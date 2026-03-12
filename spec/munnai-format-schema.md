@@ -26,9 +26,9 @@ Munnai 以三张主表表达 memory：
 
 | dataset | 粒度 | 主键（推荐） | 时间列 | 稳定排序键（推荐） | 主要用途 |
 |---|---|---|---|---|---|
-| message | 单条 message 记录 | message_id | time | (session_id, time, message_id) | search/list/get_timeline(message)/get_detail(message) |
+| message | 单条 message 记录 | message_id | time | (session_id, time, message_id) | recall/list/get_timeline(message)/get_detail(message) |
 | session | 单个 session 元信息 | session_id | updated_at | (updated_at, session_id) | get_detail(session) |
-| thinking | 同一 thinking 的版本条目 | (thinking_id, last_update) | last_update | (thinking_id, last_update) | search/list/get_timeline(thinking)/get_detail(thinking) |
+| thinking | 同一 thinking 的版本条目 | (thinking_id, last_update) | last_update | (thinking_id, last_update) | recall/list/get_timeline(thinking)/get_detail(thinking) |
 
 说明：
 - `message.time`：消息发生时间（RFC3339）。
