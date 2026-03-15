@@ -1,0 +1,25 @@
+{
+  "name": "@munnai/mcp-server",
+  "version": "0.1.0",
+  "private": true,
+  "main": "./dist/index.js",
+  "bin": {
+    "munnai-mcp": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "start": "node dist/index.js",
+    "demo": "pnpm build && node dist/demo-client.js"
+  },
+  "dependencies": {
+    "@munnai/sdk": "workspace:*",
+    "@munnai/types": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "zod": "^3.22.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0"
+  }
+}
