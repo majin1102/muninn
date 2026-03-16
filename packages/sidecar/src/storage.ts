@@ -1,8 +1,8 @@
 import { appendFile, mkdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
-import type { Message } from '@munnai/types';
+import type { Turn } from '@munnai/types';
 
-export interface StoredMessage extends Message {
+export interface StoredTurn extends Turn {
   turnId: string;
   createdAt: string;
 }
@@ -11,27 +11,32 @@ function getDataDir(): string {
   return path.join(process.cwd(), '.munnai', 'data');
 }
 
-function getMessagesFilePath(): string {
-  return path.join(getDataDir(), 'messages.jsonl');
+function getTurnsFilePath(): string {
+  return path.join(getDataDir(), 'turns.jsonl');
 }
 
-export async function appendMessage(message: StoredMessage): Promise<void> {
+export async function appendTurn(turn: StoredTurn): Promise<void> {
   await mkdir(getDataDir(), { recursive: true });
-  await appendFile(getMessagesFilePath(), `${JSON.stringify(message)}\n`, 'utf8');
+  await appendFile(getTurnsFilePath(), `${JSON.stringify(turn)}\n`, 'utf8');
 }
 
-export async function readMessages(): Promise<StoredMessage[]> {
+async function readJsonlFile(filePath: string): Promise<StoredTurn[]> {
+  const raw = await readFile(filePath, 'utf8');
+  return raw
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as StoredTurn);
+}
+
+export async function readTurns(): Promise<StoredTurn[]> {
   try {
-    const raw = await readFile(getMessagesFilePath(), 'utf8');
-    return raw
-      .split('\n')
-      .map((line) => line.trim())
-      .filter(Boolean)
-      .map((line) => JSON.parse(line) as StoredMessage);
+    return await readJsonlFile(getTurnsFilePath());
   } catch (error: any) {
     if (error && error.code === 'ENOENT') {
       return [];
     }
+
     throw error;
   }
 }

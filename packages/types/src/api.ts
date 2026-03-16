@@ -36,21 +36,22 @@ export interface GetDetailRequest {
   memoryId: string;
 }
 
-export interface Message {
+export interface Turn {
   agent: string;
   summary?: string;
   details?: string;
-  trace?: string[];
+  tool_calling?: string[];
+  // Tool outputs produced during this turn.
   artifacts?: Record<string, string>;
   prompt?: string;
   response?: string;
 }
 
-export interface AddMessageRequest {
-  message: Message;
+export interface AddTurnRequest {
+  turn: Turn;
 }
 
-export interface AddMessageResponse {
+export interface AddTurnResponse {
   turnId: string;
   requestId: string;
 }

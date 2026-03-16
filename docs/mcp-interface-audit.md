@@ -17,16 +17,24 @@
 写入类型：
 
 ```ts
-export interface Message {
+export interface Turn {
   agent: string;
   summary?: string;
   details?: string;
-  trace?: string[];
+  tool_calling?: string[];
+  // 工具调用过程中产生的产出物。
   artifacts?: Record<string, string>;
   prompt?: string;
   response?: string;
 }
 ```
+
+说明：
+
+- 当前接口路径仍为 `POST /api/v1/message/add`
+- 文档语义统一改为 turn
+- `tool_calling` 表示本轮调用过的工具
+- `artifacts` 表示工具调用产生的产出物
 
 ## 3. 当前 sidecar 读接口
 
@@ -53,4 +61,4 @@ export interface MemoryResponse {
 
 - 读接口：`memoryId`
 - 文档术语：`turnId`
-- 单条 message-turn 的持久化标识统一表述为 `turnId`
+- 单条 turn 的持久化标识统一表述为 `turnId`

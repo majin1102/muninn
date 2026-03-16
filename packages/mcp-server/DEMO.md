@@ -33,7 +33,7 @@ The MCP server currently exposes these tools:
 
 - `print` is local-debug oriented.
 - `recall`, `list`, `get_timeline`, and `get_detail` call the sidecar HTTP API.
-- The sidecar currently stores turn-like message records locally and returns `MemoryResponse`.
+- The sidecar currently stores turn records locally and returns `MemoryResponse`.
 
 ## Current shared response shape
 
@@ -60,25 +60,28 @@ POST /api/v1/message/add
 With:
 
 ```ts
-export interface Message {
+export interface Turn {
   agent: string;
   summary?: string;
   details?: string;
-  trace?: string[];
+  tool_calling?: string[];
+  // Artifacts produced by tool calls in this turn.
   artifacts?: Record<string, string>;
   prompt?: string;
   response?: string;
 }
 
-export interface AddMessageRequest {
-  message: Message;
+export interface AddTurnRequest {
+  turn: Turn;
 }
 
-export interface AddMessageResponse {
+export interface AddTurnResponse {
   turnId: string;
   requestId: string;
 }
 ```
+
+The HTTP path remains `POST /api/v1/message/add`, and the request body is `AddTurnRequest`.
 
 ## How to run
 

@@ -11,7 +11,7 @@ MCP 层当前通过 `memoryId: string` 读取 memory。
 当前 demo 下：
 - `memoryId` 是 read-side 的统一读取键
 - `get_detail` 与 `get_timeline` 都以它为输入
-- 当前 demo 的持久化重点仍然是 message-turn 数据
+- 当前 demo 的持久化重点仍然是 turn 数据
 
 ### 1.2 `MemoryHit`
 

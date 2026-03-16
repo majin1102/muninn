@@ -4,9 +4,9 @@
 
 ## 1. 概览
 
-当前 demo 主要围绕单条 message-turn 数据展开：
+当前 demo 主要围绕单条 turn 数据展开：
 
-- 写入侧通过 `message/add` 写入 message
+- 写入侧通过 `message/add` 写入 turn
 - 读侧通过 `memoryId` 读取 `MemoryHit[]`
 - session 聚合与 thinking 写入尚未进入当前 demo 的正式接口
 
@@ -15,30 +15,33 @@
 当前文档约定：
 
 - 读侧统一使用 `memoryId`
-- 单条持久化的 message-turn 标识记为 `turnId`
+- 单条持久化的 turn 标识记为 `turnId`
 
 ## 3. 当前写入类型
 
 ```ts
-export interface Message {
+export interface Turn {
   agent: string;
   summary?: string;
   details?: string;
-  trace?: string[];
+  tool_calling?: string[];
+  // 工具调用过程中产生的产出物。
   artifacts?: Record<string, string>;
   prompt?: string;
   response?: string;
 }
 
-export interface AddMessageRequest {
-  message: Message;
+export interface AddTurnRequest {
+  turn: Turn;
 }
 
-export interface AddMessageResponse {
+export interface AddTurnResponse {
   turnId: string;
   requestId: string;
 }
 ```
+
+当前 HTTP 路径仍为 `POST /api/v1/message/add`，但请求体语义统一为 `{ turn: Turn }`。
 
 ## 4. 当前持久化记录（概念层）
 
@@ -48,7 +51,8 @@ export interface StoredTurn {
   agent: string;
   summary?: string;
   details?: string;
-  trace?: string[];
+  tool_calling?: string[];
+  // 工具调用过程中产生的产出物。
   artifacts?: Record<string, string>;
   prompt?: string;
   response?: string;

@@ -15,6 +15,6 @@
 
 | 维度 | claude-mem | Munnai |
 |---|---|---|
-| 基本记录粒度 | observation / session summary | 当前 demo 以 message-turn 为主 |
+| 基本记录粒度 | observation / session summary | 当前 demo 以 turn 为主 |
 | MCP 输出形态 | text 为主 | Markdown（MemoryHit/数组），解释权归服务端 |
 | 导航键 | 各工具自带 ids | 当前统一 `memoryId` |

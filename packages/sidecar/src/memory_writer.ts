@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
-import type { AddMessageRequest, ErrorResponse, Message } from '@munnai/types';
-import { appendMessage } from './storage.js';
+import type { AddTurnRequest, ErrorResponse, Turn } from '@munnai/types';
+import { appendTurn } from './storage.js';
 import { generateRequestId, generateTurnId } from './utils.js';
 
 export const memoryWriter = new Hono();
@@ -21,51 +21,51 @@ function isStringRecord(value: unknown): value is Record<string, string> {
   return Object.values(value).every((entry) => typeof entry === 'string');
 }
 
-function validateMessage(message: Message | undefined): string | null {
-  if (!message) {
-    return 'message is required';
+function validateTurn(turn: Turn | undefined): string | null {
+  if (!turn) {
+    return 'turn is required';
   }
 
-  if (!message.agent || typeof message.agent !== 'string') {
-    return 'message.agent is required';
+  if (!turn.agent || typeof turn.agent !== 'string') {
+    return 'turn.agent is required';
   }
 
-  if (message.trace !== undefined && !Array.isArray(message.trace)) {
-    return 'message.trace must be an array of strings';
+  if (turn.tool_calling !== undefined && !Array.isArray(turn.tool_calling)) {
+    return 'turn.tool_calling must be an array of strings';
   }
 
-  if (message.trace && !message.trace.every((entry) => typeof entry === 'string')) {
-    return 'message.trace must be an array of strings';
+  if (turn.tool_calling && !turn.tool_calling.every((entry) => typeof entry === 'string')) {
+    return 'turn.tool_calling must be an array of strings';
   }
 
-  if (message.artifacts !== undefined && !isStringRecord(message.artifacts)) {
-    return 'message.artifacts must be a record of string values';
+  if (turn.artifacts !== undefined && !isStringRecord(turn.artifacts)) {
+    return 'turn.artifacts must be a record of string values';
   }
 
   return null;
 }
 
 memoryWriter.post('/api/v1/message/add', async (c) => {
-  let body: AddMessageRequest;
+  let body: AddTurnRequest;
   try {
-    body = await c.req.json<AddMessageRequest>();
+    body = await c.req.json<AddTurnRequest>();
   } catch {
     return c.json(errorResponse('invalidRequest', 'Invalid JSON body'), 400);
   }
 
   console.log('[MESSAGE_ADD]', JSON.stringify(body, null, 2));
 
-  const validationError = validateMessage(body.message);
+  const validationError = validateTurn(body.turn);
   if (validationError) {
     return c.json(errorResponse('invalidRequest', validationError), 400);
   }
 
   const turnId = generateTurnId();
   const createdAt = new Date().toISOString();
-  await appendMessage({
+  await appendTurn({
     turnId,
     createdAt,
-    ...body.message,
+    ...body.turn,
   });
 
   return c.json({

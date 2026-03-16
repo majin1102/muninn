@@ -33,7 +33,7 @@ Munnai Sidecar
   │
   │  local JSONL storage
   ▼
-turn-like message records
+turn records
 ```
 
 ### 2.1 组件职责
@@ -45,7 +45,7 @@ turn-like message records
 - **Sidecar**
   - 提供 `message/add` 写接口
   - 提供 `recall/list/timeline/detail` 读接口
-  - 将已写入的 message-turn 数据渲染为 `MemoryHit`
+  - 将已写入的 turn 数据渲染为 `MemoryHit`
 
 ---
 
@@ -126,11 +126,12 @@ export interface MemoryResponse {
 写入 payload 为：
 
 ```ts
-export interface Message {
+export interface Turn {
   agent: string;
   summary?: string;
   details?: string;
-  trace?: string[];
+  tool_calling?: string[];
+  // 工具调用过程中产生的产出物。
   artifacts?: Record<string, string>;
   prompt?: string;
   response?: string;
@@ -139,12 +140,18 @@ export interface Message {
 
 当前 demo 不暴露其他写接口。
 
+补充说明：
+
+- 当前路径仍为 `POST /api/v1/message/add`，但写入记录语义统一为 turn
+- `tool_calling` 表示本轮调用过的工具
+- `artifacts` 表示工具调用产生的产出物
+
 ---
 
 ## 6. 标识约定（当前）
 
 - 读接口统一使用 `memoryId`
-- 单条 message-turn 的持久化标识统一记为 `turnId`
+- 单条 turn 的持久化标识统一记为 `turnId`
 
 ---
 

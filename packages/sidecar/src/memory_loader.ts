@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import type { ErrorResponse, MemoryHit, MemoryResponse } from '@munnai/types';
-import { renderMessageHit } from './render.js';
-import { readMessages } from './storage.js';
+import { renderTurnHit } from './render.js';
+import { readTurns } from './storage.js';
 import { generateRequestId } from './utils.js';
 
 export const memoryLoader = new Hono();
@@ -37,17 +37,17 @@ memoryLoader.get('/api/v1/recall', async (c) => {
   }
 
   const maxResults = limit ? Number(limit) : 10;
-  const messages = await readMessages();
-  const matched = messages
-    .filter((message) =>
-      includesQuery(message.summary, query) ||
-      includesQuery(message.details, query) ||
-      includesQuery(message.prompt, query) ||
-      includesQuery(message.response, query)
+  const turns = await readTurns();
+  const matched = turns
+    .filter((turn) =>
+      includesQuery(turn.summary, query) ||
+      includesQuery(turn.details, query) ||
+      includesQuery(turn.prompt, query) ||
+      includesQuery(turn.response, query)
     )
     .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
     .slice(0, maxResults)
-    .map(renderMessageHit);
+    .map(renderTurnHit);
 
   return c.json(memoryResponse(matched));
 });
@@ -64,11 +64,11 @@ memoryLoader.get('/api/v1/list', async (c) => {
   }
 
   const maxResults = limit ? Number(limit) : 10;
-  const messages = await readMessages();
-  const recent = messages
+  const turns = await readTurns();
+  const recent = turns
     .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
     .slice(0, maxResults)
-    .map(renderMessageHit);
+    .map(renderTurnHit);
 
   return c.json(memoryResponse(recent));
 });
@@ -86,16 +86,16 @@ memoryLoader.get('/api/v1/timeline', async (c) => {
 
   const before = beforeLimit ? Number(beforeLimit) : 3;
   const after = afterLimit ? Number(afterLimit) : 3;
-  const messages = (await readMessages()).sort((left, right) => left.createdAt.localeCompare(right.createdAt));
-  const anchorIndex = messages.findIndex((message) => message.turnId === memoryId);
+  const turns = (await readTurns()).sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+  const anchorIndex = turns.findIndex((turn) => turn.turnId === memoryId);
 
   if (anchorIndex === -1) {
     return c.json(errorResponse('notFound', 'memoryId not found'), 404);
   }
 
   const startIndex = Math.max(0, anchorIndex - before);
-  const endIndex = Math.min(messages.length, anchorIndex + after + 1);
-  const windowed = messages.slice(startIndex, endIndex).map(renderMessageHit);
+  const endIndex = Math.min(turns.length, anchorIndex + after + 1);
+  const windowed = turns.slice(startIndex, endIndex).map(renderTurnHit);
 
   return c.json(memoryResponse(windowed));
 });
@@ -109,12 +109,12 @@ memoryLoader.get('/api/v1/detail', async (c) => {
     return c.json(errorResponse('invalidRequest', 'memoryId is required'), 400);
   }
 
-  const messages = await readMessages();
-  const message = messages.find((entry) => entry.turnId === memoryId);
+  const turns = await readTurns();
+  const turn = turns.find((entry) => entry.turnId === memoryId);
 
-  if (!message) {
+  if (!turn) {
     return c.json(errorResponse('notFound', 'memoryId not found'), 404);
   }
 
-  return c.json(memoryResponse([renderMessageHit(message)]));
+  return c.json(memoryResponse([renderTurnHit(turn)]));
 });

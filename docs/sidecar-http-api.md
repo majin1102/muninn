@@ -12,8 +12,8 @@
 
 ### 写入接口（Write）
 
-- **当前只保留 message 写入**
-- **单条写入**：当前 demo 使用 `message/add`
+- **当前只保留 turn 写入**
+- **单条写入**：当前 demo 的路径仍为 `message/add`
 - **服务端生成标识与时间**：单条持久化记录的标识统一记为 `turnId`
 
 ---
@@ -110,30 +110,31 @@ Query 参数：
 ### 3.1 `POST /api/v1/message/add`
 
 用途：
-- 写入一条 message-turn 数据
+- 写入一条 turn 数据
 
 请求体：
 
 ```ts
-export interface Message {
+export interface Turn {
   agent: string;
   summary?: string;
   details?: string;
-  trace?: string[];
+  tool_calling?: string[];
+  // 工具调用过程中产生的产出物。
   artifacts?: Record<string, string>;
   prompt?: string;
   response?: string;
 }
 
-export interface AddMessageRequest {
-  message: Message;
+export interface AddTurnRequest {
+  turn: Turn;
 }
 ```
 
 响应：
 
 ```ts
-export interface AddMessageResponse {
+export interface AddTurnResponse {
   turnId: string;
   requestId: string;
 }
@@ -141,6 +142,8 @@ export interface AddMessageResponse {
 
 说明：
 - 当前文档统一将这条记录视为 turn，并使用 `turnId` 表达该标识
+- `tool_calling` 表示本轮调用过的工具
+- `artifacts` 表示工具调用产生的产出物
 
 ---
 

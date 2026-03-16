@@ -1,5 +1,5 @@
 import type { MemoryHit } from '@munnai/types';
-import type { StoredMessage } from './storage.js';
+import type { StoredTurn } from './storage.js';
 
 function renderRecordBlock(title: string, value: Record<string, string>): string {
   const lines = Object.entries(value).map(([key, entry]) => `- ${key}: ${entry}`);
@@ -11,40 +11,40 @@ function renderListBlock(title: string, value: string[]): string {
   return [`## ${title}`, '', ...lines].join('\n');
 }
 
-export function renderMessageHit(message: StoredMessage): MemoryHit {
+export function renderTurnHit(turn: StoredTurn): MemoryHit {
   const sections = [
-    `# ${message.turnId}`,
+    `# ${turn.turnId}`,
     '',
-    `- Agent: ${message.agent}`,
-    `- Created At: ${message.createdAt}`,
+    `- Agent: ${turn.agent}`,
+    `- Created At: ${turn.createdAt}`,
   ];
 
-  if (message.summary) {
-    sections.push('', '## Summary', '', message.summary);
+  if (turn.summary) {
+    sections.push('', '## Summary', '', turn.summary);
   }
 
-  if (message.details) {
-    sections.push('', '## Details', '', message.details);
+  if (turn.details) {
+    sections.push('', '## Details', '', turn.details);
   }
 
-  if (message.prompt) {
-    sections.push('', '## Prompt', '', message.prompt);
+  if (turn.prompt) {
+    sections.push('', '## Prompt', '', turn.prompt);
   }
 
-  if (message.response) {
-    sections.push('', '## Response', '', message.response);
+  if (turn.response) {
+    sections.push('', '## Response', '', turn.response);
   }
 
-  if (message.trace && message.trace.length > 0) {
-    sections.push('', renderListBlock('Trace', message.trace));
+  if (turn.tool_calling && turn.tool_calling.length > 0) {
+    sections.push('', renderListBlock('Tool Calling', turn.tool_calling));
   }
 
-  if (message.artifacts && Object.keys(message.artifacts).length > 0) {
-    sections.push('', renderRecordBlock('Artifacts', message.artifacts));
+  if (turn.artifacts && Object.keys(turn.artifacts).length > 0) {
+    sections.push('', renderRecordBlock('Tool Artifacts', turn.artifacts));
   }
 
   return {
-    memoryId: message.turnId,
+    memoryId: turn.turnId,
     content: sections.join('\n'),
   };
 }

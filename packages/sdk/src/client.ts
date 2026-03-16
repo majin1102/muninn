@@ -1,6 +1,6 @@
 import type {
-  AddMessageRequest,
-  AddMessageResponse,
+  AddTurnRequest,
+  AddTurnResponse,
   ErrorResponse,
   GetDetailRequest,
   GetTimelineRequest,
@@ -37,14 +37,14 @@ export class MunnaiClient {
     return url.toString();
   }
 
-  async addMessage(request: AddMessageRequest): Promise<AddMessageResponse> {
+  async addTurn(request: AddTurnRequest): Promise<AddTurnResponse> {
     const response = await fetch(`${this.baseUrl}/api/v1/message/add`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(request),
     });
 
-    return this.parseJsonResponse<AddMessageResponse>(response);
+    return this.parseJsonResponse<AddTurnResponse>(response);
   }
 
   async recall(request: RecallRequest): Promise<MemoryResponse> {
