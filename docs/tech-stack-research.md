@@ -12,7 +12,7 @@
 
 ## 2. 当前模块边界
 
-1. `packages/mcp-server`
+1. `packages/mcp`
 2. `packages/sidecar`
 3. `packages/sdk`
 4. `packages/types`

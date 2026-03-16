@@ -88,7 +88,7 @@ The HTTP path remains `POST /api/v1/message/add`, and the request body is `AddTu
 From the repo root:
 
 ```bash
-pnpm --filter @munnai/mcp-server demo
+pnpm --filter @munnai/mcp demo
 ```
 
 The demo client currently exercises `print`, and the server will generate a Markdown debug file.

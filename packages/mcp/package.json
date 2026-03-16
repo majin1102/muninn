@@ -1,5 +1,5 @@
 {
-  "name": "@munnai/mcp-server",
+  "name": "@munnai/mcp",
   "version": "0.1.0",
   "private": true,
   "main": "./dist/index.js",
