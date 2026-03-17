@@ -24,3 +24,11 @@ $RECYCLE.BIN/
 
 target/
 .trae/
+
+node_modules/
+pnpm-lock.yaml
+dist/
+*.tsbuildinfo
+
+Cargo.lock
+.munnai/

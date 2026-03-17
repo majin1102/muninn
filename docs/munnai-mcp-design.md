@@ -1,132 +1,165 @@
-# Munnai MCP 接口与服务设计（参考 claude-mem 设计）
+# Munnai MCP 接口与服务设计（当前 Demo 对齐版）
 
-本文档描述 Munnai 的 MCP（Model Context Protocol）接口与服务端架构设计。MCP 层采用 text-first：工具输出以 Markdown 文本为主，解释权归服务端所有；对 agent 仅暴露统一的 `memory_id`。
+本文档描述当前仓库中 Munnai 的 MCP（Model Context Protocol）接口与服务端架构设计。本文档延续原有的设计文档组织方式，但以当前 TS/JS demo 的真实接口与数据结构为准。
 
-当前规范以 spec 文档为准：
-- MCP API（tools 语义/参数/排序）：[spec/munnai-mcp-api.md](file:///Users/Nathan/workspace/claude-mem/docs/spec/munnai-mcp-api.md)
-- Format Schema（IDs/实体/关系）：[spec/munnai-format-schema.md](file:///Users/Nathan/workspace/claude-mem/docs/spec/munnai-format-schema.md)
-- claude-mem MCP 设计风格：薄 MCP Server + HTTP sidecar API（thin wrapper）
+当前规范以仓库内文档为准：
+- MCP API：[spec/munnai-mcp-api.md](/Users/Nathan/workspace/munnai/spec/munnai-mcp-api.md)
+- Format Schema：[spec/munnai-format-schema.md](/Users/Nathan/workspace/munnai/spec/munnai-format-schema.md)
+- Sidecar HTTP API：[docs/sidecar-http-api.md](/Users/Nathan/workspace/munnai/docs/sidecar-http-api.md)
 
 ---
 
 ## 1. 设计目标
 
-- **跨 agent 互操作**：所有 agent 只要会 MCP，就能读到同一种 memory 结构。
-- **渐进式披露**：先返回轻量索引（多个 MemoryHit 的 Markdown 渲染），再按需展开同维度上下文（get_timeline）与单条详情（get_detail）。
-- **薄 MCP 层**：MCP Server 只做协议与 tool schema，不承载业务逻辑；业务逻辑下沉到 HTTP sidecar service。
-- **列裁剪友好**：sidecar 内部按“轻字段优先”查询 Lance/Arrow 表，减少 IO 与 token 占用。
+- **跨 agent 可接入**：MCP 层通过统一的读接口暴露 memory 查询能力。
+- **text-first**：读取结果统一收敛到 `MemoryHit[]`，每个 `MemoryHit.content` 为 Markdown 文本。
+- **薄 MCP 层**：MCP Server 负责 stdio MCP 协议、tool schema 和 sidecar 调用，不承载复杂业务状态。
+- **可调试**：保留 `print` 作为本地调试工具，并额外生成 Markdown 调试文件。
 
 ---
 
-## 2. 总体架构
+## 2. 当前总体架构
 
-```
-Agent (Claude / OpenAI / Custom)
+```text
+Agent
   │
-  │  MCP stdio (tools/list + tools/call)
+  │  MCP stdio
   ▼
-Munnai MCP Server (thin wrapper)
-  │  (不存状态；不做业务逻辑)
+Munnai MCP Server
   │
-  │  HTTP (localhost / remote)
+  │  HTTP
   ▼
-Munnai HTTP Sidecar Service (HTTP API)
+Munnai Sidecar
   │
-  │  Lance Dataset (Arrow Schema)
+  │  local JSONL storage
   ▼
-thinking + message + session datasets
+turn records
 ```
 
 ### 2.1 组件职责
 
 - **MCP Server**
-  - 提供 `tools/list`（工具定义与描述）
-  - 处理 `tools/call`（参数校验/标准化/错误包装）
-  - 转发请求到 sidecar 的 HTTP API
-- **HTTP Sidecar Service**
-  - 读取 Lance 表（支持列裁剪、过滤、ANN 检索）
-  - 实现渐进式披露工作流（Index → Expand）
-  - 统一返回 MCP 友好的文本/结构化输出
+  - 暴露 `print`、`recall`、`list`、`get_timeline`、`get_detail`
+  - 参数校验与 sidecar 调用
+  - `print` 额外写调试 Markdown
+- **Sidecar**
+  - 提供 `message/add` 写接口
+  - 提供 `recall/list/timeline/detail` 读接口
+  - 将已写入的 turn 数据渲染为 `MemoryHit`
 
 ---
 
-## 3. 工具设计：对标 claude-mem 的 3 层工作流（强约束）
+## 3. MCP Tools（当前）
 
-Munnai 的检索工具对标 claude-mem 的使用习惯与命名风格，仍然保持 3 层强约束（类似 claude-mem 的 `__IMPORTANT` 提示工具；Munnai 侧命名为 `_GUIDE`）：
+当前 demo 的 MCP tools 集合为：
 
-1. **recall(query)**：返回 Markdown 文本（多个 MemoryHit），按相关度排序。
-2. **get_timeline(memory_id, before_limit, after_limit)**：返回 Markdown 文本（多个 MemoryHit），用于“同维度上下历史/上下文窗口”，按时间轴升序排序。
-3. **get_detail(memory_id)**：返回 Markdown 文本（单个 MemoryHit），作为下钻终点。
+- `print`
+- `recall`
+- `list`
+- `get_timeline`
+- `get_detail`
 
-补充：
-- **list(mode=recency)**：返回 Markdown 文本（多个 MemoryHit），用于“无明确 query 的最近浏览”，按 time 降序排序。
+### 3.1 `print`
 
-可选补充：
-- **help(operation)**：输出完整用法（减少 tool 列表 description 的 token）
+用途：
+- 本地调试
+- 将参数打印到 stderr
+- 将参数写入 `.munnai/debug/*.md`
 
----
+### 3.2 `recall`
 
-## 4. MCP Tools（现行）
+输入参数：
+- `query: string`
+- `limit?: number`
+- `thinkingRatio?: number`
 
-本项目的 MCP tools 以 spec 为唯一规范来源：
-- [spec/munnai-mcp-api.md](file:///Users/Nathan/workspace/claude-mem/docs/spec/munnai-mcp-api.md)
+### 3.3 `list`
 
-工具集合：
+输入参数：
+- `mode: "recency"`
+- `limit?: number`
+- `thinkingRatio?: number`
 
-- `_GUIDE`：工作流说明文本
-- `recall(query, limit?, thinking_ratio?)`：相关度排序的索引检索，输出 Markdown（多个 MemoryHit）
-- `list(mode="recency", limit?, thinking_ratio?)`：最近浏览，输出 Markdown（多个 MemoryHit，按 time 降序）
-- `get_timeline(memory_id, before_limit?, after_limit?)`：同维度窗口/历史，输出 Markdown（多个 MemoryHit，按时间轴升序）
-- `get_detail(memory_id)`：单条下钻详情，输出 Markdown（单个 MemoryHit）
+### 3.4 `get_timeline`
 
-输出约定（简要）：
-- MCP tool 返回值统一为 `{ content: [{ type: "text", text: "<markdown>" }] }`
-- `memory_id` 为 `thinking_<ULID>` / `session_<ULID>` / `message_<ULID>`（服务端按前缀解释维度）
+输入参数：
+- `memoryId: string`
+- `beforeLimit?: number`
+- `afterLimit?: number`
 
----
+### 3.5 `get_detail`
 
-## 5. Sidecar 与存储（现行）
-
-MCP Server 是薄层，负责：
-- tool schema 与 stdio JSON-RPC
-- 将 `tools/call` 转发给 sidecar（业务逻辑在 sidecar）
-
-sidecar 负责（与 spec 对齐）：
-- 按 `memory_id` 前缀路由到 `thinking/session/message` 三张表
-- 按工具语义与排序规则渲染 Markdown（MemoryHit/数组）
-- 列裁剪与 token 预算控制（避免返回大字段）
-- 向量召回（可选；例如基于 Lance/Arrow）
-
-数据格式与表结构以 [spec/munnai-format-schema.md](file:///Users/Nathan/workspace/claude-mem/docs/spec/munnai-format-schema.md) 为准。
+输入参数：
+- `memoryId: string`
 
 ---
 
-## 6. 输出渲染（现行）
+## 4. 输出约定（当前）
 
-输出以 Markdown 为主（text-first）。服务端渲染建议包含（允许演进）：
-- `memory_id`
-- `agent`
-- `time`（RFC3339）
-- `summary`
-- `details`
+当前读接口和 sidecar 返回统一收敛为：
 
-并可选包含：
-- `Related memories`（其他 `memory_id` 列表）
-- `Next`（非强制提示；建议用于 recall/get_timeline）
+```ts
+export interface MemoryHit {
+  memoryId: string;
+  content: string;
+}
+
+export interface MemoryResponse {
+  memoryHits: MemoryHit[];
+  requestId: string;
+}
+```
+
+说明：
+- `recall`、`list`、`get_timeline` 返回 `memoryHits[]`
+- `get_detail` 也返回 `MemoryResponse`，但约定 `memoryHits.length === 1`
+- `content` 为 Markdown 文本，承担 text-first 的主要输出职责
 
 ---
 
-## 7. 错误处理与可靠性（现行）
+## 5. 写入侧（当前）
 
-- MCP Server 所有日志写 stderr，避免破坏 stdio JSON-RPC 输出。
-- sidecar 不可用时，MCP 返回 `isError: true` 的文本消息。
-- 参数缺失/格式错误（如 `memory_id` 前缀不合法或 ULID 不匹配）在 MCP 层快速报错。
+当前 demo 只暴露一个正式写接口：
+
+- `POST /api/v1/message/add`
+
+写入 payload 为：
+
+```ts
+export interface Turn {
+  agent: string;
+  summary?: string;
+  details?: string;
+  tool_calling?: string[];
+  // 工具调用过程中产生的产出物。
+  artifacts?: Record<string, string>;
+  prompt?: string;
+  response?: string;
+}
+```
+
+当前 demo 不暴露其他写接口。
+
+补充说明：
+
+- 当前路径仍为 `POST /api/v1/message/add`，但写入记录语义统一为 turn
+- `tool_calling` 表示本轮调用过的工具
+- `artifacts` 表示工具调用产生的产出物
 
 ---
 
-## 8. thinking_ratio（现行）
+## 6. 标识约定（当前）
 
-在 text-first 输出下，`thinking_ratio` 仍可作为服务端“召回/渲染预算建议”：
-- 倾向更多 `thinking_...`（接近 1）或更多 `message_...`（接近 0）
-- `session_...` 的混入与混排不受该值约束
-- 服务端可忽略该建议；最终返回由供给与质量决定
+- 读接口统一使用 `memoryId`
+- 单条 turn 的持久化标识统一记为 `turnId`
+
+---
+
+## 7. 当前非目标
+
+以下内容仍属于后续演进方向，不属于当前 demo 的正式实现：
+
+- session 自动聚合算法
+- thinking 写接口
+- 向量召回与 embedding 写入
+- 复杂存储后端（数据库 / Lance / Arrow）
