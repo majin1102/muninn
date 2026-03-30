@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 
 import { mkdir, writeFile } from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import type { ErrorResponse, MemoryResponse } from '@munnai/types';
 import { z } from 'zod';
+import { SidecarClient } from './sidecar_client.js';
 
 function safeStringify(value: unknown): string {
   try {
@@ -15,35 +16,13 @@ function safeStringify(value: unknown): string {
   }
 }
 
-function buildSidecarUrl(endpoint: string, params: Record<string, unknown>): string {
-  const baseUrl = (process.env.MUNNAI_SIDECAR_BASE_URL || 'http://127.0.0.1:8080').replace(/\/$/, '');
-  const url = new URL(`${baseUrl}${endpoint}`);
-
-  for (const [key, value] of Object.entries(params)) {
-    if (value !== undefined) {
-      url.searchParams.set(key, String(value));
-    }
-  }
-
-  return url.toString();
-}
-
-async function fetchMemoryResponse(endpoint: string, params: Record<string, unknown>): Promise<MemoryResponse> {
-  const response = await fetch(buildSidecarUrl(endpoint, params));
-  if (!response.ok) {
-    const error = await response.json() as ErrorResponse;
-    throw new Error(`${error.errorCode}: ${error.errorMessage}`);
-  }
-
-  return response.json() as Promise<MemoryResponse>;
-}
-
-function renderMemoryResponse(memoryResponse: MemoryResponse): string {
+function renderMemoryResponse(memoryResponse: { memoryHits: Array<{ content: string }> }): string {
   return memoryResponse.memoryHits.map((memoryHit) => memoryHit.content).join('\n\n---\n\n');
 }
 
 async function writeDebugMarkdown(toolName: string, args: unknown): Promise<string> {
-  const debugDir = path.join(process.cwd(), '.munnai', 'debug');
+  const munnaiHome = process.env.MUNNAI_HOME ?? path.join(os.homedir(), '.munnai');
+  const debugDir = path.join(munnaiHome, 'debug');
   await mkdir(debugDir, { recursive: true });
 
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
@@ -69,6 +48,7 @@ async function writeDebugMarkdown(toolName: string, args: unknown): Promise<stri
 }
 
 async function main() {
+  const sidecarClient = new SidecarClient();
   const server = new McpServer(
     {
       name: 'munnai-mcp',
@@ -115,7 +95,7 @@ async function main() {
       }),
     },
     async (args: any) => {
-      const result = await fetchMemoryResponse('/api/v1/recall', args);
+      const result = await sidecarClient.recall(args);
       return {
         content: [{ type: 'text', text: renderMemoryResponse(result) }],
       };
@@ -133,7 +113,7 @@ async function main() {
       }),
     },
     async (args: any) => {
-      const result = await fetchMemoryResponse('/api/v1/list', args);
+      const result = await sidecarClient.list(args);
       return {
         content: [{ type: 'text', text: renderMemoryResponse(result) }],
       };
@@ -151,7 +131,7 @@ async function main() {
       }),
     },
     async (args: any) => {
-      const result = await fetchMemoryResponse('/api/v1/timeline', args);
+      const result = await sidecarClient.getTimeline(args);
       return {
         content: [{ type: 'text', text: renderMemoryResponse(result) }],
       };
@@ -167,7 +147,7 @@ async function main() {
       }),
     },
     async (args: any) => {
-      const result = await fetchMemoryResponse('/api/v1/detail', args);
+      const result = await sidecarClient.getDetail(args);
       return {
         content: [{ type: 'text', text: renderMemoryResponse(result) }],
       };

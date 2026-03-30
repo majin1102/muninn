@@ -1,7 +1,11 @@
+import { addMessage } from '@munnai/core';
 import { Hono } from 'hono';
-import type { AddTurnRequest, ErrorResponse, Turn } from '@munnai/types';
-import { appendTurn } from './storage.js';
-import { generateRequestId, generateTurnId } from './utils.js';
+import type {
+  AddMessageToSessionRequest,
+  ErrorResponse,
+  SessionMessageInput,
+} from '@munnai/types';
+import { generateRequestId } from './utils.js';
 
 export const memoryWriter = new Hono();
 
@@ -21,55 +25,79 @@ function isStringRecord(value: unknown): value is Record<string, string> {
   return Object.values(value).every((entry) => typeof entry === 'string');
 }
 
-function validateTurn(turn: Turn | undefined): string | null {
-  if (!turn) {
-    return 'turn is required';
+function hasTextContent(value: string | undefined): boolean {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function hasMessageContent(session: SessionMessageInput): boolean {
+  return hasTextContent(session.title)
+    || hasTextContent(session.summary)
+    || hasTextContent(session.prompt)
+    || hasTextContent(session.response)
+    || (session.tool_calling !== undefined && session.tool_calling.length > 0)
+    || (session.artifacts !== undefined && Object.keys(session.artifacts).length > 0);
+}
+
+function validateSession(session: SessionMessageInput | undefined): string | null {
+  if (!session) {
+    return 'session is required';
   }
 
-  if (!turn.agent || typeof turn.agent !== 'string') {
-    return 'turn.agent is required';
+  if (!session.agent || typeof session.agent !== 'string') {
+    return 'session.agent is required';
   }
 
-  if (turn.tool_calling !== undefined && !Array.isArray(turn.tool_calling)) {
-    return 'turn.tool_calling must be an array of strings';
+  if (session.session_id !== undefined && typeof session.session_id !== 'string') {
+    return 'session.session_id must be a string';
   }
 
-  if (turn.tool_calling && !turn.tool_calling.every((entry) => typeof entry === 'string')) {
-    return 'turn.tool_calling must be an array of strings';
+  if (session.title !== undefined && typeof session.title !== 'string') {
+    return 'session.title must be a string';
   }
 
-  if (turn.artifacts !== undefined && !isStringRecord(turn.artifacts)) {
-    return 'turn.artifacts must be a record of string values';
+  if (session.tool_calling !== undefined && !Array.isArray(session.tool_calling)) {
+    return 'session.tool_calling must be an array of strings';
+  }
+
+  if (session.tool_calling && !session.tool_calling.every((entry: string) => typeof entry === 'string')) {
+    return 'session.tool_calling must be an array of strings';
+  }
+
+  if (session.artifacts !== undefined && !isStringRecord(session.artifacts)) {
+    return 'session.artifacts must be a record of string values';
+  }
+
+  if (session.extra !== undefined && !isStringRecord(session.extra)) {
+    return 'session.extra must be a record of string values';
+  }
+
+  if (!hasMessageContent(session)) {
+    return 'session must include at least one message field';
   }
 
   return null;
 }
 
-memoryWriter.post('/api/v1/message/add', async (c) => {
-  let body: AddTurnRequest;
+memoryWriter.post('/api/v1/session/messages', async (c) => {
+  let body: AddMessageToSessionRequest;
   try {
-    body = await c.req.json<AddTurnRequest>();
+    body = await c.req.json<AddMessageToSessionRequest>();
   } catch {
     return c.json(errorResponse('invalidRequest', 'Invalid JSON body'), 400);
   }
 
-  console.log('[MESSAGE_ADD]', JSON.stringify(body, null, 2));
+  console.log('[SESSION_MESSAGES]', JSON.stringify(body, null, 2));
 
-  const validationError = validateTurn(body.turn);
+  const validationError = validateSession(body.session);
   if (validationError) {
     return c.json(errorResponse('invalidRequest', validationError), 400);
   }
 
-  const turnId = generateTurnId();
-  const createdAt = new Date().toISOString();
-  await appendTurn({
-    turnId,
-    createdAt,
-    ...body.turn,
-  });
+  const { extra: _extra, ...persistedSession } = body.session;
+  const storedTurn = await addMessage(persistedSession);
 
   return c.json({
-    turnId,
+    turnId: storedTurn.turnId,
     requestId: generateRequestId(),
   });
 });

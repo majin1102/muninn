@@ -1,24 +1,8 @@
-# Munnai MCP 接口与服务设计（当前 Demo 对齐版）
+# Munnai MCP 接口与服务设计
 
-本文档描述当前仓库中 Munnai 的 MCP（Model Context Protocol）接口与服务端架构设计。本文档延续原有的设计文档组织方式，但以当前 TS/JS demo 的真实接口与数据结构为准。
+本文档描述当前仓库中 Munnai 的 MCP 接口与服务端架构。
 
-当前规范以仓库内文档为准：
-- MCP API：[spec/munnai-mcp-api.md](/Users/Nathan/workspace/munnai/spec/munnai-mcp-api.md)
-- Format Schema：[spec/munnai-format-schema.md](/Users/Nathan/workspace/munnai/spec/munnai-format-schema.md)
-- Sidecar HTTP API：[docs/sidecar-http-api.md](/Users/Nathan/workspace/munnai/docs/sidecar-http-api.md)
-
----
-
-## 1. 设计目标
-
-- **跨 agent 可接入**：MCP 层通过统一的读接口暴露 memory 查询能力。
-- **text-first**：读取结果统一收敛到 `MemoryHit[]`，每个 `MemoryHit.content` 为 Markdown 文本。
-- **薄 MCP 层**：MCP Server 负责 stdio MCP 协议、tool schema 和 sidecar 调用，不承载复杂业务状态。
-- **可调试**：保留 `print` 作为本地调试工具，并额外生成 Markdown 调试文件。
-
----
-
-## 2. 当前总体架构
+## 1. Current Architecture
 
 ```text
 Agent
@@ -31,135 +15,94 @@ Munnai MCP Server
   ▼
 Munnai Sidecar
   │
-  │  local JSONL storage
+  │  TypeScript binding
   ▼
-turn records
+@munnai/core
+  │
+  │  daemon bridge
+  ▼
+Rust daemon in `core/` (session-layer queries backed by session turn rows / observing queries)
 ```
 
-### 2.1 组件职责
+### Component Responsibilities
 
-- **MCP Server**
+- MCP Server
   - 暴露 `print`、`recall`、`list`、`get_timeline`、`get_detail`
-  - 参数校验与 sidecar 调用
-  - `print` 额外写调试 Markdown
-- **Sidecar**
-  - 提供 `message/add` 写接口
-  - 提供 `recall/list/timeline/detail` 读接口
-  - 将已写入的 turn 数据渲染为 `MemoryHit`
+  - 只做参数校验、sidecar 调用与文本返回
+- Sidecar
+  - 提供 HTTP 读写接口
+  - 将 `RenderedMemoryRecord` 渲染为 `MemoryHit[]`
+- `@munnai/core`
+  - 作为 TS binding layer 连接 sidecar 和 Rust daemon
+  - 暴露结构化读写调用给 sidecar
+- Rust daemon in `core/`
+  - 提供 layer-specific 结构化读取能力
+  - 提供 cross-layer rendered 读接口
+  - 维护 observing / semantic index 等核心状态
 
----
+## 2. Text-First Output
 
-## 3. MCP Tools（当前）
-
-当前 demo 的 MCP tools 集合为：
-
-- `print`
-- `recall`
-- `list`
-- `get_timeline`
-- `get_detail`
-
-### 3.1 `print`
-
-用途：
-- 本地调试
-- 将参数打印到 stderr
-- 将参数写入 `.munnai/debug/*.md`
-
-### 3.2 `recall`
-
-输入参数：
-- `query: string`
-- `limit?: number`
-- `thinkingRatio?: number`
-
-### 3.3 `list`
-
-输入参数：
-- `mode: "recency"`
-- `limit?: number`
-- `thinkingRatio?: number`
-
-### 3.4 `get_timeline`
-
-输入参数：
-- `memoryId: string`
-- `beforeLimit?: number`
-- `afterLimit?: number`
-
-### 3.5 `get_detail`
-
-输入参数：
-- `memoryId: string`
-
----
-
-## 4. 输出约定（当前）
-
-当前读接口和 sidecar 返回统一收敛为：
+当前 MCP 与 sidecar 的最终输出仍然统一为：
 
 ```ts
 export interface MemoryHit {
   memoryId: string;
   content: string;
 }
-
-export interface MemoryResponse {
-  memoryHits: MemoryHit[];
-  requestId: string;
-}
 ```
 
 说明：
-- `recall`、`list`、`get_timeline` 返回 `memoryHits[]`
-- `get_detail` 也返回 `MemoryResponse`，但约定 `memoryHits.length === 1`
-- `content` 为 Markdown 文本，承担 text-first 的主要输出职责
 
----
+- `content` 为 Markdown
+- MCP 直接拼接 `MemoryHit.content`
+- sidecar 是当前的 `RenderedMemoryRecord -> MemoryHit` 渲染边界
 
-## 5. 写入侧（当前）
+`@munnai/core` 当前对 sidecar 暴露的是 `RenderedMemoryRecord` 等 TS contract，但 MCP 并不直接消费它；MCP 仍通过 sidecar 的 `MemoryHit[]` 获得最终文本。
 
-当前 demo 只暴露一个正式写接口：
+## 3. Memory Navigation
 
-- `POST /api/v1/message/add`
+统一导航键仍为 `memoryId`。
 
-写入 payload 为：
+当前有效语义：
 
-```ts
-export interface Turn {
-  agent: string;
-  summary?: string;
-  details?: string;
-  tool_calling?: string[];
-  // 工具调用过程中产生的产出物。
-  artifacts?: Record<string, string>;
-  prompt?: string;
-  response?: string;
-}
-```
+- `SESSION:{turn_id}`
+- `OBSERVING:{snapshot_id}`
 
-当前 demo 不暴露其他写接口。
+其中：
 
-补充说明：
+- `OBSERVING` 现在表示 observing snapshot row
+- `observing_id` 是内部 observing line 分组键，不单独暴露为 MCP memory id
 
-- 当前路径仍为 `POST /api/v1/message/add`，但写入记录语义统一为 turn
-- `tool_calling` 表示本轮调用过的工具
-- `artifacts` 表示工具调用产生的产出物
+## 4. Read Semantics
 
----
+MCP 暴露的结构化读能力对应 core 内部的统一读语义：
 
-## 6. 标识约定（当前）
+- `list`
+  - layer 的顶层浏览接口
+- `detail`
+  - 单个 memory row
+- `timeline`
+  - 单个 anchor row 周围的同层邻近 records
 
-- 读接口统一使用 `memoryId`
-- 单条 turn 的持久化标识统一记为 `turnId`
+具体到当前已落地 layers：
 
----
+- `session`
+  - `list` 返回最近 session memory points（内部来源于 session turn rows）
+  - `timeline` 返回相邻 session memory points（内部来源于 session turn rows）
+- `observing`
+  - `list` 返回每条 observing line 的 latest snapshot row
+  - `detail` 返回单个 observing snapshot row
+  - `timeline` 返回同一 `observing_id` 下按 `snapshot_sequence` 排序的邻近 snapshot rows
 
-## 7. 当前非目标
+`recall` 继续独立于这套接口，因为它属于 retrieval，而不是基础结构化读取。
 
-以下内容仍属于后续演进方向，不属于当前 demo 的正式实现：
+## 5. MCP Boundary
 
-- session 自动聚合算法
-- thinking 写接口
-- 向量召回与 embedding 写入
-- 复杂存储后端（数据库 / Lance / Arrow）
+当前 MCP 层故意保持很薄，不承载以下职责：
+
+- layer-specific 查询语义
+- 结构化 record 聚合
+- 文本渲染策略
+- semantic index / observer 业务逻辑
+
+这些职责都留在 sidecar/core。

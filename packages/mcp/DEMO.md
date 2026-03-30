@@ -1,41 +1,12 @@
-# MCP Demo (Current)
+# Munnai MCP Demo
 
-This package contains the current MCP demo for Munnai.
+The current demo shape is:
 
-## Tools
+- the sidecar stores session memory rows in the Lance-backed `turn` dataset (public memory layer `SESSION`)
+- `session/messages` adds a single message into a logical session
+- memory APIs return `MemoryResponse`
 
-The MCP server currently exposes these tools:
-
-- `print`
-  - Debug tool.
-  - Prints arguments to stderr.
-  - Writes a Markdown debug snapshot under `.munnai/debug/`.
-- `recall`
-  - Input:
-    - `query: string`
-    - `limit?: number`
-    - `thinkingRatio?: number`
-- `list`
-  - Input:
-    - `mode: "recency"`
-    - `limit?: number`
-    - `thinkingRatio?: number`
-- `get_timeline`
-  - Input:
-    - `memoryId: string`
-    - `beforeLimit?: number`
-    - `afterLimit?: number`
-- `get_detail`
-  - Input:
-    - `memoryId: string`
-
-## Current behavior
-
-- `print` is local-debug oriented.
-- `recall`, `list`, `get_timeline`, and `get_detail` call the sidecar HTTP API.
-- The sidecar currently stores turn records locally and returns `MemoryResponse`.
-
-## Current shared response shape
+## Core Types
 
 ```ts
 export interface MemoryHit {
@@ -49,46 +20,31 @@ export interface MemoryResponse {
 }
 ```
 
-## Current write path
-
-The current sidecar write API is:
-
-```http
-POST /api/v1/message/add
-```
-
-With:
+## Write Shape
 
 ```ts
-export interface Turn {
+export interface SessionMessageInput {
+  session_id?: string;
   agent: string;
+  title?: string;
   summary?: string;
-  details?: string;
   tool_calling?: string[];
-  // Artifacts produced by tool calls in this turn.
+  // Artifacts produced by tool calls in this session memory row.
   artifacts?: Record<string, string>;
   prompt?: string;
   response?: string;
+  // Free-form API-layer extra input.
+  extra?: Record<string, string>;
 }
 
-export interface AddTurnRequest {
-  turn: Turn;
+export interface AddMessageToSessionRequest {
+  session: SessionMessageInput;
 }
 
-export interface AddTurnResponse {
+export interface AddMessageToSessionResponse {
   turnId: string;
   requestId: string;
 }
 ```
 
-The HTTP path remains `POST /api/v1/message/add`, and the request body is `AddTurnRequest`.
-
-## How to run
-
-From the repo root:
-
-```bash
-pnpm --filter @munnai/mcp demo
-```
-
-The demo client currently exercises `print`, and the server will generate a Markdown debug file.
+The HTTP path is `POST /api/v1/session/messages`. `agent` is required, the other message fields are optional, and at least one persisted message field must be present. `extra` is API-layer input and is not persisted.

@@ -26,9 +26,12 @@ target/
 .trae/
 
 node_modules/
+.pnpm-store/
 pnpm-lock.yaml
 dist/
+packages/board/dist-server/
 *.tsbuildinfo
 
 Cargo.lock
 .munnai/
+.claude/settings.local.json
