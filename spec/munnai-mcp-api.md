@@ -1,21 +1,29 @@
-# Munnai MCP API Spec（当前 Demo 对齐版）
+# Munnai MCP API Spec
 
-本文档定义当前 Munnai 暴露给 agent 的 MCP tools 语义与输入参数。文档仍然保留 spec 的组织方式，但以当前 demo 的接口为准。
+本文档定义当前 Munnai 暴露给 agent 的 MCP tools 语义与输入参数。
 
-## 1. 核心概念
+## 1. Core Concepts
 
 ### 1.1 `memoryId`
 
-MCP 层当前通过 `memoryId: string` 读取 memory。
+MCP 层当前统一通过 `memoryId: string` 读取 memory。
 
-当前 demo 下：
-- `memoryId` 是 read-side 的统一读取键
-- `get_detail` 与 `get_timeline` 都以它为输入
-- 当前 demo 的持久化重点仍然是 turn 数据
+约定：
+
+- `memoryId = {memoryLayer}:{memoryPoint}`
+
+当前有效语义：
+
+- `SESSION:{turn_id}`
+  - 指向单个 session memory point（内部落在 turn row 上）
+- `OBSERVING:{snapshot_id}`
+  - 指向单个 observing snapshot row
+
+MCP 不单独暴露 observing line id；`observing_id` 只作为内部 grouping key 存在。
 
 ### 1.2 `MemoryHit`
 
-所有读接口最终都收敛为：
+所有读工具最终都收敛为：
 
 ```ts
 export interface MemoryHit {
@@ -25,67 +33,114 @@ export interface MemoryHit {
 ```
 
 其中：
+
 - `content` 为 Markdown 文本
 - `MemoryHit[]` 是 sidecar 与 MCP 之间的统一读结果载体
 
-## 2. 排序与稳定性（当前）
+MCP 仍保持 text-first；当前不直接暴露 `@munnai/core` 的 `RenderedMemoryRecord`，而是通过 sidecar 将其渲染为 `MemoryHit[]`。
 
-- `recall`：当前 demo 为简单文本匹配，按当前实现规则返回
-- `list`：按时间倒序返回最近结果
-- `get_timeline`：按锚点前后窗口返回结果
-- `get_detail`：返回单条结果
+## 2. Tool Semantics
 
-## 3. Tools
-
-### 3.1 `print`
+### 2.1 `recall`
 
 用途：
-- 本地调试
-- 打印参数并生成 Markdown 调试文件
+
+- 执行当前 demo 的文本检索
 
 输入参数：
-- `message?: string`
-- `data?: unknown`
 
-### 3.2 `recall`
-
-输入参数：
 - `query: string`
 - `limit?: number`
 - `thinkingRatio?: number`
 
 输出：
+
 - MCP 文本结果，底层来源于 `MemoryResponse`
 
-### 3.3 `list`
+说明：
+
+- `recall` 不属于基础 browse/navigation 读接口
+- 它属于 retrieval 行为
+
+### 2.2 `list`
+
+用途：
+
+- 浏览最近的 memories
 
 输入参数：
+
 - `mode: "recency"`
 - `limit?: number`
 - `thinkingRatio?: number`
 
 输出：
+
 - MCP 文本结果，底层来源于 `MemoryResponse`
 
-### 3.4 `get_timeline`
+语义：
+
+- `list` 是 layer 的顶层浏览接口
+- `SESSION` 返回最近 session memory points 的窗口（内部来源于 session turn rows）
+- `OBSERVING` 返回每条 observing line 的 latest snapshot row
+- sidecar 合并不同 layer 的结果后，再按时间窗口输出给 MCP
+- 输出顺序为从旧到新，便于直接注入 LLM context
+
+### 2.3 `get_timeline`
+
+用途：
+
+- 读取某个 anchor memory 周围的同层邻近 records
 
 输入参数：
+
 - `memoryId: string`
 - `beforeLimit?: number`
 - `afterLimit?: number`
 
 输出：
+
 - MCP 文本结果，底层来源于 `MemoryResponse`
 
-### 3.5 `get_detail`
+语义：
+
+- `SESSION`
+  - 围绕 anchor session memory point 返回同 agent/session 条件下的邻近 session memory points（内部来源于 session turn rows）
+- `OBSERVING`
+  - 围绕 anchor snapshot 返回同一 `observing_id` 下按 `snapshot_sequence` 的邻近 snapshot rows
+
+### 2.4 `get_detail`
+
+用途：
+
+- 读取单个 memory row 的完整内容
 
 输入参数：
+
 - `memoryId: string`
 
 输出：
+
 - MCP 文本结果，底层来源于 `MemoryResponse`
 
-## 4. 当前对应的共享响应类型
+说明：
+
+- `get_detail` 约定只返回单条 `MemoryHit`
+- `OBSERVING:{snapshot_id}` 返回的是单个 observing snapshot row，而不是整条 observing line
+
+### 2.5 `print`
+
+用途：
+
+- 本地调试
+- 打印参数并生成 Markdown 调试文件
+
+输入参数：
+
+- `message?: string`
+- `data?: unknown`
+
+## 3. Shared Response Type
 
 ```ts
 export interface MemoryResponse {
@@ -93,3 +148,19 @@ export interface MemoryResponse {
   requestId: string;
 }
 ```
+
+## 4. MCP Layer Boundary
+
+当前 MCP 层职责保持极简：
+
+- 定义 tool schema
+- 调用 sidecar
+- 把 sidecar 返回的 `MemoryHit[]` 直接拼接成文本结果
+
+当前不在 MCP 层承担：
+
+- memory 排序策略
+- structure-to-text 渲染策略
+- cross-layer business logic
+
+这些职责都保留在 sidecar / `@munnai/core` / lance core。

@@ -1,0 +1,23 @@
+{
+  "id": "munnai",
+  "kind": "memory",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "baseUrl": {
+        "type": "string"
+      },
+      "enabled": {
+        "type": "boolean"
+      },
+      "timeoutMs": {
+        "type": "number",
+        "minimum": 1
+      }
+    },
+    "required": [
+      "baseUrl"
+    ]
+  }
+}
