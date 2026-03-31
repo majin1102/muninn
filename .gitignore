@@ -30,6 +30,10 @@ node_modules/
 pnpm-lock.yaml
 dist/
 packages/board/dist-server/
+benchmark/**/.runs/
+benchmark/**/out/
+benchmark/**/__pycache__/
+benchmark/**/.venv/
 *.tsbuildinfo
 
 Cargo.lock
