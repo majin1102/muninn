@@ -35,7 +35,7 @@ export function createMunnaiContextEngine(params: {
       try {
         const signal = AbortSignal.timeout(params.config.timeoutMs);
         const response = await fetchImpl(
-          `${params.config.baseUrl}/api/v1/list?mode=recency&limit=5`,
+          `${params.config.baseUrl}/api/v1/list?mode=recency&limit=${params.config.recencyLimit}`,
           { signal }
         );
 
@@ -72,42 +72,6 @@ export function createMunnaiContextEngine(params: {
       }
     },
 
-    async afterTurn(afterTurnParams: {
-      sessionId: string;
-      sessionFile: string;
-      messages: AgentMessage[];
-      prePromptMessageCount: number;
-      runtimeContext?: Record<string, unknown>;
-    }): Promise<void> {
-      try {
-        const newMessages = afterTurnParams.messages.slice(
-          afterTurnParams.prePromptMessageCount
-        );
-        const { userText, assistantText } = extractTurnTexts(newMessages);
-
-        if (!userText && !assistantText) {
-          return;
-        }
-
-        const signal = AbortSignal.timeout(params.config.timeoutMs);
-        await fetchImpl(`${params.config.baseUrl}/api/v1/session/messages`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            session: {
-              session_id: afterTurnParams.sessionId,
-              agent: "openclaw",
-              prompt: userText || undefined,
-              response: assistantText || undefined,
-            },
-          }),
-          signal,
-        });
-      } catch (error) {
-        params.logger.warn?.(`munnai afterTurn failed: ${String(error)}`);
-      }
-    },
-
     async compact(): Promise<CompactResult> {
       return {
         ok: true,
@@ -130,51 +94,4 @@ function formatMemoriesContext(memories: string): string {
   return `<relevant-memories>
 ${memories}
 </relevant-memories>`;
-}
-
-function extractTurnTexts(messages: AgentMessage[]): {
-  userText: string;
-  assistantText: string;
-} {
-  const userTexts: string[] = [];
-  const assistantTexts: string[] = [];
-
-  for (const msg of messages) {
-    if (!msg || typeof msg !== "object") continue;
-    const role = msg.role;
-    if (role !== "user" && role !== "assistant") continue;
-
-    const text = extractContentText(msg.content);
-    if (!text) continue;
-
-    if (role === "user") {
-      userTexts.push(text);
-    } else {
-      assistantTexts.push(text);
-    }
-  }
-
-  return {
-    userText: userTexts.join("\n\n").trim(),
-    assistantText: assistantTexts.join("\n\n").trim(),
-  };
-}
-
-function extractContentText(content: unknown): string {
-  if (typeof content === "string") {
-    return content.trim();
-  }
-  if (!Array.isArray(content)) {
-    return "";
-  }
-  const texts = content
-    .map((block) => {
-      if (!block || typeof block !== "object") return "";
-      const entry = block as Record<string, unknown>;
-      return entry.type === "text" && typeof entry.text === "string"
-        ? entry.text.trim()
-        : "";
-    })
-    .filter(Boolean);
-  return texts.join("\n\n").trim();
 }

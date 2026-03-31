@@ -22,7 +22,7 @@ export default definePluginEntry({
           })
         );
         api.logger.info?.(
-          "munnai: registered context-engine (assemble=auto-recall, afterTurn=text-capture)"
+          "munnai: registered context-engine (assemble=global-recency) with hook-based writes"
         );
       }
     } else {

@@ -17,7 +17,7 @@ test("integration: assemble calls /api/v1/list", async () => {
 
   try {
     const engine = createMunnaiContextEngine({
-      config: { baseUrl: `http://localhost:${port}`, enabled: true, timeoutMs: 1000 },
+      config: { baseUrl: `http://localhost:${port}`, enabled: true, timeoutMs: 1000, recencyLimit: 5 },
       logger: {},
     });
 
@@ -35,16 +35,12 @@ test("integration: assemble calls /api/v1/list", async () => {
   }
 });
 
-test("integration: afterTurn calls /api/v1/session/messages", async () => {
+test("integration: assemble honors configured recencyLimit", async () => {
   const requests = [];
   const server = http.createServer((req, res) => {
-    let body = "";
-    req.on("data", (chunk) => (body += chunk));
-    req.on("end", () => {
-      requests.push({ method: req.method, url: req.url, body: JSON.parse(body) });
-      res.writeHead(200);
-      res.end();
-    });
+    requests.push({ method: req.method, url: req.url });
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ memoryHits: [{ content: "test memory" }] }));
   });
 
   await new Promise((resolve) => server.listen(0, resolve));
@@ -52,46 +48,30 @@ test("integration: afterTurn calls /api/v1/session/messages", async () => {
 
   try {
     const engine = createMunnaiContextEngine({
-      config: { baseUrl: `http://localhost:${port}`, enabled: true, timeoutMs: 1000 },
+      config: { baseUrl: `http://localhost:${port}`, enabled: true, timeoutMs: 1000, recencyLimit: 9 },
       logger: {},
     });
 
-    await engine.afterTurn({
-      sessionId: "test-session",
-      sessionFile: "/tmp/session.json",
-      messages: [
-        { role: "user", content: "user text" },
-        { role: "assistant", content: "assistant text" },
-      ],
-      prePromptMessageCount: 0,
+    await engine.assemble({
+      sessionId: "test",
+      messages: [{ role: "user", content: "hello" }],
     });
 
     assert.strictEqual(requests.length, 1);
-    assert.strictEqual(requests[0].method, "POST");
-    assert.strictEqual(requests[0].url, "/api/v1/session/messages");
-    assert.strictEqual(requests[0].body.session.session_id, "test-session");
-    assert.strictEqual(requests[0].body.session.prompt, "user text");
-    assert.strictEqual(requests[0].body.session.response, "assistant text");
+    assert.strictEqual(requests[0].method, "GET");
+    assert.match(requests[0].url, /^\/api\/v1\/list\?mode=recency&limit=9/);
   } finally {
     server.close();
   }
 });
 
-test("integration: full turn flow (assemble + afterTurn)", async () => {
+test("integration: context engine does not write turns through afterTurn", async () => {
   const requests = [];
   const server = http.createServer((req, res) => {
     if (req.method === "GET" && req.url.startsWith("/api/v1/list")) {
       requests.push({ method: "GET", url: req.url });
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ memoryHits: [{ content: "recalled memory" }] }));
-    } else if (req.method === "POST" && req.url === "/api/v1/session/messages") {
-      let body = "";
-      req.on("data", (chunk) => (body += chunk));
-      req.on("end", () => {
-        requests.push({ method: "POST", url: req.url, body: JSON.parse(body) });
-        res.writeHead(200);
-        res.end();
-      });
     } else {
       res.writeHead(404);
       res.end();
@@ -103,7 +83,7 @@ test("integration: full turn flow (assemble + afterTurn)", async () => {
 
   try {
     const engine = createMunnaiContextEngine({
-      config: { baseUrl: `http://localhost:${port}`, enabled: true, timeoutMs: 1000 },
+      config: { baseUrl: `http://localhost:${port}`, enabled: true, timeoutMs: 1000, recencyLimit: 5 },
       logger: {},
     });
 
@@ -112,22 +92,10 @@ test("integration: full turn flow (assemble + afterTurn)", async () => {
       messages: [{ role: "user", content: "query" }],
     });
 
-    await engine.afterTurn({
-      sessionId: "test",
-      sessionFile: "/tmp/session.json",
-      messages: [
-        { role: "user", content: "query" },
-        { role: "assistant", content: "answer" },
-      ],
-      prePromptMessageCount: 0,
-    });
-
-    assert.strictEqual(requests.length, 2);
+    assert.strictEqual(requests.length, 1);
     assert.strictEqual(requests[0].method, "GET");
-    assert.strictEqual(requests[1].method, "POST");
     assert.ok(assembleResult.systemPromptAddition?.includes("recalled memory"));
-    assert.strictEqual(requests[1].body.session.prompt, "query");
-    assert.strictEqual(requests[1].body.session.response, "answer");
+    assert.strictEqual(engine.afterTurn, undefined);
   } finally {
     server.close();
   }
@@ -145,7 +113,7 @@ test("integration: server error does not throw", async () => {
   try {
     const warnings = [];
     const engine = createMunnaiContextEngine({
-      config: { baseUrl: `http://localhost:${port}`, enabled: true, timeoutMs: 1000 },
+      config: { baseUrl: `http://localhost:${port}`, enabled: true, timeoutMs: 1000, recencyLimit: 5 },
       logger: { warn: (msg) => warnings.push(msg) },
     });
 
