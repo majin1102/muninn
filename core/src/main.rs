@@ -25,6 +25,11 @@ struct ResponseEnvelope {
     error: Option<String>,
 }
 
+struct RequestHandling {
+    response: ResponseEnvelope,
+    should_exit: bool,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct AddMessageParams {
@@ -118,31 +123,38 @@ async fn main() {
             continue;
         }
 
-        let response = handle_request(&service, &line).await;
-        let encoded = serde_json::to_string(&response).expect("response should encode");
+        let handled = handle_request(&service, &line).await;
+        let encoded = serde_json::to_string(&handled.response).expect("response should encode");
         if writeln!(stdout, "{encoded}").is_err() {
             break;
         }
         if stdout.flush().is_err() {
             break;
         }
+        if handled.should_exit {
+            break;
+        }
     }
     service.shutdown().await;
 }
 
-async fn handle_request(service: &Service, line: &str) -> ResponseEnvelope {
+async fn handle_request(service: &Service, line: &str) -> RequestHandling {
     let request: RequestEnvelope = match serde_json::from_str(line) {
         Ok(request) => request,
         Err(error) => {
-            return ResponseEnvelope {
-                id: 0,
-                ok: false,
-                data: None,
-                error: Some(format!("invalid request: {error}")),
+            return RequestHandling {
+                response: ResponseEnvelope {
+                    id: 0,
+                    ok: false,
+                    data: None,
+                    error: Some(format!("invalid request: {error}")),
+                },
+                should_exit: false,
             };
         }
     };
 
+    let should_exit = request.method == "shutdown";
     let result = match request.method.as_str() {
         "addMessage" => match parse_params::<AddMessageParams>(&request.params) {
             Ok(params) => service
@@ -256,22 +268,29 @@ async fn handle_request(service: &Service, line: &str) -> ResponseEnvelope {
                 .map_err(|error| error.to_string()),
             Err(error) => Err(error),
         },
+        "shutdown" => {
+            service.shutdown().await;
+            Ok(Value::Null)
+        }
         _ => Err(format!("unknown method: {}", request.method)),
     };
 
-    match result {
-        Ok(data) => ResponseEnvelope {
-            id: request.id,
-            ok: true,
-            data: Some(data),
-            error: None,
+    RequestHandling {
+        response: match result {
+            Ok(data) => ResponseEnvelope {
+                id: request.id,
+                ok: true,
+                data: Some(data),
+                error: None,
+            },
+            Err(error) => ResponseEnvelope {
+                id: request.id,
+                ok: false,
+                data: None,
+                error: Some(error),
+            },
         },
-        Err(error) => ResponseEnvelope {
-            id: request.id,
-            ok: false,
-            data: None,
-            error: Some(error),
-        },
+        should_exit,
     }
 }
 

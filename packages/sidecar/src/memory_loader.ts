@@ -23,6 +23,32 @@ function memoryResponse(memoryHits: MemoryHit[]): MemoryResponse {
   };
 }
 
+function parseNonNegativeInteger(
+  raw: string | undefined,
+  fieldName: string,
+): { value: number | undefined; error: string | null } {
+  if (raw === undefined) {
+    return { value: undefined, error: null };
+  }
+
+  if (raw.trim() === '') {
+    return {
+      value: undefined,
+      error: `${fieldName} must be a non-negative integer`,
+    };
+  }
+
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < 0) {
+    return {
+      value: undefined,
+      error: `${fieldName} must be a non-negative integer`,
+    };
+  }
+
+  return { value, error: null };
+}
+
 function mapCoreLookupError(error: unknown): { status: number; body: ErrorResponse } {
   const message = error instanceof Error ? error.message : String(error);
   const lowered = message.toLowerCase();
@@ -56,7 +82,12 @@ memoryLoader.get('/api/v1/recall', async (c) => {
     return c.json(errorResponse('invalidRequest', 'query is required'), 400);
   }
 
-  const maxResults = limit ? Number(limit) : 10;
+  const parsedLimit = parseNonNegativeInteger(limit, 'limit');
+  if (parsedLimit.error) {
+    return c.json(errorResponse('invalidRequest', parsedLimit.error), 400);
+  }
+
+  const maxResults = parsedLimit.value ?? 10;
   const matched = (await memories.recall(query, maxResults)).map(renderRenderedMemoryHit);
 
   return c.json(memoryResponse(matched));
@@ -73,7 +104,12 @@ memoryLoader.get('/api/v1/list', async (c) => {
     return c.json(errorResponse('invalidRequest', 'mode must be "recency"'), 400);
   }
 
-  const maxResults = limit ? Number(limit) : 10;
+  const parsedLimit = parseNonNegativeInteger(limit, 'limit');
+  if (parsedLimit.error) {
+    return c.json(errorResponse('invalidRequest', parsedLimit.error), 400);
+  }
+
+  const maxResults = parsedLimit.value ?? 10;
   const recent = (await memories.list({ mode: { type: 'recency', limit: maxResults } })).map(renderRenderedMemoryHit);
 
   return c.json(memoryResponse(recent));
@@ -90,12 +126,22 @@ memoryLoader.get('/api/v1/timeline', async (c) => {
     return c.json(errorResponse('invalidRequest', 'memoryId is required'), 400);
   }
 
+  const parsedBeforeLimit = parseNonNegativeInteger(beforeLimit, 'beforeLimit');
+  if (parsedBeforeLimit.error) {
+    return c.json(errorResponse('invalidRequest', parsedBeforeLimit.error), 400);
+  }
+
+  const parsedAfterLimit = parseNonNegativeInteger(afterLimit, 'afterLimit');
+  if (parsedAfterLimit.error) {
+    return c.json(errorResponse('invalidRequest', parsedAfterLimit.error), 400);
+  }
+
   let windowed;
   try {
     windowed = (await memories.timeline({
       memoryId,
-      beforeLimit: beforeLimit ? Number(beforeLimit) : 3,
-      afterLimit: afterLimit ? Number(afterLimit) : 3,
+      beforeLimit: parsedBeforeLimit.value ?? 3,
+      afterLimit: parsedAfterLimit.value ?? 3,
     })).map(renderRenderedMemoryHit);
   } catch (error) {
     const mapped = mapCoreLookupError(error);

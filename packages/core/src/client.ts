@@ -163,10 +163,19 @@ class RustCoreBridge {
       return;
     }
 
-    await new Promise<void>((resolve) => {
-      this.process.once('exit', () => resolve());
-      this.process.kill();
-    });
+    try {
+      await this.request<null>('shutdown', {});
+    } catch {
+      // fall through to exit wait / hard kill
+    }
+
+    await this.waitForExit(2_000);
+    if (this.exited) {
+      return;
+    }
+
+    this.process.kill();
+    await this.waitForExit(2_000);
   }
 
   private handleLine(line: string) {
@@ -182,6 +191,24 @@ class RustCoreBridge {
     } else {
       pending.reject(new Error(response.error ?? 'unknown rust daemon error'));
     }
+  }
+
+  private waitForExit(timeoutMs: number): Promise<void> {
+    if (this.exited) {
+      return Promise.resolve();
+    }
+
+    return new Promise<void>((resolve) => {
+      const onExit = () => {
+        clearTimeout(timer);
+        resolve();
+      };
+      const timer = setTimeout(() => {
+        this.process.off('exit', onExit);
+        resolve();
+      }, timeoutMs);
+      this.process.once('exit', onExit);
+    });
   }
 }
 

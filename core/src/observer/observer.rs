@@ -7,6 +7,8 @@ use std::time::{Duration, Instant};
 use chrono::Utc;
 use lance::Result;
 use tokio::sync::Mutex;
+use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
 
 use crate::format::semantic_index::SemanticIndexRow;
 use crate::format::session::SessionTurn;
@@ -54,6 +56,12 @@ struct EpochBarrierState {
 }
 
 #[derive(Debug)]
+struct ObserverRuntime {
+    cancel: CancellationToken,
+    task: StdMutex<Option<JoinHandle<()>>>,
+}
+
+#[derive(Debug)]
 pub(crate) struct PostWriteGuard {
     epoch: u64,
     barrier: Arc<StdMutex<EpochBarrierState>>,
@@ -86,15 +94,19 @@ pub struct Observer {
     poll_interval: Duration,
     barrier: Arc<StdMutex<EpochBarrierState>>,
     state: Arc<Mutex<ObserverState>>,
+    runtime: Arc<ObserverRuntime>,
 }
 
 impl Observer {
     pub async fn new(storage: Storage) -> Result<Self> {
         let observer_name = effective_observer_name()?;
         let mut singleton = observer_singleton().lock().await;
-        if let Some(observer) = singleton.as_ref() {
-            if observer.observer == observer_name && observer.storage.matches(&storage) {
-                return Ok(observer.clone());
+        if let Some(observer) = singleton.as_ref().cloned() {
+            if !observer.is_shutdown().await
+                && observer.observer == observer_name
+                && observer.storage.matches(&storage)
+            {
+                return Ok(observer);
             }
             observer.shutdown().await;
         }
@@ -154,13 +166,18 @@ impl Observer {
                 flushing: false,
                 shutdown: false,
             })),
+            runtime: Arc::new(ObserverRuntime {
+                cancel: CancellationToken::new(),
+                task: StdMutex::new(None),
+            }),
         };
         observer.start_polling();
         Ok(observer)
     }
 
-    async fn shutdown(&self) {
+    pub async fn shutdown(&self) {
         self.state.lock().await.shutdown = true;
+        self.runtime.shutdown().await;
     }
 
     pub(crate) fn begin_post(&self) -> PostWriteGuard {
@@ -186,64 +203,38 @@ impl Observer {
             return;
         }
         let mut state = self.state.lock().await;
+        if state.shutdown {
+            return;
+        }
         for turn in turns {
             enqueue_turn(&mut state.buffer, turn);
         }
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub async fn flush_epoch(&self) -> Result<usize> {
-        let mut state = self.state.lock().await;
-        if state.shutdown || state.flushing {
-            return Ok(0);
-        }
-        let epoch = if let Some(epoch) = state.observing_epoch {
-            epoch
-        } else {
-            if state.buffer.is_empty() {
-                return Ok(0);
-            }
-            let mut barrier = self
-                .barrier
-                .lock()
-                .expect("observer epoch barrier poisoned");
-            if barrier.open_writes > 0 {
-                maybe_warn_stalled_writes(&self.observer, self.poll_interval, &mut barrier);
-                return Ok(0);
-            }
-            let epoch = barrier.current_epoch;
-            barrier.current_epoch += 1;
-            state.observing_epoch = Some(epoch);
-            state.observing_buffer = std::mem::take(&mut state.buffer);
-            epoch
-        };
-        if state.observing_buffer.is_empty() {
-            state.observing_epoch = None;
-            return Ok(0);
-        }
-
-        state.flushing = true;
-        let pending_turns = state.observing_buffer.clone();
-        let result = flush_epoch_inner(
+        flush_epoch_with(
             &self.storage,
             &self.observer,
-            &mut state.threads,
-            epoch,
-            &pending_turns,
+            self.poll_interval,
+            &self.barrier,
+            &self.state,
         )
-        .await;
-        match result {
-            Ok(flushed) => {
-                state.committed_epoch = Some(epoch);
-                state.observing_epoch = None;
-                state.observing_buffer.clear();
-                state.flushing = false;
-                Ok(flushed)
-            }
-            Err(error) => {
-                state.flushing = false;
-                Err(error)
-            }
-        }
+        .await
+    }
+
+    pub(crate) async fn is_shutdown(&self) -> bool {
+        self.state.lock().await.shutdown
+    }
+
+    #[cfg(test)]
+    pub(crate) fn shares_runtime_with(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.runtime, &other.runtime)
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn runtime_stopped(&self) -> bool {
+        self.runtime.is_shutdown().await
     }
 
     #[cfg(test)]
@@ -266,16 +257,109 @@ impl Observer {
     }
 
     fn start_polling(&self) {
-        let observer = self.clone();
-        tokio::spawn(async move {
+        let storage = self.storage.clone();
+        let observer = self.observer.clone();
+        let poll_interval = self.poll_interval;
+        let barrier = Arc::clone(&self.barrier);
+        let state = Arc::clone(&self.state);
+        let cancel = self.runtime.cancel.clone();
+        let task = tokio::spawn(async move {
             loop {
-                tokio::time::sleep(observer.poll_interval).await;
-                if observer.state.lock().await.shutdown {
-                    break;
+                tokio::select! {
+                    _ = cancel.cancelled() => break,
+                    _ = tokio::time::sleep(poll_interval) => {
+                        let _ =
+                            flush_epoch_with(&storage, &observer, poll_interval, &barrier, &state)
+                                .await;
+                    }
                 }
-                let _ = observer.flush_epoch().await;
             }
         });
+        let mut slot = self
+            .runtime
+            .task
+            .lock()
+            .expect("observer runtime task poisoned");
+        *slot = Some(task);
+    }
+}
+
+impl ObserverRuntime {
+    async fn shutdown(&self) {
+        self.cancel.cancel();
+        let task = {
+            let mut slot = self.task.lock().expect("observer runtime task poisoned");
+            slot.take()
+        };
+        if let Some(task) = task {
+            let _ = task.await;
+        }
+    }
+
+    #[cfg(test)]
+    async fn is_shutdown(&self) -> bool {
+        self.task
+            .lock()
+            .expect("observer runtime task poisoned")
+            .is_none()
+    }
+}
+
+impl Drop for ObserverRuntime {
+    fn drop(&mut self) {
+        self.cancel.cancel();
+    }
+}
+
+async fn flush_epoch_with(
+    storage: &Storage,
+    observer: &str,
+    poll_interval: Duration,
+    barrier: &Arc<StdMutex<EpochBarrierState>>,
+    state: &Arc<Mutex<ObserverState>>,
+) -> Result<usize> {
+    let mut state = state.lock().await;
+    if state.shutdown || state.flushing {
+        return Ok(0);
+    }
+    let epoch = if let Some(epoch) = state.observing_epoch {
+        epoch
+    } else {
+        if state.buffer.is_empty() {
+            return Ok(0);
+        }
+        let mut barrier = barrier.lock().expect("observer epoch barrier poisoned");
+        if barrier.open_writes > 0 {
+            maybe_warn_stalled_writes(observer, poll_interval, &mut barrier);
+            return Ok(0);
+        }
+        let epoch = barrier.current_epoch;
+        barrier.current_epoch += 1;
+        state.observing_epoch = Some(epoch);
+        state.observing_buffer = std::mem::take(&mut state.buffer);
+        epoch
+    };
+    if state.observing_buffer.is_empty() {
+        state.observing_epoch = None;
+        return Ok(0);
+    }
+
+    state.flushing = true;
+    let pending_turns = state.observing_buffer.clone();
+    let result =
+        flush_epoch_inner(storage, observer, &mut state.threads, epoch, &pending_turns).await;
+    match result {
+        Ok(flushed) => {
+            state.committed_epoch = Some(epoch);
+            state.observing_epoch = None;
+            state.observing_buffer.clear();
+            state.flushing = false;
+            Ok(flushed)
+        }
+        Err(error) => {
+            state.flushing = false;
+            Err(error)
+        }
     }
 }
 

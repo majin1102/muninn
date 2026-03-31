@@ -38,6 +38,27 @@ function hasMessageContent(session: SessionMessageInput): boolean {
     || (session.artifacts !== undefined && Object.keys(session.artifacts).length > 0);
 }
 
+function mapCoreWriteError(error: unknown): { status: number; body: ErrorResponse } {
+  const message = error instanceof Error ? error.message : String(error);
+  const lowered = message.toLowerCase();
+
+  if (
+    lowered.includes('invalid')
+    || lowered.includes('turn must include at least one message field')
+    || lowered.includes('message session does not match')
+  ) {
+    return {
+      status: 400,
+      body: errorResponse('invalidRequest', message),
+    };
+  }
+
+  return {
+    status: 500,
+    body: errorResponse('internalError', 'internal server error'),
+  };
+}
+
 function validateSession(session: SessionMessageInput | undefined): string | null {
   if (!session) {
     return 'session is required';
@@ -53,6 +74,18 @@ function validateSession(session: SessionMessageInput | undefined): string | nul
 
   if (session.title !== undefined && typeof session.title !== 'string') {
     return 'session.title must be a string';
+  }
+
+  if (session.summary !== undefined && typeof session.summary !== 'string') {
+    return 'session.summary must be a string';
+  }
+
+  if (session.prompt !== undefined && typeof session.prompt !== 'string') {
+    return 'session.prompt must be a string';
+  }
+
+  if (session.response !== undefined && typeof session.response !== 'string') {
+    return 'session.response must be a string';
   }
 
   if (session.tool_calling !== undefined && !Array.isArray(session.tool_calling)) {
@@ -94,7 +127,13 @@ memoryWriter.post('/api/v1/session/messages', async (c) => {
   }
 
   const { extra: _extra, ...persistedSession } = body.session;
-  const storedTurn = await addMessage(persistedSession);
+  let storedTurn;
+  try {
+    storedTurn = await addMessage(persistedSession);
+  } catch (error) {
+    const mapped = mapCoreWriteError(error);
+    return c.json(mapped.body, mapped.status as 400 | 500);
+  }
 
   return c.json({
     turnId: storedTurn.turnId,

@@ -118,6 +118,7 @@ test('session/messages validates request shape and requires at least one message
     for (const badSession of [
       { agent: 'agent-a' },
       { agent: 'agent-a', tool_calling: 'tool-a' },
+      { agent: 'agent-a', prompt: 123, tool_calling: ['tool-a'] },
       { agent: 'agent-a', artifacts: { key: 1 } },
       { agent: 'agent-a', extra: { key: 1 } },
     ]) {
@@ -128,6 +129,31 @@ test('session/messages validates request shape and requires at least one message
       });
       assert.equal(invalidResponse.status, 400);
     }
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('session/messages maps core write validation failures to invalidRequest', async () => {
+  const { dir, homeDir } = await makeDatasetUri();
+  process.env.MUNNAI_HOME = homeDir;
+
+  try {
+    const response = await app.request('/api/v1/session/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        session: {
+          session_id: 'group-a',
+          agent: 'agent-a',
+          summary: 'summary only',
+        },
+      }),
+    });
+    assert.equal(response.status, 400);
+    const body = await json(response);
+    assert.equal(body.errorCode, 'invalidRequest');
+    assert.match(body.errorMessage, /at least one message field/i);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -287,6 +313,70 @@ test('list returns the recent window in chronological order, and timeline/recall
   assert.match(recalled.memoryHits[0].content, /alpha/);
 });
 
+test('timeline stays scoped to the full session key when agents share a session_id', async (t) => {
+  const { dir, homeDir } = await makeDatasetUri();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+
+  process.env.MUNNAI_HOME = homeDir;
+
+  const first = await app.request('/api/v1/session/messages', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      session: {
+        session_id: 'group-a',
+        agent: 'agent-a',
+        prompt: 'agent a prompt 1',
+        response: 'agent a response 1',
+      },
+    }),
+  });
+  assert.equal(first.status, 200);
+  const firstBody = await json(first);
+
+  const otherAgent = await app.request('/api/v1/session/messages', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      session: {
+        session_id: 'group-a',
+        agent: 'agent-b',
+        prompt: 'agent b prompt',
+        response: 'agent b response',
+      },
+    }),
+  });
+  assert.equal(otherAgent.status, 200);
+  const otherAgentBody = await json(otherAgent);
+
+  const second = await app.request('/api/v1/session/messages', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      session: {
+        session_id: 'group-a',
+        agent: 'agent-a',
+        prompt: 'agent a prompt 2',
+        response: 'agent a response 2',
+      },
+    }),
+  });
+  assert.equal(second.status, 200);
+  const secondBody = await json(second);
+
+  const timelineResponse = await app.request(
+    `/api/v1/timeline?memoryId=${encodeURIComponent(`SESSION:${secondBody.turnId}`)}&beforeLimit=1&afterLimit=1`
+  );
+  assert.equal(timelineResponse.status, 200);
+  const timeline = await json(timelineResponse);
+  const memoryIds = timeline.memoryHits.map((hit) => hit.memoryId);
+  assert.deepEqual(memoryIds, [
+    `SESSION:${firstBody.turnId}`,
+    `SESSION:${secondBody.turnId}`,
+  ]);
+  assert.ok(!memoryIds.includes(`SESSION:${otherAgentBody.turnId}`));
+});
+
 test('recall and timeline surface request and not-found errors', async () => {
   const { dir, homeDir } = await makeDatasetUri();
   process.env.MUNNAI_HOME = homeDir;
@@ -299,6 +389,32 @@ test('recall and timeline surface request and not-found errors', async () => {
       `/api/v1/timeline?memoryId=${encodeURIComponent('SESSION:01JQ7Y8YQ6V7D4M1N9K2F5T8ZX')}`
     );
     assert.equal(missingTimeline.status, 404);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('recall, list, and timeline reject invalid numeric query parameters', async () => {
+  const { dir, homeDir } = await makeDatasetUri();
+  process.env.MUNNAI_HOME = homeDir;
+
+  try {
+    const badRecall = await app.request('/api/v1/recall?query=alpha&limit=abc');
+    assert.equal(badRecall.status, 400);
+    const badRecallBody = await json(badRecall);
+    assert.equal(badRecallBody.errorCode, 'invalidRequest');
+
+    const badList = await app.request('/api/v1/list?mode=recency&limit=-1');
+    assert.equal(badList.status, 400);
+    const badListBody = await json(badList);
+    assert.equal(badListBody.errorCode, 'invalidRequest');
+
+    const badTimeline = await app.request(
+      `/api/v1/timeline?memoryId=${encodeURIComponent('SESSION:01JQ7Y8YQ6V7D4M1N9K2F5T8ZX')}&beforeLimit=1.5`
+    );
+    assert.equal(badTimeline.status, 400);
+    const badTimelineBody = await json(badTimeline);
+    assert.equal(badTimelineBody.errorCode, 'invalidRequest');
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

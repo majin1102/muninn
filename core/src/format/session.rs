@@ -97,21 +97,7 @@ impl SessionKey {
     }
 
     pub(crate) fn same_group_as(&self, other: &Self) -> bool {
-        match (self, other) {
-            (
-                Self::Session {
-                    session_id: left, ..
-                },
-                Self::Session {
-                    session_id: right, ..
-                },
-            ) => left == right,
-            (Self::Agent { agent: left, .. }, Self::Agent { agent: right, .. }) => left == right,
-            (Self::Observer { observer: left }, Self::Observer { observer: right }) => {
-                left == right
-            }
-            _ => false,
-        }
+        self == other
     }
 }
 
@@ -1365,6 +1351,23 @@ mod tests {
             .map(|turn| turn.turn_id.as_str())
             .collect::<Vec<_>>();
         assert_eq!(ids, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn timeline_with_explicit_session_id_stays_scoped_to_the_full_session_key() {
+        let turns = [
+            make_turn("a", 1, "agent-a", Some("group-a")),
+            make_turn("b", 2, "agent-a", Some("group-a")),
+            make_turn("c", 3, "agent-b", Some("group-a")),
+            make_turn("d", 4, "agent-a", Some("group-a")),
+        ];
+        let anchor = turns.iter().find(|turn| turn.turn_id == "b").unwrap();
+        let result = timeline_from_source(&turns, "b", 1, 1, &anchor.session_key()).unwrap();
+        let ids = result
+            .iter()
+            .map(|turn| turn.turn_id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(ids, vec!["a", "b", "d"]);
     }
 
     #[tokio::test]
