@@ -1,0 +1,60 @@
+[
+  {
+    "sample_id": "sample-a",
+    "conversation": {
+      "speaker_a": "Caroline",
+      "speaker_b": "Melanie",
+      "session_1_date_time": "1:56 pm on 8 May, 2023",
+      "session_1": [
+        {
+          "speaker": "Caroline",
+          "dia_id": "D1:1",
+          "text": "I joined an LGBTQ support group and it helped me a lot."
+        },
+        {
+          "speaker": "Melanie",
+          "dia_id": "D1:2",
+          "text": "That sounds inspiring."
+        }
+      ],
+      "session_2_date_time": "1:14 pm on 25 May, 2023",
+      "session_2": [
+        {
+          "speaker": "Melanie",
+          "dia_id": "D2:1",
+          "text": "I ran a charity race for mental health."
+        }
+      ]
+    },
+    "observation": {
+      "session_1_observation": {
+        "Caroline": [
+          [
+            "Caroline joined an LGBTQ support group.",
+            "D1:1"
+          ]
+        ]
+      },
+      "session_2_observation": {
+        "Melanie": [
+          [
+            "Melanie ran a charity race for mental health.",
+            "D2:1"
+          ]
+        ]
+      }
+    },
+    "session_summary": {
+      "session_1_summary": "On 8 May 2023 at 1:56 pm, Caroline told Melanie that she joined an LGBTQ support group.",
+      "session_2_summary": "On 25 May 2023 at 1:14 pm, Melanie told Caroline that she ran a charity race for mental health."
+    },
+    "qa": [
+      {
+        "question": "What support group did Caroline join?",
+        "answer": "LGBTQ support group",
+        "evidence": ["D1:1"],
+        "category": 4
+      }
+    ]
+  }
+]
