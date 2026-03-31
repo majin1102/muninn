@@ -69,6 +69,8 @@ def evaluate_question_answering(qas: list[dict[str, Any]], prediction_key: str) 
                 recall = sum(ev.split(":")[0][1:] in sessions for ev in evidence) / len(evidence)
             else:
                 recall = sum(ev in contexts for ev in evidence) / len(evidence)
+        elif evidence:
+            recall = 0.0
         else:
             recall = 1.0
 

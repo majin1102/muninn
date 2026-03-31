@@ -46,6 +46,22 @@ class ScoringTests(unittest.TestCase):
     def test_f1_score_handles_token_overlap(self) -> None:
         self.assertGreater(f1_score("mental health", "health"), 0.0)
 
+    def test_recall_is_zero_when_evidence_exists_without_context_hits(self) -> None:
+        scores, recall = evaluate_question_answering(
+            [
+                {
+                    "category": 2,
+                    "answer": "8 May 2023",
+                    "evidence": ["D2:3"],
+                    "munnai_dialog_top_5_prediction": "8 May 2023",
+                    "munnai_dialog_top_5_prediction_context": [],
+                }
+            ],
+            "munnai_dialog_top_5_prediction",
+        )
+        self.assertEqual(scores, [1.0])
+        self.assertEqual(recall, [0.0])
+
     def test_query_builder_emits_searchable_phrases(self) -> None:
         self.assertIn(
             "support group",
