@@ -107,9 +107,9 @@ impl Service {
     }
 
     pub async fn shutdown(&self) {
-        self.observer.shutdown().await;
+        self.observer.shutdown(false).await;
         if let Some(watchdog) = &self._watchdog {
-            watchdog.shutdown().await;
+            watchdog.shutdown(false).await;
         }
     }
 
@@ -219,7 +219,6 @@ mod tests {
         cloned.shutdown().await;
 
         assert!(service.observer.is_shutdown().await);
-        assert!(service.observer.runtime_stopped().await);
 
         unsafe {
             std::env::remove_var("MUNNAI_HOME");

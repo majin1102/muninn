@@ -3,6 +3,8 @@ import os from 'os';
 import path from 'path';
 import readline from 'readline';
 
+const SHUTDOWN_RPC_TIMEOUT_MS = 500;
+
 export interface SessionTurnRecord {
   turnId: string;
   createdAt: string;
@@ -163,11 +165,10 @@ class RustCoreBridge {
       return;
     }
 
-    try {
-      await this.request<null>('shutdown', {});
-    } catch {
-      // fall through to exit wait / hard kill
-    }
+    await waitForPromiseOrTimeout(
+      this.request<null>('shutdown', {}),
+      SHUTDOWN_RPC_TIMEOUT_MS,
+    );
 
     await this.waitForExit(2_000);
     if (this.exited) {
@@ -210,6 +211,25 @@ class RustCoreBridge {
       this.process.once('exit', onExit);
     });
   }
+}
+
+async function waitForPromiseOrTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const settled = promise.then(
+    () => true,
+    () => true,
+  );
+  const timeout = new Promise<false>((resolve) => {
+    timer = setTimeout(() => resolve(false), timeoutMs);
+  });
+  const result = await Promise.race([settled, timeout]);
+  if (timer) {
+    clearTimeout(timer);
+  }
+  return result;
 }
 
 let singleton: RustCoreBridge | null = null;
@@ -316,6 +336,10 @@ export async function shutdownCoreForTests(): Promise<void> {
   singleton = null;
   await daemon.close();
 }
+
+export const __testing = {
+  waitForPromiseOrTimeout,
+};
 
 function resolveRepoRoot(): string {
   return path.resolve(__dirname, '../../..');
