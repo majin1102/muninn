@@ -164,7 +164,7 @@ class RustCoreBridge {
     }
 
     try {
-      await this.request<null>('shutdown', {});
+      await this.requestWithTimeout<null>('shutdown', {}, 1_000);
     } catch {
       // fall through to exit wait / hard kill
     }
@@ -209,6 +209,15 @@ class RustCoreBridge {
       }, timeoutMs);
       this.process.once('exit', onExit);
     });
+  }
+
+  private async requestWithTimeout<T>(method: string, params: object, timeoutMs: number): Promise<T> {
+    return Promise.race([
+      this.request<T>(method, params),
+      new Promise<T>((_, reject) => {
+        setTimeout(() => reject(new Error(`Rust daemon request timed out: ${method}`)), timeoutMs);
+      }),
+    ]);
   }
 }
 
