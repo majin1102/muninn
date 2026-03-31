@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {
@@ -26,10 +26,14 @@ import { validateSettingsJson } from './settings.js';
 
 const AGENT_DEFAULT_SESSION_PREFIX = '__agent_default__:';
 const OBSERVER_DEFAULT_SESSION_PREFIX = '__observer_default__:';
-const SESSION_NODE_PAGE_SIZE = 200;
+const SESSION_TREE_PAGE_LIMIT = Number.MAX_SAFE_INTEGER;
 const packageDir = path.resolve(__dirname, '..');
 
 export const boardApp = new Hono();
+
+let sessionTreeCache: Awaited<ReturnType<typeof sessions.list>> | null = null;
+let sessionTreeLoading: Promise<Awaited<ReturnType<typeof sessions.list>>> | null = null;
+let sessionTreeLoadCount = 0;
 
 const MIME_TYPES: Record<string, string> = {
   '.css': 'text/css; charset=utf-8',
@@ -159,28 +163,41 @@ function hasSummary(turn: { summary?: string | null }): boolean {
   return typeof turn.summary === 'string' && turn.summary.trim().length > 0;
 }
 
-async function loadAllSessionTurns(params?: {
-  agent?: string;
-  sessionId?: string;
-}) {
-  const turns: Awaited<ReturnType<typeof sessions.list>> = [];
-  let offset = 0;
+export function invalidateSessionTreeCache() {
+  sessionTreeCache = null;
+  sessionTreeLoading = null;
+}
 
-  while (true) {
-    const page = await sessions.list({
-      mode: { type: 'page', offset, limit: SESSION_NODE_PAGE_SIZE },
-      agent: params?.agent,
-      sessionId: params?.sessionId,
-    });
+export function resetSessionTreeCacheForTests() {
+  sessionTreeCache = null;
+  sessionTreeLoading = null;
+  sessionTreeLoadCount = 0;
+}
 
-    turns.push(...page);
-    if (page.length < SESSION_NODE_PAGE_SIZE) {
-      break;
-    }
-    offset += SESSION_NODE_PAGE_SIZE;
+export function getSessionTreeLoadCountForTests() {
+  return sessionTreeLoadCount;
+}
+
+async function loadAllSessionTurns(): Promise<Awaited<ReturnType<typeof sessions.list>>> {
+  if (sessionTreeCache) {
+    return sessionTreeCache;
   }
 
-  return turns;
+  if (!sessionTreeLoading) {
+    sessionTreeLoading = sessions
+      .list({
+        mode: { type: 'page', offset: 0, limit: SESSION_TREE_PAGE_LIMIT },
+      })
+      .then((turns) => {
+        sessionTreeCache = turns;
+        sessionTreeLoadCount += 1;
+        return turns;
+      })
+      .finally(() => {
+        sessionTreeLoading = null;
+      });
+  }
+  return sessionTreeLoading!;
 }
 
 function toTurnPreview(turn: BoardSessionTurn): TurnPreview {
@@ -199,51 +216,16 @@ async function loadSessionTurnPreviewsPage(params: {
   offset: number;
   limit: number;
 }): Promise<{ turns: TurnPreview[]; nextOffset: number | null }> {
-  const pageSize = Math.max(params.limit, SESSION_NODE_PAGE_SIZE);
-  const previews: TurnPreview[] = [];
-  let rawOffset = 0;
-  let seenPreviewCount = 0;
-
-  while (previews.length < params.limit + 1) {
-    const page = await sessions.list({
-      mode: { type: 'page', offset: rawOffset, limit: pageSize },
-      agent: params.agent,
-    });
-
-    if (page.length === 0) {
-      break;
-    }
-
-    const filtered = page
-      .filter((turn) => matchesSessionNode(turn, params.sessionKey))
-      .filter(hasSummary);
-    if (seenPreviewCount + filtered.length <= params.offset) {
-      seenPreviewCount += filtered.length;
-      if (page.length < pageSize) {
-        break;
-      }
-      rawOffset += pageSize;
-      continue;
-    }
-
-    const start = Math.max(0, params.offset - seenPreviewCount);
-    for (const turn of filtered.slice(start)) {
-      previews.push(toTurnPreview(turn));
-      if (previews.length >= params.limit + 1) {
-        break;
-      }
-    }
-
-    seenPreviewCount += filtered.length;
-    if (page.length < pageSize) {
-      break;
-    }
-    rawOffset += pageSize;
-  }
-
-  const hasMore = previews.length > params.limit;
+  const turns = (await loadAllSessionTurns())
+    .filter((turn) => turn.agent === params.agent)
+    .filter((turn) => matchesSessionNode(turn, params.sessionKey))
+    .filter(hasSummary);
+  const previews = turns
+    .slice(params.offset, params.offset + params.limit)
+    .map(toTurnPreview);
+  const hasMore = params.offset + params.limit < turns.length;
   return {
-    turns: previews.slice(0, params.limit),
+    turns: previews,
     nextOffset: hasMore ? params.offset + params.limit : null,
   };
 }
@@ -351,7 +333,9 @@ boardApp.get('/api/v1/ui/session/agents/:agent/sessions', async (c) => {
   const agent = c.req.param('agent');
   console.log('[BOARD_UI_SESSION_GROUPS] agent:', agent);
 
-  const turns = (await loadAllSessionTurns({ agent })).filter(hasSummary);
+  const turns = (await loadAllSessionTurns())
+    .filter((turn) => turn.agent === agent)
+    .filter(hasSummary);
   const grouped = new Map<string, { latestUpdatedAt: string; displaySessionId: string }>();
 
   for (const turn of turns) {
@@ -519,6 +503,7 @@ boardApp.put('/api/v1/ui/settings/config', async (c) => {
   }
 
   try {
+    await mkdir(path.dirname(configPath), { recursive: true });
     await writeFile(configPath, body.content, 'utf8');
   } catch {
     return c.json(errorResponse('internalError', 'failed to write settings.json'), 500);
