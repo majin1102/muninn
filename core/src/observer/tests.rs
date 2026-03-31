@@ -190,6 +190,63 @@ async fn failed_post_does_not_leak_open_write_barrier() {
 }
 
 #[tokio::test]
+async fn observer_shutdown_is_idempotent_and_drops_enqueues() {
+    let _guard = llm_test_env_guard();
+    let dir = tempfile::tempdir().unwrap();
+    set_test_config(&dir, None, Some("mock"), None);
+    set_data_root(&dir);
+    unsafe {
+        std::env::set_var("MUNNAI_OBSERVER_POLL_MS", "60000");
+    }
+
+    let observer = Observer::new(test_storage()).await.unwrap();
+    observer.shutdown().await;
+    observer.shutdown().await;
+
+    assert!(observer.is_shutdown().await);
+    assert!(observer.runtime_stopped().await);
+
+    let turn = SessionTurn::new(&SessionWrite {
+        session_id: Some("group-a".to_string()),
+        agent: "agent-a".to_string(),
+        observer: "test-observer".to_string(),
+        title: None,
+        summary: Some("summary-a".to_string()),
+        title_source: None,
+        summary_source: None,
+        tool_calling: None,
+        artifacts: None,
+        prompt: Some("prompt-a".to_string()),
+        response: Some("response-a".to_string()),
+    });
+    observer.enqueue(vec![turn]).await;
+    assert!(observer.snapshot().await.unwrap().is_empty());
+
+    clear_data_root();
+}
+
+#[tokio::test]
+async fn observer_new_replaces_shutdown_singleton() {
+    let _guard = llm_test_env_guard();
+    let dir = tempfile::tempdir().unwrap();
+    set_test_config(&dir, None, Some("mock"), None);
+    set_data_root(&dir);
+    unsafe {
+        std::env::set_var("MUNNAI_OBSERVER_POLL_MS", "60000");
+    }
+
+    let first = Observer::new(test_storage()).await.unwrap();
+    first.shutdown().await;
+
+    let second = Observer::new(test_storage()).await.unwrap();
+    assert!(first.is_shutdown().await);
+    assert!(!second.is_shutdown().await);
+    assert!(!first.shares_runtime_with(&second));
+
+    clear_data_root();
+}
+
+#[tokio::test]
 async fn recovery_requeues_observable_turns_without_an_epoch() {
     let _guard = llm_test_env_guard();
     let dir = tempfile::tempdir().unwrap();

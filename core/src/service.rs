@@ -107,6 +107,7 @@ impl Service {
     }
 
     pub async fn shutdown(&self) {
+        self.observer.shutdown().await;
         if let Some(watchdog) = &self._watchdog {
             watchdog.shutdown().await;
         }
@@ -201,7 +202,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cloned_services_share_one_watchdog_runtime_and_shutdown_is_idempotent() {
+    async fn cloned_services_share_one_runtime_and_shutdown_is_idempotent() {
         let _guard = llm_test_env_guard();
         let dir = tempfile::tempdir().unwrap();
         write_service_config(&dir);
@@ -212,9 +213,13 @@ mod tests {
         let first_runtime = service._watchdog.as_ref().unwrap();
         let second_runtime = cloned._watchdog.as_ref().unwrap();
         assert!(Arc::ptr_eq(first_runtime, second_runtime));
+        assert!(service.observer.shares_runtime_with(&cloned.observer));
 
         service.shutdown().await;
         cloned.shutdown().await;
+
+        assert!(service.observer.is_shutdown().await);
+        assert!(service.observer.runtime_stopped().await);
 
         unsafe {
             std::env::remove_var("MUNNAI_HOME");
