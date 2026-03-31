@@ -108,7 +108,7 @@ impl Observer {
             {
                 return Ok(observer);
             }
-            observer.shutdown().await;
+            observer.shutdown(true).await;
         }
 
         let observer = Self::build(storage, observer_name).await?;
@@ -175,9 +175,9 @@ impl Observer {
         Ok(observer)
     }
 
-    pub async fn shutdown(&self) {
+    pub async fn shutdown(&self, wait: bool) {
         self.state.lock().await.shutdown = true;
-        self.runtime.shutdown().await;
+        self.runtime.shutdown(wait).await;
     }
 
     pub(crate) fn begin_post(&self) -> PostWriteGuard {
@@ -285,8 +285,11 @@ impl Observer {
 }
 
 impl ObserverRuntime {
-    async fn shutdown(&self) {
+    async fn shutdown(&self, wait: bool) {
         self.cancel.cancel();
+        if !wait {
+            return;
+        }
         let task = {
             let mut slot = self.task.lock().expect("observer runtime task poisoned");
             slot.take()

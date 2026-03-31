@@ -200,8 +200,8 @@ async fn observer_shutdown_is_idempotent_and_drops_enqueues() {
     }
 
     let observer = Observer::new(test_storage()).await.unwrap();
-    observer.shutdown().await;
-    observer.shutdown().await;
+    observer.shutdown(true).await;
+    observer.shutdown(true).await;
 
     assert!(observer.is_shutdown().await);
     assert!(observer.runtime_stopped().await);
@@ -236,7 +236,7 @@ async fn observer_new_replaces_shutdown_singleton() {
     }
 
     let first = Observer::new(test_storage()).await.unwrap();
-    first.shutdown().await;
+    first.shutdown(true).await;
 
     let second = Observer::new(test_storage()).await.unwrap();
     assert!(first.is_shutdown().await);

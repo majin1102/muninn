@@ -240,8 +240,11 @@ impl Watchdog {
 }
 
 impl WatchdogRuntime {
-    pub(crate) async fn shutdown(&self) {
+    pub(crate) async fn shutdown(&self, wait: bool) {
         self.cancel.cancel();
+        if !wait {
+            return;
+        }
         if let Some(task) = self.task.lock().await.take() {
             let _ = task.await;
         }
@@ -432,12 +435,12 @@ mod tests {
         let watchdog = Watchdog::new(storage).unwrap();
         let runtime = watchdog.spawn();
 
-        tokio::time::timeout(Duration::from_secs(1), runtime.shutdown())
+        tokio::time::timeout(Duration::from_secs(1), runtime.shutdown(true))
             .await
             .unwrap();
         assert!(runtime.is_shutdown().await);
 
-        tokio::time::timeout(Duration::from_secs(1), runtime.shutdown())
+        tokio::time::timeout(Duration::from_secs(1), runtime.shutdown(true))
             .await
             .unwrap();
 
