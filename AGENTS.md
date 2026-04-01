@@ -10,7 +10,7 @@ Current strategic direction:
 
 - Rust is expected to become the long-term implementation language for core logic.
 - TypeScript packages are the current integration and transport shell.
-- MCP protocol evolution should happen under `spec/`.
+- MCP protocol evolution should happen under `docs/spec/`.
 
 ## Current Module Map
 
@@ -31,10 +31,8 @@ Current strategic direction:
 - `core/`
   - Intended long-term home of core logic and domain behavior.
   - Defaults to the published `lance` crate; see `core/README.md` for local override workflow.
-- `spec/`
-  - Canonical location for protocol and schema evolution, especially MCP-related specs.
 - `docs/`
-  - Design notes, audits, comparisons, and research documents.
+  - Design notes, product plans, specs, architecture notes, comparisons, research documents, and workstream trackers.
 - `examples/`
   - Example code and runnable demos when needed.
 
@@ -152,7 +150,7 @@ Milestone 1 is successful when:
 
 - Keep `mcp` thin.
 - Keep transport concerns in `sidecar`.
-- Put MCP protocol and schema evolution in `spec/`.
+- Put MCP protocol and schema evolution in `docs/spec/`.
 - Use `session` for the current persisted unit.
 - Treat Rust as the future home of core logic.
 - Use a local Cargo `[patch.crates-io]` override when developing against a local Lance checkout.
@@ -171,4 +169,4 @@ Milestone 1 is successful when:
 
 - Continue consolidating TS integration work into `packages/core`.
 - Gradually move demo logic from TypeScript toward Rust-backed implementation.
-- Keep long-lived MCP protocol definitions under `spec/`.
+- Keep long-lived MCP protocol definitions under `docs/spec/`.

@@ -3,8 +3,8 @@
 本文件只对比两者暴露给 agent 的 MCP 工具工作流与“渐进式披露”策略，不展开存储实现细节。
 
 参考（Muninn 当前规范）：
-- [spec/muninn-mcp-api.md](/Users/Nathan/Documents/Playground/muninn/spec/muninn-mcp-api.md)
-- [spec/muninn-format-schema.md](/Users/Nathan/Documents/Playground/muninn/spec/muninn-format-schema.md)
+- [../spec/muninn-mcp-api.md](../spec/muninn-mcp-api.md)
+- [../spec/muninn-format-schema.md](../spec/muninn-format-schema.md)
 
 ## 工作流对比（高层）
 

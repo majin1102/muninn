@@ -1,6 +1,6 @@
 # Muninn 接下来的工作清单
 
-基于 MVP1.md、agents/ 进度文档和当前代码状态，以下是需要完成的工作：
+基于 `mvp1.md`、`../workstreams/` 进度文档和当前代码状态，以下是需要完成的工作：
 
 ## 1. 核心功能完善
 
@@ -22,7 +22,7 @@
 ### 1.2 OpenClaw 对接（高优先级）
 **状态：** 调研收敛中，MVP hook 面已初步定稿，等待实现
 
-**已确认方案：**（见 `agents/progress-openclaw-integration.md`）
+**已确认方案：**（见 `../workstreams/progress-openclaw-integration.md`）
 - ✅ Hook 映射已定：`before_model_resolve` → prompt，`after_tool_call` → artifacts，`agent_end` → response
 - ✅ Session ID 映射：`muninn.session.session_id = openclaw.sessionKey`
 - ✅ Artifact 采集策略已确认：write/edit 直接读，apply_patch/exec 按需回读
@@ -64,7 +64,7 @@
 
 ## 2. 记忆蒸馏优化（进行中）
 
-**状态：** 已完成 turn 双路径蒸馏，进入质量优化阶段（见 `agents/progress-memory-distillation.md`）
+**状态：** 已完成 turn 双路径蒸馏，进入质量优化阶段（见 `../workstreams/progress-memory-distillation.md`）
 
 **已完成：**
 - ✅ Turn 双路径蒸馏：短 turn 用 direct summary，长 turn 用 full LLM
@@ -123,7 +123,7 @@
 
 ## 6. MVP1 验收标准检查清单
 
-根据 `MVP1.md` 的验收标准，需要确保：
+根据 `mvp1.md` 的验收标准，需要确保：
 
 - [ ] OpenClaw 能在真实执行过程中持续把上下文写入 Muninn
 - [x] Muninn 能把这些上下文整理成 session 记忆（已实现）
@@ -152,7 +152,7 @@
 
 **MVP1 的关键路径现在是：**
 
-1. **OpenClaw 写入对接**（agents/progress-openclaw-integration.md）
+1. **OpenClaw 写入对接**（`../workstreams/progress-openclaw-integration.md`）
    - 在 OpenClaw 中实现 3 个 hook 的 Muninn 写入
    - 解决 artifact 路径抽取问题
 
