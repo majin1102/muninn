@@ -10,9 +10,12 @@
       "default": "./dist/index.js"
     }
   },
-  "files": ["dist"],
+  "files": ["dist", "bin"],
   "scripts": {
     "build": "tsc",
+    "build:daemon": "cargo build --release --manifest-path ../../core/Cargo.toml --bin munnai-core",
+    "export:daemon": "sh ../../scripts/export-daemon.sh",
+    "install:daemon": "sh ../../scripts/install-daemon.sh",
     "dev": "tsc --watch",
     "test": "pnpm build && node --test test/**/*.test.mjs"
   },
