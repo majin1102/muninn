@@ -35,6 +35,7 @@ let sessionTreeCache: Awaited<ReturnType<typeof sessions.list>> | null = null;
 let sessionTreeLoading: Promise<Awaited<ReturnType<typeof sessions.list>>> | null = null;
 let sessionTreeLoadCount = 0;
 let sessionTreeCacheGeneration = 0;
+let sessionTreeLoadToken = 0;
 
 const MIME_TYPES: Record<string, string> = {
   '.css': 'text/css; charset=utf-8',
@@ -166,6 +167,7 @@ function hasSummary(turn: { summary?: string | null }): boolean {
 
 export function invalidateSessionTreeCache() {
   sessionTreeCacheGeneration += 1;
+  sessionTreeLoadToken += 1;
   sessionTreeCache = null;
   sessionTreeLoading = null;
 }
@@ -175,6 +177,7 @@ export function resetSessionTreeCacheForTests() {
   sessionTreeLoading = null;
   sessionTreeLoadCount = 0;
   sessionTreeCacheGeneration = 0;
+  sessionTreeLoadToken = 0;
 }
 
 export function getSessionTreeLoadCountForTests() {
@@ -188,12 +191,15 @@ async function loadAllSessionTurns(): Promise<Awaited<ReturnType<typeof sessions
 
   if (!sessionTreeLoading) {
     const loadGeneration = sessionTreeCacheGeneration;
+    const loadToken = ++sessionTreeLoadToken;
     const loadingPromise = sessions
       .list({
         mode: { type: 'page', offset: 0, limit: SESSION_TREE_PAGE_LIMIT },
       })
       .then((turns) => {
-        if (sessionTreeCacheGeneration === loadGeneration) {
+        const isCurrentLoad = loadToken === sessionTreeLoadToken;
+        const isCurrentGeneration = sessionTreeCacheGeneration === loadGeneration;
+        if (isCurrentLoad && isCurrentGeneration) {
           sessionTreeCache = turns;
           sessionTreeLoadCount += 1;
         }
