@@ -454,13 +454,22 @@ function trimEnv(value: string | undefined): string | undefined {
 }
 
 function resolveBundledDaemonPath(): string | undefined {
-  const candidate = path.resolve(__dirname, '..', 'bin', 'munnai-core');
+  const candidate = path.resolve(
+    __dirname,
+    '..',
+    'bin',
+    resolveBundledDaemonExecutableName(),
+  );
   try {
     accessSync(candidate, fsConstants.X_OK);
     return candidate;
   } catch {
     return undefined;
   }
+}
+
+function resolveBundledDaemonExecutableName(platform = process.platform): string {
+  return platform === 'win32' ? `${DEFAULT_DAEMON_COMMAND}.exe` : DEFAULT_DAEMON_COMMAND;
 }
 
 function validateExplicitDaemonPath(daemonPath: string): void {
@@ -541,6 +550,7 @@ function normalizeRenderedMemoryRecord(row: RawRenderedMemoryRecord): RenderedMe
 export const __testing = {
   waitForPromiseOrTimeout,
   resolveDaemonLaunchSpec,
+  resolveBundledDaemonExecutableName,
   formatDaemonStartError,
   formatDaemonExitError,
 };

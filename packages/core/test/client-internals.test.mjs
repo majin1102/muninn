@@ -2,9 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 
 import { __testing } from '../dist/client.js';
+
+const testDir = path.dirname(fileURLToPath(import.meta.url));
 
 test('waitForPromiseOrTimeout returns false when the promise does not settle in time', async () => {
   const startedAt = Date.now();
@@ -65,8 +68,8 @@ test('resolveDaemonLaunchSpec can target a named command on PATH', async () => {
 });
 
 test('resolveDaemonLaunchSpec prefers a bundled daemon before PATH lookup', async () => {
-  const binDir = path.join(process.cwd(), 'packages', 'core', 'bin');
-  const bundledDaemonPath = path.join(binDir, 'munnai-core');
+  const binDir = path.join(testDir, '..', 'bin');
+  const bundledDaemonPath = path.join(binDir, __testing.resolveBundledDaemonExecutableName());
 
   await mkdir(binDir, { recursive: true });
   await writeFile(bundledDaemonPath, '#!/bin/sh\nexit 0\n', 'utf8');
@@ -79,6 +82,11 @@ test('resolveDaemonLaunchSpec prefers a bundled daemon before PATH lookup', asyn
   } finally {
     await rm(bundledDaemonPath, { force: true });
   }
+});
+
+test('resolveBundledDaemonExecutableName uses .exe on Windows', async () => {
+  assert.equal(__testing.resolveBundledDaemonExecutableName('win32'), 'munnai-core.exe');
+  assert.equal(__testing.resolveBundledDaemonExecutableName('darwin'), 'munnai-core');
 });
 
 test('resolveDaemonLaunchSpec only falls back to cargo when explicitly enabled', async () => {
