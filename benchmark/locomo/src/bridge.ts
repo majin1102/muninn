@@ -4,6 +4,8 @@ import { mkdir, readFile, rm } from 'node:fs/promises';
 import type { SessionTurnRecord } from '@munnai/core';
 import * as coreClient from '@munnai/core';
 
+process.env.MUNNAI_CORE_ALLOW_CARGO_FALLBACK ??= '1';
+
 type LocomoDialog = {
   speaker: string;
   dia_id: string;

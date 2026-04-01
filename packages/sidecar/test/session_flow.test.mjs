@@ -57,6 +57,12 @@ test.afterEach(async () => {
   resetSessionTreeCacheForTests();
   delete process.env.MUNNAI_HOME;
   delete process.env.MUNNAI_OBSERVE_WINDOW_MS;
+  delete process.env.MUNNAI_BOARD_SESSION_TREE_CACHE_TTL_MS;
+  delete process.env.MUNNAI_CORE_ALLOW_CARGO_FALLBACK;
+});
+
+test.beforeEach(() => {
+  process.env.MUNNAI_CORE_ALLOW_CARGO_FALLBACK = '1';
 });
 
 test('session/messages writes a message into a session and detail reads it back', async (t) => {
@@ -572,6 +578,36 @@ test('ui session endpoints reuse the cached session tree until a write invalidat
   const third = await app.request('/api/v1/ui/session/agents');
   assert.equal(third.status, 200);
   assert.equal(getSessionTreeLoadCountForTests(), 2);
+});
+
+test('ui session cache expires and reloads after direct core writes bypass invalidation', async (t) => {
+  const { dir, homeDir, configPath } = await makeDatasetUri();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+
+  process.env.MUNNAI_HOME = homeDir;
+  process.env.MUNNAI_BOARD_SESSION_TREE_CACHE_TTL_MS = '25';
+  await writeMunnaiConfig(configPath, { turnProvider: 'mock' });
+  resetSessionTreeCacheForTests();
+
+  const first = await app.request('/api/v1/ui/session/agents');
+  assert.equal(first.status, 200);
+  assert.equal(getSessionTreeLoadCountForTests(), 1);
+
+  await core.addMessage({
+    session_id: 'group-a',
+    agent: 'openclaw',
+    prompt: 'external write prompt',
+    response: 'external write response',
+  });
+
+  await new Promise((resolve) => setTimeout(resolve, 50));
+
+  const refreshed = await app.request('/api/v1/ui/session/agents');
+  assert.equal(refreshed.status, 200);
+  assert.equal(getSessionTreeLoadCountForTests(), 2);
+
+  const refreshedBody = await json(refreshed);
+  assert.ok(refreshedBody.agents.some((agent) => agent.agent === 'openclaw'));
 });
 
 test('observing memories are readable through list/detail/timeline/recall', async (t) => {

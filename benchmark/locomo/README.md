@@ -51,7 +51,9 @@ Run everything from the repository root.
 Required:
 
 - `pnpm install`
-- a working Rust toolchain, because `@munnai/core` starts the Rust daemon
+- a working Rust toolchain, because the bridge opts into
+  `MUNNAI_CORE_ALLOW_CARGO_FALLBACK=1` and starts the repo-local daemon through
+  `cargo run`
 - `python3`
 
 No LLM keys are required for this benchmark.
@@ -69,6 +71,10 @@ You can also run the package test target, which rebuilds the bridge first:
 ```bash
 pnpm --filter @munnai/benchmark-locomo test
 ```
+
+The benchmark bridge explicitly enables `MUNNAI_CORE_ALLOW_CARGO_FALLBACK=1`, so
+you do not need to export or install `munnai-core` separately when running from
+this repository checkout.
 
 ## Run
 

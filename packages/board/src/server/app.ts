@@ -27,6 +27,7 @@ import { validateSettingsJson } from './settings.js';
 const AGENT_DEFAULT_SESSION_PREFIX = '__agent_default__:';
 const OBSERVER_DEFAULT_SESSION_PREFIX = '__observer_default__:';
 const SESSION_TREE_PAGE_LIMIT = Number.MAX_SAFE_INTEGER;
+const DEFAULT_SESSION_TREE_CACHE_TTL_MS = 1_000;
 const packageDir = path.resolve(__dirname, '..');
 
 export const boardApp = new Hono();
@@ -35,6 +36,7 @@ let sessionTreeCache: Awaited<ReturnType<typeof sessions.list>> | null = null;
 let sessionTreeLoading: Promise<Awaited<ReturnType<typeof sessions.list>>> | null = null;
 let sessionTreeLoadCount = 0;
 let sessionTreeCacheGeneration = 0;
+let sessionTreeCacheExpiresAt = 0;
 
 const MIME_TYPES: Record<string, string> = {
   '.css': 'text/css; charset=utf-8',
@@ -168,6 +170,7 @@ export function invalidateSessionTreeCache() {
   sessionTreeCacheGeneration += 1;
   sessionTreeCache = null;
   sessionTreeLoading = null;
+  sessionTreeCacheExpiresAt = 0;
 }
 
 export function resetSessionTreeCacheForTests() {
@@ -175,14 +178,28 @@ export function resetSessionTreeCacheForTests() {
   sessionTreeLoading = null;
   sessionTreeLoadCount = 0;
   sessionTreeCacheGeneration = 0;
+  sessionTreeCacheExpiresAt = 0;
 }
 
 export function getSessionTreeLoadCountForTests() {
   return sessionTreeLoadCount;
 }
 
+function resolveSessionTreeCacheTtlMs(): number {
+  const raw = process.env.MUNNAI_BOARD_SESSION_TREE_CACHE_TTL_MS?.trim();
+  if (!raw) {
+    return DEFAULT_SESSION_TREE_CACHE_TTL_MS;
+  }
+
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return DEFAULT_SESSION_TREE_CACHE_TTL_MS;
+  }
+  return parsed;
+}
+
 async function loadAllSessionTurns(): Promise<Awaited<ReturnType<typeof sessions.list>>> {
-  if (sessionTreeCache) {
+  if (sessionTreeCache && Date.now() < sessionTreeCacheExpiresAt) {
     return sessionTreeCache;
   }
 
@@ -195,6 +212,7 @@ async function loadAllSessionTurns(): Promise<Awaited<ReturnType<typeof sessions
       .then((turns) => {
         if (sessionTreeCacheGeneration === loadGeneration) {
           sessionTreeCache = turns;
+          sessionTreeCacheExpiresAt = Date.now() + resolveSessionTreeCacheTtlMs();
           sessionTreeLoadCount += 1;
         }
         return turns;

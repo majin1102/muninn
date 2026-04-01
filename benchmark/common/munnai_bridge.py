@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import tempfile
 from dataclasses import dataclass
@@ -143,12 +144,15 @@ class MunnaiBridge:
             raise BridgeError(f"invalid JSON from bridge: {error}") from error
 
     def _run_process(self, args: list[str]) -> subprocess.CompletedProcess[str]:
+        env = os.environ.copy()
+        env.setdefault("MUNNAI_CORE_ALLOW_CARGO_FALLBACK", "1")
         completed = subprocess.run(
             args,
             cwd=self.repo_root,
             capture_output=True,
             text=True,
             check=False,
+            env=env,
         )
         if completed.returncode != 0:
             raise BridgeError(
