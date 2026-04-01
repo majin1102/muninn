@@ -31,6 +31,8 @@ pub(crate) struct SnapshotContent {
 pub(crate) struct ObservingThread {
     pub(crate) observing_id: String,
     pub(crate) snapshot_id: Option<String>,
+    #[serde(skip_serializing)]
+    pub(crate) snapshot_ids: Vec<String>,
     pub(crate) observing_epoch: u64,
     pub(crate) title: String,
     pub(crate) summary: String,
@@ -54,6 +56,7 @@ impl ObservingThread {
         Self {
             observing_id: new_observing_id(),
             snapshot_id: None,
+            snapshot_ids: Vec::new(),
             observing_epoch,
             title: normalize_title(title),
             summary: normalize_summary(summary),
@@ -89,6 +92,7 @@ impl ObservingThread {
         Ok(Self {
             observing_id: latest_row.observing_id.clone(),
             snapshot_id: Some(latest_row.snapshot_id.clone()),
+            snapshot_ids: rows.iter().map(|row| row.snapshot_id.clone()).collect(),
             observing_epoch: latest_row.checkpoint.observing_epoch,
             title: latest_row.title.clone(),
             summary: latest_row.summary.clone(),
@@ -106,6 +110,16 @@ impl ObservingThread {
 
     pub(crate) fn latest_snapshot(&self) -> Option<&SnapshotContent> {
         self.snapshots.last()
+    }
+
+    pub(crate) fn snapshot_memory_id(&self, snapshot_index: usize) -> Result<String> {
+        let snapshot_id = self.snapshot_ids.get(snapshot_index).ok_or_else(|| {
+            lance::Error::invalid_input(format!(
+                "missing snapshot id for observing thread {} at sequence {}",
+                self.observing_id, snapshot_index
+            ))
+        })?;
+        Ok(format!("OBSERVING:{snapshot_id}"))
     }
 
     pub(crate) fn current_content(&self) -> ObservingContent {
@@ -139,7 +153,9 @@ impl ObservingThread {
             next_steps: result.observing_content_update.next_steps,
             memory_delta: materialized_delta,
         });
-        self.snapshot_id = Some(Ulid::new().to_string());
+        let snapshot_id = Ulid::new().to_string();
+        self.snapshot_ids.push(snapshot_id.clone());
+        self.snapshot_id = Some(snapshot_id);
         self.updated_at = now;
         Ok(())
     }
@@ -155,12 +171,17 @@ impl ObservingThread {
     }
 
     pub(crate) fn to_row(&self) -> Result<ObservingSnapshot> {
-        let snapshot_id = self.snapshot_id.clone().ok_or_else(|| {
-            lance::Error::invalid_input(format!(
-                "missing snapshot id for observing thread {}",
-                self.observing_id
-            ))
-        })?;
+        let snapshot_id = self
+            .snapshot_ids
+            .last()
+            .cloned()
+            .or_else(|| self.snapshot_id.clone())
+            .ok_or_else(|| {
+                lance::Error::invalid_input(format!(
+                    "missing snapshot id for observing thread {}",
+                    self.observing_id
+                ))
+            })?;
         let snapshot_sequence =
             self.snapshots.len().checked_sub(1).ok_or_else(|| {
                 lance::Error::invalid_input("missing snapshots for observing thread")

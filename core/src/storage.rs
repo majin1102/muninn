@@ -501,6 +501,7 @@ impl SemanticIndexStore<'_> {
             return Ok(());
         };
         let actual_dimensions = semantic_index_vector_dimensions(&dataset)?;
+        semantic_index_memory_id_field(&dataset)?;
         if actual_dimensions != expected_dimensions {
             return Err(Error::invalid_input(format!(
                 "semantic_index dimension mismatch: settings.json expects {expected_dimensions}, \
@@ -544,6 +545,47 @@ but the existing semantic_index dataset stores {actual_dimensions}; update seman
             return Ok(Vec::new());
         }
         record_batch_to_semantic_rows(&batch)
+    }
+
+    pub(crate) async fn nearest(
+        &self,
+        query_vector: &[f32],
+        limit: usize,
+    ) -> Result<Vec<SemanticIndexRow>> {
+        if limit == 0 || query_vector.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let Some(dataset) = self.inner.try_open().await? else {
+            return Ok(Vec::new());
+        };
+        let query_vector = Float32Array::from(query_vector.to_vec());
+
+        match dataset.scan().nearest("vector", &query_vector, limit) {
+            Ok(scanner) => {
+                let batch = scanner.try_into_batch().await?;
+                if batch.num_rows() == 0 {
+                    return Ok(Vec::new());
+                }
+                record_batch_to_semantic_rows(&batch)
+            }
+            Err(_) => {
+                let batch = dataset.scan().try_into_batch().await?;
+                if batch.num_rows() == 0 {
+                    return Ok(Vec::new());
+                }
+                let mut rows = record_batch_to_semantic_rows(&batch)?;
+                rows.sort_by(|left, right| {
+                    semantic_vector_score(query_vector.values(), &right.vector)
+                        .partial_cmp(&semantic_vector_score(query_vector.values(), &left.vector))
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                        .then(right.importance.total_cmp(&left.importance))
+                        .then(right.created_at.cmp(&left.created_at))
+                });
+                rows.truncate(limit);
+                Ok(rows)
+            }
+        }
     }
 
     #[allow(dead_code)]
@@ -604,6 +646,28 @@ async fn delete_by_ids(
 
 fn escape_predicate_string(value: &str) -> String {
     value.replace('\'', "''")
+}
+
+fn semantic_vector_score(query: &[f32], candidate: &[f32]) -> f32 {
+    if query.len() != candidate.len() || query.is_empty() {
+        return f32::NEG_INFINITY;
+    }
+
+    let mut dot = 0.0_f32;
+    let mut query_norm = 0.0_f32;
+    let mut candidate_norm = 0.0_f32;
+    for (left, right) in query.iter().zip(candidate.iter()) {
+        dot += left * right;
+        query_norm += left * left;
+        candidate_norm += right * right;
+    }
+
+    let denominator = query_norm.sqrt() * candidate_norm.sqrt();
+    if denominator == 0.0 {
+        f32::NEG_INFINITY
+    } else {
+        dot / denominator
+    }
 }
 
 fn turns_to_record_batch(turns: &[SessionTurn]) -> std::result::Result<RecordBatch, ArrowError> {
@@ -1073,6 +1137,7 @@ fn record_batch_to_observings(batch: &RecordBatch) -> lance::Result<Vec<Observin
 fn semantic_rows_to_record_batch(rows: &[SemanticIndexRow]) -> Result<RecordBatch> {
     let dimensions = semantic_index_dimensions()?;
     let ids = StringArray::from_iter_values(rows.iter().map(|row| row.id.as_str()));
+    let memory_ids = StringArray::from_iter_values(rows.iter().map(|row| row.memory_id.as_str()));
     let text = StringArray::from_iter_values(rows.iter().map(|row| row.text.as_str()));
     let vector = build_float32_fixed_size_list_array(
         rows.iter().map(|row| row.vector.as_slice()),
@@ -1090,6 +1155,7 @@ fn semantic_rows_to_record_batch(rows: &[SemanticIndexRow]) -> Result<RecordBatc
         Arc::new(semantic_index_schema(dimensions)),
         vec![
             Arc::new(ids),
+            Arc::new(memory_ids),
             Arc::new(text),
             Arc::new(vector),
             Arc::new(importance),
@@ -1119,24 +1185,29 @@ fn record_batch_to_semantic_rows(batch: &RecordBatch) -> lance::Result<Vec<Seman
         .as_any()
         .downcast_ref::<StringArray>()
         .unwrap();
-    let text = batch
+    let memory_ids = batch
         .column(1)
         .as_any()
         .downcast_ref::<StringArray>()
         .unwrap();
-    let vector = batch.column(2);
+    let text = batch
+        .column(2)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap();
+    let vector = batch.column(3);
     let importance = batch
-        .column(3)
+        .column(4)
         .as_any()
         .downcast_ref::<Float32Array>()
         .unwrap();
     let category = batch
-        .column(4)
+        .column(5)
         .as_any()
         .downcast_ref::<StringArray>()
         .unwrap();
     let created_at = batch
-        .column(5)
+        .column(6)
         .as_any()
         .downcast_ref::<TimestampMicrosecondArray>()
         .unwrap();
@@ -1155,6 +1226,7 @@ fn record_batch_to_semantic_rows(batch: &RecordBatch) -> lance::Result<Vec<Seman
 
             Ok(SemanticIndexRow {
                 id: ids.value(index).to_string(),
+                memory_id: memory_ids.value(index).to_string(),
                 text: text.value(index).to_string(),
                 vector,
                 importance: importance.value(index),
@@ -1229,6 +1301,21 @@ fn semantic_index_vector_dimensions(dataset: &Dataset) -> Result<usize> {
         }
         actual => Err(Error::invalid_input(format!(
             "semantic_index dataset schema is incompatible: expected vector column type FixedSizeList<Float32, N>, found {actual:?}; rebuild the semantic_index dataset"
+        ))),
+    }
+}
+
+fn semantic_index_memory_id_field(dataset: &Dataset) -> Result<()> {
+    let field = dataset.schema().field("memory_id").ok_or_else(|| {
+        Error::invalid_input(
+            "semantic_index dataset schema is incompatible: missing memory_id column; rebuild the semantic_index dataset",
+        )
+    })?;
+
+    match field.data_type() {
+        DataType::Utf8 => Ok(()),
+        actual => Err(Error::invalid_input(format!(
+            "semantic_index dataset schema is incompatible: expected memory_id column type Utf8, found {actual:?}; rebuild the semantic_index dataset"
         ))),
     }
 }
@@ -1311,6 +1398,7 @@ mod tests {
             .collect();
         SemanticIndexRow {
             id: id.to_string(),
+            memory_id: "OBSERVING:01JQ7Y8YQ6V7D4M1N9K2F5T8ZX".to_string(),
             text: text.to_string(),
             vector,
             importance: 0.7,
@@ -1512,6 +1600,7 @@ mod tests {
             .unwrap();
         assert_eq!(subset.len(), 1);
         assert_eq!(subset[0].id, "mem-b");
+        assert_eq!(subset[0].memory_id, "OBSERVING:01JQ7Y8YQ6V7D4M1N9K2F5T8ZX");
 
         let mut updated = row_a.clone();
         updated.text = "alpha-updated".to_string();
@@ -1523,10 +1612,9 @@ mod tests {
             .unwrap();
 
         let rows = storage.semantic_index().list().await.unwrap();
-        assert!(
-            rows.iter()
-                .any(|row| row.id == "mem-a" && row.text == "alpha-updated")
-        );
+        assert!(rows.iter().any(|row| row.id == "mem-a"
+            && row.memory_id == "OBSERVING:01JQ7Y8YQ6V7D4M1N9K2F5T8ZX"
+            && row.text == "alpha-updated"));
 
         let deleted = storage
             .semantic_index()
@@ -1535,6 +1623,58 @@ mod tests {
             .unwrap();
         assert_eq!(deleted, 1);
         assert_eq!(storage.semantic_index().list().await.unwrap().len(), 1);
+
+        unsafe {
+            std::env::remove_var("MUNNAI_HOME");
+        }
+    }
+
+    #[tokio::test]
+    async fn semantic_index_nearest_returns_closest_vectors_first() {
+        let _guard = crate::llm::config::llm_test_env_guard();
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("munnai-home");
+        std::fs::create_dir_all(&home).unwrap();
+        crate::llm::config::write_test_munnai_config(
+            &home.join("settings.json"),
+            None,
+            None,
+            Some("mock"),
+        );
+        unsafe {
+            std::env::set_var("MUNNAI_HOME", &home);
+        }
+        let storage = Storage::local(dir.path().join("store")).unwrap();
+        let query = vec![1.0, 0.0, 0.0, 0.0];
+        let row_a = SemanticIndexRow {
+            id: "mem-a".to_string(),
+            memory_id: "OBSERVING:01JQ7Y8YQ6V7D4M1N9K2F5T8ZY".to_string(),
+            text: "alpha".to_string(),
+            vector: vec![1.0, 0.0, 0.0, 0.0],
+            importance: 0.7,
+            category: "fact".to_string(),
+            created_at: Utc::now(),
+        };
+        let row_b = SemanticIndexRow {
+            id: "mem-b".to_string(),
+            memory_id: "OBSERVING:01JQ7Y8YQ6V7D4M1N9K2F5T8ZZ".to_string(),
+            text: "beta".to_string(),
+            vector: vec![0.0, 1.0, 0.0, 0.0],
+            importance: 0.7,
+            category: "fact".to_string(),
+            created_at: Utc::now(),
+        };
+
+        storage
+            .semantic_index()
+            .upsert(vec![row_b.clone(), row_a.clone()])
+            .await
+            .unwrap();
+
+        let rows = storage.semantic_index().nearest(&query, 2).await.unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].id, "mem-a");
+        assert_eq!(rows[1].id, "mem-b");
 
         unsafe {
             std::env::remove_var("MUNNAI_HOME");

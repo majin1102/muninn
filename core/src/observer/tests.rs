@@ -343,6 +343,7 @@ async fn gateway_can_append_or_spawn_observing() {
     let mut threads = vec![ObservingThread {
         observing_id: "OBS-A".to_string(),
         snapshot_id: None,
+        snapshot_ids: Vec::new(),
         observing_epoch: 0,
         title: "Session A".to_string(),
         summary: "Existing line A".to_string(),
@@ -481,6 +482,7 @@ async fn catches_up_semantic_index_from_checkpoint() {
         .upsert(vec![
             SemanticIndexRow {
                 id: "mem-1".to_string(),
+                memory_id: "OBSERVING:01JQ7Y8YQ6V7D4M1N9K2F5T8ZA".to_string(),
                 text: "before text".to_string(),
                 vector: vec![0.1, 0.2, 0.3, 0.4],
                 importance: 0.33,
@@ -489,6 +491,7 @@ async fn catches_up_semantic_index_from_checkpoint() {
             },
             SemanticIndexRow {
                 id: "mem-deleted".to_string(),
+                memory_id: "OBSERVING:01JQ7Y8YQ6V7D4M1N9K2F5T8ZA".to_string(),
                 text: "to be deleted".to_string(),
                 vector: vec![0.4, 0.3, 0.2, 0.1],
                 importance: 0.51,
@@ -581,10 +584,12 @@ async fn catches_up_semantic_index_from_checkpoint() {
     assert_eq!(mem_1.importance, 0.33);
     assert_eq!(mem_1.created_at, first_created_at);
     assert_eq!(mem_1.category, "fact");
+    assert_eq!(mem_1.memory_id, "OBSERVING:01JQ7Y8YQ6V7D4M1N9K2F5T8ZB");
     assert_eq!(mem_1.vector.len(), 4);
     assert_eq!(mem_2.text, "concept promoted");
     assert_eq!(mem_2.category, "other");
     assert_eq!(mem_2.importance, 0.7);
+    assert_eq!(mem_2.memory_id, "OBSERVING:01JQ7Y8YQ6V7D4M1N9K2F5T8ZB");
     assert_eq!(mem_2.vector.len(), 4);
     assert!(rows.iter().all(|row| row.id != "mem-deleted"));
 
@@ -633,9 +638,14 @@ async fn replaying_snapshot_keeps_index_metadata() {
         dimensions: 4,
         default_importance: 0.7,
     };
-    apply_memory_delta(&storage, &snapshot, &initial_config)
-        .await
-        .unwrap();
+    apply_memory_delta(
+        &storage,
+        &snapshot,
+        "OBSERVING:01JQ7Y8YQ6V7D4M1N9K2F5T8ZC",
+        &initial_config,
+    )
+    .await
+    .unwrap();
 
     let first_row = storage
         .semantic_index()
@@ -650,6 +660,7 @@ async fn replaying_snapshot_keeps_index_metadata() {
         .semantic_index()
         .upsert(vec![SemanticIndexRow {
             id: first_row.id.clone(),
+            memory_id: first_row.memory_id.clone(),
             text: first_row.text.clone(),
             vector: first_row.vector.clone(),
             importance: 0.25,
@@ -667,9 +678,14 @@ async fn replaying_snapshot_keeps_index_metadata() {
         dimensions: 4,
         default_importance: 0.95,
     };
-    apply_memory_delta(&storage, &snapshot, &replay_config)
-        .await
-        .unwrap();
+    apply_memory_delta(
+        &storage,
+        &snapshot,
+        "OBSERVING:01JQ7Y8YQ6V7D4M1N9K2F5T8ZD",
+        &replay_config,
+    )
+    .await
+    .unwrap();
 
     let rows = storage.semantic_index().list().await.unwrap();
     assert_eq!(rows.len(), 1);
@@ -677,6 +693,7 @@ async fn replaying_snapshot_keeps_index_metadata() {
     assert_eq!(row.importance, 0.25);
     assert_eq!(row.created_at, pinned_created_at);
     assert_eq!(row.category, "fact");
+    assert_eq!(row.memory_id, "OBSERVING:01JQ7Y8YQ6V7D4M1N9K2F5T8ZD");
     assert_eq!(row.text, "stable fact");
     assert_eq!(row.vector.len(), 4);
 

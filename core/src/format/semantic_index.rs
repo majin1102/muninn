@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "camelCase")]
 pub struct SemanticIndexRow {
     pub id: String,
+    pub memory_id: String,
     pub text: String,
     pub vector: Vec<f32>,
     pub importance: f32,

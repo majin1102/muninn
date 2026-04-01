@@ -744,7 +744,8 @@ async fn catch_up_index(
             .snapshots
             .get(snapshot_index)
             .ok_or_else(|| lance::Error::invalid_input("missing snapshot during index flush"))?;
-        apply_memory_delta(storage, current, semantic_config).await?;
+        let memory_id = thread.snapshot_memory_id(snapshot_index)?;
+        apply_memory_delta(storage, current, &memory_id, semantic_config).await?;
         latest_indexed_sequence = Some(snapshot_index as i64);
     }
 
@@ -762,6 +763,7 @@ async fn catch_up_index(
 pub(crate) async fn apply_memory_delta(
     storage: &Storage,
     current: &SnapshotContent,
+    memory_id: &str,
     semantic_config: &EmbeddingConfig,
 ) -> Result<()> {
     let delta = &current.memory_delta;
@@ -811,6 +813,7 @@ pub(crate) async fn apply_memory_delta(
             .unwrap_or(semantic_config.default_importance);
         upserts.push(SemanticIndexRow {
             id: id.clone(),
+            memory_id: memory_id.to_string(),
             text: text.to_string(),
             vector,
             importance,
