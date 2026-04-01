@@ -38,5 +38,5 @@ benchmark/**/.venv/
 *.tsbuildinfo
 
 Cargo.lock
-.munnai/
+.muninn/
 .claude/settings.local.json
