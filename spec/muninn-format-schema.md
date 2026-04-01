@@ -1,6 +1,6 @@
-# Munnai Format Schema Spec
+# Muninn Format Schema Spec
 
-本文档描述 Munnai 当前代码中的核心 format 对象、标识语义和持久化约定。
+本文档描述 Muninn 当前代码中的核心 format 对象、标识语义和持久化约定。
 
 ## 1. Current Persisted Units
 

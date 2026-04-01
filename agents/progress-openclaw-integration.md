@@ -9,15 +9,15 @@
 ## 已确认结论
 
 - 以后统一以上游 `../openclaw` 为准，不再以 `../openclaw-cn` 的旧实现作为事实基线。
-- OpenClaw 当前对 Munnai 的 MVP 接入面，先只关注三个 hook：
+- OpenClaw 当前对 Muninn 的 MVP 接入面，先只关注三个 hook：
   - `before_model_resolve`
   - `agent_end`
   - `after_tool_call`
-- `message_sent` 对 Munnai MVP 不是必需项，当前不作为接入范围。
+- `message_sent` 对 Muninn MVP 不是必需项，当前不作为接入范围。
 - `tool_result_persist` 已理解其语义，但当前阶段先不纳入 MVP 主链路。
 - OpenClaw 的稳定逻辑会话锚点应使用 `sessionKey`，不是物理 transcript `sessionId`。
-- 对 Munnai 而言，当前可采用：
-  - `munnai.session.session_id = openclaw.sessionKey`
+- 对 Muninn 而言，当前可采用：
+  - `muninn.session.session_id = openclaw.sessionKey`
 - 这个 `session.session_id` 语义上是逻辑会话归属，不是 OpenClaw 当前 transcript 文件 id。
 - 在上游 `openclaw` 里，`before_tool_call` / `after_tool_call` 的上下文已经会透传：
   - `agentId`
@@ -26,7 +26,7 @@
   - `runId`
   - `toolCallId`
 - `after_tool_call` 的 `event.result` 是 `sanitizedResult`，不是更早期的 provider 原始包，但已经是 OpenClaw 认可过的统一执行结果。
-- 如果目标是把完整信息交给 Munnai，再由 format 层去处理噪音，那么 OpenClaw hook 这一层应以“高保真采集”为主，不应过早做裁剪或价值判断。
+- 如果目标是把完整信息交给 Muninn，再由 format 层去处理噪音，那么 OpenClaw hook 这一层应以“高保真采集”为主，不应过早做裁剪或价值判断。
 - 对于启动输入采集，当前应优先使用 `before_model_resolve.prompt`：
   - 它是本轮的 user prompt
   - 这个阶段还没有 session messages 混入
@@ -40,13 +40,13 @@
   - `artifacts` 的 key 统一使用工具指令的目标路径
   - 仅在目标路径能被明确解析时才写入 `artifacts`
   - `exec` 默认不产出 artifact，除非输出中能明确识别文件路径
-- hook 到当前 Munnai 写入契约的映射原则已确认：
+- hook 到当前 Muninn 写入契约的映射原则已确认：
   - 写入粒度采用“每个 hook 各写一条 `session/messages`”
   - OpenClaw MVP 不写 `extra`
   - OpenClaw MVP 不使用 `details`
-  - `summary` 属于 Munnai 的派生字段，不是 OpenClaw hook 的输入责任
+  - `summary` 属于 Muninn 的派生字段，不是 OpenClaw hook 的输入责任
   - 缺少 `summary` 不应阻止 `prompt` / `tool_calling` / `artifacts` / `response` 的原始写入
-- 因此，对 Munnai 来说：
+- 因此，对 Muninn 来说：
   - `after_tool_call` 是 artifact 识别入口
   - 文件正文不应只依赖 `after_tool_call.result`
   - 必要时应由 hook 实现补一次文件读取
@@ -64,8 +64,8 @@
   - `new_string -> newText`
 - 已确认上游 `apply_patch` 返回的主要是修改摘要，不保证返回文件全文。
 - 已确认 `write` / `edit` / `apply_patch` 这类工具不能统一假设 `after_tool_call.result` 一定包含完整 artifact 正文。
-- 已确认 artifact 正文采集的 MVP 策略，优先保证保真，再把噪音控制下沉到 Munnai format 层。
-- 已确认 `summary` 的所有权属于 Munnai core；OpenClaw hook 只提交原始执行上下文。
+- 已确认 artifact 正文采集的 MVP 策略，优先保证保真，再把噪音控制下沉到 Muninn format 层。
+- 已确认 `summary` 的所有权属于 Muninn core；OpenClaw hook 只提交原始执行上下文。
 - 已确认 OpenClaw MVP 只采集 user prompt，不采集经 prompt-build 后的混合 prompt。
 
 ## Hook 到写入映射
@@ -110,7 +110,7 @@
 
 - 依赖记忆蒸馏工作线的点：
 - hook 层暂定走高保真采集，噪音裁剪与 observation/session 抽象留给蒸馏/format 层处理。
-- 依赖 Munnai Board 工作线的点：
+- 依赖 Muninn Board 工作线的点：
 - 暂无直接阻塞依赖。
 
 ## 下一步建议
@@ -124,5 +124,5 @@
 
 - 若只依赖 `after_tool_call.result`，将无法稳定拿到完整 markdown 或其他文件正文。
 - 若 hook 层过早做摘要化，可能会损失后续蒸馏真正需要的原始上下文。
-- 如果未来将 `sessionId` 一词同时用于 OpenClaw 物理 transcript id 和 Munnai 逻辑 session anchor，文档和实现都容易混淆，需在接口说明里明确。
-- 若继续把 `response` 写入与 `summary` 生成强绑定，会让 OpenClaw hook 层被迫理解 Munnai 内部派生逻辑，破坏职责边界。
+- 如果未来将 `sessionId` 一词同时用于 OpenClaw 物理 transcript id 和 Muninn 逻辑 session anchor，文档和实现都容易混淆，需在接口说明里明确。
+- 若继续把 `response` 写入与 `summary` 生成强绑定，会让 OpenClaw hook 层被迫理解 Muninn 内部派生逻辑，破坏职责边界。

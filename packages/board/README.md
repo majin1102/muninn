@@ -1,10 +1,10 @@
-# Munnai Board
+# Muninn Board
 
-`@munnai/board` 是 Munnai Board 的页面承载模块。
+`@muninn/board` 是 Muninn Board 的页面承载模块。
 
 当前阶段目标：
 
-- 为 Munnai Board 提供独立的前端落点
+- 为 Muninn Board 提供独立的前端落点
 - 先把 MVP 1 的最小信息架构跑起来
 - 接入真实的 sidecar session / observation 数据，并持续打磨只读查看体验
 
@@ -16,16 +16,16 @@
 - `session` 树状 explorer
 - `observation` 摘要 block 列表
 - 右侧 markdown 文档详情区
-- Settings 弹窗，可查看和保存 `${MUNNAI_HOME}/settings.json`
+- Settings 弹窗，可查看和保存 `${MUNINN_HOME}/settings.json`
 - `board` 自己维护人类向 UI 路由与页面静态资源
-- 运行时由 `@munnai/sidecar` 统一挂载到 `/board/`
+- 运行时由 `@muninn/sidecar` 统一挂载到 `/board/`
 
 `settings.json` 里的配置目前支持：
 
 ```json
 {
   "storage": {
-    "uri": "s3://my-bucket/munnai",
+    "uri": "s3://my-bucket/muninn",
     "storageOptions": {
       "region": "ap-southeast-1"
     }
@@ -78,7 +78,7 @@
 }
 ```
 
-- `storage` 缺省时，Munnai 默认使用本地 `MUNNAI_HOME`
+- `storage` 缺省时，Muninn 默认使用本地 `MUNINN_HOME`
 - `storage.uri` 可以切到 `s3://...` 等对象存储前缀
 - `storage.storageOptions` 会透传给 Lance/object_store 初始化底层存储后端
 - `turn.llmSummaryThresholdChars` 决定 turn 在多长输入下切换到 LLM summary 路径
@@ -95,7 +95,7 @@
 
 当前状态：
 
-- Munnai Board 的基础前端功能已经基本完成
+- Muninn Board 的基础前端功能已经基本完成
 - 当前主要未完成项是 logo / 品牌标识，以及少量视觉与交互细节收尾
 
 Demo 模式：
@@ -107,13 +107,13 @@ Demo 模式：
 构建：
 
 ```bash
-pnpm --filter @munnai/board build
+pnpm --filter @muninn/board build
 ```
 
 运行：
 
 ```bash
-pnpm --filter @munnai/sidecar start
+pnpm --filter @muninn/sidecar start
 ```
 
 然后访问：

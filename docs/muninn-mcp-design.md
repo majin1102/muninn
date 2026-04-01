@@ -1,6 +1,6 @@
-# Munnai MCP 接口与服务设计
+# Muninn MCP 接口与服务设计
 
-本文档描述当前仓库中 Munnai 的 MCP 接口与服务端架构。
+本文档描述当前仓库中 Muninn 的 MCP 接口与服务端架构。
 
 ## 1. Current Architecture
 
@@ -9,15 +9,15 @@ Agent
   │
   │  MCP stdio
   ▼
-Munnai MCP Server
+Muninn MCP Server
   │
   │  HTTP
   ▼
-Munnai Sidecar
+Muninn Sidecar
   │
   │  TypeScript binding
   ▼
-@munnai/core
+@muninn/core
   │
   │  daemon bridge
   ▼
@@ -32,7 +32,7 @@ Rust daemon in `core/` (session-layer queries backed by session turn rows / obse
 - Sidecar
   - 提供 HTTP 读写接口
   - 将 `RenderedMemoryRecord` 渲染为 `MemoryHit[]`
-- `@munnai/core`
+- `@muninn/core`
   - 作为 TS binding layer 连接 sidecar 和 Rust daemon
   - 暴露结构化读写调用给 sidecar
 - Rust daemon in `core/`
@@ -57,7 +57,7 @@ export interface MemoryHit {
 - MCP 直接拼接 `MemoryHit.content`
 - sidecar 是当前的 `RenderedMemoryRecord -> MemoryHit` 渲染边界
 
-`@munnai/core` 当前对 sidecar 暴露的是 `RenderedMemoryRecord` 等 TS contract，但 MCP 并不直接消费它；MCP 仍通过 sidecar 的 `MemoryHit[]` 获得最终文本。
+`@muninn/core` 当前对 sidecar 暴露的是 `RenderedMemoryRecord` 等 TS contract，但 MCP 并不直接消费它；MCP 仍通过 sidecar 的 `MemoryHit[]` 获得最终文本。
 
 ## 3. Memory Navigation
 
