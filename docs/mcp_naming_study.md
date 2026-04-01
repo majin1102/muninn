@@ -2,8 +2,8 @@
 
 本文档整理当前仓库周边几个 memory 项目的接口命名风格，回答一个具体问题：
 
-- Munnai 的 MCP / sidecar 接口是否有必要遵守 REST 风格
-- `POST /api/v1/session/messages` 这样的写接口命名是否更适合当前 Munnai
+- Muninn 的 MCP / sidecar 接口是否有必要遵守 REST 风格
+- `POST /api/v1/session/messages` 这样的写接口命名是否更适合当前 Muninn
 
 调研对象：
 
@@ -19,7 +19,7 @@
 - memory 项目的常见做法是分层混合命名，而不是全盘 REST
 - MCP tool 层通常使用动作名或能力名
 - HTTP 层常常混合资源命名、查询命名、流程命名、生命周期命名
-- 资源风格与 workflow 风格在 memory 项目里都常见，Munnai 需要按自身定位做取舍
+- 资源风格与 workflow 风格在 memory 项目里都常见，Muninn 需要按自身定位做取舍
 
 如果只看接口设计纯度：
 
@@ -31,7 +31,7 @@
 
 所以命名选择的关键不是 “MCP 要不要 REST”，而是：
 
-- Munnai 的 sidecar 长期是偏 agent capability API，还是偏标准资源 API
+- Muninn 的 sidecar 长期是偏 agent capability API，还是偏标准资源 API
 
 ## 2. 关键判断标准
 
@@ -210,11 +210,11 @@ HTTP 层是否 REST，是项目自己的设计选择。
 - MCP 层用动作名
 - sidecar / worker HTTP 层按产品工作流混合命名
 
-## 7. 回到 Munnai
+## 7. 回到 Muninn
 
-### 7.1 当前 Munnai 的读接口
+### 7.1 当前 Muninn 的读接口
 
-Munnai 当前读接口是：
+Muninn 当前读接口是：
 
 - `GET /api/v1/recall`
 - `GET /api/v1/list`
@@ -267,14 +267,14 @@ Munnai 当前读接口是：
 评价：
 
 - 最接近传统资源建模
-- 但和 Munnai 当前对 `session_id` 的定义有冲突
+- 但和 Muninn 当前对 `session_id` 的定义有冲突
 - 因为当前 `session_id` 只是逻辑归属参考，不是严格生命周期主键
 
 所以当前阶段不适合直接采用。
 
 ## 8. 推荐判断
 
-### 8.1 如果 Munnai sidecar 的定位是 agent capability API
+### 8.1 如果 Muninn sidecar 的定位是 agent capability API
 
 建议：
 
@@ -287,7 +287,7 @@ Munnai 当前读接口是：
 - 更接近 `claude-mem`、`SimpleMem-Cross` 的 workflow endpoint 思路
 - 不会给人错误暗示：`session_id` 不是强资源主键
 
-### 8.2 如果 Munnai sidecar 的长期定位是标准资源 API
+### 8.2 如果 Muninn sidecar 的长期定位是标准资源 API
 
 建议：
 
@@ -332,7 +332,7 @@ Munnai 当前读接口是：
 1. MCP 接口没有必要遵守 REST 风格。
 2. 参考项目普遍采用“工具层动作命名 + HTTP 层混合命名”。
 3. `claude-mem`、`SimpleMem`、`SimpleMem-Cross` 都不支持“memory/MCP 项目必须纯 REST”这个前提。
-4. 对 Munnai 而言，`session/messages` 是当前更优的落地命名。
+4. 对 Muninn 而言，`session/messages` 是当前更优的落地命名。
 5. 这一选择的理由不在 MCP，而在 sidecar 的 HTTP 命名策略：当前更偏向资源集合创建语义
 
 ## 10. 参考文件

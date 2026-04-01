@@ -41,7 +41,7 @@
 - 依赖 OpenClaw 对接工作线的点：
   - 需要后续用真实 OpenClaw 对话样本继续验证 direct-summary gate 是否合理
   - 需要在 benchmark 中证明新方案比默认全量 LLM summary 更稳或更省 token
-- 依赖 Munnai Board 工作线的点：
+- 依赖 Muninn Board 工作线的点：
   - 后续 UI 如果允许人工查看或编辑 turn summary，需要确认 direct summary 与 full summary 的展示差异是否可接受
 
 ## 下一步建议

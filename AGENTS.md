@@ -1,10 +1,10 @@
-# Munnai AGENTS
+# Muninn AGENTS
 
 This file is the fast-path context for coding agents working in this repository.
 
 ## What This Repo Is
 
-Munnai is a shared memory system for agents.
+Muninn is a shared memory system for agents.
 
 Current strategic direction:
 
@@ -21,7 +21,7 @@ Current strategic direction:
 - `packages/sidecar`
   - HTTP service layer.
   - Owns request validation, response shaping, and local process-facing APIs.
-  - Reads and writes the Lance-backed turn dataset through `@munnai/core`.
+  - Reads and writes the Lance-backed turn dataset through `@muninn/core`.
 - `packages/types`
   - Shared TypeScript contracts.
   - Defines request, response, and record types used by TS packages.
@@ -94,11 +94,11 @@ Important modeling note:
 
 ## Milestone 1
 
-Milestone 1 exists to validate the first real product value of Munnai.
+Milestone 1 exists to validate the first real product value of Muninn.
 
 Product statement:
 
-- Munnai gives an agent a small but usable working memory.
+- Muninn gives an agent a small but usable working memory.
 - The agent can save what just happened.
 - The agent can later pull back the most relevant or most recent context.
 - The returned context is directly usable for the next LLM step.
@@ -117,7 +117,7 @@ Milestone 1 user story:
 
 - An agent completes a task step and writes a session memory row
 - Later, the same or another agent asks what happened recently or what was said about a topic
-- Munnai returns a small set of records in chronological order that can be injected into prompt context
+- Muninn returns a small set of records in chronological order that can be injected into prompt context
 - The agent continues work without manually reconstructing history
 
 Milestone 1 in-scope implementation:

@@ -1,4 +1,4 @@
-# Munnai Board 工作线 Progress
+# Muninn Board 工作线 Progress
 
 ## 当前状态
 
@@ -8,7 +8,7 @@
 
 ## 已确认结论
 
-- Munnai Board 应单独承载在 `packages/board`，不应塞入 `mcp`
+- Muninn Board 应单独承载在 `packages/board`，不应塞入 `mcp`
 - 当前阶段先做只读查看器，不做编辑器
 - 当前后端只具备 session 读链路，observation 视图需要先占位再等上游接入
 - 现有 sidecar read payload 偏 LLM 注入，后续可能需要补 UI-friendly read model
@@ -22,7 +22,7 @@
 
 ## 当前正在推进
 
-- 站稳 Munnai Board 的最小页面结构
+- 站稳 Muninn Board 的最小页面结构
 - 为后续接 sidecar 真实数据预留页面入口和模块边界
 
 ## 当前阻塞点
@@ -40,11 +40,11 @@
 
 ## 下一步建议
 
-- 明确 Munnai Board 的 MVP 页面清单与导航
+- 明确 Muninn Board 的 MVP 页面清单与导航
 - 决定真实数据接入时是继续消费 `MemoryHit`，还是单独补 UI-oriented read API
 - 在 observation 数据到位前，先完成 session 列表 / 详情页的真实接线
 
 ## 需要记录的风险
 
 - 如果继续直接消费 Markdown `MemoryHit`，页面会很快遇到结构化展示瓶颈
-- 如果 observation 工作线延迟，Munnai Board 很容易长期停留在 session-only viewer
+- 如果 observation 工作线延迟，Muninn Board 很容易长期停留在 session-only viewer

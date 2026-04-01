@@ -1,4 +1,4 @@
-# Munnai MCP Demo
+# Muninn MCP Demo
 
 The current demo shape is:
 

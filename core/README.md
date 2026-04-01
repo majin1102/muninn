@@ -1,6 +1,6 @@
 # Core Module
 
-This crate is Munnai's current Rust core implementation layer.
+This crate is Muninn's current Rust core implementation layer.
 
 ## Dependency Policy
 
@@ -8,11 +8,11 @@ By default, this crate depends on the official published `lance` crate from crat
 
 Do not commit a repository-external `path` dependency for `lance` into the main branch.
 
-Current default dependency lives in [Cargo.toml](/Users/Nathan/workspace/munnai/core/Cargo.toml).
+Current default dependency lives in [Cargo.toml](/Users/Nathan/Documents/Playground/muninn/core/Cargo.toml).
 
 ## Local Lance Development
 
-If you want Munnai to use your local Lance source tree immediately while you edit it, use a local Cargo patch instead of changing the main dependency to a repo-external path.
+If you want Muninn to use your local Lance source tree immediately while you edit it, use a local Cargo patch instead of changing the main dependency to a repo-external path.
 
 Recommended approach:
 
