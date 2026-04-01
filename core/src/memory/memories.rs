@@ -98,7 +98,7 @@ pub async fn recall(storage: &Storage, query: &str, limit: usize) -> Result<Vec<
     match semantic_recall(storage, query, limit).await {
         Ok(semantic_hits) => {
             let fallback_hits = legacy_recall(storage, query, limit).await?;
-            merge_recall_results(fallback_hits, semantic_hits, limit)
+            merge_recall_results(semantic_hits, fallback_hits, limit)
         }
         Err(error) => {
             eprintln!("[memory] semantic recall failed for {:?}: {}", query, error);
