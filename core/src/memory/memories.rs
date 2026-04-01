@@ -85,40 +85,6 @@ impl TryFrom<&ObservingSnapshot> for MemoryView {
     }
 }
 
-impl TryFrom<&SessionTurn> for RecallHit {
-    type Error = Error;
-
-    fn try_from(turn: &SessionTurn) -> Result<Self> {
-        let text = render_recall_text([
-            labeled_line("Title", turn.title.as_deref()),
-            labeled_line("Summary", turn.summary.as_deref()),
-            render_session_turn_detail(turn),
-        ])?;
-
-        Ok(Self {
-            memory_id: turn.memory_id()?,
-            text,
-        })
-    }
-}
-
-impl TryFrom<&ObservingSnapshot> for RecallHit {
-    type Error = Error;
-
-    fn try_from(observing: &ObservingSnapshot) -> Result<Self> {
-        let text = render_recall_text([
-            labeled_line("Title", Some(observing.title.as_str())),
-            labeled_line("Summary", Some(observing.summary.as_str())),
-            labeled_line("Content", Some(observing.content.as_str())),
-        ])?;
-
-        Ok(Self {
-            memory_id: observing.memory_id()?,
-            text,
-        })
-    }
-}
-
 pub async fn recall(storage: &Storage, query: &str, limit: usize) -> Result<Vec<RecallHit>> {
     if limit == 0 {
         return Ok(Vec::new());
@@ -126,28 +92,10 @@ pub async fn recall(storage: &Storage, query: &str, limit: usize) -> Result<Vec<
 
     let query = query.trim();
     if query.is_empty() {
-        return legacy_recall(storage, query, limit).await;
+        return Ok(Vec::new());
     }
 
-    let session_hits = render_session_recall_hits(sessions::recall(storage, query, limit).await?)?;
-
-    match semantic_recall(storage, query, limit).await {
-        Ok(semantic_hits) => {
-            let observing_fallback = if semantic_hits.len() < limit {
-                render_observing_recall_hits(observings::recall(storage, query, limit).await?)?
-            } else {
-                Vec::new()
-            };
-            Ok(merge_recall_results(
-                vec![semantic_hits, session_hits, observing_fallback],
-                limit,
-            ))
-        }
-        Err(error) => {
-            eprintln!("[memory] semantic recall failed for {:?}: {}", query, error);
-            legacy_recall(storage, query, limit).await
-        }
-    }
+    semantic_recall(storage, query, limit).await
 }
 
 pub async fn list(storage: &Storage, mode: ListMode) -> Result<Vec<MemoryView>> {
@@ -251,39 +199,7 @@ fn render_observings(observings: Vec<ObservingSnapshot>) -> Result<Vec<MemoryVie
         .collect::<Result<Vec<_>>>()
 }
 
-fn render_session_recall_hits(turns: Vec<SessionTurn>) -> Result<Vec<RecallCandidate>> {
-    turns
-        .iter()
-        .map(RecallCandidate::try_from)
-        .collect::<Result<Vec<_>>>()
-}
-
-fn render_observing_recall_hits(
-    observings: Vec<ObservingSnapshot>,
-) -> Result<Vec<RecallCandidate>> {
-    observings
-        .iter()
-        .map(RecallCandidate::try_from)
-        .collect::<Result<Vec<_>>>()
-}
-
-async fn legacy_recall(storage: &Storage, query: &str, limit: usize) -> Result<Vec<RecallHit>> {
-    let turns = sessions::recall(storage, query, limit).await?;
-    let observings = observings::recall(storage, query, limit).await?;
-    Ok(merge_recall_results(
-        vec![
-            render_session_recall_hits(turns)?,
-            render_observing_recall_hits(observings)?,
-        ],
-        limit,
-    ))
-}
-
-async fn semantic_recall(
-    storage: &Storage,
-    query: &str,
-    limit: usize,
-) -> Result<Vec<RecallCandidate>> {
+async fn semantic_recall(storage: &Storage, query: &str, limit: usize) -> Result<Vec<RecallHit>> {
     let query_vector = embed_text(query).await?;
     let mut fetch_limit = limit.saturating_mul(4).max(limit);
     let candidate_groups = loop {
@@ -300,40 +216,12 @@ async fn semantic_recall(
 
     let mut hits = Vec::new();
     for candidate in candidate_groups {
-        hits.push(candidate.try_into()?);
+        hits.push(RecallHit::try_from(candidate)?);
         if hits.len() >= limit {
             break;
         }
     }
     Ok(hits)
-}
-
-fn merge_recall_results(result_sets: Vec<Vec<RecallCandidate>>, limit: usize) -> Vec<RecallHit> {
-    let mut deduped = HashMap::<String, RecallCandidate>::new();
-
-    for memory in result_sets.into_iter().flatten() {
-        let key = memory.hit.memory_id.to_string();
-        deduped
-            .entry(key)
-            .and_modify(|current| {
-                if memory.created_at > current.created_at
-                    || (memory.created_at == current.created_at
-                        && memory.updated_at > current.updated_at)
-                {
-                    *current = memory.clone();
-                }
-            })
-            .or_insert(memory);
-    }
-
-    let mut combined = deduped.into_values().collect::<Vec<_>>();
-    combined.sort_by(|left, right| right.created_at.cmp(&left.created_at));
-    combined.truncate(limit);
-    combined.sort_by(|left, right| left.created_at.cmp(&right.created_at));
-    combined
-        .into_iter()
-        .map(|candidate| candidate.hit)
-        .collect()
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -386,90 +274,27 @@ fn merge_semantic_candidates(candidates: Vec<SemanticIndexRow>) -> Vec<SemanticC
     merged
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct RecallCandidate {
-    hit: RecallHit,
-    created_at: chrono::DateTime<chrono::Utc>,
-    updated_at: chrono::DateTime<chrono::Utc>,
-}
-
-impl TryFrom<&SessionTurn> for RecallCandidate {
-    type Error = Error;
-
-    fn try_from(turn: &SessionTurn) -> Result<Self> {
-        Ok(Self {
-            hit: RecallHit::try_from(turn)?,
-            created_at: turn.created_at,
-            updated_at: turn.updated_at,
-        })
-    }
-}
-
-impl TryFrom<&ObservingSnapshot> for RecallCandidate {
-    type Error = Error;
-
-    fn try_from(observing: &ObservingSnapshot) -> Result<Self> {
-        Ok(Self {
-            hit: RecallHit::try_from(observing)?,
-            created_at: observing.created_at,
-            updated_at: observing.updated_at,
-        })
-    }
-}
-
-impl TryFrom<SemanticCandidateGroup> for RecallCandidate {
+impl TryFrom<SemanticCandidateGroup> for RecallHit {
     type Error = Error;
 
     fn try_from(candidate: SemanticCandidateGroup) -> Result<Self> {
         Ok(Self {
-            hit: RecallHit {
-                memory_id: MemoryId::from_str(&candidate.memory_id)?,
-                text: candidate.best_text,
-            },
-            created_at: candidate.newest_created_at,
-            updated_at: candidate.newest_created_at,
+            memory_id: MemoryId::from_str(&candidate.memory_id)?,
+            text: candidate.best_text,
         })
     }
 }
 
-fn labeled_line(label: &str, value: Option<&str>) -> Option<String> {
-    value
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|value| format!("{label}: {value}"))
-}
-
-fn render_recall_text<const N: usize>(sections: [Option<String>; N]) -> Result<String> {
-    let text = sections
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>()
-        .join("\n\n");
-
-    if text.trim().is_empty() {
-        return Err(Error::invalid_input(
-            "recall hit must include at least one non-empty text section",
-        ));
-    }
-
-    Ok(text)
-}
-
 #[cfg(test)]
 mod tests {
-    use chrono::{Duration, Utc};
+    use chrono::Utc;
     use ulid::Ulid;
 
     use super::{merge_semantic_candidates, recall};
-    use crate::format::observing::{
-        MemoryCategory, ObservedMemory, ObservingCheckpoint, ObservingSnapshot,
-    };
     use crate::format::semantic_index::SemanticIndexRow;
     use crate::format::session::SessionTurn;
     use crate::llm::config::llm_test_env_guard;
     use crate::llm::embedding::embed_text;
-    use crate::observer::observing::SnapshotContent;
-    use crate::observer::types::LlmFieldUpdate;
     use crate::storage::Storage;
 
     fn test_storage() -> Storage {
@@ -502,35 +327,6 @@ mod tests {
         let storage = test_storage();
         let now = Utc::now();
         let snapshot_id = Ulid::new().to_string();
-        let observed_memory = ObservedMemory {
-            id: Some("mem-1".to_string()),
-            text: "beta".to_string(),
-            category: MemoryCategory::Fact,
-            updated_memory: None,
-        };
-        let snapshot_content = SnapshotContent {
-            memories: vec![observed_memory.clone()],
-            open_questions: vec![],
-            next_steps: vec![],
-            memory_delta: LlmFieldUpdate::new(vec![], vec![observed_memory]),
-        };
-        let observing = ObservingSnapshot {
-            snapshot_id: snapshot_id.clone(),
-            observing_id: "OBS-1".to_string(),
-            snapshot_sequence: 0,
-            created_at: now,
-            updated_at: now,
-            observer: "observer-a".to_string(),
-            title: "alpha title".to_string(),
-            summary: "alpha summary".to_string(),
-            content: serde_json::to_string_pretty(&snapshot_content).unwrap(),
-            references: vec!["SESSION:ref-1".to_string()],
-            checkpoint: ObservingCheckpoint {
-                observing_epoch: 0,
-                indexed_snapshot_sequence: Some(0),
-            },
-        };
-        storage.observings().upsert(vec![observing]).await.unwrap();
 
         let row = SemanticIndexRow {
             id: "mem-1".to_string(),
@@ -557,7 +353,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn recall_preserves_recent_session_hits_when_semantic_results_reach_limit() {
+    async fn recall_ignores_session_matches_when_semantic_index_is_empty() {
         let _guard = llm_test_env_guard();
         let home = tempfile::tempdir().unwrap();
         let home_dir = home.path().join("munnai");
@@ -581,47 +377,7 @@ mod tests {
 
         let storage = test_storage();
         let now = Utc::now();
-        let older_snapshot_id = Ulid::new().to_string();
-        let newer_snapshot_id = Ulid::new().to_string();
         let session_turn_id = Ulid::new().to_string();
-
-        let older_observing = ObservingSnapshot {
-            snapshot_id: older_snapshot_id.clone(),
-            observing_id: "OBS-OLDER".to_string(),
-            snapshot_sequence: 0,
-            created_at: now - Duration::hours(2),
-            updated_at: now - Duration::hours(2),
-            observer: "observer-a".to_string(),
-            title: "older semantic".to_string(),
-            summary: "older semantic summary".to_string(),
-            content: "{\"memories\":[]}".to_string(),
-            references: vec!["SESSION:older".to_string()],
-            checkpoint: ObservingCheckpoint {
-                observing_epoch: 0,
-                indexed_snapshot_sequence: Some(0),
-            },
-        };
-        let newer_observing = ObservingSnapshot {
-            snapshot_id: newer_snapshot_id.clone(),
-            observing_id: "OBS-NEWER".to_string(),
-            snapshot_sequence: 0,
-            created_at: now - Duration::hours(1),
-            updated_at: now - Duration::hours(1),
-            observer: "observer-a".to_string(),
-            title: "newer semantic".to_string(),
-            summary: "newer semantic summary".to_string(),
-            content: "{\"memories\":[]}".to_string(),
-            references: vec!["SESSION:newer".to_string()],
-            checkpoint: ObservingCheckpoint {
-                observing_epoch: 0,
-                indexed_snapshot_sequence: Some(0),
-            },
-        };
-        storage
-            .observings()
-            .upsert(vec![older_observing, newer_observing])
-            .await
-            .unwrap();
 
         let session_turn = SessionTurn {
             turn_id: session_turn_id.clone(),
@@ -642,44 +398,8 @@ mod tests {
         };
         storage.sessions().upsert(vec![session_turn]).await.unwrap();
 
-        storage
-            .semantic_index()
-            .upsert(vec![
-                SemanticIndexRow {
-                    id: "mem-older".to_string(),
-                    memory_id: format!("OBSERVING:{older_snapshot_id}"),
-                    text: "beta older".to_string(),
-                    vector: embed_text("beta").await.unwrap(),
-                    importance: 0.7,
-                    category: "fact".to_string(),
-                    created_at: now - Duration::hours(2),
-                },
-                SemanticIndexRow {
-                    id: "mem-newer".to_string(),
-                    memory_id: format!("OBSERVING:{newer_snapshot_id}"),
-                    text: "beta newer".to_string(),
-                    vector: embed_text("beta").await.unwrap(),
-                    importance: 0.7,
-                    category: "fact".to_string(),
-                    created_at: now - Duration::hours(1),
-                },
-            ])
-            .await
-            .unwrap();
-
         let recalled = recall(&storage, "beta", 2).await.unwrap();
-        assert_eq!(recalled.len(), 2);
-        assert_eq!(
-            recalled[0].memory_id.to_string(),
-            format!("OBSERVING:{newer_snapshot_id}")
-        );
-        assert_eq!(recalled[0].text, "beta newer");
-        assert_eq!(
-            recalled[1].memory_id.to_string(),
-            format!("SESSION:{session_turn_id}")
-        );
-        assert!(recalled[1].text.contains("Prompt: beta prompt"));
-        assert!(recalled[1].text.contains("Response: beta response"));
+        assert!(recalled.is_empty());
 
         unsafe {
             std::env::remove_var("MUNNAI_HOME");
@@ -687,7 +407,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn recall_merges_results_using_recency_window_order() {
+    async fn recall_does_not_merge_session_matches_with_semantic_hits() {
         let _guard = llm_test_env_guard();
         let home = tempfile::tempdir().unwrap();
         let home_dir = home.path().join("munnai");
@@ -712,67 +432,25 @@ mod tests {
         let storage = test_storage();
         let now = Utc::now();
         let semantic_snapshot_id = Ulid::new().to_string();
-        let session_old_id = Ulid::new().to_string();
-        let session_new_id = Ulid::new().to_string();
-
-        storage
-            .observings()
-            .upsert(vec![ObservingSnapshot {
-                snapshot_id: semantic_snapshot_id.clone(),
-                observing_id: "OBS-RECENCY".to_string(),
-                snapshot_sequence: 0,
-                created_at: now - Duration::hours(3),
-                updated_at: now - Duration::hours(3),
-                observer: "observer-a".to_string(),
-                title: "semantic old".to_string(),
-                summary: "semantic old summary".to_string(),
-                content: "{\"memories\":[]}".to_string(),
-                references: vec!["SESSION:semantic".to_string()],
-                checkpoint: ObservingCheckpoint {
-                    observing_epoch: 0,
-                    indexed_snapshot_sequence: Some(0),
-                },
-            }])
-            .await
-            .unwrap();
         storage
             .sessions()
-            .upsert(vec![
-                SessionTurn {
-                    turn_id: session_old_id.clone(),
-                    created_at: now - Duration::hours(2),
-                    updated_at: now - Duration::hours(2),
-                    session_id: Some("group-a".to_string()),
-                    agent: "agent-a".to_string(),
-                    observer: "observer-a".to_string(),
-                    title: Some("session beta old".to_string()),
-                    summary: Some("session beta old summary".to_string()),
-                    title_source: None,
-                    summary_source: None,
-                    tool_calling: None,
-                    artifacts: None,
-                    prompt: Some("beta old prompt".to_string()),
-                    response: Some("beta old response".to_string()),
-                    observing_epoch: None,
-                },
-                SessionTurn {
-                    turn_id: session_new_id.clone(),
-                    created_at: now - Duration::hours(1),
-                    updated_at: now - Duration::hours(1),
-                    session_id: Some("group-b".to_string()),
-                    agent: "agent-a".to_string(),
-                    observer: "observer-a".to_string(),
-                    title: Some("session beta new".to_string()),
-                    summary: Some("session beta new summary".to_string()),
-                    title_source: None,
-                    summary_source: None,
-                    tool_calling: None,
-                    artifacts: None,
-                    prompt: Some("beta new prompt".to_string()),
-                    response: Some("beta new response".to_string()),
-                    observing_epoch: None,
-                },
-            ])
+            .upsert(vec![SessionTurn {
+                turn_id: Ulid::new().to_string(),
+                created_at: now,
+                updated_at: now,
+                session_id: Some("group-a".to_string()),
+                agent: "agent-a".to_string(),
+                observer: "observer-a".to_string(),
+                title: Some("session beta".to_string()),
+                summary: Some("session beta summary".to_string()),
+                title_source: None,
+                summary_source: None,
+                tool_calling: None,
+                artifacts: None,
+                prompt: Some("beta prompt".to_string()),
+                response: Some("beta response".to_string()),
+                observing_epoch: None,
+            }])
             .await
             .unwrap();
         storage
@@ -784,22 +462,18 @@ mod tests {
                 vector: embed_text("beta").await.unwrap(),
                 importance: 0.7,
                 category: "fact".to_string(),
-                created_at: now - Duration::hours(3),
+                created_at: now,
             }])
             .await
             .unwrap();
 
         let recalled = recall(&storage, "beta", 2).await.unwrap();
-        assert_eq!(recalled.len(), 2);
+        assert_eq!(recalled.len(), 1);
         assert_eq!(
             recalled[0].memory_id.to_string(),
-            format!("SESSION:{session_old_id}")
+            format!("OBSERVING:{semantic_snapshot_id}")
         );
-        assert_eq!(
-            recalled[1].memory_id.to_string(),
-            format!("SESSION:{session_new_id}")
-        );
-        assert!(recalled[1].text.contains("Title: session beta new"));
+        assert_eq!(recalled[0].text, "beta semantic");
 
         unsafe {
             std::env::remove_var("MUNNAI_HOME");
@@ -833,39 +507,6 @@ mod tests {
         let now = Utc::now();
         let snapshot_a = Ulid::new().to_string();
         let snapshot_b = Ulid::new().to_string();
-
-        for (index, (snapshot_id, observing_id, title)) in [
-            (snapshot_a.clone(), "OBS-A", "alpha title"),
-            (snapshot_b.clone(), "OBS-B", "beta title"),
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            let created_at = now + Duration::minutes(index as i64);
-            let observing = ObservingSnapshot {
-                snapshot_id: snapshot_id.clone(),
-                observing_id: observing_id.to_string(),
-                snapshot_sequence: 0,
-                created_at,
-                updated_at: created_at,
-                observer: "observer-a".to_string(),
-                title: title.to_string(),
-                summary: format!("{title} summary"),
-                content: serde_json::to_string_pretty(&SnapshotContent {
-                    memories: vec![],
-                    open_questions: vec![],
-                    next_steps: vec![],
-                    memory_delta: LlmFieldUpdate::new(vec![], vec![]),
-                })
-                .unwrap(),
-                references: vec!["SESSION:ref".to_string()],
-                checkpoint: ObservingCheckpoint {
-                    observing_epoch: 0,
-                    indexed_snapshot_sequence: Some(0),
-                },
-            };
-            storage.observings().upsert(vec![observing]).await.unwrap();
-        }
 
         let mut rows = Vec::new();
         for index in 0..8 {

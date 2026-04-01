@@ -59,28 +59,6 @@ pub(crate) async fn timeline(
     Ok(observings[start..end].to_vec())
 }
 
-pub(crate) async fn recall(
-    storage: &Storage,
-    query: &str,
-    limit: usize,
-) -> Result<Vec<ObservingSnapshot>> {
-    let query_lower = query.to_lowercase();
-    let mut observings = storage.observings().list(None).await?;
-    observings.retain(|observing| {
-        matches_query(Some(observing.title.as_str()), &query_lower)
-            || matches_query(Some(observing.summary.as_str()), &query_lower)
-            || matches_query(Some(observing.content.as_str()), &query_lower)
-    });
-    observings.sort_by(|left, right| {
-        right
-            .created_at
-            .cmp(&left.created_at)
-            .then(right.snapshot_sequence.cmp(&left.snapshot_sequence))
-    });
-    observings.truncate(limit);
-    Ok(observings)
-}
-
 fn ensure_observing_memory_id(memory_id: &MemoryId) -> Result<()> {
     if memory_id.memory_layer() != MemoryLayer::Observing {
         return Err(Error::invalid_input(format!(
@@ -132,63 +110,6 @@ fn apply_list_mode(observings: Vec<ObservingSnapshot>, mode: ListMode) -> Vec<Ob
                     .then(right.snapshot_sequence.cmp(&left.snapshot_sequence))
             });
             latest.into_iter().skip(offset).take(limit).collect()
-        }
-    }
-}
-
-fn matches_query(value: Option<&str>, query_lower: &str) -> bool {
-    value
-        .map(|value| value.to_lowercase().contains(query_lower))
-        .unwrap_or(false)
-}
-
-#[cfg(test)]
-mod tests {
-    use chrono::Utc;
-    use ulid::Ulid;
-
-    use super::recall;
-    use crate::format::observing::{ObservingCheckpoint, ObservingSnapshot};
-    use crate::storage::Storage;
-
-    fn test_storage() -> Storage {
-        Storage::local(crate::config::data_root().unwrap()).unwrap()
-    }
-
-    #[tokio::test]
-    async fn recall_does_not_match_reference_only_queries() {
-        let home = tempfile::tempdir().unwrap();
-        let home_dir = home.path().join("munnai");
-        std::fs::create_dir_all(&home_dir).unwrap();
-        unsafe {
-            std::env::set_var("MUNNAI_HOME", &home_dir);
-        }
-
-        let storage = test_storage();
-        let now = Utc::now();
-        let observing = ObservingSnapshot {
-            snapshot_id: Ulid::new().to_string(),
-            observing_id: "OBS-1".to_string(),
-            snapshot_sequence: 0,
-            created_at: now,
-            updated_at: now,
-            observer: "observer-a".to_string(),
-            title: "release plan".to_string(),
-            summary: "shipping prep".to_string(),
-            content: "discussion about rollout".to_string(),
-            references: vec!["SESSION:secret-keyword".to_string()],
-            checkpoint: ObservingCheckpoint {
-                observing_epoch: 0,
-                indexed_snapshot_sequence: Some(0),
-            },
-        };
-        storage.observings().upsert(vec![observing]).await.unwrap();
-
-        let recalled = recall(&storage, "secret-keyword", 10).await.unwrap();
-        assert!(recalled.is_empty());
-
-        unsafe {
-            std::env::remove_var("MUNNAI_HOME");
         }
     }
 }

@@ -403,7 +403,7 @@ fn merge_metadata_field(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{HashMap, HashSet};
+    use std::collections::HashMap;
     use std::str::FromStr;
     use std::sync::Arc;
 
@@ -413,7 +413,7 @@ mod tests {
 
     use super::{SessionKey, SessionTurn, SessionWrite, TurnMetadataSource, reconcile_open_turns};
     use crate::format::memory::{MemoryId, MemoryLayer};
-    use crate::memory::sessions::{apply_list_mode, get, recall, timeline, timeline_from_source};
+    use crate::memory::sessions::{apply_list_mode, get, timeline, timeline_from_source};
     use crate::memory::types::{ListMode, MemoryView};
     use crate::service::{PostMessage, Service};
     use crate::storage::{SessionSelect, Storage};
@@ -729,97 +729,6 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(persisted.summary.as_deref(), Some("provided summary"));
-    }
-
-    #[tokio::test]
-    async fn recall_matches_text_fields_and_limit() {
-        let _guard = crate::llm::config::llm_test_env_guard();
-        let dir = tempfile::tempdir().unwrap();
-        let home = dir.path().join("munnai-home");
-        std::fs::create_dir_all(&home).unwrap();
-        let config_path = home.join("settings.json");
-        crate::llm::config::write_test_munnai_config(&config_path, Some("mock"), None, None);
-        unsafe {
-            std::env::set_var("MUNNAI_HOME", &home);
-        }
-        let storage = Storage::local(dir.path()).unwrap();
-
-        let _first = post(
-            &storage,
-            Some("group-a"),
-            "agent-a",
-            None,
-            Some("alpha summary"),
-            None,
-            None,
-            Some("alpha prompt"),
-            None,
-        )
-        .await;
-        let _second = post(
-            &storage,
-            Some("group-a"),
-            "agent-a",
-            None,
-            None,
-            Some(vec!["alpha-tool".to_string()]),
-            None,
-            None,
-            None,
-        )
-        .await;
-        let _third = post(
-            &storage,
-            Some("group-b"),
-            "agent-b",
-            None,
-            None,
-            None,
-            None,
-            Some("alpha prompt"),
-            None,
-        )
-        .await;
-        let _fourth = post(
-            &storage,
-            Some("group-c"),
-            "agent-c",
-            None,
-            None,
-            None,
-            None,
-            None,
-            Some("alpha response"),
-        )
-        .await;
-
-        let recalled = recall(&storage, "alpha", 3).await.unwrap();
-        assert_eq!(recalled.len(), 3);
-        assert!(recalled.iter().all(|turn| {
-            turn.summary
-                .as_deref()
-                .unwrap_or_default()
-                .contains("alpha")
-                || turn.prompt.as_deref().unwrap_or_default().contains("alpha")
-                || turn
-                    .response
-                    .as_deref()
-                    .unwrap_or_default()
-                    .contains("alpha")
-                || turn
-                    .tool_calling
-                    .as_ref()
-                    .map(|entries| entries.iter().any(|entry| entry.contains("alpha")))
-                    .unwrap_or(false)
-        }));
-        let unique_ids = recalled
-            .iter()
-            .map(|turn| turn.turn_id.as_str())
-            .collect::<HashSet<_>>();
-        assert_eq!(unique_ids.len(), 3);
-        unsafe {
-            std::env::remove_var("MUNNAI_HOME");
-        }
     }
 
     #[tokio::test]

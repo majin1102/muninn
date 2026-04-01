@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use lance::{Error, Result};
 
 use crate::format::memory::{MemoryId, MemoryLayer};
@@ -57,26 +55,6 @@ pub(crate) async fn timeline(
         &anchor.session_key(),
     )
     .unwrap_or_default())
-}
-
-pub(crate) async fn recall(
-    storage: &Storage,
-    query: &str,
-    limit: usize,
-) -> Result<Vec<SessionTurn>> {
-    let query_lower = query.to_lowercase();
-    let mut turns = storage.sessions().select(SessionSelect::All).await?;
-    turns.retain(|turn| {
-        matches_query(turn.title.as_deref(), &query_lower)
-            || matches_query(turn.summary.as_deref(), &query_lower)
-            || matches_query(turn.prompt.as_deref(), &query_lower)
-            || matches_query(turn.response.as_deref(), &query_lower)
-            || matches_string_list(turn.tool_calling.as_ref(), &query_lower)
-            || matches_string_map(turn.artifacts.as_ref(), &query_lower)
-    });
-    turns.sort_by(|left, right| right.created_at.cmp(&left.created_at));
-    turns.truncate(limit);
-    Ok(turns)
 }
 
 fn ensure_session_memory_id(memory_id: &MemoryId) -> Result<()> {
@@ -164,31 +142,4 @@ pub(crate) fn timeline_from_source(
     let start = anchor_index.saturating_sub(before_limit);
     let end = (anchor_index + after_limit + 1).min(filtered.len());
     Some(filtered[start..end].to_vec())
-}
-
-fn matches_query(value: Option<&str>, query_lower: &str) -> bool {
-    value
-        .map(|value| value.to_lowercase().contains(query_lower))
-        .unwrap_or(false)
-}
-
-fn matches_string_list(values: Option<&Vec<String>>, query_lower: &str) -> bool {
-    values
-        .map(|values| {
-            values
-                .iter()
-                .any(|value| value.to_lowercase().contains(query_lower))
-        })
-        .unwrap_or(false)
-}
-
-fn matches_string_map(values: Option<&HashMap<String, String>>, query_lower: &str) -> bool {
-    values
-        .map(|values| {
-            values.iter().any(|(key, value)| {
-                key.to_lowercase().contains(query_lower)
-                    || value.to_lowercase().contains(query_lower)
-            })
-        })
-        .unwrap_or(false)
 }
