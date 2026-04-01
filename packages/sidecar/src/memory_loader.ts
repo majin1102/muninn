@@ -3,7 +3,7 @@ import {
 } from '@munnai/core';
 import { Hono } from 'hono';
 import type { ErrorResponse, MemoryHit, MemoryResponse } from '@munnai/types';
-import { renderRenderedMemoryHit } from './render.js';
+import { renderRecallHit, renderRenderedMemoryHit } from './render.js';
 import { generateRequestId } from './utils.js';
 
 export const memoryLoader = new Hono();
@@ -88,7 +88,7 @@ memoryLoader.get('/api/v1/recall', async (c) => {
   }
 
   const maxResults = parsedLimit.value ?? 10;
-  const matched = (await memories.recall(query, maxResults)).map(renderRenderedMemoryHit);
+  const matched = (await memories.recall(query, maxResults)).map(renderRecallHit);
 
   return c.json(memoryResponse(matched));
 });

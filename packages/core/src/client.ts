@@ -52,6 +52,11 @@ export interface RenderedMemoryRecord {
   updatedAt: string;
 }
 
+export interface RecallHitRecord {
+  memoryId: string;
+  text: string;
+}
+
 export type ListModeInput =
   | { type: 'recency'; limit: number }
   | { type: 'page'; offset: number; limit: number };
@@ -80,6 +85,11 @@ type RawRenderedMemoryRecord = {
   detail?: string | null;
   createdAt: string;
   updatedAt: string;
+};
+
+type RawRecallHitRecord = {
+  memoryId: string;
+  text: string;
 };
 
 export interface SessionMessageInput {
@@ -363,9 +373,9 @@ export const memories = {
     return rows.map(normalizeRenderedMemoryRecord);
   },
 
-  async recall(query: string, limit?: number): Promise<RenderedMemoryRecord[]> {
-    const rows = await getDaemon().request<RawRenderedMemoryRecord[]>('memories.recall', { query, limit });
-    return rows.map(normalizeRenderedMemoryRecord);
+  async recall(query: string, limit?: number): Promise<RecallHitRecord[]> {
+    const rows = await getDaemon().request<RawRecallHitRecord[]>('memories.recall', { query, limit });
+    return rows.map(normalizeRecallHitRecord);
   },
 };
 
@@ -544,6 +554,13 @@ function normalizeRenderedMemoryRecord(row: RawRenderedMemoryRecord): RenderedMe
     detail: row.detail ?? undefined,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
+  };
+}
+
+function normalizeRecallHitRecord(row: RawRecallHitRecord): RecallHitRecord {
+  return {
+    memoryId: row.memoryId,
+    text: row.text,
   };
 }
 

@@ -12,7 +12,7 @@ use crate::llm::turn::TurnGenerator;
 use crate::memory::memories;
 use crate::memory::observings::{self, ObservingListQuery};
 use crate::memory::sessions::{self, SessionListQuery};
-use crate::memory::types::{ListMode, MemoryView};
+use crate::memory::types::{ListMode, MemoryView, RecallHit};
 use crate::observer::observer::Observer;
 use crate::storage::Storage;
 use crate::watchdog::{Watchdog, WatchdogRuntime};
@@ -363,7 +363,7 @@ pub struct Memories<'a> {
 }
 
 impl Memories<'_> {
-    pub async fn recall(&self, recall: MemoryRecall) -> Result<Vec<MemoryView>> {
+    pub async fn recall(&self, recall: MemoryRecall) -> Result<Vec<RecallHit>> {
         memories::recall(self.service.storage(), &recall.text, recall.limit).await
     }
 
