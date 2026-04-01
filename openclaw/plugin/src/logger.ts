@@ -7,7 +7,7 @@ export type LoggerLike = {
 
 export function logWarn(logger: LoggerLike, message: string, error?: unknown): void {
   const suffix = error ? `: ${formatError(error)}` : "";
-  logger.warn?.(`[munnai] ${message}${suffix}`);
+  logger.warn?.(`[muninn] ${message}${suffix}`);
 }
 
 function formatError(error: unknown): string {

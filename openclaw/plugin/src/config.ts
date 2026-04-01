@@ -1,4 +1,4 @@
-export type MunnaiPluginConfig = {
+export type MuninnPluginConfig = {
   baseUrl: string;
   enabled: boolean;
   timeoutMs: number;
@@ -10,7 +10,7 @@ const DEFAULT_RECENCY_LIMIT = 5;
 
 export function resolvePluginConfig(
   raw: Record<string, unknown> | undefined,
-): MunnaiPluginConfig | null {
+): MuninnPluginConfig | null {
   const baseUrl = typeof raw?.baseUrl === "string" ? raw.baseUrl.trim() : "";
   if (!baseUrl) {
     return null;

@@ -1,4 +1,4 @@
-import type { MunnaiPluginConfig } from "./config.js";
+import type { MuninnPluginConfig } from "./config.js";
 import type { LoggerLike } from "./logger.js";
 import { logWarn } from "./logger.js";
 import type { AddMessageToSessionRequest } from "./payloads.js";
@@ -19,15 +19,15 @@ export type FetchLike = (
   },
 ) => Promise<FetchResponseLike>;
 
-export type MunnaiClient = {
+export type MuninnClient = {
   sendMessage(request: AddMessageToSessionRequest): Promise<void>;
 };
 
-export function createMunnaiClient(params: {
-  config: MunnaiPluginConfig;
+export function createMuninnClient(params: {
+  config: MuninnPluginConfig;
   logger: LoggerLike;
   fetchImpl?: FetchLike;
-}): MunnaiClient {
+}): MuninnClient {
   const fetchImpl = params.fetchImpl ?? fetch;
 
   return {
@@ -46,11 +46,11 @@ export function createMunnaiClient(params: {
           const body = await safeReadBody(response);
           logWarn(
             params.logger,
-            `munnai write failed with status ${response.status}${body ? ` body=${body}` : ""}`,
+            `muninn write failed with status ${response.status}${body ? ` body=${body}` : ""}`,
           );
         }
       } catch (error) {
-        logWarn(params.logger, "munnai write request failed", error);
+        logWarn(params.logger, "muninn write request failed", error);
       }
     },
   };

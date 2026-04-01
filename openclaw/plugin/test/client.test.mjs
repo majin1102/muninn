@@ -1,11 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { createMunnaiClient } from "../dist/src/client.js";
+import { createMuninnClient } from "../dist/src/client.js";
 
-test("createMunnaiClient swallows fetch failures", async () => {
+test("createMuninnClient swallows fetch failures", async () => {
   const warnings = [];
-  const client = createMunnaiClient({
+  const client = createMuninnClient({
     config: {
       baseUrl: "http://127.0.0.1:8787",
       enabled: true,
@@ -27,12 +27,12 @@ test("createMunnaiClient swallows fetch failures", async () => {
   });
 
   assert.equal(warnings.length, 1);
-  assert.match(warnings[0], /munnai write request failed/i);
+  assert.match(warnings[0], /muninn write request failed/i);
 });
 
-test("createMunnaiClient logs non-ok responses", async () => {
+test("createMuninnClient logs non-ok responses", async () => {
   const warnings = [];
-  const client = createMunnaiClient({
+  const client = createMuninnClient({
     config: {
       baseUrl: "http://127.0.0.1:8787",
       enabled: true,
