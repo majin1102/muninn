@@ -100,6 +100,7 @@ pub fn semantic_index_schema(dimensions: usize) -> Schema {
 
     Schema::new(vec![
         Field::new("id", DataType::Utf8, false).with_metadata(id_metadata),
+        Field::new("memory_id", DataType::Utf8, false),
         Field::new("text", DataType::Utf8, false),
         Field::new(
             "vector",

@@ -361,6 +361,7 @@ mod tests {
             .semantic_index()
             .upsert(vec![crate::format::semantic_index::SemanticIndexRow {
                 id: "mem-bootstrap".to_string(),
+                memory_id: "OBSERVING:01JQ7Y8YQ6V7D4M1N9K2F5T8ZX".to_string(),
                 text: "text-bootstrap".to_string(),
                 vector: vec![0.1, 0.2, 0.3, 0.4],
                 importance: 0.7,
@@ -405,6 +406,7 @@ mod tests {
                 .semantic_index()
                 .upsert(vec![crate::format::semantic_index::SemanticIndexRow {
                     id: format!("mem-{index}"),
+                    memory_id: format!("OBSERVING:01JQ7Y8YQ6V7D4M1N9K2F5T8Z{index}"),
                     text: format!("text-{index}"),
                     vector: vec![0.1, 0.2, 0.3, 0.4],
                     importance: 0.7,
