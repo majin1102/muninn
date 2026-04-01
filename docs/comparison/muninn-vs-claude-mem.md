@@ -3,8 +3,8 @@
 本文件用于给读者一个“概览级对比”，帮助理解 Muninn 的定位与 claude-mem 的差异。两者都主张渐进式披露：先返回轻量索引，再按需展开上下文与详情。
 
 参考（Muninn 当前规范）：
-- MCP API：[spec/muninn-mcp-api.md](/Users/Nathan/Documents/Playground/muninn/spec/muninn-mcp-api.md)
-- Format Schema：[spec/muninn-format-schema.md](/Users/Nathan/Documents/Playground/muninn/spec/muninn-format-schema.md)
+- MCP API：[../spec/muninn-mcp-api.md](../spec/muninn-mcp-api.md)
+- Format Schema：[../spec/muninn-format-schema.md](../spec/muninn-format-schema.md)
 
 ## 一句话总结
 

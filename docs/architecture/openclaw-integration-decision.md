@@ -108,7 +108,7 @@ export function createMemoryOpenVikingContextEngine(params): ContextEngine {
 
 ### 当前 MVP1 需求
 
-根据 `agents/progress-openclaw-integration.md`：
+根据 `../workstreams/progress-openclaw-integration.md`：
 
 1. **before_model_resolve** → 写入 `prompt`
 2. **after_tool_call** → 写入 `artifacts`（tool_calling + artifacts）
