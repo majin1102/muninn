@@ -5,6 +5,10 @@ import path from 'node:path';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 
 import core from '@munnai/core';
+import {
+  getSessionTreeLoadCountForTests,
+  resetSessionTreeCacheForTests,
+} from '@munnai/board/server';
 import { app } from '../dist/app.js';
 
 const { shutdownCoreForTests } = core;
@@ -50,6 +54,7 @@ async function writeMunnaiConfig(configPath, { turnProvider, observerProvider } 
 
 test.afterEach(async () => {
   await shutdownCoreForTests();
+  resetSessionTreeCacheForTests();
   delete process.env.MUNNAI_HOME;
   delete process.env.MUNNAI_OBSERVE_WINDOW_MS;
 });
@@ -530,6 +535,45 @@ test('ui session endpoints group by agent/session and return rendered turn docum
   assert.match(documentBody.document.markdown, /first alpha prompt/);
 });
 
+test('ui session endpoints reuse the cached session tree until a write invalidates it', async (t) => {
+  const { dir, homeDir, configPath } = await makeDatasetUri();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+
+  process.env.MUNNAI_HOME = homeDir;
+  await writeMunnaiConfig(configPath, { turnProvider: 'mock' });
+  resetSessionTreeCacheForTests();
+
+  const first = await app.request('/api/v1/ui/session/agents');
+  assert.equal(first.status, 200);
+  assert.equal(getSessionTreeLoadCountForTests(), 1);
+
+  const second = await app.request('/api/v1/ui/session/agents');
+  assert.equal(second.status, 200);
+  assert.equal(getSessionTreeLoadCountForTests(), 1);
+
+  const groups = await app.request('/api/v1/ui/session/agents/openclaw/sessions');
+  assert.equal(groups.status, 200);
+  assert.equal(getSessionTreeLoadCountForTests(), 1);
+
+  const addResponse = await app.request('/api/v1/session/messages', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      session: {
+        session_id: 'group-a',
+        agent: 'openclaw',
+        prompt: 'invalidate cache',
+        response: 'invalidate cache response',
+      },
+    }),
+  });
+  assert.equal(addResponse.status, 200);
+
+  const third = await app.request('/api/v1/ui/session/agents');
+  assert.equal(third.status, 200);
+  assert.equal(getSessionTreeLoadCountForTests(), 2);
+});
+
 test('observing memories are readable through list/detail/timeline/recall', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(async () => rm(dir, { recursive: true, force: true }));
@@ -653,6 +697,24 @@ test('ui settings config reads and writes settings.json through sidecar', async 
 
   const persisted = await readFile(configPath, 'utf8');
   assert.match(persisted, /"provider": "live"/);
+});
+
+test('ui settings config creates the parent directory on first save', async (t) => {
+  const { dir, homeDir, configPath } = await makeDatasetUri();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+  process.env.MUNNAI_HOME = homeDir;
+
+  const writeResponse = await app.request('/api/v1/ui/settings/config', {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      content: '{\n  "watchdog": {\n    "enabled": true\n  }\n}\n',
+    }),
+  });
+  assert.equal(writeResponse.status, 200);
+
+  const persisted = await readFile(configPath, 'utf8');
+  assert.match(persisted, /"watchdog"/);
 });
 
 test('ui settings config returns default watchdog template when settings.json is missing', async (t) => {

@@ -1,4 +1,5 @@
 import { addMessage } from '@munnai/core';
+import { invalidateSessionTreeCache } from '@munnai/board/server';
 import { Hono } from 'hono';
 import type {
   AddMessageToSessionRequest,
@@ -134,6 +135,8 @@ memoryWriter.post('/api/v1/session/messages', async (c) => {
     const mapped = mapCoreWriteError(error);
     return c.json(mapped.body, mapped.status as 400 | 500);
   }
+
+  invalidateSessionTreeCache();
 
   return c.json({
     turnId: storedTurn.turnId,
