@@ -96,14 +96,9 @@ pub async fn recall(storage: &Storage, query: &str, limit: usize) -> Result<Vec<
     }
 
     match semantic_recall(storage, query, limit).await {
-        Ok(mut semantic_hits) => {
-            if semantic_hits.len() >= limit {
-                semantic_hits.truncate(limit);
-                return Ok(semantic_hits);
-            }
-
+        Ok(semantic_hits) => {
             let fallback_hits = legacy_recall(storage, query, limit).await?;
-            merge_recall_results(semantic_hits, fallback_hits, limit)
+            merge_recall_results(fallback_hits, semantic_hits, limit)
         }
         Err(error) => {
             eprintln!("[memory] semantic recall failed for {:?}: {}", query, error);
@@ -338,6 +333,7 @@ mod tests {
         MemoryCategory, ObservedMemory, ObservingCheckpoint, ObservingSnapshot,
     };
     use crate::format::semantic_index::SemanticIndexRow;
+    use crate::format::session::{SessionTurn, SessionWrite};
     use crate::llm::config::llm_test_env_guard;
     use crate::llm::embedding::embed_text;
     use crate::observer::observing::SnapshotContent;
@@ -519,6 +515,119 @@ mod tests {
             recalled[1].memory_id.to_string(),
             format!("OBSERVING:{snapshot_b}")
         );
+
+        unsafe {
+            std::env::remove_var("MUNNAI_HOME");
+        }
+    }
+
+    #[tokio::test]
+    async fn recall_preserves_session_hits_when_semantic_limit_is_reached() {
+        let _guard = llm_test_env_guard();
+        let home = tempfile::tempdir().unwrap();
+        let home_dir = home.path().join("munnai");
+        std::fs::create_dir_all(&home_dir).unwrap();
+        std::fs::write(
+            home_dir.join("settings.json"),
+            r#"{
+              "semanticIndex": {
+                "embedding": {
+                  "provider": "mock",
+                  "dimensions": 4
+                },
+                "defaultImportance": 0.7
+              }
+            }"#,
+        )
+        .unwrap();
+        unsafe {
+            std::env::set_var("MUNNAI_HOME", &home_dir);
+        }
+
+        let storage = test_storage();
+        let now = Utc::now();
+        let mut session_turn = SessionTurn::new(&SessionWrite {
+            session_id: Some("session-1".to_string()),
+            agent: "agent-a".to_string(),
+            observer: "observer-a".to_string(),
+            title: None,
+            summary: None,
+            title_source: None,
+            summary_source: None,
+            tool_calling: None,
+            artifacts: None,
+            prompt: None,
+            response: None,
+        });
+        session_turn.title = Some("alpha session title".to_string());
+        session_turn.created_at = now;
+        session_turn.updated_at = now;
+        storage
+            .sessions()
+            .upsert(vec![session_turn.clone()])
+            .await
+            .unwrap();
+
+        let snapshot_a = Ulid::new().to_string();
+        let snapshot_b = Ulid::new().to_string();
+        for (snapshot_id, observing_id) in
+            [(snapshot_a.clone(), "OBS-A"), (snapshot_b.clone(), "OBS-B")]
+        {
+            let observing = ObservingSnapshot {
+                snapshot_id: snapshot_id.clone(),
+                observing_id: observing_id.to_string(),
+                snapshot_sequence: 0,
+                created_at: now,
+                updated_at: now,
+                observer: "observer-a".to_string(),
+                title: format!("{observing_id} title"),
+                summary: format!("{observing_id} summary"),
+                content: serde_json::to_string_pretty(&SnapshotContent {
+                    memories: vec![],
+                    open_questions: vec![],
+                    next_steps: vec![],
+                    memory_delta: LlmFieldUpdate::new(vec![], vec![]),
+                })
+                .unwrap(),
+                references: vec![],
+                checkpoint: ObservingCheckpoint {
+                    observing_epoch: 0,
+                    indexed_snapshot_sequence: Some(0),
+                },
+            };
+            storage.observings().upsert(vec![observing]).await.unwrap();
+        }
+
+        storage
+            .semantic_index()
+            .upsert(vec![
+                SemanticIndexRow {
+                    id: "chunk-a".to_string(),
+                    memory_id: format!("OBSERVING:{snapshot_a}"),
+                    text: "alpha observing a".to_string(),
+                    vector: embed_text("alpha").await.unwrap(),
+                    importance: 0.7,
+                    category: "fact".to_string(),
+                    created_at: now,
+                },
+                SemanticIndexRow {
+                    id: "chunk-b".to_string(),
+                    memory_id: format!("OBSERVING:{snapshot_b}"),
+                    text: "alpha observing b".to_string(),
+                    vector: embed_text("alpha").await.unwrap(),
+                    importance: 0.6,
+                    category: "fact".to_string(),
+                    created_at: now,
+                },
+            ])
+            .await
+            .unwrap();
+
+        let recalled = recall(&storage, "alpha", 2).await.unwrap();
+        assert_eq!(recalled.len(), 2);
+        assert!(recalled.iter().any(|memory| {
+            memory.memory_id.to_string() == format!("SESSION:{}", session_turn.turn_id)
+        }));
 
         unsafe {
             std::env::remove_var("MUNNAI_HOME");
