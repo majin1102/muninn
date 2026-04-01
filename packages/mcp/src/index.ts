@@ -16,8 +16,20 @@ function safeStringify(value: unknown): string {
   }
 }
 
-function renderMemoryResponse(memoryResponse: { memoryHits: Array<{ content: string }> }): string {
-  return memoryResponse.memoryHits.map((memoryHit) => memoryHit.content).join('\n\n---\n\n');
+function renderMemoryResponse(
+  memoryResponse: { memoryHits: Array<{ memoryId: string; content: string }> },
+): string {
+  return memoryResponse.memoryHits.map((memoryHit) => {
+    if (memoryHit.content.includes(memoryHit.memoryId)) {
+      return memoryHit.content;
+    }
+
+    return [
+      `Memory ID: ${memoryHit.memoryId}`,
+      '',
+      memoryHit.content,
+    ].join('\n');
+  }).join('\n\n---\n\n');
 }
 
 async function writeDebugMarkdown(toolName: string, args: unknown): Promise<string> {
