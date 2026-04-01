@@ -33,5 +33,5 @@ packages/board/dist-server/
 *.tsbuildinfo
 
 Cargo.lock
-.munnai/
+.muninn/
 .claude/settings.local.json
