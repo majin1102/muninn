@@ -2,15 +2,15 @@
 
 ## 目的
 
-这条工作线承担的是 Munnai 的核心产品价值：
+这条工作线承担的是 Muninn 的核心产品价值：
 
 - 把原始执行上下文变成更高价值的记忆
 
-如果没有这条线，Munnai 只会像日志系统，而不像记忆系统。
+如果没有这条线，Muninn 只会像日志系统，而不像记忆系统。
 
 ## 产品目标
 
-Munnai 应该能够从 session 输入中形成 observation 记忆，并进一步产出可以被 OpenClaw 直接召回的精炼记忆结果。
+Muninn 应该能够从 session 输入中形成 observation 记忆，并进一步产出可以被 OpenClaw 直接召回的精炼记忆结果。
 
 ## 范围
 
@@ -26,8 +26,8 @@ Munnai 应该能够从 session 输入中形成 observation 记忆，并进一步
 
 - OpenClaw hook 接入实现本身
 - 长期 thinking 层设计
-- Munnai MCP recall 接口设计
-- Munnai Board 界面实现
+- Muninn MCP recall 接口设计
+- Muninn Board 界面实现
 
 ## 当前方向
 
@@ -37,7 +37,7 @@ Munnai 应该能够从 session 输入中形成 observation 记忆，并进一步
 - `observation` 用来保留更可复用的观察和总结
 - 面向 OpenClaw 的 semantic memory 结果不是原始数据同步
 - 它是经过整理、蒸馏、精炼后的记忆投影
-- MVP 1 的 recall 验证路径，是 OpenClaw 自己直接召回这些记忆，而不是 Munnai MCP recall
+- MVP 1 的 recall 验证路径，是 OpenClaw 自己直接召回这些记忆，而不是 Muninn MCP recall
 - `turn` 级别的蒸馏不应默认依赖 LLM 改写
 - 如果原始 `prompt` / `response` 已经在预算内且结构清晰，优先保真直出 `summary`
 - `title` 可以独立生成；不要为了生成 `title` 强制重写 `summary`
@@ -85,8 +85,8 @@ Munnai 应该能够从 session 输入中形成 observation 记忆，并进一步
 
 当下面这些条件都满足时，这条工作线可以认为对 MVP 1 足够完成：
 
-- Munnai 能基于真实 OpenClaw 输入产出 session 和记忆 observation
-- Munnai 能产出可被 OpenClaw 直接召回的精炼记忆
+- Muninn 能基于真实 OpenClaw 输入产出 session 和记忆 observation
+- Muninn 能产出可被 OpenClaw 直接召回的精炼记忆
 - benchmark 结果显示，召回准确性优于 OpenClaw 自带 LanceDB plugin
 - 在相近或更好效果下，token 消耗表现更优或至少足够有竞争力
 

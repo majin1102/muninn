@@ -2,7 +2,7 @@
 
 ## 背景
 
-Munnai 需要对接 OpenClaw 以捕获 agent 执行上下文。当前有两种集成方式可选：
+Muninn 需要对接 OpenClaw 以捕获 agent 执行上下文。当前有两种集成方式可选：
 
 1. **Hook-based**：OpenClaw memory-lancedb 插件使用的方式
 2. **Context Engine**：OpenViking 使用的方式
@@ -104,7 +104,7 @@ export function createMemoryOpenVikingContextEngine(params): ContextEngine {
 - ❌ 更重的抽象，学习成本高
 - ❌ 需要理解 OpenClaw 的 context engine 调用时机
 
-## Munnai 的需求分析
+## Muninn 的需求分析
 
 ### 当前 MVP1 需求
 
@@ -116,14 +116,14 @@ export function createMemoryOpenVikingContextEngine(params): ContextEngine {
 
 ### 数据流特点
 
-- **写入为主**：Munnai 当前主要是捕获上下文，不是召回
+- **写入为主**：Muninn 当前主要是捕获上下文，不是召回
 - **分段写入**：prompt、artifacts、response 在不同时机产生
-- **需要 sessionKey 映射**：OpenClaw sessionKey → Munnai session_id
+- **需要 sessionKey 映射**：OpenClaw sessionKey → Muninn session_id
 - **artifact 采集复杂**：需要根据 tool 类型决定是否回读文件
 
 ### 未来扩展
 
-- 可能需要在 `before_model_resolve` 时召回 Munnai 记忆注入 context
+- 可能需要在 `before_model_resolve` 时召回 Muninn 记忆注入 context
 - 可能需要在 `afterTurn` 批量触发 Observer 生成
 
 ## 决策建议
@@ -157,12 +157,12 @@ export function createMemoryOpenVikingContextEngine(params): ContextEngine {
 // packages/openclaw-integration/index.ts
 
 export default {
-  id: "munnai",
-  name: "Munnai Memory",
-  description: "Munnai observing memory layer for OpenClaw",
+  id: "muninn",
+  name: "Muninn Memory",
+  description: "Muninn observing memory layer for OpenClaw",
 
   register(api) {
-    const sidecarUrl = process.env.MUNNAI_SIDECAR_URL || "http://localhost:3100";
+    const sidecarUrl = process.env.MUNINN_SIDECAR_URL || "http://localhost:3100";
     const sessionMap = new Map<string, string>(); // sessionKey → session_id
 
     // Hook 1: before_model_resolve → 写入 prompt
@@ -181,7 +181,7 @@ export default {
           })
         });
       } catch (err) {
-        api.logger.warn(`munnai: failed to write prompt: ${err}`);
+        api.logger.warn(`muninn: failed to write prompt: ${err}`);
       }
     });
 
@@ -203,7 +203,7 @@ export default {
           })
         });
       } catch (err) {
-        api.logger.warn(`munnai: failed to write artifacts: ${err}`);
+        api.logger.warn(`muninn: failed to write artifacts: ${err}`);
       }
     });
 
@@ -224,7 +224,7 @@ export default {
           })
         });
       } catch (err) {
-        api.logger.warn(`munnai: failed to write response: ${err}`);
+        api.logger.warn(`muninn: failed to write response: ${err}`);
       }
     });
   }
@@ -260,7 +260,7 @@ export default {
          try {
            artifacts[path] = await fs.readFile(path, "utf-8");
          } catch (err) {
-           api.logger.warn(`munnai: failed to read ${path}: ${err}`);
+           api.logger.warn(`muninn: failed to read ${path}: ${err}`);
          }
        }
      }
@@ -302,7 +302,7 @@ export default {
 
 **下一步行动：**
 
-1. 在 `openclaw-cn/extensions/munnai/` 创建插件
+1. 在 `openclaw-cn/extensions/muninn/` 创建插件
 2. 实现三个 hook 的写入逻辑
 3. 实现 artifact 采集策略
 4. 端到端测试验证
