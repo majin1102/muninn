@@ -300,11 +300,9 @@ async fn semantic_recall(
 
     let mut hits = Vec::new();
     for candidate in candidate_groups {
-        if let Some(memory) = resolve_semantic_candidate(storage, &candidate.memory_id).await? {
-            hits.push(memory);
-            if hits.len() >= limit {
-                break;
-            }
+        hits.push(candidate.try_into()?);
+        if hits.len() >= limit {
+            break;
         }
     }
     Ok(hits)
@@ -341,6 +339,7 @@ fn merge_recall_results(result_sets: Vec<Vec<RecallCandidate>>, limit: usize) ->
 #[derive(Debug, Clone, PartialEq)]
 struct SemanticCandidateGroup {
     memory_id: String,
+    best_text: String,
     reciprocal_rank_score: f32,
     hit_count: usize,
     best_rank: usize,
@@ -357,6 +356,7 @@ fn merge_semantic_candidates(candidates: Vec<SemanticIndexRow>) -> Vec<SemanticC
             .entry(candidate.memory_id.clone())
             .or_insert_with(|| SemanticCandidateGroup {
                 memory_id: candidate.memory_id.clone(),
+                best_text: candidate.text.clone(),
                 reciprocal_rank_score: 0.0,
                 hit_count: 0,
                 best_rank: rank,
@@ -365,7 +365,10 @@ fn merge_semantic_candidates(candidates: Vec<SemanticIndexRow>) -> Vec<SemanticC
             });
         entry.reciprocal_rank_score += rank_score;
         entry.hit_count += 1;
-        entry.best_rank = entry.best_rank.min(rank);
+        if rank < entry.best_rank {
+            entry.best_rank = rank;
+            entry.best_text = candidate.text.clone();
+        }
         entry.max_importance = entry.max_importance.max(candidate.importance);
         entry.newest_created_at = entry.newest_created_at.max(candidate.created_at);
     }
@@ -381,28 +384,6 @@ fn merge_semantic_candidates(candidates: Vec<SemanticIndexRow>) -> Vec<SemanticC
             .then(right.newest_created_at.cmp(&left.newest_created_at))
     });
     merged
-}
-
-async fn resolve_semantic_candidate(
-    storage: &Storage,
-    memory_id: &str,
-) -> Result<Option<RecallCandidate>> {
-    let memory_id = MemoryId::from_str(memory_id)?;
-    match memory_id.memory_layer() {
-        MemoryLayer::Session => sessions::get(storage, &memory_id)
-            .await?
-            .as_ref()
-            .map(RecallCandidate::try_from)
-            .transpose(),
-        MemoryLayer::Observing => observings::get(storage, &memory_id)
-            .await?
-            .as_ref()
-            .map(RecallCandidate::try_from)
-            .transpose(),
-        layer => Err(Error::invalid_input(format!(
-            "unsupported memory layer for recall candidate: {layer}"
-        ))),
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -432,6 +413,21 @@ impl TryFrom<&ObservingSnapshot> for RecallCandidate {
             hit: RecallHit::try_from(observing)?,
             created_at: observing.created_at,
             updated_at: observing.updated_at,
+        })
+    }
+}
+
+impl TryFrom<SemanticCandidateGroup> for RecallCandidate {
+    type Error = Error;
+
+    fn try_from(candidate: SemanticCandidateGroup) -> Result<Self> {
+        Ok(Self {
+            hit: RecallHit {
+                memory_id: MemoryId::from_str(&candidate.memory_id)?,
+                text: candidate.best_text,
+            },
+            created_at: candidate.newest_created_at,
+            updated_at: candidate.newest_created_at,
         })
     }
 }
@@ -553,8 +549,7 @@ mod tests {
             recalled[0].memory_id.to_string(),
             format!("OBSERVING:{snapshot_id}")
         );
-        assert!(recalled[0].text.contains("Title: alpha title"));
-        assert!(recalled[0].text.contains("Summary: alpha summary"));
+        assert_eq!(recalled[0].text, "beta");
 
         unsafe {
             std::env::remove_var("MUNNAI_HOME");
@@ -678,6 +673,7 @@ mod tests {
             recalled[0].memory_id.to_string(),
             format!("OBSERVING:{newer_snapshot_id}")
         );
+        assert_eq!(recalled[0].text, "beta newer");
         assert_eq!(
             recalled[1].memory_id.to_string(),
             format!("SESSION:{session_turn_id}")
@@ -904,8 +900,8 @@ mod tests {
             recalled[1].memory_id.to_string(),
             format!("OBSERVING:{snapshot_b}")
         );
-        assert!(recalled[0].text.contains("Title: alpha title"));
-        assert!(recalled[1].text.contains("Title: beta title"));
+        assert_eq!(recalled[0].text, "alpha segment 0");
+        assert_eq!(recalled[1].text, "beta segment");
 
         unsafe {
             std::env::remove_var("MUNNAI_HOME");
@@ -947,6 +943,7 @@ mod tests {
 
         assert_eq!(merged.len(), 2);
         assert_eq!(merged[0].memory_id, "OBSERVING:01JQ7Y8YQ6V7D4M1N9K2F5T8ZA");
+        assert_eq!(merged[0].best_text, "alpha");
         assert_eq!(merged[0].hit_count, 2);
         assert!(merged[0].reciprocal_rank_score > merged[1].reciprocal_rank_score);
         assert_eq!(merged[1].memory_id, "OBSERVING:01JQ7Y8YQ6V7D4M1N9K2F5T8ZB");
