@@ -34,6 +34,7 @@ export const boardApp = new Hono();
 let sessionTreeCache: Awaited<ReturnType<typeof sessions.list>> | null = null;
 let sessionTreeLoading: Promise<Awaited<ReturnType<typeof sessions.list>>> | null = null;
 let sessionTreeLoadCount = 0;
+let sessionTreeCacheGeneration = 0;
 
 const MIME_TYPES: Record<string, string> = {
   '.css': 'text/css; charset=utf-8',
@@ -164,6 +165,7 @@ function hasSummary(turn: { summary?: string | null }): boolean {
 }
 
 export function invalidateSessionTreeCache() {
+  sessionTreeCacheGeneration += 1;
   sessionTreeCache = null;
   sessionTreeLoading = null;
 }
@@ -172,6 +174,7 @@ export function resetSessionTreeCacheForTests() {
   sessionTreeCache = null;
   sessionTreeLoading = null;
   sessionTreeLoadCount = 0;
+  sessionTreeCacheGeneration = 0;
 }
 
 export function getSessionTreeLoadCountForTests() {
@@ -184,18 +187,24 @@ async function loadAllSessionTurns(): Promise<Awaited<ReturnType<typeof sessions
   }
 
   if (!sessionTreeLoading) {
-    sessionTreeLoading = sessions
+    const loadGeneration = sessionTreeCacheGeneration;
+    const loadingPromise = sessions
       .list({
         mode: { type: 'page', offset: 0, limit: SESSION_TREE_PAGE_LIMIT },
       })
       .then((turns) => {
-        sessionTreeCache = turns;
-        sessionTreeLoadCount += 1;
+        if (sessionTreeCacheGeneration === loadGeneration) {
+          sessionTreeCache = turns;
+          sessionTreeLoadCount += 1;
+        }
         return turns;
       })
       .finally(() => {
-        sessionTreeLoading = null;
+        if (sessionTreeLoading === loadingPromise) {
+          sessionTreeLoading = null;
+        }
       });
+    sessionTreeLoading = loadingPromise;
   }
   return sessionTreeLoading!;
 }
