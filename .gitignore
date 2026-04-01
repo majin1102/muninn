@@ -35,3 +35,5 @@ packages/board/dist-server/
 Cargo.lock
 .muninn/
 .claude/settings.local.json
+muninn.json
+munnai.json
