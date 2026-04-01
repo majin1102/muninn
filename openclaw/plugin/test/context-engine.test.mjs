@@ -1,11 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { createMunnaiContextEngine } from "../dist/src/context-engine.js";
+import { createMuninnContextEngine } from "../dist/src/context-engine.js";
 
 test("assemble returns original messages when recall fails", async () => {
   const warnings = [];
-  const engine = createMunnaiContextEngine({
+  const engine = createMuninnContextEngine({
     config: { baseUrl: "http://localhost:3100", enabled: true, timeoutMs: 100, recencyLimit: 5 },
     logger: { warn: (msg) => warnings.push(msg) },
     fetchImpl: async () => ({ ok: false, status: 500, text: async () => "" }),
@@ -19,11 +19,11 @@ test("assemble returns original messages when recall fails", async () => {
   assert.strictEqual(result.messages.length, 1);
   assert.strictEqual(result.systemPromptAddition, undefined);
   assert.strictEqual(warnings.length, 1);
-  assert.match(warnings[0], /munnai recall failed: 500/);
+  assert.match(warnings[0], /muninn recall failed: 500/);
 });
 
 test("assemble injects memories when recall succeeds", async () => {
-  const engine = createMunnaiContextEngine({
+  const engine = createMuninnContextEngine({
     config: { baseUrl: "http://localhost:3100", enabled: true, timeoutMs: 1000, recencyLimit: 5 },
     logger: {},
     fetchImpl: async () => ({
@@ -46,7 +46,7 @@ test("assemble injects memories when recall succeeds", async () => {
 });
 
 test("assemble returns no systemPromptAddition when memories are empty", async () => {
-  const engine = createMunnaiContextEngine({
+  const engine = createMuninnContextEngine({
     config: { baseUrl: "http://localhost:3100", enabled: true, timeoutMs: 1000, recencyLimit: 5 },
     logger: {},
     fetchImpl: async () => ({
@@ -66,7 +66,7 @@ test("assemble returns no systemPromptAddition when memories are empty", async (
 
 test("assemble degrades gracefully on fetch exception", async () => {
   const warnings = [];
-  const engine = createMunnaiContextEngine({
+  const engine = createMuninnContextEngine({
     config: { baseUrl: "http://localhost:3100", enabled: true, timeoutMs: 100, recencyLimit: 5 },
     logger: { warn: (msg) => warnings.push(msg) },
     fetchImpl: async () => { throw new Error("network error"); },
@@ -80,12 +80,12 @@ test("assemble degrades gracefully on fetch exception", async () => {
   assert.strictEqual(result.messages.length, 1);
   assert.strictEqual(result.systemPromptAddition, undefined);
   assert.strictEqual(warnings.length, 1);
-  assert.match(warnings[0], /munnai assemble failed/);
+  assert.match(warnings[0], /muninn assemble failed/);
 });
 
 test("assemble uses configured recencyLimit in the request URL", async () => {
   const calls = [];
-  const engine = createMunnaiContextEngine({
+  const engine = createMuninnContextEngine({
     config: { baseUrl: "http://localhost:3100", enabled: true, timeoutMs: 1000, recencyLimit: 7 },
     logger: {},
     fetchImpl: async (url) => {
@@ -108,7 +108,7 @@ test("assemble uses configured recencyLimit in the request URL", async () => {
 });
 
 test("context engine does not implement afterTurn writes", () => {
-  const engine = createMunnaiContextEngine({
+  const engine = createMuninnContextEngine({
     config: { baseUrl: "http://localhost:3100", enabled: true, timeoutMs: 1000, recencyLimit: 5 },
     logger: {},
   });
