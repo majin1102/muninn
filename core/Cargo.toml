@@ -3,6 +3,10 @@ name = "munnai-sidecar"
 version = "0.1.0"
 edition = "2024"
 
+[[bin]]
+name = "munnai-core"
+path = "src/main.rs"
+
 [lib]
 name = "munnai_sidecar"
 path = "src/lib.rs"

@@ -1,9 +1,14 @@
+import { accessSync, constants as fsConstants } from 'fs';
 import { spawn, type ChildProcessWithoutNullStreams } from 'child_process';
 import os from 'os';
 import path from 'path';
 import readline from 'readline';
 
 const SHUTDOWN_RPC_TIMEOUT_MS = 500;
+const DEFAULT_DAEMON_COMMAND = 'munnai-core';
+const DAEMON_PATH_ENV = 'MUNNAI_CORE_DAEMON_PATH';
+const DAEMON_COMMAND_ENV = 'MUNNAI_CORE_DAEMON_COMMAND';
+const CARGO_FALLBACK_ENV = 'MUNNAI_CORE_ALLOW_CARGO_FALLBACK';
 
 export interface SessionTurnRecord {
   turnId: string;
@@ -100,22 +105,31 @@ type ResponseEnvelope = {
   error?: string;
 };
 
+type DaemonLaunchSpec = {
+  command: string;
+  args: string[];
+  cwd?: string;
+  description: string;
+  source: 'path' | 'command' | 'cargo-fallback';
+};
+
 class RustCoreBridge {
   private process: ChildProcessWithoutNullStreams;
+  private readonly launchSpec: DaemonLaunchSpec;
+  private readonly started: Promise<void>;
   private pending = new Map<number, PendingRequest>();
   private nextId = 1;
   private exited = false;
 
   constructor() {
-    const repoRoot = resolveRepoRoot();
     const munnaiHome = resolveMunnaiHome();
-    const manifestPath = resolveManifestPath(repoRoot);
+    this.launchSpec = resolveDaemonLaunchSpec();
 
     this.process = spawn(
-      'cargo',
-      ['run', '--quiet', '--manifest-path', manifestPath],
+      this.launchSpec.command,
+      this.launchSpec.args,
       {
-        cwd: repoRoot,
+        cwd: this.launchSpec.cwd,
         env: {
           ...process.env,
           MUNNAI_HOME: munnaiHome,
@@ -123,6 +137,19 @@ class RustCoreBridge {
         stdio: ['pipe', 'pipe', 'pipe'],
       }
     );
+
+    this.started = new Promise<void>((resolve, reject) => {
+      this.process.once('spawn', () => resolve());
+      this.process.once('error', (error: Error) => {
+        reject(formatDaemonStartError(this.launchSpec, error));
+      });
+      this.process.once('exit', (code: number | null, signal: string | null) => {
+        if (!this.exited) {
+          reject(formatDaemonExitError(this.launchSpec, code, signal));
+        }
+      });
+    });
+    this.started.catch(() => undefined);
 
     const rl = readline.createInterface({ input: this.process.stdout });
     rl.on('line', (line: string) => this.handleLine(line));
@@ -150,13 +177,18 @@ class RustCoreBridge {
     const payload = JSON.stringify({ id, method, params });
 
     return new Promise<T>((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
-      this.process.stdin.write(`${payload}\n`, 'utf8', (error?: Error | null) => {
-        if (error) {
-          this.pending.delete(id);
-          reject(error);
-        }
-      });
+      void this.started.then(
+        () => {
+          this.pending.set(id, { resolve, reject });
+          this.process.stdin.write(`${payload}\n`, 'utf8', (error?: Error | null) => {
+            if (error) {
+              this.pending.delete(id);
+              reject(error);
+            }
+          });
+        },
+        (error) => reject(error),
+      );
     });
   }
 
@@ -165,10 +197,13 @@ class RustCoreBridge {
       return;
     }
 
-    await waitForPromiseOrTimeout(
-      this.request<null>('shutdown', {}),
-      SHUTDOWN_RPC_TIMEOUT_MS,
-    );
+    try {
+      await this.started;
+    } catch {
+      return;
+    }
+
+    await waitForPromiseOrTimeout(this.request<null>('shutdown', {}), SHUTDOWN_RPC_TIMEOUT_MS);
 
     await this.waitForExit(2_000);
     if (this.exited) {
@@ -180,7 +215,13 @@ class RustCoreBridge {
   }
 
   private handleLine(line: string) {
-    const response = JSON.parse(line) as ResponseEnvelope;
+    let response: ResponseEnvelope;
+    try {
+      response = JSON.parse(line) as ResponseEnvelope;
+    } catch (error) {
+      console.error(`[munnai-core:rust] invalid JSON response: ${(error as Error).message}`);
+      return;
+    }
     const pending = this.pending.get(response.id);
     if (!pending) {
       return;
@@ -337,10 +378,6 @@ export async function shutdownCoreForTests(): Promise<void> {
   await daemon.close();
 }
 
-export const __testing = {
-  waitForPromiseOrTimeout,
-};
-
 function resolveRepoRoot(): string {
   return path.resolve(__dirname, '../../..');
 }
@@ -353,6 +390,131 @@ function resolveMunnaiHome(): string {
 function resolveManifestPath(repoRoot: string): string {
   return process.env.MUNNAI_CORE_MANIFEST_PATH
     ?? path.join(repoRoot, 'core', 'Cargo.toml');
+}
+
+function resolveDaemonLaunchSpec(): DaemonLaunchSpec {
+  const explicitPath = trimEnv(process.env[DAEMON_PATH_ENV]);
+  if (explicitPath) {
+    validateExplicitDaemonPath(explicitPath);
+    return {
+      command: explicitPath,
+      args: [],
+      cwd: undefined,
+      description: `${DAEMON_PATH_ENV}=${explicitPath}`,
+      source: 'path',
+    };
+  }
+
+  const explicitCommand = trimEnv(process.env[DAEMON_COMMAND_ENV]);
+  if (explicitCommand) {
+    return {
+      command: explicitCommand,
+      args: [],
+      cwd: undefined,
+      description: `${DAEMON_COMMAND_ENV}=${explicitCommand}`,
+      source: 'command',
+    };
+  }
+
+  const bundledPath = resolveBundledDaemonPath();
+  if (bundledPath) {
+    return {
+      command: bundledPath,
+      args: [],
+      cwd: undefined,
+      description: `bundled daemon at ${bundledPath}`,
+      source: 'path',
+    };
+  }
+
+  if (process.env[CARGO_FALLBACK_ENV] === '1') {
+    const repoRoot = resolveRepoRoot();
+    const manifestPath = resolveManifestPath(repoRoot);
+    return {
+      command: 'cargo',
+      args: ['run', '--quiet', '--manifest-path', manifestPath],
+      cwd: repoRoot,
+      description: `${CARGO_FALLBACK_ENV}=1 (cargo fallback)`,
+      source: 'cargo-fallback',
+    };
+  }
+
+  return {
+    command: DEFAULT_DAEMON_COMMAND,
+    args: [],
+    cwd: undefined,
+    description: `${DEFAULT_DAEMON_COMMAND} on PATH`,
+    source: 'command',
+  };
+}
+
+function trimEnv(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function resolveBundledDaemonPath(): string | undefined {
+  const candidate = path.resolve(
+    __dirname,
+    '..',
+    'bin',
+    resolveBundledDaemonExecutableName(),
+  );
+  try {
+    accessSync(candidate, fsConstants.X_OK);
+    return candidate;
+  } catch {
+    return undefined;
+  }
+}
+
+function resolveBundledDaemonExecutableName(platform = process.platform): string {
+  return platform === 'win32' ? `${DEFAULT_DAEMON_COMMAND}.exe` : DEFAULT_DAEMON_COMMAND;
+}
+
+function validateExplicitDaemonPath(daemonPath: string): void {
+  try {
+    accessSync(daemonPath, fsConstants.X_OK);
+  } catch (error) {
+    throw new Error(
+      `Unable to use ${DAEMON_PATH_ENV}=${daemonPath}: ${(error as Error).message}`,
+    );
+  }
+}
+
+function formatDaemonStartError(spec: DaemonLaunchSpec, error: unknown): Error {
+  const message = error instanceof Error ? error.message : String(error);
+  if (isMissingExecutableError(error)) {
+    return new Error([
+      `Unable to start the Munnai core daemon (${spec.description}).`,
+      `Set ${DAEMON_PATH_ENV} to an executable daemon binary or install ${DEFAULT_DAEMON_COMMAND} on PATH.`,
+      `For local development only, set ${CARGO_FALLBACK_ENV}=1 to opt back into the source-tree cargo fallback.`,
+      `Original error: ${message}`,
+    ].join(' '));
+  }
+
+  return new Error(`Unable to start the Munnai core daemon (${spec.description}): ${message}`);
+}
+
+function formatDaemonExitError(
+  spec: DaemonLaunchSpec,
+  code: number | null,
+  signal: string | null,
+): Error {
+  return new Error(
+    `Munnai core daemon exited before it became ready (${spec.description}) with ${
+      signal ?? code ?? 'unknown'
+    }`,
+  );
+}
+
+function isMissingExecutableError(error: unknown): boolean {
+  return Boolean(
+    error &&
+      typeof error === 'object' &&
+      'code' in error &&
+      (error as NodeJS.ErrnoException).code === 'ENOENT',
+  );
 }
 
 function normalizeObservingRecord(row: RawObservingRecord): ObservingRecord {
@@ -384,6 +546,14 @@ function normalizeRenderedMemoryRecord(row: RawRenderedMemoryRecord): RenderedMe
     updatedAt: row.updatedAt,
   };
 }
+
+export const __testing = {
+  waitForPromiseOrTimeout,
+  resolveDaemonLaunchSpec,
+  resolveBundledDaemonExecutableName,
+  formatDaemonStartError,
+  formatDaemonExitError,
+};
 
 const core = {
   addMessage,

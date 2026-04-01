@@ -30,6 +30,7 @@ node_modules/
 pnpm-lock.yaml
 dist/
 packages/board/dist-server/
+packages/core/bin/
 benchmark/**/.runs/
 benchmark/**/out/
 benchmark/**/__pycache__/

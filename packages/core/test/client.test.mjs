@@ -47,6 +47,11 @@ async function writeMunnaiConfig(configPath, { turnProvider, observerProvider } 
 test.afterEach(async () => {
   await shutdownCoreForTests();
   delete process.env.MUNNAI_HOME;
+  delete process.env.MUNNAI_CORE_ALLOW_CARGO_FALLBACK;
+});
+
+test.beforeEach(() => {
+  process.env.MUNNAI_CORE_ALLOW_CARGO_FALLBACK = '1';
 });
 
 test('addMessage and sessions.get roundtrip through the Rust bridge', async (t) => {
