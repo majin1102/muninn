@@ -35,6 +35,17 @@ pub struct MemoryView {
     pub updated_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RecallHit {
+    #[serde(
+        serialize_with = "serialize_memory_id",
+        deserialize_with = "deserialize_memory_id"
+    )]
+    pub memory_id: MemoryId,
+    pub text: String,
+}
+
 fn serialize_memory_id<S>(memory_id: &MemoryId, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: Serializer,

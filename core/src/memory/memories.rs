@@ -10,7 +10,7 @@ use crate::format::session::SessionTurn;
 use crate::llm::embedding::embed_text;
 use crate::memory::observings::{self, ObservingListQuery};
 use crate::memory::sessions::{self, SessionListQuery, render_session_turn_detail};
-use crate::memory::types::{ListMode, MemoryView};
+use crate::memory::types::{ListMode, MemoryView, RecallHit};
 use crate::storage::Storage;
 
 impl TryFrom<&SessionTurn> for MemoryView {
@@ -85,7 +85,41 @@ impl TryFrom<&ObservingSnapshot> for MemoryView {
     }
 }
 
-pub async fn recall(storage: &Storage, query: &str, limit: usize) -> Result<Vec<MemoryView>> {
+impl TryFrom<&SessionTurn> for RecallHit {
+    type Error = Error;
+
+    fn try_from(turn: &SessionTurn) -> Result<Self> {
+        let text = render_recall_text([
+            labeled_line("Title", turn.title.as_deref()),
+            labeled_line("Summary", turn.summary.as_deref()),
+            render_session_turn_detail(turn),
+        ])?;
+
+        Ok(Self {
+            memory_id: turn.memory_id()?,
+            text,
+        })
+    }
+}
+
+impl TryFrom<&ObservingSnapshot> for RecallHit {
+    type Error = Error;
+
+    fn try_from(observing: &ObservingSnapshot) -> Result<Self> {
+        let text = render_recall_text([
+            labeled_line("Title", Some(observing.title.as_str())),
+            labeled_line("Summary", Some(observing.summary.as_str())),
+            labeled_line("Content", Some(observing.content.as_str())),
+        ])?;
+
+        Ok(Self {
+            memory_id: observing.memory_id()?,
+            text,
+        })
+    }
+}
+
+pub async fn recall(storage: &Storage, query: &str, limit: usize) -> Result<Vec<RecallHit>> {
     if limit == 0 {
         return Ok(Vec::new());
     }
@@ -95,12 +129,12 @@ pub async fn recall(storage: &Storage, query: &str, limit: usize) -> Result<Vec<
         return legacy_recall(storage, query, limit).await;
     }
 
-    let session_hits = render_session_turns(sessions::recall(storage, query, limit).await?)?;
+    let session_hits = render_session_recall_hits(sessions::recall(storage, query, limit).await?)?;
 
     match semantic_recall(storage, query, limit).await {
         Ok(semantic_hits) => {
             let observing_fallback = if semantic_hits.len() < limit {
-                render_observings(observings::recall(storage, query, limit).await?)?
+                render_observing_recall_hits(observings::recall(storage, query, limit).await?)?
             } else {
                 Vec::new()
             };
@@ -217,17 +251,39 @@ fn render_observings(observings: Vec<ObservingSnapshot>) -> Result<Vec<MemoryVie
         .collect::<Result<Vec<_>>>()
 }
 
-async fn legacy_recall(storage: &Storage, query: &str, limit: usize) -> Result<Vec<MemoryView>> {
-    let turns = sessions::recall(storage, query, limit).await?;
-    let observings = observings::recall(storage, query, limit).await?;
-    combine_rendered_window(
-        render_session_turns(turns)?,
-        render_observings(observings)?,
-        ListMode::Recency { limit },
-    )
+fn render_session_recall_hits(turns: Vec<SessionTurn>) -> Result<Vec<RecallCandidate>> {
+    turns
+        .iter()
+        .map(RecallCandidate::try_from)
+        .collect::<Result<Vec<_>>>()
 }
 
-async fn semantic_recall(storage: &Storage, query: &str, limit: usize) -> Result<Vec<MemoryView>> {
+fn render_observing_recall_hits(
+    observings: Vec<ObservingSnapshot>,
+) -> Result<Vec<RecallCandidate>> {
+    observings
+        .iter()
+        .map(RecallCandidate::try_from)
+        .collect::<Result<Vec<_>>>()
+}
+
+async fn legacy_recall(storage: &Storage, query: &str, limit: usize) -> Result<Vec<RecallHit>> {
+    let turns = sessions::recall(storage, query, limit).await?;
+    let observings = observings::recall(storage, query, limit).await?;
+    Ok(merge_recall_results(
+        vec![
+            render_session_recall_hits(turns)?,
+            render_observing_recall_hits(observings)?,
+        ],
+        limit,
+    ))
+}
+
+async fn semantic_recall(
+    storage: &Storage,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<RecallCandidate>> {
     let query_vector = embed_text(query).await?;
     let mut fetch_limit = limit.saturating_mul(4).max(limit);
     let candidate_groups = loop {
@@ -254,11 +310,11 @@ async fn semantic_recall(storage: &Storage, query: &str, limit: usize) -> Result
     Ok(hits)
 }
 
-fn merge_recall_results(result_sets: Vec<Vec<MemoryView>>, limit: usize) -> Vec<MemoryView> {
-    let mut deduped = HashMap::<String, MemoryView>::new();
+fn merge_recall_results(result_sets: Vec<Vec<RecallCandidate>>, limit: usize) -> Vec<RecallHit> {
+    let mut deduped = HashMap::<String, RecallCandidate>::new();
 
     for memory in result_sets.into_iter().flatten() {
-        let key = memory.memory_id.to_string();
+        let key = memory.hit.memory_id.to_string();
         deduped
             .entry(key)
             .and_modify(|current| {
@@ -277,6 +333,9 @@ fn merge_recall_results(result_sets: Vec<Vec<MemoryView>>, limit: usize) -> Vec<
     combined.truncate(limit);
     combined.sort_by(|left, right| left.created_at.cmp(&right.created_at));
     combined
+        .into_iter()
+        .map(|candidate| candidate.hit)
+        .collect()
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -327,9 +386,77 @@ fn merge_semantic_candidates(candidates: Vec<SemanticIndexRow>) -> Vec<SemanticC
 async fn resolve_semantic_candidate(
     storage: &Storage,
     memory_id: &str,
-) -> Result<Option<MemoryView>> {
+) -> Result<Option<RecallCandidate>> {
     let memory_id = MemoryId::from_str(memory_id)?;
-    get(storage, &memory_id.to_string()).await
+    match memory_id.memory_layer() {
+        MemoryLayer::Session => sessions::get(storage, &memory_id)
+            .await?
+            .as_ref()
+            .map(RecallCandidate::try_from)
+            .transpose(),
+        MemoryLayer::Observing => observings::get(storage, &memory_id)
+            .await?
+            .as_ref()
+            .map(RecallCandidate::try_from)
+            .transpose(),
+        layer => Err(Error::invalid_input(format!(
+            "unsupported memory layer for recall candidate: {layer}"
+        ))),
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RecallCandidate {
+    hit: RecallHit,
+    created_at: chrono::DateTime<chrono::Utc>,
+    updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl TryFrom<&SessionTurn> for RecallCandidate {
+    type Error = Error;
+
+    fn try_from(turn: &SessionTurn) -> Result<Self> {
+        Ok(Self {
+            hit: RecallHit::try_from(turn)?,
+            created_at: turn.created_at,
+            updated_at: turn.updated_at,
+        })
+    }
+}
+
+impl TryFrom<&ObservingSnapshot> for RecallCandidate {
+    type Error = Error;
+
+    fn try_from(observing: &ObservingSnapshot) -> Result<Self> {
+        Ok(Self {
+            hit: RecallHit::try_from(observing)?,
+            created_at: observing.created_at,
+            updated_at: observing.updated_at,
+        })
+    }
+}
+
+fn labeled_line(label: &str, value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| format!("{label}: {value}"))
+}
+
+fn render_recall_text<const N: usize>(sections: [Option<String>; N]) -> Result<String> {
+    let text = sections
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join("\n\n");
+
+    if text.trim().is_empty() {
+        return Err(Error::invalid_input(
+            "recall hit must include at least one non-empty text section",
+        ));
+    }
+
+    Ok(text)
 }
 
 #[cfg(test)]
@@ -426,8 +553,8 @@ mod tests {
             recalled[0].memory_id.to_string(),
             format!("OBSERVING:{snapshot_id}")
         );
-        assert_eq!(recalled[0].title.as_deref(), Some("alpha title"));
-        assert_eq!(recalled[0].summary.as_deref(), Some("alpha summary"));
+        assert!(recalled[0].text.contains("Title: alpha title"));
+        assert!(recalled[0].text.contains("Summary: alpha summary"));
 
         unsafe {
             std::env::remove_var("MUNNAI_HOME");
@@ -555,6 +682,8 @@ mod tests {
             recalled[1].memory_id.to_string(),
             format!("SESSION:{session_turn_id}")
         );
+        assert!(recalled[1].text.contains("Prompt: beta prompt"));
+        assert!(recalled[1].text.contains("Response: beta response"));
 
         unsafe {
             std::env::remove_var("MUNNAI_HOME");
@@ -674,6 +803,7 @@ mod tests {
             recalled[1].memory_id.to_string(),
             format!("SESSION:{session_new_id}")
         );
+        assert!(recalled[1].text.contains("Title: session beta new"));
 
         unsafe {
             std::env::remove_var("MUNNAI_HOME");
@@ -774,6 +904,8 @@ mod tests {
             recalled[1].memory_id.to_string(),
             format!("OBSERVING:{snapshot_b}")
         );
+        assert!(recalled[0].text.contains("Title: alpha title"));
+        assert!(recalled[1].text.contains("Title: beta title"));
 
         unsafe {
             std::env::remove_var("MUNNAI_HOME");
