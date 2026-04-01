@@ -20,7 +20,7 @@ test("collectArtifacts uses write params content directly", async () => {
 });
 
 test("collectArtifacts reads edit target from workspace", async (t) => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), "munnai-plugin-"));
+  const dir = await mkdtemp(path.join(os.tmpdir(), "muninn-plugin-"));
   t.after(async () => rm(dir, { recursive: true, force: true }));
 
   await writeFile(path.join(dir, "src.txt"), "edited");
@@ -50,7 +50,7 @@ test("collectArtifacts returns undefined when exec output has no path", async ()
 });
 
 test("collectArtifacts extracts paths from apply_patch", async (t) => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), "munnai-plugin-"));
+  const dir = await mkdtemp(path.join(os.tmpdir(), "muninn-plugin-"));
   t.after(async () => rm(dir, { recursive: true, force: true }));
 
   await writeFile(path.join(dir, "file1.txt"), "content1");
@@ -72,7 +72,7 @@ test("collectArtifacts extracts paths from apply_patch", async (t) => {
 });
 
 test("collectArtifacts extracts paths from exec output", async (t) => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), "munnai-plugin-"));
+  const dir = await mkdtemp(path.join(os.tmpdir(), "muninn-plugin-"));
   t.after(async () => rm(dir, { recursive: true, force: true }));
 
   await writeFile(path.join(dir, "result.json"), '{"status":"ok"}');

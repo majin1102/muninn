@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
 
-import { createMunnaiContextEngine } from "../dist/src/context-engine.js";
+import { createMuninnContextEngine } from "../dist/src/context-engine.js";
 
 test("integration: assemble calls /api/v1/list", async () => {
   const requests = [];
@@ -16,7 +16,7 @@ test("integration: assemble calls /api/v1/list", async () => {
   const port = server.address().port;
 
   try {
-    const engine = createMunnaiContextEngine({
+    const engine = createMuninnContextEngine({
       config: { baseUrl: `http://localhost:${port}`, enabled: true, timeoutMs: 1000, recencyLimit: 5 },
       logger: {},
     });
@@ -47,7 +47,7 @@ test("integration: assemble honors configured recencyLimit", async () => {
   const port = server.address().port;
 
   try {
-    const engine = createMunnaiContextEngine({
+    const engine = createMuninnContextEngine({
       config: { baseUrl: `http://localhost:${port}`, enabled: true, timeoutMs: 1000, recencyLimit: 9 },
       logger: {},
     });
@@ -82,7 +82,7 @@ test("integration: context engine does not write turns through afterTurn", async
   const port = server.address().port;
 
   try {
-    const engine = createMunnaiContextEngine({
+    const engine = createMuninnContextEngine({
       config: { baseUrl: `http://localhost:${port}`, enabled: true, timeoutMs: 1000, recencyLimit: 5 },
       logger: {},
     });
@@ -112,7 +112,7 @@ test("integration: server error does not throw", async () => {
 
   try {
     const warnings = [];
-    const engine = createMunnaiContextEngine({
+    const engine = createMuninnContextEngine({
       config: { baseUrl: `http://localhost:${port}`, enabled: true, timeoutMs: 1000, recencyLimit: 5 },
       logger: { warn: (msg) => warnings.push(msg) },
     });
@@ -124,7 +124,7 @@ test("integration: server error does not throw", async () => {
 
     assert.strictEqual(result.systemPromptAddition, undefined);
     assert.strictEqual(warnings.length, 1);
-    assert.match(warnings[0], /munnai recall failed: 500/);
+    assert.match(warnings[0], /muninn recall failed: 500/);
   } finally {
     server.close();
   }

@@ -5,12 +5,12 @@ import type {
   IngestResult,
   CompactResult,
 } from "openclaw/plugin-sdk/core";
-import type { MunnaiPluginConfig } from "./config.js";
+import type { MuninnPluginConfig } from "./config.js";
 import type { LoggerLike } from "./logger.js";
 import type { FetchLike } from "./client.js";
 
-export function createMunnaiContextEngine(params: {
-  config: MunnaiPluginConfig;
+export function createMuninnContextEngine(params: {
+  config: MuninnPluginConfig;
   logger: LoggerLike;
   fetchImpl?: FetchLike;
 }): ContextEngine {
@@ -18,8 +18,8 @@ export function createMunnaiContextEngine(params: {
 
   return {
     info: {
-      id: "munnai",
-      name: "Munnai Memory",
+      id: "muninn",
+      name: "Muninn Memory",
       version: "0.1.0",
     },
 
@@ -40,7 +40,7 @@ export function createMunnaiContextEngine(params: {
         );
 
         if (!response.ok) {
-          params.logger.warn?.(`munnai recall failed: ${response.status}`);
+          params.logger.warn?.(`muninn recall failed: ${response.status}`);
           return {
             messages: assembleParams.messages,
             estimatedTokens: estimateTokens(assembleParams.messages),
@@ -64,7 +64,7 @@ export function createMunnaiContextEngine(params: {
           estimatedTokens: estimateTokens(assembleParams.messages) + estimateTextTokens(memories),
         };
       } catch (error) {
-        params.logger.warn?.(`munnai assemble failed: ${String(error)}`);
+        params.logger.warn?.(`muninn assemble failed: ${String(error)}`);
         return {
           messages: assembleParams.messages,
           estimatedTokens: estimateTokens(assembleParams.messages),
@@ -76,7 +76,7 @@ export function createMunnaiContextEngine(params: {
       return {
         ok: true,
         compacted: false,
-        reason: "munnai_does_not_compact",
+        reason: "muninn_does_not_compact",
       };
     },
   };

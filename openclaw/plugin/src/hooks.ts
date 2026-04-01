@@ -8,17 +8,17 @@ import type {
 import { collectArtifacts } from "./artifacts.js";
 import { buildCommandString } from "./command-string.js";
 import { resolvePluginConfig } from "./config.js";
-import { createMunnaiClient } from "./client.js";
+import { createMuninnClient } from "./client.js";
 import { buildPromptPayload, buildResponsePayload, buildToolPayload } from "./payloads.js";
 
-export function registerMunnaiHooks(api: OpenClawPluginApi): void {
+export function registerMuninnHooks(api: OpenClawPluginApi): void {
   const config = resolvePluginConfig(api.pluginConfig);
   if (!config?.enabled) {
-    api.logger.info?.("[munnai] plugin disabled or missing baseUrl");
+    api.logger.info?.("[muninn] plugin disabled or missing baseUrl");
     return;
   }
 
-  const client = createMunnaiClient({
+  const client = createMuninnClient({
     config,
     logger: api.logger,
   });
