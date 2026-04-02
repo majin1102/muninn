@@ -1,1 +1,1 @@
-"""Benchmark modules for Munnai."""
+"""Benchmark modules for Muninn."""

@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
 import { mkdir, readFile, rm } from 'node:fs/promises';
-import type { SessionTurnRecord } from '@munnai/core';
-import * as coreClient from '@munnai/core';
+import type { SessionTurnRecord } from '@muninn/core';
+import * as coreClient from '@muninn/core';
 
 type LocomoDialog = {
   speaker: string;
@@ -46,7 +46,7 @@ async function main() {
   try {
     switch (command) {
       case 'reset-home':
-        await resetHome(requireOption(options, 'munnai-home'));
+        await resetHome(requireOption(options, 'muninn-home'));
         emitJson({ ok: true });
         break;
       case 'import-sample':
@@ -78,8 +78,8 @@ async function importSampleCommand(options: Map<string, string>) {
   const dataFile = requireOption(options, 'data-file');
   const sampleId = requireOption(options, 'sample-id');
   const mode = requireOption(options, 'mode') as ImportMode;
-  const home = requireOption(options, 'munnai-home');
-  process.env.MUNNAI_HOME = home;
+  const home = requireOption(options, 'muninn-home');
+  process.env.MUNINN_HOME = home;
   await mkdir(home, { recursive: true });
 
   const sample = await loadSample(dataFile, sampleId);
@@ -96,7 +96,7 @@ async function importSampleCommand(options: Map<string, string>) {
 }
 
 async function recallCommand(options: Map<string, string>) {
-  process.env.MUNNAI_HOME = requireOption(options, 'munnai-home');
+  process.env.MUNINN_HOME = requireOption(options, 'muninn-home');
   const query = requireOption(options, 'query');
   const limit = parseInt(requireOption(options, 'limit'), 10);
   if (!Number.isFinite(limit) || limit <= 0) {
@@ -116,7 +116,7 @@ async function recallCommand(options: Map<string, string>) {
 }
 
 async function recallBatchCommand(options: Map<string, string>) {
-  process.env.MUNNAI_HOME = requireOption(options, 'munnai-home');
+  process.env.MUNINN_HOME = requireOption(options, 'muninn-home');
   const queriesFile = requireOption(options, 'queries-file');
   const raw = await readFile(queriesFile, 'utf8');
   const queries = JSON.parse(raw) as Array<{ key: string; query: string; limit: number }>;

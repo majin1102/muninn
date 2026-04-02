@@ -1,1 +1,1 @@
-"""LoCoMo benchmark for Munnai."""
+"""LoCoMo benchmark for Muninn."""

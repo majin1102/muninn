@@ -1,19 +1,19 @@
 {
-  "name": "@munnai/benchmark-locomo",
+  "name": "@muninn/benchmark-locomo",
   "version": "0.1.0",
   "private": true,
   "main": "./dist/bridge.js",
   "types": "./dist/bridge.d.ts",
   "bin": {
-    "munnai-locomo-bridge": "./dist/bridge.js"
+    "muninn-locomo-bridge": "./dist/bridge.js"
   },
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
-    "test": "pnpm --filter @munnai/core build && pnpm build && node --test test/**/*.test.mjs"
+    "test": "pnpm --filter @muninn/core build && pnpm build && node --test test/**/*.test.mjs"
   },
   "dependencies": {
-    "@munnai/core": "workspace:*"
+    "@muninn/core": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

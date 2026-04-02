@@ -9,7 +9,7 @@ from typing import Any
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-BRIDGE_PACKAGE_NAME = "@munnai/benchmark-locomo"
+BRIDGE_PACKAGE_NAME = "@muninn/benchmark-locomo"
 BRIDGE_DIST = REPO_ROOT / "benchmark" / "locomo" / "dist" / "bridge.js"
 
 
@@ -29,7 +29,7 @@ class RecallHit:
     detail: str | None
 
 
-class MunnaiBridge:
+class MuninnBridge:
     def __init__(self, repo_root: Path | None = None) -> None:
         self.repo_root = repo_root or REPO_ROOT
 
@@ -46,34 +46,34 @@ class MunnaiBridge:
         )
 
     def reset_home(self, home: Path) -> dict[str, Any]:
-        return self._run_json("reset-home", munnai_home=str(home))
+        return self._run_json("reset-home", muninn_home=str(home))
 
     def import_sample(
         self,
         data_file: Path,
         sample_id: str,
         mode: str,
-        munnai_home: Path,
+        muninn_home: Path,
     ) -> dict[str, Any]:
         return self._run_json(
             "import-sample",
             data_file=str(data_file),
             sample_id=sample_id,
             mode=mode,
-            munnai_home=str(munnai_home),
+            muninn_home=str(muninn_home),
         )
 
     def recall(
         self,
         query: str,
         limit: int,
-        munnai_home: Path,
+        muninn_home: Path,
     ) -> list[RecallHit]:
         payload = self._run_json(
             "recall",
             query=query,
             limit=str(limit),
-            munnai_home=str(munnai_home),
+            muninn_home=str(muninn_home),
         )
         hits = []
         for item in payload["hits"]:
@@ -94,7 +94,7 @@ class MunnaiBridge:
     def recall_batch(
         self,
         queries: list[dict[str, Any]],
-        munnai_home: Path,
+        muninn_home: Path,
     ) -> dict[str, list[RecallHit]]:
         with tempfile.NamedTemporaryFile(
             "w",
@@ -109,7 +109,7 @@ class MunnaiBridge:
             payload = self._run_json(
                 "recall-batch",
                 queries_file=str(query_file),
-                munnai_home=str(munnai_home),
+                muninn_home=str(muninn_home),
             )
         finally:
             query_file.unlink(missing_ok=True)

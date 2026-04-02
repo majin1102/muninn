@@ -5,7 +5,7 @@ import string
 from collections import Counter
 from typing import Iterable
 
-from benchmark.common.munnai_bridge import RecallHit
+from benchmark.common.muninn_bridge import RecallHit
 
 
 STOPWORDS = {

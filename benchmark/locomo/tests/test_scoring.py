@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from benchmark.common.munnai_bridge import RecallHit
+from benchmark.common.muninn_bridge import RecallHit
 from benchmark.locomo.heuristics import build_prediction, build_query_candidates, extract_date
 from benchmark.locomo.scoring import evaluate_question_answering, f1_score
 
@@ -34,11 +34,11 @@ class ScoringTests(unittest.TestCase):
                     "category": 5,
                     "question": "What did Caroline realize after the race?",
                     "evidence": ["D2:3"],
-                    "munnai_dialog_top_5_prediction": "Not mentioned in the conversation",
-                    "munnai_dialog_top_5_prediction_context": ["D2:1"],
+                    "muninn_dialog_top_5_prediction": "Not mentioned in the conversation",
+                    "muninn_dialog_top_5_prediction_context": ["D2:1"],
                 }
             ],
-            "munnai_dialog_top_5_prediction",
+            "muninn_dialog_top_5_prediction",
         )
         self.assertEqual(scores, [1.0])
         self.assertEqual(recall, [0.0])
@@ -53,11 +53,11 @@ class ScoringTests(unittest.TestCase):
                     "category": 2,
                     "answer": "8 May 2023",
                     "evidence": ["D2:3"],
-                    "munnai_dialog_top_5_prediction": "8 May 2023",
-                    "munnai_dialog_top_5_prediction_context": [],
+                    "muninn_dialog_top_5_prediction": "8 May 2023",
+                    "muninn_dialog_top_5_prediction_context": [],
                 }
             ],
-            "munnai_dialog_top_5_prediction",
+            "muninn_dialog_top_5_prediction",
         )
         self.assertEqual(scores, [1.0])
         self.assertEqual(recall, [0.0])

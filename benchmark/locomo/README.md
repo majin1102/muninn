@@ -1,20 +1,20 @@
 # LoCoMo Benchmark
 
-This module adapts LoCoMo to run directly on top of Munnai.
+This module adapts LoCoMo to run directly on top of Muninn.
 
 The key design choice is that the benchmark does not reuse LoCoMo's original
 LLM-driven retrieval and answer-generation path. Instead:
 
-- LoCoMo data is imported into isolated Munnai homes
-- recall is executed through `@munnai/core`
+- LoCoMo data is imported into isolated Muninn homes
+- recall is executed through `@muninn/core`
 - answer generation is a deterministic heuristic baseline
 - the output shape remains evaluator-compatible with LoCoMo-style QA results
 
 ## Module Layout
 
 - `src/bridge.ts`
-  - thin Node bridge into `@munnai/core`
-  - imports LoCoMo samples into Munnai
+  - thin Node bridge into `@muninn/core`
+  - imports LoCoMo samples into Muninn
   - runs single or batch recall
 - `run.py`
   - benchmark entrypoint
@@ -35,13 +35,13 @@ LLM-driven retrieval and answer-generation path. Instead:
 This adapter currently supports the three LoCoMo retrieval views:
 
 - `dialog`
-  - each LoCoMo turn becomes one Munnai session row
+  - each LoCoMo turn becomes one Muninn session row
   - retrieved context maps back to `D{session}:{turn}`
 - `observation`
-  - each extracted fact becomes one Munnai session row
+  - each extracted fact becomes one Muninn session row
   - fact rows still preserve the original `D...` source id
 - `summary`
-  - each LoCoMo session summary becomes one Munnai session row
+  - each LoCoMo session summary becomes one Muninn session row
   - retrieved context maps back to `S{session}`
 
 ## Prerequisites
@@ -51,7 +51,7 @@ Run everything from the repository root.
 Required:
 
 - `pnpm install`
-- a working Rust toolchain, because `@munnai/core` starts the Rust daemon
+- a working Rust toolchain, because `@muninn/core` starts the Rust daemon
 - `python3`
 
 No LLM keys are required for this benchmark.
@@ -61,13 +61,13 @@ No LLM keys are required for this benchmark.
 Build the Node bridge once before running the benchmark:
 
 ```bash
-pnpm --filter @munnai/benchmark-locomo build
+pnpm --filter @muninn/benchmark-locomo build
 ```
 
 You can also run the package test target, which rebuilds the bridge first:
 
 ```bash
-pnpm --filter @munnai/benchmark-locomo test
+pnpm --filter @muninn/benchmark-locomo test
 ```
 
 ## Run
@@ -118,15 +118,15 @@ python3 benchmark/locomo/run.py \
 
 For each `sample_id + mode` pair, the runner:
 
-1. creates an isolated `MUNNAI_HOME`
-2. imports LoCoMo source data into Munnai through the local bridge
+1. creates an isolated `MUNINN_HOME`
+2. imports LoCoMo source data into Muninn through the local bridge
 3. builds deterministic query candidates from each question
-4. runs batch recall through Munnai
+4. runs batch recall through Muninn
 5. maps retrieved rows back to LoCoMo source ids
 6. generates a non-LLM heuristic answer
 7. writes QA results and aggregate stats
 
-This means the benchmark measures Munnai's current text recall behavior, not an
+This means the benchmark measures Muninn's current text recall behavior, not an
 embedding retriever and not an LLM answerer.
 
 ## Output Files
@@ -135,8 +135,8 @@ The runner writes two files:
 
 - `<out-file>`
   - per-sample QA results
-  - includes `munnai_<mode>_top_<k>_prediction`
-  - includes `munnai_<mode>_top_<k>_prediction_context`
+  - includes `muninn_<mode>_top_<k>_prediction`
+  - includes `muninn_<mode>_top_<k>_prediction_context`
 - `<out-file stem>_stats.json`
   - aggregate F1 and retrieval recall
   - grouped by mode and category
@@ -150,10 +150,10 @@ when `--keep-home` is used.
 
 - This is an evaluator-compatible baseline, not a parity answerer with the
   original LoCoMo LLM pipeline.
-- Munnai recall is currently text-based, so the query builder and heuristic
+- Muninn recall is currently text-based, so the query builder and heuristic
   answer extraction matter a lot for benchmark quality.
 - Original LoCoMo timestamps are preserved as benchmark metadata and text, not
-  as first-class Munnai row timestamps.
+  as first-class Muninn row timestamps.
 - The runner is optimized to batch recall queries per mode, but full runs can
   still be slow compared with pure in-memory scoring.
 
@@ -168,12 +168,12 @@ python3 -m unittest benchmark.locomo.tests.test_scoring
 Node bridge tests:
 
 ```bash
-pnpm --filter @munnai/benchmark-locomo test
+pnpm --filter @muninn/benchmark-locomo test
 ```
 
 ## Implementation Notes
 
-- The Python side talks to Munnai through `benchmark/common/munnai_bridge.py`
-- The bridge itself talks directly to `@munnai/core`, not sidecar
-- Benchmark metadata is stored in Munnai row artifacts so recall hits can be
+- The Python side talks to Muninn through `benchmark/common/muninn_bridge.py`
+- The bridge itself talks directly to `@muninn/core`, not sidecar
+- Benchmark metadata is stored in Muninn row artifacts so recall hits can be
   mapped back to LoCoMo source ids like `D1:3` or `S2`
