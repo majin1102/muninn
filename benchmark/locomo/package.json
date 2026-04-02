@@ -10,7 +10,9 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
-    "test": "pnpm --filter @muninn/core build && pnpm build && node --test test/**/*.test.mjs"
+    "bootstrap": "sh ./scripts/bootstrap.sh",
+    "benchmark": "sh ./scripts/run.sh",
+    "test": "sh ./scripts/test.sh"
   },
   "dependencies": {
     "@muninn/core": "workspace:*"

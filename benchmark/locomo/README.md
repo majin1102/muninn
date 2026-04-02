@@ -2,8 +2,8 @@
 
 This module adapts LoCoMo to run directly on top of Muninn.
 
-The key design choice is that the benchmark does not reuse LoCoMo's original
-LLM-driven retrieval and answer-generation path. Instead:
+The benchmark does not reuse LoCoMo's original LLM-driven retrieval and
+answer-generation path. Instead:
 
 - LoCoMo data is imported into isolated Muninn homes
 - recall is executed through `@muninn/core`
@@ -25,6 +25,8 @@ LLM-driven retrieval and answer-generation path. Instead:
   - deterministic query builder and answer heuristics
 - `scoring.py`
   - evaluator-compatible QA and retrieval scoring
+- `scripts/`
+  - benchmark bootstrap, test, and run wrappers
 - `test/`
   - Node bridge tests and smoke fixtures
 - `tests/`
@@ -44,58 +46,107 @@ This adapter currently supports the three LoCoMo retrieval views:
   - each LoCoMo session summary becomes one Muninn session row
   - retrieved context maps back to `S{session}`
 
+## Supported Pipelines
+
+The runner supports two benchmark baselines:
+
+- `oracle`
+  - imports LoCoMo gold dialog / observation / summary rows directly
+  - acts as an upper bound for adapter correctness and retrieval quality
+- `generated`
+  - imports raw dialog only
+  - relies on Muninn's own turn summary / observer path for generated layers
+  - is the main end-to-end benchmark result
+
 ## Prerequisites
 
-Run everything from the repository root.
+Run everything from the repository root or through the wrapper scripts in this
+package.
 
 Required:
 
 - `pnpm install`
-- a working Rust toolchain, because `@muninn/core` starts the Rust daemon
+- a working Rust toolchain, because `@muninn/core` exports the Rust daemon
 - `python3`
+- a shell that can source `~/.zshrc`
+
+The wrapper scripts source `~/.zshrc` before invoking `node`, `pnpm`, or
+`python3`, so PATH fixes that live in your shell config are available to the
+benchmark subprocesses.
 
 No LLM keys are required for this benchmark.
 
-## Build
+## One-Shot Commands
 
-Build the Node bridge once before running the benchmark:
+The recommended entrypoints are the wrapper scripts under `benchmark/locomo/scripts/`.
+They handle shell setup, bridge rebuilds, and daemon export for you.
+
+### Bootstrap
+
+Build the Rust daemon and compile the bridge:
 
 ```bash
-pnpm --filter @muninn/benchmark-locomo build
+sh benchmark/locomo/scripts/bootstrap.sh
 ```
 
-You can also run the package test target, which rebuilds the bridge first:
+You can also use the package script from the repository root:
+
+```bash
+pnpm --filter @muninn/benchmark-locomo bootstrap
+```
+
+### Tests
+
+Run the full benchmark-local test slice:
+
+```bash
+sh benchmark/locomo/scripts/test.sh
+```
+
+Or through `pnpm`:
 
 ```bash
 pnpm --filter @muninn/benchmark-locomo test
 ```
 
-## Run
+### Benchmark Run
 
-### Full LoCoMo-style run
+Run the benchmark end-to-end:
 
 ```bash
-python3 benchmark/locomo/run.py \
+sh benchmark/locomo/scripts/run.sh \
   --data-file ../locomo/data/locomo10.json \
   --out-file benchmark/locomo/out/locomo10_results.json \
   --modes dialog,observation,summary \
+  --pipeline both \
   --top-k 5
 ```
 
-### Single mode
+Or through `pnpm`:
 
 ```bash
-python3 benchmark/locomo/run.py \
+pnpm --filter @muninn/benchmark-locomo benchmark -- \
+  --data-file ../locomo/data/locomo10.json \
+  --out-file benchmark/locomo/out/locomo10_results.json \
+  --modes dialog,observation,summary \
+  --pipeline both \
+  --top-k 5
+```
+
+### Single Mode
+
+```bash
+sh benchmark/locomo/scripts/run.sh \
   --data-file ../locomo/data/locomo10.json \
   --out-file benchmark/locomo/out/locomo10_dialog_results.json \
   --modes dialog \
   --top-k 5
 ```
 
-### Single sample
+### Single Sample
 
 ```bash
-python3 benchmark/locomo/run.py \
+sh benchmark/locomo/scripts/run.sh \
   --data-file ../locomo/data/locomo10.json \
   --out-file benchmark/locomo/out/sample_1_dialog_results.json \
   --modes dialog \
@@ -103,10 +154,10 @@ python3 benchmark/locomo/run.py \
   --top-k 5
 ```
 
-### Limit the QA count for debugging
+### Limit QA Count
 
 ```bash
-python3 benchmark/locomo/run.py \
+sh benchmark/locomo/scripts/run.sh \
   --data-file ../locomo/data/locomo10.json \
   --out-file benchmark/locomo/out/debug_results.json \
   --modes dialog \
@@ -116,7 +167,7 @@ python3 benchmark/locomo/run.py \
 
 ## Runtime Behavior
 
-For each `sample_id + mode` pair, the runner:
+For each `sample_id + pipeline + mode` tuple, the runner:
 
 1. creates an isolated `MUNINN_HOME`
 2. imports LoCoMo source data into Muninn through the local bridge
@@ -131,15 +182,19 @@ embedding retriever and not an LLM answerer.
 
 ## Output Files
 
-The runner writes two files:
+The runner writes three files:
 
 - `<out-file>`
   - per-sample QA results
-  - includes `muninn_<mode>_top_<k>_prediction`
-  - includes `muninn_<mode>_top_<k>_prediction_context`
+  - includes `muninn_<pipeline>_<mode>_top_<k>_prediction`
+  - includes `muninn_<pipeline>_<mode>_top_<k>_prediction_context`
 - `<out-file stem>_stats.json`
   - aggregate F1 and retrieval recall
-  - grouped by mode and category
+  - grouped by `pipeline -> mode -> category`
+- `<out-file stem>_report.json`
+  - top recall misses
+  - top extraction misses
+  - oracle vs generated delta samples
 
 Outputs are written under `benchmark/locomo/out/`, which is gitignored.
 
@@ -154,8 +209,8 @@ when `--keep-home` is used.
   answer extraction matter a lot for benchmark quality.
 - Original LoCoMo timestamps are preserved as benchmark metadata and text, not
   as first-class Muninn row timestamps.
-- The runner is optimized to batch recall queries per mode, but full runs can
-  still be slow compared with pure in-memory scoring.
+- The runtime wrappers intentionally rebuild the bridge and export the daemon
+  before tests or benchmark runs.
 
 ## Tests
 
@@ -168,7 +223,7 @@ python3 -m unittest benchmark.locomo.tests.test_scoring
 Node bridge tests:
 
 ```bash
-pnpm --filter @muninn/benchmark-locomo test
+sh benchmark/locomo/scripts/test.sh
 ```
 
 ## Implementation Notes

@@ -13,6 +13,7 @@ if __package__ is None or __package__ == "":
 from benchmark.common.muninn_bridge import MuninnBridge
 from benchmark.locomo.dataset import iter_target_samples, load_samples, parse_modes
 from benchmark.locomo.heuristics import build_prediction, build_query_candidates
+from benchmark.locomo.report import build_error_report, write_report
 from benchmark.locomo.scoring import build_stats, write_results
 
 
@@ -22,6 +23,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--out-file", required=True, type=Path)
     parser.add_argument("--modes", default="dialog,observation,summary")
     parser.add_argument("--top-k", default=5, type=int)
+    parser.add_argument("--pipeline", default="both", choices=("oracle", "generated", "both"))
     parser.add_argument("--sample-id", default=None)
     parser.add_argument("--limit-questions", default=None, type=int)
     parser.add_argument("--keep-home", action="store_true")
@@ -30,12 +32,19 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    if not args.data_file.exists():
+        raise FileNotFoundError(
+            f"LoCoMo data file not found: {args.data_file}. "
+            "Pass --data-file with a valid external LoCoMo JSON dataset."
+        )
+
     modes = parse_modes(args.modes)
+    pipelines = parse_pipelines(args.pipeline)
     bridge = MuninnBridge()
     samples = load_samples(args.data_file)
     selected = iter_target_samples(samples, args.sample_id)
     results = []
-    model_key_by_mode: dict[str, str] = {}
+    model_key_by_pipeline: dict[str, dict[str, str]] = {pipeline: {} for pipeline in pipelines}
 
     for sample in selected:
         sample_result = {
@@ -47,26 +56,58 @@ def main() -> None:
             qas = qas[: args.limit_questions]
             sample_result["qa"] = qas
 
-        for mode in modes:
-            model_key = f"muninn_{mode}_top_{args.top_k}"
-            model_key_by_mode[mode] = model_key
-            prediction_key = f"{model_key}_prediction"
-            home_dir = prepare_home(bridge, sample["sample_id"], mode, args.keep_home)
-            try:
-                bridge.import_sample(args.data_file, sample["sample_id"], mode, home_dir.path)
-                batch_hits = collect_batch_hits(bridge, qas, args.top_k, home_dir.path)
-                for qa_index, qa in enumerate(qas):
-                    hits = batch_hits[qa_index]
-                    qa[prediction_key] = build_prediction(qa["question"], int(qa["category"]), hits)
-                    qa[f"{prediction_key}_context"] = [hit.source_id for hit in hits]
-            finally:
-                if home_dir.tmpdir is not None:
-                    home_dir.tmpdir.cleanup()
+        for pipeline in pipelines:
+            for mode in modes:
+                model_key = build_model_key(pipeline, mode, args.top_k)
+                model_key_by_pipeline[pipeline][mode] = model_key
+                prediction_key = f"{model_key}_prediction"
+                home_dir = prepare_home(
+                    bridge,
+                    sample["sample_id"],
+                    pipeline,
+                    mode,
+                    args.keep_home,
+                )
+                try:
+                    bridge.import_sample(
+                        args.data_file,
+                        sample["sample_id"],
+                        pipeline,
+                        mode,
+                        home_dir.path,
+                    )
+                    batch_hits = collect_batch_hits(
+                        bridge,
+                        qas,
+                        pipeline,
+                        mode,
+                        args.top_k,
+                        home_dir.path,
+                    )
+                    for qa_index, qa in enumerate(qas):
+                        hits = batch_hits[qa_index]
+                        qa[prediction_key] = build_prediction(qa["question"], int(qa["category"]), hits)
+                        qa[f"{prediction_key}_context"] = [hit.source_id for hit in hits]
+                finally:
+                    if home_dir.tmpdir is not None:
+                        home_dir.tmpdir.cleanup()
 
         results.append(sample_result)
 
-    stats = build_stats(results, model_key_by_mode)
+    stats = build_stats(results, model_key_by_pipeline)
+    report = build_error_report(results, model_key_by_pipeline)
     write_results(args.out_file, results, stats)
+    write_report(args.out_file, report)
+
+
+def parse_pipelines(raw: str) -> list[str]:
+    if raw == "both":
+        return ["oracle", "generated"]
+    return [raw]
+
+
+def build_model_key(pipeline: str, mode: str, top_k: int) -> str:
+    return f"muninn_{pipeline}_{mode}_top_{top_k}"
 
 
 @dataclass
@@ -78,15 +119,16 @@ class ManagedHome:
 def prepare_home(
     bridge: MuninnBridge,
     sample_id: str,
+    pipeline: str,
     mode: str,
     keep_home: bool,
 ) -> ManagedHome:
     if keep_home:
         path = ManagedHome(
-            Path("benchmark") / "locomo" / ".runs" / f"{sample_id}_{mode}"
+            Path("benchmark") / "locomo" / ".runs" / f"{sample_id}_{pipeline}_{mode}"
         )
     else:
-        tmpdir = TemporaryDirectory(prefix=f"muninn-locomo-{sample_id}-{mode}-")
+        tmpdir = TemporaryDirectory(prefix=f"muninn-locomo-{sample_id}-{pipeline}-{mode}-")
         path = ManagedHome(Path(tmpdir.name), tmpdir=tmpdir)
     bridge.reset_home(path.path)
     return path
@@ -95,6 +137,8 @@ def prepare_home(
 def collect_batch_hits(
     bridge: MuninnBridge,
     qas: list[dict[str, object]],
+    pipeline: str,
+    mode: str,
     top_k: int,
     home_dir: Path,
 ):
@@ -109,7 +153,7 @@ def collect_batch_hits(
             queries.append({"key": key, "query": query, "limit": top_k})
         ordered_candidates[index] = candidate_keys
 
-    batch_results = bridge.recall_batch(queries, home_dir)
+    batch_results = bridge.recall_batch(queries, pipeline, mode, home_dir)
     merged_results = {}
     for qa_index, candidate_keys in ordered_candidates.items():
         by_source_id = {}

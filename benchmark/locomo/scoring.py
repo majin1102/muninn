@@ -4,8 +4,39 @@ import json
 import re
 import string
 from collections import Counter, defaultdict
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+
+@dataclass(frozen=True)
+class ScoredQA:
+    question: str
+    category: int
+    prediction: str
+    recall: float
+    f1: float
+    evidence: list[str]
+    contexts: list[str]
+    adversarial_answer: str | None
+    adversarial_match: bool
+
+
+def _as_list(value: Any) -> list[Any]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    if isinstance(value, tuple):
+        return list(value)
+    return [value]
+
+
+def _normalize_optional_answer(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text if text else None
 
 
 def normalize_answer(value: str) -> str:
@@ -41,75 +72,198 @@ def multi_answer_f1(prediction: str, ground_truth: str) -> float:
     ) / len(ground_truth_items)
 
 
-def evaluate_question_answering(qas: list[dict[str, Any]], prediction_key: str) -> tuple[list[float], list[float]]:
-    all_scores: list[float] = []
-    all_recall: list[float] = []
+def is_negative_answer(prediction: str) -> bool:
+    lowered = prediction.lower()
+    return "not mentioned" in lowered or "no information available" in lowered
+
+
+def score_qa(qa: dict[str, Any], prediction_key: str) -> ScoredQA:
+    prediction = str(qa.get(prediction_key, "")).strip()
+    category = int(qa["category"])
+
     context_key = f"{prediction_key}_context"
-
-    for qa in qas:
-        prediction = str(qa.get(prediction_key, "")).strip()
-        category = int(qa["category"])
-        if category in {2, 3, 4}:
-            answer = str(qa.get("answer", "")).split(";")[0].strip()
-            score = f1_score(prediction, answer)
-        elif category == 1:
-            answer = str(qa.get("answer", "")).strip()
-            score = multi_answer_f1(prediction, answer)
-        elif category == 5:
-            lowered = prediction.lower()
-            score = 1.0 if ("not mentioned" in lowered or "no information available" in lowered) else 0.0
+    contexts = [str(context) for context in _as_list(qa.get(context_key, []))]
+    evidence = [str(item) for item in _as_list(qa.get("evidence", []))]
+    if contexts and evidence:
+        if contexts and all(context.startswith("S") for context in contexts):
+            recall = _summary_recall(contexts, evidence)
         else:
-            raise ValueError(f"unsupported category: {category}")
+            recall = sum(ev in contexts for ev in evidence) / len(evidence)
+    elif evidence:
+        recall = 0.0
+    else:
+        recall = 1.0
 
-        contexts = qa.get(context_key, [])
-        evidence = qa.get("evidence", [])
-        if contexts and evidence:
-            if contexts[0].startswith("S"):
-                sessions = {context[1:] for context in contexts}
-                recall = sum(ev.split(":")[0][1:] in sessions for ev in evidence) / len(evidence)
-            else:
-                recall = sum(ev in contexts for ev in evidence) / len(evidence)
-        elif evidence:
-            recall = 0.0
-        else:
-            recall = 1.0
+    adversarial_answer = _normalize_optional_answer(qa.get("adversarial_answer"))
+    adversarial_match = bool(
+        adversarial_answer
+        and normalize_answer(prediction) == normalize_answer(adversarial_answer)
+    )
 
-        all_scores.append(score)
-        all_recall.append(recall)
+    if category in {2, 3, 4}:
+        answer = str(qa.get("answer", "")).split(";")[0].strip()
+        score = f1_score(prediction, answer)
+    elif category == 1:
+        answer = str(qa.get("answer", "")).strip()
+        score = multi_answer_f1(prediction, answer)
+    elif category == 5:
+        score = 1.0 if is_negative_answer(prediction) and recall == 0.0 and not adversarial_match else 0.0
+    else:
+        raise ValueError(f"unsupported category: {category}")
 
-    return all_scores, all_recall
+    return ScoredQA(
+        question=str(qa.get("question", "")),
+        category=category,
+        prediction=prediction,
+        recall=recall,
+        f1=score,
+        evidence=evidence,
+        contexts=contexts,
+        adversarial_answer=adversarial_answer,
+        adversarial_match=adversarial_match,
+    )
+
+
+def _summary_recall(contexts: list[str], evidence: list[str]) -> float:
+    summary_sessions = {
+        context[1:]
+        for context in contexts
+        if context.startswith("S") and len(context) > 1
+    }
+    if not summary_sessions:
+        return 0.0
+
+    evidence_sessions = {
+        session_id
+        for item in evidence
+        if (session_id := evidence_session_id(item)) is not None
+    }
+    if not evidence_sessions:
+        return 0.0
+
+    hits = summary_sessions & evidence_sessions
+    if not hits:
+        return 0.0
+
+    precision = len(hits) / len(summary_sessions)
+    recall = len(hits) / len(evidence_sessions)
+    return (2 * precision * recall) / (precision + recall)
+
+
+def evidence_session_id(evidence_id: str) -> str | None:
+    if ":" not in evidence_id:
+        return None
+    prefix = evidence_id.split(":", 1)[0]
+    if len(prefix) <= 1:
+        return None
+    return prefix[1:]
+
+
+def score_qas(qas: list[dict[str, Any]], prediction_key: str) -> list[ScoredQA]:
+    return [score_qa(qa, prediction_key) for qa in qas]
+
+
+def evaluate_question_answering(qas: list[dict[str, Any]], prediction_key: str) -> tuple[list[float], list[float]]:
+    rows = score_qas(qas, prediction_key)
+    return [row.f1 for row in rows], [row.recall for row in rows]
+
+
+def summarize_question_answering(
+    qas: list[dict[str, Any]],
+    prediction_key: str,
+    model_key: str,
+) -> dict[str, Any]:
+    rows = score_qas(qas, prediction_key)
+    category_scores: dict[str, list[float]] = defaultdict(list)
+    category_recall: dict[str, list[float]] = defaultdict(list)
+    for row, qa in zip(rows, qas):
+        category = str(qa["category"])
+        category_scores[category].append(row.f1)
+        category_recall[category].append(row.recall)
+
+    scores = [row.f1 for row in rows]
+    recall = [row.recall for row in rows]
+    return {
+        "model_key": model_key,
+        "qa_count": len(rows),
+        "average_f1": round(sum(scores) / len(scores), 4) if scores else 0.0,
+        "average_recall": round(sum(recall) / len(recall), 4) if recall else 0.0,
+        "category_f1": {
+            category: round(sum(values) / len(values), 4)
+            for category, values in sorted(category_scores.items())
+        },
+        "category_recall": {
+            category: round(sum(values) / len(values), 4)
+            for category, values in sorted(category_recall.items())
+        },
+    }
 
 
 def build_stats(
     samples: list[dict[str, Any]],
-    model_key_by_mode: dict[str, str],
+    model_key_by_pipeline: dict[str, dict[str, str]],
 ) -> dict[str, Any]:
-    stats: dict[str, Any] = {"modes": {}}
-    for mode, model_key in model_key_by_mode.items():
-        prediction_key = f"{model_key}_prediction"
-        flat_qas = [qa for sample in samples for qa in sample["qa"] if prediction_key in qa]
-        scores, recall = evaluate_question_answering(flat_qas, prediction_key)
+    stats: dict[str, Any] = {"pipelines": {}}
+    for pipeline, model_key_by_mode in model_key_by_pipeline.items():
+        pipeline_stats = {"modes": {}}
+        for mode, model_key in model_key_by_mode.items():
+            prediction_key = f"{model_key}_prediction"
+            flat_qas = [qa for sample in samples for qa in sample["qa"] if prediction_key in qa]
+            pipeline_stats["modes"][mode] = summarize_question_answering(
+                flat_qas,
+                prediction_key,
+                model_key,
+            )
+        stats["pipelines"][pipeline] = pipeline_stats
 
-        category_scores: dict[str, list[float]] = defaultdict(list)
-        category_recall: dict[str, list[float]] = defaultdict(list)
-        for qa, score_value, recall_value in zip(flat_qas, scores, recall):
-            category = str(qa["category"])
-            category_scores[category].append(score_value)
-            category_recall[category].append(recall_value)
-
-        stats["modes"][mode] = {
-            "model_key": model_key,
-            "qa_count": len(flat_qas),
-            "average_f1": round(sum(scores) / len(scores), 4) if scores else 0.0,
-            "average_recall": round(sum(recall) / len(recall), 4) if recall else 0.0,
-            "category_f1": {
-                category: round(sum(values) / len(values), 4)
-                for category, values in sorted(category_scores.items())
-            },
-            "category_recall": {
-                category: round(sum(values) / len(values), 4)
-                for category, values in sorted(category_recall.items())
-            },
+    oracle_modes = stats["pipelines"].get("oracle", {}).get("modes", {})
+    generated_modes = stats["pipelines"].get("generated", {}).get("modes", {})
+    shared_modes = sorted(set(oracle_modes) & set(generated_modes))
+    if shared_modes:
+        stats["oracle_vs_generated_delta"] = {
+            "modes": {
+                mode: {
+                    "model_key": {
+                        "oracle": oracle_modes[mode]["model_key"],
+                        "generated": generated_modes[mode]["model_key"],
+                    },
+                    "qa_count": min(
+                        oracle_modes[mode]["qa_count"],
+                        generated_modes[mode]["qa_count"],
+                    ),
+                    "average_f1": round(
+                        generated_modes[mode]["average_f1"] - oracle_modes[mode]["average_f1"],
+                        4,
+                    ),
+                    "average_recall": round(
+                        generated_modes[mode]["average_recall"] - oracle_modes[mode]["average_recall"],
+                        4,
+                    ),
+                    "category_f1": {
+                        category: round(
+                            generated_modes[mode]["category_f1"].get(category, 0.0)
+                            - oracle_modes[mode]["category_f1"].get(category, 0.0),
+                            4,
+                        )
+                        for category in sorted(
+                            set(oracle_modes[mode]["category_f1"])
+                            | set(generated_modes[mode]["category_f1"])
+                        )
+                    },
+                    "category_recall": {
+                        category: round(
+                            generated_modes[mode]["category_recall"].get(category, 0.0)
+                            - oracle_modes[mode]["category_recall"].get(category, 0.0),
+                            4,
+                        )
+                        for category in sorted(
+                            set(oracle_modes[mode]["category_recall"])
+                            | set(generated_modes[mode]["category_recall"])
+                        )
+                    },
+                }
+                for mode in shared_modes
+            }
         }
     return stats
 

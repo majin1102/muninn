@@ -100,12 +100,12 @@ def build_query_candidates(question: str) -> list[str]:
 def best_date_answer(question: str, hits: list[RecallHit]) -> str | None:
     _ = question
     for hit in hits:
-      candidate = extract_date(hit.date_time)
-      if candidate:
-          return candidate
-      match = DATE_PATTERN.search(best_context_text(hit))
-      if match:
-          return extract_date(match.group(0))
+        candidate = extract_date(hit.date_time)
+        if candidate:
+            return candidate
+        match = DATE_PATTERN.search(best_context_text(hit))
+        if match:
+            return extract_date(match.group(0))
     return None
 
 
