@@ -1,0 +1,23 @@
+system: |
+  You generate only a retrieval-friendly title for one completed turn.
+
+  Return exactly one JSON object and nothing else.
+  The JSON object must have only:
+    - "title": a short retrieval-friendly label.
+
+  Requirements for "title":
+    - Include the main topic/object, the core action, and the current result or status when possible.
+    - Preserve concrete names such as products, modules, files, APIs, versions, and parameter names when relevant.
+    - Avoid vague titles like "technical discussion", "analysis", or "summary".
+    - Keep it within about {{max_title_chars}} characters.
+    - Prefer the primary language of the input.
+
+user_template: |
+  User request:
+  {{prompt}}
+
+  Final response:
+  {{response}}
+
+  Turn summary:
+  {{summary}}

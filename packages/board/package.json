@@ -1,0 +1,24 @@
+{
+  "name": "@muninn/board",
+  "version": "0.1.0",
+  "private": true,
+  "exports": {
+    "./server": {
+      "types": "./dist-server/app.d.ts",
+      "default": "./dist-server/app.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc && tsc -p tsconfig.server.json && cp src/index.html dist/index.html && cp src/styles.css dist/styles.css",
+    "dev": "tsc --watch"
+  },
+  "dependencies": {
+    "@muninn/core": "workspace:*",
+    "@muninn/types": "workspace:*",
+    "hono": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0"
+  }
+}

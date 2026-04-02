@@ -1,0 +1,29 @@
+{
+  "name": "@muninn/core",
+  "version": "0.1.0",
+  "private": true,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": ["dist", "bin"],
+  "scripts": {
+    "build": "tsc",
+    "build:daemon": "cargo build --release --manifest-path ../../core/Cargo.toml --bin muninn-core",
+    "export:daemon": "sh ../../scripts/export-daemon.sh",
+    "install:daemon": "sh ../../scripts/install-daemon.sh",
+    "dev": "tsc --watch",
+    "test": "pnpm build && node --test test/**/*.test.mjs"
+  },
+  "dependencies": {
+    "@muninn/types": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0"
+  }
+}

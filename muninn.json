@@ -1,0 +1,28 @@
+{
+  "turn": {
+    "llm": "default"
+  },
+  "observer": {
+    "name": "default-observer",
+    "llm": "default",
+    "maxAttempts": 3
+  },
+  "llm": {
+    "default": {
+      "provider": "openai",
+      "model": "gpt-4.1-mini",
+      "apiKey": "****",
+      "baseUrl": "****"
+    }
+  },
+  "semanticIndex": {
+    "embedding": {
+      "provider": "openai",
+      "model": "text-embedding-3-small",
+      "apiKey": "****",
+      "baseUrl": "****",
+      "dimensions": 1536
+    },
+    "defaultImportance": 0.7
+  }
+}

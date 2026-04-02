@@ -1,0 +1,27 @@
+{
+  "id": "muninn",
+  "kind": "memory",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "baseUrl": {
+        "type": "string"
+      },
+      "enabled": {
+        "type": "boolean"
+      },
+      "timeoutMs": {
+        "type": "number",
+        "minimum": 1
+      },
+      "recencyLimit": {
+        "type": "integer",
+        "minimum": 1
+      }
+    },
+    "required": [
+      "baseUrl"
+    ]
+  }
+}

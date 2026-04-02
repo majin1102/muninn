@@ -1,0 +1,33 @@
+[package]
+name = "muninn-sidecar"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "muninn-core"
+path = "src/main.rs"
+
+[lib]
+name = "muninn_sidecar"
+path = "src/lib.rs"
+
+[dependencies]
+arrow-array = "57.0.0"
+arrow-schema = "57.0.0"
+async-trait = "0.1"
+chrono = { version = "0.4", features = ["serde"] }
+lance = { version = "3.0.0", default-features = false }
+lance-index = "3.0.0"
+lance-linalg = "3.0.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+object_store = { version = "0.12.5", features = ["fs"] }
+tokio = { version = "1.0", features = ["full"] }
+tokio-util = "0.7"
+ulid = { version = "1.1", features = ["serde"] }
+uuid = { version = "1.10", features = ["v4", "serde"] }
+
+[dev-dependencies]
+tempfile = "3.13"
