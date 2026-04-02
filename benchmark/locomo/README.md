@@ -131,6 +131,7 @@ Run the benchmark end-to-end:
 sh benchmark/locomo/scripts/run.sh \
   --data-file benchmark/locomo/data/locomo10.json \
   --out-file benchmark/locomo/out/locomo10_results.json \
+  --progress-file benchmark/locomo/out/locomo10_progress.jsonl \
   --modes dialog,observation,summary \
   --pipeline both \
   --top-k 5
@@ -142,6 +143,7 @@ Or through `pnpm`:
 pnpm --filter @muninn/benchmark-locomo benchmark -- \
   --data-file benchmark/locomo/data/locomo10.json \
   --out-file benchmark/locomo/out/locomo10_results.json \
+  --progress-file benchmark/locomo/out/locomo10_progress.jsonl \
   --modes dialog,observation,summary \
   --pipeline both \
   --top-k 5
@@ -153,6 +155,7 @@ pnpm --filter @muninn/benchmark-locomo benchmark -- \
 sh benchmark/locomo/scripts/run.sh \
   --data-file benchmark/locomo/data/locomo10.json \
   --out-file benchmark/locomo/out/locomo10_dialog_results.json \
+  --progress-file benchmark/locomo/out/locomo10_dialog_progress.jsonl \
   --modes dialog \
   --top-k 5
 ```
@@ -163,6 +166,7 @@ sh benchmark/locomo/scripts/run.sh \
 sh benchmark/locomo/scripts/run.sh \
   --data-file benchmark/locomo/data/locomo10.json \
   --out-file benchmark/locomo/out/sample_1_dialog_results.json \
+  --progress-file benchmark/locomo/out/sample_1_dialog_progress.jsonl \
   --modes dialog \
   --sample-id <sample_id> \
   --top-k 5
@@ -174,6 +178,7 @@ sh benchmark/locomo/scripts/run.sh \
 sh benchmark/locomo/scripts/run.sh \
   --data-file benchmark/locomo/data/locomo10.json \
   --out-file benchmark/locomo/out/debug_results.json \
+  --progress-file benchmark/locomo/out/debug_progress.jsonl \
   --modes dialog \
   --limit-questions 20 \
   --top-k 5
@@ -210,6 +215,10 @@ The runner writes three files:
   - top extraction misses
   - oracle vs generated delta samples
 
+If `--progress-file` is provided, the runner also writes a fresh-start
+`progress.jsonl` event stream for runtime observation only. It is overwritten on
+each run and is not used for resume logic.
+
 Outputs are written under `benchmark/locomo/out/`, which is gitignored.
 
 Temporary benchmark homes may also be written under `benchmark/locomo/.runs/`
@@ -225,6 +234,31 @@ when `--keep-home` is used.
   as first-class Muninn row timestamps.
 - The runtime wrappers intentionally rebuild the bridge and export the daemon
   before tests or benchmark runs.
+
+## Progress Observation
+
+The runner emits structured progress lines to `stderr` for every major stage:
+
+- `run_start` / `run_complete`
+- `sample_start` / `sample_complete`
+- `unit_start` / `unit_complete`
+- `phase_start` / `phase_complete`
+- `*_failed` on the last known failure point
+
+The optional `progress.jsonl` file mirrors those events in machine-readable
+form. Each record includes a UTC timestamp plus any available context such as:
+
+- `sample_id`
+- `pipeline`
+- `mode`
+- `qa_count`
+- `query_candidate_count`
+- `elapsed_s`
+- `error_type`
+- `error`
+
+This is meant for diagnosing long runs and bottlenecks while keeping each full
+benchmark invocation a fresh start.
 
 ## Tests
 
