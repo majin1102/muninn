@@ -76,6 +76,20 @@ benchmark subprocesses.
 
 No LLM keys are required for this benchmark.
 
+## Data Files
+
+This repository now vendors the LoCoMo benchmark data under
+`benchmark/locomo/data/` so benchmark runs do not depend on a sibling checkout.
+
+- Vendored source: <https://github.com/snap-research/locomo>
+- Default benchmark file: `benchmark/locomo/data/locomo10.json`
+- License note: upstream LoCoMo data is distributed under `CC BY-NC 4.0`
+- Attribution and a local license copy are included in
+  `benchmark/locomo/data/README.md` and `benchmark/locomo/data/LOCOMO_LICENSE.txt`
+
+If you reuse or redistribute these files, review the upstream non-commercial
+license terms first.
+
 ## One-Shot Commands
 
 The recommended entrypoints are the wrapper scripts under `benchmark/locomo/scripts/`.
@@ -115,7 +129,7 @@ Run the benchmark end-to-end:
 
 ```bash
 sh benchmark/locomo/scripts/run.sh \
-  --data-file ../locomo/data/locomo10.json \
+  --data-file benchmark/locomo/data/locomo10.json \
   --out-file benchmark/locomo/out/locomo10_results.json \
   --modes dialog,observation,summary \
   --pipeline both \
@@ -126,7 +140,7 @@ Or through `pnpm`:
 
 ```bash
 pnpm --filter @muninn/benchmark-locomo benchmark -- \
-  --data-file ../locomo/data/locomo10.json \
+  --data-file benchmark/locomo/data/locomo10.json \
   --out-file benchmark/locomo/out/locomo10_results.json \
   --modes dialog,observation,summary \
   --pipeline both \
@@ -137,7 +151,7 @@ pnpm --filter @muninn/benchmark-locomo benchmark -- \
 
 ```bash
 sh benchmark/locomo/scripts/run.sh \
-  --data-file ../locomo/data/locomo10.json \
+  --data-file benchmark/locomo/data/locomo10.json \
   --out-file benchmark/locomo/out/locomo10_dialog_results.json \
   --modes dialog \
   --top-k 5
@@ -147,7 +161,7 @@ sh benchmark/locomo/scripts/run.sh \
 
 ```bash
 sh benchmark/locomo/scripts/run.sh \
-  --data-file ../locomo/data/locomo10.json \
+  --data-file benchmark/locomo/data/locomo10.json \
   --out-file benchmark/locomo/out/sample_1_dialog_results.json \
   --modes dialog \
   --sample-id <sample_id> \
@@ -158,7 +172,7 @@ sh benchmark/locomo/scripts/run.sh \
 
 ```bash
 sh benchmark/locomo/scripts/run.sh \
-  --data-file ../locomo/data/locomo10.json \
+  --data-file benchmark/locomo/data/locomo10.json \
   --out-file benchmark/locomo/out/debug_results.json \
   --modes dialog \
   --limit-questions 20 \
