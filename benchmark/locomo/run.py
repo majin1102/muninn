@@ -10,7 +10,7 @@ from tempfile import TemporaryDirectory
 if __package__ is None or __package__ == "":
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from benchmark.common.munnai_bridge import MunnaiBridge
+from benchmark.common.muninn_bridge import MuninnBridge
 from benchmark.locomo.dataset import iter_target_samples, load_samples, parse_modes
 from benchmark.locomo.heuristics import build_prediction, build_query_candidates
 from benchmark.locomo.scoring import build_stats, write_results
@@ -31,7 +31,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     modes = parse_modes(args.modes)
-    bridge = MunnaiBridge()
+    bridge = MuninnBridge()
     samples = load_samples(args.data_file)
     selected = iter_target_samples(samples, args.sample_id)
     results = []
@@ -48,7 +48,7 @@ def main() -> None:
             sample_result["qa"] = qas
 
         for mode in modes:
-            model_key = f"munnai_{mode}_top_{args.top_k}"
+            model_key = f"muninn_{mode}_top_{args.top_k}"
             model_key_by_mode[mode] = model_key
             prediction_key = f"{model_key}_prediction"
             home_dir = prepare_home(bridge, sample["sample_id"], mode, args.keep_home)
@@ -76,7 +76,7 @@ class ManagedHome:
 
 
 def prepare_home(
-    bridge: MunnaiBridge,
+    bridge: MuninnBridge,
     sample_id: str,
     mode: str,
     keep_home: bool,
@@ -86,14 +86,14 @@ def prepare_home(
             Path("benchmark") / "locomo" / ".runs" / f"{sample_id}_{mode}"
         )
     else:
-        tmpdir = TemporaryDirectory(prefix=f"munnai-locomo-{sample_id}-{mode}-")
+        tmpdir = TemporaryDirectory(prefix=f"muninn-locomo-{sample_id}-{mode}-")
         path = ManagedHome(Path(tmpdir.name), tmpdir=tmpdir)
     bridge.reset_home(path.path)
     return path
 
 
 def collect_batch_hits(
-    bridge: MunnaiBridge,
+    bridge: MuninnBridge,
     qas: list[dict[str, object]],
     top_k: int,
     home_dir: Path,

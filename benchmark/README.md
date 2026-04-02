@@ -1,14 +1,14 @@
 # Benchmarks
 
 `benchmark/` is the top-level home for evaluation modules that run directly
-against Munnai.
+against Muninn.
 
 These modules are intentionally different from upstream benchmark repos:
 
-- data is imported into isolated Munnai homes inside this repository
-- recall is executed directly through Munnai
+- data is imported into isolated Muninn homes inside this repository
+- recall is executed directly through Muninn
 - no LLM generation step is required in the benchmark loop
-- benchmark adapters live next to Munnai code, so import and retrieval logic can
+- benchmark adapters live next to Muninn code, so import and retrieval logic can
   evolve with the product
 
 ## Directory Structure
@@ -18,7 +18,7 @@ These modules are intentionally different from upstream benchmark repos:
   - current example: Python wrapper around the local Node bridge
 - `locomo/`
   - first benchmark module
-  - adapts LoCoMo data and scoring to run on top of Munnai
+  - adapts LoCoMo data and scoring to run on top of Muninn
 
 Each benchmark module is expected to be self-contained:
 
@@ -26,15 +26,15 @@ Each benchmark module is expected to be self-contained:
 - dataset adapter logic
 - scoring logic
 - minimal tests and smoke fixtures
-- a thin bridge into Munnai if the benchmark is driven from another runtime
+- a thin bridge into Muninn if the benchmark is driven from another runtime
 
 ## Working Principles
 
 All benchmark modules under this directory should follow these rules:
 
-1. Use isolated `MUNNAI_HOME` directories so benchmark runs do not pollute
+1. Use isolated `MUNINN_HOME` directories so benchmark runs do not pollute
    normal local data.
-2. Talk to Munnai directly through `@munnai/core` unless there is a strong
+2. Talk to Muninn directly through `@muninn/core` unless there is a strong
    reason to insert sidecar or MCP in the loop.
 3. Keep the benchmark loop deterministic when possible. If a benchmark needs
    answer generation, prefer non-LLM baselines first.

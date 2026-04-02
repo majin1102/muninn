@@ -40,4 +40,3 @@ benchmark/**/.venv/
 Cargo.lock
 .muninn/
 .claude/settings.local.json
-munnai.json

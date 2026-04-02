@@ -21,21 +21,21 @@ async function runBridge(command, options) {
 }
 
 test('dialog import and recall expose structured source ids', async (t) => {
-  const home = await mkdtemp(path.join(os.tmpdir(), 'munnai-locomo-dialog-'));
+  const home = await mkdtemp(path.join(os.tmpdir(), 'muninn-locomo-dialog-'));
   t.after(async () => rm(home, { recursive: true, force: true }));
 
-  await runBridge('reset-home', { 'munnai-home': home });
+  await runBridge('reset-home', { 'muninn-home': home });
   await runBridge('import-sample', {
     'data-file': fixturePath,
     'sample-id': 'sample-a',
     mode: 'dialog',
-    'munnai-home': home,
+    'muninn-home': home,
   });
 
   const recalled = await runBridge('recall', {
     query: 'support group',
     limit: 5,
-    'munnai-home': home,
+    'muninn-home': home,
   });
 
   assert.equal(recalled.hits[0].source_id, 'D1:1');
@@ -44,36 +44,36 @@ test('dialog import and recall expose structured source ids', async (t) => {
 });
 
 test('observation and summary modes preserve their source ids', async (t) => {
-  const observationHome = await mkdtemp(path.join(os.tmpdir(), 'munnai-locomo-observation-'));
-  const summaryHome = await mkdtemp(path.join(os.tmpdir(), 'munnai-locomo-summary-'));
+  const observationHome = await mkdtemp(path.join(os.tmpdir(), 'muninn-locomo-observation-'));
+  const summaryHome = await mkdtemp(path.join(os.tmpdir(), 'muninn-locomo-summary-'));
   t.after(async () => rm(observationHome, { recursive: true, force: true }));
   t.after(async () => rm(summaryHome, { recursive: true, force: true }));
 
-  await runBridge('reset-home', { 'munnai-home': observationHome });
+  await runBridge('reset-home', { 'muninn-home': observationHome });
   await runBridge('import-sample', {
     'data-file': fixturePath,
     'sample-id': 'sample-a',
     mode: 'observation',
-    'munnai-home': observationHome,
+    'muninn-home': observationHome,
   });
   const observationRecall = await runBridge('recall', {
     query: 'charity race',
     limit: 5,
-    'munnai-home': observationHome,
+    'muninn-home': observationHome,
   });
   assert.equal(observationRecall.hits[0].source_id, 'D2:1');
 
-  await runBridge('reset-home', { 'munnai-home': summaryHome });
+  await runBridge('reset-home', { 'muninn-home': summaryHome });
   await runBridge('import-sample', {
     'data-file': fixturePath,
     'sample-id': 'sample-a',
     mode: 'summary',
-    'munnai-home': summaryHome,
+    'muninn-home': summaryHome,
   });
   const summaryRecall = await runBridge('recall', {
     query: 'support group',
     limit: 5,
-    'munnai-home': summaryHome,
+    'muninn-home': summaryHome,
   });
   assert.equal(summaryRecall.hits[0].source_id, 'S1');
 });
