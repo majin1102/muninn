@@ -7,7 +7,8 @@ This file is the fast-path context for coding agents working in this repository.
 - After opening a PR, do not mark it as draft; open it directly as ready for review.
 - Do not design or implement for forward compatibility. This repository is still in an MVP-stage of iteration, so when a schema or interface changes, update the code to the new shape only and remove obsolete compatibility handling instead of preserving support for historical versions.
 - Describe all code review findings in Chinese.
-- PR titles must follow the `Conventional Commits` style, such as `feat: ...`, `fix: ...`, and `docs: ...`. Use a valid type prefix followed by a short summary, and do not open PRs with arbitrary title formats.
+- PR titles must follow the `Conventional Commits` style, such as `feat: ...`, `fix: ...`, and `docs: ...`. Use a valid type prefix followed by a short summary, do not open PRs with arbitrary title formats, and when developing a new feature always start by creating a new worktree from `main` with a new branch, then use that branch to implement the work and open the PR.
+- Prefer short, context-aware names for methods and variables. Avoid sentence-like names that restate the entire workflow; both method names and variable names should stay compact when the surrounding code already provides the domain context. For example, prefer `link_parent_refs(thread, refs)` over `resolve_pending_parent_references_after_flush(thread, refs)`, and prefer `pending_parent_id` over `pending_parent_observing_reference_id`.
 
 ## What This Repo Is
 
@@ -69,29 +70,6 @@ Current write path:
 - HTTP path: `POST /api/v1/session/messages`
 - Request type: `AddMessageToSessionRequest`
 
-Current session message write fields:
-
-- `agent`
-- `title`
-- `summary`
-- `tool_calling`
-- `artifacts`
-- `prompt`
-- `response`
-- `extra`
-
-Current persisted fields added by storage:
-
-- `turnId`
-- `createdAt`
-- `updatedAt`
-
-Field semantics:
-
-- `tool_calling` means tools invoked during the turn.
-- `artifacts` means outputs produced by tool execution.
-- `extra` means free-form API-layer input supplied by the client or adapter.
-
 Important modeling note:
 
 - Current TypeScript interfaces are API/storage contracts.
@@ -102,22 +80,3 @@ Important modeling note:
 - Keep `mcp` thin.
 - Keep transport concerns in `sidecar`.
 - Put MCP protocol and schema evolution in `docs/spec/`.
-- Use `session` for the current persisted unit.
-- Treat Rust as the future home of core logic.
-- Use a local Cargo `[patch.crates-io]` override when developing against a local Lance checkout.
-- Remove obsolete code paths and interfaces instead of preserving compatibility layers that are no longer needed.
-
-## Do Not
-
-- Do not move business logic into `mcp`.
-- Do not rename session memory to `conversation`.
-- Do not use a top-level `mcp/` docs folder for protocol evolution.
-- Do not overload transport adapters with future core-binding responsibilities.
-- Do not commit a repository-external `path` dependency for the `lance` crate.
-- Do not keep temporary compatibility shims once the underlying model has changed and the old path no longer needs to exist.
-
-## Likely Next Moves
-
-- Continue consolidating TS integration work into `packages/core`.
-- Gradually move demo logic from TypeScript toward Rust-backed implementation.
-- Keep long-lived MCP protocol definitions under `docs/spec/`.
