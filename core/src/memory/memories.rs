@@ -288,9 +288,9 @@ impl TryFrom<SemanticCandidateGroup> for RecallHit {
 #[cfg(test)]
 mod tests {
     use chrono::Utc;
-    use ulid::Ulid;
 
     use super::{merge_semantic_candidates, recall};
+    use crate::format::memory::{MemoryId, MemoryLayer};
     use crate::format::semantic_index::SemanticIndexRow;
     use crate::format::session::SessionTurn;
     use crate::llm::config::llm_test_env_guard;
@@ -326,11 +326,11 @@ mod tests {
 
         let storage = test_storage();
         let now = Utc::now();
-        let snapshot_id = Ulid::new().to_string();
+        let snapshot_id = 101_u64;
 
         let row = SemanticIndexRow {
             id: "mem-1".to_string(),
-            memory_id: format!("OBSERVING:{snapshot_id}"),
+            memory_id: format!("observing:{snapshot_id}"),
             text: "beta".to_string(),
             vector: embed_text("beta").await.unwrap(),
             importance: 0.7,
@@ -343,7 +343,7 @@ mod tests {
         assert_eq!(recalled.len(), 1);
         assert_eq!(
             recalled[0].memory_id.to_string(),
-            format!("OBSERVING:{snapshot_id}")
+            format!("observing:{snapshot_id}")
         );
         assert_eq!(recalled[0].text, "beta");
 
@@ -377,10 +377,9 @@ mod tests {
 
         let storage = test_storage();
         let now = Utc::now();
-        let session_turn_id = Ulid::new().to_string();
 
         let session_turn = SessionTurn {
-            turn_id: session_turn_id.clone(),
+            turn_id: MemoryId::new(MemoryLayer::Session, u64::MAX),
             created_at: now,
             updated_at: now,
             session_id: Some("group-a".to_string()),
@@ -431,11 +430,11 @@ mod tests {
 
         let storage = test_storage();
         let now = Utc::now();
-        let semantic_snapshot_id = Ulid::new().to_string();
+        let semantic_snapshot_id = 202_u64;
         storage
             .sessions()
             .upsert(vec![SessionTurn {
-                turn_id: Ulid::new().to_string(),
+                turn_id: MemoryId::new(MemoryLayer::Session, u64::MAX),
                 created_at: now,
                 updated_at: now,
                 session_id: Some("group-a".to_string()),
@@ -457,7 +456,7 @@ mod tests {
             .semantic_index()
             .upsert(vec![SemanticIndexRow {
                 id: "mem-recency".to_string(),
-                memory_id: format!("OBSERVING:{semantic_snapshot_id}"),
+                memory_id: format!("observing:{semantic_snapshot_id}"),
                 text: "beta semantic".to_string(),
                 vector: embed_text("beta").await.unwrap(),
                 importance: 0.7,
@@ -471,7 +470,7 @@ mod tests {
         assert_eq!(recalled.len(), 1);
         assert_eq!(
             recalled[0].memory_id.to_string(),
-            format!("OBSERVING:{semantic_snapshot_id}")
+            format!("observing:{semantic_snapshot_id}")
         );
         assert_eq!(recalled[0].text, "beta semantic");
 
@@ -505,14 +504,14 @@ mod tests {
 
         let storage = test_storage();
         let now = Utc::now();
-        let snapshot_a = Ulid::new().to_string();
-        let snapshot_b = Ulid::new().to_string();
+        let snapshot_a = 301_u64;
+        let snapshot_b = 302_u64;
 
         let mut rows = Vec::new();
         for index in 0..8 {
             rows.push(SemanticIndexRow {
                 id: format!("chunk-a-{index}"),
-                memory_id: format!("OBSERVING:{snapshot_a}"),
+                memory_id: format!("observing:{snapshot_a}"),
                 text: format!("alpha segment {index}"),
                 vector: embed_text("alpha").await.unwrap(),
                 importance: 0.7,
@@ -522,7 +521,7 @@ mod tests {
         }
         rows.push(SemanticIndexRow {
             id: "chunk-b-0".to_string(),
-            memory_id: format!("OBSERVING:{snapshot_b}"),
+            memory_id: format!("observing:{snapshot_b}"),
             text: "beta segment".to_string(),
             vector: embed_text("alpha").await.unwrap(),
             importance: 0.6,
@@ -535,11 +534,11 @@ mod tests {
         assert_eq!(recalled.len(), 2);
         assert_eq!(
             recalled[0].memory_id.to_string(),
-            format!("OBSERVING:{snapshot_a}")
+            format!("observing:{snapshot_a}")
         );
         assert_eq!(
             recalled[1].memory_id.to_string(),
-            format!("OBSERVING:{snapshot_b}")
+            format!("observing:{snapshot_b}")
         );
         assert_eq!(recalled[0].text, "alpha segment 0");
         assert_eq!(recalled[1].text, "beta segment");
@@ -555,7 +554,7 @@ mod tests {
         let merged = merge_semantic_candidates(vec![
             SemanticIndexRow {
                 id: "chunk-a-1".to_string(),
-                memory_id: "OBSERVING:01JQ7Y8YQ6V7D4M1N9K2F5T8ZA".to_string(),
+                memory_id: "observing:41".to_string(),
                 text: "alpha".to_string(),
                 vector: vec![1.0, 0.0, 0.0, 0.0],
                 importance: 0.4,
@@ -564,7 +563,7 @@ mod tests {
             },
             SemanticIndexRow {
                 id: "chunk-b-1".to_string(),
-                memory_id: "OBSERVING:01JQ7Y8YQ6V7D4M1N9K2F5T8ZB".to_string(),
+                memory_id: "observing:42".to_string(),
                 text: "beta".to_string(),
                 vector: vec![0.0, 1.0, 0.0, 0.0],
                 importance: 0.9,
@@ -573,7 +572,7 @@ mod tests {
             },
             SemanticIndexRow {
                 id: "chunk-a-2".to_string(),
-                memory_id: "OBSERVING:01JQ7Y8YQ6V7D4M1N9K2F5T8ZA".to_string(),
+                memory_id: "observing:41".to_string(),
                 text: "alpha more".to_string(),
                 vector: vec![1.0, 0.0, 0.0, 0.0],
                 importance: 0.8,
@@ -583,10 +582,10 @@ mod tests {
         ]);
 
         assert_eq!(merged.len(), 2);
-        assert_eq!(merged[0].memory_id, "OBSERVING:01JQ7Y8YQ6V7D4M1N9K2F5T8ZA");
+        assert_eq!(merged[0].memory_id, "observing:41");
         assert_eq!(merged[0].best_text, "alpha");
         assert_eq!(merged[0].hit_count, 2);
         assert!(merged[0].reciprocal_rank_score > merged[1].reciprocal_rank_score);
-        assert_eq!(merged[1].memory_id, "OBSERVING:01JQ7Y8YQ6V7D4M1N9K2F5T8ZB");
+        assert_eq!(merged[1].memory_id, "observing:42");
     }
 }

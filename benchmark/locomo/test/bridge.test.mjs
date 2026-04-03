@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
@@ -20,15 +20,33 @@ async function runBridge(command, options) {
   return JSON.parse(stdout);
 }
 
-test('dialog import and recall expose structured source ids', async (t) => {
-  const home = await mkdtemp(path.join(os.tmpdir(), 'muninn-locomo-dialog-'));
+test('import writes an external manifest aligned to locomo sessions', async (t) => {
+  const home = await mkdtemp(path.join(os.tmpdir(), 'muninn-locomo-import-'));
+  t.after(async () => rm(home, { recursive: true, force: true }));
+
+  await runBridge('reset-home', { 'muninn-home': home });
+  const imported = await runBridge('import-sample', {
+    'data-file': fixturePath,
+    'sample-id': 'sample-a',
+    'muninn-home': home,
+  });
+
+  const manifest = JSON.parse(await readFile(imported.manifest_path, 'utf8'));
+  assert.equal(imported.imported_count, 3);
+  assert.equal(manifest.turns.length, 3);
+  assert.equal(manifest.turns[0].source_id, 'D1:1');
+  assert.equal(manifest.turns[0].session_id, 'locomo:sample-a:session_1');
+  assert.equal(manifest.turns[2].session_id, 'locomo:sample-a:session_2');
+});
+
+test('recall returns evidence ids without leaking benchmark artifacts into muninn rows', async (t) => {
+  const home = await mkdtemp(path.join(os.tmpdir(), 'muninn-locomo-recall-'));
   t.after(async () => rm(home, { recursive: true, force: true }));
 
   await runBridge('reset-home', { 'muninn-home': home });
   await runBridge('import-sample', {
     'data-file': fixturePath,
     'sample-id': 'sample-a',
-    mode: 'dialog',
     'muninn-home': home,
   });
 
@@ -38,42 +56,38 @@ test('dialog import and recall expose structured source ids', async (t) => {
     'muninn-home': home,
   });
 
-  assert.equal(recalled.hits[0].source_id, 'D1:1');
-  assert.equal(recalled.hits[0].mode, 'dialog');
-  assert.equal(recalled.hits[0].session_no, 1);
+  assert.equal(recalled.hits[0].evidence_ids[0], 'D1:1');
+  assert.equal(recalled.hits[0].date_time, '1:56 pm on 8 May, 2023');
+  assert.ok(!('source_id' in recalled.hits[0]));
 });
 
-test('observation and summary modes preserve their source ids', async (t) => {
-  const observationHome = await mkdtemp(path.join(os.tmpdir(), 'muninn-locomo-observation-'));
-  const summaryHome = await mkdtemp(path.join(os.tmpdir(), 'muninn-locomo-summary-'));
-  t.after(async () => rm(observationHome, { recursive: true, force: true }));
-  t.after(async () => rm(summaryHome, { recursive: true, force: true }));
+test('recursive evidence resolution can walk observing lineage back to turn ids', async () => {
+  const bridgeModule = await import(bridgePath);
+  const evidenceIds = bridgeModule.resolveEvidenceIdsFromGraph(
+    'observing:9',
+    [
+      {
+        turn_id: 'session:101',
+        source_id: 'D1:1',
+        sample_id: 'sample-a',
+        session_id: 'locomo:sample-a:session_1',
+        date_time: '1:56 pm on 8 May, 2023',
+        import_order: 0,
+      },
+      {
+        turn_id: 'session:102',
+        source_id: 'D2:1',
+        sample_id: 'sample-a',
+        session_id: 'locomo:sample-a:session_2',
+        date_time: '1:14 pm on 25 May, 2023',
+        import_order: 1,
+      },
+    ],
+    {
+      'observing:9': ['observing:7', 'session:102'],
+      'observing:7': ['session:101'],
+    },
+  );
 
-  await runBridge('reset-home', { 'muninn-home': observationHome });
-  await runBridge('import-sample', {
-    'data-file': fixturePath,
-    'sample-id': 'sample-a',
-    mode: 'observation',
-    'muninn-home': observationHome,
-  });
-  const observationRecall = await runBridge('recall', {
-    query: 'charity race',
-    limit: 5,
-    'muninn-home': observationHome,
-  });
-  assert.equal(observationRecall.hits[0].source_id, 'D2:1');
-
-  await runBridge('reset-home', { 'muninn-home': summaryHome });
-  await runBridge('import-sample', {
-    'data-file': fixturePath,
-    'sample-id': 'sample-a',
-    mode: 'summary',
-    'muninn-home': summaryHome,
-  });
-  const summaryRecall = await runBridge('recall', {
-    query: 'support group',
-    limit: 5,
-    'muninn-home': summaryHome,
-  });
-  assert.equal(summaryRecall.hits[0].source_id, 'S1');
+  assert.deepEqual(evidenceIds, ['D1:1', 'D2:1']);
 });

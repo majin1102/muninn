@@ -26,11 +26,3 @@ def iter_target_samples(
     if sample_id is None:
         return samples
     return [sample for sample in samples if sample["sample_id"] == sample_id]
-
-
-def parse_modes(raw: str) -> list[str]:
-    modes = [item.strip() for item in raw.split(",") if item.strip()]
-    for mode in modes:
-        if mode not in {"dialog", "observation", "summary"}:
-            raise ValueError(f"unsupported mode: {mode}")
-    return modes

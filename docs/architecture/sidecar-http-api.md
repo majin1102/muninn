@@ -33,7 +33,7 @@ export interface MemoryResponse {
 
 - `memoryId` 仍是 HTTP 读侧统一导航键
 - 约定为 `memoryId = {memoryLayer}:{memoryPoint}`
-- 当前有效值包括 `SESSION:{turn_id}` 与 `OBSERVING:{snapshot_id}`
+- 当前有效值包括 `session:{row_id}` 与 `observing:{row_id}`
 - `SESSION` 是 public memory layer；内部仍然由 session turn rows 承载
 - `OBSERVING` 当前对应 observing snapshot row，不对应 observing line
 
@@ -94,9 +94,9 @@ Query 参数：
 说明：
 
 - sidecar 通过 `@muninn/core` 的统一 rendered `timeline` 接口读取同层邻近 records
-- `SESSION:{turn_id}`
+- `session:{row_id}`
   - 返回同层 session timeline（内部来源于 session turn rows）
-- `OBSERVING:{snapshot_id}`
+- `observing:{row_id}`
   - 返回同一 `observing_id` 下按 `snapshot_sequence` 排序的邻近 snapshot rows
 
 ### 2.4 `GET /api/v1/detail`
@@ -113,7 +113,7 @@ Query 参数：
 
 - sidecar 通过 `@muninn/core` 的统一 rendered `detail` 接口读取单个 memory row
 - `detail` 约定只返回一条 `MemoryHit`
-- `OBSERVING:{snapshot_id}` 返回的是单个 observing snapshot 的 detail 文档
+- `observing:{row_id}` 返回的是单个 observing snapshot 的 detail 文档
 
 ## 3. Write Endpoint
 

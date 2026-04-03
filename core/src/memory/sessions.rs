@@ -14,13 +14,7 @@ pub struct SessionListQuery {
 
 pub async fn get(storage: &Storage, memory_id: &MemoryId) -> Result<Option<SessionTurn>> {
     ensure_session_memory_id(memory_id)?;
-    let row_id = memory_id.memory_point().to_string();
-    Ok(storage
-        .sessions()
-        .select(SessionSelect::ById(row_id))
-        .await?
-        .into_iter()
-        .next())
+    storage.sessions().get_turn(memory_id.memory_point()).await
 }
 
 pub async fn list(storage: &Storage, query: SessionListQuery) -> Result<Vec<SessionTurn>> {
@@ -41,15 +35,17 @@ pub(crate) async fn timeline(
     after_limit: usize,
 ) -> Result<Vec<SessionTurn>> {
     ensure_session_memory_id(memory_id)?;
-    let row_id = memory_id.memory_point().to_string();
-    let all_turns = storage.sessions().select(SessionSelect::All).await?;
-    let Some(anchor) = all_turns.iter().find(|turn| turn.turn_id == row_id) else {
+    let Some(anchor) = storage.sessions().get_turn(memory_id.memory_point()).await? else {
         return Ok(Vec::new());
     };
+    let turns = storage
+        .sessions()
+        .load_session_turns(&anchor.session_key())
+        .await?;
 
     Ok(timeline_from_source(
-        &all_turns,
-        &row_id,
+        &turns,
+        *memory_id,
         before_limit,
         after_limit,
         &anchor.session_key(),
@@ -126,7 +122,7 @@ pub(crate) fn render_session_turn_detail(turn: &SessionTurn) -> Option<String> {
 
 pub(crate) fn timeline_from_source(
     turns: &[SessionTurn],
-    memory_id: &str,
+    memory_id: MemoryId,
     before_limit: usize,
     after_limit: usize,
     session: &SessionKey,

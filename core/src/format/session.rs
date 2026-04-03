@@ -1,12 +1,9 @@
-use std::collections::HashMap;
-use std::str::FromStr;
-
 use chrono::{DateTime, Utc};
 use lance::{Error, Result};
 use serde::{Deserialize, Serialize};
-use ulid::Ulid;
+use std::collections::HashMap;
 
-use crate::format::memory::{MemoryId, MemoryLayer};
+use crate::format::memory::{MemoryId, MemoryLayer, deserialize_memory_id, serialize_memory_id};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
@@ -41,7 +38,11 @@ pub struct Session {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionTurn {
-    pub turn_id: String,
+    #[serde(
+        serialize_with = "serialize_memory_id",
+        deserialize_with = "deserialize_memory_id"
+    )]
+    pub turn_id: MemoryId,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     #[serde(rename = "session_id")]
@@ -145,7 +146,7 @@ impl Session {
         let mut turn = if let Some(open_turn) = self.open_turn.take() {
             open_turn
         } else {
-            SessionTurn::new(&write)
+            SessionTurn::new_pending(&write)
         };
         turn.merge(&write)?;
         if turn.is_open() {
@@ -159,9 +160,13 @@ impl Session {
 
 impl SessionTurn {
     pub fn new(write: &SessionWrite) -> Self {
+        Self::new_pending(write)
+    }
+
+    pub fn new_pending(write: &SessionWrite) -> Self {
         let now = Utc::now();
         Self {
-            turn_id: Ulid::new().to_string(),
+            turn_id: MemoryId::new(MemoryLayer::Session, u64::MAX),
             created_at: now,
             updated_at: now,
             session_id: write.session_id.clone(),
@@ -231,9 +236,22 @@ impl SessionTurn {
     }
 
     pub fn memory_id(&self) -> Result<MemoryId> {
-        let id = Ulid::from_str(&self.turn_id)
-            .map_err(|error| Error::invalid_input(format!("invalid turn ulid: {error}")))?;
-        Ok(MemoryId::new(MemoryLayer::Session, id))
+        if self.turn_id.memory_layer() != MemoryLayer::Session {
+            return Err(Error::invalid_input(format!(
+                "invalid turn memory layer: {}",
+                self.turn_id.memory_layer()
+            )));
+        }
+        Ok(self.turn_id)
+    }
+
+    pub fn with_row_id(mut self, row_id: u64) -> Self {
+        self.turn_id = MemoryId::new(MemoryLayer::Session, row_id);
+        self
+    }
+
+    pub fn set_row_id(&mut self, row_id: u64) {
+        self.turn_id = MemoryId::new(MemoryLayer::Session, row_id);
     }
 
     pub(crate) fn session_key(&self) -> SessionKey {
@@ -279,7 +297,7 @@ pub(crate) fn has_text_content(value: Option<&str>) -> bool {
 #[derive(Debug, Clone)]
 pub(crate) struct OpenTurnReconciliation {
     pub(crate) canonical_turn: SessionTurn,
-    pub(crate) discarded_turn_ids: Vec<String>,
+    pub(crate) discarded_turn_ids: Vec<MemoryId>,
 }
 
 pub(crate) fn reconcile_open_turns(turns: Vec<SessionTurn>) -> Result<OpenTurnReconciliation> {
@@ -307,7 +325,7 @@ pub(crate) fn reconcile_open_turns(turns: Vec<SessionTurn>) -> Result<OpenTurnRe
         .expect("sorted turns should contain canonical turn");
     let discarded_turn_ids = sorted[..sorted.len() - 1]
         .iter()
-        .map(|turn| turn.turn_id.clone())
+        .map(|turn| turn.turn_id)
         .collect::<Vec<_>>();
 
     let mut merged_prompt = None;
@@ -407,21 +425,23 @@ mod tests {
     use std::str::FromStr;
     use std::sync::Arc;
 
-    use chrono::{TimeZone, Utc};
-    use tokio::sync::Barrier;
-    use ulid::Ulid;
-
     use super::{SessionKey, SessionTurn, SessionWrite, TurnMetadataSource, reconcile_open_turns};
     use crate::format::memory::{MemoryId, MemoryLayer};
     use crate::memory::sessions::{apply_list_mode, get, timeline, timeline_from_source};
     use crate::memory::types::{ListMode, MemoryView};
     use crate::service::{PostMessage, Service};
     use crate::storage::{SessionSelect, Storage};
+    use chrono::{TimeZone, Utc};
+    use tokio::sync::Barrier;
 
-    fn make_turn(id: &str, created_at: i64, agent: &str, session_id: Option<&str>) -> SessionTurn {
+    fn session_memory_id(row_id: u64) -> MemoryId {
+        MemoryId::new(MemoryLayer::Session, row_id)
+    }
+
+    fn make_turn(id: u64, created_at: i64, agent: &str, session_id: Option<&str>) -> SessionTurn {
         let timestamp = Utc.timestamp_micros(created_at).single().unwrap();
         SessionTurn {
-            turn_id: id.to_string(),
+            turn_id: session_memory_id(id),
             created_at: timestamp,
             updated_at: timestamp,
             session_id: session_id.map(str::to_string),
@@ -472,51 +492,61 @@ mod tests {
     fn recency_mode_returns_ascending_window() {
         let result = apply_list_mode(
             vec![
-                make_turn("a", 1, "agent", None),
-                make_turn("b", 3, "agent", None),
-                make_turn("c", 2, "agent", None),
+                make_turn(1, 1, "agent", None),
+                make_turn(2, 3, "agent", None),
+                make_turn(3, 2, "agent", None),
             ],
             ListMode::Recency { limit: 2 },
         );
         let ids = result
             .iter()
-            .map(|turn| turn.turn_id.as_str())
+            .map(|turn| turn.turn_id.to_string())
             .collect::<Vec<_>>();
-        assert_eq!(ids, vec!["c", "b"]);
+        assert_eq!(ids, vec!["session:3", "session:2"]);
     }
 
     #[test]
     fn timeline_honors_filters() {
         let turns = [
-            make_turn("a", 1, "agent-a", Some("group")),
-            make_turn("b", 2, "agent-a", Some("group")),
-            make_turn("c", 3, "agent-b", Some("other")),
-            make_turn("d", 4, "agent-a", Some("group")),
+            make_turn(1, 1, "agent-a", Some("group")),
+            make_turn(2, 2, "agent-a", Some("group")),
+            make_turn(3, 3, "agent-b", Some("other")),
+            make_turn(4, 4, "agent-a", Some("group")),
         ];
-        let anchor = turns.iter().find(|turn| turn.turn_id == "b").unwrap();
-        let result = timeline_from_source(&turns, "b", 1, 1, &anchor.session_key()).unwrap();
+        let anchor = turns
+            .iter()
+            .find(|turn| turn.turn_id == session_memory_id(2))
+            .unwrap();
+        let result =
+            timeline_from_source(&turns, session_memory_id(2), 1, 1, &anchor.session_key())
+                .unwrap();
         let ids = result
             .iter()
-            .map(|turn| turn.turn_id.as_str())
+            .map(|turn| turn.turn_id.to_string())
             .collect::<Vec<_>>();
-        assert_eq!(ids, vec!["a", "b", "d"]);
+        assert_eq!(ids, vec!["session:1", "session:2", "session:4"]);
     }
 
     #[test]
     fn timeline_orders_chronologically_even_if_source_is_recency_sorted() {
         let turns = [
-            make_turn("d", 4, "agent-a", Some("group")),
-            make_turn("c", 3, "agent-a", Some("group")),
-            make_turn("b", 2, "agent-a", Some("group")),
-            make_turn("a", 1, "agent-a", Some("group")),
+            make_turn(4, 4, "agent-a", Some("group")),
+            make_turn(3, 3, "agent-a", Some("group")),
+            make_turn(2, 2, "agent-a", Some("group")),
+            make_turn(1, 1, "agent-a", Some("group")),
         ];
-        let anchor = turns.iter().find(|turn| turn.turn_id == "c").unwrap();
-        let result = timeline_from_source(&turns, "c", 1, 1, &anchor.session_key()).unwrap();
+        let anchor = turns
+            .iter()
+            .find(|turn| turn.turn_id == session_memory_id(3))
+            .unwrap();
+        let result =
+            timeline_from_source(&turns, session_memory_id(3), 1, 1, &anchor.session_key())
+                .unwrap();
         let ids = result
             .iter()
-            .map(|turn| turn.turn_id.as_str())
+            .map(|turn| turn.turn_id.to_string())
             .collect::<Vec<_>>();
-        assert_eq!(ids, vec!["b", "c", "d"]);
+        assert_eq!(ids, vec!["session:2", "session:3", "session:4"]);
     }
 
     #[test]
@@ -651,14 +681,14 @@ mod tests {
 
     #[test]
     fn reconcile_open_turns_merges_content_into_latest_turn_id() {
-        let mut first = make_turn("01JQ7Y8YQ6V7D4M1N9K2F5T8ZA", 1, "agent", Some("group"));
+        let mut first = make_turn(101, 1, "agent", Some("group"));
         first.prompt = Some("prompt-a".to_string());
         first.tool_calling = Some(vec!["tool-a".to_string()]);
         first.artifacts = Some(HashMap::from([("shared".to_string(), "a".to_string())]));
         first.title = Some("title-a".to_string());
         first.summary = Some("summary-a".to_string());
 
-        let mut second = make_turn("01JQ7Y8YQ6V7D4M1N9K2F5T8ZB", 2, "agent", Some("group"));
+        let mut second = make_turn(102, 2, "agent", Some("group"));
         second.prompt = Some("prompt-b".to_string());
         second.tool_calling = Some(vec!["tool-b".to_string()]);
         second.artifacts = Some(HashMap::from([
@@ -757,7 +787,7 @@ mod tests {
             .unwrap();
         assert_eq!(found.turn_id, turn.turn_id);
 
-        let bad_layer = format!("OBSERVING:{}", turn.turn_id);
+        let bad_layer = format!("observing:{}", turn.turn_id.memory_point());
         assert!(
             get(&storage, &MemoryId::from_str(&bad_layer).unwrap())
                 .await
@@ -1154,18 +1184,14 @@ mod tests {
             .unwrap();
         let ids = timeline_rows
             .iter()
-            .map(|turn| turn.turn_id.as_str())
+            .map(|turn| turn.turn_id.to_string())
             .collect::<Vec<_>>();
         assert_eq!(ids.len(), 3);
-        assert!(ids.contains(&a.turn_id.as_str()));
-        assert!(ids.contains(&b.turn_id.as_str()));
-        assert!(ids.contains(&d.turn_id.as_str()));
+        assert!(ids.contains(&a.turn_id.to_string()));
+        assert!(ids.contains(&b.turn_id.to_string()));
+        assert!(ids.contains(&d.turn_id.to_string()));
 
-        let missing_anchor = MemoryId::new(
-            MemoryLayer::Session,
-            Ulid::from_str("01JQ7Y8YQ6V7D4M1N9K2F5T8ZX").unwrap(),
-        )
-        .to_string();
+        let missing_anchor = MemoryId::new(MemoryLayer::Session, 999_999).to_string();
         let missing = timeline(
             &storage,
             &MemoryId::from_str(&missing_anchor).unwrap(),
@@ -1179,37 +1205,29 @@ mod tests {
 
     #[test]
     fn turn_memory_id_roundtrip() {
-        let turn = make_turn("01JQ7Y8YQ6V7D4M1N9K2F5T8ZX", 100, "agent", None);
+        let turn = make_turn(42, 100, "agent", None);
         let memory_id = turn.memory_id().unwrap();
         assert_eq!(memory_id.memory_layer(), MemoryLayer::Session);
-        assert_eq!(memory_id.to_string(), "SESSION:01JQ7Y8YQ6V7D4M1N9K2F5T8ZX");
+        assert_eq!(memory_id.to_string(), "session:42");
     }
 
     #[test]
     fn row_id_requires_memory_layer_prefix() {
-        assert!(MemoryId::from_str("01JQ7Y8YQ6V7D4M1N9K2F5T8ZX").is_err());
-        let session_memory_id = MemoryId::from_str("SESSION:01JQ7Y8YQ6V7D4M1N9K2F5T8ZX").unwrap();
+        assert!(MemoryId::from_str("legacy-row-id").is_err());
+        let session_memory_id = MemoryId::from_str("session:42").unwrap();
         assert_eq!(session_memory_id.memory_layer(), MemoryLayer::Session);
-        assert_eq!(
-            session_memory_id.memory_point().to_string(),
-            Ulid::from_str("01JQ7Y8YQ6V7D4M1N9K2F5T8ZX")
-                .unwrap()
-                .to_string()
-        );
+        assert_eq!(session_memory_id.memory_point(), 42);
     }
 
     #[test]
     fn turn_try_into_rendered_memory_prefers_summary() {
-        let mut turn = make_turn("01JQ7Y8YQ6V7D4M1N9K2F5T8ZX", 100, "agent", Some("group"));
+        let mut turn = make_turn(42, 100, "agent", Some("group"));
         turn.title = Some("Turn title".to_string());
         turn.summary = Some("Short summary".to_string());
         turn.prompt = Some("Prompt body".to_string());
 
         let rendered = MemoryView::try_from(&turn).unwrap();
-        assert_eq!(
-            rendered.memory_id.to_string(),
-            "SESSION:01JQ7Y8YQ6V7D4M1N9K2F5T8ZX"
-        );
+        assert_eq!(rendered.memory_id.to_string(), "session:42");
         assert_eq!(rendered.title.as_deref(), Some("Turn title"));
         assert_eq!(rendered.summary.as_deref(), Some("Short summary"));
         assert_eq!(rendered.detail.as_deref(), Some("Prompt: Prompt body"));
@@ -1217,7 +1235,7 @@ mod tests {
 
     #[test]
     fn session_prefers_explicit_session_id_then_agent_default_then_observer_default() {
-        let explicit = make_turn("a", 1, "agent-a", Some("group-a"));
+        let explicit = make_turn(1, 1, "agent-a", Some("group-a"));
         assert_eq!(
             explicit.session_key(),
             SessionKey::Session {
@@ -1227,7 +1245,7 @@ mod tests {
             }
         );
 
-        let agent_default = make_turn("b", 2, "agent-a", None);
+        let agent_default = make_turn(2, 2, "agent-a", None);
         assert_eq!(
             agent_default.session_key(),
             SessionKey::Agent {
@@ -1248,35 +1266,45 @@ mod tests {
     #[test]
     fn timeline_uses_resolved_default_session_when_session_id_is_missing() {
         let turns = [
-            make_turn("a", 1, "agent-a", None),
-            make_turn("b", 2, "agent-a", None),
-            make_turn("c", 3, "agent-b", None),
-            make_turn("d", 4, "agent-a", Some("group-a")),
+            make_turn(1, 1, "agent-a", None),
+            make_turn(2, 2, "agent-a", None),
+            make_turn(3, 3, "agent-b", None),
+            make_turn(4, 4, "agent-a", Some("group-a")),
         ];
-        let anchor = turns.iter().find(|turn| turn.turn_id == "b").unwrap();
-        let result = timeline_from_source(&turns, "b", 1, 1, &anchor.session_key()).unwrap();
+        let anchor = turns
+            .iter()
+            .find(|turn| turn.turn_id == session_memory_id(2))
+            .unwrap();
+        let result =
+            timeline_from_source(&turns, session_memory_id(2), 1, 1, &anchor.session_key())
+                .unwrap();
         let ids = result
             .iter()
-            .map(|turn| turn.turn_id.as_str())
+            .map(|turn| turn.turn_id.to_string())
             .collect::<Vec<_>>();
-        assert_eq!(ids, vec!["a", "b"]);
+        assert_eq!(ids, vec!["session:1", "session:2"]);
     }
 
     #[test]
     fn timeline_with_explicit_session_id_stays_scoped_to_the_full_session_key() {
         let turns = [
-            make_turn("a", 1, "agent-a", Some("group-a")),
-            make_turn("b", 2, "agent-a", Some("group-a")),
-            make_turn("c", 3, "agent-b", Some("group-a")),
-            make_turn("d", 4, "agent-a", Some("group-a")),
+            make_turn(1, 1, "agent-a", Some("group-a")),
+            make_turn(2, 2, "agent-a", Some("group-a")),
+            make_turn(3, 3, "agent-b", Some("group-a")),
+            make_turn(4, 4, "agent-a", Some("group-a")),
         ];
-        let anchor = turns.iter().find(|turn| turn.turn_id == "b").unwrap();
-        let result = timeline_from_source(&turns, "b", 1, 1, &anchor.session_key()).unwrap();
+        let anchor = turns
+            .iter()
+            .find(|turn| turn.turn_id == session_memory_id(2))
+            .unwrap();
+        let result =
+            timeline_from_source(&turns, session_memory_id(2), 1, 1, &anchor.session_key())
+                .unwrap();
         let ids = result
             .iter()
-            .map(|turn| turn.turn_id.as_str())
+            .map(|turn| turn.turn_id.to_string())
             .collect::<Vec<_>>();
-        assert_eq!(ids, vec!["a", "b", "d"]);
+        assert_eq!(ids, vec!["session:1", "session:2", "session:4"]);
     }
 
     #[tokio::test]

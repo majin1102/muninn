@@ -1,23 +1,26 @@
-use std::str::FromStr;
-
 use chrono::{DateTime, Utc};
 use lance::{Error, Result};
 use serde::{Deserialize, Serialize};
-use ulid::Ulid;
 
-use crate::format::memory::{MemoryId, MemoryLayer};
+use crate::format::memory::{MemoryId, MemoryLayer, deserialize_memory_id, serialize_memory_id};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ObservingCheckpoint {
     pub observing_epoch: u64,
     pub indexed_snapshot_sequence: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_parent_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ObservingSnapshot {
-    pub snapshot_id: String,
+    #[serde(
+        serialize_with = "serialize_memory_id",
+        deserialize_with = "deserialize_memory_id"
+    )]
+    pub snapshot_id: MemoryId,
     pub observing_id: String,
     pub snapshot_sequence: i64,
     pub created_at: DateTime<Utc>,
@@ -66,10 +69,13 @@ pub struct ObservedMemory {
 
 impl ObservingSnapshot {
     pub fn memory_id(&self) -> Result<MemoryId> {
-        let id = Ulid::from_str(&self.snapshot_id).map_err(|error| {
-            Error::invalid_input(format!("invalid observing snapshot ulid: {error}"))
-        })?;
-        Ok(MemoryId::new(MemoryLayer::Observing, id))
+        if self.snapshot_id.memory_layer() != MemoryLayer::Observing {
+            return Err(Error::invalid_input(format!(
+                "invalid observing memory layer: {}",
+                self.snapshot_id.memory_layer()
+            )));
+        }
+        Ok(self.snapshot_id)
     }
 }
 
@@ -78,37 +84,13 @@ mod tests {
     use chrono::Utc;
 
     use super::{ObservingCheckpoint, ObservingSnapshot};
+    use crate::format::memory::{MemoryId, MemoryLayer};
     use crate::memory::types::MemoryView;
 
     #[test]
     fn observing_memory_id_roundtrip() {
         let observing = ObservingSnapshot {
-            snapshot_id: "01JQ7Y8YQ6V7D4M1N9K2F5T8ZX".to_string(),
-            observing_id: "01JQ7Y8YQ6V7D4M1N9K2F5T8ZX".to_string(),
-            snapshot_sequence: 1,
-            created_at: Utc::now(),
-            updated_at: Utc::now(),
-            observer: "observer-a".to_string(),
-            title: "Observing Title".to_string(),
-            summary: "Observing summary".to_string(),
-            content: "{\"memories\":[]}".to_string(),
-            references: vec!["SESSION:01JQ7Y8YQ6V7D4M1N9K2F5T8ZX".to_string()],
-            checkpoint: ObservingCheckpoint {
-                observing_epoch: 1,
-                indexed_snapshot_sequence: Some(1),
-            },
-        };
-
-        assert_eq!(
-            observing.memory_id().unwrap().to_string(),
-            "OBSERVING:01JQ7Y8YQ6V7D4M1N9K2F5T8ZX"
-        );
-    }
-
-    #[test]
-    fn observing_try_into_rendered_memory_prefers_summary() {
-        let observing = ObservingSnapshot {
-            snapshot_id: "01JQ7Y8YQ6V7D4M1N9K2F5T8ZX".to_string(),
+            snapshot_id: MemoryId::new(MemoryLayer::Observing, 42),
             observing_id: "OBS-LINE".to_string(),
             snapshot_sequence: 1,
             created_at: Utc::now(),
@@ -117,18 +99,39 @@ mod tests {
             title: "Observing Title".to_string(),
             summary: "Observing summary".to_string(),
             content: "{\"memories\":[]}".to_string(),
-            references: vec!["SESSION:01JQ7Y8YQ6V7D4M1N9K2F5T8ZX".to_string()],
+            references: vec!["session:7".to_string()],
             checkpoint: ObservingCheckpoint {
                 observing_epoch: 1,
                 indexed_snapshot_sequence: Some(1),
+                pending_parent_id: None,
+            },
+        };
+
+        assert_eq!(observing.memory_id().unwrap().to_string(), "observing:42");
+    }
+
+    #[test]
+    fn observing_try_into_rendered_memory_prefers_summary() {
+        let observing = ObservingSnapshot {
+            snapshot_id: MemoryId::new(MemoryLayer::Observing, 42),
+            observing_id: "OBS-LINE".to_string(),
+            snapshot_sequence: 1,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            observer: "observer-a".to_string(),
+            title: "Observing Title".to_string(),
+            summary: "Observing summary".to_string(),
+            content: "{\"memories\":[]}".to_string(),
+            references: vec!["session:7".to_string()],
+            checkpoint: ObservingCheckpoint {
+                observing_epoch: 1,
+                indexed_snapshot_sequence: Some(1),
+                pending_parent_id: None,
             },
         };
 
         let rendered = MemoryView::try_from(&observing).unwrap();
-        assert_eq!(
-            rendered.memory_id.to_string(),
-            "OBSERVING:01JQ7Y8YQ6V7D4M1N9K2F5T8ZX"
-        );
+        assert_eq!(rendered.memory_id.to_string(), "observing:42");
         assert_eq!(rendered.title.as_deref(), Some("Observing Title"));
         assert_eq!(rendered.summary.as_deref(), Some("Observing summary"));
         assert_eq!(rendered.detail.as_deref(), Some("{\"memories\":[]}"));

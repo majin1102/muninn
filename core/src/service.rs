@@ -260,14 +260,27 @@ impl Sessions<'_> {
             let turn = if let Some(mut sealed_turn) = session.apply(write)? {
                 if sealed_turn.observable() {
                     sealed_turn.observing_epoch = Some(guard.epoch());
-                    observable_turns.push(sealed_turn.clone());
                 }
                 self.service
                     .storage()
                     .sessions()
                     .upsert(vec![sealed_turn.clone()])
                     .await?;
-                sealed_turn
+                let persisted = self
+                    .service
+                    .storage()
+                    .sessions()
+                    .load_latest_turn(session.key())
+                    .await?
+                    .ok_or_else(|| {
+                        lance::Error::invalid_input(
+                            "sealed turn write completed but persisted row could not be reloaded",
+                        )
+                    })?;
+                if persisted.observable() {
+                    observable_turns.push(persisted.clone());
+                }
+                persisted
             } else {
                 let open_turn = session.open_turn().cloned().ok_or_else(|| {
                     lance::Error::invalid_input("session apply completed without an open turn")
@@ -277,7 +290,19 @@ impl Sessions<'_> {
                     .sessions()
                     .upsert(vec![open_turn.clone()])
                     .await?;
-                open_turn
+                let persisted = self
+                    .service
+                    .storage()
+                    .sessions()
+                    .load_open_turn(session.key())
+                    .await?
+                    .ok_or_else(|| {
+                        lance::Error::invalid_input(
+                            "open turn write completed but persisted row could not be reloaded",
+                        )
+                    })?;
+                session = Session::new(session.key().clone(), Some(persisted.clone()))?;
+                persisted
             };
             self.service.store_session(session).await;
             self.service.observer.enqueue(observable_turns).await;

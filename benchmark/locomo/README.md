@@ -1,48 +1,56 @@
 # LoCoMo Benchmark
 
-This module adapts LoCoMo to run directly on top of Muninn.
+This module benchmarks Muninn as a single QA system.
 
-The key design choice is that the benchmark does not reuse LoCoMo's original
-LLM-driven retrieval and answer-generation path. Instead:
+The benchmark flow is:
 
-- LoCoMo data is imported into isolated Muninn homes
-- recall is executed through `@muninn/core`
-- answer generation is a deterministic heuristic baseline
-- the output shape remains evaluator-compatible with LoCoMo-style QA results
+1. import one LoCoMo sample into an isolated Muninn home
+2. recall context from Muninn for each question
+3. send recalled context plus the question to one fixed OpenAI-compatible QA model
+4. score final answer F1 and hidden recall
+
+This v1 runner does not mirror LoCoMo's original `dialog / observation / summary`
+RAG modes. It intentionally tests one Muninn entrypoint.
 
 ## Module Layout
 
 - `src/bridge.ts`
   - thin Node bridge into `@muninn/core`
-  - imports LoCoMo samples into Muninn
-  - runs single or batch recall
+  - imports raw conversation turns into Muninn
+  - maintains an external manifest for hidden recall scoring
+  - resolves recalled memories back to LoCoMo evidence ids
 - `run.py`
   - benchmark entrypoint
-  - coordinates import, recall, prediction, and score writing
+  - coordinates import, recall, QA prompting, and score writing
 - `dataset.py`
-  - LoCoMo dataset loading and mode parsing
+  - LoCoMo dataset loading helpers
 - `heuristics.py`
-  - deterministic query builder and answer heuristics
+  - query candidate generation helpers
 - `scoring.py`
-  - evaluator-compatible QA and retrieval scoring
+  - answer F1 and hidden recall scoring helpers
 - `test/`
-  - Node bridge tests and smoke fixtures
+  - Node bridge tests and fixtures
 - `tests/`
   - Python unit tests
 
-## Supported Modes
+## Import Model
 
-This adapter currently supports the three LoCoMo retrieval views:
+Each LoCoMo dialog turn is imported as one Muninn record:
 
-- `dialog`
-  - each LoCoMo turn becomes one Muninn session row
-  - retrieved context maps back to `D{session}:{turn}`
-- `observation`
-  - each extracted fact becomes one Muninn session row
-  - fact rows still preserve the original `D...` source id
-- `summary`
-  - each LoCoMo session summary becomes one Muninn session row
-  - retrieved context maps back to `S{session}`
+- `session_id = locomo:<sample_id>:session_<n>`
+- `prompt = "<speaker>: <dialog text>"`
+- `summary = "<speaker>: <dialog text>"`
+- `response = "Recorded."`
+
+Benchmark-specific truth data is not written into Muninn rows.
+Instead, the bridge writes a run-local manifest under the benchmark home that maps:
+
+- `turn_id -> source_id`
+- `turn_id -> sample_id`
+- `turn_id -> session_id`
+- import order and LoCoMo `date_time`
+
+That manifest is used only for hidden recall scoring.
 
 ## Prerequisites
 
@@ -53,8 +61,12 @@ Required:
 - `pnpm install`
 - a working Rust toolchain, because `@muninn/core` starts the Rust daemon
 - `python3`
+- an OpenAI-compatible chat endpoint
 
-No LLM keys are required for this benchmark.
+Environment:
+
+- `OPENAI_API_KEY`
+- optionally `OPENAI_BASE_URL`
 
 ## Build
 
@@ -72,23 +84,13 @@ pnpm --filter @muninn/benchmark-locomo test
 
 ## Run
 
-### Full LoCoMo-style run
+### Full run
 
 ```bash
 python3 benchmark/locomo/run.py \
   --data-file ../locomo/data/locomo10.json \
   --out-file benchmark/locomo/out/locomo10_results.json \
-  --modes dialog,observation,summary \
-  --top-k 5
-```
-
-### Single mode
-
-```bash
-python3 benchmark/locomo/run.py \
-  --data-file ../locomo/data/locomo10.json \
-  --out-file benchmark/locomo/out/locomo10_dialog_results.json \
-  --modes dialog \
+  --qa-model gpt-4.1-mini \
   --top-k 5
 ```
 
@@ -97,9 +99,9 @@ python3 benchmark/locomo/run.py \
 ```bash
 python3 benchmark/locomo/run.py \
   --data-file ../locomo/data/locomo10.json \
-  --out-file benchmark/locomo/out/sample_1_dialog_results.json \
-  --modes dialog \
+  --out-file benchmark/locomo/out/sample_results.json \
   --sample-id <sample_id> \
+  --qa-model gpt-4.1-mini \
   --top-k 5
 ```
 
@@ -109,25 +111,26 @@ python3 benchmark/locomo/run.py \
 python3 benchmark/locomo/run.py \
   --data-file ../locomo/data/locomo10.json \
   --out-file benchmark/locomo/out/debug_results.json \
-  --modes dialog \
   --limit-questions 20 \
+  --qa-model gpt-4.1-mini \
   --top-k 5
 ```
 
 ## Runtime Behavior
 
-For each `sample_id + mode` pair, the runner:
+For each `sample_id`, the runner:
 
 1. creates an isolated `MUNINN_HOME`
-2. imports LoCoMo source data into Muninn through the local bridge
-3. builds deterministic query candidates from each question
+2. imports the LoCoMo conversation into Muninn
+3. builds search query candidates from each question
 4. runs batch recall through Muninn
-5. maps retrieved rows back to LoCoMo source ids
-6. generates a non-LLM heuristic answer
-7. writes QA results and aggregate stats
+5. renders recalled hits into a QA prompt
+6. asks one fixed QA model for the final answer
+7. scores answer F1 and hidden recall
 
-This means the benchmark measures Muninn's current text recall behavior, not an
-embedding retriever and not an LLM answerer.
+Hidden recall is computed inside the harness by resolving recalled `memory_id`s
+back to imported turn ids and then to LoCoMo evidence ids. Those ids are not
+shown to the QA model.
 
 ## Output Files
 
@@ -135,27 +138,17 @@ The runner writes two files:
 
 - `<out-file>`
   - per-sample QA results
-  - includes `muninn_<mode>_top_<k>_prediction`
-  - includes `muninn_<mode>_top_<k>_prediction_context`
+  - includes `<model_key>_prediction`
+  - includes `<model_key>_f1`
+  - includes `<model_key>_recall`
 - `<out-file stem>_stats.json`
-  - aggregate F1 and retrieval recall
-  - grouped by mode and category
+  - aggregate F1 and hidden recall
+  - grouped by category
 
 Outputs are written under `benchmark/locomo/out/`, which is gitignored.
 
 Temporary benchmark homes may also be written under `benchmark/locomo/.runs/`
 when `--keep-home` is used.
-
-## Current Limitations
-
-- This is an evaluator-compatible baseline, not a parity answerer with the
-  original LoCoMo LLM pipeline.
-- Muninn recall is currently text-based, so the query builder and heuristic
-  answer extraction matter a lot for benchmark quality.
-- Original LoCoMo timestamps are preserved as benchmark metadata and text, not
-  as first-class Muninn row timestamps.
-- The runner is optimized to batch recall queries per mode, but full runs can
-  still be slow compared with pure in-memory scoring.
 
 ## Tests
 
@@ -170,10 +163,3 @@ Node bridge tests:
 ```bash
 pnpm --filter @muninn/benchmark-locomo test
 ```
-
-## Implementation Notes
-
-- The Python side talks to Muninn through `benchmark/common/muninn_bridge.py`
-- The bridge itself talks directly to `@muninn/core`, not sidecar
-- Benchmark metadata is stored in Muninn row artifacts so recall hits can be
-  mapped back to LoCoMo source ids like `D1:3` or `S2`

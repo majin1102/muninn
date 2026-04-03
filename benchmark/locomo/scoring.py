@@ -41,77 +41,75 @@ def multi_answer_f1(prediction: str, ground_truth: str) -> float:
     ) / len(ground_truth_items)
 
 
-def evaluate_question_answering(qas: list[dict[str, Any]], prediction_key: str) -> tuple[list[float], list[float]]:
-    all_scores: list[float] = []
-    all_recall: list[float] = []
-    context_key = f"{prediction_key}_context"
-
-    for qa in qas:
-        prediction = str(qa.get(prediction_key, "")).strip()
-        category = int(qa["category"])
-        if category in {2, 3, 4}:
-            answer = str(qa.get("answer", "")).split(";")[0].strip()
-            score = f1_score(prediction, answer)
-        elif category == 1:
-            answer = str(qa.get("answer", "")).strip()
-            score = multi_answer_f1(prediction, answer)
-        elif category == 5:
-            lowered = prediction.lower()
-            score = 1.0 if ("not mentioned" in lowered or "no information available" in lowered) else 0.0
-        else:
-            raise ValueError(f"unsupported category: {category}")
-
-        contexts = qa.get(context_key, [])
-        evidence = qa.get("evidence", [])
-        if contexts and evidence:
-            if contexts[0].startswith("S"):
-                sessions = {context[1:] for context in contexts}
-                recall = sum(ev.split(":")[0][1:] in sessions for ev in evidence) / len(evidence)
-            else:
-                recall = sum(ev in contexts for ev in evidence) / len(evidence)
-        elif evidence:
-            recall = 0.0
-        else:
-            recall = 1.0
-
-        all_scores.append(score)
-        all_recall.append(recall)
-
-    return all_scores, all_recall
+def score_prediction(qa: dict[str, Any], prediction: str) -> float:
+    prediction = prediction.strip()
+    category = int(qa["category"])
+    if category in {2, 3, 4}:
+        answer = str(qa.get("answer", "")).split(";")[0].strip()
+        return f1_score(prediction, answer)
+    if category == 1:
+        answer = str(qa.get("answer", "")).strip()
+        return multi_answer_f1(prediction, answer)
+    if category == 5:
+        lowered = prediction.lower()
+        return 1.0 if ("not mentioned" in lowered or "no information available" in lowered) else 0.0
+    raise ValueError(f"unsupported category: {category}")
 
 
-def build_stats(
-    samples: list[dict[str, Any]],
-    model_key_by_mode: dict[str, str],
-) -> dict[str, Any]:
-    stats: dict[str, Any] = {"modes": {}}
-    for mode, model_key in model_key_by_mode.items():
-        prediction_key = f"{model_key}_prediction"
-        flat_qas = [qa for sample in samples for qa in sample["qa"] if prediction_key in qa]
-        scores, recall = evaluate_question_answering(flat_qas, prediction_key)
+def score_recall(recalled_evidence_ids: list[str], evidence: list[str]) -> float:
+    if not evidence:
+        return 1.0
+    if not recalled_evidence_ids:
+        return 0.0
+    if recalled_evidence_ids[0].startswith("S"):
+        recalled_sessions = {context[1:] for context in recalled_evidence_ids}
+        return sum(ev.split(":")[0][1:] in recalled_sessions for ev in evidence) / len(evidence)
+    return sum(ev in recalled_evidence_ids for ev in evidence) / len(evidence)
 
-        category_scores: dict[str, list[float]] = defaultdict(list)
-        category_recall: dict[str, list[float]] = defaultdict(list)
-        for qa, score_value, recall_value in zip(flat_qas, scores, recall):
-            category = str(qa["category"])
-            category_scores[category].append(score_value)
-            category_recall[category].append(recall_value)
 
-        stats["modes"][mode] = {
-            "model_key": model_key,
-            "qa_count": len(flat_qas),
-            "average_f1": round(sum(scores) / len(scores), 4) if scores else 0.0,
-            "average_recall": round(sum(recall) / len(recall), 4) if recall else 0.0,
-            "category_f1": {
-                category: round(sum(values) / len(values), 4)
-                for category, values in sorted(category_scores.items())
-            },
-            "category_recall": {
-                category: round(sum(values) / len(values), 4)
-                for category, values in sorted(category_recall.items())
-            },
-        }
-    return stats
+def annotate_qa_result(
+    qa: dict[str, Any],
+    model_key: str,
+    prediction: str,
+    recalled_evidence_ids: list[str],
+) -> None:
+    qa[f"{model_key}_prediction"] = prediction
+    qa[f"{model_key}_f1"] = round(score_prediction(qa, prediction), 4)
+    qa[f"{model_key}_recall"] = round(score_recall(recalled_evidence_ids, qa.get("evidence", [])), 4)
+
+
+def build_stats(samples: list[dict[str, Any]], model_key: str) -> dict[str, Any]:
+    f1_key = f"{model_key}_f1"
+    recall_key = f"{model_key}_recall"
+    flat_qas = [qa for sample in samples for qa in sample["qa"] if f1_key in qa]
+
+    category_scores: dict[str, list[float]] = defaultdict(list)
+    category_recall: dict[str, list[float]] = defaultdict(list)
+
+    for qa in flat_qas:
+        category = str(qa["category"])
+        score_value = float(qa.get(f1_key, 0.0))
+        recall_value = float(qa.get(recall_key, 0.0))
+        category_scores[category].append(score_value)
+        category_recall[category].append(recall_value)
+
+    scores = [float(qa.get(f1_key, 0.0)) for qa in flat_qas]
+    recall = [float(qa.get(recall_key, 0.0)) for qa in flat_qas]
+
+    return {
+        "model_key": model_key,
+        "qa_count": len(flat_qas),
+        "average_f1": round(sum(scores) / len(scores), 4) if scores else 0.0,
+        "average_recall": round(sum(recall) / len(recall), 4) if recall else 0.0,
+        "category_f1": {
+            category: round(sum(values) / len(values), 4)
+            for category, values in sorted(category_scores.items())
+        },
+        "category_recall": {
+            category: round(sum(values) / len(values), 4)
+            for category, values in sorted(category_recall.items())
+        },
+    }
 
 
 def write_results(out_file: Path, samples: list[dict[str, Any]], stats: dict[str, Any]) -> None:

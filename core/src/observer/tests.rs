@@ -1,5 +1,6 @@
 use chrono::Utc;
 
+use crate::format::memory::{MemoryId, MemoryLayer};
 use crate::format::observing::{
     MemoryCategory, ObservedMemory, ObservingCheckpoint, ObservingSnapshot,
 };
@@ -29,6 +30,14 @@ fn clear_data_root() {
 
 fn test_storage() -> Storage {
     Storage::local(crate::config::data_root().unwrap()).unwrap()
+}
+
+fn pending_turn_id() -> MemoryId {
+    MemoryId::new(MemoryLayer::Session, u64::MAX)
+}
+
+fn pending_snapshot_id() -> MemoryId {
+    MemoryId::new(MemoryLayer::Observing, u64::MAX)
 }
 
 fn set_test_config(
@@ -104,10 +113,7 @@ async fn flush_completed_turn_persists_observing_checkpoint() {
     assert_eq!(observings.len(), 1);
     assert_eq!(observings[0].checkpoint.observing_epoch, 0);
     assert_eq!(observings[0].checkpoint.indexed_snapshot_sequence, Some(0));
-    assert_eq!(
-        observings[0].references,
-        vec![format!("SESSION:{}", turn.turn_id)]
-    );
+    assert_eq!(observings[0].references, vec![turn.turn_id.to_string()]);
 
     clear_data_root();
 }
@@ -260,7 +266,7 @@ async fn recovery_requeues_observable_turns_without_an_epoch() {
     storage
         .observings()
         .upsert(vec![ObservingSnapshot {
-            snapshot_id: "01JQ7Y8YQ6V7D4M1N9K2F5T8ZQ".to_string(),
+            snapshot_id: pending_snapshot_id(),
             observing_id: "OBS-RECOVERY".to_string(),
             snapshot_sequence: 0,
             created_at: Utc::now(),
@@ -274,6 +280,7 @@ async fn recovery_requeues_observable_turns_without_an_epoch() {
             checkpoint: ObservingCheckpoint {
                 observing_epoch: 0,
                 indexed_snapshot_sequence: Some(0),
+                pending_parent_id: None,
             },
         }])
         .await
@@ -281,7 +288,7 @@ async fn recovery_requeues_observable_turns_without_an_epoch() {
 
     let now = Utc::now();
     let turn = SessionTurn {
-        turn_id: "01JQ7Y8YQ6V7D4M1N9K2F5T8ZR".to_string(),
+        turn_id: pending_turn_id(),
         created_at: now,
         updated_at: now,
         session_id: Some("group-a".to_string()),
@@ -298,16 +305,27 @@ async fn recovery_requeues_observable_turns_without_an_epoch() {
         observing_epoch: None,
     };
     storage.sessions().upsert(vec![turn.clone()]).await.unwrap();
+    let persisted_turn = storage
+        .sessions()
+        .select(SessionSelect::Filter {
+            agent: Some("agent-a".to_string()),
+            session_id: Some("group-a".to_string()),
+        })
+        .await
+        .unwrap()
+        .into_iter()
+        .next()
+        .unwrap();
 
     let observer = Observer::new(test_storage()).await.unwrap();
     let inbox = observer.snapshot().await.unwrap();
     assert_eq!(inbox.len(), 1);
-    assert_eq!(inbox[0].turn_id, turn.turn_id);
+    assert_eq!(inbox[0].turn_id, persisted_turn.turn_id);
     assert_eq!(inbox[0].observing_epoch, Some(1));
 
     let persisted = storage
         .sessions()
-        .select(SessionSelect::ById(turn.turn_id.clone()))
+        .select(SessionSelect::ById(persisted_turn.turn_id.memory_point()))
         .await
         .unwrap();
     assert_eq!(persisted.len(), 1);
@@ -342,13 +360,14 @@ async fn gateway_can_append_or_spawn_observing() {
 
     let mut threads = vec![ObservingThread {
         observing_id: "OBS-A".to_string(),
-        snapshot_id: None,
-        snapshot_ids: Vec::new(),
+        snapshot_id: Some(MemoryId::new(MemoryLayer::Observing, 42)),
+        snapshot_ids: vec![MemoryId::new(MemoryLayer::Observing, 42)],
+        pending_parent_id: None,
         observing_epoch: 0,
         title: "Session A".to_string(),
         summary: "Existing line A".to_string(),
         snapshots: Vec::new(),
-        references: vec!["SESSION:TURN-PREV".to_string()],
+        references: vec!["session:79".to_string()],
         indexed_snapshot_sequence: None,
         observer: "test-observer".to_string(),
         created_at: Utc::now(),
@@ -362,7 +381,7 @@ async fn gateway_can_append_or_spawn_observing() {
         7,
         vec![
             GatewayUpdate {
-                turn_id: turn.turn_id.clone(),
+                turn_id: turn.turn_id.to_string(),
                 action: GatewayAction::Append,
                 observing_id: Some("OBS-A".to_string()),
                 summary: "continue A".to_string(),
@@ -370,7 +389,7 @@ async fn gateway_can_append_or_spawn_observing() {
                 why: "same thread".to_string(),
             },
             GatewayUpdate {
-                turn_id: turn.turn_id.clone(),
+                turn_id: turn.turn_id.to_string(),
                 action: GatewayAction::New,
                 observing_id: None,
                 summary: "branch B".to_string(),
@@ -401,20 +420,15 @@ async fn gateway_can_append_or_spawn_observing() {
 
     assert_eq!(
         session_a.references,
-        vec![format!("SESSION:{}", turn.turn_id)]
+        vec!["session:79".to_string(), turn.turn_id.to_string()]
     );
     assert!(
         session_b
             .references
             .iter()
-            .any(|reference| reference == "OBSERVING:OBS-A")
+            .any(|reference| *reference == turn.turn_id.to_string())
     );
-    assert!(
-        session_b
-            .references
-            .iter()
-            .any(|reference| *reference == format!("SESSION:{}", turn.turn_id))
-    );
+    assert_eq!(session_b.pending_parent_id.as_deref(), Some("OBS-A"));
 
     clear_data_root();
 }
@@ -428,7 +442,7 @@ async fn load_runtime_restores_observings() {
     let storage = test_storage();
 
     let observing = ObservingSnapshot {
-        snapshot_id: "01JQ7Y8YQ6V7D4M1N9K2F5T8ZX".to_string(),
+        snapshot_id: pending_snapshot_id(),
         observing_id: "OBS-LINE".to_string(),
         snapshot_sequence: 0,
         created_at: Utc::now(),
@@ -442,10 +456,11 @@ async fn load_runtime_restores_observings() {
             "nextSteps": ["follow up"]
         })
         .to_string(),
-        references: vec!["SESSION:01TEST".to_string()],
+        references: vec!["session:77".to_string()],
         checkpoint: ObservingCheckpoint {
             observing_epoch: 3,
             indexed_snapshot_sequence: Some(0),
+            pending_parent_id: None,
         },
     };
     storage.observings().upsert(vec![observing]).await.unwrap();
@@ -456,14 +471,170 @@ async fn load_runtime_restores_observings() {
     assert_eq!(sessions.len(), 1);
     assert_eq!(sessions[0].observing_id, "OBS-LINE");
     assert_eq!(
-        sessions[0].snapshot_id.as_deref(),
-        Some("01JQ7Y8YQ6V7D4M1N9K2F5T8ZX")
+        sessions[0].snapshot_id.as_ref().map(ToString::to_string),
+        Some("observing:0".to_string())
     );
     assert_eq!(sessions[0].snapshots.len(), 1);
     assert_eq!(sessions[0].snapshots[0].memories.len(), 1);
-    assert_eq!(sessions[0].references, vec!["SESSION:01TEST".to_string()]);
+    assert_eq!(sessions[0].references, vec!["session:77".to_string()]);
     assert_eq!(sessions[0].indexed_snapshot_sequence, Some(0));
     assert_eq!(sessions[0].observing_epoch, 3);
+
+    clear_data_root();
+}
+
+#[tokio::test]
+async fn append_preserves_existing_parent_snapshot_reference() {
+    let _guard = llm_test_env_guard();
+    let dir = tempfile::tempdir().unwrap();
+    set_test_config(&dir, None, Some("mock"), None);
+    set_data_root(&dir);
+
+    let mut turn = SessionTurn::new(
+        &SessionWrite {
+            session_id: Some("group-a".to_string()),
+            agent: "agent-a".to_string(),
+            observer: "test-observer".to_string(),
+            title: None,
+            summary: Some("turn summary".to_string()),
+            title_source: None,
+            summary_source: None,
+            tool_calling: None,
+            artifacts: None,
+            prompt: Some("prompt".to_string()),
+            response: Some("response".to_string()),
+        },
+    )
+    .with_row_id(88);
+    turn.summary = Some("turn summary".to_string());
+    turn.prompt = Some("prompt".to_string());
+    turn.response = Some("response".to_string());
+
+    let parent_ref = MemoryId::new(MemoryLayer::Observing, 42).to_string();
+    let mut threads = vec![ObservingThread {
+        observing_id: "OBS-CHILD".to_string(),
+        snapshot_id: Some(MemoryId::new(MemoryLayer::Observing, 52)),
+        snapshot_ids: vec![MemoryId::new(MemoryLayer::Observing, 52)],
+        pending_parent_id: None,
+        observing_epoch: 0,
+        title: "Child".to_string(),
+        summary: "Child summary".to_string(),
+        snapshots: Vec::new(),
+        references: vec!["session:77".to_string(), parent_ref.clone()],
+        indexed_snapshot_sequence: None,
+        observer: "test-observer".to_string(),
+        created_at: Utc::now(),
+        updated_at: Utc::now(),
+    }];
+
+    apply_gateway_updates(
+        &mut threads,
+        "test-observer",
+        std::slice::from_ref(&turn),
+        3,
+        vec![GatewayUpdate {
+            turn_id: turn.turn_id.to_string(),
+            action: GatewayAction::Append,
+            observing_id: Some("OBS-CHILD".to_string()),
+            summary: "continue child".to_string(),
+            new_thread: None,
+            why: "same thread".to_string(),
+        }],
+    )
+    .await
+    .unwrap();
+
+    let child = threads.iter().find(|thread| thread.observing_id == "OBS-CHILD").unwrap();
+    assert!(child.references.iter().any(|reference| reference == &parent_ref));
+    assert!(child
+        .references
+        .iter()
+        .any(|reference| reference == &turn.turn_id.to_string()));
+    assert_eq!(child.pending_parent_id, None);
+
+    clear_data_root();
+}
+
+#[tokio::test]
+async fn observer_startup_reconciles_pending_parent_references() {
+    let _guard = llm_test_env_guard();
+    let dir = tempfile::tempdir().unwrap();
+    set_test_config(&dir, None, Some("mock"), None);
+    set_data_root(&dir);
+    let storage = test_storage();
+
+    let now = Utc::now();
+    storage
+        .observings()
+        .upsert(vec![
+            ObservingSnapshot {
+                snapshot_id: pending_snapshot_id(),
+                observing_id: "OBS-PARENT".to_string(),
+                snapshot_sequence: 0,
+                created_at: now,
+                updated_at: now,
+                observer: "test-observer".to_string(),
+                title: "Parent".to_string(),
+                summary: "Parent summary".to_string(),
+                content: serde_json::json!({"memories":[],"openQuestions":[],"nextSteps":[]})
+                    .to_string(),
+                references: vec!["session:10".to_string()],
+                checkpoint: ObservingCheckpoint {
+                    observing_epoch: 1,
+                    indexed_snapshot_sequence: Some(0),
+                    pending_parent_id: None,
+                },
+            },
+            ObservingSnapshot {
+                snapshot_id: pending_snapshot_id(),
+                observing_id: "OBS-CHILD".to_string(),
+                snapshot_sequence: 0,
+                created_at: now,
+                updated_at: now,
+                observer: "test-observer".to_string(),
+                title: "Child".to_string(),
+                summary: "Child summary".to_string(),
+                content: serde_json::json!({"memories":[],"openQuestions":[],"nextSteps":[]})
+                    .to_string(),
+                references: vec!["session:11".to_string()],
+                checkpoint: ObservingCheckpoint {
+                    observing_epoch: 1,
+                    indexed_snapshot_sequence: Some(0),
+                    pending_parent_id: Some("OBS-PARENT".to_string()),
+                },
+            },
+        ])
+        .await
+        .unwrap();
+
+    let observer = Observer::new(test_storage()).await.unwrap();
+    let threads = observer.threads_snapshot().await;
+    let parent = threads
+        .iter()
+        .find(|thread| thread.observing_id == "OBS-PARENT")
+        .unwrap();
+    let child = threads
+        .iter()
+        .find(|thread| thread.observing_id == "OBS-CHILD")
+        .unwrap();
+    let parent_ref = parent.snapshot_id.as_ref().unwrap().to_string();
+
+    assert!(child.references.iter().any(|reference| reference == &parent_ref));
+    assert_eq!(child.references.first(), Some(&parent_ref));
+    assert_eq!(child.pending_parent_id, None);
+
+    let persisted = storage
+        .observings()
+        .list(Some("test-observer"))
+        .await
+        .unwrap();
+    let latest_child = persisted
+        .into_iter()
+        .find(|snapshot| snapshot.observing_id == "OBS-CHILD")
+        .unwrap();
+    assert!(latest_child.references.iter().any(|reference| reference == &parent_ref));
+    assert_eq!(latest_child.references.first(), Some(&parent_ref));
+    assert_eq!(latest_child.checkpoint.pending_parent_id, None);
 
     clear_data_root();
 }
@@ -482,7 +653,7 @@ async fn catches_up_semantic_index_from_checkpoint() {
         .upsert(vec![
             SemanticIndexRow {
                 id: "mem-1".to_string(),
-                memory_id: "OBSERVING:01JQ7Y8YQ6V7D4M1N9K2F5T8ZA".to_string(),
+                memory_id: "observing:201".to_string(),
                 text: "before text".to_string(),
                 vector: vec![0.1, 0.2, 0.3, 0.4],
                 importance: 0.33,
@@ -491,7 +662,7 @@ async fn catches_up_semantic_index_from_checkpoint() {
             },
             SemanticIndexRow {
                 id: "mem-deleted".to_string(),
-                memory_id: "OBSERVING:01JQ7Y8YQ6V7D4M1N9K2F5T8ZA".to_string(),
+                memory_id: "observing:201".to_string(),
                 text: "to be deleted".to_string(),
                 vector: vec![0.4, 0.3, 0.2, 0.1],
                 importance: 0.51,
@@ -539,7 +710,7 @@ async fn catches_up_semantic_index_from_checkpoint() {
         .observings()
         .upsert(vec![
             ObservingSnapshot {
-                snapshot_id: "01JQ7Y8YQ6V7D4M1N9K2F5T8ZA".to_string(),
+                snapshot_id: pending_snapshot_id(),
                 observing_id: "OBS-CATCHUP".to_string(),
                 snapshot_sequence: 0,
                 created_at: Utc::now(),
@@ -548,14 +719,15 @@ async fn catches_up_semantic_index_from_checkpoint() {
                 title: "Catch-up observing".to_string(),
                 summary: "Checkpoint lagging behind".to_string(),
                 content: snapshot0.to_string(),
-                references: vec!["SESSION:TURN-0".to_string()],
+                references: vec!["session:70".to_string()],
                 checkpoint: ObservingCheckpoint {
                     observing_epoch: 0,
                     indexed_snapshot_sequence: None,
+                    pending_parent_id: None,
                 },
             },
             ObservingSnapshot {
-                snapshot_id: "01JQ7Y8YQ6V7D4M1N9K2F5T8ZB".to_string(),
+                snapshot_id: pending_snapshot_id(),
                 observing_id: "OBS-CATCHUP".to_string(),
                 snapshot_sequence: 1,
                 created_at: Utc::now(),
@@ -564,10 +736,11 @@ async fn catches_up_semantic_index_from_checkpoint() {
                 title: "Catch-up observing".to_string(),
                 summary: "Checkpoint lagging behind".to_string(),
                 content: snapshot1.to_string(),
-                references: vec!["SESSION:TURN-1".to_string()],
+                references: vec!["session:71".to_string()],
                 checkpoint: ObservingCheckpoint {
                     observing_epoch: 0,
                     indexed_snapshot_sequence: Some(0),
+                    pending_parent_id: None,
                 },
             },
         ])
@@ -578,27 +751,29 @@ async fn catches_up_semantic_index_from_checkpoint() {
 
     let rows = storage.semantic_index().list().await.unwrap();
     assert_eq!(rows.len(), 2);
+    let persisted = storage.observings().list(None).await.unwrap();
+    let latest = persisted
+        .iter()
+        .find(|observing| {
+            observing.observing_id == "OBS-CATCHUP" && observing.snapshot_sequence == 1
+        })
+        .unwrap();
     let mem_1 = rows.iter().find(|row| row.id == "mem-1").unwrap();
     let mem_2 = rows.iter().find(|row| row.id == "mem-2").unwrap();
     assert_eq!(mem_1.text, "after text");
     assert_eq!(mem_1.importance, 0.33);
     assert_eq!(mem_1.created_at, first_created_at);
     assert_eq!(mem_1.category, "fact");
-    assert_eq!(mem_1.memory_id, "OBSERVING:01JQ7Y8YQ6V7D4M1N9K2F5T8ZB");
+    assert_eq!(mem_1.memory_id, latest.snapshot_id.to_string());
     assert_eq!(mem_1.vector.len(), 4);
     assert_eq!(mem_2.text, "concept promoted");
     assert_eq!(mem_2.category, "other");
     assert_eq!(mem_2.importance, 0.7);
-    assert_eq!(mem_2.memory_id, "OBSERVING:01JQ7Y8YQ6V7D4M1N9K2F5T8ZB");
+    assert_eq!(mem_2.memory_id, latest.snapshot_id.to_string());
     assert_eq!(mem_2.vector.len(), 4);
     assert!(rows.iter().all(|row| row.id != "mem-deleted"));
 
-    let persisted = storage.observings().list(None).await.unwrap();
-    let observing = persisted
-        .iter()
-        .find(|observing| observing.snapshot_id == "01JQ7Y8YQ6V7D4M1N9K2F5T8ZB")
-        .unwrap();
-    assert_eq!(observing.checkpoint.indexed_snapshot_sequence, Some(1));
+    assert_eq!(latest.checkpoint.indexed_snapshot_sequence, Some(1));
 
     clear_data_root();
 }
@@ -638,14 +813,9 @@ async fn replaying_snapshot_keeps_index_metadata() {
         dimensions: 4,
         default_importance: 0.7,
     };
-    apply_memory_delta(
-        &storage,
-        &snapshot,
-        "OBSERVING:01JQ7Y8YQ6V7D4M1N9K2F5T8ZC",
-        &initial_config,
-    )
-    .await
-    .unwrap();
+    apply_memory_delta(&storage, &snapshot, "observing:301", &initial_config)
+        .await
+        .unwrap();
 
     let first_row = storage
         .semantic_index()
@@ -678,14 +848,9 @@ async fn replaying_snapshot_keeps_index_metadata() {
         dimensions: 4,
         default_importance: 0.95,
     };
-    apply_memory_delta(
-        &storage,
-        &snapshot,
-        "OBSERVING:01JQ7Y8YQ6V7D4M1N9K2F5T8ZD",
-        &replay_config,
-    )
-    .await
-    .unwrap();
+    apply_memory_delta(&storage, &snapshot, "observing:302", &replay_config)
+        .await
+        .unwrap();
 
     let rows = storage.semantic_index().list().await.unwrap();
     assert_eq!(rows.len(), 1);
@@ -693,7 +858,7 @@ async fn replaying_snapshot_keeps_index_metadata() {
     assert_eq!(row.importance, 0.25);
     assert_eq!(row.created_at, pinned_created_at);
     assert_eq!(row.category, "fact");
-    assert_eq!(row.memory_id, "OBSERVING:01JQ7Y8YQ6V7D4M1N9K2F5T8ZD");
+    assert_eq!(row.memory_id, "observing:302");
     assert_eq!(row.text, "stable fact");
     assert_eq!(row.vector.len(), 4);
 

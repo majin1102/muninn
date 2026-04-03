@@ -3,15 +3,17 @@ use std::collections::{HashMap, HashSet};
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use lance::Result;
 use serde::{Deserialize, Serialize};
-use ulid::Ulid;
 use uuid::Uuid;
 
+use crate::format::memory::{MemoryId, MemoryLayer};
 use crate::format::observing::{ObservedMemory, ObservingCheckpoint, ObservingSnapshot};
 use crate::format::session::SessionTurn;
 use crate::llm::observing::new_observing_id;
 use crate::llm::observing_update::{ObserveResult, ObservingContent};
 use crate::observer::types::LlmFieldUpdate;
 use crate::storage::Storage;
+
+pub(crate) const MAX_REFERENCES: usize = 1000;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -30,9 +32,11 @@ pub(crate) struct SnapshotContent {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ObservingThread {
     pub(crate) observing_id: String,
-    pub(crate) snapshot_id: Option<String>,
+    pub(crate) snapshot_id: Option<MemoryId>,
     #[serde(skip_serializing)]
-    pub(crate) snapshot_ids: Vec<String>,
+    pub(crate) snapshot_ids: Vec<MemoryId>,
+    #[serde(skip_serializing)]
+    pub(crate) pending_parent_id: Option<String>,
     pub(crate) observing_epoch: u64,
     pub(crate) title: String,
     pub(crate) summary: String,
@@ -45,7 +49,7 @@ pub(crate) struct ObservingThread {
 }
 
 impl ObservingThread {
-    pub(crate) fn new_seeded(
+    pub(crate) fn new(
         observer: &str,
         title: &str,
         summary: &str,
@@ -57,6 +61,7 @@ impl ObservingThread {
             observing_id: new_observing_id(),
             snapshot_id: None,
             snapshot_ids: Vec::new(),
+            pending_parent_id: None,
             observing_epoch,
             title: normalize_title(title),
             summary: normalize_summary(summary),
@@ -93,6 +98,7 @@ impl ObservingThread {
             observing_id: latest_row.observing_id.clone(),
             snapshot_id: Some(latest_row.snapshot_id.clone()),
             snapshot_ids: rows.iter().map(|row| row.snapshot_id.clone()).collect(),
+            pending_parent_id: latest_row.checkpoint.pending_parent_id.clone(),
             observing_epoch: latest_row.checkpoint.observing_epoch,
             title: latest_row.title.clone(),
             summary: latest_row.summary.clone(),
@@ -112,14 +118,14 @@ impl ObservingThread {
         self.snapshots.last()
     }
 
-    pub(crate) fn snapshot_memory_id(&self, snapshot_index: usize) -> Result<String> {
+    pub(crate) fn snapshot_ref(&self, snapshot_index: usize) -> Result<String> {
         let snapshot_id = self.snapshot_ids.get(snapshot_index).ok_or_else(|| {
             lance::Error::invalid_input(format!(
                 "missing snapshot id for observing thread {} at sequence {}",
                 self.observing_id, snapshot_index
             ))
         })?;
-        Ok(format!("OBSERVING:{snapshot_id}"))
+        Ok(snapshot_id.to_string())
     }
 
     pub(crate) fn current_content(&self) -> ObservingContent {
@@ -153,35 +159,19 @@ impl ObservingThread {
             next_steps: result.observing_content_update.next_steps,
             memory_delta: materialized_delta,
         });
-        let snapshot_id = Ulid::new().to_string();
-        self.snapshot_ids.push(snapshot_id.clone());
-        self.snapshot_id = Some(snapshot_id);
+        self.snapshot_id = None;
         self.updated_at = now;
         Ok(())
-    }
-
-    pub(crate) fn reset_references(&mut self) {
-        self.references.clear();
     }
 
     pub(crate) fn push_reference(&mut self, reference: String) {
         if !self.references.contains(&reference) {
             self.references.push(reference);
+            trim_references(&mut self.references);
         }
     }
 
     pub(crate) fn to_row(&self) -> Result<ObservingSnapshot> {
-        let snapshot_id = self
-            .snapshot_ids
-            .last()
-            .cloned()
-            .or_else(|| self.snapshot_id.clone())
-            .ok_or_else(|| {
-                lance::Error::invalid_input(format!(
-                    "missing snapshot id for observing thread {}",
-                    self.observing_id
-                ))
-            })?;
         let snapshot_sequence =
             self.snapshots.len().checked_sub(1).ok_or_else(|| {
                 lance::Error::invalid_input("missing snapshots for observing thread")
@@ -194,7 +184,9 @@ impl ObservingThread {
         })?;
 
         Ok(ObservingSnapshot {
-            snapshot_id,
+            snapshot_id: self
+                .snapshot_id
+                .unwrap_or_else(|| MemoryId::new(MemoryLayer::Observing, u64::MAX)),
             observing_id: self.observing_id.clone(),
             snapshot_sequence,
             created_at: self.updated_at,
@@ -209,6 +201,7 @@ impl ObservingThread {
             checkpoint: ObservingCheckpoint {
                 observing_epoch: self.observing_epoch,
                 indexed_snapshot_sequence: self.indexed_snapshot_sequence,
+                pending_parent_id: self.pending_parent_id.clone(),
             },
         })
     }
@@ -243,12 +236,12 @@ pub(crate) async fn load_threads(
         .collect()
 }
 
-pub(crate) fn turn_reference(turn: &SessionTurn) -> String {
-    format!("SESSION:{}", turn.turn_id)
+pub(crate) fn turn_ref(turn: &SessionTurn) -> String {
+    turn.turn_id.to_string()
 }
 
-pub(crate) fn observing_reference(observing_id: &str) -> String {
-    format!("OBSERVING:{observing_id}")
+pub(crate) fn snapshot_ref(snapshot_id: MemoryId) -> String {
+    snapshot_id.to_string()
 }
 
 fn deserialize_snapshot(observing: &ObservingSnapshot) -> Result<SnapshotContent> {
@@ -277,6 +270,21 @@ fn normalize_text(value: &str, max_chars: usize) -> String {
         format!("{text}...")
     } else {
         text
+    }
+}
+
+fn trim_references(references: &mut Vec<String>) {
+    while references.len() > MAX_REFERENCES {
+        let index = references
+            .iter()
+            .position(|reference| {
+                matches!(
+                    reference.parse::<MemoryId>(),
+                    Ok(memory_id) if memory_id.memory_layer() == MemoryLayer::Session
+                )
+            })
+            .unwrap_or(0);
+        references.remove(index);
     }
 }
 
@@ -366,7 +374,8 @@ fn apply_memories_delta(
 mod tests {
     use chrono::Utc;
 
-    use super::{ObservingThread, SnapshotContent};
+    use super::{MAX_REFERENCES, ObservingThread, SnapshotContent};
+    use crate::format::memory::{MemoryId, MemoryLayer};
     use crate::format::observing::{MemoryCategory, ObservedMemory};
     use crate::llm::observing_update::{ObserveResult, ObservingContentUpdate};
     use crate::observer::types::LlmFieldUpdate;
@@ -374,8 +383,7 @@ mod tests {
     #[test]
     fn apply_observe_result_patches_memories_into_full_snapshot() {
         let now = Utc::now();
-        let mut thread =
-            ObservingThread::new_seeded("observer-a", "Title", "Summary", vec![], 0, now);
+        let mut thread = ObservingThread::new("observer-a", "Title", "Summary", vec![], 0, now);
         thread.snapshots.push(SnapshotContent {
             memories: vec![
                 ObservedMemory {
@@ -471,5 +479,21 @@ mod tests {
                 .iter()
                 .all(|memory| memory.id.is_some())
         );
+    }
+
+    #[test]
+    fn push_reference_caps_provenance_and_prefers_keeping_observing_refs() {
+        let now = Utc::now();
+        let mut thread = ObservingThread::new("observer-a", "Title", "Summary", vec![], 0, now);
+        for index in 0..MAX_REFERENCES {
+            thread.push_reference(format!("session:{index}"));
+        }
+
+        let parent_ref = MemoryId::new(MemoryLayer::Observing, 42).to_string();
+        thread.push_reference(parent_ref.clone());
+
+        assert_eq!(thread.references.len(), MAX_REFERENCES);
+        assert!(!thread.references.iter().any(|reference| reference == "session:0"));
+        assert!(thread.references.iter().any(|reference| reference == &parent_ref));
     }
 }

@@ -1,7 +1,7 @@
 use lance::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
-use ulid::Ulid;
+use uuid::Uuid;
 
 use crate::format::session::SessionTurn;
 use crate::llm::config::{LlmTask, observing_max_attempts};
@@ -67,7 +67,7 @@ impl ObservingGateway {
         let pending_turns = pending_turns
             .iter()
             .map(|turn| TurnGatewayInput {
-                turn_id: turn.turn_id.clone(),
+                turn_id: turn.turn_id.to_string(),
                 summary: turn.summary.clone().unwrap_or_else(|| {
                     turn.prompt
                         .clone()
@@ -280,7 +280,7 @@ fn normalize_text(value: &str, max_chars: usize) -> String {
 }
 
 pub fn new_observing_id() -> String {
-    Ulid::new().to_string()
+    Uuid::new_v4().to_string()
 }
 
 #[cfg(test)]

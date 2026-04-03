@@ -22,7 +22,7 @@
   - 对应一个 `observing_id`
 - 该观察线的某一次状态切片
   - 对应一个 observing snapshot row
-  - 对外 `memoryId = OBSERVING:{snapshot_id}`
+  - 对外 `memoryId = observing:{row_id}`
 
 所以当前并没有单独的 `observation` public layer；产品上的 observation 通过 `observing` snapshot rows 落地。
 
@@ -45,7 +45,7 @@
 
 对 agent/MCP 来说，当前正式可见的 public observation surface 仍然是：
 
-- `OBSERVING:{snapshot_id}`
+- `observing:{row_id}`
 
 ## 5. Future Direction
 
