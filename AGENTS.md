@@ -7,6 +7,7 @@ This file is the fast-path context for coding agents working in this repository.
 - After opening a PR, do not mark it as draft; open it directly as ready for review.
 - Do not design or implement for forward compatibility. This repository is still in an MVP-stage of iteration, so when a schema or interface changes, update the code to the new shape only and remove obsolete compatibility handling instead of preserving support for historical versions.
 - Describe all code review findings in Chinese.
+- PR titles must follow the `Conventional Commits` style, such as `feat: ...`, `fix: ...`, and `docs: ...`. Use a valid type prefix followed by a short summary, and do not open PRs with arbitrary title formats.
 
 ## What This Repo Is
 
