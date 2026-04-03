@@ -15,8 +15,7 @@ pub struct ObservingListQuery {
 
 pub async fn get(storage: &Storage, memory_id: &MemoryId) -> Result<Option<ObservingSnapshot>> {
     ensure_observing_memory_id(memory_id)?;
-    let snapshot_id = memory_id.memory_point().to_string();
-    storage.observings().get(&snapshot_id).await
+    storage.observings().get(memory_id.memory_point()).await
 }
 
 pub async fn list(storage: &Storage, query: ObservingListQuery) -> Result<Vec<ObservingSnapshot>> {
@@ -32,16 +31,13 @@ pub(crate) async fn timeline(
     after_limit: usize,
 ) -> Result<Vec<ObservingSnapshot>> {
     ensure_observing_memory_id(memory_id)?;
-    let snapshot_id = memory_id.memory_point().to_string();
-    let mut observings = storage.observings().list(None).await?;
-    let Some(anchor) = observings
-        .iter()
-        .find(|observing| observing.snapshot_id == snapshot_id)
-    else {
+    let Some(anchor) = storage.observings().get(memory_id.memory_point()).await? else {
         return Ok(Vec::new());
     };
-    let observing_id = anchor.observing_id.clone();
-    observings.retain(|observing| observing.observing_id == observing_id);
+    let mut observings = storage
+        .observings()
+        .load_thread_snapshots(&anchor.observing_id)
+        .await?;
     observings.sort_by(|left, right| {
         left.snapshot_sequence
             .cmp(&right.snapshot_sequence)
@@ -50,7 +46,7 @@ pub(crate) async fn timeline(
 
     let Some(anchor_index) = observings
         .iter()
-        .position(|observing| observing.snapshot_id == snapshot_id)
+        .position(|observing| observing.snapshot_id == *memory_id)
     else {
         return Ok(Vec::new());
     };

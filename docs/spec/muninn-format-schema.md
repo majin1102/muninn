@@ -53,9 +53,9 @@ Rust 内部继续使用 snake_case：
 
 当前实际语义：
 
-- `SESSION:{turn_id}`
+- `session:{row_id}`
   - 指向一条 session memory point（内部落在 turn row 上）
-- `OBSERVING:{snapshot_id}`
+- `observing:{row_id}`
   - 指向一条 observing snapshot row
 
 `observing_id` 不单独暴露为 public `memory_id`；它只用于把多条 observing snapshot rows 归属到同一条 observing line。
@@ -64,7 +64,7 @@ Rust 内部继续使用 snake_case：
 
 存储层约定：
 
-- 表内主键字段只保存裸 `ULID`
+- 表内主键字段使用 Lance stable `_rowid`
 - 不在表内冗余保存格式化后的 `memory_id`
 - 对外暴露时再根据 `memory_layer + memory_point` 构造 `memory_id`
 
@@ -74,7 +74,7 @@ Rust 内部继续使用 snake_case：
 
 ```ts
 type SessionTurn = {
-  turn_id: string;
+  turn_id: MemoryId;
   created_at: string;
   updated_at: string;
   session_id?: string | null;
@@ -91,7 +91,7 @@ type SessionTurn = {
 
 语义说明：
 
-- `turn_id` 是内部 row identity，也是 `SESSION:{turn_id}` 的 `memoryPoint`
+- `turn_id` 是 session layer 的导航键，值形如 `session:{row_id}`
 - `session_id` 是逻辑会话分组键
 - `summary` 是可选派生字段，不是写入 `response` 的前提
 
@@ -101,49 +101,53 @@ type SessionTurn = {
 
 ```ts
 type Observing = {
-  snapshot_id: string;
-  observing_id: string;
-  snapshot_sequence: number;
-  created_at: string;
-  updated_at: string;
+  snapshotId: MemoryId;
+  observingId: string;
+  snapshotSequence: number;
+  createdAt: string;
+  updatedAt: string;
   observer: string;
   title: string;
   summary: string;
   content: string;
   references: string[];
   checkpoint: {
-    observing_epoch: number;
-    indexed_snapshot_sequence?: number | null;
+    observingEpoch: number;
+    indexedSnapshotSequence?: number | null;
+    pendingParentId?: string | null;
   };
 };
 ```
 
 语义说明：
 
-- `snapshot_id`
+- `snapshotId`
   - 当前 row 的唯一 identity
-  - 对外 `memory_id = OBSERVING:{snapshot_id}`
-- `observing_id`
+  - 对外 `memory_id = observing:{row_id}`
+- `observingId`
   - 同一条 observing line 的稳定分组键
-- `snapshot_sequence`
+- `snapshotSequence`
   - 该 row 在所属 observing line 中的顺序
 - `content`
   - 当前 snapshot 的完整内容 JSON
   - 序列化的是 `SnapshotContent`
 - `references`
-  - 当前 snapshot 的直接引用
+  - 当前 snapshot 的有界来源集合
+  - 累计保留形成当前 snapshot 的 provenance
+  - 默认最多保留 `1000` 条，超限时优先淘汰最老的 `session:*` 引用
 - `checkpoint`
   - 当前 observing line 的 checkpoint 状态
-  - 包含 `observing_epoch` 和 `indexed_snapshot_sequence`
+  - 包含 `observingEpoch`、`indexedSnapshotSequence` 和可选的 `pendingParentId`
+  - `pendingParentId` 仅用于父 observing 引用的补偿恢复，不是公开导航字段
 
 当前 `ObservingSnapshot.content` 承载的 payload 形状为：
 
 ```ts
 type SnapshotContent = {
   memories: ObservedMemory[];
-  open_questions: string[];
-  next_steps: string[];
-  memory_delta: LlmFieldUpdate<ObservedMemory>;
+  openQuestions: string[];
+  nextSteps: string[];
+  memoryDelta: LlmFieldUpdate<ObservedMemory>;
 };
 
 type LlmFieldUpdate<T> = {
@@ -155,15 +159,15 @@ type ObservedMemory = {
   id?: string | null;
   text: string;
   category: "Preference" | "Fact" | "Decision" | "Entity" | "Concept" | "Other";
-  updated_memory?: string | null;
+  updatedMemory?: string | null;
 };
 ```
 
 补充说明：
 
 - `memories` 是当前 snapshot 的完整 materialized memory 集合
-- `open_questions` / `next_steps` 是 full-image 状态字段
-- `memory_delta` 只描述本次 snapshot 相对上一版的 memory 变化
+- `openQuestions` / `nextSteps` 是 full-image 状态字段
+- `memoryDelta` 只描述本次 snapshot 相对上一版的 memory 变化
 - 不再单独维护 `concepts` 列表；概念类信息通过 `ObservedMemory.category = "Concept"` 表达
 
 当前已经废弃的旧聚合行字段：
@@ -231,7 +235,7 @@ sidecar/MCP 返回的最终载体是 `MemoryHit[]`，但底层结构化读取在
 当前已确定：
 
 - `thinking` 属于独立 memory layer
-- 对外导航键格式为 `THINKING:{ulid}`
+- 对外导航键格式为 `thinking:{row_id}`
 
 当前未确定：
 

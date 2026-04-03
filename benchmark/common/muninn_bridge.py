@@ -11,6 +11,7 @@ from typing import Any
 REPO_ROOT = Path(__file__).resolve().parents[2]
 BRIDGE_PACKAGE_NAME = "@muninn/benchmark-locomo"
 BRIDGE_DIST = REPO_ROOT / "benchmark" / "locomo" / "dist" / "bridge.js"
+BRIDGE_SRC = REPO_ROOT / "benchmark" / "locomo" / "src" / "bridge.ts"
 
 
 class BridgeError(RuntimeError):
@@ -20,10 +21,8 @@ class BridgeError(RuntimeError):
 @dataclass
 class RecallHit:
     memory_id: str
-    source_id: str
-    mode: str
-    session_no: int
-    date_time: str
+    evidence_ids: list[str]
+    date_time: str | None
     title: str | None
     summary: str | None
     detail: str | None
@@ -34,7 +33,7 @@ class MuninnBridge:
         self.repo_root = repo_root or REPO_ROOT
 
     def ensure_built(self) -> None:
-        if BRIDGE_DIST.exists():
+        if BRIDGE_DIST.exists() and BRIDGE_DIST.stat().st_mtime >= BRIDGE_SRC.stat().st_mtime:
             return
         self._run_process(
             [
@@ -52,14 +51,12 @@ class MuninnBridge:
         self,
         data_file: Path,
         sample_id: str,
-        mode: str,
         muninn_home: Path,
     ) -> dict[str, Any]:
         return self._run_json(
             "import-sample",
             data_file=str(data_file),
             sample_id=sample_id,
-            mode=mode,
             muninn_home=str(muninn_home),
         )
 
@@ -80,10 +77,8 @@ class MuninnBridge:
             hits.append(
                 RecallHit(
                     memory_id=item["memory_id"],
-                    source_id=item["source_id"],
-                    mode=item["mode"],
-                    session_no=int(item["session_no"]),
-                    date_time=item["date_time"],
+                    evidence_ids=list(item.get("evidence_ids", [])),
+                    date_time=item.get("date_time"),
                     title=item.get("title"),
                     summary=item.get("summary"),
                     detail=item.get("detail"),
@@ -119,10 +114,8 @@ class MuninnBridge:
             results[key] = [
                 RecallHit(
                     memory_id=item["memory_id"],
-                    source_id=item["source_id"],
-                    mode=item["mode"],
-                    session_no=int(item["session_no"]),
-                    date_time=item["date_time"],
+                    evidence_ids=list(item.get("evidence_ids", [])),
+                    date_time=item.get("date_time"),
                     title=item.get("title"),
                     summary=item.get("summary"),
                     detail=item.get("detail"),

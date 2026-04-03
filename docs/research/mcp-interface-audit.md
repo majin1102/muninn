@@ -66,6 +66,6 @@ export interface MemoryResponse {
 - 读接口：`memoryId`
 - 文档术语：`sessionId`
 - public memory id 统一表述为 `memoryId = {memoryLayer}:{memoryPoint}`
-- 当前 session memory row 的 public memory id 为 `SESSION:{turn_id}`
+- 当前 session memory row 的 public memory id 为 `session:{row_id}`
 - 可选分组键：`session_id`
 - 长期格式方向：`memory_id = {memory_layer}:{memory_point}`

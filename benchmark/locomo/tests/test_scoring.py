@@ -3,69 +3,85 @@ from __future__ import annotations
 import unittest
 
 from benchmark.common.muninn_bridge import RecallHit
-from benchmark.locomo.heuristics import build_prediction, build_query_candidates, extract_date
-from benchmark.locomo.scoring import evaluate_question_answering, f1_score
+from benchmark.locomo.heuristics import build_query_candidates
+from benchmark.locomo.run import build_model_key, build_user_prompt, merge_evidence_ids
+from benchmark.locomo.scoring import annotate_qa_result, f1_score, score_recall
 
 
 class ScoringTests(unittest.TestCase):
-    def test_extract_date_normalizes_locomo_datetime(self) -> None:
-        self.assertEqual(extract_date("1:56 pm on 8 May, 2023"), "8 May 2023")
-
-    def test_build_prediction_prefers_date_for_category_two(self) -> None:
-        hit = RecallHit(
-            memory_id="SESSION:1",
-            source_id="D1:3",
-            mode="dialog",
-            session_no=1,
-            date_time="1:56 pm on 8 May, 2023",
-            title="LOCOMO dialog D1:3",
-            summary="Caroline attended a support group recently.",
-            detail="Response: 1:56 pm on 8 May, 2023",
-        )
-        self.assertEqual(
-            build_prediction("When did Caroline go to the support group?", 2, [hit]),
-            "8 May 2023",
-        )
-
     def test_category_five_requires_not_mentioned_string(self) -> None:
-        scores, recall = evaluate_question_answering(
-            [
-                {
-                    "category": 5,
-                    "question": "What did Caroline realize after the race?",
-                    "evidence": ["D2:3"],
-                    "muninn_dialog_top_5_prediction": "Not mentioned in the conversation",
-                    "muninn_dialog_top_5_prediction_context": ["D2:1"],
-                }
-            ],
-            "muninn_dialog_top_5_prediction",
+        qa = {
+            "category": 5,
+            "question": "What did Caroline realize after the race?",
+            "evidence": ["D2:3"],
+        }
+        annotate_qa_result(
+            qa,
+            "muninn_qa_test_top_5",
+            "Not mentioned in the conversation",
+            ["D2:1"],
         )
-        self.assertEqual(scores, [1.0])
-        self.assertEqual(recall, [0.0])
+        self.assertEqual(qa["muninn_qa_test_top_5_f1"], 1.0)
+        self.assertEqual(qa["muninn_qa_test_top_5_recall"], 0.0)
+
+    def test_recall_is_zero_when_evidence_exists_without_hits(self) -> None:
+        self.assertEqual(score_recall([], ["D2:3"]), 0.0)
+
+    def test_recall_supports_summary_session_matching(self) -> None:
+        self.assertEqual(score_recall(["S2"], ["D2:1", "D2:3"]), 1.0)
 
     def test_f1_score_handles_token_overlap(self) -> None:
         self.assertGreater(f1_score("mental health", "health"), 0.0)
-
-    def test_recall_is_zero_when_evidence_exists_without_context_hits(self) -> None:
-        scores, recall = evaluate_question_answering(
-            [
-                {
-                    "category": 2,
-                    "answer": "8 May 2023",
-                    "evidence": ["D2:3"],
-                    "muninn_dialog_top_5_prediction": "8 May 2023",
-                    "muninn_dialog_top_5_prediction_context": [],
-                }
-            ],
-            "muninn_dialog_top_5_prediction",
-        )
-        self.assertEqual(scores, [1.0])
-        self.assertEqual(recall, [0.0])
 
     def test_query_builder_emits_searchable_phrases(self) -> None:
         self.assertIn(
             "support group",
             build_query_candidates("What support group did Caroline join?"),
+        )
+
+    def test_merge_evidence_ids_dedupes_and_preserves_order(self) -> None:
+        hits = [
+            RecallHit(
+                memory_id="session:1",
+                evidence_ids=["D1:1", "D1:2"],
+                date_time="1:56 pm on 8 May, 2023",
+                title=None,
+                summary=None,
+                detail=None,
+            ),
+            RecallHit(
+                memory_id="observing:3",
+                evidence_ids=["D1:2", "D2:1"],
+                date_time=None,
+                title=None,
+                summary=None,
+                detail=None,
+            ),
+        ]
+        self.assertEqual(merge_evidence_ids(hits), ["D1:1", "D1:2", "D2:1"])
+
+    def test_prompt_contains_context_but_not_hidden_evidence_ids(self) -> None:
+        prompt = build_user_prompt(
+            "What support group did Caroline join?",
+            4,
+            [
+                RecallHit(
+                    memory_id="session:1",
+                    evidence_ids=["D1:1"],
+                    date_time="1:56 pm on 8 May, 2023",
+                    title="Conversation memory",
+                    summary="Caroline: I joined an LGBTQ support group.",
+                    detail="Prompt: Caroline: I joined an LGBTQ support group.\nResponse: Recorded.",
+                )
+            ],
+        )
+        self.assertIn("LGBTQ support group", prompt)
+        self.assertNotIn("D1:1", prompt)
+
+    def test_model_key_is_stable_and_sanitized(self) -> None:
+        self.assertEqual(
+            build_model_key("gpt-4.1-mini", 5),
+            "muninn_qa_gpt_4_1_mini_top_5",
         )
 
 

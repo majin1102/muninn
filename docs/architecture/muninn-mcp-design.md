@@ -65,8 +65,8 @@ export interface MemoryHit {
 
 当前有效语义：
 
-- `SESSION:{turn_id}`
-- `OBSERVING:{snapshot_id}`
+- `session:{row_id}`
+- `observing:{row_id}`
 
 其中：
 

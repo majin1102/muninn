@@ -56,8 +56,6 @@ function mapCoreLookupError(error: unknown): { status: number; body: ErrorRespon
   if (
     lowered.includes('invalid')
     || lowered.includes('memory layer')
-    || lowered.includes('ulid')
-    || lowered.includes("missing ':' separator")
   ) {
     return {
       status: 400,
