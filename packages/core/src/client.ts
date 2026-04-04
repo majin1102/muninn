@@ -593,6 +593,7 @@ function normalizeObserverWatermarkRecord(
 
 export const __testing = {
   waitForPromiseOrTimeout,
+  resolveRepoRoot,
   resolveDaemonLaunchSpec,
   resolveBundledDaemonExecutableName,
   formatDaemonStartError,

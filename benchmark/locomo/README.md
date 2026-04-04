@@ -6,11 +6,12 @@ The benchmark flow is:
 
 1. import one LoCoMo sample into an isolated Muninn home
 2. recall context from Muninn for each question
-3. send recalled context plus the question to one fixed OpenAI-compatible QA model
+3. turn recalled context plus the question into one benchmark prediction
 4. score final answer F1 and hidden recall
 
 This v1 runner does not mirror LoCoMo's original `dialog / observation / summary`
-RAG modes. It intentionally tests one Muninn entrypoint.
+RAG modes or the older `oracle / generated` split. It intentionally tests one
+Muninn entrypoint.
 
 ## Module Layout
 
@@ -61,13 +62,6 @@ Required:
 - `pnpm install`
 - a working Rust toolchain, because `@muninn/core` starts the Rust daemon
 - `python3`
-- an OpenAI-compatible chat endpoint
-
-Environment:
-
-- `OPENAI_API_KEY`
-- optionally `OPENAI_BASE_URL`
-
 ## Build
 
 Build the Node bridge once before running the benchmark:
@@ -82,6 +76,9 @@ You can also run the package test target, which rebuilds the bridge first:
 pnpm --filter @muninn/benchmark-locomo test
 ```
 
+Direct `python3 benchmark/locomo/run.py ...` runs also auto-build the bridge and
+export the bundled Muninn daemon when needed.
+
 ## Run
 
 ### Full run
@@ -90,7 +87,6 @@ pnpm --filter @muninn/benchmark-locomo test
 python3 benchmark/locomo/run.py \
   --data-file ../locomo/data/locomo10.json \
   --out-file benchmark/locomo/out/locomo10_results.json \
-  --qa-model gpt-4.1-mini \
   --top-k 5
 ```
 
@@ -101,7 +97,6 @@ python3 benchmark/locomo/run.py \
   --data-file ../locomo/data/locomo10.json \
   --out-file benchmark/locomo/out/sample_results.json \
   --sample-id <sample_id> \
-  --qa-model gpt-4.1-mini \
   --top-k 5
 ```
 
@@ -112,7 +107,6 @@ python3 benchmark/locomo/run.py \
   --data-file ../locomo/data/locomo10.json \
   --out-file benchmark/locomo/out/debug_results.json \
   --limit-questions 20 \
-  --qa-model gpt-4.1-mini \
   --top-k 5
 ```
 
@@ -125,12 +119,13 @@ For each `sample_id`, the runner:
 3. builds search query candidates from each question
 4. runs batch recall through Muninn
 5. renders recalled hits into a QA prompt
-6. asks one fixed QA model for the final answer
+6. writes one benchmark prediction per question
 7. scores answer F1 and hidden recall
 
 Hidden recall is computed inside the harness by resolving recalled `memory_id`s
 back to imported turn ids and then to LoCoMo evidence ids. Those ids are not
-shown to the QA model.
+shown to the prediction logic; the bridge only returns them to the harness as hidden
+`evidence_ids`.
 
 ## Output Files
 
@@ -138,9 +133,9 @@ The runner writes two files:
 
 - `<out-file>`
   - per-sample QA results
-  - includes `<model_key>_prediction`
-  - includes `<model_key>_f1`
-  - includes `<model_key>_recall`
+  - includes `muninn_top_<k>_prediction`
+  - includes `muninn_top_<k>_f1`
+  - includes `muninn_top_<k>_recall`
 - `<out-file stem>_stats.json`
   - aggregate F1 and hidden recall
   - grouped by category

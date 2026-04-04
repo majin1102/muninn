@@ -16,10 +16,8 @@ class ScoringTests(unittest.TestCase):
 
     def test_build_prediction_prefers_date_for_category_two(self) -> None:
         hit = RecallHit(
-            memory_id="session:1",
-            source_id="D1:3",
-            mode="dialog",
-            session_no=1,
+            memory_id="observing:1",
+            evidence_ids=["D1:3"],
             date_time="1:56 pm on 8 May, 2023",
             title="LOCOMO dialog D1:3",
             summary="Caroline attended a support group recently.",
@@ -37,11 +35,11 @@ class ScoringTests(unittest.TestCase):
                     "category": 5,
                     "question": "What did Caroline realize after the race?",
                     "evidence": ["D2:3"],
-                    "muninn_dialog_top_5_prediction": "Not mentioned in the conversation",
-                    "muninn_dialog_top_5_prediction_context": ["D2:1"],
+                    "muninn_top_5_prediction": "Not mentioned in the conversation",
+                    "muninn_top_5_prediction_context": ["D2:1"],
                 }
             ],
-            "muninn_dialog_top_5_prediction",
+            "muninn_top_5_prediction",
         )
         self.assertEqual(scores, [1.0])
         self.assertEqual(recall, [0.0])
@@ -53,11 +51,11 @@ class ScoringTests(unittest.TestCase):
                     "category": 5,
                     "question": "What did Caroline realize after the race?",
                     "evidence": ["D2:3"],
-                    "muninn_dialog_top_5_prediction": "Not mentioned in the conversation",
-                    "muninn_dialog_top_5_prediction_context": ["D2:3"],
+                    "muninn_top_5_prediction": "Not mentioned in the conversation",
+                    "muninn_top_5_prediction_context": ["D2:3"],
                 }
             ],
-            "muninn_dialog_top_5_prediction",
+            "muninn_top_5_prediction",
         )
         self.assertEqual(scores, [0.0])
         self.assertEqual(recall, [1.0])
@@ -70,11 +68,11 @@ class ScoringTests(unittest.TestCase):
                     "question": "What did Caroline realize after the race?",
                     "adversarial_answer": "No information available",
                     "evidence": [],
-                    "muninn_dialog_top_5_prediction": "No information available",
-                    "muninn_dialog_top_5_prediction_context": [],
+                    "muninn_top_5_prediction": "No information available",
+                    "muninn_top_5_prediction_context": [],
                 }
             ],
-            "muninn_dialog_top_5_prediction",
+            "muninn_top_5_prediction",
         )
         self.assertEqual(scores, [0.0])
         self.assertEqual(recall, [1.0])
@@ -89,11 +87,11 @@ class ScoringTests(unittest.TestCase):
                     "category": 2,
                     "answer": "8 May 2023",
                     "evidence": ["D2:3"],
-                    "muninn_dialog_top_5_prediction": "8 May 2023",
-                    "muninn_dialog_top_5_prediction_context": [],
+                    "muninn_top_5_prediction": "8 May 2023",
+                    "muninn_top_5_prediction_context": [],
                 }
             ],
-            "muninn_dialog_top_5_prediction",
+            "muninn_top_5_prediction",
         )
         self.assertEqual(scores, [1.0])
         self.assertEqual(recall, [0.0])
@@ -105,11 +103,11 @@ class ScoringTests(unittest.TestCase):
                     "category": 4,
                     "answer": "LGBTQ support group",
                     "evidence": ["D1:1", "D1:2", "D2:1"],
-                    "muninn_summary_top_5_prediction": "LGBTQ support group",
-                    "muninn_summary_top_5_prediction_context": ["S1"],
+                    "muninn_top_5_prediction": "LGBTQ support group",
+                    "muninn_top_5_prediction_context": ["S1"],
                 }
             ],
-            "muninn_summary_top_5_prediction",
+            "muninn_top_5_prediction",
         )
         self.assertEqual(scores, [1.0])
         self.assertEqual(recall, [2 / 3])
@@ -128,16 +126,16 @@ class ScoringTests(unittest.TestCase):
                     "question": "What support group did Caroline join?",
                     "answer": "LGBTQ support group",
                     "evidence": ["D1:1"],
-                    "muninn_summary_top_5_prediction": "LGBTQ support group",
-                    "muninn_summary_top_5_prediction_context": ["S1", "S2"],
+                    "muninn_top_5_prediction": "LGBTQ support group",
+                    "muninn_top_5_prediction_context": ["S1", "S2"],
                 }
             ],
-            "muninn_summary_top_5_prediction",
+            "muninn_top_5_prediction",
         )
         self.assertAlmostEqual(scores[0], 1.0)
         self.assertAlmostEqual(recall[0], 2 / 3)
 
-    def test_pipeline_aware_stats_and_report(self) -> None:
+    def test_single_entry_stats_and_report(self) -> None:
         samples = [
             {
                 "sample_id": "sample-1",
@@ -147,57 +145,32 @@ class ScoringTests(unittest.TestCase):
                         "category": 2,
                         "answer": "8 May 2023",
                         "evidence": ["D1:3"],
-                        "muninn_oracle_dialog_top_5_prediction": "8 May 2023",
-                        "muninn_oracle_dialog_top_5_prediction_context": ["D1:3"],
-                        "muninn_generated_dialog_top_5_prediction": "12 June 2024",
-                        "muninn_generated_dialog_top_5_prediction_context": ["D1:3"],
+                        "muninn_top_5_prediction": "8 May 2023",
+                        "muninn_top_5_prediction_context": ["D1:3"],
                     },
                     {
                         "question": "What did Caroline realize after the race?",
                         "category": 5,
                         "evidence": ["D2:3"],
-                        "muninn_oracle_dialog_top_5_prediction": "Not mentioned in the conversation",
-                        "muninn_oracle_dialog_top_5_prediction_context": ["D2:3"],
-                        "muninn_generated_dialog_top_5_prediction": "Not mentioned in the conversation",
-                        "muninn_generated_dialog_top_5_prediction_context": ["D9:1"],
+                        "muninn_top_5_prediction": "Not mentioned in the conversation",
+                        "muninn_top_5_prediction_context": ["D9:1"],
                     },
                 ],
             }
         ]
 
-        stats = build_stats(
-            samples,
-            {
-                "oracle": {"dialog": "muninn_oracle_dialog_top_5"},
-                "generated": {"dialog": "muninn_generated_dialog_top_5"},
-            },
-        )
-        self.assertEqual(stats["pipelines"]["oracle"]["modes"]["dialog"]["model_key"], "muninn_oracle_dialog_top_5")
-        self.assertEqual(stats["pipelines"]["generated"]["modes"]["dialog"]["qa_count"], 2)
-        self.assertAlmostEqual(stats["pipelines"]["oracle"]["modes"]["dialog"]["average_f1"], 0.5)
-        self.assertAlmostEqual(stats["pipelines"]["generated"]["modes"]["dialog"]["average_f1"], 0.5)
-        self.assertAlmostEqual(stats["oracle_vs_generated_delta"]["modes"]["dialog"]["average_f1"], 0.0)
-        self.assertAlmostEqual(stats["oracle_vs_generated_delta"]["modes"]["dialog"]["average_recall"], -0.5)
+        stats = build_stats(samples, "muninn_top_5")
+        self.assertEqual(stats["model_key"], "muninn_top_5")
+        self.assertEqual(stats["qa_count"], 2)
+        self.assertAlmostEqual(stats["average_f1"], 1.0)
+        self.assertAlmostEqual(stats["average_recall"], 0.5)
 
-        report = build_error_report(
-            samples,
-            {
-                "oracle": {"dialog": "muninn_oracle_dialog_top_5"},
-                "generated": {"dialog": "muninn_generated_dialog_top_5"},
-            },
-        )
-        dialog_report = report["pipelines"]["generated"]["modes"]["dialog"]
-        self.assertEqual(dialog_report["model_key"], "muninn_generated_dialog_top_5")
-        self.assertEqual(len(dialog_report["top_recall_misses"]), 1)
-        self.assertEqual(dialog_report["top_recall_misses"][0]["sample_id"], "sample-1")
-        self.assertEqual(len(dialog_report["top_extraction_misses"]), 1)
-        self.assertEqual(dialog_report["top_extraction_misses"][0]["qa_index"], 0)
-        self.assertEqual(dialog_report["top_adversarial_conflicts"], [])
-        self.assertEqual(report["oracle_vs_generated_delta"]["modes"]["dialog"]["qa_count"], 2)
-        self.assertEqual(
-            report["oracle_vs_generated_delta"]["modes"]["dialog"]["top_deltas"][0]["sample_id"],
-            "sample-1",
-        )
+        report = build_error_report(samples, "muninn_top_5")
+        self.assertEqual(report["model_key"], "muninn_top_5")
+        self.assertEqual(report["qa_count"], 2)
+        self.assertEqual(len(report["top_recall_misses"]), 1)
+        self.assertEqual(report["top_recall_misses"][0]["sample_id"], "sample-1")
+        self.assertEqual(report["top_extraction_misses"], [])
 
         adversarial_samples = [
             {
@@ -209,20 +182,18 @@ class ScoringTests(unittest.TestCase):
                         "answer": "blue tea",
                         "adversarial_answer": "red tea",
                         "evidence": ["D3:1"],
-                        "muninn_oracle_dialog_top_5_prediction": "red tea",
-                        "muninn_oracle_dialog_top_5_prediction_context": ["D3:1"],
+                        "muninn_top_5_prediction": "red tea",
+                        "muninn_top_5_prediction_context": ["D3:1"],
                     }
                 ],
             }
         ]
         adversarial_report = build_error_report(
             adversarial_samples,
-            {
-                "oracle": {"dialog": "muninn_oracle_dialog_top_5"},
-            },
+            "muninn_top_5",
         )
         self.assertEqual(
-            adversarial_report["pipelines"]["oracle"]["modes"]["dialog"]["top_adversarial_conflicts"][0]["sample_id"],
+            adversarial_report["top_adversarial_conflicts"][0]["sample_id"],
             "sample-2",
         )
 

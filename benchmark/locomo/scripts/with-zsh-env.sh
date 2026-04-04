@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/zsh
 set -eu
 
 if [ "$#" -eq 0 ]; then
@@ -8,7 +8,7 @@ fi
 
 if [ -f "$HOME/.zshrc" ]; then
   # Source the user's interactive zsh PATH tweaks before running benchmark tools.
-  . "$HOME/.zshrc"
+  source "$HOME/.zshrc"
 fi
 
 exec "$@"

@@ -32,4 +32,4 @@ if [ "$has_data_file" -eq 0 ]; then
 fi
 
 cd "$ROOT_DIR"
-sh "$WITH_ZSH_ENV" python3 benchmark/locomo/run.py "$@"
+/bin/zsh "$WITH_ZSH_ENV" python3 benchmark/locomo/run.py "$@"
