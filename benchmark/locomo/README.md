@@ -191,6 +191,8 @@ sh benchmark/locomo/scripts/run.sh \
   --top-k 5
 ```
 
+If `--sample-id` does not exist in the selected dataset, the runner exits with an error instead of writing an empty benchmark result.
+
 ### Limit QA Count
 
 ```bash

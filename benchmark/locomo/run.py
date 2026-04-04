@@ -49,6 +49,7 @@ def main() -> None:
     bridge = MuninnBridge()
     samples = load_samples(args.data_file)
     selected = iter_target_samples(samples, args.sample_id)
+    ensure_selected_samples(selected, args.sample_id, args.data_file)
     reporter = ProgressReporter(args.progress_file)
     reporter.start()
 
@@ -161,6 +162,19 @@ def main() -> None:
         raise
     finally:
         reporter.close()
+
+
+def ensure_selected_samples(
+    selected: list[dict[str, Any]],
+    sample_id: str | None,
+    data_file: Path,
+) -> None:
+    if sample_id is None or selected:
+        return
+    raise ValueError(
+        f"LoCoMo sample not found: {sample_id} in {data_file}. "
+        "Check that --sample-id matches a sample_id present in the dataset."
+    )
 
 
 def parse_pipelines(raw: str) -> list[str]:
