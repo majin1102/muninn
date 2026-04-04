@@ -15,7 +15,10 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 use crate::config::{WatchdogConfig, watchdog_config};
-use crate::storage::{DatasetStats, Storage};
+use crate::format::memory::semantic_index::SemanticIndexRow;
+use crate::format::table::{
+    ObservingTable, SemanticIndexTable, SessionTable, TableOptions, TableStats,
+};
 
 pub(crate) const SEMANTIC_VECTOR_INDEX_NAME: &str = "semantic_vector_idx";
 
@@ -47,7 +50,7 @@ struct DatasetWatchState {
 
 #[derive(Clone)]
 pub(crate) struct Watchdog {
-    storage: Storage,
+    table_options: TableOptions,
     config: WatchdogConfig,
     state: Arc<Mutex<HashMap<ManagedDataset, DatasetWatchState>>>,
 }
@@ -58,9 +61,9 @@ pub(crate) struct WatchdogRuntime {
 }
 
 impl Watchdog {
-    pub(crate) fn new(storage: Storage) -> Result<Self> {
+    pub(crate) fn new(table_options: TableOptions) -> Result<Self> {
         Ok(Self {
-            storage,
+            table_options,
             config: watchdog_config()?,
             state: Arc::new(Mutex::new(HashMap::new())),
         })
@@ -113,14 +116,14 @@ impl Watchdog {
     }
 
     async fn bootstrap_turn(&self) -> Result<()> {
-        if let Some(stats) = self.storage.sessions().maintenance_stats().await? {
+        if let Some(stats) = self.session_table().maintenance_stats().await? {
             self.update_state(ManagedDataset::Turn, stats, false).await;
         }
         Ok(())
     }
 
     async fn bootstrap_observing(&self) -> Result<()> {
-        if let Some(stats) = self.storage.observings().maintenance_stats().await? {
+        if let Some(stats) = self.observing_table().maintenance_stats().await? {
             self.update_state(ManagedDataset::Observing, stats, false)
                 .await;
         }
@@ -128,7 +131,7 @@ impl Watchdog {
     }
 
     async fn bootstrap_semantic_index(&self) -> Result<()> {
-        let mut dataset = self.storage.semantic_index().ensure_dataset().await?;
+        let mut dataset = self.semantic_index_table().ensure_dataset().await?;
         let created = ensure_semantic_vector_index(&mut dataset, &self.config).await?;
         let stats = dataset_stats(&dataset).await?;
         self.update_state(ManagedDataset::SemanticIndex, stats, created)
@@ -145,7 +148,7 @@ impl Watchdog {
     }
 
     async fn maintain_turn(&self) -> Result<()> {
-        let Some(mut dataset) = self.storage.sessions().try_open_dataset().await? else {
+        let Some(mut dataset) = self.session_table().try_open_dataset().await? else {
             return Ok(());
         };
         let stats = dataset_stats(&dataset).await?;
@@ -166,7 +169,7 @@ impl Watchdog {
     }
 
     async fn maintain_observing(&self) -> Result<()> {
-        let Some(mut dataset) = self.storage.observings().try_open_dataset().await? else {
+        let Some(mut dataset) = self.observing_table().try_open_dataset().await? else {
             return Ok(());
         };
         let stats = dataset_stats(&dataset).await?;
@@ -187,7 +190,7 @@ impl Watchdog {
     }
 
     async fn maintain_semantic_index(&self) -> Result<()> {
-        let mut dataset = self.storage.semantic_index().ensure_dataset().await?;
+        let mut dataset = self.semantic_index_table().ensure_dataset().await?;
         let initial_stats = dataset_stats(&dataset).await?;
         if self.seen_version(ManagedDataset::SemanticIndex).await == Some(initial_stats.version) {
             return Ok(());
@@ -218,7 +221,7 @@ impl Watchdog {
             .and_then(|state| state.last_seen_version)
     }
 
-    async fn update_state(&self, kind: ManagedDataset, stats: DatasetStats, maintained: bool) {
+    async fn update_state(&self, kind: ManagedDataset, stats: TableStats, maintained: bool) {
         let mut state = self.state.lock().await;
         let entry = state.entry(kind).or_default();
         entry.last_seen_version = Some(stats.version);
@@ -236,6 +239,18 @@ impl Watchdog {
             .get(&kind)
             .cloned()
             .unwrap_or_default()
+    }
+
+    fn session_table(&self) -> SessionTable {
+        SessionTable::new(self.table_options.clone())
+    }
+
+    fn observing_table(&self) -> ObservingTable {
+        ObservingTable::new(self.table_options.clone())
+    }
+
+    fn semantic_index_table(&self) -> SemanticIndexTable {
+        SemanticIndexTable::new(self.table_options.clone())
     }
 }
 
@@ -262,8 +277,8 @@ impl Drop for WatchdogRuntime {
     }
 }
 
-async fn dataset_stats(dataset: &Dataset) -> Result<DatasetStats> {
-    Ok(DatasetStats {
+async fn dataset_stats(dataset: &Dataset) -> Result<TableStats> {
+    Ok(TableStats {
         version: dataset.version().version,
         fragment_count: dataset.get_fragments().len(),
         row_count: dataset.count_rows(None).await?,
@@ -309,11 +324,13 @@ mod tests {
     use serde_json::json;
 
     use super::{ManagedDataset, SEMANTIC_VECTOR_INDEX_NAME, Watchdog};
+    use crate::format::memory::semantic_index::SemanticIndexRow;
+    use crate::format::table::SemanticIndexTable;
+    use crate::format::table::TableOptions;
     use crate::llm::config::llm_test_env_guard;
-    use crate::storage::Storage;
 
-    fn test_storage() -> Storage {
-        Storage::local(crate::config::data_root().unwrap()).unwrap()
+    fn test_table_options() -> TableOptions {
+        TableOptions::local(crate::config::data_root().unwrap()).unwrap()
     }
 
     fn write_watchdog_config(dir: &tempfile::TempDir) {
@@ -356,10 +373,9 @@ mod tests {
         let _guard = llm_test_env_guard();
         let dir = tempfile::tempdir().unwrap();
         write_watchdog_config(&dir);
-        let storage = test_storage();
-        storage
-            .semantic_index()
-            .upsert(vec![crate::format::semantic_index::SemanticIndexRow {
+        let table_options = test_table_options();
+        SemanticIndexTable::new(table_options.clone())
+            .upsert(vec![SemanticIndexRow {
                 id: "mem-bootstrap".to_string(),
                 memory_id: "observing:1001".to_string(),
                 text: "text-bootstrap".to_string(),
@@ -370,12 +386,11 @@ mod tests {
             }])
             .await
             .unwrap();
-        let watchdog = Watchdog::new(storage.clone()).unwrap();
+        let watchdog = Watchdog::new(table_options.clone()).unwrap();
 
         watchdog.bootstrap().await.unwrap();
 
-        let dataset = storage
-            .semantic_index()
+        let dataset = SemanticIndexTable::new(table_options)
             .try_open_dataset()
             .await
             .unwrap()
@@ -397,14 +412,13 @@ mod tests {
         let _guard = llm_test_env_guard();
         let dir = tempfile::tempdir().unwrap();
         write_watchdog_config(&dir);
-        let storage = test_storage();
-        let watchdog = Watchdog::new(storage.clone()).unwrap();
+        let table_options = test_table_options();
+        let watchdog = Watchdog::new(table_options.clone()).unwrap();
         watchdog.bootstrap().await.unwrap();
 
         for index in 0..3 {
-            storage
-                .semantic_index()
-                .upsert(vec![crate::format::semantic_index::SemanticIndexRow {
+            SemanticIndexTable::new(table_options.clone())
+                .upsert(vec![SemanticIndexRow {
                     id: format!("mem-{index}"),
                     memory_id: format!("observing:{}", 1100 + index),
                     text: format!("text-{index}"),
@@ -433,8 +447,8 @@ mod tests {
         let _guard = llm_test_env_guard();
         let dir = tempfile::tempdir().unwrap();
         write_watchdog_config(&dir);
-        let storage = test_storage();
-        let watchdog = Watchdog::new(storage).unwrap();
+        let table_options = test_table_options();
+        let watchdog = Watchdog::new(table_options).unwrap();
         let runtime = watchdog.spawn();
 
         tokio::time::timeout(Duration::from_secs(1), runtime.shutdown(true))

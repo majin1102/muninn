@@ -316,19 +316,6 @@ mod tests {
         parse_turn_output, should_use_llm_summary,
     };
     use crate::llm::config::{llm_test_env_guard, write_test_muninn_config};
-    use serde::Deserialize;
-
-    #[derive(Debug, Deserialize)]
-    struct TurnCasesFile {
-        cases: Vec<TurnCase>,
-    }
-
-    #[derive(Debug, Deserialize)]
-    struct TurnCase {
-        name: String,
-        prompt: String,
-        response: String,
-    }
 
     #[tokio::test]
     async fn generate_without_provider_keeps_turn_optional() {
@@ -492,66 +479,5 @@ mod tests {
 
         assert!(generated.title.chars().count() <= 100, "{generated:?}");
         assert!(generated.summary.chars().count() <= 1000, "{generated:?}");
-    }
-
-    #[tokio::test]
-    #[ignore = "live provider validation against configured turn model"]
-    async fn turn_with_configured_provider() {
-        let cases: TurnCasesFile =
-            serde_yaml::from_str(include_str!("../../tests/fixtures/turn_cases.yaml"))
-                .expect("turn_cases.yaml must be valid");
-        let case = cases
-            .cases
-            .into_iter()
-            .find(|item| item.name == "observing_debugging_review")
-            .expect("fixture case observing_debugging_review must exist");
-        let prompt = case.prompt;
-        let response = case.response;
-
-        let generated = TurnGenerator::generate_if_configured(Some(prompt.as_str()), &response)
-            .await
-            .expect("live provider call should succeed")
-            .expect("configured provider should return a turn");
-
-        println!("LIVE TURN INPUT PROMPT:\n{prompt}\n");
-        println!("LIVE TURN INPUT RESPONSE:\n{response}\n");
-        println!("LIVE TURN OUTPUT TITLE:\n{}\n", generated.title);
-        println!("LIVE TURN OUTPUT SUMMARY:\n{}\n", generated.summary);
-
-        assert!(!generated.title.trim().is_empty());
-        assert!(!generated.summary.trim().is_empty());
-        assert!(!generated.title.contains('\n'));
-        assert!(!generated.summary.contains('\n'));
-        assert!(generated.title.len() <= 100);
-        assert!(generated.summary.len() <= 1200);
-    }
-
-    #[test]
-    fn turn_fixtures_are_non_empty_and_named_uniquely() {
-        let cases: TurnCasesFile =
-            serde_yaml::from_str(include_str!("../../tests/fixtures/turn_cases.yaml"))
-                .expect("turn_cases.yaml must be valid");
-        let mut names = std::collections::BTreeSet::new();
-        assert!(
-            cases.cases.len() >= 3,
-            "expected multiple turn fixture cases"
-        );
-        for case in cases.cases {
-            assert!(
-                names.insert(case.name.clone()),
-                "duplicate case name: {}",
-                case.name
-            );
-            assert!(
-                !case.prompt.trim().is_empty(),
-                "prompt must not be empty: {}",
-                case.name
-            );
-            assert!(
-                !case.response.trim().is_empty(),
-                "response must not be empty: {}",
-                case.name
-            );
-        }
     }
 }

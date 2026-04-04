@@ -240,10 +240,7 @@ fn load_muninn_config() -> Result<Option<MuninnConfig>> {
     let raw = fs::read_to_string(&path)
         .map_err(|error| Error::io(format!("failed to read {}: {error}", path.display())))?;
     let parsed = serde_json::from_str::<MuninnConfig>(&raw).map_err(|error| {
-        Error::invalid_input(format!(
-            "invalid Muninn config {}: {error}",
-            path.display()
-        ))
+        Error::invalid_input(format!("invalid Muninn config {}: {error}", path.display()))
     })?;
     Ok(Some(parsed))
 }

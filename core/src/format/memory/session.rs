@@ -4,6 +4,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use crate::format::memory::{MemoryId, MemoryLayer, deserialize_memory_id, serialize_memory_id};
+use crate::session::{
+    SessionKey, SessionUpdate, has_text_content, merge_artifacts, merge_metadata_field,
+    merge_prompt, merge_tool_calling,
+};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
@@ -11,28 +15,6 @@ pub(crate) enum TurnMetadataSource {
     Fallback,
     Generated,
     User,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub(crate) enum SessionKey {
-    Session {
-        session_id: String,
-        agent: String,
-        observer: String,
-    },
-    Agent {
-        agent: String,
-        observer: String,
-    },
-    Observer {
-        observer: String,
-    },
-}
-
-#[derive(Debug, Clone)]
-pub struct Session {
-    key: SessionKey,
-    open_turn: Option<SessionTurn>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -62,108 +44,13 @@ pub struct SessionTurn {
     pub observing_epoch: Option<u64>,
 }
 
-#[derive(Debug, Clone)]
-pub struct SessionWrite {
-    pub session_id: Option<String>,
-    pub agent: String,
-    pub observer: String,
-    pub title: Option<String>,
-    pub summary: Option<String>,
-    pub(crate) title_source: Option<TurnMetadataSource>,
-    pub(crate) summary_source: Option<TurnMetadataSource>,
-    pub tool_calling: Option<Vec<String>>,
-    pub artifacts: Option<HashMap<String, String>>,
-    pub prompt: Option<String>,
-    pub response: Option<String>,
-}
-
-impl SessionKey {
-    pub(crate) fn from_parts(session_id: Option<&str>, agent: &str, observer: &str) -> Self {
-        if let Some(session_id) = session_id.map(str::trim).filter(|value| !value.is_empty()) {
-            return Self::Session {
-                session_id: session_id.to_string(),
-                agent: agent.to_string(),
-                observer: observer.to_string(),
-            };
-        }
-        if !agent.trim().is_empty() {
-            return Self::Agent {
-                agent: agent.to_string(),
-                observer: observer.to_string(),
-            };
-        }
-        Self::Observer {
-            observer: observer.to_string(),
-        }
-    }
-
-    pub(crate) fn same_group_as(&self, other: &Self) -> bool {
-        self == other
-    }
-}
-
-impl Session {
-    pub(crate) fn new(key: SessionKey, open_turn: Option<SessionTurn>) -> Result<Self> {
-        if let Some(turn) = open_turn.as_ref() {
-            if turn.session_key() != key {
-                return Err(Error::invalid_input(
-                    "open turn session key does not match session",
-                ));
-            }
-            if !turn.is_open() {
-                return Err(Error::invalid_input(
-                    "open turn must not contain a response",
-                ));
-            }
-        }
-        Ok(Self { key, open_turn })
-    }
-
-    pub(crate) fn key(&self) -> &SessionKey {
-        &self.key
-    }
-
-    pub(crate) fn open_turn(&self) -> Option<&SessionTurn> {
-        self.open_turn.as_ref()
-    }
-
-    pub(crate) fn preview_prompt(&self, incoming: Option<&str>) -> Option<String> {
-        let current = self
-            .open_turn
-            .as_ref()
-            .filter(|turn| turn.is_open())
-            .and_then(|turn| turn.prompt.as_deref());
-        merge_prompt(current, incoming)
-    }
-
-    pub fn apply(&mut self, write: SessionWrite) -> Result<Option<SessionTurn>> {
-        if self.key != write.session_key() {
-            return Err(Error::invalid_input(
-                "message session does not match session",
-            ));
-        }
-
-        let mut turn = if let Some(open_turn) = self.open_turn.take() {
-            open_turn
-        } else {
-            SessionTurn::new_pending(&write)
-        };
-        turn.merge(&write)?;
-        if turn.is_open() {
-            self.open_turn = Some(turn);
-            Ok(None)
-        } else {
-            Ok(Some(turn))
-        }
-    }
-}
-
 impl SessionTurn {
-    pub fn new(write: &SessionWrite) -> Self {
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn new(write: &SessionUpdate) -> Self {
         Self::new_pending(write)
     }
 
-    pub fn new_pending(write: &SessionWrite) -> Self {
+    pub(crate) fn new_pending(write: &SessionUpdate) -> Self {
         let now = Utc::now();
         Self {
             turn_id: MemoryId::new(MemoryLayer::Session, u64::MAX),
@@ -184,7 +71,7 @@ impl SessionTurn {
         }
     }
 
-    pub fn merge(&mut self, update: &SessionWrite) -> Result<()> {
+    pub(crate) fn merge(&mut self, update: &SessionUpdate) -> Result<()> {
         if self.session_key() != update.session_key() {
             return Err(Error::invalid_input(
                 "message session does not match open turn",
@@ -259,178 +146,19 @@ impl SessionTurn {
     }
 }
 
-impl SessionWrite {
-    pub(crate) fn session_key(&self) -> SessionKey {
-        SessionKey::from_parts(self.session_id.as_deref(), &self.agent, &self.observer)
-    }
-
-    pub(crate) fn title_source(&self) -> Option<TurnMetadataSource> {
-        has_text_content(self.title.as_deref())
-            .then(|| self.title_source.unwrap_or(TurnMetadataSource::User))
-    }
-
-    pub(crate) fn summary_source(&self) -> Option<TurnMetadataSource> {
-        has_text_content(self.summary.as_deref())
-            .then(|| self.summary_source.unwrap_or(TurnMetadataSource::User))
-    }
-
-    pub fn validate(&self) -> Result<()> {
-        let has_content = has_string_list_content(self.tool_calling.as_ref())
-            || has_string_map_content(self.artifacts.as_ref())
-            || has_text_content(self.prompt.as_deref())
-            || has_text_content(self.response.as_deref());
-
-        if has_content {
-            Ok(())
-        } else {
-            Err(Error::invalid_input(
-                "turn must include at least one message field",
-            ))
-        }
-    }
-}
-
-pub(crate) fn has_text_content(value: Option<&str>) -> bool {
-    value.map(|value| !value.trim().is_empty()).unwrap_or(false)
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct OpenTurnReconciliation {
-    pub(crate) canonical_turn: SessionTurn,
-    pub(crate) discarded_turn_ids: Vec<MemoryId>,
-}
-
-pub(crate) fn reconcile_open_turns(turns: Vec<SessionTurn>) -> Result<OpenTurnReconciliation> {
-    if turns.is_empty() {
-        return Err(Error::invalid_input(
-            "open turn reconciliation requires turns",
-        ));
-    }
-
-    let mut sorted = turns;
-    sorted.sort_by(|left, right| left.turn_id.cmp(&right.turn_id));
-    let expected_key = sorted[0].session_key();
-    if sorted
-        .iter()
-        .any(|turn| turn.session_key() != expected_key || !turn.is_open())
-    {
-        return Err(Error::invalid_input(
-            "open turn reconciliation requires turns from one open session",
-        ));
-    }
-
-    let mut canonical_turn = sorted
-        .last()
-        .cloned()
-        .expect("sorted turns should contain canonical turn");
-    let discarded_turn_ids = sorted[..sorted.len() - 1]
-        .iter()
-        .map(|turn| turn.turn_id)
-        .collect::<Vec<_>>();
-
-    let mut merged_prompt = None;
-    let mut merged_tool_calling = None;
-    let mut merged_artifacts = None;
-    let mut latest_updated_at = canonical_turn.updated_at;
-    for turn in &sorted {
-        merged_prompt = merge_prompt(merged_prompt.as_deref(), turn.prompt.as_deref());
-        merge_tool_calling(&mut merged_tool_calling, turn.tool_calling.as_ref());
-        merge_artifacts(&mut merged_artifacts, turn.artifacts.as_ref());
-        if turn.updated_at > latest_updated_at {
-            latest_updated_at = turn.updated_at;
-        }
-    }
-
-    canonical_turn.prompt = merged_prompt;
-    canonical_turn.tool_calling = merged_tool_calling;
-    canonical_turn.artifacts = merged_artifacts;
-    canonical_turn.response = None;
-    canonical_turn.observing_epoch = None;
-    canonical_turn.updated_at = latest_updated_at;
-    // TODO: use an LLM-assisted reconciliation strategy for title/summary conflicts.
-
-    Ok(OpenTurnReconciliation {
-        canonical_turn,
-        discarded_turn_ids,
-    })
-}
-
-fn merge_prompt(current: Option<&str>, incoming: Option<&str>) -> Option<String> {
-    let current = current.filter(|value| !value.trim().is_empty());
-    let incoming = incoming.filter(|value| !value.trim().is_empty());
-    match (current, incoming) {
-        (Some(current), Some(incoming)) if current == incoming => Some(current.to_string()),
-        (Some(current), Some(incoming)) => Some(format!("{current}\n\n{incoming}")),
-        (Some(current), None) => Some(current.to_string()),
-        (None, Some(incoming)) => Some(incoming.to_string()),
-        (None, None) => None,
-    }
-}
-
-fn has_string_list_content(value: Option<&Vec<String>>) -> bool {
-    value.map(|entries| !entries.is_empty()).unwrap_or(false)
-}
-
-fn has_string_map_content(value: Option<&HashMap<String, String>>) -> bool {
-    value.map(|entries| !entries.is_empty()).unwrap_or(false)
-}
-
-fn merge_tool_calling(current: &mut Option<Vec<String>>, incoming: Option<&Vec<String>>) {
-    let Some(incoming) = incoming else {
-        return;
-    };
-    if incoming.is_empty() {
-        return;
-    }
-    let current_values = current.get_or_insert_with(Vec::new);
-    current_values.extend(incoming.iter().cloned());
-}
-
-fn merge_artifacts(
-    current: &mut Option<HashMap<String, String>>,
-    incoming: Option<&HashMap<String, String>>,
-) {
-    let Some(incoming) = incoming else {
-        return;
-    };
-    if incoming.is_empty() {
-        return;
-    }
-    let current_values = current.get_or_insert_with(HashMap::new);
-    for (key, value) in incoming {
-        current_values.insert(key.clone(), value.clone());
-    }
-}
-
-fn merge_metadata_field(
-    current: &mut Option<String>,
-    current_source: &mut Option<TurnMetadataSource>,
-    incoming: Option<&str>,
-    incoming_source: Option<TurnMetadataSource>,
-) {
-    let Some(incoming) = incoming.filter(|value| !value.trim().is_empty()) else {
-        return;
-    };
-    let should_replace =
-        !has_text_content(current.as_deref()) || incoming_source >= *current_source;
-    if should_replace {
-        *current = Some(incoming.to_string());
-        *current_source = incoming_source;
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
     use std::str::FromStr;
     use std::sync::Arc;
 
-    use super::{SessionKey, SessionTurn, SessionWrite, TurnMetadataSource, reconcile_open_turns};
+    use super::{SessionTurn, TurnMetadataSource};
     use crate::format::memory::{MemoryId, MemoryLayer};
+    use crate::format::table::{SessionSelect, SessionTable, TableOptions};
     use crate::memory::sessions::{apply_list_mode, get, timeline, timeline_from_source};
     use crate::memory::types::{ListMode, MemoryView};
-    use crate::service::{PostMessage, Service};
-    use crate::storage::{SessionSelect, Storage};
+    use crate::muninn::{Muninn, PostMessage};
+    use crate::session::{Session, SessionKey, SessionUpdate, reconcile_open_turns};
     use chrono::{TimeZone, Utc};
     use tokio::sync::Barrier;
 
@@ -459,8 +187,12 @@ mod tests {
         }
     }
 
+    fn session_table(table_options: &TableOptions) -> SessionTable {
+        SessionTable::new(table_options.to_owned())
+    }
+
     async fn post(
-        storage: &Storage,
+        table_options: &TableOptions,
         session_id: Option<&str>,
         agent: &str,
         title: Option<&str>,
@@ -470,7 +202,7 @@ mod tests {
         prompt: Option<&str>,
         response: Option<&str>,
     ) -> SessionTurn {
-        Service::new(storage.clone())
+        Muninn::new(table_options.clone())
             .await
             .unwrap()
             .sessions()
@@ -551,7 +283,7 @@ mod tests {
 
     #[test]
     fn session_turn_update_validate_requires_content() {
-        let update = SessionWrite {
+        let update = SessionUpdate {
             session_id: Some("group".to_string()),
             agent: "agent".to_string(),
             observer: "observer".to_string(),
@@ -571,10 +303,10 @@ mod tests {
     #[test]
     fn session_apply_seals_completed_turn_without_assigning_observer_epoch() {
         let key = SessionKey::from_parts(Some("group"), "agent", "observer");
-        let mut session = super::Session::new(key, None).unwrap();
+        let mut session = Session::new(key, None).unwrap();
 
         let first = session
-            .apply(SessionWrite {
+            .apply(SessionUpdate {
                 session_id: Some("group".to_string()),
                 agent: "agent".to_string(),
                 observer: "observer".to_string(),
@@ -592,7 +324,7 @@ mod tests {
         assert_eq!(session.open_turn().unwrap().observing_epoch, None);
 
         let sealed = session
-            .apply(SessionWrite {
+            .apply(SessionUpdate {
                 session_id: Some("group".to_string()),
                 agent: "agent".to_string(),
                 observer: "observer".to_string(),
@@ -613,7 +345,7 @@ mod tests {
 
     #[test]
     fn summary_priority_allows_upgrading_fallback_to_generated_to_user() {
-        let mut turn = SessionTurn::new(&SessionWrite {
+        let mut turn = SessionTurn::new(&SessionUpdate {
             session_id: Some("group".to_string()),
             agent: "agent".to_string(),
             observer: "observer".to_string(),
@@ -627,7 +359,7 @@ mod tests {
             response: None,
         });
 
-        turn.merge(&SessionWrite {
+        turn.merge(&SessionUpdate {
             session_id: Some("group".to_string()),
             agent: "agent".to_string(),
             observer: "observer".to_string(),
@@ -644,7 +376,7 @@ mod tests {
         assert_eq!(turn.summary.as_deref(), Some("fallback"));
         assert_eq!(turn.summary_source, Some(TurnMetadataSource::Fallback));
 
-        turn.merge(&SessionWrite {
+        turn.merge(&SessionUpdate {
             session_id: Some("group".to_string()),
             agent: "agent".to_string(),
             observer: "observer".to_string(),
@@ -661,7 +393,7 @@ mod tests {
         assert_eq!(turn.summary.as_deref(), Some("generated"));
         assert_eq!(turn.summary_source, Some(TurnMetadataSource::Generated));
 
-        turn.merge(&SessionWrite {
+        turn.merge(&SessionUpdate {
             session_id: Some("group".to_string()),
             agent: "agent".to_string(),
             observer: "observer".to_string(),
@@ -738,10 +470,10 @@ mod tests {
     async fn summary_input_is_persisted_without_summarizer() {
         let _guard = crate::llm::config::llm_test_env_guard();
         let dir = tempfile::tempdir().unwrap();
-        let storage = Storage::local(dir.path()).unwrap();
+        let table_options = TableOptions::local(dir.path()).unwrap();
 
         let turn = post(
-            &storage,
+            &table_options,
             Some("group-a"),
             "agent-a",
             None,
@@ -754,7 +486,7 @@ mod tests {
         .await;
 
         assert_eq!(turn.summary.as_deref(), Some("provided summary"));
-        let persisted = get(&storage, &turn.memory_id().unwrap())
+        let persisted = get(&table_options, &turn.memory_id().unwrap())
             .await
             .unwrap()
             .unwrap();
@@ -765,10 +497,10 @@ mod tests {
     async fn detail_rejects_invalid_memory_layers_and_formats() {
         let _guard = crate::llm::config::llm_test_env_guard();
         let dir = tempfile::tempdir().unwrap();
-        let storage = Storage::local(dir.path()).unwrap();
+        let table_options = TableOptions::local(dir.path()).unwrap();
 
         let turn = post(
-            &storage,
+            &table_options,
             Some("group-a"),
             "agent-a",
             None,
@@ -781,7 +513,7 @@ mod tests {
         .await;
 
         let memory_id = turn.memory_id().unwrap().to_string();
-        let found = get(&storage, &MemoryId::from_str(&memory_id).unwrap())
+        let found = get(&table_options, &MemoryId::from_str(&memory_id).unwrap())
             .await
             .unwrap()
             .unwrap();
@@ -789,7 +521,7 @@ mod tests {
 
         let bad_layer = format!("observing:{}", turn.turn_id.memory_point());
         assert!(
-            get(&storage, &MemoryId::from_str(&bad_layer).unwrap())
+            get(&table_options, &MemoryId::from_str(&bad_layer).unwrap())
                 .await
                 .is_err()
         );
@@ -807,10 +539,10 @@ mod tests {
         unsafe {
             std::env::set_var("MUNINN_HOME", &home);
         }
-        let storage = Storage::local(dir.path()).unwrap();
+        let table_options = TableOptions::local(dir.path()).unwrap();
 
         let turn = post(
-            &storage,
+            &table_options,
             Some("group-a"),
             "agent-a",
             None,
@@ -843,10 +575,10 @@ mod tests {
         unsafe {
             std::env::set_var("MUNINN_HOME", &home);
         }
-        let storage = Storage::local(dir.path()).unwrap();
+        let table_options = TableOptions::local(dir.path()).unwrap();
 
         let turn = post(
-            &storage,
+            &table_options,
             Some("group-a"),
             "agent-a",
             None,
@@ -871,10 +603,10 @@ mod tests {
         unsafe {
             std::env::set_var("MUNINN_HOME", dir.path().join("missing-muninn-home"));
         }
-        let storage = Storage::local(dir.path()).unwrap();
+        let table_options = TableOptions::local(dir.path()).unwrap();
 
         let turn = post(
-            &storage,
+            &table_options,
             Some("group-a"),
             "agent-a",
             None,
@@ -897,10 +629,10 @@ mod tests {
     async fn explicit_titles_are_preserved_on_turns() {
         let _guard = crate::llm::config::llm_test_env_guard();
         let dir = tempfile::tempdir().unwrap();
-        let storage = Storage::local(dir.path()).unwrap();
+        let table_options = TableOptions::local(dir.path()).unwrap();
 
         let turn = post(
-            &storage,
+            &table_options,
             Some("group-a"),
             "agent-a",
             Some("custom title"),
@@ -919,10 +651,10 @@ mod tests {
     async fn consecutive_prompts_append_to_the_same_open_turn() {
         let _guard = crate::llm::config::llm_test_env_guard();
         let dir = tempfile::tempdir().unwrap();
-        let storage = Storage::local(dir.path()).unwrap();
+        let table_options = TableOptions::local(dir.path()).unwrap();
 
         let first = post(
-            &storage,
+            &table_options,
             Some("group-a"),
             "agent-a",
             None,
@@ -934,7 +666,7 @@ mod tests {
         )
         .await;
         let merged = post(
-            &storage,
+            &table_options,
             Some("group-a"),
             "agent-a",
             None,
@@ -946,7 +678,7 @@ mod tests {
         )
         .await;
         let appended = post(
-            &storage,
+            &table_options,
             Some("group-a"),
             "agent-a",
             None,
@@ -980,8 +712,8 @@ mod tests {
     async fn concurrent_writes_for_same_session_key_share_one_open_turn() {
         let _guard = crate::llm::config::llm_test_env_guard();
         let dir = tempfile::tempdir().unwrap();
-        let storage = Storage::local(dir.path()).unwrap();
-        let service = Service::new(storage.clone()).await.unwrap();
+        let table_options = TableOptions::local(dir.path()).unwrap();
+        let service = Muninn::new(table_options.clone()).await.unwrap();
         let barrier = Arc::new(Barrier::new(3));
 
         let first_service = service.clone();
@@ -1030,8 +762,7 @@ mod tests {
 
         assert_eq!(first.turn_id, second.turn_id);
 
-        let turns = storage
-            .sessions()
+        let turns = session_table(&table_options)
             .select(SessionSelect::Filter {
                 agent: Some("agent-a".to_string()),
                 session_id: Some("group-a".to_string()),
@@ -1052,8 +783,8 @@ mod tests {
     async fn concurrent_writes_for_different_session_keys_do_not_share_turns() {
         let _guard = crate::llm::config::llm_test_env_guard();
         let dir = tempfile::tempdir().unwrap();
-        let storage = Storage::local(dir.path()).unwrap();
-        let service = Service::new(storage.clone()).await.unwrap();
+        let table_options = TableOptions::local(dir.path()).unwrap();
+        let service = Muninn::new(table_options.clone()).await.unwrap();
         let barrier = Arc::new(Barrier::new(3));
 
         let first_service = service.clone();
@@ -1102,16 +833,14 @@ mod tests {
 
         assert_ne!(first.turn_id, second.turn_id);
 
-        let group_a_turns = storage
-            .sessions()
+        let group_a_turns = session_table(&table_options)
             .select(SessionSelect::Filter {
                 agent: Some("agent-a".to_string()),
                 session_id: Some("group-a".to_string()),
             })
             .await
             .unwrap();
-        let group_b_turns = storage
-            .sessions()
+        let group_b_turns = session_table(&table_options)
             .select(SessionSelect::Filter {
                 agent: Some("agent-a".to_string()),
                 session_id: Some("group-b".to_string()),
@@ -1128,10 +857,10 @@ mod tests {
     async fn public_timeline_uses_memory_ids_and_returns_empty_for_missing_anchor() {
         let _guard = crate::llm::config::llm_test_env_guard();
         let dir = tempfile::tempdir().unwrap();
-        let storage = Storage::local(dir.path()).unwrap();
+        let table_options = TableOptions::local(dir.path()).unwrap();
 
         let a = post(
-            &storage,
+            &table_options,
             Some("group-a"),
             "agent-a",
             None,
@@ -1143,7 +872,7 @@ mod tests {
         )
         .await;
         let b = post(
-            &storage,
+            &table_options,
             Some("group-a"),
             "agent-a",
             None,
@@ -1155,7 +884,7 @@ mod tests {
         )
         .await;
         let _c = post(
-            &storage,
+            &table_options,
             Some("group-b"),
             "agent-a",
             None,
@@ -1167,7 +896,7 @@ mod tests {
         )
         .await;
         let d = post(
-            &storage,
+            &table_options,
             Some("group-a"),
             "agent-a",
             None,
@@ -1179,7 +908,7 @@ mod tests {
         )
         .await;
 
-        let timeline_rows = timeline(&storage, &b.memory_id().unwrap(), 1, 1)
+        let timeline_rows = timeline(&table_options, &b.memory_id().unwrap(), 1, 1)
             .await
             .unwrap();
         let ids = timeline_rows
@@ -1193,7 +922,7 @@ mod tests {
 
         let missing_anchor = MemoryId::new(MemoryLayer::Session, 999_999).to_string();
         let missing = timeline(
-            &storage,
+            &table_options,
             &MemoryId::from_str(&missing_anchor).unwrap(),
             1,
             1,
@@ -1311,10 +1040,10 @@ mod tests {
     async fn same_explicit_session_with_different_agents_opens_new_turns() {
         let _guard = crate::llm::config::llm_test_env_guard();
         let dir = tempfile::tempdir().unwrap();
-        let storage = Storage::local(dir.path()).unwrap();
+        let table_options = TableOptions::local(dir.path()).unwrap();
 
         let first = post(
-            &storage,
+            &table_options,
             Some("group-a"),
             "agent-a",
             None,
@@ -1326,7 +1055,7 @@ mod tests {
         )
         .await;
         let second = post(
-            &storage,
+            &table_options,
             Some("group-a"),
             "agent-b",
             None,
@@ -1346,10 +1075,10 @@ mod tests {
     async fn missing_session_id_reuses_agent_default_open_turn() {
         let _guard = crate::llm::config::llm_test_env_guard();
         let dir = tempfile::tempdir().unwrap();
-        let storage = Storage::local(dir.path()).unwrap();
+        let table_options = TableOptions::local(dir.path()).unwrap();
 
         let first = post(
-            &storage,
+            &table_options,
             None,
             "agent-a",
             None,
@@ -1361,7 +1090,7 @@ mod tests {
         )
         .await;
         let merged = post(
-            &storage,
+            &table_options,
             None,
             "agent-a",
             None,

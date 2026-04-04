@@ -34,10 +34,6 @@ pub fn turn_schema() -> Schema {
     ])
 }
 
-pub fn thinking_schema() -> Schema {
-    Schema::empty()
-}
-
 pub fn observing_schema() -> Schema {
     Schema::new(vec![
         Field::new("observing_id", DataType::Utf8, false),

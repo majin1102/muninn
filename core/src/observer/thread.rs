@@ -5,13 +5,13 @@ use lance::Result;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::format::memory::observing::{ObservedMemory, ObservingCheckpoint, ObservingSnapshot};
+use crate::format::memory::session::SessionTurn;
 use crate::format::memory::{MemoryId, MemoryLayer};
-use crate::format::observing::{ObservedMemory, ObservingCheckpoint, ObservingSnapshot};
-use crate::format::session::SessionTurn;
+use crate::format::table::{ObservingTable, TableOptions};
 use crate::llm::observing::new_observing_id;
 use crate::llm::observing_update::{ObserveResult, ObservingContent};
 use crate::observer::types::LlmFieldUpdate;
-use crate::storage::Storage;
 
 pub(crate) const MAX_REFERENCES: usize = 1000;
 
@@ -212,11 +212,13 @@ impl ObservingThread {
 }
 
 pub(crate) async fn load_threads(
-    storage: &Storage,
+    table_options: &TableOptions,
     observer: &str,
 ) -> Result<Vec<ObservingThread>> {
     let now = Utc::now();
-    let observings = storage.observings().list(None).await?;
+    let observings = ObservingTable::new(table_options.clone())
+        .list(None)
+        .await?;
     let mut grouped = HashMap::<String, Vec<ObservingSnapshot>>::new();
 
     for observing in observings
@@ -375,8 +377,8 @@ mod tests {
     use chrono::Utc;
 
     use super::{MAX_REFERENCES, ObservingThread, SnapshotContent};
+    use crate::format::memory::observing::{MemoryCategory, ObservedMemory};
     use crate::format::memory::{MemoryId, MemoryLayer};
-    use crate::format::observing::{MemoryCategory, ObservedMemory};
     use crate::llm::observing_update::{ObserveResult, ObservingContentUpdate};
     use crate::observer::types::LlmFieldUpdate;
 
@@ -493,7 +495,17 @@ mod tests {
         thread.push_reference(parent_ref.clone());
 
         assert_eq!(thread.references.len(), MAX_REFERENCES);
-        assert!(!thread.references.iter().any(|reference| reference == "session:0"));
-        assert!(thread.references.iter().any(|reference| reference == &parent_ref));
+        assert!(
+            !thread
+                .references
+                .iter()
+                .any(|reference| reference == "session:0")
+        );
+        assert!(
+            thread
+                .references
+                .iter()
+                .any(|reference| reference == &parent_ref)
+        );
     }
 }

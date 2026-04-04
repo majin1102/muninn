@@ -2,10 +2,10 @@ use std::collections::HashMap;
 
 use lance::{Error, Result};
 
+use crate::format::memory::observing::ObservingSnapshot;
 use crate::format::memory::{MemoryId, MemoryLayer};
-use crate::format::observing::ObservingSnapshot;
+use crate::format::table::{ObservingTable, TableOptions};
 use crate::memory::types::ListMode;
-use crate::storage::Storage;
 
 #[derive(Debug, Clone)]
 pub struct ObservingListQuery {
@@ -13,31 +13,39 @@ pub struct ObservingListQuery {
     pub observer: Option<String>,
 }
 
-pub async fn get(storage: &Storage, memory_id: &MemoryId) -> Result<Option<ObservingSnapshot>> {
+pub async fn get(
+    table_options: &TableOptions,
+    memory_id: &MemoryId,
+) -> Result<Option<ObservingSnapshot>> {
     ensure_observing_memory_id(memory_id)?;
-    storage.observings().get(memory_id.memory_point()).await
+    ObservingTable::new(table_options.clone())
+        .get(memory_id.memory_point())
+        .await
 }
 
-pub async fn list(storage: &Storage, query: ObservingListQuery) -> Result<Vec<ObservingSnapshot>> {
-    let observings = storage.observings().list(query.observer.as_deref()).await?;
+pub async fn list(
+    table_options: &TableOptions,
+    query: ObservingListQuery,
+) -> Result<Vec<ObservingSnapshot>> {
+    let observings = ObservingTable::new(table_options.clone())
+        .list(query.observer.as_deref())
+        .await?;
 
     Ok(apply_list_mode(observings, query.mode))
 }
 
 pub(crate) async fn timeline(
-    storage: &Storage,
+    table_options: &TableOptions,
     memory_id: &MemoryId,
     before_limit: usize,
     after_limit: usize,
 ) -> Result<Vec<ObservingSnapshot>> {
     ensure_observing_memory_id(memory_id)?;
-    let Some(anchor) = storage.observings().get(memory_id.memory_point()).await? else {
+    let table = ObservingTable::new(table_options.clone());
+    let Some(anchor) = table.get(memory_id.memory_point()).await? else {
         return Ok(Vec::new());
     };
-    let mut observings = storage
-        .observings()
-        .load_thread_snapshots(&anchor.observing_id)
-        .await?;
+    let mut observings = table.load_thread_snapshots(&anchor.observing_id).await?;
     observings.sort_by(|left, right| {
         left.snapshot_sequence
             .cmp(&right.snapshot_sequence)

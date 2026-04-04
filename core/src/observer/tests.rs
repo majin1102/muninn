@@ -1,18 +1,21 @@
 use chrono::Utc;
 
-use crate::format::memory::{MemoryId, MemoryLayer};
-use crate::format::observing::{
+use crate::format::memory::observing::{
     MemoryCategory, ObservedMemory, ObservingCheckpoint, ObservingSnapshot,
 };
-use crate::format::semantic_index::SemanticIndexRow;
-use crate::format::session::{SessionTurn, SessionWrite};
+use crate::format::memory::semantic_index::SemanticIndexRow;
+use crate::format::memory::session::SessionTurn;
+use crate::format::memory::{MemoryId, MemoryLayer};
+use crate::format::table::{
+    ObservingTable, SemanticIndexTable, SessionSelect, SessionTable, TableOptions,
+};
 use crate::llm::config::EmbeddingConfig;
 use crate::llm::config::{llm_test_env_guard, write_test_muninn_config};
 use crate::llm::observing::{GatewayAction, GatewayUpdate, NewThreadHint};
-use crate::observer::observer::{Observer, apply_gateway_updates, apply_memory_delta};
-use crate::observer::observing::{ObservingThread, SnapshotContent};
-use crate::service::{PostMessage, Service};
-use crate::storage::{SessionSelect, Storage};
+use crate::observer::runtime::{Observer, apply_gateway_updates, apply_memory_delta};
+use crate::observer::thread::{ObservingThread, SnapshotContent};
+use crate::muninn::{Muninn, PostMessage};
+use crate::session::SessionUpdate;
 
 fn set_data_root(dir: &tempfile::TempDir) {
     let root = dir.path().join("muninn");
@@ -28,8 +31,20 @@ fn clear_data_root() {
     }
 }
 
-fn test_storage() -> Storage {
-    Storage::local(crate::config::data_root().unwrap()).unwrap()
+fn test_table_options() -> TableOptions {
+    TableOptions::local(crate::config::data_root().unwrap()).unwrap()
+}
+
+fn session_table(table_options: &TableOptions) -> SessionTable {
+    SessionTable::new(table_options.to_owned())
+}
+
+fn observing_table(table_options: &TableOptions) -> ObservingTable {
+    ObservingTable::new(table_options.to_owned())
+}
+
+fn semantic_index_table(table_options: &TableOptions) -> SemanticIndexTable {
+    SemanticIndexTable::new(table_options.to_owned())
 }
 
 fn pending_turn_id() -> MemoryId {
@@ -58,13 +73,13 @@ fn set_test_config(
 }
 
 async fn post_observable(
-    storage: &Storage,
+    table_options: &TableOptions,
     session_id: &str,
     prompt: &str,
     response: &str,
     summary: &str,
 ) -> SessionTurn {
-    Service::new(storage.clone())
+    Muninn::new(table_options.clone())
         .await
         .unwrap()
         .sessions()
@@ -91,12 +106,19 @@ async fn flush_completed_turn_persists_observing_checkpoint() {
     unsafe {
         std::env::set_var("MUNINN_OBSERVER_POLL_MS", "60000");
     }
-    let storage = test_storage();
+    let table_options = test_table_options();
 
-    let turn = post_observable(&storage, "group-a", "prompt-a", "response-a", "summary-a").await;
+    let turn = post_observable(
+        &table_options,
+        "group-a",
+        "prompt-a",
+        "response-a",
+        "summary-a",
+    )
+    .await;
     assert_eq!(turn.observing_epoch, Some(0));
 
-    let observer = Observer::new(test_storage()).await.unwrap();
+    let observer = Observer::new(test_table_options()).await.unwrap();
     let inbox = observer.snapshot().await.unwrap();
     assert_eq!(inbox.len(), 1);
     assert_eq!(inbox[0].turn_id, turn.turn_id);
@@ -105,8 +127,7 @@ async fn flush_completed_turn_persists_observing_checkpoint() {
     assert_eq!(flushed, 1);
     assert!(observer.snapshot().await.unwrap().is_empty());
 
-    let observings = storage
-        .observings()
+    let observings = observing_table(&table_options)
         .list(Some("test-observer"))
         .await
         .unwrap();
@@ -127,14 +148,28 @@ async fn different_sessions_share_same_open_epoch() {
     unsafe {
         std::env::set_var("MUNINN_OBSERVER_POLL_MS", "60000");
     }
-    let storage = test_storage();
+    let table_options = test_table_options();
 
-    let first = post_observable(&storage, "group-a", "prompt-a", "response-a", "summary-a").await;
-    let second = post_observable(&storage, "group-b", "prompt-b", "response-b", "summary-b").await;
+    let first = post_observable(
+        &table_options,
+        "group-a",
+        "prompt-a",
+        "response-a",
+        "summary-a",
+    )
+    .await;
+    let second = post_observable(
+        &table_options,
+        "group-b",
+        "prompt-b",
+        "response-b",
+        "summary-b",
+    )
+    .await;
     assert_eq!(first.observing_epoch, Some(0));
     assert_eq!(second.observing_epoch, Some(0));
 
-    let observer = Observer::new(test_storage()).await.unwrap();
+    let observer = Observer::new(test_table_options()).await.unwrap();
     let inbox = observer.snapshot().await.unwrap();
     assert_eq!(inbox.len(), 2);
     assert!(inbox.iter().any(|turn| turn.turn_id == first.turn_id));
@@ -143,8 +178,7 @@ async fn different_sessions_share_same_open_epoch() {
     let flushed = observer.flush_epoch().await.unwrap();
     assert_eq!(flushed, 2);
 
-    let observings = storage
-        .observings()
+    let observings = observing_table(&table_options)
         .list(Some("test-observer"))
         .await
         .unwrap();
@@ -167,8 +201,8 @@ async fn failed_post_does_not_leak_open_write_barrier() {
     unsafe {
         std::env::set_var("MUNINN_OBSERVER_POLL_MS", "60000");
     }
-    let storage = test_storage();
-    let service = Service::new(storage.clone()).await.unwrap();
+    let table_options = test_table_options();
+    let service = Muninn::new(table_options.clone()).await.unwrap();
 
     let error = service
         .sessions()
@@ -185,8 +219,15 @@ async fn failed_post_does_not_leak_open_write_barrier() {
         .await;
     assert!(error.is_err());
 
-    let turn = post_observable(&storage, "group-a", "prompt-a", "response-a", "summary-a").await;
-    let observer = Observer::new(test_storage()).await.unwrap();
+    let turn = post_observable(
+        &table_options,
+        "group-a",
+        "prompt-a",
+        "response-a",
+        "summary-a",
+    )
+    .await;
+    let observer = Observer::new(test_table_options()).await.unwrap();
     let inbox = observer.snapshot().await.unwrap();
     assert_eq!(inbox.len(), 1);
     assert_eq!(inbox[0].turn_id, turn.turn_id);
@@ -205,14 +246,14 @@ async fn observer_shutdown_is_idempotent_and_drops_enqueues() {
         std::env::set_var("MUNINN_OBSERVER_POLL_MS", "60000");
     }
 
-    let observer = Observer::new(test_storage()).await.unwrap();
+    let observer = Observer::new(test_table_options()).await.unwrap();
     observer.shutdown(true).await;
     observer.shutdown(true).await;
 
     assert!(observer.is_shutdown().await);
     assert!(observer.runtime_stopped().await);
 
-    let turn = SessionTurn::new(&SessionWrite {
+    let turn = SessionTurn::new(&SessionUpdate {
         session_id: Some("group-a".to_string()),
         agent: "agent-a".to_string(),
         observer: "test-observer".to_string(),
@@ -241,10 +282,10 @@ async fn observer_new_replaces_shutdown_singleton() {
         std::env::set_var("MUNINN_OBSERVER_POLL_MS", "60000");
     }
 
-    let first = Observer::new(test_storage()).await.unwrap();
+    let first = Observer::new(test_table_options()).await.unwrap();
     first.shutdown(true).await;
 
-    let second = Observer::new(test_storage()).await.unwrap();
+    let second = Observer::new(test_table_options()).await.unwrap();
     assert!(first.is_shutdown().await);
     assert!(!second.is_shutdown().await);
     assert!(!first.shares_runtime_with(&second));
@@ -262,9 +303,16 @@ async fn observer_watermark_tracks_pending_turns_until_flush_completes() {
         std::env::set_var("MUNINN_OBSERVER_POLL_MS", "60000");
     }
 
-    let storage = test_storage();
-    let turn = post_observable(&storage, "group-a", "prompt-a", "response-a", "summary-a").await;
-    let observer = Observer::new(test_storage()).await.unwrap();
+    let table_options = test_table_options();
+    let turn = post_observable(
+        &table_options,
+        "group-a",
+        "prompt-a",
+        "response-a",
+        "summary-a",
+    )
+    .await;
+    let observer = Observer::new(test_table_options()).await.unwrap();
 
     let current = observer.watermark().await.unwrap();
     assert!(!current.resolved);
@@ -291,8 +339,8 @@ async fn observer_watermark_dedupes_and_sorts_pending_turn_ids() {
         std::env::set_var("MUNINN_OBSERVER_POLL_MS", "60000");
     }
 
-    let observer = Observer::new(test_storage()).await.unwrap();
-    let write = SessionWrite {
+    let observer = Observer::new(test_table_options()).await.unwrap();
+    let write = SessionUpdate {
         session_id: Some("group-a".to_string()),
         agent: "agent-a".to_string(),
         observer: "test-observer".to_string(),
@@ -316,7 +364,9 @@ async fn observer_watermark_dedupes_and_sorts_pending_turn_ids() {
     let mut first_newer = first.clone();
     first_newer.updated_at = first_newer.updated_at + chrono::Duration::seconds(5);
 
-    observer.enqueue(vec![second, first.clone(), first_newer]).await;
+    observer
+        .enqueue(vec![second, first.clone(), first_newer])
+        .await;
 
     let watermark = observer.watermark().await.unwrap();
     assert!(!watermark.resolved);
@@ -339,9 +389,16 @@ async fn observer_watermark_keeps_turn_pending_until_index_retry_succeeds() {
         std::env::set_var("MUNINN_OBSERVER_POLL_MS", "60000");
     }
 
-    let storage = test_storage();
-    let turn = post_observable(&storage, "group-a", "prompt-a", "response-a", "summary-a").await;
-    let observer = Observer::new(test_storage()).await.unwrap();
+    let table_options = test_table_options();
+    let turn = post_observable(
+        &table_options,
+        "group-a",
+        "prompt-a",
+        "response-a",
+        "summary-a",
+    )
+    .await;
+    let observer = Observer::new(test_table_options()).await.unwrap();
 
     assert_eq!(observer.flush_epoch().await.unwrap(), 1);
 
@@ -371,13 +428,20 @@ async fn observer_restart_restores_pending_turns_from_observing_epoch() {
         std::env::set_var("MUNINN_OBSERVER_POLL_MS", "60000");
     }
 
-    let storage = test_storage();
-    let turn = post_observable(&storage, "group-a", "prompt-a", "response-a", "summary-a").await;
-    let observer = Observer::new(test_storage()).await.unwrap();
+    let table_options = test_table_options();
+    let turn = post_observable(
+        &table_options,
+        "group-a",
+        "prompt-a",
+        "response-a",
+        "summary-a",
+    )
+    .await;
+    let observer = Observer::new(test_table_options()).await.unwrap();
     assert_eq!(observer.flush_epoch().await.unwrap(), 1);
     observer.shutdown(true).await;
 
-    let restarted = Observer::new(test_storage()).await.unwrap();
+    let restarted = Observer::new(test_table_options()).await.unwrap();
     let watermark = restarted.watermark().await.unwrap();
     assert!(!watermark.resolved);
     assert_eq!(watermark.pending_turn_ids, vec![turn.turn_id.to_string()]);
@@ -395,10 +459,9 @@ async fn recovery_requeues_observable_turns_without_an_epoch() {
     unsafe {
         std::env::set_var("MUNINN_OBSERVER_POLL_MS", "60000");
     }
-    let storage = test_storage();
+    let table_options = test_table_options();
 
-    storage
-        .observings()
+    observing_table(&table_options)
         .upsert(vec![ObservingSnapshot {
             snapshot_id: pending_snapshot_id(),
             observing_id: "OBS-RECOVERY".to_string(),
@@ -438,9 +501,11 @@ async fn recovery_requeues_observable_turns_without_an_epoch() {
         response: Some("response-a".to_string()),
         observing_epoch: None,
     };
-    storage.sessions().upsert(vec![turn.clone()]).await.unwrap();
-    let persisted_turn = storage
-        .sessions()
+    session_table(&table_options)
+        .upsert(vec![turn.clone()])
+        .await
+        .unwrap();
+    let persisted_turn = session_table(&table_options)
         .select(SessionSelect::Filter {
             agent: Some("agent-a".to_string()),
             session_id: Some("group-a".to_string()),
@@ -451,14 +516,13 @@ async fn recovery_requeues_observable_turns_without_an_epoch() {
         .next()
         .unwrap();
 
-    let observer = Observer::new(test_storage()).await.unwrap();
+    let observer = Observer::new(test_table_options()).await.unwrap();
     let inbox = observer.snapshot().await.unwrap();
     assert_eq!(inbox.len(), 1);
     assert_eq!(inbox[0].turn_id, persisted_turn.turn_id);
     assert_eq!(inbox[0].observing_epoch, Some(1));
 
-    let persisted = storage
-        .sessions()
+    let persisted = session_table(&table_options)
         .select(SessionSelect::ById(persisted_turn.turn_id.memory_point()))
         .await
         .unwrap();
@@ -475,7 +539,7 @@ async fn gateway_can_append_or_spawn_observing() {
     set_test_config(&dir, None, Some("mock"), None);
     set_data_root(&dir);
 
-    let mut turn = SessionTurn::new(&SessionWrite {
+    let mut turn = SessionTurn::new(&SessionUpdate {
         session_id: Some("group-a".to_string()),
         agent: "agent-a".to_string(),
         observer: "test-observer".to_string(),
@@ -573,7 +637,7 @@ async fn load_runtime_restores_observings() {
     let dir = tempfile::tempdir().unwrap();
     set_test_config(&dir, None, Some("mock"), None);
     set_data_root(&dir);
-    let storage = test_storage();
+    let table_options = test_table_options();
 
     let observing = ObservingSnapshot {
         snapshot_id: pending_snapshot_id(),
@@ -597,9 +661,12 @@ async fn load_runtime_restores_observings() {
             pending_parent_id: None,
         },
     };
-    storage.observings().upsert(vec![observing]).await.unwrap();
+    observing_table(&table_options)
+        .upsert(vec![observing])
+        .await
+        .unwrap();
 
-    let observer = Observer::new(test_storage()).await.unwrap();
+    let observer = Observer::new(test_table_options()).await.unwrap();
 
     let sessions = observer.threads_snapshot().await;
     assert_eq!(sessions.len(), 1);
@@ -624,21 +691,19 @@ async fn append_preserves_existing_parent_snapshot_reference() {
     set_test_config(&dir, None, Some("mock"), None);
     set_data_root(&dir);
 
-    let mut turn = SessionTurn::new(
-        &SessionWrite {
-            session_id: Some("group-a".to_string()),
-            agent: "agent-a".to_string(),
-            observer: "test-observer".to_string(),
-            title: None,
-            summary: Some("turn summary".to_string()),
-            title_source: None,
-            summary_source: None,
-            tool_calling: None,
-            artifacts: None,
-            prompt: Some("prompt".to_string()),
-            response: Some("response".to_string()),
-        },
-    )
+    let mut turn = SessionTurn::new(&SessionUpdate {
+        session_id: Some("group-a".to_string()),
+        agent: "agent-a".to_string(),
+        observer: "test-observer".to_string(),
+        title: None,
+        summary: Some("turn summary".to_string()),
+        title_source: None,
+        summary_source: None,
+        tool_calling: None,
+        artifacts: None,
+        prompt: Some("prompt".to_string()),
+        response: Some("response".to_string()),
+    })
     .with_row_id(88);
     turn.summary = Some("turn summary".to_string());
     turn.prompt = Some("prompt".to_string());
@@ -678,12 +743,22 @@ async fn append_preserves_existing_parent_snapshot_reference() {
     .await
     .unwrap();
 
-    let child = threads.iter().find(|thread| thread.observing_id == "OBS-CHILD").unwrap();
-    assert!(child.references.iter().any(|reference| reference == &parent_ref));
-    assert!(child
-        .references
+    let child = threads
         .iter()
-        .any(|reference| reference == &turn.turn_id.to_string()));
+        .find(|thread| thread.observing_id == "OBS-CHILD")
+        .unwrap();
+    assert!(
+        child
+            .references
+            .iter()
+            .any(|reference| reference == &parent_ref)
+    );
+    assert!(
+        child
+            .references
+            .iter()
+            .any(|reference| reference == &turn.turn_id.to_string())
+    );
     assert_eq!(child.pending_parent_id, None);
 
     clear_data_root();
@@ -695,11 +770,10 @@ async fn observer_startup_reconciles_pending_parent_references() {
     let dir = tempfile::tempdir().unwrap();
     set_test_config(&dir, None, Some("mock"), None);
     set_data_root(&dir);
-    let storage = test_storage();
+    let table_options = test_table_options();
 
     let now = Utc::now();
-    storage
-        .observings()
+    observing_table(&table_options)
         .upsert(vec![
             ObservingSnapshot {
                 snapshot_id: pending_snapshot_id(),
@@ -741,7 +815,7 @@ async fn observer_startup_reconciles_pending_parent_references() {
         .await
         .unwrap();
 
-    let observer = Observer::new(test_storage()).await.unwrap();
+    let observer = Observer::new(test_table_options()).await.unwrap();
     let threads = observer.threads_snapshot().await;
     let parent = threads
         .iter()
@@ -753,12 +827,16 @@ async fn observer_startup_reconciles_pending_parent_references() {
         .unwrap();
     let parent_ref = parent.snapshot_id.as_ref().unwrap().to_string();
 
-    assert!(child.references.iter().any(|reference| reference == &parent_ref));
+    assert!(
+        child
+            .references
+            .iter()
+            .any(|reference| reference == &parent_ref)
+    );
     assert_eq!(child.references.first(), Some(&parent_ref));
     assert_eq!(child.pending_parent_id, None);
 
-    let persisted = storage
-        .observings()
+    let persisted = observing_table(&table_options)
         .list(Some("test-observer"))
         .await
         .unwrap();
@@ -766,7 +844,12 @@ async fn observer_startup_reconciles_pending_parent_references() {
         .into_iter()
         .find(|snapshot| snapshot.observing_id == "OBS-CHILD")
         .unwrap();
-    assert!(latest_child.references.iter().any(|reference| reference == &parent_ref));
+    assert!(
+        latest_child
+            .references
+            .iter()
+            .any(|reference| reference == &parent_ref)
+    );
     assert_eq!(latest_child.references.first(), Some(&parent_ref));
     assert_eq!(latest_child.checkpoint.pending_parent_id, None);
 
@@ -779,11 +862,10 @@ async fn catches_up_semantic_index_from_checkpoint() {
     let dir = tempfile::tempdir().unwrap();
     set_test_config(&dir, None, None, Some("mock"));
     set_data_root(&dir);
-    let storage = test_storage();
+    let table_options = test_table_options();
 
     let first_created_at = Utc::now() - chrono::Duration::hours(1);
-    storage
-        .semantic_index()
+    semantic_index_table(&table_options)
         .upsert(vec![
             SemanticIndexRow {
                 id: "mem-1".to_string(),
@@ -840,8 +922,7 @@ async fn catches_up_semantic_index_from_checkpoint() {
             ]
         }
     });
-    storage
-        .observings()
+    observing_table(&table_options)
         .upsert(vec![
             ObservingSnapshot {
                 snapshot_id: pending_snapshot_id(),
@@ -881,11 +962,11 @@ async fn catches_up_semantic_index_from_checkpoint() {
         .await
         .unwrap();
 
-    let _observer = Observer::new(test_storage()).await.unwrap();
+    let _observer = Observer::new(test_table_options()).await.unwrap();
 
-    let rows = storage.semantic_index().list().await.unwrap();
+    let rows = semantic_index_table(&table_options).list().await.unwrap();
     assert_eq!(rows.len(), 2);
-    let persisted = storage.observings().list(None).await.unwrap();
+    let persisted = observing_table(&table_options).list(None).await.unwrap();
     let latest = persisted
         .iter()
         .find(|observing| {
@@ -918,7 +999,7 @@ async fn replaying_snapshot_keeps_index_metadata() {
     let dir = tempfile::tempdir().unwrap();
     set_test_config(&dir, None, None, Some("mock"));
     set_data_root(&dir);
-    let storage = test_storage();
+    let table_options = test_table_options();
 
     let snapshot = SnapshotContent {
         memories: vec![ObservedMemory {
@@ -947,12 +1028,11 @@ async fn replaying_snapshot_keeps_index_metadata() {
         dimensions: 4,
         default_importance: 0.7,
     };
-    apply_memory_delta(&storage, &snapshot, "observing:301", &initial_config)
+    apply_memory_delta(&table_options, &snapshot, "observing:301", &initial_config)
         .await
         .unwrap();
 
-    let first_row = storage
-        .semantic_index()
+    let first_row = semantic_index_table(&table_options)
         .list()
         .await
         .unwrap()
@@ -960,8 +1040,7 @@ async fn replaying_snapshot_keeps_index_metadata() {
         .find(|row| row.id == "mem-1")
         .unwrap();
     let pinned_created_at = first_row.created_at - chrono::Duration::minutes(15);
-    storage
-        .semantic_index()
+    semantic_index_table(&table_options)
         .upsert(vec![SemanticIndexRow {
             id: first_row.id.clone(),
             memory_id: first_row.memory_id.clone(),
@@ -982,11 +1061,11 @@ async fn replaying_snapshot_keeps_index_metadata() {
         dimensions: 4,
         default_importance: 0.95,
     };
-    apply_memory_delta(&storage, &snapshot, "observing:302", &replay_config)
+    apply_memory_delta(&table_options, &snapshot, "observing:302", &replay_config)
         .await
         .unwrap();
 
-    let rows = storage.semantic_index().list().await.unwrap();
+    let rows = semantic_index_table(&table_options).list().await.unwrap();
     assert_eq!(rows.len(), 1);
     let row = rows.iter().find(|item| item.id == "mem-1").unwrap();
     assert_eq!(row.importance, 0.25);
