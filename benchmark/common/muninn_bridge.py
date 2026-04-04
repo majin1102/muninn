@@ -44,6 +44,12 @@ class MuninnBridge:
         self._run_process([
             "pnpm",
             "--filter",
+            "@muninn/core",
+            "build",
+        ])
+        self._run_process([
+            "pnpm",
+            "--filter",
             BRIDGE_PACKAGE_NAME,
             "build",
         ])
