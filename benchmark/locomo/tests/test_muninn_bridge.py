@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import contextlib
+import io
+import os
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -20,7 +23,6 @@ class MuninnBridgeTests(unittest.TestCase):
             [
                 unittest.mock.call(
                     ["sh", str(BOOTSTRAP_SCRIPT)],
-                    wrap_zsh_env=False,
                 ),
             ],
         )
@@ -41,14 +43,28 @@ class MuninnBridgeTests(unittest.TestCase):
             [
                 unittest.mock.call(
                     ["sh", str(BOOTSTRAP_SCRIPT)],
-                    wrap_zsh_env=False,
                 ),
                 unittest.mock.call(
                     ["sh", str(BOOTSTRAP_SCRIPT)],
-                    wrap_zsh_env=False,
                 ),
             ],
         )
+
+    def test_run_process_streams_and_returns_output_without_check_argument(self) -> None:
+        bridge = MuninnBridge()
+
+        with contextlib.redirect_stderr(io.StringIO()):
+            completed = bridge._run_process(
+                [
+                    os.environ.get("PYTHON", "python3"),
+                    "-c",
+                    "import sys; print('ok'); print('warn', file=sys.stderr)",
+                ]
+            )
+
+        self.assertEqual(completed.returncode, 0)
+        self.assertEqual(completed.stdout.strip(), "ok")
+        self.assertIn("warn", completed.stderr)
 
     def test_recall_batch_parses_evidence_ids(self) -> None:
         bridge = MuninnBridge()

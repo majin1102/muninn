@@ -15,7 +15,6 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 BRIDGE_PACKAGE_NAME = "@muninn/benchmark-locomo"
 BRIDGE_DIST = REPO_ROOT / "benchmark" / "locomo" / "dist" / "bridge.js"
 BOOTSTRAP_SCRIPT = REPO_ROOT / "benchmark" / "locomo" / "scripts" / "bootstrap.sh"
-ZSH_ENV_SCRIPT = REPO_ROOT / "benchmark" / "locomo" / "scripts" / "with-zsh-env.sh"
 
 
 class BridgeError(RuntimeError):
@@ -40,7 +39,7 @@ class MuninnBridge:
     def ensure_built(self) -> None:
         if self._bootstrapped:
             return
-        self._run_process(["sh", str(BOOTSTRAP_SCRIPT)], wrap_zsh_env=False)
+        self._run_process(["sh", str(BOOTSTRAP_SCRIPT)])
         self._bootstrapped = True
 
     def reset_home(self, home: Path) -> dict[str, Any]:
@@ -134,20 +133,13 @@ class MuninnBridge:
         except json.JSONDecodeError as error:
             raise BridgeError(f"invalid JSON from bridge: {error}") from error
 
-    def _run_process(
-        self,
-        args: list[str],
-        *,
-        wrap_zsh_env: bool = True,
-    ) -> subprocess.CompletedProcess[str]:
-        command_args = self._with_zsh_env(args) if wrap_zsh_env else args
+    def _run_process(self, args: list[str]) -> subprocess.CompletedProcess[str]:
         process = subprocess.Popen(
-            command_args,
+            args,
             cwd=self.repo_root,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            check=False,
             bufsize=1,
             env=self._subprocess_env(),
         )
@@ -173,7 +165,7 @@ class MuninnBridge:
                     sys.stderr.flush()
         returncode = process.wait()
         completed = subprocess.CompletedProcess(
-            args=command_args,
+            args=args,
             returncode=returncode,
             stdout="".join(stdout_chunks),
             stderr="".join(stderr_chunks),
@@ -184,11 +176,6 @@ class MuninnBridge:
                 f"{' '.join(args)}\nstdout:\n{completed.stdout}\nstderr:\n{completed.stderr}"
             )
         return completed
-
-    def _with_zsh_env(self, args: list[str]) -> list[str]:
-        if not ZSH_ENV_SCRIPT.exists():
-            return args
-        return ["/bin/zsh", str(ZSH_ENV_SCRIPT), *args]
 
     def _subprocess_env(self) -> dict[str, str]:
         env = os.environ.copy()
