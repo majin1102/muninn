@@ -9,6 +9,7 @@ import * as coreClient from '@muninn/core';
 const CONFIG_FILE_NAME = 'muninn.json';
 const WATERMARK_POLL_MS = 2_000;
 const WATERMARK_TIMEOUT_MS = 10 * 60 * 1_000;
+const WATERMARK_WARNING_DELAY_MS = 10_000;
 
 type LocomoDialog = {
   speaker: string;
@@ -173,6 +174,7 @@ export async function waitForImportWatermark(
   options?: {
     pollMs?: number;
     timeoutMs?: number;
+    warningDelayMs?: number;
   },
 ): Promise<void> {
   const targetTurnId = manifest.turns[manifest.turns.length - 1]?.turn_id;
@@ -182,8 +184,11 @@ export async function waitForImportWatermark(
 
   const pollMs = options?.pollMs ?? WATERMARK_POLL_MS;
   const timeoutMs = options?.timeoutMs ?? WATERMARK_TIMEOUT_MS;
+  const warningDelayMs = options?.warningDelayMs ?? WATERMARK_WARNING_DELAY_MS;
   const startedAt = Date.now();
   let pendingTurnIds: string[] = [];
+  let observerWarningEmitted = false;
+  const observerConfigured = await hasConfiguredObserver(resolveActiveConfigPath());
 
   while (Date.now() - startedAt <= timeoutMs) {
     const watermark = await coreClient.observer.watermark();
@@ -194,6 +199,12 @@ export async function waitForImportWatermark(
     );
     if (watermark.resolved) {
       return;
+    }
+    if (!observerConfigured && !observerWarningEmitted && Date.now() - startedAt >= warningDelayMs) {
+      observerWarningEmitted = true;
+      console.error(
+        `[locomo] warning: observer is not configured; watermark may stay pending and recall may remain incomplete`
+      );
     }
     await sleep(pollMs);
   }
@@ -360,6 +371,7 @@ async function bootstrapHome(
     mergeJsonObjects(mergedConfig, sourceConfig);
   }
 
+  normalizeObserverConfig(mergedConfig);
   validateBenchmarkConfig(mergedConfig);
   await writeFile(targetConfigPath, `${JSON.stringify(mergedConfig, null, 2)}\n`, 'utf8');
 }
@@ -417,12 +429,6 @@ function mergeJsonObjects(
 }
 
 function validateBenchmarkConfig(config: Record<string, unknown>): void {
-  const observer = requireObjectField(config, 'observer', 'observer');
-  const observerLlmName = requireStringField(observer, 'llm', 'observer.llm');
-  const llm = requireObjectField(config, 'llm', 'llm');
-  const observerLlm = requireObjectField(llm, observerLlmName, `llm.${observerLlmName}`);
-  requireStringField(observerLlm, 'provider', `llm.${observerLlmName}.provider`);
-
   const semanticIndex = requireObjectField(config, 'semanticIndex', 'semanticIndex');
   const embedding = requireObjectField(
     semanticIndex,
@@ -462,6 +468,43 @@ function requireStringField(
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function normalizeObserverConfig(config: Record<string, unknown>): void {
+  if (hasConfiguredObserverConfig(config)) {
+    return;
+  }
+  delete config.observer;
+}
+
+function hasConfiguredObserverConfig(config: Record<string, unknown>): boolean {
+  const observer = config.observer;
+  if (!isPlainObject(observer)) {
+    return false;
+  }
+  const llmName = observer.llm;
+  if (typeof llmName !== 'string' || llmName.trim().length === 0) {
+    return false;
+  }
+  const llm = config.llm;
+  if (!isPlainObject(llm)) {
+    return false;
+  }
+  const observerLlm = llm[llmName];
+  if (!isPlainObject(observerLlm)) {
+    return false;
+  }
+  const provider = observerLlm.provider;
+  return typeof provider === 'string' && provider.trim().length > 0;
+}
+
+async function hasConfiguredObserver(configPath: string): Promise<boolean> {
+  if (!await pathExists(configPath)) {
+    return false;
+  }
+  const raw = await readFile(configPath, 'utf8');
+  const config = parseJsonObject(raw, configPath);
+  return hasConfiguredObserverConfig(config);
 }
 
 function manifestPath(home: string): string {

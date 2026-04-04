@@ -199,7 +199,7 @@ test('waitForImportWatermark times out with pending turn ids when observer does 
   );
 });
 
-test('import fails fast when observer or semantic index config is missing', async (t) => {
+test('import only fails fast when semantic index config is missing', async (t) => {
   const home = await mkdtemp(path.join(os.tmpdir(), 'muninn-locomo-missing-config-'));
   t.after(async () => rm(home, { recursive: true, force: true }));
 
@@ -212,6 +212,50 @@ test('import fails fast when observer or semantic index config is missing', asyn
       'sample-id': 'sample-a',
       'muninn-home': home,
     }),
-    /LoCoMo benchmark requires (observer\.llm|semanticIndex\.embedding\.provider)/i,
+    /LoCoMo benchmark requires semanticIndex\.embedding(?:\.provider)?/i,
   );
+});
+
+test('waitForImportWatermark emits a delayed warning when observer is not configured', async (t) => {
+  const home = await mkdtemp(path.join(os.tmpdir(), 'muninn-locomo-warning-'));
+  t.after(async () => rm(home, { recursive: true, force: true }));
+  t.after(async () => core.shutdownCoreForTests());
+  t.after(() => {
+    delete process.env.MUNINN_OBSERVER_POLL_MS;
+  });
+
+  await prepareSourceConfig(t, {
+    semanticIndexProvider: 'mock',
+  });
+  await runBridge('reset-home', { 'muninn-home': home });
+  await runBridge('import-sample', {
+    'data-file': fixturePath,
+    'sample-id': 'sample-a',
+    'muninn-home': home,
+  });
+
+  process.env.MUNINN_HOME = home;
+  process.env.MUNINN_OBSERVER_POLL_MS = '60000';
+  const bridgeModule = await import(bridgePath);
+  const manifest = JSON.parse(await readFile(path.join(home, 'locomo-manifest.json'), 'utf8'));
+  const originalError = console.error;
+  const messages = [];
+  console.error = (...args) => {
+    messages.push(args.join(' '));
+  };
+
+  try {
+    await assert.rejects(
+      () => bridgeModule.waitForImportWatermark(manifest, {
+        pollMs: 10,
+        timeoutMs: 60,
+        warningDelayMs: 0,
+      }),
+      /observer watermark timeout.*pending turn ids/i,
+    );
+  } finally {
+    console.error = originalError;
+  }
+
+  assert.ok(messages.some((message) => /observer is not configured/i.test(message)));
 });

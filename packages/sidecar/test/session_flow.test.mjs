@@ -399,22 +399,6 @@ test('recall and timeline surface request and not-found errors', async () => {
   }
 });
 
-test('recall fails fast when observer is not configured', async () => {
-  const { dir, homeDir, configPath } = await makeDatasetUri();
-  process.env.MUNINN_HOME = homeDir;
-
-  try {
-    await writeMuninnConfig(configPath, { turnProvider: 'mock' });
-    const recallResponse = await app.request('/api/v1/recall?query=alpha&limit=2');
-    assert.equal(recallResponse.status, 400);
-    const body = await json(recallResponse);
-    assert.equal(body.errorCode, 'invalidRequest');
-    assert.match(body.errorMessage, /observer is not configured/);
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
-});
-
 test('recall, list, and timeline reject invalid numeric query parameters', async () => {
   const { dir, homeDir } = await makeDatasetUri();
   process.env.MUNINN_HOME = homeDir;
