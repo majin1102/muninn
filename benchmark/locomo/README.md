@@ -78,17 +78,22 @@ No LLM keys are required for this benchmark.
 
 ## Data Files
 
-This repository now vendors the LoCoMo benchmark data under
-`benchmark/locomo/data/` so benchmark runs do not depend on a sibling checkout.
+This repository no longer vendors the full LoCoMo benchmark payload in Git.
+Instead, the benchmark downloads a pinned copy on demand into the local cache
+directory `benchmark/locomo/.cache/data/`.
 
-- Vendored source: <https://github.com/snap-research/locomo>
-- Default benchmark file: `benchmark/locomo/data/locomo10.json`
+- Source repository: <https://github.com/snap-research/locomo>
+- Default cached benchmark file: `benchmark/locomo/.cache/data/locomo10.json`
 - License note: upstream LoCoMo data is distributed under `CC BY-NC 4.0`
-- Attribution and a local license copy are included in
+- Attribution and a local license copy remain in
   `benchmark/locomo/data/README.md` and `benchmark/locomo/data/LOCOMO_LICENSE.txt`
 
-If you reuse or redistribute these files, review the upstream non-commercial
-license terms first.
+The download script verifies SHA256 checksums for the expected data files, so
+benchmark runs stay pinned to a known LoCoMo snapshot even though the payload
+is fetched from GitHub.
+
+If you reuse or redistribute the downloaded files, review the upstream
+non-commercial license terms first.
 
 ## One-Shot Commands
 
@@ -123,13 +128,28 @@ Or through `pnpm`:
 pnpm --filter @muninn/benchmark-locomo test
 ```
 
+### Fetch Data
+
+Download or refresh the default cached LoCoMo dataset:
+
+```bash
+sh benchmark/locomo/scripts/fetch-data.sh
+```
+
+Or through `pnpm`:
+
+```bash
+pnpm --filter @muninn/benchmark-locomo fetch-data
+```
+
 ### Benchmark Run
 
-Run the benchmark end-to-end:
+Run the benchmark end-to-end. If `--data-file` is omitted, the wrapper script
+downloads the default LoCoMo payload into `benchmark/locomo/.cache/data/` and
+uses that cached copy automatically:
 
 ```bash
 sh benchmark/locomo/scripts/run.sh \
-  --data-file benchmark/locomo/data/locomo10.json \
   --out-file benchmark/locomo/out/locomo10_results.json \
   --progress-file benchmark/locomo/out/locomo10_progress.jsonl \
   --modes dialog,observation,summary \
@@ -141,7 +161,6 @@ Or through `pnpm`:
 
 ```bash
 pnpm --filter @muninn/benchmark-locomo benchmark -- \
-  --data-file benchmark/locomo/data/locomo10.json \
   --out-file benchmark/locomo/out/locomo10_results.json \
   --progress-file benchmark/locomo/out/locomo10_progress.jsonl \
   --modes dialog,observation,summary \
@@ -153,7 +172,6 @@ pnpm --filter @muninn/benchmark-locomo benchmark -- \
 
 ```bash
 sh benchmark/locomo/scripts/run.sh \
-  --data-file benchmark/locomo/data/locomo10.json \
   --out-file benchmark/locomo/out/locomo10_dialog_results.json \
   --progress-file benchmark/locomo/out/locomo10_dialog_progress.jsonl \
   --modes dialog \
@@ -164,7 +182,6 @@ sh benchmark/locomo/scripts/run.sh \
 
 ```bash
 sh benchmark/locomo/scripts/run.sh \
-  --data-file benchmark/locomo/data/locomo10.json \
   --out-file benchmark/locomo/out/sample_1_dialog_results.json \
   --progress-file benchmark/locomo/out/sample_1_dialog_progress.jsonl \
   --modes dialog \
@@ -176,13 +193,15 @@ sh benchmark/locomo/scripts/run.sh \
 
 ```bash
 sh benchmark/locomo/scripts/run.sh \
-  --data-file benchmark/locomo/data/locomo10.json \
   --out-file benchmark/locomo/out/debug_results.json \
   --progress-file benchmark/locomo/out/debug_progress.jsonl \
   --modes dialog \
   --limit-questions 20 \
   --top-k 5
 ```
+
+If you want to use a manually managed dataset file instead of the cached
+default, pass `--data-file /path/to/locomo10.json` explicitly.
 
 ## Runtime Behavior
 

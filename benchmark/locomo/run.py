@@ -40,7 +40,8 @@ def main() -> None:
     if not args.data_file.exists():
         raise FileNotFoundError(
             f"LoCoMo data file not found: {args.data_file}. "
-            "Pass --data-file with a valid external LoCoMo JSON dataset."
+            "Run `sh benchmark/locomo/scripts/fetch-data.sh` to populate the default cache, "
+            "or pass --data-file with a valid external LoCoMo JSON dataset."
         )
 
     modes = parse_modes(args.modes)

@@ -11,6 +11,7 @@
     "build": "tsc",
     "dev": "tsc --watch",
     "bootstrap": "sh ./scripts/bootstrap.sh",
+    "fetch-data": "sh ./scripts/fetch-data.sh",
     "benchmark": "sh ./scripts/run.sh",
     "test": "sh ./scripts/test.sh"
   },

@@ -1,19 +1,19 @@
-# LoCoMo Vendored Data
+# LoCoMo Data Source
 
-This directory vendors benchmark data copied from the official LoCoMo repository:
+This directory now keeps only the attribution and license material for LoCoMo.
+The benchmark payload itself is downloaded on demand from the official LoCoMo
+repository into `benchmark/locomo/.cache/data/`.
 
 - Source repository: <https://github.com/snap-research/locomo>
 - Upstream data path: `data/`
+- Download helper: `benchmark/locomo/scripts/fetch-data.sh`
 
-Vendored files in this directory currently include:
+The download script currently fetches and checksum-verifies:
 
 - `locomo10.json`
 - `msc_personas_all.json`
-- `multimodal_dialog/`
-- `LOCOMO_LICENSE.txt`
-
-These files are included so the Muninn LoCoMo benchmark can run without a
-path dependency on a sibling checkout such as `../locomo`.
+- `multimodal_dialog/example/agent_a.json`
+- `multimodal_dialog/example/agent_b.json`
 
 License and compliance note:
 
