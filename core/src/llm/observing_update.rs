@@ -1,7 +1,7 @@
 use lance::Result;
 use serde::{Deserialize, Serialize};
 
-use crate::format::observing::ObservedMemory;
+use crate::format::memory::observing::ObservedMemory;
 use crate::llm::config::{LlmTask, observing_max_attempts};
 use crate::llm::prompts::{build_observing_system_prompt, build_observing_user_prompt};
 use crate::llm::provider::{LlmTextRequest, generate_text};
@@ -258,7 +258,7 @@ fn build_retry_prompt(base_prompt: &str, attempt: usize, last_error: &str) -> St
 
 #[cfg(test)]
 mod tests {
-    use crate::format::observing::MemoryCategory;
+    use crate::format::memory::observing::MemoryCategory;
 
     use super::*;
 

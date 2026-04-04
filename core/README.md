@@ -48,13 +48,13 @@ Using `[patch.crates-io]` for local experimentation preserves those guarantees w
 
 Current Rust-side boundaries are intentionally layered:
 
-- `service.rs`
+- `muninn.rs`
   - Top-level Rust application facade.
-  - `Service` is the preferred entrypoint for higher layers.
-- `storage.rs`
-  - Internal persistence boundary.
-  - `Storage` owns object-store configuration and dataset wiring.
-  - `SessionStore`, `ObservingStore`, and `SemanticIndexStore` are crate-internal typed stores used by Rust modules.
+  - `Muninn` is the preferred entrypoint for higher layers.
+- `format/table/`
+  - Internal table boundary.
+  - `TableOptions` owns object-store configuration and table wiring.
+  - `SessionTable`, `ObservingTable`, and `SemanticIndexTable` are crate-internal typed tables used by Rust modules.
 - `format/`
   - Pure persisted row and memory-id models.
   - Row structs do not carry persistence behavior.
@@ -65,7 +65,7 @@ Current Rust-side boundaries are intentionally layered:
 
 Practical rule:
 
-- Higher-level callers should prefer `Service`.
-- Internal Rust modules can use `Storage` and its typed stores.
-- Store APIs expose internal domain structs, not Arrow types.
-- Arrow/codec conversion stays below the store boundary.
+- Higher-level callers should prefer `Muninn`.
+- Internal Rust modules can use `TableOptions` and the typed tables under `format/table/`.
+- Table APIs expose internal domain structs, not Arrow types.
+- Arrow/codec conversion stays below the table boundary.

@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use uuid::Uuid;
 
-use crate::format::session::SessionTurn;
+use crate::format::memory::session::SessionTurn;
 use crate::llm::config::{LlmTask, observing_max_attempts};
 use crate::llm::prompts::{
     build_observing_gateway_system_prompt, build_observing_gateway_user_prompt,

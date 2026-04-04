@@ -1,9 +1,10 @@
 use lance::{Error, Result};
 
+use crate::format::memory::session::SessionTurn;
 use crate::format::memory::{MemoryId, MemoryLayer};
-use crate::format::session::{SessionKey, SessionTurn};
+use crate::format::table::{SessionSelect, SessionTable, TableOptions};
 use crate::memory::types::ListMode;
-use crate::storage::{SessionSelect, Storage};
+use crate::session::SessionKey;
 
 #[derive(Debug, Clone)]
 pub struct SessionListQuery {
@@ -12,14 +13,21 @@ pub struct SessionListQuery {
     pub session_id: Option<String>,
 }
 
-pub async fn get(storage: &Storage, memory_id: &MemoryId) -> Result<Option<SessionTurn>> {
+pub async fn get(
+    table_options: &TableOptions,
+    memory_id: &MemoryId,
+) -> Result<Option<SessionTurn>> {
     ensure_session_memory_id(memory_id)?;
-    storage.sessions().get_turn(memory_id.memory_point()).await
+    SessionTable::new(table_options.clone())
+        .get_turn(memory_id.memory_point())
+        .await
 }
 
-pub async fn list(storage: &Storage, query: SessionListQuery) -> Result<Vec<SessionTurn>> {
-    let turns = storage
-        .sessions()
+pub async fn list(
+    table_options: &TableOptions,
+    query: SessionListQuery,
+) -> Result<Vec<SessionTurn>> {
+    let turns = SessionTable::new(table_options.clone())
         .select(SessionSelect::Filter {
             agent: query.agent.clone(),
             session_id: query.session_id.clone(),
@@ -29,19 +37,17 @@ pub async fn list(storage: &Storage, query: SessionListQuery) -> Result<Vec<Sess
 }
 
 pub(crate) async fn timeline(
-    storage: &Storage,
+    table_options: &TableOptions,
     memory_id: &MemoryId,
     before_limit: usize,
     after_limit: usize,
 ) -> Result<Vec<SessionTurn>> {
     ensure_session_memory_id(memory_id)?;
-    let Some(anchor) = storage.sessions().get_turn(memory_id.memory_point()).await? else {
+    let table = SessionTable::new(table_options.clone());
+    let Some(anchor) = table.get_turn(memory_id.memory_point()).await? else {
         return Ok(Vec::new());
     };
-    let turns = storage
-        .sessions()
-        .load_session_turns(&anchor.session_key())
-        .await?;
+    let turns = table.load_session_turns(&anchor.session_key()).await?;
 
     Ok(timeline_from_source(
         &turns,

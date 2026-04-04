@@ -6,7 +6,6 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum MemoryLayer {
-    Thinking,
     Observing,
     Session,
 }
@@ -14,7 +13,6 @@ pub enum MemoryLayer {
 impl MemoryLayer {
     pub fn as_str(&self) -> &'static str {
         match self {
-            Self::Thinking => "thinking",
             Self::Observing => "observing",
             Self::Session => "session",
         }
@@ -32,7 +30,6 @@ impl FromStr for MemoryLayer {
 
     fn from_str(value: &str) -> Result<Self> {
         match value {
-            "thinking" => Ok(Self::Thinking),
             "observing" => Ok(Self::Observing),
             "session" => Ok(Self::Session),
             _ => Err(Error::invalid_input(format!(
@@ -127,10 +124,11 @@ mod tests {
     #[test]
     fn memory_layer_roundtrip() {
         assert_eq!(
-            MemoryLayer::from_str("thinking").unwrap(),
-            MemoryLayer::Thinking
+            MemoryLayer::from_str("observing").unwrap(),
+            MemoryLayer::Observing
         );
         assert_eq!(MemoryLayer::Observing.to_string(), "observing");
+        assert!(MemoryLayer::from_str("thinking").is_err());
     }
 
     #[test]
@@ -145,6 +143,7 @@ mod tests {
     fn invalid_memory_id_is_rejected() {
         assert!(MemoryId::from_str("session").is_err());
         assert!(MemoryId::from_str("unknown:42").is_err());
+        assert!(MemoryId::from_str("thinking:42").is_err());
         assert!(MemoryId::from_str("session:bad-row-id").is_err());
         assert!(MemoryId::from_str("session:42:extra").is_err());
     }

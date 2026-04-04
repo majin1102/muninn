@@ -1,10 +1,9 @@
 use std::collections::BTreeSet;
 
-use lance::{Error, Result};
 use serde::Deserialize;
 
 use crate::llm::prompts::{MAX_TURN_SUMMARY_CHARS, MAX_TURN_TITLE_CHARS};
-use crate::llm::turn::{TurnGenerator, TurnOutput};
+use crate::llm::turn::TurnOutput;
 
 const MIN_USER_SECTION_CHARS: usize = 24;
 const PREFERENCE_MARKERS: &[&str] = &["默认", "prefer", "偏好", "以后", "先给结论", "default"];
@@ -202,35 +201,6 @@ pub fn evaluate_turn_output(
     }
 }
 
-pub fn load_turn_cases() -> Result<Vec<TurnCase>> {
-    #[derive(Debug, Deserialize)]
-    struct TurnCasesFile {
-        cases: Vec<TurnCase>,
-    }
-
-    serde_yaml::from_str::<TurnCasesFile>(include_str!("../../tests/fixtures/turn_cases.yaml"))
-        .map(|parsed| parsed.cases)
-        .map_err(|error| Error::invalid_input(format!("invalid turn_cases.yaml: {error}")))
-}
-
-pub async fn evaluate_configured_turn_cases() -> Result<Vec<TurnCaseEvaluation>> {
-    let mut evaluations = Vec::new();
-    for case in load_turn_cases()? {
-        let generated =
-            TurnGenerator::generate_if_configured(Some(case.prompt.as_str()), &case.response)
-                .await?
-                .ok_or_else(|| Error::invalid_input("turn provider is not configured"))?;
-        let evaluation = evaluate_turn_output(Some(&case.prompt), &case.response, &generated);
-        evaluations.push(TurnCaseEvaluation {
-            name: case.name,
-            title: generated.title,
-            summary: generated.summary,
-            evaluation,
-        });
-    }
-    Ok(evaluations)
-}
-
 fn issue(code: &'static str, message: impl Into<String>, penalty: u8) -> TurnEvaluationIssue {
     TurnEvaluationIssue {
         code,
@@ -300,8 +270,7 @@ fn contains_any(text: &str, markers: &[&str]) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{evaluate_configured_turn_cases, evaluate_turn_output, load_turn_cases};
-    use crate::llm::config::llm_test_env_guard;
+    use super::evaluate_turn_output;
     use crate::llm::turn::TurnOutput;
 
     #[test]
@@ -394,36 +363,5 @@ mod tests {
                 .iter()
                 .any(|item| item.code == "summary.agent_reasoning_filler")
         );
-    }
-
-    #[test]
-    fn turn_cases_fixture_loads_multiple_cases() {
-        let cases = load_turn_cases().expect("fixture cases should load");
-        assert!(cases.len() >= 3);
-        assert!(cases.iter().any(|item| item.name == "preference_capture"));
-    }
-
-    #[tokio::test]
-    #[ignore = "live provider evaluation across configured turn cases"]
-    async fn configured_turn_cases_can_be_scored() {
-        let _guard = llm_test_env_guard();
-        let evaluations = evaluate_configured_turn_cases()
-            .await
-            .expect("configured provider should evaluate all turn cases");
-
-        assert!(!evaluations.is_empty());
-        for item in evaluations {
-            println!(
-                "CASE={} SCORE={} PASSED={}\nTITLE={}\nSUMMARY={}\nISSUES={:?}\n",
-                item.name,
-                item.evaluation.score,
-                item.evaluation.passed,
-                item.title,
-                item.summary,
-                item.evaluation.issues
-            );
-            assert!(!item.title.trim().is_empty());
-            assert!(!item.summary.trim().is_empty());
-        }
     }
 }

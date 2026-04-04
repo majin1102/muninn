@@ -10,8 +10,9 @@ use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
-use crate::format::semantic_index::SemanticIndexRow;
-use crate::format::session::SessionTurn;
+use crate::format::memory::semantic_index::SemanticIndexRow;
+use crate::format::memory::session::SessionTurn;
+use crate::format::table::{ObservingTable, SemanticIndexTable, SessionTable, TableOptions};
 use crate::llm::config::{EmbeddingConfig, effective_observer_name};
 use crate::llm::embedding::embed_text;
 use crate::llm::observing::{
@@ -20,11 +21,10 @@ use crate::llm::observing::{
 use crate::llm::observing_update::{
     ObserveRequest, ObserveResult, ObservingTurnInput, ObservingUpdater,
 };
-use crate::observer::observing::{
+use crate::observer::thread::{
     ObservingThread, SnapshotContent, load_threads, snapshot_ref, turn_ref,
 };
-use crate::service::ObserverWatermark;
-use crate::storage::Storage;
+use crate::observer::types::ObserverWatermark;
 
 fn observer_singleton() -> &'static Mutex<Option<Observer>> {
     static INSTANCE: OnceLock<Mutex<Option<Observer>>> = OnceLock::new();
@@ -97,7 +97,7 @@ impl Drop for PostWriteGuard {
 
 #[derive(Clone)]
 pub struct Observer {
-    storage: Storage,
+    table_options: TableOptions,
     observer: String,
     poll_interval: Duration,
     barrier: Arc<StdMutex<EpochBarrierState>>,
@@ -106,45 +106,44 @@ pub struct Observer {
 }
 
 impl Observer {
-    pub async fn new(storage: Storage) -> Result<Self> {
+    pub async fn new(table_options: TableOptions) -> Result<Self> {
         let observer_name = effective_observer_name()?;
         let mut singleton = observer_singleton().lock().await;
         if let Some(observer) = singleton.as_ref().cloned() {
             if !observer.is_shutdown().await
                 && observer.observer == observer_name
-                && observer.storage.matches(&storage)
+                && observer.table_options.matches(&table_options)
             {
                 return Ok(observer);
             }
             observer.shutdown(true).await;
         }
 
-        let observer = Self::build(storage, observer_name).await?;
+        let observer = Self::build(table_options, observer_name).await?;
         *singleton = Some(observer.clone());
         Ok(observer)
     }
 
-    async fn build(storage: Storage, observer: String) -> Result<Self> {
+    async fn build(table_options: TableOptions, observer: String) -> Result<Self> {
         let semantic_config = crate::config::semantic_index_config()?;
-        let mut threads = load_threads(&storage, &observer).await?;
+        let mut threads = load_threads(&table_options, &observer).await?;
         let thread_ids = threads
             .iter()
             .map(|thread| thread.observing_id.clone())
             .collect::<HashSet<_>>();
-        apply_parent_refs(&storage, &mut threads, &thread_ids).await?;
+        apply_parent_refs(&table_options, &mut threads, &thread_ids).await?;
         for thread in &mut threads {
-            if let Err(error) = catch_up_index(&storage, thread, &semantic_config).await {
+            if let Err(error) = catch_up_index(&table_options, thread, &semantic_config).await {
                 eprintln!(
                     "[observer] semantic_index catch-up failed for {}: {}",
                     thread.observing_id, error
                 );
             }
         }
-        let index_batches = restore_index_batches(&storage, &observer, &threads).await?;
+        let index_batches = restore_index_batches(&table_options, &observer, &threads).await?;
 
-        let committed_epoch = load_committed_epoch(&storage, &observer).await?;
-        let mut inbox = storage
-            .sessions()
+        let committed_epoch = load_committed_epoch(&table_options, &observer).await?;
+        let mut inbox = SessionTable::new(table_options.clone())
             .turns_after_epoch(&observer, committed_epoch)
             .await?;
         if !inbox.is_empty() {
@@ -157,12 +156,14 @@ impl Observer {
                 }
             }
             if repaired {
-                storage.sessions().upsert(inbox.clone()).await?;
+                SessionTable::new(table_options.clone())
+                    .upsert(inbox.clone())
+                    .await?;
             }
         }
 
         let observer = Self {
-            storage,
+            table_options,
             observer,
             poll_interval: default_poll_interval(),
             barrier: Arc::new(StdMutex::new(EpochBarrierState {
@@ -244,7 +245,7 @@ impl Observer {
     #[cfg_attr(not(test), allow(dead_code))]
     pub async fn flush_epoch(&self) -> Result<usize> {
         flush_epoch_with(
-            &self.storage,
+            &self.table_options,
             &self.observer,
             self.poll_interval,
             &self.barrier,
@@ -267,6 +268,18 @@ impl Observer {
         self.runtime.is_shutdown().await
     }
 
+    fn session_table(&self) -> SessionTable {
+        SessionTable::new(self.table_options.clone())
+    }
+
+    fn observing_table(&self) -> ObservingTable {
+        ObservingTable::new(self.table_options.clone())
+    }
+
+    fn semantic_index_table(&self) -> SemanticIndexTable {
+        SemanticIndexTable::new(self.table_options.clone())
+    }
+
     #[cfg(test)]
     pub(crate) async fn snapshot(&self) -> Result<Vec<SessionTurn>> {
         let state = self.state.lock().await;
@@ -287,7 +300,7 @@ impl Observer {
     }
 
     fn start_polling(&self) {
-        let storage = self.storage.clone();
+        let table_options = self.table_options.clone();
         let observer = self.observer.clone();
         let poll_interval = self.poll_interval;
         let barrier = Arc::clone(&self.barrier);
@@ -299,7 +312,7 @@ impl Observer {
                     _ = cancel.cancelled() => break,
                     _ = tokio::time::sleep(poll_interval) => {
                         let _ =
-                            flush_epoch_with(&storage, &observer, poll_interval, &barrier, &state)
+                            flush_epoch_with(&table_options, &observer, poll_interval, &barrier, &state)
                                 .await;
                     }
                 }
@@ -345,7 +358,7 @@ impl Drop for ObserverRuntime {
 }
 
 async fn flush_epoch_with(
-    storage: &Storage,
+    table_options: &TableOptions,
     observer: &str,
     poll_interval: Duration,
     barrier: &Arc<StdMutex<EpochBarrierState>>,
@@ -361,7 +374,8 @@ async fn flush_epoch_with(
         }
         state.flushing = true;
         let mut index_batches = std::mem::take(&mut state.index_batches);
-        let result = retry_index_batches(storage, &mut state.threads, &mut index_batches).await;
+        let result =
+            retry_index_batches(table_options, &mut state.threads, &mut index_batches).await;
         state.index_batches = index_batches;
         state.flushing = false;
         return result.map(|_| 0);
@@ -390,15 +404,25 @@ async fn flush_epoch_with(
 
     state.flushing = true;
     let pending_turns = state.observing_buffer.clone();
-    let result =
-        flush_epoch_inner(storage, observer, &mut state.threads, epoch, &pending_turns).await;
+    let result = flush_epoch_inner(
+        table_options,
+        observer,
+        &mut state.threads,
+        epoch,
+        &pending_turns,
+    )
+    .await;
     match result {
         Ok(failed_index_ids) => {
             state.committed_epoch = Some(epoch);
             state.observing_epoch = None;
             state.observing_buffer.clear();
             if !failed_index_ids.is_empty() {
-                push_index_batch(&mut state.index_batches, pending_turns.clone(), failed_index_ids);
+                push_index_batch(
+                    &mut state.index_batches,
+                    pending_turns.clone(),
+                    failed_index_ids,
+                );
             }
             state.flushing = false;
             Ok(pending_turns.len())
@@ -478,7 +502,12 @@ fn collect_pending(state: &ObserverState) -> Vec<SessionTurn> {
         .observing_buffer
         .iter()
         .chain(state.buffer.iter())
-        .chain(state.index_batches.iter().flat_map(|batch| batch.turns.iter()))
+        .chain(
+            state
+                .index_batches
+                .iter()
+                .flat_map(|batch| batch.turns.iter()),
+        )
     {
         turns_by_id
             .entry(turn.turn_id)
@@ -501,7 +530,11 @@ fn collect_pending(state: &ObserverState) -> Vec<SessionTurn> {
 }
 
 fn thread_has_pending_index(thread: &ObservingThread) -> bool {
-    let latest_snapshot_sequence = thread.snapshots.len().checked_sub(1).map(|value| value as i64);
+    let latest_snapshot_sequence = thread
+        .snapshots
+        .len()
+        .checked_sub(1)
+        .map(|value| value as i64);
     match (thread.indexed_snapshot_sequence, latest_snapshot_sequence) {
         (_, None) => false,
         (Some(indexed), Some(latest)) => indexed < latest,
@@ -510,12 +543,15 @@ fn thread_has_pending_index(thread: &ObservingThread) -> bool {
 }
 
 async fn restore_index_batches(
-    storage: &Storage,
+    table_options: &TableOptions,
     observer: &str,
     threads: &[ObservingThread],
 ) -> Result<Vec<PendingIndexBatch>> {
     let mut observing_ids_by_epoch = HashMap::<u64, HashSet<String>>::new();
-    for thread in threads.iter().filter(|thread| thread_has_pending_index(thread)) {
+    for thread in threads
+        .iter()
+        .filter(|thread| thread_has_pending_index(thread))
+    {
         observing_ids_by_epoch
             .entry(thread.observing_epoch)
             .or_default()
@@ -525,9 +561,11 @@ async fn restore_index_batches(
         return Ok(Vec::new());
     }
 
-    let epochs = observing_ids_by_epoch.keys().copied().collect::<HashSet<_>>();
-    let turns = storage
-        .sessions()
+    let epochs = observing_ids_by_epoch
+        .keys()
+        .copied()
+        .collect::<HashSet<_>>();
+    let turns = session_table(table_options)
         .turns_for_observing_epochs(observer, &epochs)
         .await?;
     let mut turns_by_epoch = HashMap::<u64, Vec<SessionTurn>>::new();
@@ -550,9 +588,8 @@ async fn restore_index_batches(
     Ok(index_batches)
 }
 
-async fn load_committed_epoch(storage: &Storage, observer: &str) -> Result<Option<u64>> {
-    Ok(storage
-        .observings()
+async fn load_committed_epoch(table_options: &TableOptions, observer: &str) -> Result<Option<u64>> {
+    Ok(observing_table(table_options)
         .list(Some(observer))
         .await?
         .into_iter()
@@ -561,7 +598,7 @@ async fn load_committed_epoch(storage: &Storage, observer: &str) -> Result<Optio
 }
 
 async fn flush_epoch_inner(
-    storage: &Storage,
+    table_options: &TableOptions,
     observer: &str,
     threads: &mut Vec<ObservingThread>,
     epoch: u64,
@@ -579,7 +616,7 @@ async fn flush_epoch_inner(
         gateway_result.updates,
     )
     .await?;
-    let failed_index_ids = flush_threads(storage, threads, &touched_ids).await?;
+    let failed_index_ids = flush_threads(table_options, threads, &touched_ids).await?;
 
     eprintln!(
         "[observer] flushed epoch {} with {} turns",
@@ -815,7 +852,7 @@ fn turn_summary(turn: &SessionTurn) -> String {
 }
 
 async fn flush_threads(
-    storage: &Storage,
+    table_options: &TableOptions,
     threads: &mut [ObservingThread],
     touched_ids: &HashSet<String>,
 ) -> Result<HashSet<String>> {
@@ -828,7 +865,9 @@ async fn flush_threads(
         .iter()
         .map(|observing| observing.observing_id.clone())
         .collect::<HashSet<_>>();
-    let inserted = storage.observings().upsert_and_load_inserted(observings).await?;
+    let inserted = observing_table(table_options)
+        .upsert_and_load_inserted(observings)
+        .await?;
     let mut inserted_by_id = inserted
         .into_iter()
         .map(|observing| (observing.observing_id.clone(), observing))
@@ -853,7 +892,7 @@ async fn flush_threads(
         thread.observing_epoch = inserted.checkpoint.observing_epoch;
         thread.updated_at = inserted.updated_at;
     }
-    apply_parent_refs(storage, threads, touched_ids).await?;
+    apply_parent_refs(table_options, threads, touched_ids).await?;
 
     let semantic_config = crate::config::semantic_index_config()?;
     let mut failed_index_ids = HashSet::new();
@@ -864,7 +903,7 @@ async fn flush_threads(
         else {
             continue;
         };
-        if let Err(error) = catch_up_index(storage, thread, &semantic_config).await {
+        if let Err(error) = catch_up_index(table_options, thread, &semantic_config).await {
             eprintln!(
                 "[observer] semantic_index flush failed for {}: {}",
                 thread.observing_id, error
@@ -883,11 +922,14 @@ fn push_index_batch(
     if turns.is_empty() || observing_ids.is_empty() {
         return;
     }
-    batches.push(PendingIndexBatch { turns, observing_ids });
+    batches.push(PendingIndexBatch {
+        turns,
+        observing_ids,
+    });
 }
 
 async fn retry_index_batches(
-    storage: &Storage,
+    table_options: &TableOptions,
     threads: &mut [ObservingThread],
     batches: &mut Vec<PendingIndexBatch>,
 ) -> Result<()> {
@@ -897,15 +939,20 @@ async fn retry_index_batches(
 
     let semantic_config = crate::config::semantic_index_config()?;
     for batch in batches.iter_mut() {
-        batch.observing_ids =
-            retry_index_batch(storage, threads, &batch.observing_ids, &semantic_config).await?;
+        batch.observing_ids = retry_index_batch(
+            table_options,
+            threads,
+            &batch.observing_ids,
+            &semantic_config,
+        )
+        .await?;
     }
     batches.retain(|batch| !batch.observing_ids.is_empty());
     Ok(())
 }
 
 async fn retry_index_batch(
-    storage: &Storage,
+    table_options: &TableOptions,
     threads: &mut [ObservingThread],
     observing_ids: &HashSet<String>,
     semantic_config: &EmbeddingConfig,
@@ -918,7 +965,7 @@ async fn retry_index_batch(
         else {
             continue;
         };
-        if let Err(error) = catch_up_index(storage, thread, semantic_config).await {
+        if let Err(error) = catch_up_index(table_options, thread, semantic_config).await {
             eprintln!(
                 "[observer] semantic_index retry failed for {}: {}",
                 thread.observing_id, error
@@ -930,7 +977,7 @@ async fn retry_index_batch(
 }
 
 async fn apply_parent_refs(
-    storage: &Storage,
+    table_options: &TableOptions,
     threads: &mut [ObservingThread],
     ids: &HashSet<String>,
 ) -> Result<()> {
@@ -944,7 +991,10 @@ async fn apply_parent_refs(
         .collect::<HashMap<_, _>>();
 
     let mut ref_threads = Vec::new();
-    for thread in threads.iter().filter(|thread| ids.contains(&thread.observing_id)) {
+    for thread in threads
+        .iter()
+        .filter(|thread| ids.contains(&thread.observing_id))
+    {
         let Some(parent_id) = thread.pending_parent_id.as_ref() else {
             continue;
         };
@@ -964,7 +1014,7 @@ async fn apply_parent_refs(
         // Bound the accumulated provenance without dropping the front parent
         // reference we just repaired. When we need room, evict the oldest
         // session-scoped turn reference first.
-        while ref_thread.references.len() > crate::observer::observing::MAX_REFERENCES {
+        while ref_thread.references.len() > crate::observer::thread::MAX_REFERENCES {
             let index = ref_thread
                 .references
                 .iter()
@@ -989,8 +1039,7 @@ async fn apply_parent_refs(
     if ref_threads.is_empty() {
         return Ok(());
     }
-    storage
-        .observings()
+    observing_table(table_options)
         .upsert(
             ref_threads
                 .iter()
@@ -1003,7 +1052,10 @@ async fn apply_parent_refs(
         .into_iter()
         .map(|thread| (thread.observing_id.clone(), thread))
         .collect::<HashMap<_, _>>();
-    for thread in threads.iter_mut().filter(|thread| ids.contains(&thread.observing_id)) {
+    for thread in threads
+        .iter_mut()
+        .filter(|thread| ids.contains(&thread.observing_id))
+    {
         let Some(updated) = ref_threads_by_id.remove(&thread.observing_id) else {
             continue;
         };
@@ -1013,7 +1065,7 @@ async fn apply_parent_refs(
 }
 
 async fn catch_up_index(
-    storage: &Storage,
+    table_options: &TableOptions,
     thread: &mut ObservingThread,
     semantic_config: &EmbeddingConfig,
 ) -> Result<()> {
@@ -1032,7 +1084,7 @@ async fn catch_up_index(
             .get(snapshot_index)
             .ok_or_else(|| lance::Error::invalid_input("missing snapshot during index flush"))?;
         let memory_id = thread.snapshot_ref(snapshot_index)?;
-        apply_memory_delta(storage, current, &memory_id, semantic_config).await?;
+        apply_memory_delta(table_options, current, &memory_id, semantic_config).await?;
         latest_indexed_sequence = Some(snapshot_index as i64);
     }
 
@@ -1041,14 +1093,16 @@ async fn catch_up_index(
             thread.set_indexed_snapshot_sequence(snapshot_sequence);
         }
         if thread.snapshot_id.is_some() {
-            storage.observings().upsert(vec![thread.to_row()?]).await?;
+            observing_table(table_options)
+                .upsert(vec![thread.to_row()?])
+                .await?;
         }
     }
     Ok(())
 }
 
 pub(crate) async fn apply_memory_delta(
-    storage: &Storage,
+    table_options: &TableOptions,
     current: &SnapshotContent,
     memory_id: &str,
     semantic_config: &EmbeddingConfig,
@@ -1065,14 +1119,18 @@ pub(crate) async fn apply_memory_delta(
         .filter_map(|memory| memory.id.clone())
         .filter(|id| !after_ids.contains(id))
         .collect::<Vec<_>>();
-    storage.semantic_index().delete(deleted_ids).await?;
+    semantic_index_table(table_options)
+        .delete(deleted_ids)
+        .await?;
 
     let upsert_ids = delta
         .after
         .iter()
         .filter_map(|memory| memory.id.clone())
         .collect::<Vec<_>>();
-    let existing_rows = storage.semantic_index().load_by_ids(&upsert_ids).await?;
+    let existing_rows = semantic_index_table(table_options)
+        .load_by_ids(&upsert_ids)
+        .await?;
     let existing_by_id = existing_rows
         .into_iter()
         .map(|row| (row.id.clone(), row))
@@ -1109,7 +1167,19 @@ pub(crate) async fn apply_memory_delta(
         });
     }
 
-    storage.semantic_index().upsert(upserts).await
+    semantic_index_table(table_options).upsert(upserts).await
+}
+
+fn session_table(table_options: &TableOptions) -> SessionTable {
+    SessionTable::new(table_options.to_owned())
+}
+
+fn observing_table(table_options: &TableOptions) -> ObservingTable {
+    ObservingTable::new(table_options.to_owned())
+}
+
+fn semantic_index_table(table_options: &TableOptions) -> SemanticIndexTable {
+    SemanticIndexTable::new(table_options.to_owned())
 }
 
 fn normalize_text(value: &str, max_chars: usize) -> String {

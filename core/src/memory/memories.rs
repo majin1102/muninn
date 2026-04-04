@@ -3,15 +3,15 @@ use std::str::FromStr;
 
 use lance::{Error, Result};
 
+use crate::format::memory::observing::ObservingSnapshot;
+use crate::format::memory::semantic_index::SemanticIndexRow;
+use crate::format::memory::session::SessionTurn;
 use crate::format::memory::{MemoryId, MemoryLayer};
-use crate::format::observing::ObservingSnapshot;
-use crate::format::semantic_index::SemanticIndexRow;
-use crate::format::session::SessionTurn;
+use crate::format::table::{SemanticIndexTable, TableOptions};
 use crate::llm::embedding::embed_text;
 use crate::memory::observings::{self, ObservingListQuery};
 use crate::memory::sessions::{self, SessionListQuery, render_session_turn_detail};
 use crate::memory::types::{ListMode, MemoryView, RecallHit};
-use crate::storage::Storage;
 
 impl TryFrom<&SessionTurn> for MemoryView {
     type Error = Error;
@@ -85,7 +85,11 @@ impl TryFrom<&ObservingSnapshot> for MemoryView {
     }
 }
 
-pub async fn recall(storage: &Storage, query: &str, limit: usize) -> Result<Vec<RecallHit>> {
+pub async fn recall(
+    table_options: &TableOptions,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<RecallHit>> {
     if limit == 0 {
         return Ok(Vec::new());
     }
@@ -95,12 +99,12 @@ pub async fn recall(storage: &Storage, query: &str, limit: usize) -> Result<Vec<
         return Ok(Vec::new());
     }
 
-    semantic_recall(storage, query, limit).await
+    semantic_recall(table_options, query, limit).await
 }
 
-pub async fn list(storage: &Storage, mode: ListMode) -> Result<Vec<MemoryView>> {
+pub async fn list(table_options: &TableOptions, mode: ListMode) -> Result<Vec<MemoryView>> {
     let turns = sessions::list(
-        storage,
+        table_options,
         SessionListQuery {
             mode,
             agent: None,
@@ -109,7 +113,7 @@ pub async fn list(storage: &Storage, mode: ListMode) -> Result<Vec<MemoryView>> 
     )
     .await?;
     let observings = observings::list(
-        storage,
+        table_options,
         ObservingListQuery {
             mode,
             observer: None,
@@ -124,7 +128,7 @@ pub async fn list(storage: &Storage, mode: ListMode) -> Result<Vec<MemoryView>> 
 }
 
 pub async fn timeline(
-    storage: &Storage,
+    table_options: &TableOptions,
     memory_id: &str,
     before_limit: Option<usize>,
     after_limit: Option<usize>,
@@ -134,11 +138,13 @@ pub async fn timeline(
     let after_limit = after_limit.unwrap_or(3);
     match memory_id.memory_layer() {
         MemoryLayer::Session => {
-            let rows = sessions::timeline(storage, &memory_id, before_limit, after_limit).await?;
+            let rows =
+                sessions::timeline(table_options, &memory_id, before_limit, after_limit).await?;
             render_session_turns(rows)
         }
         MemoryLayer::Observing => {
-            let rows = observings::timeline(storage, &memory_id, before_limit, after_limit).await?;
+            let rows =
+                observings::timeline(table_options, &memory_id, before_limit, after_limit).await?;
             render_observings(rows)
         }
         layer => Err(Error::invalid_input(format!(
@@ -147,15 +153,15 @@ pub async fn timeline(
     }
 }
 
-pub async fn get(storage: &Storage, memory_id: &str) -> Result<Option<MemoryView>> {
+pub async fn get(table_options: &TableOptions, memory_id: &str) -> Result<Option<MemoryView>> {
     let memory_id = MemoryId::from_str(memory_id)?;
     match memory_id.memory_layer() {
-        MemoryLayer::Session => sessions::get(storage, &memory_id)
+        MemoryLayer::Session => sessions::get(table_options, &memory_id)
             .await?
             .as_ref()
             .map(MemoryView::try_from)
             .transpose(),
-        MemoryLayer::Observing => observings::get(storage, &memory_id)
+        MemoryLayer::Observing => observings::get(table_options, &memory_id)
             .await?
             .as_ref()
             .map(MemoryView::try_from)
@@ -199,12 +205,15 @@ fn render_observings(observings: Vec<ObservingSnapshot>) -> Result<Vec<MemoryVie
         .collect::<Result<Vec<_>>>()
 }
 
-async fn semantic_recall(storage: &Storage, query: &str, limit: usize) -> Result<Vec<RecallHit>> {
+async fn semantic_recall(
+    table_options: &TableOptions,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<RecallHit>> {
     let query_vector = embed_text(query).await?;
     let mut fetch_limit = limit.saturating_mul(4).max(limit);
     let candidate_groups = loop {
-        let candidates = storage
-            .semantic_index()
+        let candidates = SemanticIndexTable::new(table_options.clone())
             .nearest(&query_vector, fetch_limit)
             .await?;
         let candidate_groups = merge_semantic_candidates(candidates.clone());
@@ -290,15 +299,15 @@ mod tests {
     use chrono::Utc;
 
     use super::{merge_semantic_candidates, recall};
+    use crate::format::memory::semantic_index::SemanticIndexRow;
+    use crate::format::memory::session::SessionTurn;
     use crate::format::memory::{MemoryId, MemoryLayer};
-    use crate::format::semantic_index::SemanticIndexRow;
-    use crate::format::session::SessionTurn;
+    use crate::format::table::{SemanticIndexTable, TableOptions};
     use crate::llm::config::llm_test_env_guard;
     use crate::llm::embedding::embed_text;
-    use crate::storage::Storage;
 
-    fn test_storage() -> Storage {
-        Storage::local(crate::config::data_root().unwrap()).unwrap()
+    fn test_options() -> TableOptions {
+        TableOptions::local(crate::config::data_root().unwrap()).unwrap()
     }
 
     #[tokio::test]
@@ -324,7 +333,7 @@ mod tests {
             std::env::set_var("MUNINN_HOME", &home_dir);
         }
 
-        let storage = test_storage();
+        let table_options = test_options();
         let now = Utc::now();
         let snapshot_id = 101_u64;
 
@@ -337,9 +346,12 @@ mod tests {
             category: "fact".to_string(),
             created_at: now,
         };
-        storage.semantic_index().upsert(vec![row]).await.unwrap();
+        SemanticIndexTable::new(table_options.clone())
+            .upsert(vec![row])
+            .await
+            .unwrap();
 
-        let recalled = recall(&storage, "beta", 10).await.unwrap();
+        let recalled = recall(&table_options, "beta", 10).await.unwrap();
         assert_eq!(recalled.len(), 1);
         assert_eq!(
             recalled[0].memory_id.to_string(),
@@ -375,7 +387,7 @@ mod tests {
             std::env::set_var("MUNINN_HOME", &home_dir);
         }
 
-        let storage = test_storage();
+        let table_options = test_options();
         let now = Utc::now();
 
         let session_turn = SessionTurn {
@@ -395,9 +407,12 @@ mod tests {
             response: Some("beta response".to_string()),
             observing_epoch: None,
         };
-        storage.sessions().upsert(vec![session_turn]).await.unwrap();
+        crate::format::table::SessionTable::new(table_options.clone())
+            .upsert(vec![session_turn])
+            .await
+            .unwrap();
 
-        let recalled = recall(&storage, "beta", 2).await.unwrap();
+        let recalled = recall(&table_options, "beta", 2).await.unwrap();
         assert!(recalled.is_empty());
 
         unsafe {
@@ -428,11 +443,10 @@ mod tests {
             std::env::set_var("MUNINN_HOME", &home_dir);
         }
 
-        let storage = test_storage();
+        let table_options = test_options();
         let now = Utc::now();
         let semantic_snapshot_id = 202_u64;
-        storage
-            .sessions()
+        crate::format::table::SessionTable::new(table_options.clone())
             .upsert(vec![SessionTurn {
                 turn_id: MemoryId::new(MemoryLayer::Session, u64::MAX),
                 created_at: now,
@@ -452,8 +466,7 @@ mod tests {
             }])
             .await
             .unwrap();
-        storage
-            .semantic_index()
+        SemanticIndexTable::new(table_options.clone())
             .upsert(vec![SemanticIndexRow {
                 id: "mem-recency".to_string(),
                 memory_id: format!("observing:{semantic_snapshot_id}"),
@@ -466,7 +479,7 @@ mod tests {
             .await
             .unwrap();
 
-        let recalled = recall(&storage, "beta", 2).await.unwrap();
+        let recalled = recall(&table_options, "beta", 2).await.unwrap();
         assert_eq!(recalled.len(), 1);
         assert_eq!(
             recalled[0].memory_id.to_string(),
@@ -502,7 +515,7 @@ mod tests {
             std::env::set_var("MUNINN_HOME", &home_dir);
         }
 
-        let storage = test_storage();
+        let table_options = test_options();
         let now = Utc::now();
         let snapshot_a = 301_u64;
         let snapshot_b = 302_u64;
@@ -528,9 +541,12 @@ mod tests {
             category: "fact".to_string(),
             created_at: now,
         });
-        storage.semantic_index().upsert(rows).await.unwrap();
+        SemanticIndexTable::new(table_options.clone())
+            .upsert(rows)
+            .await
+            .unwrap();
 
-        let recalled = recall(&storage, "alpha", 2).await.unwrap();
+        let recalled = recall(&table_options, "alpha", 2).await.unwrap();
         assert_eq!(recalled.len(), 2);
         assert_eq!(
             recalled[0].memory_id.to_string(),
@@ -588,5 +604,4 @@ mod tests {
         assert!(merged[0].reciprocal_rank_score > merged[1].reciprocal_rank_score);
         assert_eq!(merged[1].memory_id, "observing:42");
     }
-
 }
