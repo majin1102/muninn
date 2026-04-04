@@ -61,6 +61,8 @@ pub struct ObservingList {
 pub struct ObserverWatermark {
     pub resolved: bool,
     pub pending_turn_ids: Vec<String>,
+    pub observing_epoch: Option<u64>,
+    pub committed_epoch: Option<u64>,
 }
 
 #[derive(Clone)]

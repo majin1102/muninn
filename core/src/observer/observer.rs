@@ -236,6 +236,8 @@ impl Observer {
         Ok(ObserverWatermark {
             resolved: pending.is_empty(),
             pending_turn_ids,
+            observing_epoch: state.observing_epoch,
+            committed_epoch: state.committed_epoch,
         })
     }
 

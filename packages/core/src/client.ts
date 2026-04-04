@@ -60,6 +60,8 @@ export interface RecallHitRecord {
 export interface ObserverWatermarkRecord {
   resolved: boolean;
   pendingTurnIds: string[];
+  observingEpoch?: number;
+  committedEpoch?: number;
 }
 
 export type ListModeInput =
@@ -100,6 +102,8 @@ type RawRecallHitRecord = {
 type RawObserverWatermarkRecord = {
   resolved: boolean;
   pendingTurnIds?: string[];
+  observingEpoch?: number | null;
+  committedEpoch?: number | null;
 };
 
 export interface SessionMessageInput {
@@ -588,6 +592,8 @@ function normalizeObserverWatermarkRecord(
   return {
     resolved: row.resolved,
     pendingTurnIds: row.pendingTurnIds ?? [],
+    observingEpoch: row.observingEpoch ?? undefined,
+    committedEpoch: row.committedEpoch ?? undefined,
   };
 }
 

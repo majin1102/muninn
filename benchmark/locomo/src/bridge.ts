@@ -36,6 +36,8 @@ export type ManifestTurn = {
 
 export type ImportManifest = {
   sample_id: string;
+  baseline_observing_epoch?: number;
+  baseline_committed_epoch?: number;
   turns: ManifestTurn[];
 };
 
@@ -98,6 +100,7 @@ async function importSampleCommand(options: Map<string, string>) {
   await mkdir(home, { recursive: true });
   await bootstrapHome(home, templateConfigPath, sourceConfigPath);
   process.env.MUNINN_HOME = home;
+  const baselineWatermark = await coreClient.observer.watermark();
 
   const sample = await loadSample(dataFile, sampleId);
   const manifestTurns: ManifestTurn[] = [];
@@ -130,6 +133,8 @@ async function importSampleCommand(options: Map<string, string>) {
 
   const manifest = {
     sample_id: sample.sample_id,
+    baseline_observing_epoch: baselineWatermark.observingEpoch,
+    baseline_committed_epoch: baselineWatermark.committedEpoch,
     turns: manifestTurns,
   } satisfies ImportManifest;
   await writeManifest(home, manifest);
@@ -187,8 +192,7 @@ export async function waitForImportWatermark(
   const warningDelayMs = options?.warningDelayMs ?? WATERMARK_WARNING_DELAY_MS;
   const startedAt = Date.now();
   let pendingTurnIds: string[] = [];
-  let observerWarningEmitted = false;
-  const observerConfigured = await hasConfiguredObserver(resolveActiveConfigPath());
+  let stalledWarningEmitted = false;
 
   while (Date.now() - startedAt <= timeoutMs) {
     const watermark = await coreClient.observer.watermark();
@@ -200,10 +204,16 @@ export async function waitForImportWatermark(
     if (watermark.resolved) {
       return;
     }
-    if (!observerConfigured && !observerWarningEmitted && Date.now() - startedAt >= warningDelayMs) {
-      observerWarningEmitted = true;
+    if (
+      !stalledWarningEmitted
+      && Date.now() - startedAt >= warningDelayMs
+      && pendingTurnIds.length > 0
+      && watermark.observingEpoch === manifest.baseline_observing_epoch
+      && watermark.committedEpoch === manifest.baseline_committed_epoch
+    ) {
+      stalledWarningEmitted = true;
       console.error(
-        `[locomo] warning: observer is not configured; watermark may stay pending and recall may remain incomplete`
+        `[locomo] warning: no observing progress detected after ${warningDelayMs}ms; pending turn ids: ${preview}; observingEpoch=${formatEpoch(watermark.observingEpoch)} committedEpoch=${formatEpoch(watermark.committedEpoch)}`
       );
     }
     await sleep(pollMs);
@@ -498,15 +508,6 @@ function hasConfiguredObserverConfig(config: Record<string, unknown>): boolean {
   return typeof provider === 'string' && provider.trim().length > 0;
 }
 
-async function hasConfiguredObserver(configPath: string): Promise<boolean> {
-  if (!await pathExists(configPath)) {
-    return false;
-  }
-  const raw = await readFile(configPath, 'utf8');
-  const config = parseJsonObject(raw, configPath);
-  return hasConfiguredObserverConfig(config);
-}
-
 function manifestPath(home: string): string {
   return path.join(home, 'locomo-manifest.json');
 }
@@ -632,6 +633,10 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
   });
+}
+
+function formatEpoch(value: number | undefined): string {
+  return value === undefined ? 'none' : String(value);
 }
 
 const isDirectExecution =

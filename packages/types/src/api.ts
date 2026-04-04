@@ -17,6 +17,8 @@ export interface ErrorResponse {
 export interface ObserverWatermark {
   resolved: boolean;
   pendingTurnIds: string[];
+  observingEpoch?: number;
+  committedEpoch?: number;
 }
 
 export interface ObserverWatermarkResponse extends ObserverWatermark {

@@ -269,12 +269,14 @@ async fn observer_watermark_tracks_pending_turns_until_flush_completes() {
     let current = observer.watermark().await.unwrap();
     assert!(!current.resolved);
     assert_eq!(current.pending_turn_ids, vec![turn.turn_id.to_string()]);
+    assert_eq!(current.observing_epoch, None);
 
     assert_eq!(observer.flush_epoch().await.unwrap(), 1);
 
     let flushed = observer.watermark().await.unwrap();
     assert!(flushed.resolved);
     assert!(flushed.pending_turn_ids.is_empty());
+    assert_eq!(flushed.committed_epoch, Some(0));
 
     clear_data_root();
 }
@@ -322,6 +324,7 @@ async fn observer_watermark_dedupes_and_sorts_pending_turn_ids() {
         watermark.pending_turn_ids,
         vec![first.turn_id.to_string(), "session:2".to_string()]
     );
+    assert_eq!(watermark.observing_epoch, None);
 
     clear_data_root();
 }
@@ -345,6 +348,7 @@ async fn observer_watermark_keeps_turn_pending_until_index_retry_succeeds() {
     let stuck = observer.watermark().await.unwrap();
     assert!(!stuck.resolved);
     assert_eq!(stuck.pending_turn_ids, vec![turn.turn_id.to_string()]);
+    assert_eq!(stuck.committed_epoch, Some(0));
 
     set_test_config(&dir, None, Some("mock"), Some("mock"));
     assert_eq!(observer.flush_epoch().await.unwrap(), 0);
@@ -352,6 +356,7 @@ async fn observer_watermark_keeps_turn_pending_until_index_retry_succeeds() {
     let recovered = observer.watermark().await.unwrap();
     assert!(recovered.resolved);
     assert!(recovered.pending_turn_ids.is_empty());
+    assert_eq!(recovered.committed_epoch, Some(0));
 
     clear_data_root();
 }
@@ -376,6 +381,7 @@ async fn observer_restart_restores_pending_turns_from_observing_epoch() {
     let watermark = restarted.watermark().await.unwrap();
     assert!(!watermark.resolved);
     assert_eq!(watermark.pending_turn_ids, vec![turn.turn_id.to_string()]);
+    assert_eq!(watermark.committed_epoch, Some(0));
 
     clear_data_root();
 }

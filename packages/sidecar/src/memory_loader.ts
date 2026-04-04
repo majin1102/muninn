@@ -32,10 +32,14 @@ function memoryResponse(memoryHits: MemoryHit[]): MemoryResponse {
 function observerWatermarkResponse(
   resolved: boolean,
   pendingTurnIds: string[],
+  observingEpoch?: number,
+  committedEpoch?: number,
 ): ObserverWatermarkResponse {
   return {
     resolved,
     pendingTurnIds,
+    observingEpoch,
+    committedEpoch,
     requestId: generateRequestId(),
   };
 }
@@ -210,6 +214,11 @@ memoryLoader.get('/api/v1/observer/watermark', async (c) => {
   }
 
   return c.json(
-    observerWatermarkResponse(watermark.resolved, watermark.pendingTurnIds)
+    observerWatermarkResponse(
+      watermark.resolved,
+      watermark.pendingTurnIds,
+      watermark.observingEpoch,
+      watermark.committedEpoch,
+    )
   );
 });

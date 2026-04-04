@@ -7,11 +7,11 @@ use crate::format::memory::{MemoryId, MemoryLayer};
 use crate::format::observing::ObservingSnapshot;
 use crate::format::semantic_index::SemanticIndexRow;
 use crate::format::session::SessionTurn;
-use crate::format::table::Storage;
 use crate::llm::embedding::embed_text;
 use crate::memory::observings::{self, ObservingListQuery};
 use crate::memory::sessions::{self, SessionListQuery, render_session_turn_detail};
 use crate::memory::types::{ListMode, MemoryView, RecallHit};
+use crate::storage::Storage;
 
 impl TryFrom<&SessionTurn> for MemoryView {
     type Error = Error;
@@ -293,9 +293,9 @@ mod tests {
     use crate::format::memory::{MemoryId, MemoryLayer};
     use crate::format::semantic_index::SemanticIndexRow;
     use crate::format::session::SessionTurn;
-    use crate::format::table::Storage;
     use crate::llm::config::llm_test_env_guard;
     use crate::llm::embedding::embed_text;
+    use crate::storage::Storage;
 
     fn test_storage() -> Storage {
         Storage::local(crate::config::data_root().unwrap()).unwrap()

@@ -216,7 +216,7 @@ test('import only fails fast when semantic index config is missing', async (t) =
   );
 });
 
-test('waitForImportWatermark emits a delayed warning when observer is not configured', async (t) => {
+test('waitForImportWatermark emits a delayed unresolved-watermark warning', async (t) => {
   const home = await mkdtemp(path.join(os.tmpdir(), 'muninn-locomo-warning-'));
   t.after(async () => rm(home, { recursive: true, force: true }));
   t.after(async () => core.shutdownCoreForTests());
@@ -257,5 +257,5 @@ test('waitForImportWatermark emits a delayed warning when observer is not config
     console.error = originalError;
   }
 
-  assert.ok(messages.some((message) => /observer is not configured/i.test(message)));
+  assert.ok(messages.some((message) => /no observing progress detected/i.test(message)));
 });
