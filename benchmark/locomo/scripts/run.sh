@@ -13,9 +13,14 @@ for arg in "$@"; do
     expect_data_file_value=0
     continue
   fi
-  if [ "$arg" = "--data-file" ]; then
-    expect_data_file_value=1
-  fi
+  case "$arg" in
+    --data-file)
+      expect_data_file_value=1
+      ;;
+    --data-file=*)
+      has_data_file=1
+      ;;
+  esac
 done
 
 sh "$SCRIPT_DIR/bootstrap.sh"

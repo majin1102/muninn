@@ -1,11 +1,12 @@
 # LoCoMo Data Source
 
 This directory now keeps only the attribution and license material for LoCoMo.
-The benchmark payload itself is downloaded on demand from the official LoCoMo
-repository into `benchmark/locomo/.cache/data/`.
+The benchmark payload itself is downloaded on demand from a pinned commit in
+the maintained fork and cached under `benchmark/locomo/.cache/data/`.
 
-- Source repository: <https://github.com/snap-research/locomo>
-- Upstream data path: `data/`
+- Pinned source repository: <https://github.com/majin1102/locomo>
+- Pinned source commit: `3eb6f2c585f5e1699204e3c3bdf7adc5c28cb376`
+- Upstream data path in the fork: `data/`
 - Download helper: `benchmark/locomo/scripts/fetch-data.sh`
 
 The download script currently fetches and checksum-verifies:

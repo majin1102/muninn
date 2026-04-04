@@ -6,6 +6,9 @@ from pathlib import Path
 from typing import Any
 
 
+VALID_MODES = ("dialog", "observation", "summary")
+
+
 @dataclass
 class LocomoQuestion:
     question: str
@@ -26,3 +29,24 @@ def iter_target_samples(
     if sample_id is None:
         return samples
     return [sample for sample in samples if sample["sample_id"] == sample_id]
+
+
+def parse_modes(raw: str) -> list[str]:
+    modes = [mode.strip() for mode in raw.split(",") if mode.strip()]
+    if not modes:
+        raise ValueError("at least one LoCoMo mode is required")
+
+    invalid = [mode for mode in modes if mode not in VALID_MODES]
+    if invalid:
+        valid = ", ".join(VALID_MODES)
+        bad = ", ".join(invalid)
+        raise ValueError(f"unsupported LoCoMo modes: {bad}. Expected one or more of: {valid}")
+
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for mode in modes:
+        if mode in seen:
+            continue
+        seen.add(mode)
+        ordered.append(mode)
+    return ordered

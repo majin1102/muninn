@@ -82,15 +82,16 @@ This repository no longer vendors the full LoCoMo benchmark payload in Git.
 Instead, the benchmark downloads a pinned copy on demand into the local cache
 directory `benchmark/locomo/.cache/data/`.
 
-- Source repository: <https://github.com/snap-research/locomo>
+- Pinned source repository: <https://github.com/majin1102/locomo>
+- Pinned source commit: `3eb6f2c585f5e1699204e3c3bdf7adc5c28cb376`
 - Default cached benchmark file: `benchmark/locomo/.cache/data/locomo10.json`
 - License note: upstream LoCoMo data is distributed under `CC BY-NC 4.0`
 - Attribution and a local license copy remain in
   `benchmark/locomo/data/README.md` and `benchmark/locomo/data/LOCOMO_LICENSE.txt`
 
-The download script verifies SHA256 checksums for the expected data files, so
-benchmark runs stay pinned to a known LoCoMo snapshot even though the payload
-is fetched from GitHub.
+The download script fetches from the pinned fork commit above and also verifies
+SHA256 checksums for the expected data files, so benchmark runs stay pinned to
+a known LoCoMo snapshot even though the payload is fetched from GitHub.
 
 If you reuse or redistribute the downloaded files, review the upstream
 non-commercial license terms first.
@@ -130,7 +131,8 @@ pnpm --filter @muninn/benchmark-locomo test
 
 ### Fetch Data
 
-Download or refresh the default cached LoCoMo dataset:
+Download or refresh the default cached LoCoMo dataset from the pinned fork
+commit:
 
 ```bash
 sh benchmark/locomo/scripts/fetch-data.sh
@@ -201,7 +203,8 @@ sh benchmark/locomo/scripts/run.sh \
 ```
 
 If you want to use a manually managed dataset file instead of the cached
-default, pass `--data-file /path/to/locomo10.json` explicitly.
+default, pass `--data-file /path/to/locomo10.json` or
+`--data-file=/path/to/locomo10.json` explicitly.
 
 ## Runtime Behavior
 

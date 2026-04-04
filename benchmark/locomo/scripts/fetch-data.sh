@@ -5,7 +5,7 @@ SCRIPT_DIR=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
 ROOT_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/../../.." && pwd)
 
 CACHE_DIR=${MUNINN_LOCOMO_DATA_DIR:-"$ROOT_DIR/benchmark/locomo/.cache/data"}
-BASE_URL=${MUNINN_LOCOMO_DATA_BASE_URL:-"https://raw.githubusercontent.com/snap-research/locomo/main/data"}
+BASE_URL=${MUNINN_LOCOMO_DATA_BASE_URL:-"https://raw.githubusercontent.com/majin1102/locomo/3eb6f2c585f5e1699204e3c3bdf7adc5c28cb376/data"}
 
 PRINT_DEFAULT_DATA_FILE=0
 FORCE=0
@@ -22,6 +22,13 @@ Options:
   --print-default-data-file  Print the default cached locomo10.json path.
   --help                     Show this help text.
 EOF
+}
+
+require_command() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    echo "locomo: required command not found: $1" >&2
+    exit 1
+  fi
 }
 
 sha256() {
@@ -93,6 +100,9 @@ if [ "$PRINT_DEFAULT_DATA_FILE" -eq 1 ]; then
   printf '%s\n' "$default_data_file"
   exit 0
 fi
+
+require_command curl
+require_command shasum
 
 download_file "locomo10.json" "79fa87e90f04081343b8c8debecb80a9a6842b76a7aa537dc9fdf651ea698ff4"
 download_file "msc_personas_all.json" "75440be006945f5e92141f2374becd551a17a4a98ccd982d1d06c821b40c7dc7"
