@@ -14,6 +14,15 @@ export interface ErrorResponse {
   requestId: string;
 }
 
+export interface ObserverWatermark {
+  resolved: boolean;
+  pendingTurnIds: string[];
+}
+
+export interface ObserverWatermarkResponse extends ObserverWatermark {
+  requestId: string;
+}
+
 export interface RecallRequest {
   query: string;
   limit?: number;

@@ -48,7 +48,7 @@ fn set_test_config(
 ) {
     let home = dir.path().join("muninn");
     std::fs::create_dir_all(&home).unwrap();
-    let config_path = home.join("settings.json");
+    let config_path = home.join(crate::llm::config::CONFIG_FILE_NAME);
     write_test_muninn_config(
         &config_path,
         turn_provider,
@@ -248,6 +248,134 @@ async fn observer_new_replaces_shutdown_singleton() {
     assert!(first.is_shutdown().await);
     assert!(!second.is_shutdown().await);
     assert!(!first.shares_runtime_with(&second));
+
+    clear_data_root();
+}
+
+#[tokio::test]
+async fn observer_watermark_tracks_pending_turns_until_flush_completes() {
+    let _guard = llm_test_env_guard();
+    let dir = tempfile::tempdir().unwrap();
+    set_test_config(&dir, None, Some("mock"), None);
+    set_data_root(&dir);
+    unsafe {
+        std::env::set_var("MUNINN_OBSERVER_POLL_MS", "60000");
+    }
+
+    let storage = test_storage();
+    let turn = post_observable(&storage, "group-a", "prompt-a", "response-a", "summary-a").await;
+    let observer = Observer::new(test_storage()).await.unwrap();
+
+    let current = observer.watermark().await.unwrap();
+    assert!(!current.resolved);
+    assert_eq!(current.pending_turn_ids, vec![turn.turn_id.to_string()]);
+
+    assert_eq!(observer.flush_epoch().await.unwrap(), 1);
+
+    let flushed = observer.watermark().await.unwrap();
+    assert!(flushed.resolved);
+    assert!(flushed.pending_turn_ids.is_empty());
+
+    clear_data_root();
+}
+
+#[tokio::test]
+async fn observer_watermark_dedupes_and_sorts_pending_turn_ids() {
+    let _guard = llm_test_env_guard();
+    let dir = tempfile::tempdir().unwrap();
+    set_test_config(&dir, None, Some("mock"), None);
+    set_data_root(&dir);
+    unsafe {
+        std::env::set_var("MUNINN_OBSERVER_POLL_MS", "60000");
+    }
+
+    let observer = Observer::new(test_storage()).await.unwrap();
+    let write = SessionWrite {
+        session_id: Some("group-a".to_string()),
+        agent: "agent-a".to_string(),
+        observer: "test-observer".to_string(),
+        title: None,
+        summary: Some("summary".to_string()),
+        title_source: None,
+        summary_source: None,
+        tool_calling: None,
+        artifacts: None,
+        prompt: Some("prompt".to_string()),
+        response: Some("response".to_string()),
+    };
+
+    let mut second = SessionTurn::new_pending(&write).with_row_id(2);
+    second.created_at = second.created_at + chrono::Duration::seconds(1);
+    second.updated_at = second.created_at;
+
+    let mut first = SessionTurn::new_pending(&write).with_row_id(1);
+    first.updated_at = first.created_at;
+
+    let mut first_newer = first.clone();
+    first_newer.updated_at = first_newer.updated_at + chrono::Duration::seconds(5);
+
+    observer.enqueue(vec![second, first.clone(), first_newer]).await;
+
+    let watermark = observer.watermark().await.unwrap();
+    assert!(!watermark.resolved);
+    assert_eq!(
+        watermark.pending_turn_ids,
+        vec![first.turn_id.to_string(), "session:2".to_string()]
+    );
+
+    clear_data_root();
+}
+
+#[tokio::test]
+async fn observer_watermark_keeps_turn_pending_until_index_retry_succeeds() {
+    let _guard = llm_test_env_guard();
+    let dir = tempfile::tempdir().unwrap();
+    set_test_config(&dir, None, Some("mock"), Some("broken"));
+    set_data_root(&dir);
+    unsafe {
+        std::env::set_var("MUNINN_OBSERVER_POLL_MS", "60000");
+    }
+
+    let storage = test_storage();
+    let turn = post_observable(&storage, "group-a", "prompt-a", "response-a", "summary-a").await;
+    let observer = Observer::new(test_storage()).await.unwrap();
+
+    assert_eq!(observer.flush_epoch().await.unwrap(), 1);
+
+    let stuck = observer.watermark().await.unwrap();
+    assert!(!stuck.resolved);
+    assert_eq!(stuck.pending_turn_ids, vec![turn.turn_id.to_string()]);
+
+    set_test_config(&dir, None, Some("mock"), Some("mock"));
+    assert_eq!(observer.flush_epoch().await.unwrap(), 0);
+
+    let recovered = observer.watermark().await.unwrap();
+    assert!(recovered.resolved);
+    assert!(recovered.pending_turn_ids.is_empty());
+
+    clear_data_root();
+}
+
+#[tokio::test]
+async fn observer_restart_restores_pending_turns_from_observing_epoch() {
+    let _guard = llm_test_env_guard();
+    let dir = tempfile::tempdir().unwrap();
+    set_test_config(&dir, None, Some("mock"), Some("broken"));
+    set_data_root(&dir);
+    unsafe {
+        std::env::set_var("MUNINN_OBSERVER_POLL_MS", "60000");
+    }
+
+    let storage = test_storage();
+    let turn = post_observable(&storage, "group-a", "prompt-a", "response-a", "summary-a").await;
+    let observer = Observer::new(test_storage()).await.unwrap();
+    assert_eq!(observer.flush_epoch().await.unwrap(), 1);
+    observer.shutdown(true).await;
+
+    let restarted = Observer::new(test_storage()).await.unwrap();
+    let watermark = restarted.watermark().await.unwrap();
+    assert!(!watermark.resolved);
+    assert_eq!(watermark.pending_turn_ids, vec![turn.turn_id.to_string()]);
 
     clear_data_root();
 }

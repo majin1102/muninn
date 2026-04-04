@@ -23,6 +23,7 @@ use crate::llm::observing_update::{
 use crate::observer::observing::{
     ObservingThread, SnapshotContent, load_threads, snapshot_ref, turn_ref,
 };
+use crate::service::ObserverWatermark;
 use crate::storage::Storage;
 
 fn observer_singleton() -> &'static Mutex<Option<Observer>> {
@@ -36,12 +37,19 @@ struct PendingObservingTask {
     input: ObserveRequest,
 }
 
+#[derive(Debug, Clone)]
+struct PendingIndexBatch {
+    turns: Vec<SessionTurn>,
+    observing_ids: HashSet<String>,
+}
+
 #[derive(Debug, Default)]
 struct ObserverState {
     committed_epoch: Option<u64>,
     observing_epoch: Option<u64>,
     buffer: Vec<SessionTurn>,
     observing_buffer: Vec<SessionTurn>,
+    index_batches: Vec<PendingIndexBatch>,
     threads: Vec<ObservingThread>,
     flushing: bool,
     shutdown: bool,
@@ -132,6 +140,7 @@ impl Observer {
                 );
             }
         }
+        let index_batches = restore_index_batches(&storage, &observer, &threads).await?;
 
         let committed_epoch = load_committed_epoch(&storage, &observer).await?;
         let mut inbox = storage
@@ -167,6 +176,7 @@ impl Observer {
                 observing_epoch: None,
                 buffer: inbox,
                 observing_buffer: Vec::new(),
+                index_batches,
                 threads,
                 flushing: false,
                 shutdown: false,
@@ -214,6 +224,19 @@ impl Observer {
         for turn in turns {
             enqueue_turn(&mut state.buffer, turn);
         }
+    }
+
+    pub async fn watermark(&self) -> Result<ObserverWatermark> {
+        let state = self.state.lock().await;
+        let pending = collect_pending(&state);
+        let pending_turn_ids = pending
+            .iter()
+            .map(|turn| turn.turn_id.to_string())
+            .collect::<Vec<_>>();
+        Ok(ObserverWatermark {
+            resolved: pending.is_empty(),
+            pending_turn_ids,
+        })
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
@@ -330,6 +353,17 @@ async fn flush_epoch_with(
     if state.shutdown || state.flushing {
         return Ok(0);
     }
+    if state.observing_epoch.is_none() && state.buffer.is_empty() {
+        if state.index_batches.is_empty() {
+            return Ok(0);
+        }
+        state.flushing = true;
+        let mut index_batches = std::mem::take(&mut state.index_batches);
+        let result = retry_index_batches(storage, &mut state.threads, &mut index_batches).await;
+        state.index_batches = index_batches;
+        state.flushing = false;
+        return result.map(|_| 0);
+    }
     let epoch = if let Some(epoch) = state.observing_epoch {
         epoch
     } else {
@@ -357,12 +391,15 @@ async fn flush_epoch_with(
     let result =
         flush_epoch_inner(storage, observer, &mut state.threads, epoch, &pending_turns).await;
     match result {
-        Ok(flushed) => {
+        Ok(failed_index_ids) => {
             state.committed_epoch = Some(epoch);
             state.observing_epoch = None;
             state.observing_buffer.clear();
+            if !failed_index_ids.is_empty() {
+                push_index_batch(&mut state.index_batches, pending_turns.clone(), failed_index_ids);
+            }
             state.flushing = false;
-            Ok(flushed)
+            Ok(pending_turns.len())
         }
         Err(error) => {
             state.flushing = false;
@@ -433,6 +470,84 @@ fn enqueue_turn(buffer: &mut Vec<SessionTurn>, turn: SessionTurn) {
     });
 }
 
+fn collect_pending(state: &ObserverState) -> Vec<SessionTurn> {
+    let mut turns_by_id = HashMap::new();
+    for turn in state
+        .observing_buffer
+        .iter()
+        .chain(state.buffer.iter())
+        .chain(state.index_batches.iter().flat_map(|batch| batch.turns.iter()))
+    {
+        turns_by_id
+            .entry(turn.turn_id)
+            .and_modify(|existing: &mut SessionTurn| {
+                if turn.updated_at > existing.updated_at {
+                    *existing = turn.clone();
+                }
+            })
+            .or_insert_with(|| turn.clone());
+    }
+
+    let mut pending = turns_by_id.into_values().collect::<Vec<_>>();
+    pending.sort_by(|left, right| {
+        left.created_at
+            .cmp(&right.created_at)
+            .then(left.updated_at.cmp(&right.updated_at))
+            .then(left.turn_id.cmp(&right.turn_id))
+    });
+    pending
+}
+
+fn thread_has_pending_index(thread: &ObservingThread) -> bool {
+    let latest_snapshot_sequence = thread.snapshots.len().checked_sub(1).map(|value| value as i64);
+    match (thread.indexed_snapshot_sequence, latest_snapshot_sequence) {
+        (_, None) => false,
+        (Some(indexed), Some(latest)) => indexed < latest,
+        (None, Some(_)) => true,
+    }
+}
+
+async fn restore_index_batches(
+    storage: &Storage,
+    observer: &str,
+    threads: &[ObservingThread],
+) -> Result<Vec<PendingIndexBatch>> {
+    let mut observing_ids_by_epoch = HashMap::<u64, HashSet<String>>::new();
+    for thread in threads.iter().filter(|thread| thread_has_pending_index(thread)) {
+        observing_ids_by_epoch
+            .entry(thread.observing_epoch)
+            .or_default()
+            .insert(thread.observing_id.clone());
+    }
+    if observing_ids_by_epoch.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let epochs = observing_ids_by_epoch.keys().copied().collect::<HashSet<_>>();
+    let turns = storage
+        .sessions()
+        .turns_for_observing_epochs(observer, &epochs)
+        .await?;
+    let mut turns_by_epoch = HashMap::<u64, Vec<SessionTurn>>::new();
+    for turn in turns {
+        let Some(epoch) = turn.observing_epoch else {
+            continue;
+        };
+        turns_by_epoch.entry(epoch).or_default().push(turn);
+    }
+
+    let mut index_batches = Vec::new();
+    let mut pending_epochs = observing_ids_by_epoch.into_iter().collect::<Vec<_>>();
+    pending_epochs.sort_by_key(|(epoch, _)| *epoch);
+    for (epoch, observing_ids) in pending_epochs {
+        let Some(turns) = turns_by_epoch.remove(&epoch) else {
+            continue;
+        };
+        push_index_batch(&mut index_batches, turns, observing_ids);
+    }
+    Ok(index_batches)
+}
+
 async fn load_committed_epoch(storage: &Storage, observer: &str) -> Result<Option<u64>> {
     Ok(storage
         .observings()
@@ -449,7 +564,7 @@ async fn flush_epoch_inner(
     threads: &mut Vec<ObservingThread>,
     epoch: u64,
     pending_turns: &[SessionTurn],
-) -> Result<usize> {
+) -> Result<HashSet<String>> {
     ensure_root_thread(threads, observer, pending_turns, epoch);
 
     let gateway_inputs = active_gateway_inputs(threads, observer);
@@ -462,14 +577,14 @@ async fn flush_epoch_inner(
         gateway_result.updates,
     )
     .await?;
-    flush_threads(storage, threads, &touched_ids).await?;
+    let failed_index_ids = flush_threads(storage, threads, &touched_ids).await?;
 
     eprintln!(
         "[observer] flushed epoch {} with {} turns",
         epoch,
         pending_turns.len()
     );
-    Ok(pending_turns.len())
+    Ok(failed_index_ids)
 }
 
 pub(crate) async fn apply_gateway_updates(
@@ -701,7 +816,7 @@ async fn flush_threads(
     storage: &Storage,
     threads: &mut [ObservingThread],
     touched_ids: &HashSet<String>,
-) -> Result<()> {
+) -> Result<HashSet<String>> {
     let observings = collect_touched_threads(threads, touched_ids)
         .iter()
         .filter(|thread| !thread.snapshots.is_empty())
@@ -739,6 +854,7 @@ async fn flush_threads(
     apply_parent_refs(storage, threads, touched_ids).await?;
 
     let semantic_config = crate::config::semantic_index_config()?;
+    let mut failed_index_ids = HashSet::new();
     for observing_id in touched_ids {
         let Some(thread) = threads
             .iter_mut()
@@ -751,9 +867,64 @@ async fn flush_threads(
                 "[observer] semantic_index flush failed for {}: {}",
                 thread.observing_id, error
             );
+            failed_index_ids.insert(thread.observing_id.clone());
         }
     }
+    Ok(failed_index_ids)
+}
+
+fn push_index_batch(
+    batches: &mut Vec<PendingIndexBatch>,
+    turns: Vec<SessionTurn>,
+    observing_ids: HashSet<String>,
+) {
+    if turns.is_empty() || observing_ids.is_empty() {
+        return;
+    }
+    batches.push(PendingIndexBatch { turns, observing_ids });
+}
+
+async fn retry_index_batches(
+    storage: &Storage,
+    threads: &mut [ObservingThread],
+    batches: &mut Vec<PendingIndexBatch>,
+) -> Result<()> {
+    if batches.is_empty() {
+        return Ok(());
+    }
+
+    let semantic_config = crate::config::semantic_index_config()?;
+    for batch in batches.iter_mut() {
+        batch.observing_ids =
+            retry_index_batch(storage, threads, &batch.observing_ids, &semantic_config).await?;
+    }
+    batches.retain(|batch| !batch.observing_ids.is_empty());
     Ok(())
+}
+
+async fn retry_index_batch(
+    storage: &Storage,
+    threads: &mut [ObservingThread],
+    observing_ids: &HashSet<String>,
+    semantic_config: &EmbeddingConfig,
+) -> Result<HashSet<String>> {
+    let mut failed_ids = HashSet::new();
+    for observing_id in observing_ids {
+        let Some(thread) = threads
+            .iter_mut()
+            .find(|thread| thread.observing_id == *observing_id)
+        else {
+            continue;
+        };
+        if let Err(error) = catch_up_index(storage, thread, semantic_config).await {
+            eprintln!(
+                "[observer] semantic_index retry failed for {}: {}",
+                thread.observing_id, error
+            );
+            failed_ids.insert(thread.observing_id.clone());
+        }
+    }
+    Ok(failed_ids)
 }
 
 async fn apply_parent_refs(

@@ -169,7 +169,7 @@ const state: AppState = {
   settingsLoading: false,
   settingsSaving: false,
   settingsEditing: false,
-  settingsPathLabel: 'settings.json',
+  settingsPathLabel: 'muninn.json',
   settingsContent: '',
   settingsDraft: '',
   settingsError: null,
@@ -564,7 +564,7 @@ function renderSettingsModal(): string {
           </button>
         </header>
         <div class="settings-body ${state.settingsEditing ? 'settings-body-editing' : ''}">
-          ${state.settingsLoading ? '<div class="pane-message">Loading settings.json...</div>' : ''}
+          ${state.settingsLoading ? '<div class="pane-message">Loading muninn.json...</div>' : ''}
           ${state.settingsError ? `<div class="pane-message pane-error">${escapeHtml(state.settingsError)}</div>` : ''}
           <textarea
             class="settings-editor"

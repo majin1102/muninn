@@ -6,7 +6,7 @@ import { mkdtemp, mkdir, realpath, rm, writeFile } from 'node:fs/promises';
 
 import { resolveConfigPath } from '../dist/utils.js';
 
-test('resolveConfigPath uses MUNINN_HOME/settings.json when set', async (t) => {
+test('resolveConfigPath uses MUNINN_HOME/muninn.json when set', async (t) => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'muninn-config-home-'));
   const originalHome = process.env.HOME;
   t.after(async () => {
@@ -21,7 +21,7 @@ test('resolveConfigPath uses MUNINN_HOME/settings.json when set', async (t) => {
   });
 
   const muninnHome = path.join(dir, 'custom-home');
-  const configPath = path.join(muninnHome, 'settings.json');
+  const configPath = path.join(muninnHome, 'muninn.json');
 
   await mkdir(muninnHome, { recursive: true });
   await writeFile(configPath, '{\n  \n}\n', 'utf8');
@@ -32,7 +32,7 @@ test('resolveConfigPath uses MUNINN_HOME/settings.json when set', async (t) => {
   assert.equal(await realpath(resolveConfigPath()), await realpath(configPath));
 });
 
-test('resolveConfigPath falls back to HOME/.muninn/settings.json when MUNINN_HOME is missing', async (t) => {
+test('resolveConfigPath falls back to HOME/.muninn/muninn.json when MUNINN_HOME is missing', async (t) => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'muninn-config-user-'));
   const originalHome = process.env.HOME;
   t.after(async () => {
@@ -47,7 +47,7 @@ test('resolveConfigPath falls back to HOME/.muninn/settings.json when MUNINN_HOM
   });
 
   const cwd = path.join(dir, 'workspace', 'child');
-  const userConfig = path.join(dir, 'home', '.muninn', 'settings.json');
+  const userConfig = path.join(dir, 'home', '.muninn', 'muninn.json');
 
   await mkdir(cwd, { recursive: true });
   await mkdir(path.dirname(userConfig), { recursive: true });

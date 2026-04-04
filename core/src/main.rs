@@ -88,6 +88,10 @@ struct DetailParams {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ObserverWatermarkParams {}
+
+#[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SettingsValidateParams {
     content: String,
@@ -257,6 +261,14 @@ async fn handle_request(service: &Service, line: &str) -> RequestHandling {
                 .get(&params.memory_id)
                 .await
                 .map(|memory| serde_json::to_value(memory).unwrap())
+                .map_err(|error| error.to_string()),
+            Err(error) => Err(error),
+        },
+        "observer.watermark" => match parse_params::<ObserverWatermarkParams>(&request.params) {
+            Ok(_) => service
+                .observer_watermark()
+                .await
+                .map(|watermark| serde_json::to_value(watermark).unwrap())
                 .map_err(|error| error.to_string()),
             Err(error) => Err(error),
         },

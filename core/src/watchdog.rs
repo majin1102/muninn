@@ -320,7 +320,7 @@ mod tests {
         let home = dir.path().join("muninn");
         fs::create_dir_all(&home).unwrap();
         fs::write(
-            home.join("settings.json"),
+            home.join(crate::llm::config::CONFIG_FILE_NAME),
             serde_json::to_string_pretty(&json!({
                 "watchdog": {
                     "enabled": true,

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -171,6 +172,9 @@ class MuninnBridge:
             check=False,
             env=self._subprocess_env(),
         )
+        if completed.stderr:
+            sys.stderr.write(completed.stderr)
+            sys.stderr.flush()
         if completed.returncode != 0:
             raise BridgeError(
                 f"bridge command failed ({completed.returncode}): "

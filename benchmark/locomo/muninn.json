@@ -1,0 +1,10 @@
+{
+  "observer": {
+    "name": "locomo-observer",
+    "maxAttempts": 3
+  },
+  "llm": {},
+  "semanticIndex": {
+    "defaultImportance": 0.7
+  }
+}

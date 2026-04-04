@@ -16,11 +16,11 @@
 - `session` 树状 explorer
 - `observation` 摘要 block 列表
 - 右侧 markdown 文档详情区
-- Settings 弹窗，可查看和保存 `${MUNINN_HOME}/settings.json`
+- Settings 弹窗，可查看和保存 `${MUNINN_HOME}/muninn.json`
 - `board` 自己维护人类向 UI 路由与页面静态资源
 - 运行时由 `@muninn/sidecar` 统一挂载到 `/board/`
 
-`settings.json` 里的配置目前支持：
+`muninn.json` 里的配置目前支持：
 
 ```json
 {
@@ -90,7 +90,7 @@
 - `watchdog.compactMinFragments` 控制 `turn / observing / semanticIndex` 触发 compaction 的最小 fragment 数
 - `watchdog.semanticIndex.targetPartitionSize` 用于计算 `semantic_index` 向量索引的 IVF 分区数
 - `watchdog.semanticIndex.optimizeMergeCount` 控制每次索引优化最多合并多少个增量索引段，值越大单次维护越重，但索引碎片通常更少
-- Board 在 `settings.json` 不存在时会给出一份默认模板，其中包含 watchdog 默认配置
+- Board 在 `muninn.json` 不存在时会给出一份默认模板，其中包含 watchdog 默认配置
 - `semantic_index` 的向量索引会在 watchdog 启动检查或后续维护中自动补建；如果 dataset 还是空表，会等第一批 row 写入后再建索引
 
 当前状态：

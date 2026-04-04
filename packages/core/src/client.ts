@@ -57,6 +57,11 @@ export interface RecallHitRecord {
   text: string;
 }
 
+export interface ObserverWatermarkRecord {
+  resolved: boolean;
+  pendingTurnIds: string[];
+}
+
 export type ListModeInput =
   | { type: 'recency'; limit: number }
   | { type: 'page'; offset: number; limit: number };
@@ -90,6 +95,11 @@ type RawRenderedMemoryRecord = {
 type RawRecallHitRecord = {
   memoryId: string;
   text: string;
+};
+
+type RawObserverWatermarkRecord = {
+  resolved: boolean;
+  pendingTurnIds?: string[];
 };
 
 export interface SessionMessageInput {
@@ -379,13 +389,13 @@ export const memories = {
   },
 };
 
-export async function flushObserverForTests(): Promise<number> {
-  return getDaemon().request<number>('observer.flush', {});
-}
-
-export async function runWatchdogOnceForTests(): Promise<void> {
-  await getDaemon().request<true>('watchdog.run_once', {});
-}
+export const observer = {
+  async watermark(): Promise<ObserverWatermarkRecord> {
+    const row = await getDaemon().request<RawObserverWatermarkRecord>('observer.watermark', {
+    });
+    return normalizeObserverWatermarkRecord(row);
+  },
+};
 
 export async function shutdownCoreForTests(): Promise<void> {
   if (!singleton) {
@@ -572,9 +582,17 @@ function normalizeRecallHitRecord(row: RawRecallHitRecord): RecallHitRecord {
   };
 }
 
+function normalizeObserverWatermarkRecord(
+  row: RawObserverWatermarkRecord,
+): ObserverWatermarkRecord {
+  return {
+    resolved: row.resolved,
+    pendingTurnIds: row.pendingTurnIds ?? [],
+  };
+}
+
 export const __testing = {
   waitForPromiseOrTimeout,
-  resolveRepoRoot,
   resolveDaemonLaunchSpec,
   resolveBundledDaemonExecutableName,
   formatDaemonStartError,
@@ -587,8 +605,7 @@ const core = {
   sessions,
   observings,
   memories,
-  flushObserverForTests,
-  runWatchdogOnceForTests,
+  observer,
   shutdownCoreForTests,
 };
 

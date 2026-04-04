@@ -1,8 +1,14 @@
 import {
   memories,
+  observer,
 } from '@muninn/core';
 import { Hono } from 'hono';
-import type { ErrorResponse, MemoryHit, MemoryResponse } from '@muninn/types';
+import type {
+  ErrorResponse,
+  MemoryHit,
+  MemoryResponse,
+  ObserverWatermarkResponse,
+} from '@muninn/types';
 import { renderRecallHit, renderRenderedMemoryHit } from './render.js';
 import { generateRequestId } from './utils.js';
 
@@ -19,6 +25,17 @@ function errorResponse(errorCode: string, errorMessage: string): ErrorResponse {
 function memoryResponse(memoryHits: MemoryHit[]): MemoryResponse {
   return {
     memoryHits,
+    requestId: generateRequestId(),
+  };
+}
+
+function observerWatermarkResponse(
+  resolved: boolean,
+  pendingTurnIds: string[],
+): ObserverWatermarkResponse {
+  return {
+    resolved,
+    pendingTurnIds,
     requestId: generateRequestId(),
   };
 }
@@ -175,4 +192,18 @@ memoryLoader.get('/api/v1/detail', async (c) => {
   }
 
   return c.json(memoryResponse([renderRenderedMemoryHit(memory)]));
+});
+
+memoryLoader.get('/api/v1/observer/watermark', async (c) => {
+  let watermark;
+  try {
+    watermark = await observer.watermark();
+  } catch (error) {
+    const mapped = mapCoreLookupError(error);
+    return c.json(mapped.body, mapped.status as 400 | 500);
+  }
+
+  return c.json(
+    observerWatermarkResponse(watermark.resolved, watermark.pendingTurnIds)
+  );
 });

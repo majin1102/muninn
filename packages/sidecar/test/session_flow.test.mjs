@@ -18,7 +18,7 @@ async function makeDatasetUri() {
   return {
     dir,
     homeDir: path.join(dir, 'muninn'),
-    configPath: path.join(dir, 'muninn', 'settings.json'),
+    configPath: path.join(dir, 'muninn', 'muninn.json'),
   };
 }
 
@@ -57,6 +57,7 @@ test.afterEach(async () => {
   resetSessionTreeCacheForTests();
   delete process.env.MUNINN_HOME;
   delete process.env.MUNINN_OBSERVE_WINDOW_MS;
+  delete process.env.MUNINN_OBSERVER_POLL_MS;
 });
 
 test('session/messages writes a message into a session and detail reads it back', async (t) => {
@@ -445,6 +446,53 @@ test('detail and timeline map invalid memoryId inputs to invalidRequest', async 
   }
 });
 
+test('observer watermark reports pending turns until the observer flush completes', async (t) => {
+  const { dir, homeDir, configPath } = await makeDatasetUri();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+
+  process.env.MUNINN_HOME = homeDir;
+  process.env.MUNINN_OBSERVER_POLL_MS = '60000';
+  await writeMuninnConfig(configPath, { observerProvider: 'mock' });
+
+  const writeResponse = await app.request('/api/v1/session/messages', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      session: {
+        session_id: 'group-a',
+        agent: 'agent-a',
+        prompt: 'watermark prompt',
+        response: 'watermark response',
+      },
+    }),
+  });
+  assert.equal(writeResponse.status, 200);
+  const written = await json(writeResponse);
+
+  const currentResponse = await app.request('/api/v1/observer/watermark');
+  assert.equal(currentResponse.status, 200);
+  const currentBody = await json(currentResponse);
+  assert.equal(currentBody.resolved, false);
+  assert.deepEqual(currentBody.pendingTurnIds, [written.turnId]);
+
+  process.env.MUNINN_OBSERVER_POLL_MS = '1';
+  await shutdownCoreForTests();
+
+  let resolvedBody = null;
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    const resolvedResponse = await app.request('/api/v1/observer/watermark');
+    assert.equal(resolvedResponse.status, 200);
+    resolvedBody = await json(resolvedResponse);
+    if (resolvedBody.resolved) {
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  assert.ok(resolvedBody);
+  assert.equal(resolvedBody.resolved, true);
+  assert.deepEqual(resolvedBody.pendingTurnIds, []);
+});
+
 test('detail returns notFound for missing observing memoryId', async () => {
   const { dir, homeDir } = await makeDatasetUri();
   process.env.MUNINN_HOME = homeDir;
@@ -687,7 +735,7 @@ test('ui observing endpoints return live observings and documents', async (t) =>
   assert.doesNotMatch(document.document.markdown, /## References/);
 });
 
-test('ui settings config reads and writes settings.json through sidecar', async (t) => {
+test('ui settings config reads and writes muninn.json through sidecar', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(async () => rm(dir, { recursive: true, force: true }));
   process.env.MUNINN_HOME = homeDir;
@@ -732,7 +780,7 @@ test('ui settings config creates the parent directory on first save', async (t) 
   assert.match(persisted, /"watchdog"/);
 });
 
-test('ui settings config returns default watchdog template when settings.json is missing', async (t) => {
+test('ui settings config returns default watchdog template when muninn.json is missing', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(async () => rm(dir, { recursive: true, force: true }));
   process.env.MUNINN_HOME = homeDir;

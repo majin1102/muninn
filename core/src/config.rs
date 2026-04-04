@@ -31,7 +31,7 @@ pub fn semantic_index_config() -> Result<EmbeddingConfig> {
 }
 
 pub fn semantic_index_config_from_raw(raw: &str) -> Result<EmbeddingConfig> {
-    let parsed = parse_muninn_config(raw, "provided settings config")?;
+    let parsed = parse_muninn_config(raw, "provided Muninn config")?;
     Ok(embedding_config_from_file_config(
         parsed.semantic_index.as_ref(),
     ))
@@ -141,7 +141,7 @@ fn embedding_config_from_file_config(
 
 fn parse_muninn_config(raw: &str, source: &str) -> Result<MuninnConfig> {
     serde_json::from_str::<MuninnConfig>(raw)
-        .map_err(|error| Error::invalid_input(format!("invalid settings config {source}: {error}")))
+        .map_err(|error| Error::invalid_input(format!("invalid Muninn config {source}: {error}")))
 }
 
 #[cfg(test)]
@@ -157,7 +157,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let home = dir.path().join("muninn-home");
         fs::create_dir_all(&home).unwrap();
-        fs::write(home.join("settings.json"), "{}").unwrap();
+        fs::write(home.join(crate::llm::config::CONFIG_FILE_NAME), "{}").unwrap();
         unsafe {
             std::env::set_var("MUNINN_HOME", &home);
         }
@@ -181,7 +181,7 @@ mod tests {
         let home = dir.path().join("muninn-home");
         fs::create_dir_all(&home).unwrap();
         fs::write(
-            home.join("settings.json"),
+            home.join(crate::llm::config::CONFIG_FILE_NAME),
             r#"{
               "watchdog": {
                 "enabled": false,

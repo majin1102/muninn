@@ -10,7 +10,8 @@ mod watchdog;
 pub use format::{MemoryId, MemoryLayer};
 pub use memory::types::{ListMode, MemoryView, RecallHit};
 pub use service::{
-    Memories, MemoryRecall, MemoryTimeline, ObservingList, Observings, PostMessage, Service,
+    Memories, MemoryRecall, MemoryTimeline, ObserverWatermark, ObservingList, Observings,
+    PostMessage, Service,
     SessionList, Sessions,
 };
 pub use storage::Storage;
