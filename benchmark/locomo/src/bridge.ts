@@ -9,7 +9,7 @@ import * as coreClient from '@muninn/core';
 const CONFIG_FILE_NAME = 'muninn.json';
 const WATERMARK_POLL_MS = 2_000;
 const WATERMARK_TIMEOUT_MS = 10 * 60 * 1_000;
-const WATERMARK_WARNING_DELAY_MS = 10_000;
+const WATERMARK_WARNING_DELAY_MS = 60_000;
 
 type LocomoDialog = {
   speaker: string;
