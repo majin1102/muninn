@@ -14,6 +14,17 @@ export interface ErrorResponse {
   requestId: string;
 }
 
+export interface ObserverWatermark {
+  resolved: boolean;
+  pendingTurnIds: string[];
+  observingEpoch?: number;
+  committedEpoch?: number;
+}
+
+export interface ObserverWatermarkResponse extends ObserverWatermark {
+  requestId: string;
+}
+
 export interface RecallRequest {
   query: string;
   limit?: number;

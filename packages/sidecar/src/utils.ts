@@ -20,8 +20,8 @@ export function parseNumber(value: string | undefined, defaultValue?: number): n
 
 export function resolveConfigPath(): string {
   if (process.env.MUNINN_HOME) {
-    return path.join(process.env.MUNINN_HOME, 'settings.json');
+    return path.join(process.env.MUNINN_HOME, 'muninn.json');
   }
 
-  return path.join(os.homedir(), '.muninn', 'settings.json');
+  return path.join(os.homedir(), '.muninn', 'muninn.json');
 }

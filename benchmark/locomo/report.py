@@ -11,44 +11,17 @@ MAX_EXAMPLES = 10
 
 def build_error_report(
     samples: list[dict[str, Any]],
-    model_key_by_pipeline: dict[str, dict[str, str]],
+    model_key: str,
 ) -> dict[str, Any]:
-    pipelines: dict[str, Any] = {}
-    scored_by_pipeline: dict[str, dict[str, dict[tuple[str, int], dict[str, Any]]]] = {}
-
-    for pipeline, model_key_by_mode in sorted(model_key_by_pipeline.items()):
-        pipeline_report = {"modes": {}}
-        scored_by_pipeline[pipeline] = {}
-        for mode, model_key in sorted(model_key_by_mode.items()):
-            prediction_key = f"{model_key}_prediction"
-            rows = _score_rows(samples, prediction_key)
-            scored_by_pipeline[pipeline][mode] = {
-                (row["sample_id"], row["qa_index"]): row for row in rows
-            }
-            pipeline_report["modes"][mode] = {
-                "model_key": model_key,
-                "qa_count": len(rows),
-                "top_recall_misses": _top_recall_misses(rows),
-                "top_extraction_misses": _top_extraction_misses(rows),
-                "top_adversarial_conflicts": _top_adversarial_conflicts(rows),
-            }
-        pipelines[pipeline] = pipeline_report
-
-    report: dict[str, Any] = {"pipelines": pipelines}
-    oracle_rows = scored_by_pipeline.get("oracle", {})
-    generated_rows = scored_by_pipeline.get("generated", {})
-    shared_modes = sorted(set(oracle_rows) & set(generated_rows))
-    if shared_modes:
-        report["oracle_vs_generated_delta"] = {
-            "modes": {
-                mode: _build_mode_delta(
-                    oracle_rows[mode],
-                    generated_rows[mode],
-                )
-                for mode in shared_modes
-            }
-        }
-    return report
+    prediction_key = f"{model_key}_prediction"
+    rows = _score_rows(samples, prediction_key)
+    return {
+        "model_key": model_key,
+        "qa_count": len(rows),
+        "top_recall_misses": _top_recall_misses(rows),
+        "top_extraction_misses": _top_extraction_misses(rows),
+        "top_adversarial_conflicts": _top_adversarial_conflicts(rows),
+    }
 
 
 def write_report(out_file: Path, report: dict[str, Any]) -> None:
@@ -135,44 +108,3 @@ def _top_adversarial_conflicts(rows: list[dict[str, Any]]) -> list[dict[str, Any
         )
     )
     return conflicts[:MAX_EXAMPLES]
-
-
-def _build_mode_delta(
-    oracle_rows: dict[tuple[str, int], dict[str, Any]],
-    generated_rows: dict[tuple[str, int], dict[str, Any]],
-) -> dict[str, Any]:
-    rows: list[dict[str, Any]] = []
-    shared_keys = sorted(set(oracle_rows) & set(generated_rows))
-    for sample_id, qa_index in shared_keys:
-        oracle = oracle_rows[(sample_id, qa_index)]
-        generated = generated_rows[(sample_id, qa_index)]
-        rows.append(
-            {
-                "sample_id": sample_id,
-                "qa_index": qa_index,
-                "question": oracle["question"],
-                "category": oracle["category"],
-                "oracle_prediction": oracle["prediction"],
-                "generated_prediction": generated["prediction"],
-                "oracle_f1": oracle["f1"],
-                "generated_f1": generated["f1"],
-                "f1_delta": round(generated["f1"] - oracle["f1"], 4),
-                "oracle_recall": oracle["recall"],
-                "generated_recall": generated["recall"],
-                "recall_delta": round(generated["recall"] - oracle["recall"], 4),
-                "oracle_contexts": oracle["contexts"],
-                "generated_contexts": generated["contexts"],
-            }
-        )
-    rows.sort(
-        key=lambda row: (
-            row["f1_delta"],
-            row["recall_delta"],
-            row["sample_id"],
-            row["qa_index"],
-        )
-    )
-    return {
-        "qa_count": len(shared_keys),
-        "top_deltas": rows[:MAX_EXAMPLES],
-    }

@@ -354,7 +354,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let home = dir.path().join("muninn-home");
         std::fs::create_dir_all(&home).unwrap();
-        let config_path = home.join("settings.json");
+        let config_path = home.join(crate::llm::config::CONFIG_FILE_NAME);
         write_test_muninn_config(&config_path, Some("mock"), None, None);
         unsafe {
             std::env::set_var("MUNINN_HOME", &home);

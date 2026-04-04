@@ -3,7 +3,6 @@ set -eu
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
 ROOT_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/../../.." && pwd)
-WITH_ZSH_ENV="$SCRIPT_DIR/with-zsh-env.sh"
 
 has_data_file=0
 expect_data_file_value=0
@@ -32,4 +31,4 @@ if [ "$has_data_file" -eq 0 ]; then
 fi
 
 cd "$ROOT_DIR"
-sh "$WITH_ZSH_ENV" python3 benchmark/locomo/run.py "$@"
+python3 benchmark/locomo/run.py "$@"

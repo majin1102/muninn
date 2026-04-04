@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path as FsPath;
 use std::sync::Arc;
 
@@ -454,6 +454,33 @@ impl SessionStore<'_> {
         Ok(turns)
     }
 
+    pub(crate) async fn turns_for_observing_epochs(
+        &self,
+        observer: &str,
+        epochs: &HashSet<u64>,
+    ) -> Result<Vec<SessionTurn>> {
+        if epochs.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut turns = self
+            .load_all_turns()
+            .await?
+            .into_iter()
+            .filter(|turn| turn.observer == observer)
+            .filter(|turn| turn.observable())
+            .filter(|turn| turn.observing_epoch.is_some_and(|epoch| epochs.contains(&epoch)))
+            .collect::<Vec<_>>();
+        turns.sort_by(|left, right| {
+            left.observing_epoch
+                .cmp(&right.observing_epoch)
+                .then(left.created_at.cmp(&right.created_at))
+                .then(left.updated_at.cmp(&right.updated_at))
+                .then(left.turn_id.cmp(&right.turn_id))
+        });
+        Ok(turns)
+    }
+
     async fn load_all_turns(&self) -> Result<Vec<SessionTurn>> {
         let Some(dataset) = self.inner.try_open().await? else {
             return Ok(Vec::new());
@@ -627,7 +654,7 @@ impl SemanticIndexStore<'_> {
         semantic_index_memory_id_field(&dataset)?;
         if actual_dimensions != expected_dimensions {
             return Err(Error::invalid_input(format!(
-                "semantic_index dimension mismatch: settings.json expects {expected_dimensions}, \
+                "semantic_index dimension mismatch: muninn.json expects {expected_dimensions}, \
 but the existing semantic_index dataset stores {actual_dimensions}; update semanticIndex.embedding.dimensions or rebuild the semantic_index dataset"
             )));
         }
@@ -1994,7 +2021,7 @@ mod tests {
         let home = dir.path().join("muninn-home");
         std::fs::create_dir_all(&home).unwrap();
         crate::llm::config::write_test_muninn_config(
-            &home.join("settings.json"),
+            &home.join(crate::llm::config::CONFIG_FILE_NAME),
             None,
             None,
             Some("mock"),
@@ -2065,7 +2092,7 @@ mod tests {
         let home = dir.path().join("muninn-home");
         std::fs::create_dir_all(&home).unwrap();
         crate::llm::config::write_test_muninn_config(
-            &home.join("settings.json"),
+            &home.join(crate::llm::config::CONFIG_FILE_NAME),
             None,
             None,
             Some("mock"),
@@ -2117,7 +2144,7 @@ mod tests {
         let home = dir.path().join("muninn-home");
         std::fs::create_dir_all(&home).unwrap();
         std::fs::write(
-            home.join("settings.json"),
+            home.join(crate::llm::config::CONFIG_FILE_NAME),
             r#"{
               "semanticIndex": {
                 "embedding": {
@@ -2141,7 +2168,7 @@ mod tests {
             .unwrap();
 
         std::fs::write(
-            home.join("settings.json"),
+            home.join(crate::llm::config::CONFIG_FILE_NAME),
             r#"{
               "semanticIndex": {
                 "embedding": {

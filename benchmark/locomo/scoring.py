@@ -199,73 +199,10 @@ def summarize_question_answering(
     }
 
 
-def build_stats(
-    samples: list[dict[str, Any]],
-    model_key_by_pipeline: dict[str, dict[str, str]],
-) -> dict[str, Any]:
-    stats: dict[str, Any] = {"pipelines": {}}
-    for pipeline, model_key_by_mode in model_key_by_pipeline.items():
-        pipeline_stats = {"modes": {}}
-        for mode, model_key in model_key_by_mode.items():
-            prediction_key = f"{model_key}_prediction"
-            flat_qas = [qa for sample in samples for qa in sample["qa"] if prediction_key in qa]
-            pipeline_stats["modes"][mode] = summarize_question_answering(
-                flat_qas,
-                prediction_key,
-                model_key,
-            )
-        stats["pipelines"][pipeline] = pipeline_stats
-
-    oracle_modes = stats["pipelines"].get("oracle", {}).get("modes", {})
-    generated_modes = stats["pipelines"].get("generated", {}).get("modes", {})
-    shared_modes = sorted(set(oracle_modes) & set(generated_modes))
-    if shared_modes:
-        stats["oracle_vs_generated_delta"] = {
-            "modes": {
-                mode: {
-                    "model_key": {
-                        "oracle": oracle_modes[mode]["model_key"],
-                        "generated": generated_modes[mode]["model_key"],
-                    },
-                    "qa_count": min(
-                        oracle_modes[mode]["qa_count"],
-                        generated_modes[mode]["qa_count"],
-                    ),
-                    "average_f1": round(
-                        generated_modes[mode]["average_f1"] - oracle_modes[mode]["average_f1"],
-                        4,
-                    ),
-                    "average_recall": round(
-                        generated_modes[mode]["average_recall"] - oracle_modes[mode]["average_recall"],
-                        4,
-                    ),
-                    "category_f1": {
-                        category: round(
-                            generated_modes[mode]["category_f1"].get(category, 0.0)
-                            - oracle_modes[mode]["category_f1"].get(category, 0.0),
-                            4,
-                        )
-                        for category in sorted(
-                            set(oracle_modes[mode]["category_f1"])
-                            | set(generated_modes[mode]["category_f1"])
-                        )
-                    },
-                    "category_recall": {
-                        category: round(
-                            generated_modes[mode]["category_recall"].get(category, 0.0)
-                            - oracle_modes[mode]["category_recall"].get(category, 0.0),
-                            4,
-                        )
-                        for category in sorted(
-                            set(oracle_modes[mode]["category_recall"])
-                            | set(generated_modes[mode]["category_recall"])
-                        )
-                    },
-                }
-                for mode in shared_modes
-            }
-        }
-    return stats
+def build_stats(samples: list[dict[str, Any]], model_key: str) -> dict[str, Any]:
+    prediction_key = f"{model_key}_prediction"
+    flat_qas = [qa for sample in samples for qa in sample["qa"] if prediction_key in qa]
+    return summarize_question_answering(flat_qas, prediction_key, model_key)
 
 
 def write_results(out_file: Path, samples: list[dict[str, Any]], stats: dict[str, Any]) -> None:

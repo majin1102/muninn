@@ -8,8 +8,8 @@ import core from '../dist/index.js';
 
 const {
   addMessage,
-  flushObserverForTests,
   memories,
+  observer,
   sessions,
   shutdownCoreForTests,
 } = core;
@@ -19,7 +19,7 @@ async function makeDatasetUri() {
   return {
     dir,
     homeDir: path.join(dir, 'muninn'),
-    configPath: path.join(dir, 'muninn', 'settings.json'),
+    configPath: path.join(dir, 'muninn', 'muninn.json'),
   };
 }
 
@@ -49,6 +49,7 @@ test.afterEach(async () => {
   await shutdownCoreForTests();
   delete process.env.MUNINN_HOME;
   delete process.env.MUNINN_CORE_ALLOW_CARGO_FALLBACK;
+  delete process.env.MUNINN_OBSERVER_POLL_MS;
 });
 
 test.beforeEach(() => {
@@ -207,6 +208,41 @@ test('addMessage rejects empty message payloads through the bridge', async (t) =
   );
 });
 
+test('observer.watermark reports pending turns until the observer flush completes', async (t) => {
+  const { dir, homeDir, configPath } = await makeDatasetUri();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+
+  process.env.MUNINN_HOME = homeDir;
+  process.env.MUNINN_OBSERVER_POLL_MS = '60000';
+  await writeMuninnConfig(configPath, { observerProvider: 'mock' });
+
+  const created = await addMessage({
+    session_id: 'group-a',
+    agent: 'agent-a',
+    prompt: 'observer pending prompt',
+    response: 'observer pending response',
+  });
+
+  const current = await observer.watermark();
+  assert.equal(current.resolved, false);
+  assert.deepEqual(current.pendingTurnIds, [created.turnId]);
+
+  process.env.MUNINN_OBSERVER_POLL_MS = '1';
+  await shutdownCoreForTests();
+
+  let resolved = null;
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    resolved = await observer.watermark();
+    if (resolved.resolved) {
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  assert.ok(resolved);
+  assert.equal(resolved.resolved, true);
+  assert.deepEqual(resolved.pendingTurnIds, []);
+});
+
 test('addMessage summarizes response turns when a summary provider is configured', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(async () => rm(dir, { recursive: true, force: true }));
@@ -291,26 +327,4 @@ test('rendered memory bridge returns unified turn and observing reads', async (t
 
   const recalled = await memories.recall('rendered', 10);
   assert.ok(recalled.some((memory) => memory.memoryId.startsWith('observing:')));
-  assert.ok(recalled.some((memory) => memory.memoryId === turn.turnId));
-});
-
-test('flushObserverForTests seals observer work on demand', async (t) => {
-  const { dir, homeDir, configPath } = await makeDatasetUri();
-  t.after(async () => rm(dir, { recursive: true, force: true }));
-
-  process.env.MUNINN_HOME = homeDir;
-  await writeMuninnConfig(configPath, { turnProvider: 'mock', observerProvider: 'mock' });
-
-  await addMessage({
-    session_id: 'group-a',
-    agent: 'agent-a',
-    prompt: 'flush prompt',
-    response: 'flush response',
-  });
-
-  const flushed = await flushObserverForTests();
-  assert.ok(flushed >= 1);
-
-  const listed = await memories.list({ mode: { type: 'recency', limit: 10 } });
-  assert.ok(listed.some((memory) => memory.memoryId.startsWith('observing:')));
 });

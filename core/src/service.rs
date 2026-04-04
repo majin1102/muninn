@@ -2,14 +2,13 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use lance::Result;
+use serde::Serialize;
 use tokio::sync::Mutex;
 
 use crate::config::semantic_index_config;
 use crate::format::observing::ObservingSnapshot;
-use crate::format::semantic_index::SemanticIndexRow;
 use crate::format::session::{Session, SessionKey, SessionTurn, SessionWrite, TurnMetadataSource};
 use crate::llm::config::effective_observer_name;
-use crate::llm::embedding::embed_text;
 use crate::llm::turn::TurnGenerator;
 use crate::memory::memories;
 use crate::memory::observings::{self, ObservingListQuery};
@@ -55,6 +54,15 @@ pub struct MemoryTimeline {
 pub struct ObservingList {
     pub mode: ListMode,
     pub observer: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ObserverWatermark {
+    pub resolved: bool,
+    pub pending_turn_ids: Vec<String>,
+    pub observing_epoch: Option<u64>,
+    pub committed_epoch: Option<u64>,
 }
 
 #[derive(Clone)]
@@ -137,6 +145,10 @@ impl Service {
             .await
     }
 
+    pub async fn observer_watermark(&self) -> Result<ObserverWatermark> {
+        self.observer.watermark().await
+    }
+
     async fn load_session(&self, key: SessionKey) -> Result<Session> {
         if let Some(session) = self.sessions.lock().await.get(&key).cloned() {
             return Ok(session);
@@ -185,7 +197,7 @@ mod tests {
         let home = dir.path().join("muninn");
         fs::create_dir_all(&home).unwrap();
         fs::write(
-            home.join("settings.json"),
+            home.join(crate::llm::config::CONFIG_FILE_NAME),
             serde_json::to_string_pretty(&json!({
                 "watchdog": {
                     "enabled": true,
@@ -319,7 +331,6 @@ impl Sessions<'_> {
                 session = Session::new(session.key().clone(), Some(persisted.clone()))?;
                 persisted
             };
-            upsert_session_semantic_row(self.service.storage(), &turn).await?;
             self.service.store_session(session).await;
             self.service.observer.enqueue(observable_turns).await;
             guard.complete();
@@ -395,49 +406,6 @@ async fn resolve_turn_metadata(
     }
 }
 
-async fn upsert_session_semantic_row(storage: &Storage, turn: &SessionTurn) -> Result<()> {
-    let Some(text) = session_semantic_text(turn) else {
-        return Ok(());
-    };
-    let memory_id = turn.memory_id()?.to_string();
-    let vector = embed_text(&text).await?;
-    storage
-        .semantic_index()
-        .upsert(vec![SemanticIndexRow {
-            id: memory_id.clone(),
-            memory_id,
-            text,
-            vector,
-            importance: semantic_index_config()?.default_importance,
-            category: "session".to_string(),
-            created_at: turn.created_at,
-        }])
-        .await
-}
-
-fn session_semantic_text(turn: &SessionTurn) -> Option<String> {
-    let mut parts = Vec::<String>::new();
-    if let Some(title) = turn.title.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
-        parts.push(title.to_string());
-    }
-    if let Some(summary) = turn.summary.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
-        parts.push(summary.to_string());
-    }
-    if let Some(detail) = sessions::render_session_turn_detail(turn)
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        if !parts.iter().any(|part| part == detail) {
-            parts.push(detail.to_string());
-        }
-    }
-    if parts.is_empty() {
-        None
-    } else {
-        Some(parts.join("\n\n"))
-    }
-}
 
 fn sanitized_text(value: Option<String>) -> Option<String> {
     value.filter(|value| !value.trim().is_empty())

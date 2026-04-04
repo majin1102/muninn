@@ -78,10 +78,10 @@ function mapCoreLookupError(error: unknown): { status: number; body: ErrorRespon
 
 function resolveConfigPath(): string {
   if (process.env.MUNINN_HOME) {
-    return path.join(process.env.MUNINN_HOME, 'settings.json');
+    return path.join(process.env.MUNINN_HOME, 'muninn.json');
   }
 
-  return path.join(os.homedir(), '.muninn', 'settings.json');
+  return path.join(os.homedir(), '.muninn', 'muninn.json');
 }
 
 function resolveBoardDistPath(): string {
@@ -467,7 +467,7 @@ boardApp.get('/api/v1/ui/settings/config', async (c) => {
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     if (code !== 'ENOENT') {
-      return c.json(errorResponse('internalError', 'failed to read settings.json'), 500);
+      return c.json(errorResponse('internalError', 'failed to read muninn.json'), 500);
     }
   }
 
@@ -513,7 +513,7 @@ boardApp.put('/api/v1/ui/settings/config', async (c) => {
     await mkdir(path.dirname(configPath), { recursive: true });
     await writeFile(configPath, body.content, 'utf8');
   } catch {
-    return c.json(errorResponse('internalError', 'failed to write settings.json'), 500);
+    return c.json(errorResponse('internalError', 'failed to write muninn.json'), 500);
   }
 
   const response: SettingsConfigResponse = {

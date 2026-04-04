@@ -5,6 +5,8 @@ use std::path::PathBuf;
 use lance::{Error, Result};
 use serde::Deserialize;
 
+pub(crate) const CONFIG_FILE_NAME: &str = "muninn.json";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LlmProviderKind {
     Mock,
@@ -239,7 +241,7 @@ fn load_muninn_config() -> Result<Option<MuninnConfig>> {
         .map_err(|error| Error::io(format!("failed to read {}: {error}", path.display())))?;
     let parsed = serde_json::from_str::<MuninnConfig>(&raw).map_err(|error| {
         Error::invalid_input(format!(
-            "invalid settings config {}: {error}",
+            "invalid Muninn config {}: {error}",
             path.display()
         ))
     })?;
@@ -247,7 +249,7 @@ fn load_muninn_config() -> Result<Option<MuninnConfig>> {
 }
 
 pub(crate) fn config_path() -> Option<PathBuf> {
-    Some(muninn_home().join("settings.json"))
+    Some(muninn_home().join(CONFIG_FILE_NAME))
 }
 
 pub(crate) fn muninn_home() -> PathBuf {
@@ -280,7 +282,7 @@ pub(crate) fn llm_test_env_guard() -> std::sync::MutexGuard<'static, ()> {
 
     let isolated_home = std::env::temp_dir().join("muninn-test-home");
     fs::create_dir_all(&isolated_home).expect("create isolated muninn home");
-    let isolated_config_path = isolated_home.join("settings.json");
+    let isolated_config_path = isolated_home.join(CONFIG_FILE_NAME);
     let default_config = r#"{
   "observer": {
     "name": "test-observer",
@@ -377,7 +379,7 @@ mod tests {
     use std::fs;
 
     use super::{
-        DEFAULT_LLM_SUMMARY_THRESHOLD_CHARS, DEFAULT_OBSERVER_MAX_ATTEMPTS,
+        CONFIG_FILE_NAME, DEFAULT_LLM_SUMMARY_THRESHOLD_CHARS, DEFAULT_OBSERVER_MAX_ATTEMPTS,
         DEFAULT_TITLE_MAX_CHARS, LlmTask, current_observer_name, current_storage_config,
         llm_test_env_guard, observing_max_attempts, task_config,
     };
@@ -388,7 +390,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let home = dir.path().join("muninn-home");
         fs::create_dir_all(&home).unwrap();
-        let path = home.join("settings.json");
+        let path = home.join(CONFIG_FILE_NAME);
         fs::write(
             &path,
             r#"{
@@ -456,7 +458,7 @@ mod tests {
         let muninn_home = dir.path().join("custom-home");
         fs::create_dir_all(&muninn_home).unwrap();
         fs::write(
-            muninn_home.join("settings.json"),
+            muninn_home.join(CONFIG_FILE_NAME),
             r#"{
               "turn": {"llm": "project-turn"},
               "observer": {"name": "project-observer", "llm": "project-observer"},
@@ -498,7 +500,7 @@ mod tests {
         let _guard = llm_test_env_guard();
         let dir = tempfile::tempdir().unwrap();
         let fake_home = dir.path().join("home");
-        let user_config = fake_home.join(".muninn").join("settings.json");
+        let user_config = fake_home.join(".muninn").join(CONFIG_FILE_NAME);
         fs::create_dir_all(user_config.parent().unwrap()).unwrap();
         fs::write(
             &user_config,
@@ -543,7 +545,7 @@ mod tests {
         let home = dir.path().join("muninn-home");
         fs::create_dir_all(&home).unwrap();
         fs::write(
-            home.join("settings.json"),
+            home.join(CONFIG_FILE_NAME),
             r#"{
               "storage": {
                 "uri": "s3://example-bucket/muninn",

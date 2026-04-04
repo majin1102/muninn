@@ -308,7 +308,7 @@ mod tests {
         let home_dir = home.path().join("muninn");
         std::fs::create_dir_all(&home_dir).unwrap();
         std::fs::write(
-            home_dir.join("settings.json"),
+            home_dir.join(crate::llm::config::CONFIG_FILE_NAME),
             r#"{
               "semanticIndex": {
                 "embedding": {
@@ -359,7 +359,7 @@ mod tests {
         let home_dir = home.path().join("muninn");
         std::fs::create_dir_all(&home_dir).unwrap();
         std::fs::write(
-            home_dir.join("settings.json"),
+            home_dir.join(crate::llm::config::CONFIG_FILE_NAME),
             r#"{
               "semanticIndex": {
                 "embedding": {
@@ -412,7 +412,7 @@ mod tests {
         let home_dir = home.path().join("muninn");
         std::fs::create_dir_all(&home_dir).unwrap();
         std::fs::write(
-            home_dir.join("settings.json"),
+            home_dir.join(crate::llm::config::CONFIG_FILE_NAME),
             r#"{
               "semanticIndex": {
                 "embedding": {
@@ -486,7 +486,7 @@ mod tests {
         let home_dir = home.path().join("muninn");
         std::fs::create_dir_all(&home_dir).unwrap();
         std::fs::write(
-            home_dir.join("settings.json"),
+            home_dir.join(crate::llm::config::CONFIG_FILE_NAME),
             r#"{
               "semanticIndex": {
                 "embedding": {
@@ -588,4 +588,5 @@ mod tests {
         assert!(merged[0].reciprocal_rank_score > merged[1].reciprocal_rank_score);
         assert_eq!(merged[1].memory_id, "observing:42");
     }
+
 }

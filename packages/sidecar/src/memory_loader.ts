@@ -1,8 +1,14 @@
 import {
   memories,
+  observer,
 } from '@muninn/core';
 import { Hono } from 'hono';
-import type { ErrorResponse, MemoryHit, MemoryResponse } from '@muninn/types';
+import type {
+  ErrorResponse,
+  MemoryHit,
+  MemoryResponse,
+  ObserverWatermarkResponse,
+} from '@muninn/types';
 import { renderRecallHit, renderRenderedMemoryHit } from './render.js';
 import { generateRequestId } from './utils.js';
 
@@ -19,6 +25,21 @@ function errorResponse(errorCode: string, errorMessage: string): ErrorResponse {
 function memoryResponse(memoryHits: MemoryHit[]): MemoryResponse {
   return {
     memoryHits,
+    requestId: generateRequestId(),
+  };
+}
+
+function observerWatermarkResponse(
+  resolved: boolean,
+  pendingTurnIds: string[],
+  observingEpoch?: number,
+  committedEpoch?: number,
+): ObserverWatermarkResponse {
+  return {
+    resolved,
+    pendingTurnIds,
+    observingEpoch,
+    committedEpoch,
     requestId: generateRequestId(),
   };
 }
@@ -86,7 +107,13 @@ memoryLoader.get('/api/v1/recall', async (c) => {
   }
 
   const maxResults = parsedLimit.value ?? 10;
-  const matched = (await memories.recall(query, maxResults)).map(renderRecallHit);
+  let matched;
+  try {
+    matched = (await memories.recall(query, maxResults)).map(renderRecallHit);
+  } catch (error) {
+    const mapped = mapCoreLookupError(error);
+    return c.json(mapped.body, mapped.status as 400 | 500);
+  }
 
   return c.json(memoryResponse(matched));
 });
@@ -175,4 +202,23 @@ memoryLoader.get('/api/v1/detail', async (c) => {
   }
 
   return c.json(memoryResponse([renderRenderedMemoryHit(memory)]));
+});
+
+memoryLoader.get('/api/v1/observer/watermark', async (c) => {
+  let watermark;
+  try {
+    watermark = await observer.watermark();
+  } catch (error) {
+    const mapped = mapCoreLookupError(error);
+    return c.json(mapped.body, mapped.status as 400 | 500);
+  }
+
+  return c.json(
+    observerWatermarkResponse(
+      watermark.resolved,
+      watermark.pendingTurnIds,
+      watermark.observingEpoch,
+      watermark.committedEpoch,
+    )
+  );
 });

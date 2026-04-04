@@ -10,7 +10,7 @@ function validateSettingsJson(text) {
         throw new Error(`invalid JSON: ${error instanceof Error ? error.message : String(error)}`);
     }
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-        throw new Error('settings.json must be a JSON object.');
+        throw new Error('muninn.json must be a JSON object.');
     }
     const root = parsed;
     const storage = root.storage;

@@ -7,7 +7,7 @@ export function validateSettingsJson(text: string): void {
   }
 
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new Error('settings.json must be a JSON object.');
+    throw new Error('muninn.json must be a JSON object.');
   }
 
   const root = parsed as Record<string, unknown>;
