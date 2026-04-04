@@ -6,8 +6,10 @@ use tokio::sync::Mutex;
 
 use crate::config::semantic_index_config;
 use crate::format::observing::ObservingSnapshot;
+use crate::format::semantic_index::SemanticIndexRow;
 use crate::format::session::{Session, SessionKey, SessionTurn, SessionWrite, TurnMetadataSource};
 use crate::llm::config::effective_observer_name;
+use crate::llm::embedding::embed_text;
 use crate::llm::turn::TurnGenerator;
 use crate::memory::memories;
 use crate::memory::observings::{self, ObservingListQuery};
@@ -59,6 +61,7 @@ pub struct ObservingList {
 pub struct Service {
     storage: Storage,
     observer: Observer,
+    watchdog: Option<Watchdog>,
     _watchdog: Option<Arc<WatchdogRuntime>>,
     sessions: Arc<Mutex<HashMap<SessionKey, Session>>>,
     session_write_locks: Arc<Mutex<HashMap<SessionKey, Arc<Mutex<()>>>>>,
@@ -73,7 +76,7 @@ impl Service {
         storage.sessions().reconcile_open_turns().await?;
         let observer = Observer::new(storage.clone()).await?;
         let watchdog = Watchdog::new(storage.clone())?;
-        let watchdog = if watchdog.enabled() {
+        let watchdog_runtime = if watchdog.enabled() {
             if let Err(error) = watchdog.bootstrap().await {
                 eprintln!("[watchdog] bootstrap failed: {}", error);
             }
@@ -84,7 +87,8 @@ impl Service {
         Ok(Self {
             storage,
             observer,
-            _watchdog: watchdog,
+            watchdog: watchdog.enabled().then_some(watchdog.clone()),
+            _watchdog: watchdog_runtime,
             sessions: Arc::new(Mutex::new(HashMap::new())),
             session_write_locks: Arc::new(Mutex::new(HashMap::new())),
         })
@@ -100,6 +104,17 @@ impl Service {
 
     pub fn observings(&self) -> Observings<'_> {
         Observings { service: self }
+    }
+
+    pub async fn flush_observer_epoch(&self) -> Result<usize> {
+        self.observer.flush_epoch().await
+    }
+
+    pub async fn run_watchdog_once(&self) -> Result<()> {
+        if let Some(watchdog) = &self.watchdog {
+            watchdog.run_once().await?;
+        }
+        Ok(())
     }
 
     pub fn storage(&self) -> &Storage {
@@ -304,6 +319,7 @@ impl Sessions<'_> {
                 session = Session::new(session.key().clone(), Some(persisted.clone()))?;
                 persisted
             };
+            upsert_session_semantic_row(self.service.storage(), &turn).await?;
             self.service.store_session(session).await;
             self.service.observer.enqueue(observable_turns).await;
             guard.complete();
@@ -376,6 +392,50 @@ async fn resolve_turn_metadata(
         title_source,
         summary,
         summary_source,
+    }
+}
+
+async fn upsert_session_semantic_row(storage: &Storage, turn: &SessionTurn) -> Result<()> {
+    let Some(text) = session_semantic_text(turn) else {
+        return Ok(());
+    };
+    let memory_id = turn.memory_id()?.to_string();
+    let vector = embed_text(&text).await?;
+    storage
+        .semantic_index()
+        .upsert(vec![SemanticIndexRow {
+            id: memory_id.clone(),
+            memory_id,
+            text,
+            vector,
+            importance: semantic_index_config()?.default_importance,
+            category: "session".to_string(),
+            created_at: turn.created_at,
+        }])
+        .await
+}
+
+fn session_semantic_text(turn: &SessionTurn) -> Option<String> {
+    let mut parts = Vec::<String>::new();
+    if let Some(title) = turn.title.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
+        parts.push(title.to_string());
+    }
+    if let Some(summary) = turn.summary.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
+        parts.push(summary.to_string());
+    }
+    if let Some(detail) = sessions::render_session_turn_detail(turn)
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        if !parts.iter().any(|part| part == detail) {
+            parts.push(detail.to_string());
+        }
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("\n\n"))
     }
 }
 

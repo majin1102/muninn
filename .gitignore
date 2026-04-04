@@ -33,6 +33,7 @@ packages/board/dist-server/
 packages/core/bin/
 benchmark/**/.runs/
 benchmark/**/out/
+benchmark/**/.cache/
 benchmark/**/__pycache__/
 benchmark/**/.venv/
 *.tsbuildinfo

@@ -379,6 +379,14 @@ export const memories = {
   },
 };
 
+export async function flushObserverForTests(): Promise<number> {
+  return getDaemon().request<number>('observer.flush', {});
+}
+
+export async function runWatchdogOnceForTests(): Promise<void> {
+  await getDaemon().request<true>('watchdog.run_once', {});
+}
+
 export async function shutdownCoreForTests(): Promise<void> {
   if (!singleton) {
     return;
@@ -566,6 +574,7 @@ function normalizeRecallHitRecord(row: RawRecallHitRecord): RecallHitRecord {
 
 export const __testing = {
   waitForPromiseOrTimeout,
+  resolveRepoRoot,
   resolveDaemonLaunchSpec,
   resolveBundledDaemonExecutableName,
   formatDaemonStartError,
@@ -578,6 +587,8 @@ const core = {
   sessions,
   observings,
   memories,
+  flushObserverForTests,
+  runWatchdogOnceForTests,
   shutdownCoreForTests,
 };
 

@@ -101,6 +101,10 @@ test('resolveDaemonLaunchSpec only falls back to cargo when explicitly enabled',
   }
 });
 
+test('resolveRepoRoot points at the repository root from the built client path', async () => {
+  assert.equal(__testing.resolveRepoRoot(), path.resolve(testDir, '../../..'));
+});
+
 test('formatDaemonStartError explains how to configure a missing daemon', async () => {
   const error = __testing.formatDaemonStartError(
     {

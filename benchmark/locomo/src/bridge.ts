@@ -1,9 +1,13 @@
 #!/usr/bin/env node
 
-import path from 'node:path';
-import { pathToFileURL } from 'node:url';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
-import type { RenderedMemoryRecord } from '@muninn/core';
+import path from 'node:path';
+import type {
+  ObservingRecord,
+  RenderedMemoryRecord,
+  SessionMessageInput,
+  SessionTurnRecord,
+} from '@muninn/core';
 import * as coreClient from '@muninn/core';
 
 type LocomoDialog = {
@@ -13,40 +17,32 @@ type LocomoDialog = {
   clean_text?: string;
   compressed_text?: string;
   blip_caption?: string;
+  img_file?: string;
 };
+
+type LocomoObservationBySpeaker = Record<string, [string, string][]>;
 
 type LocomoSample = {
   sample_id: string;
   conversation: Record<string, string | LocomoDialog[]>;
+  observation: Record<string, LocomoObservationBySpeaker>;
+  session_summary: Record<string, string>;
 };
 
-export type ManifestTurn = {
-  turn_id: string;
-  source_id: string;
-  sample_id: string;
-  session_id: string;
-  date_time: string;
-  import_order: number;
-};
-
-type ImportManifest = {
-  sample_id: string;
-  turns: ManifestTurn[];
-};
+type ImportMode = 'dialog' | 'observation' | 'summary';
+type Pipeline = 'oracle' | 'generated';
+type ArtifactMap = Record<string, string>;
 
 type BridgeHit = {
   memory_id: string;
-  evidence_ids: string[];
-  date_time?: string;
+  source_id: string;
+  sample_id: string;
+  mode: string;
+  session_no: number;
+  date_time: string;
   title?: string;
   summary?: string;
   detail?: string;
-};
-
-type RecallBatchQuery = {
-  key: string;
-  query: string;
-  limit: number;
 };
 
 async function main() {
@@ -87,73 +83,55 @@ async function resetHome(home: string) {
 async function importSampleCommand(options: Map<string, string>) {
   const dataFile = requireOption(options, 'data-file');
   const sampleId = requireOption(options, 'sample-id');
+  const mode = requireOption(options, 'mode') as ImportMode;
+  const pipeline = readPipelineOption(options);
   const home = requireOption(options, 'muninn-home');
   process.env.MUNINN_HOME = home;
+  process.env.MUNINN_CORE_ALLOW_CARGO_FALLBACK ??= '1';
   await mkdir(home, { recursive: true });
+  await writeBenchmarkConfig(home, pipeline, mode);
 
   const sample = await loadSample(dataFile, sampleId);
-  const manifestTurns: ManifestTurn[] = [];
-  let importOrder = 0;
-
-  for (const sessionNo of getSessionNumbers(sample.conversation)) {
-    const dateTime = getDateTime(sample.conversation, sessionNo);
-    const dialogs = sample.conversation[`session_${sessionNo}`] as LocomoDialog[];
-    const sessionId = sessionKey(sample.sample_id, sessionNo);
-    for (const dialog of dialogs) {
-      const text = dialogLine(dialog);
-      const turn = await coreClient.addMessage({
-        session_id: sessionId,
-        agent: dialog.speaker,
-        summary: text,
-        prompt: text,
-        response: 'Recorded.',
-      });
-      manifestTurns.push({
-        turn_id: turn.turnId,
-        source_id: dialog.dia_id,
-        sample_id: sample.sample_id,
-        session_id: sessionId,
-        date_time: dateTime,
-        import_order: importOrder,
-      });
-      importOrder += 1;
-    }
+  const rows = buildRows(sample, pipeline, mode);
+  for (const row of rows) {
+    await coreClient.addMessage(row);
   }
-
-  const manifest = {
-    sample_id: sample.sample_id,
-    turns: manifestTurns,
-  } satisfies ImportManifest;
-  await writeManifest(home, manifest);
+  if (pipeline === 'generated' && mode === 'observation') {
+    await coreClient.flushObserverForTests();
+  }
+  await coreClient.runWatchdogOnceForTests();
 
   return {
     sample_id: sample.sample_id,
-    imported_count: manifestTurns.length,
-    manifest_path: manifestPath(home),
+    pipeline,
+    mode,
+    imported_count: rows.length,
   };
 }
 
 async function recallCommand(options: Map<string, string>) {
-  const home = requireOption(options, 'muninn-home');
-  process.env.MUNINN_HOME = home;
+  const pipeline = readPipelineOption(options);
+  const mode = requireOption(options, 'mode') as ImportMode;
+  process.env.MUNINN_HOME = requireOption(options, 'muninn-home');
+  process.env.MUNINN_CORE_ALLOW_CARGO_FALLBACK ??= '1';
   const query = requireOption(options, 'query');
   const limit = parsePositiveInt(requireOption(options, 'limit'), 'limit');
-  const manifest = await readManifest(home);
-  const hits = await recallHits(query, limit, manifest);
+  const hits = await recallHits(query, limit, pipeline, mode);
   return { hits };
 }
 
 async function recallBatchCommand(options: Map<string, string>) {
-  const home = requireOption(options, 'muninn-home');
-  process.env.MUNINN_HOME = home;
+  const pipeline = readPipelineOption(options);
+  const mode = requireOption(options, 'mode') as ImportMode;
+  process.env.MUNINN_HOME = requireOption(options, 'muninn-home');
+  process.env.MUNINN_CORE_ALLOW_CARGO_FALLBACK ??= '1';
   const queriesFile = requireOption(options, 'queries-file');
   const raw = await readFile(queriesFile, 'utf8');
-  const queries = JSON.parse(raw) as RecallBatchQuery[];
-  const manifest = await readManifest(home);
+  const queries = JSON.parse(raw) as Array<{ key: string; query: string; limit: number }>;
   const results: Record<string, BridgeHit[]> = {};
 
   for (const item of queries) {
-    results[item.key] = await recallHits(item.query, item.limit, manifest);
+    results[item.key] = await recallHits(item.query, item.limit, pipeline, mode);
   }
 
   return { results };
@@ -162,125 +140,130 @@ async function recallBatchCommand(options: Map<string, string>) {
 async function recallHits(
   query: string,
   limit: number,
-  manifest: ImportManifest,
+  pipeline: Pipeline,
+  mode: ImportMode,
 ): Promise<BridgeHit[]> {
-  const rows = await coreClient.memories.recall(query, limit);
-  const turnMap = manifestTurnMap(manifest);
+  const targetLayer = targetLayerFor(pipeline, mode);
+  const rows = await coreClient.memories.recall(query, Math.max(limit * 8, limit));
   const hits: BridgeHit[] = [];
+  const seen = new Set<string>();
 
   for (const row of rows) {
+    if (memoryLayerFor(row.memoryId) !== targetLayer) {
+      continue;
+    }
     const rendered = await coreClient.memories.get(row.memoryId);
     if (!rendered) {
       continue;
     }
-    hits.push(await toBridgeHit(rendered, turnMap));
+    const expanded = await expandRecallRow(row.memoryId, rendered, mode);
+    for (const hit of expanded) {
+      if (!hit.source_id) {
+        continue;
+      }
+      const dedupeKey = `${hit.memory_id}:${hit.source_id}`;
+      if (seen.has(dedupeKey)) {
+        continue;
+      }
+      seen.add(dedupeKey);
+      hits.push(hit);
+      if (hits.length >= limit) {
+        return hits;
+      }
+    }
   }
 
   return hits;
 }
 
-async function toBridgeHit(
-  rendered: RenderedMemoryRecord,
-  turnMap: Map<string, ManifestTurn>,
-): Promise<BridgeHit> {
-  const evidenceIds = await resolveEvidenceIds(rendered.memoryId, turnMap);
-  const dateTimes = uniquePreservingOrder(
-    evidenceIds
-      .map((sourceId) => findTurnBySourceId(turnMap, sourceId)?.date_time)
-      .filter((value): value is string => Boolean(value)),
-  );
-
-  return {
-    memory_id: rendered.memoryId,
-    evidence_ids: evidenceIds,
-    date_time: dateTimes.join(' | ') || undefined,
-    title: rendered.title ?? undefined,
-    summary: rendered.summary ?? undefined,
-    detail: rendered.detail ?? undefined,
-  };
-}
-
-async function resolveEvidenceIds(
+async function expandRecallRow(
   memoryId: string,
-  turnMap: Map<string, ManifestTurn>,
-  seen = new Set<string>(),
-): Promise<string[]> {
-  if (seen.has(memoryId)) {
-    return [];
-  }
-  seen.add(memoryId);
-
-  const direct = turnMap.get(memoryId);
-  if (direct) {
-    return [direct.source_id];
-  }
-
-  if (!memoryId.startsWith('observing:')) {
-    return [];
+  rendered: RenderedMemoryRecord,
+  requestedMode: ImportMode,
+): Promise<BridgeHit[]> {
+  if (memoryLayerFor(memoryId) === 'session') {
+    const session = await coreClient.sessions.get(memoryId);
+    if (!session) {
+      return [];
+    }
+    return [toBridgeHit(rendered, session.artifacts ?? {}, requestedMode)];
   }
 
   const observing = await coreClient.observings.get(memoryId);
   if (!observing) {
     return [];
   }
+  const sessions = await collectReferencedSessions(observing);
+  const hits: BridgeHit[] = [];
+  const seenSourceIds = new Set<string>();
+  for (const session of sessions) {
+    const artifacts = session.artifacts ?? {};
+    const sourceId = artifacts.benchmark_source_id ?? '';
+    if (!sourceId || seenSourceIds.has(sourceId)) {
+      continue;
+    }
+    seenSourceIds.add(sourceId);
+    hits.push(toBridgeHit(rendered, artifacts, requestedMode));
+  }
+  return hits;
+}
 
-  const sourceIds: string[] = [];
+async function collectReferencedSessions(
+  observing: ObservingRecord,
+  visited = new Set<string>(),
+): Promise<SessionTurnRecord[]> {
+  const sessions: SessionTurnRecord[] = [];
   for (const reference of observing.references) {
-    for (const sourceId of await resolveEvidenceReference(reference, turnMap, seen)) {
-      if (!sourceIds.includes(sourceId)) {
-        sourceIds.push(sourceId);
+    if (reference.startsWith('session:')) {
+      const session = await coreClient.sessions.get(reference);
+      if (session) {
+        sessions.push(session);
       }
+      continue;
     }
-  }
-  return sourceIds;
-}
-
-async function resolveEvidenceReference(
-  reference: string,
-  turnMap: Map<string, ManifestTurn>,
-  seen: Set<string>,
-): Promise<string[]> {
-  if (!reference) {
-    return [];
-  }
-  return resolveEvidenceIds(reference, turnMap, seen);
-}
-
-export function resolveEvidenceIdsFromGraph(
-  memoryId: string,
-  turns: ManifestTurn[],
-  referenceGraph: Record<string, string[]>,
-): string[] {
-  const turnMap = new Map(turns.map((turn) => [turn.turn_id, turn]));
-  return resolveEvidenceIdsFromGraphInner(memoryId, turnMap, referenceGraph, new Set<string>());
-}
-
-function resolveEvidenceIdsFromGraphInner(
-  memoryId: string,
-  turnMap: Map<string, ManifestTurn>,
-  referenceGraph: Record<string, string[]>,
-  seen: Set<string>,
-): string[] {
-  if (seen.has(memoryId)) {
-    return [];
-  }
-  seen.add(memoryId);
-
-  const direct = turnMap.get(memoryId);
-  if (direct) {
-    return [direct.source_id];
-  }
-
-  const references = referenceGraph[memoryId] ?? [];
-  const evidenceIds: string[] = [];
-  for (const reference of references) {
-    for (const sourceId of resolveEvidenceIdsFromGraphInner(reference, turnMap, referenceGraph, seen)) {
-      if (!evidenceIds.includes(sourceId)) {
-        evidenceIds.push(sourceId);
-      }
+    if (!reference.startsWith('observing:') || visited.has(reference)) {
+      continue;
     }
+    visited.add(reference);
+    const parent = await coreClient.observings.get(reference);
+    if (!parent) {
+      continue;
+    }
+    sessions.push(...await collectReferencedSessions(parent, visited));
   }
-  return evidenceIds;
+  return sessions;
+}
+
+async function writeBenchmarkConfig(home: string, pipeline: Pipeline, mode: ImportMode) {
+  const config: Record<string, unknown> = {
+    semanticIndex: {
+      embedding: {
+        provider: 'mock',
+        dimensions: 4,
+      },
+      defaultImportance: 0.7,
+    },
+  };
+  const llm: Record<string, unknown> = {};
+
+  if (pipeline === 'generated' && (mode === 'summary' || mode === 'observation')) {
+    config.turn = { llm: 'benchmark_turn_llm' };
+    llm.benchmark_turn_llm = { provider: 'mock' };
+  }
+  if (pipeline === 'generated' && mode === 'observation') {
+    config.observer = {
+      name: 'benchmark-observer',
+      llm: 'benchmark_observer_llm',
+      maxAttempts: 3,
+    };
+    llm.benchmark_observer_llm = { provider: 'mock' };
+  }
+  if (Object.keys(llm).length > 0) {
+    config.llm = llm;
+  }
+
+  const settingsPath = path.join(home, 'settings.json');
+  await writeFile(settingsPath, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
 }
 
 async function loadSample(dataFile: string, sampleId: string): Promise<LocomoSample> {
@@ -293,33 +276,225 @@ async function loadSample(dataFile: string, sampleId: string): Promise<LocomoSam
   return sample;
 }
 
-function manifestPath(home: string): string {
-  return path.join(home, 'locomo-manifest.json');
+function buildRows(sample: LocomoSample, pipeline: Pipeline, mode: ImportMode): SessionMessageInput[] {
+  if (pipeline === 'oracle') {
+    return buildOracleRows(sample, mode);
+  }
+  return buildGeneratedRows(sample, mode);
 }
 
-async function writeManifest(home: string, manifest: ImportManifest): Promise<void> {
-  await writeFile(manifestPath(home), `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+function buildOracleRows(sample: LocomoSample, mode: ImportMode): SessionMessageInput[] {
+  switch (mode) {
+    case 'dialog':
+      return buildOracleDialogRows(sample);
+    case 'observation':
+      return buildOracleObservationRows(sample);
+    case 'summary':
+      return buildOracleSummaryRows(sample);
+  }
 }
 
-async function readManifest(home: string): Promise<ImportManifest> {
-  const raw = await readFile(manifestPath(home), 'utf8');
-  return JSON.parse(raw) as ImportManifest;
+function buildGeneratedRows(sample: LocomoSample, mode: ImportMode): SessionMessageInput[] {
+  switch (mode) {
+    case 'dialog':
+      return buildGeneratedDialogRows(sample, 'dialog');
+    case 'observation':
+      return buildGeneratedDialogRows(sample, 'observation');
+    case 'summary':
+      return buildGeneratedSummaryRows(sample);
+  }
 }
 
-function manifestTurnMap(manifest: ImportManifest): Map<string, ManifestTurn> {
-  return new Map(manifest.turns.map((turn) => [turn.turn_id, turn]));
-}
-
-function findTurnBySourceId(
-  turnMap: Map<string, ManifestTurn>,
-  sourceId: string,
-): ManifestTurn | undefined {
-  for (const turn of turnMap.values()) {
-    if (turn.source_id === sourceId) {
-      return turn;
+function buildOracleDialogRows(sample: LocomoSample): SessionMessageInput[] {
+  const rows: SessionMessageInput[] = [];
+  for (const sessionNo of getSessionNumbers(sample.conversation)) {
+    const dateTime = getDateTime(sample.conversation, sessionNo);
+    const dialogs = sample.conversation[`session_${sessionNo}`] as LocomoDialog[];
+    for (const dialog of dialogs) {
+      const text = dialogText(dialog);
+      rows.push({
+        session_id: rowSessionKey(sample.sample_id, 'oracle', 'dialog', dialog.dia_id),
+        agent: dialog.speaker,
+        title: `LoCoMo dialog ${dialog.dia_id}`,
+        summary: text,
+        response: `${dateTime}\n${dialog.speaker} said "${text}"`,
+        artifacts: makeArtifacts({
+          sampleId: sample.sample_id,
+          pipeline: 'oracle',
+          mode: 'dialog',
+          sourceId: dialog.dia_id,
+          sessionNo,
+          dateTime,
+          speaker: dialog.speaker,
+        }),
+      });
     }
   }
-  return undefined;
+  return rows;
+}
+
+function buildOracleObservationRows(sample: LocomoSample): SessionMessageInput[] {
+  const rows: SessionMessageInput[] = [];
+  for (const sessionNo of getSessionNumbers(sample.conversation)) {
+    const dateTime = getDateTime(sample.conversation, sessionNo);
+    const observations = sample.observation[`session_${sessionNo}_observation`] ?? {};
+    for (const [speaker, facts] of Object.entries(observations)) {
+      for (const [fact, sourceId] of facts) {
+        rows.push({
+          session_id: rowSessionKey(sample.sample_id, 'oracle', 'observation', sourceId),
+          agent: speaker,
+          title: `LoCoMo observation ${sourceId}`,
+          summary: fact,
+          response: `${dateTime}\nObservation by ${speaker}: ${fact}`,
+          artifacts: makeArtifacts({
+            sampleId: sample.sample_id,
+            pipeline: 'oracle',
+            mode: 'observation',
+            sourceId,
+            sessionNo,
+            dateTime,
+            speaker,
+          }),
+        });
+      }
+    }
+  }
+  return rows;
+}
+
+function buildOracleSummaryRows(sample: LocomoSample): SessionMessageInput[] {
+  const rows: SessionMessageInput[] = [];
+  for (const sessionNo of getSessionNumbers(sample.conversation)) {
+    const dateTime = getDateTime(sample.conversation, sessionNo);
+    const dialogs = sample.conversation[`session_${sessionNo}`] as LocomoDialog[];
+    const sourceId = `S${sessionNo}`;
+    const summary = sample.session_summary[`session_${sessionNo}_summary`];
+    rows.push({
+      session_id: rowSessionKey(sample.sample_id, 'oracle', 'summary', sourceId),
+      agent: 'locomo-summary',
+      title: `LoCoMo summary ${sourceId}`,
+      summary,
+      response: `${dateTime}\n${summary}`,
+      artifacts: makeArtifacts({
+        sampleId: sample.sample_id,
+        pipeline: 'oracle',
+        mode: 'summary',
+        sourceId,
+        sessionNo,
+        dateTime,
+        coveredDialogIds: dialogs.map((dialog) => dialog.dia_id).join(','),
+      }),
+    });
+  }
+  return rows;
+}
+
+function buildGeneratedDialogRows(
+  sample: LocomoSample,
+  benchmarkMode: 'dialog' | 'observation',
+): SessionMessageInput[] {
+  const rows: SessionMessageInput[] = [];
+  for (const sessionNo of getSessionNumbers(sample.conversation)) {
+    const dateTime = getDateTime(sample.conversation, sessionNo);
+    const dialogs = sample.conversation[`session_${sessionNo}`] as LocomoDialog[];
+    for (const dialog of dialogs) {
+      const text = dialogText(dialog);
+      rows.push({
+        session_id: rowSessionKey(sample.sample_id, 'generated', benchmarkMode, dialog.dia_id),
+        agent: dialog.speaker,
+        prompt: `Date: ${dateTime}\nSpeaker: ${dialog.speaker}\nTurn id: ${dialog.dia_id}`,
+        response: text,
+        artifacts: makeArtifacts({
+          sampleId: sample.sample_id,
+          pipeline: 'generated',
+          mode: benchmarkMode,
+          sourceId: dialog.dia_id,
+          sessionNo,
+          dateTime,
+          speaker: dialog.speaker,
+        }),
+      });
+    }
+  }
+  return rows;
+}
+
+function buildGeneratedSummaryRows(sample: LocomoSample): SessionMessageInput[] {
+  const rows: SessionMessageInput[] = [];
+  for (const sessionNo of getSessionNumbers(sample.conversation)) {
+    const dateTime = getDateTime(sample.conversation, sessionNo);
+    const dialogs = sample.conversation[`session_${sessionNo}`] as LocomoDialog[];
+    const sourceId = `S${sessionNo}`;
+    rows.push({
+      session_id: rowSessionKey(sample.sample_id, 'generated', 'summary', sourceId),
+      agent: 'locomo-summary',
+      prompt: `Summarize LoCoMo session ${sessionNo} for semantic recall.`,
+      response: renderSessionTranscript(dateTime, dialogs),
+      artifacts: makeArtifacts({
+        sampleId: sample.sample_id,
+        pipeline: 'generated',
+        mode: 'summary',
+        sourceId,
+        sessionNo,
+        dateTime,
+        coveredDialogIds: dialogs.map((dialog) => dialog.dia_id).join(','),
+      }),
+    });
+  }
+  return rows;
+}
+
+function renderSessionTranscript(dateTime: string, dialogs: LocomoDialog[]): string {
+  const turns = dialogs
+    .map((dialog) => `${dialog.speaker}: ${dialogText(dialog)}`)
+    .join('\n');
+  return `Session date: ${dateTime}\n${turns}`;
+}
+
+function toBridgeHit(
+  rendered: RenderedMemoryRecord,
+  artifacts: ArtifactMap,
+  requestedMode: ImportMode,
+): BridgeHit {
+  return {
+    memory_id: rendered.memoryId,
+    source_id: artifacts.benchmark_source_id ?? '',
+    sample_id: artifacts.benchmark_sample_id ?? '',
+    mode: requestedMode,
+    session_no: parseInt(artifacts.benchmark_session_no ?? '0', 10),
+    date_time: artifacts.benchmark_date_time ?? '',
+    title: rendered.title,
+    summary: rendered.summary,
+    detail: rendered.detail,
+  };
+}
+
+function makeArtifacts(input: {
+  sampleId: string;
+  pipeline: Pipeline;
+  mode: ImportMode;
+  sourceId: string;
+  sessionNo: number;
+  dateTime: string;
+  speaker?: string;
+  coveredDialogIds?: string;
+}): ArtifactMap {
+  const artifacts: ArtifactMap = {
+    benchmark_name: 'locomo',
+    benchmark_pipeline: input.pipeline,
+    benchmark_sample_id: input.sampleId,
+    benchmark_mode: input.mode,
+    benchmark_source_id: input.sourceId,
+    benchmark_session_no: String(input.sessionNo),
+    benchmark_date_time: input.dateTime,
+  };
+  if (input.speaker) {
+    artifacts.benchmark_speaker = input.speaker;
+  }
+  if (input.coveredDialogIds) {
+    artifacts.benchmark_covered_dialog_ids = input.coveredDialogIds;
+  }
+  return artifacts;
 }
 
 function dialogText(dialog: LocomoDialog): string {
@@ -330,12 +505,8 @@ function dialogText(dialog: LocomoDialog): string {
   return base;
 }
 
-function dialogLine(dialog: LocomoDialog): string {
-  return `${dialog.speaker}: ${dialogText(dialog)}`.trim();
-}
-
-export function sessionKey(sampleId: string, sessionNo: number): string {
-  return `locomo:${sampleId}:session_${sessionNo}`;
+function rowSessionKey(sampleId: string, pipeline: Pipeline, mode: ImportMode, sourceId: string) {
+  return `locomo:${sampleId}:${pipeline}:${mode}:${sourceId}`;
 }
 
 function getSessionNumbers(conversation: LocomoSample['conversation']): number[] {
@@ -346,33 +517,12 @@ function getSessionNumbers(conversation: LocomoSample['conversation']): number[]
     .sort((left, right) => left - right);
 }
 
-function getDateTime(conversation: LocomoSample['conversation'], sessionNo: number): string {
+function getDateTime(conversation: LocomoSample['conversation'], sessionNo: number) {
   const value = conversation[`session_${sessionNo}_date_time`];
   if (typeof value !== 'string') {
     throw new Error(`missing session_${sessionNo}_date_time`);
   }
   return value;
-}
-
-function uniquePreservingOrder(values: string[]): string[] {
-  const seen = new Set<string>();
-  const output: string[] = [];
-  for (const value of values) {
-    if (!value || seen.has(value)) {
-      continue;
-    }
-    seen.add(value);
-    output.push(value);
-  }
-  return output;
-}
-
-function parsePositiveInt(value: string, label: string): number {
-  const parsed = parseInt(value, 10);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
-    throw new Error(`${label} must be a positive integer, got: ${value}`);
-  }
-  return parsed;
 }
 
 function parseArgs(args: string[]) {
@@ -393,6 +543,14 @@ function parseArgs(args: string[]) {
   return options;
 }
 
+function parsePositiveInt(value: string, name: string) {
+  const parsed = parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new Error(`${name} must be a positive integer, got: ${value}`);
+  }
+  return parsed;
+}
+
 function requireOption(options: Map<string, string>, key: string) {
   const value = options.get(key);
   if (!value) {
@@ -401,11 +559,25 @@ function requireOption(options: Map<string, string>, key: string) {
   return value;
 }
 
+function readPipelineOption(options: Map<string, string>): Pipeline {
+  const raw = options.get('pipeline') ?? 'oracle';
+  if (raw === 'oracle' || raw === 'generated') {
+    return raw;
+  }
+  throw new Error(`unsupported pipeline: ${raw}`);
+}
+
+function targetLayerFor(pipeline: Pipeline, mode: ImportMode) {
+  return pipeline === 'generated' && mode === 'observation' ? 'observing' : 'session';
+}
+
+function memoryLayerFor(memoryId: string) {
+  const [layer] = memoryId.split(':', 1);
+  return layer ?? '';
+}
+
 function emitJson(payload: unknown) {
   process.stdout.write(`${JSON.stringify(payload)}\n`);
 }
 
-const entryArg = process.argv[1];
-if (entryArg && import.meta.url === pathToFileURL(entryArg).href) {
-  void main();
-}
+void main();

@@ -17,6 +17,7 @@
     "export:daemon": "sh ../../scripts/export-daemon.sh",
     "install:daemon": "sh ../../scripts/install-daemon.sh",
     "dev": "tsc --watch",
+    "pretest": "pnpm export:daemon",
     "test": "pnpm build && node --test test/**/*.test.mjs"
   },
   "dependencies": {

@@ -268,6 +268,16 @@ async fn handle_request(service: &Service, line: &str) -> RequestHandling {
                 .map_err(|error| error.to_string()),
             Err(error) => Err(error),
         },
+        "observer.flush" => service
+            .flush_observer_epoch()
+            .await
+            .map(|count| serde_json::to_value(count).unwrap())
+            .map_err(|error| error.to_string()),
+        "watchdog.run_once" => service
+            .run_watchdog_once()
+            .await
+            .map(|()| serde_json::to_value(true).unwrap())
+            .map_err(|error| error.to_string()),
         "shutdown" => {
             service.shutdown().await;
             Ok(Value::Null)

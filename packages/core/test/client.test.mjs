@@ -8,6 +8,7 @@ import core from '../dist/index.js';
 
 const {
   addMessage,
+  flushObserverForTests,
   memories,
   sessions,
   shutdownCoreForTests,
@@ -290,5 +291,26 @@ test('rendered memory bridge returns unified turn and observing reads', async (t
 
   const recalled = await memories.recall('rendered', 10);
   assert.ok(recalled.some((memory) => memory.memoryId.startsWith('observing:')));
-  assert.ok(!recalled.some((memory) => memory.memoryId === turn.turnId));
+  assert.ok(recalled.some((memory) => memory.memoryId === turn.turnId));
+});
+
+test('flushObserverForTests seals observer work on demand', async (t) => {
+  const { dir, homeDir, configPath } = await makeDatasetUri();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+
+  process.env.MUNINN_HOME = homeDir;
+  await writeMuninnConfig(configPath, { turnProvider: 'mock', observerProvider: 'mock' });
+
+  await addMessage({
+    session_id: 'group-a',
+    agent: 'agent-a',
+    prompt: 'flush prompt',
+    response: 'flush response',
+  });
+
+  const flushed = await flushObserverForTests();
+  assert.ok(flushed >= 1);
+
+  const listed = await memories.list({ mode: { type: 'recency', limit: 10 } });
+  assert.ok(listed.some((memory) => memory.memoryId.startsWith('observing:')));
 });
