@@ -291,7 +291,7 @@ test('rendered memory bridge returns unified turn and observing reads', async (t
 
   const recalled = await memories.recall('rendered', 10);
   assert.ok(recalled.some((memory) => memory.memoryId.startsWith('observing:')));
-  assert.ok(!recalled.some((memory) => memory.memoryId === turn.turnId));
+  assert.ok(recalled.some((memory) => memory.memoryId === turn.turnId));
 });
 
 test('flushObserverForTests seals observer work on demand', async (t) => {
