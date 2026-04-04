@@ -7,11 +7,12 @@ use crate::format::memory::{MemoryId, MemoryLayer};
 use crate::format::observing::ObservingSnapshot;
 use crate::format::semantic_index::SemanticIndexRow;
 use crate::format::session::SessionTurn;
+use crate::format::table::Storage;
+use crate::llm::config::{current_observer_config, task_config, LlmTask};
 use crate::llm::embedding::embed_text;
 use crate::memory::observings::{self, ObservingListQuery};
 use crate::memory::sessions::{self, SessionListQuery, render_session_turn_detail};
 use crate::memory::types::{ListMode, MemoryView, RecallHit};
-use crate::storage::Storage;
 
 impl TryFrom<&SessionTurn> for MemoryView {
     type Error = Error;
@@ -95,7 +96,32 @@ pub async fn recall(storage: &Storage, query: &str, limit: usize) -> Result<Vec<
         return Ok(Vec::new());
     }
 
+    validate_recall_observer_config()?;
+
     semantic_recall(storage, query, limit).await
+}
+
+fn validate_recall_observer_config() -> Result<()> {
+    let Some(observer_config) = current_observer_config()? else {
+        return Err(Error::invalid_input(
+            "semantic recall is unavailable because observer is not configured",
+        ));
+    };
+
+    if observer_config.llm.trim().is_empty() {
+        return Err(Error::invalid_input(
+            "semantic recall is unavailable because observer.llm is not configured",
+        ));
+    }
+
+    if task_config(LlmTask::Observer)?.is_none() {
+        return Err(Error::invalid_input(format!(
+            "semantic recall is unavailable because observer llm '{}' is not configured",
+            observer_config.llm
+        )));
+    }
+
+    Ok(())
 }
 
 pub async fn list(storage: &Storage, mode: ListMode) -> Result<Vec<MemoryView>> {
@@ -293,9 +319,9 @@ mod tests {
     use crate::format::memory::{MemoryId, MemoryLayer};
     use crate::format::semantic_index::SemanticIndexRow;
     use crate::format::session::SessionTurn;
+    use crate::format::table::Storage;
     use crate::llm::config::llm_test_env_guard;
     use crate::llm::embedding::embed_text;
-    use crate::storage::Storage;
 
     fn test_storage() -> Storage {
         Storage::local(crate::config::data_root().unwrap()).unwrap()
@@ -587,5 +613,40 @@ mod tests {
         assert_eq!(merged[0].hit_count, 2);
         assert!(merged[0].reciprocal_rank_score > merged[1].reciprocal_rank_score);
         assert_eq!(merged[1].memory_id, "observing:42");
+    }
+
+    #[tokio::test]
+    async fn recall_fails_when_observer_is_not_configured() {
+        let _guard = llm_test_env_guard();
+        let home = tempfile::tempdir().unwrap();
+        let home_dir = home.path().join("muninn");
+        std::fs::create_dir_all(&home_dir).unwrap();
+        std::fs::write(
+            home_dir.join(crate::llm::config::CONFIG_FILE_NAME),
+            r#"{
+              "semanticIndex": {
+                "embedding": {
+                  "provider": "mock",
+                  "dimensions": 4
+                }
+              }
+            }"#,
+        )
+        .unwrap();
+        unsafe {
+            std::env::set_var("MUNINN_HOME", &home_dir);
+        }
+
+        let storage = test_storage();
+        let error = recall(&storage, "alpha", 5).await.unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("semantic recall is unavailable because observer is not configured")
+        );
+
+        unsafe {
+            std::env::remove_var("MUNINN_HOME");
+        }
     }
 }

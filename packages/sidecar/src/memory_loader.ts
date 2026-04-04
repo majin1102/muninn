@@ -103,7 +103,13 @@ memoryLoader.get('/api/v1/recall', async (c) => {
   }
 
   const maxResults = parsedLimit.value ?? 10;
-  const matched = (await memories.recall(query, maxResults)).map(renderRecallHit);
+  let matched;
+  try {
+    matched = (await memories.recall(query, maxResults)).map(renderRecallHit);
+  } catch (error) {
+    const mapped = mapCoreLookupError(error);
+    return c.json(mapped.body, mapped.status as 400 | 500);
+  }
 
   return c.json(memoryResponse(matched));
 });
