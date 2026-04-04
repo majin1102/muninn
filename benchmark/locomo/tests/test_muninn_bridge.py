@@ -66,6 +66,33 @@ class MuninnBridgeTests(unittest.TestCase):
         self.assertEqual(completed.stdout.strip(), "ok")
         self.assertIn("warn", completed.stderr)
 
+    def test_run_process_handles_partial_stdout_while_stderr_streams(self) -> None:
+        bridge = MuninnBridge()
+
+        script = (
+            "import sys\n"
+            "sys.stdout.write('partial')\n"
+            "sys.stdout.flush()\n"
+            "for _ in range(64):\n"
+            "    sys.stderr.write('warn' * 256 + '\\n')\n"
+            "    sys.stderr.flush()\n"
+            "sys.stdout.write(' done\\n')\n"
+            "sys.stdout.flush()\n"
+        )
+
+        with contextlib.redirect_stderr(io.StringIO()):
+            completed = bridge._run_process(
+                [
+                    os.environ.get("PYTHON", "python3"),
+                    "-c",
+                    script,
+                ]
+            )
+
+        self.assertEqual(completed.returncode, 0)
+        self.assertEqual(completed.stdout.strip(), "partial done")
+        self.assertIn("warn", completed.stderr)
+
     def test_recall_batch_parses_evidence_ids(self) -> None:
         bridge = MuninnBridge()
         bridge.ensure_built = MagicMock()

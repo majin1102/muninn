@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import json
 import os
-import selectors
 import subprocess
 import sys
 import tempfile
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -139,36 +139,46 @@ class MuninnBridge:
             cwd=self.repo_root,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True,
-            bufsize=1,
+            text=False,
+            bufsize=0,
             env=self._subprocess_env(),
         )
-        stdout_chunks: list[str] = []
-        stderr_chunks: list[str] = []
-        selector = selectors.DefaultSelector()
-        if process.stdout is not None:
-            selector.register(process.stdout, selectors.EVENT_READ)
-        if process.stderr is not None:
-            selector.register(process.stderr, selectors.EVENT_READ)
-        while selector.get_map():
-            for key, _ in selector.select():
-                chunk = key.fileobj.readline()
-                if chunk == "":
-                    selector.unregister(key.fileobj)
-                    key.fileobj.close()
-                    continue
-                if key.fileobj is process.stdout:
+        stdout_chunks: list[bytes] = []
+        stderr_chunks: list[bytes] = []
+
+        def read_stdout() -> None:
+            assert process.stdout is not None
+            with process.stdout:
+                while True:
+                    chunk = process.stdout.read(4096)
+                    if not chunk:
+                        break
                     stdout_chunks.append(chunk)
-                else:
+
+        def read_stderr() -> None:
+            assert process.stderr is not None
+            with process.stderr:
+                while True:
+                    chunk = process.stderr.read(4096)
+                    if not chunk:
+                        break
                     stderr_chunks.append(chunk)
-                    sys.stderr.write(chunk)
+                    text = chunk.decode("utf-8", errors="replace")
+                    sys.stderr.write(text)
                     sys.stderr.flush()
+
+        stdout_thread = threading.Thread(target=read_stdout, daemon=True)
+        stderr_thread = threading.Thread(target=read_stderr, daemon=True)
+        stdout_thread.start()
+        stderr_thread.start()
         returncode = process.wait()
+        stdout_thread.join()
+        stderr_thread.join()
         completed = subprocess.CompletedProcess(
             args=args,
             returncode=returncode,
-            stdout="".join(stdout_chunks),
-            stderr="".join(stderr_chunks),
+            stdout=b"".join(stdout_chunks).decode("utf-8", errors="replace"),
+            stderr=b"".join(stderr_chunks).decode("utf-8", errors="replace"),
         )
         if completed.returncode != 0:
             raise BridgeError(
