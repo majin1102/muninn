@@ -8,6 +8,9 @@ This file is the fast-path context for coding agents working in this repository.
 - Do not design or implement for forward compatibility. This repository is still in an MVP-stage of iteration, so when a schema or interface changes, update the code to the new shape only and remove obsolete compatibility handling instead of preserving support for historical versions.
 - Describe all code review findings in Chinese.
 - PR titles must follow the `Conventional Commits` style, such as `feat: ...`, `fix: ...`, and `docs: ...`. Use a valid type prefix followed by a short summary, do not open PRs with arbitrary title formats, and when developing a new feature always start by creating a new worktree from `main` with a new branch, then use that branch to implement the work and open the PR.
+- When operating on `main`, treat the current conversation as the coordination thread. Use it for planning, review, and integration, and delegate each independent implementation task to its own sub-agent.
+- For each independent feature or bugfix, create a new worktree from `main` and do the work on a dedicated branch. Reuse an existing worktree and task conversation only for small follow-up edits within the same task.
+- Use short task-based branch names without a `codex/` prefix.
 - Prefer short, context-aware names for methods and variables. Avoid sentence-like names that restate the entire workflow; both method names and variable names should stay compact when the surrounding code already provides the domain context. For example, prefer `link_parent_refs(thread, refs)` over `resolve_pending_parent_references_after_flush(thread, refs)`, and prefer `pending_parent_id` over `pending_parent_observing_reference_id`.
 
 ## What This Repo Is
