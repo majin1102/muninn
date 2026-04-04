@@ -14,9 +14,9 @@ MCP 层当前统一通过 `memoryId: string` 读取 memory。
 
 当前有效语义：
 
-- `SESSION:{turn_id}`
+- `session:{row_id}`
   - 指向单个 session memory point（内部落在 turn row 上）
-- `OBSERVING:{snapshot_id}`
+- `observing:{row_id}`
   - 指向单个 observing snapshot row
 
 MCP 不单独暴露 observing line id；`observing_id` 只作为内部 grouping key 存在。
@@ -126,7 +126,7 @@ MCP 仍保持 text-first；当前不直接暴露 `@muninn/core` 的 `RenderedMem
 说明：
 
 - `get_detail` 约定只返回单条 `MemoryHit`
-- `OBSERVING:{snapshot_id}` 返回的是单个 observing snapshot row，而不是整条 observing line
+- `observing:{row_id}` 返回的是单个 observing snapshot row，而不是整条 observing line
 
 ### 2.5 `print`
 

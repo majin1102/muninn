@@ -109,7 +109,7 @@ test('generated observation recall resolves real observing hits back to dialog s
   });
 
   assert.ok(recalled.hits.some((hit) => hit.source_id === 'D2:1'));
-  assert.ok(recalled.hits.every((hit) => /^OBSERVING:/.test(hit.memory_id)));
+  assert.ok(recalled.hits.every((hit) => /^observing:/.test(hit.memory_id)));
   assert.ok(recalled.hits.some((hit) => hit.summary || hit.detail));
 });
 
@@ -135,6 +135,6 @@ test('generated summary recall resolves to session summary ids', async (t) => {
   });
 
   assert.ok(recalled.hits.some((hit) => hit.source_id === 'S1'));
-  assert.ok(recalled.hits.every((hit) => /^SESSION:/.test(hit.memory_id)));
+  assert.ok(recalled.hits.every((hit) => /^session:/.test(hit.memory_id)));
   assert.ok(recalled.hits.some((hit) => hit.summary || hit.detail));
 });

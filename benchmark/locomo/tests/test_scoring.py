@@ -16,7 +16,7 @@ class ScoringTests(unittest.TestCase):
 
     def test_build_prediction_prefers_date_for_category_two(self) -> None:
         hit = RecallHit(
-            memory_id="SESSION:1",
+            memory_id="session:1",
             source_id="D1:3",
             mode="dialog",
             session_no=1,

@@ -86,12 +86,12 @@ test('session/messages writes a message into a session and detail reads it back'
   assert.ok(typeof added.turnId === 'string');
 
   const detailResponse = await app.request(
-    `/api/v1/detail?memoryId=${encodeURIComponent(`SESSION:${added.turnId}`)}`
+    `/api/v1/detail?memoryId=${encodeURIComponent(added.turnId)}`
   );
   assert.equal(detailResponse.status, 200);
   const detail = await json(detailResponse);
   assert.equal(detail.memoryHits.length, 1);
-  assert.equal(detail.memoryHits[0].memoryId, `SESSION:${added.turnId}`);
+  assert.equal(detail.memoryHits[0].memoryId, added.turnId);
   assert.match(detail.memoryHits[0].content, /## Title/);
   assert.match(detail.memoryHits[0].content, /alpha prompt/);
   assert.match(detail.memoryHits[0].content, /## Created At/);
@@ -272,7 +272,7 @@ test('session/messages accepts extra at the API layer but does not treat it as m
   assert.equal(rejected.status, 400);
 });
 
-test('list returns the recent window in chronological order, and timeline/recall cover the written flow', async (t) => {
+test('list and timeline cover the written flow, and recall is empty without semantic index', async (t) => {
   const { dir, homeDir } = await makeDatasetUri();
   t.after(async () => rm(dir, { recursive: true, force: true }));
 
@@ -298,24 +298,23 @@ test('list returns the recent window in chronological order, and timeline/recall
   assert.equal(listResponse.status, 200);
   const listed = await json(listResponse);
   assert.equal(listed.memoryHits.length, 3);
-  assert.match(listed.memoryHits[0].memoryId, /^SESSION:/);
+  assert.match(listed.memoryHits[0].memoryId, /^session:/);
   assert.match(listed.memoryHits[0].content, /second alpha prompt/);
   assert.match(listed.memoryHits[1].content, /third alpha prompt/);
   assert.match(listed.memoryHits[2].content, /other beta prompt/);
 
   const timelineResponse = await app.request(
-    `/api/v1/timeline?memoryId=${encodeURIComponent(`SESSION:${created[1].turnId}`)}&beforeLimit=1&afterLimit=1`
+    `/api/v1/timeline?memoryId=${encodeURIComponent(created[1].turnId)}&beforeLimit=1&afterLimit=1`
   );
   assert.equal(timelineResponse.status, 200);
   const timeline = await json(timelineResponse);
   assert.equal(timeline.memoryHits.length, 3);
-  assert.equal(timeline.memoryHits[1].memoryId, `SESSION:${created[1].turnId}`);
+  assert.equal(timeline.memoryHits[1].memoryId, created[1].turnId);
 
   const recallResponse = await app.request('/api/v1/recall?query=alpha&limit=2');
   assert.equal(recallResponse.status, 200);
   const recalled = await json(recallResponse);
-  assert.equal(recalled.memoryHits.length, 2);
-  assert.match(recalled.memoryHits[0].content, /alpha/);
+  assert.equal(recalled.memoryHits.length, 0);
 });
 
 test('timeline stays scoped to the full session key when agents share a session_id', async (t) => {
@@ -370,16 +369,16 @@ test('timeline stays scoped to the full session key when agents share a session_
   const secondBody = await json(second);
 
   const timelineResponse = await app.request(
-    `/api/v1/timeline?memoryId=${encodeURIComponent(`SESSION:${secondBody.turnId}`)}&beforeLimit=1&afterLimit=1`
+    `/api/v1/timeline?memoryId=${encodeURIComponent(secondBody.turnId)}&beforeLimit=1&afterLimit=1`
   );
   assert.equal(timelineResponse.status, 200);
   const timeline = await json(timelineResponse);
   const memoryIds = timeline.memoryHits.map((hit) => hit.memoryId);
   assert.deepEqual(memoryIds, [
-    `SESSION:${firstBody.turnId}`,
-    `SESSION:${secondBody.turnId}`,
+    firstBody.turnId,
+    secondBody.turnId,
   ]);
-  assert.ok(!memoryIds.includes(`SESSION:${otherAgentBody.turnId}`));
+  assert.ok(!memoryIds.includes(otherAgentBody.turnId));
 });
 
 test('recall and timeline surface request and not-found errors', async () => {
@@ -391,7 +390,7 @@ test('recall and timeline surface request and not-found errors', async () => {
     assert.equal(missingQuery.status, 400);
 
     const missingTimeline = await app.request(
-      `/api/v1/timeline?memoryId=${encodeURIComponent('SESSION:01JQ7Y8YQ6V7D4M1N9K2F5T8ZX')}`
+      `/api/v1/timeline?memoryId=${encodeURIComponent('session:999999')}`
     );
     assert.equal(missingTimeline.status, 404);
   } finally {
@@ -415,7 +414,7 @@ test('recall, list, and timeline reject invalid numeric query parameters', async
     assert.equal(badListBody.errorCode, 'invalidRequest');
 
     const badTimeline = await app.request(
-      `/api/v1/timeline?memoryId=${encodeURIComponent('SESSION:01JQ7Y8YQ6V7D4M1N9K2F5T8ZX')}&beforeLimit=1.5`
+      `/api/v1/timeline?memoryId=${encodeURIComponent('session:999999')}&beforeLimit=1.5`
     );
     assert.equal(badTimeline.status, 400);
     const badTimelineBody = await json(badTimeline);
@@ -436,11 +435,27 @@ test('detail and timeline map invalid memoryId inputs to invalidRequest', async 
     assert.equal(badDetailBody.errorCode, 'invalidRequest');
 
     const wrongLayerTimeline = await app.request(
-      `/api/v1/timeline?memoryId=${encodeURIComponent('THINKING:01JQ7Y8YQ6V7D4M1N9K2F5T8ZX')}`
+      `/api/v1/timeline?memoryId=${encodeURIComponent('thinking:42')}`
     );
     assert.equal(wrongLayerTimeline.status, 400);
     const wrongLayerBody = await json(wrongLayerTimeline);
     assert.equal(wrongLayerBody.errorCode, 'invalidRequest');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('detail returns notFound for missing observing memoryId', async () => {
+  const { dir, homeDir } = await makeDatasetUri();
+  process.env.MUNINN_HOME = homeDir;
+
+  try {
+    const missingDetail = await app.request(
+      `/api/v1/detail?memoryId=${encodeURIComponent('observing:999999')}`
+    );
+    assert.equal(missingDetail.status, 404);
+    const missingDetailBody = await json(missingDetail);
+    assert.equal(missingDetailBody.errorCode, 'notFound');
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -467,7 +482,7 @@ test('session/messages accepts response payloads when turn summarization is not 
   assert.equal(response.status, 200);
   const body = await json(response);
   const detailResponse = await app.request(
-    `/api/v1/detail?memoryId=${encodeURIComponent(`SESSION:${body.turnId}`)}`
+    `/api/v1/detail?memoryId=${encodeURIComponent(body.turnId)}`
   );
   assert.equal(detailResponse.status, 200);
   const detail = await json(detailResponse);
@@ -526,7 +541,7 @@ test('ui session endpoints group by agent/session and return rendered turn docum
   assert.match(turnsBody.turns[0].summary, /alpha/);
 
   const documentResponse = await app.request(
-    `/api/v1/ui/memories/${encodeURIComponent(`SESSION:${created[0].turnId}`)}/document`
+    `/api/v1/ui/memories/${encodeURIComponent(created[0].turnId)}/document`
   );
   assert.equal(documentResponse.status, 200);
   const documentBody = await json(documentResponse);
@@ -601,7 +616,7 @@ test('observing memories are readable through list/detail/timeline/recall', asyn
   const listResponse = await app.request('/api/v1/list?mode=recency&limit=10');
   assert.equal(listResponse.status, 200);
   const listed = await json(listResponse);
-  const observingHit = listed.memoryHits.find((hit) => hit.memoryId.startsWith('OBSERVING:'));
+  const observingHit = listed.memoryHits.find((hit) => hit.memoryId.startsWith('observing:'));
   assert.ok(observingHit);
   assert.match(observingHit.content, /## Summary|## Detail/);
   assert.match(observingHit.content, /observe this prompt|observe this response/);
@@ -657,7 +672,7 @@ test('ui observing endpoints return live observings and documents', async (t) =>
   assert.equal(observingsResponse.status, 200);
   const observings = await json(observingsResponse);
   assert.ok(observings.observations.length >= 1);
-  const observing = observings.observations.find((item) => item.memoryId.startsWith('OBSERVING:'));
+  const observing = observings.observations.find((item) => item.memoryId.startsWith('observing:'));
   assert.ok(observing);
   assert.ok(observing.references.length >= 1);
   assert.match(observing.summary, /ui observing prompt|ui observing response/);

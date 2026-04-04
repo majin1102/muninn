@@ -181,7 +181,7 @@ async function expandRecallRow(
   rendered: RenderedMemoryRecord,
   requestedMode: ImportMode,
 ): Promise<BridgeHit[]> {
-  if (memoryLayerFor(memoryId) === 'SESSION') {
+  if (memoryLayerFor(memoryId) === 'session') {
     const session = await coreClient.sessions.get(memoryId);
     if (!session) {
       return [];
@@ -214,14 +214,14 @@ async function collectReferencedSessions(
 ): Promise<SessionTurnRecord[]> {
   const sessions: SessionTurnRecord[] = [];
   for (const reference of observing.references) {
-    if (reference.startsWith('SESSION:')) {
+    if (reference.startsWith('session:')) {
       const session = await coreClient.sessions.get(reference);
       if (session) {
         sessions.push(session);
       }
       continue;
     }
-    if (!reference.startsWith('OBSERVING:') || visited.has(reference)) {
+    if (!reference.startsWith('observing:') || visited.has(reference)) {
       continue;
     }
     visited.add(reference);
@@ -568,7 +568,7 @@ function readPipelineOption(options: Map<string, string>): Pipeline {
 }
 
 function targetLayerFor(pipeline: Pipeline, mode: ImportMode) {
-  return pipeline === 'generated' && mode === 'observation' ? 'OBSERVING' : 'SESSION';
+  return pipeline === 'generated' && mode === 'observation' ? 'observing' : 'session';
 }
 
 function memoryLayerFor(memoryId: string) {

@@ -63,8 +63,6 @@ function mapCoreLookupError(error: unknown): { status: number; body: ErrorRespon
   if (
     lowered.includes('invalid')
     || lowered.includes('memory layer')
-    || lowered.includes('ulid')
-    || lowered.includes("missing ':' separator")
   ) {
     return {
       status: 400,
@@ -211,7 +209,7 @@ async function loadAllSessionTurns(): Promise<Awaited<ReturnType<typeof sessions
 
 function toTurnPreview(turn: BoardSessionTurn): TurnPreview {
   return {
-    memoryId: `SESSION:${turn.turnId}`,
+    memoryId: turn.turnId,
     createdAt: turn.createdAt,
     updatedAt: turn.updatedAt,
     title: turn.title,
@@ -242,7 +240,7 @@ async function loadSessionTurnPreviewsPage(params: {
 async function loadObservingReferences(references: string[]): Promise<MemoryReference[]> {
   const resolved = await Promise.all(
     references.map(async (memoryId) => {
-      if (memoryId.startsWith('SESSION:')) {
+      if (memoryId.startsWith('session:')) {
         const turn = await sessions.get(memoryId);
         if (!turn || !hasSummary(turn)) {
           return null;
@@ -254,7 +252,7 @@ async function loadObservingReferences(references: string[]): Promise<MemoryRefe
         };
       }
 
-      if (memoryId.startsWith('OBSERVING:')) {
+      if (memoryId.startsWith('observing:')) {
         const observing = await observings.get(memoryId);
         if (!observing) {
           return null;
@@ -444,7 +442,7 @@ boardApp.get('/api/v1/ui/observing', async (c) => {
       .slice()
       .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
       .map(async (observing) => ({
-        memoryId: `OBSERVING:${observing.snapshotId}`,
+        memoryId: observing.snapshotId,
         title: observing.title,
         summary: observing.summary,
         updatedAt: observing.updatedAt,

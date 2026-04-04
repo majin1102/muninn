@@ -35,28 +35,33 @@
 
 关键字段：
 
-- `snapshot_id`
-- `observing_id`
-- `snapshot_sequence`
+- `snapshotId`
+- `observingId`
+- `snapshotSequence`
 - `content`
 - `references`
 - `checkpoint`
 
 其中：
 
-- `snapshot_id`
+- `snapshotId`
   - 当前 row 的唯一 identity
-  - 对外暴露为 `OBSERVING:{snapshot_id}`
-- `observing_id`
+  - 对外暴露为 `observing:{row_id}`
+- `observingId`
   - 同一条 line 的 grouping key
-- `snapshot_sequence`
+- `snapshotSequence`
   - 当前 row 在该 line 内的顺序
 - `content`
   - 当前 snapshot 的完整内容 JSON
   - 序列化的是 `SnapshotContent`
+- `references`
+  - 当前 snapshot 的有界 provenance
+  - 累计保留形成当前 snapshot 的来源引用
+  - 默认最多保留 `1000` 条，超限时优先淘汰最老的 `session:*` 引用
 - `checkpoint`
   - 当前 row 持久化的 checkpoint 信息
-  - 包含 `observing_epoch` 与 `indexed_snapshot_sequence`
+  - 包含 `observingEpoch`、`indexedSnapshotSequence` 和可选的 `pendingParentId`
+  - `pendingParentId` 是父 observing 引用尚未补进 `references` 时的内部恢复状态
 
 ## 3. Runtime And Persistence Boundary
 
@@ -82,11 +87,11 @@
 
 - `memories`
   - 当前 snapshot 的完整 materialized memories
-- `open_questions`
+- `openQuestions`
   - 当前 observing line 的 full-image open questions
-- `next_steps`
+- `nextSteps`
   - 当前 observing line 的 full-image next steps
-- `memory_delta`
+- `memoryDelta`
   - 当前 snapshot 相对上一版的 memory delta
 
 也就是说：
@@ -103,21 +108,21 @@
     - `title`
     - `summary`
     - `memories`
-    - `open_questions`
-    - `next_steps`
+    - `openQuestions`
+    - `nextSteps`
   - `pending_turns`
 - `ObserveResult`
   - `observing_content_update`
     - `title`
     - `summary`
-    - `open_questions`
-    - `next_steps`
-  - `memory_delta`
+    - `openQuestions`
+    - `nextSteps`
+  - `memoryDelta`
 
 关键语义：
 
 - `memories` 是唯一的 delta 字段，也是 semantic index 的输入
-- `open_questions` / `next_steps` 不是 delta，而是 full-image 覆盖
+- `openQuestions` / `nextSteps` 不是 delta，而是 full-image 覆盖
 - 不再单独维护 `concepts`；概念类长期内容统一落到 `ObservedMemory.category = Concept`
 
 ## 5. Gateway Semantics
@@ -158,4 +163,4 @@ semantic index 不再依赖单行里的 `snapshots[]` 数组。
 - `timeline`
   - 返回同一 `observing_id` 下按 `snapshot_sequence` 排序的邻近 snapshot rows
 
-这保证了 `OBSERVING` layer 与 `SESSION` layer 一样，都是 row-oriented 的 public memory surface。
+这保证了 `observing` layer 与 `session` layer 一样，都是 row-oriented 的 public memory surface。

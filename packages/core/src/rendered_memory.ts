@@ -1,7 +1,7 @@
 import type { RenderedMemoryRecord } from './client.js';
 
 export function inferRenderedMemoryKind(memoryId: string): 'session' | 'observing' {
-  return memoryId.startsWith('OBSERVING:') ? 'observing' : 'session';
+  return memoryId.startsWith('observing:') ? 'observing' : 'session';
 }
 
 export function fallbackRenderedMemoryTitle(memory: RenderedMemoryRecord): string {

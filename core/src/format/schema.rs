@@ -4,18 +4,7 @@ use std::sync::Arc;
 use arrow_schema::{DataType, Field, Schema, TimeUnit};
 
 pub fn turn_schema() -> Schema {
-    let mut turn_id_metadata = HashMap::new();
-    turn_id_metadata.insert(
-        "lance-schema:unenforced-primary-key".to_string(),
-        "true".to_string(),
-    );
-    turn_id_metadata.insert(
-        "lance-schema:unenforced-primary-key:position".to_string(),
-        "1".to_string(),
-    );
-
     Schema::new(vec![
-        Field::new("turn_id", DataType::Utf8, false).with_metadata(turn_id_metadata),
         Field::new(
             "created_at",
             DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
@@ -50,18 +39,7 @@ pub fn thinking_schema() -> Schema {
 }
 
 pub fn observing_schema() -> Schema {
-    let mut snapshot_id_metadata = HashMap::new();
-    snapshot_id_metadata.insert(
-        "lance-schema:unenforced-primary-key".to_string(),
-        "true".to_string(),
-    );
-    snapshot_id_metadata.insert(
-        "lance-schema:unenforced-primary-key:position".to_string(),
-        "1".to_string(),
-    );
-
     Schema::new(vec![
-        Field::new("snapshot_id", DataType::Utf8, false).with_metadata(snapshot_id_metadata),
         Field::new("observing_id", DataType::Utf8, false),
         Field::new("snapshot_sequence", DataType::Int64, false),
         Field::new(

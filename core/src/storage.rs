@@ -8,18 +8,22 @@ use arrow_array::{
     Array, FixedSizeListArray, Float32Array, Int64Array, ListArray, RecordBatch,
     RecordBatchIterator, StringArray, TimestampMicrosecondArray, UInt64Array,
 };
-use arrow_schema::{ArrowError, DataType, Field};
+use arrow_schema::{ArrowError, DataType, Field, Schema as ArrowSchema};
 use chrono::{TimeZone, Utc};
+use futures_util::TryStreamExt;
 use lance::Dataset;
-use lance::dataset::WriteParams;
 use lance::dataset::builder::DatasetBuilder;
+use lance::dataset::transaction::{Operation, Transaction, UpdateMode};
+use lance::dataset::write::CommitBuilder;
 use lance::dataset::{MergeInsertBuilder, WhenMatched, WhenNotMatched};
+use lance::dataset::{ProjectionRequest, ROW_ID, UpdateBuilder, WriteParams};
 use lance::io::{ObjectStoreParams, StorageOptionsAccessor};
 use lance::{Error, Result};
 use object_store::path::Path;
 use serde_json::Value;
 
 use crate::config::semantic_index_config;
+use crate::format::memory::{MemoryId, MemoryLayer};
 use crate::format::observing::ObservingSnapshot;
 use crate::format::schema::{observing_schema, semantic_index_schema, turn_schema};
 use crate::format::semantic_index::SemanticIndexRow;
@@ -39,7 +43,7 @@ pub struct Storage {
 #[derive(Debug, Clone)]
 pub(crate) enum SessionSelect {
     All,
-    ById(String),
+    ById(u64),
     Filter {
         agent: Option<String>,
         session_id: Option<String>,
@@ -160,17 +164,23 @@ impl Storage {
     }
 
     fn write_params(&self) -> Option<WriteParams> {
-        self.storage_options
-            .clone()
-            .map(|storage_options| WriteParams {
+        let mut params = WriteParams {
+            enable_stable_row_ids: true,
+            ..WriteParams::default()
+        };
+        if let Some(storage_options) = self.storage_options.clone() {
+            params = WriteParams {
                 store_params: Some(ObjectStoreParams {
                     storage_options_accessor: Some(Arc::new(
                         StorageOptionsAccessor::with_static_options(storage_options),
                     )),
                     ..Default::default()
                 }),
+                enable_stable_row_ids: true,
                 ..WriteParams::default()
-            })
+            };
+        }
+        Some(params)
     }
 }
 
@@ -221,14 +231,11 @@ impl SessionStore<'_> {
     }
 
     pub(crate) async fn select(&self, selector: SessionSelect) -> Result<Vec<SessionTurn>> {
-        let turns = self.load_all_turns().await?;
         match selector {
-            SessionSelect::All => Ok(turns),
-            SessionSelect::ById(turn_id) => Ok(turns
-                .into_iter()
-                .filter(|turn| turn.turn_id == turn_id)
-                .collect()),
+            SessionSelect::All => self.load_all_turns().await,
+            SessionSelect::ById(turn_id) => Ok(self.get_turn(turn_id).await?.into_iter().collect()),
             SessionSelect::Filter { agent, session_id } => {
+                let turns = self.load_all_turns().await?;
                 Ok(filter_turns(turns, agent.as_deref(), session_id.as_deref()))
             }
         }
@@ -263,61 +270,86 @@ impl SessionStore<'_> {
         if turns.is_empty() {
             return Ok(());
         }
-        if let Some(dataset) = self.inner.try_open().await? {
-            return self.execute_turn_upsert(dataset, turns).await;
+        if let Some(mut dataset) = self.inner.try_open().await? {
+            let (existing, new): (Vec<_>, Vec<_>) = turns
+                .into_iter()
+                .partition(|turn| turn.turn_id.memory_point() != u64::MAX);
+            if !existing.is_empty() {
+                dataset = rewrite_turn_rows_by_row_id(dataset, existing).await?;
+            }
+            if !new.is_empty() {
+                dataset.append(turns_to_reader(new), None).await?;
+            }
+            return Ok(());
         }
         let retry_turns = turns.clone();
         match self.inner.write(turns_to_reader(turns)).await {
             Ok(_) => Ok(()),
             Err(Error::DatasetAlreadyExists { .. }) => {
-                let dataset = self.inner.try_open().await?.ok_or_else(|| {
+                let mut dataset = self.inner.try_open().await?.ok_or_else(|| {
                     Error::io(
                         "turn dataset existed after concurrent create but could not be reopened",
                     )
                 })?;
-                self.execute_turn_upsert(dataset, retry_turns).await
+                let (existing, new): (Vec<_>, Vec<_>) = retry_turns
+                    .into_iter()
+                    .partition(|turn| turn.turn_id.memory_point() != u64::MAX);
+                if !existing.is_empty() {
+                    dataset = rewrite_turn_rows_by_row_id(dataset, existing).await?;
+                }
+                if !new.is_empty() {
+                    dataset.append(turns_to_reader(new), None).await?;
+                }
+                Ok(())
             }
             Err(error) => Err(error),
         }
     }
 
     #[allow(dead_code)]
-    pub(crate) async fn delete(&self, turn_ids: Vec<String>) -> Result<usize> {
-        delete_by_ids(self.inner.try_open().await?, "turn_id", turn_ids).await
+    pub(crate) async fn delete(&self, turn_ids: Vec<MemoryId>) -> Result<usize> {
+        delete_by_row_ids(
+            self.inner.try_open().await?,
+            &turn_ids
+                .iter()
+                .map(|id| id.memory_point())
+                .collect::<Vec<_>>(),
+        )
+        .await
     }
 
     #[allow(dead_code)]
-    pub(crate) async fn get_turn(&self, turn_id: &str) -> Result<Option<SessionTurn>> {
-        Ok(self
-            .get_turns(&[turn_id.to_string()])
-            .await?
+    pub(crate) async fn get_turn(&self, turn_id: u64) -> Result<Option<SessionTurn>> {
+        let Some(dataset) = self.inner.try_open().await? else {
+            return Ok(None);
+        };
+        let batch = dataset
+            .take_rows(&[turn_id], dataset.schema().clone())
+            .await?;
+        Ok(record_batch_to_turns_with_row_ids(&batch, &[turn_id])?
             .into_iter()
             .next())
     }
 
     #[allow(dead_code)]
-    pub(crate) async fn get_turns(&self, turn_ids: &[String]) -> Result<Vec<SessionTurn>> {
+    pub(crate) async fn get_turns(&self, turn_ids: &[u64]) -> Result<Vec<SessionTurn>> {
         if turn_ids.is_empty() {
             return Ok(Vec::new());
         }
-        let turns_by_id = self
-            .load_all_turns()
-            .await?
-            .into_iter()
-            .map(|turn| (turn.turn_id.clone(), turn))
-            .collect::<HashMap<_, _>>();
-        Ok(turn_ids
-            .iter()
-            .filter_map(|turn_id| turns_by_id.get(turn_id).cloned())
-            .collect())
+        let Some(dataset) = self.inner.try_open().await? else {
+            return Ok(Vec::new());
+        };
+        let batch = dataset
+            .take_rows(turn_ids, dataset.schema().clone())
+            .await?;
+        record_batch_to_turns_with_row_ids(&batch, turn_ids)
     }
 
     pub(crate) async fn load_open_turn(&self, session: &SessionKey) -> Result<Option<SessionTurn>> {
         let mut turns = self
-            .load_all_turns()
+            .load_session_turns(session)
             .await?
             .into_iter()
-            .filter(|turn| turn.session_key() == *session)
             .filter(|turn| turn.is_open())
             .collect::<Vec<_>>();
         turns.sort_by(|left, right| {
@@ -325,6 +357,25 @@ impl SessionStore<'_> {
                 .updated_at
                 .cmp(&left.updated_at)
                 .then(right.created_at.cmp(&left.created_at))
+        });
+        Ok(turns.into_iter().next())
+    }
+
+    pub(crate) async fn load_latest_turn(
+        &self,
+        session: &SessionKey,
+    ) -> Result<Option<SessionTurn>> {
+        let mut turns = self
+            .load_session_turns(session)
+            .await?
+            .into_iter()
+            .collect::<Vec<_>>();
+        turns.sort_by(|left, right| {
+            right
+                .updated_at
+                .cmp(&left.updated_at)
+                .then(right.created_at.cmp(&left.created_at))
+                .then(right.turn_id.cmp(&left.turn_id))
         });
         Ok(turns.into_iter().next())
     }
@@ -354,6 +405,25 @@ impl SessionStore<'_> {
             repaired_sessions += 1;
         }
         Ok(repaired_sessions)
+    }
+
+    pub(crate) async fn load_session_turns(
+        &self,
+        session: &SessionKey,
+    ) -> Result<Vec<SessionTurn>> {
+        let Some(dataset) = self.inner.try_open().await? else {
+            return Ok(Vec::new());
+        };
+        let batch = dataset
+            .scan()
+            .with_row_id()
+            .filter(&session_key_filter(session))?
+            .try_into_batch()
+            .await?;
+        if batch.num_rows() == 0 {
+            return Ok(Vec::new());
+        }
+        record_batch_to_turns(&batch)
     }
 
     pub(crate) async fn turns_after_epoch(
@@ -388,22 +458,11 @@ impl SessionStore<'_> {
         let Some(dataset) = self.inner.try_open().await? else {
             return Ok(Vec::new());
         };
-        let batch = dataset.scan().try_into_batch().await?;
+        let batch = dataset.scan().with_row_id().try_into_batch().await?;
         if batch.num_rows() == 0 {
             return Ok(Vec::new());
         }
         record_batch_to_turns(&batch)
-    }
-
-    async fn execute_turn_upsert(&self, dataset: Dataset, turns: Vec<SessionTurn>) -> Result<()> {
-        let dataset = Arc::new(dataset);
-        let mut builder = MergeInsertBuilder::try_new(dataset, vec!["turn_id".to_string()])?;
-        builder
-            .when_matched(WhenMatched::UpdateAll)
-            .when_not_matched(WhenNotMatched::InsertAll);
-        let job = builder.try_build()?;
-        job.execute_reader(turns_to_reader(turns)).await?;
-        Ok(())
     }
 }
 
@@ -424,12 +483,19 @@ impl ObservingStore<'_> {
         Ok(observings)
     }
 
-    pub(crate) async fn get(&self, snapshot_id: &str) -> Result<Option<ObservingSnapshot>> {
-        Ok(self
-            .load_all()
-            .await?
+    pub(crate) async fn get(&self, row_id: u64) -> Result<Option<ObservingSnapshot>> {
+        let Some(dataset) = self.inner.try_open().await? else {
+            return Ok(None);
+        };
+        let batch = dataset
+            .take_rows(&[row_id], dataset.schema().clone())
+            .await?;
+        if batch.num_rows() == 0 {
+            return Ok(None);
+        }
+        Ok(record_batch_to_observings_with_row_ids(&batch, &[row_id])?
             .into_iter()
-            .find(|observing| observing.snapshot_id == snapshot_id))
+            .next())
     }
 
     #[allow(dead_code)]
@@ -448,34 +514,91 @@ impl ObservingStore<'_> {
     }
 
     pub(crate) async fn upsert(&self, observings: Vec<ObservingSnapshot>) -> Result<()> {
+        self.upsert_and_load_inserted(observings).await.map(|_| ())
+    }
+
+    pub(crate) async fn upsert_and_load_inserted(
+        &self,
+        observings: Vec<ObservingSnapshot>,
+    ) -> Result<Vec<ObservingSnapshot>> {
         if observings.is_empty() {
-            return Ok(());
+            return Ok(Vec::new());
         }
         if let Some(dataset) = self.inner.try_open().await? {
-            let dataset = Arc::new(dataset);
-            let mut builder =
-                MergeInsertBuilder::try_new(dataset, vec!["snapshot_id".to_string()])?;
-            builder
-                .when_matched(WhenMatched::UpdateAll)
-                .when_not_matched(WhenNotMatched::InsertAll);
-            let job = builder.try_build()?;
-            job.execute_reader(observings_to_reader(observings)).await?;
+            let before_version = dataset.version().version;
+            let (existing, new): (Vec<_>, Vec<_>) = observings
+                .into_iter()
+                .partition(|observing| observing.snapshot_id.memory_point() != u64::MAX);
+            let mut dataset = update_observing_rows(dataset, &existing).await?;
+            if !new.is_empty() {
+                dataset.append(observings_to_reader(new), None).await?;
+            }
+            if dataset.version().version == before_version {
+                return Ok(Vec::new());
+            }
+            let delta = dataset
+                .delta()
+                .compared_against_version(before_version)
+                .build()?;
+            let mut inserted = delta.get_inserted_rows().await?;
+            let mut rows = Vec::new();
+            while let Some(batch) = inserted.try_next().await? {
+                if batch.num_rows() == 0 {
+                    continue;
+                }
+                rows.extend(record_batch_to_observings(&batch)?);
+            }
+            Ok(rows)
         } else {
-            self.inner.write(observings_to_reader(observings)).await?;
+            let dataset = self.inner.write(observings_to_reader(observings)).await?;
+            let batch = dataset.scan().with_row_id().try_into_batch().await?;
+            if batch.num_rows() == 0 {
+                Ok(Vec::new())
+            } else {
+                record_batch_to_observings(&batch)
+            }
         }
-        Ok(())
     }
 
     #[allow(dead_code)]
-    pub(crate) async fn delete(&self, snapshot_ids: Vec<String>) -> Result<usize> {
-        delete_by_ids(self.inner.try_open().await?, "snapshot_id", snapshot_ids).await
+    pub(crate) async fn delete(&self, snapshot_ids: Vec<MemoryId>) -> Result<usize> {
+        delete_by_row_ids(
+            self.inner.try_open().await?,
+            &snapshot_ids
+                .iter()
+                .map(|id| id.memory_point())
+                .collect::<Vec<_>>(),
+        )
+        .await
     }
 
     async fn load_all(&self) -> Result<Vec<ObservingSnapshot>> {
         let Some(dataset) = self.inner.try_open().await? else {
             return Ok(Vec::new());
         };
-        let batch = dataset.scan().try_into_batch().await?;
+        let batch = dataset.scan().with_row_id().try_into_batch().await?;
+        if batch.num_rows() == 0 {
+            return Ok(Vec::new());
+        }
+        record_batch_to_observings(&batch)
+    }
+
+    pub(crate) async fn load_thread_snapshots(
+        &self,
+        observing_id: &str,
+    ) -> Result<Vec<ObservingSnapshot>> {
+        let Some(dataset) = self.inner.try_open().await? else {
+            return Ok(Vec::new());
+        };
+        let batch = dataset
+            .scan()
+            .with_row_id()
+            .filter(&format!(
+                "observing_id = '{}'",
+                escape_predicate_string(observing_id)
+            ))?
+            .try_into_batch()
+            .await?;
         if batch.num_rows() == 0 {
             return Ok(Vec::new());
         }
@@ -644,8 +767,48 @@ async fn delete_by_ids(
     Ok(result.num_deleted_rows as usize)
 }
 
+async fn delete_by_row_ids(dataset: Option<Dataset>, row_ids: &[u64]) -> Result<usize> {
+    let Some(mut dataset) = dataset else {
+        return Ok(0);
+    };
+    if row_ids.is_empty() {
+        return Ok(0);
+    }
+    let predicate = row_ids
+        .iter()
+        .map(|row_id| format!("{ROW_ID} = {row_id}"))
+        .collect::<Vec<_>>()
+        .join(" OR ");
+    let result = dataset.delete(&predicate).await?;
+    Ok(result.num_deleted_rows as usize)
+}
+
 fn escape_predicate_string(value: &str) -> String {
     value.replace('\'', "''")
+}
+
+fn session_key_filter(session: &SessionKey) -> String {
+    match session {
+        SessionKey::Session {
+            session_id,
+            agent,
+            observer,
+        } => format!(
+            "session_id = '{}' AND agent = '{}' AND observer = '{}'",
+            escape_predicate_string(session_id),
+            escape_predicate_string(agent),
+            escape_predicate_string(observer),
+        ),
+        SessionKey::Agent { agent, observer } => format!(
+            "session_id IS NULL AND agent = '{}' AND observer = '{}'",
+            escape_predicate_string(agent),
+            escape_predicate_string(observer),
+        ),
+        SessionKey::Observer { observer } => format!(
+            "session_id IS NULL AND agent = '' AND observer = '{}'",
+            escape_predicate_string(observer),
+        ),
+    }
 }
 
 fn semantic_vector_score(query: &[f32], candidate: &[f32]) -> f32 {
@@ -671,7 +834,6 @@ fn semantic_vector_score(query: &[f32], candidate: &[f32]) -> f32 {
 }
 
 fn turns_to_record_batch(turns: &[SessionTurn]) -> std::result::Result<RecordBatch, ArrowError> {
-    let turn_ids = StringArray::from_iter_values(turns.iter().map(|turn| turn.turn_id.as_str()));
     let created_at = TimestampMicrosecondArray::from_iter_values(
         turns.iter().map(|turn| turn.created_at.timestamp_micros()),
     )
@@ -741,7 +903,6 @@ fn turns_to_record_batch(turns: &[SessionTurn]) -> std::result::Result<RecordBat
     Ok(RecordBatch::try_new(
         Arc::new(turn_schema()),
         vec![
-            Arc::new(turn_ids),
             Arc::new(created_at),
             Arc::new(updated_at),
             Arc::new(session_ids),
@@ -768,86 +929,127 @@ fn turns_to_reader(
     RecordBatchIterator::new(vec![batch].into_iter(), schema)
 }
 
+fn turns_to_update_record_batch(
+    turns: &[SessionTurn],
+) -> std::result::Result<RecordBatch, ArrowError> {
+    let batch = turns_to_record_batch(turns)?;
+    let mut fields = vec![Field::new(ROW_ID, DataType::UInt64, false)];
+    fields.extend(
+        batch
+            .schema()
+            .fields()
+            .iter()
+            .map(|field| field.as_ref().clone()),
+    );
+
+    let mut columns = vec![Arc::new(UInt64Array::from_iter_values(
+        turns.iter().map(|turn| turn.turn_id.memory_point()),
+    )) as Arc<dyn Array>];
+    columns.extend(batch.columns().iter().cloned());
+
+    RecordBatch::try_new(Arc::new(ArrowSchema::new(fields)), columns)
+}
+
+fn turns_to_update_reader(
+    turns: Vec<SessionTurn>,
+) -> RecordBatchIterator<impl Iterator<Item = std::result::Result<RecordBatch, ArrowError>>> {
+    let schema = Arc::new(ArrowSchema::new(
+        std::iter::once(Field::new(ROW_ID, DataType::UInt64, false))
+            .chain(
+                turn_schema()
+                    .fields
+                    .iter()
+                    .map(|field| field.as_ref().clone()),
+            )
+            .collect::<Vec<_>>(),
+    ));
+    let batch = turns_to_update_record_batch(&turns);
+    RecordBatchIterator::new(vec![batch].into_iter(), schema)
+}
+
 fn record_batch_to_turns(batch: &RecordBatch) -> lance::Result<Vec<SessionTurn>> {
-    let turn_ids = batch
-        .column(0)
-        .as_any()
-        .downcast_ref::<StringArray>()
-        .unwrap();
+    let row_ids = batch_row_ids(batch)?;
+    record_batch_to_turns_with_row_ids(batch, &row_ids)
+}
+
+fn record_batch_to_turns_with_row_ids(
+    batch: &RecordBatch,
+    row_ids: &[u64],
+) -> lance::Result<Vec<SessionTurn>> {
     let created_at = batch
-        .column(1)
+        .column(0)
         .as_any()
         .downcast_ref::<TimestampMicrosecondArray>()
         .unwrap();
     let updated_at = batch
-        .column(2)
+        .column(1)
         .as_any()
         .downcast_ref::<TimestampMicrosecondArray>()
         .unwrap();
     let session_ids = batch
-        .column(3)
+        .column(2)
         .as_any()
         .downcast_ref::<StringArray>()
         .unwrap();
     let agent = batch
-        .column(4)
+        .column(3)
         .as_any()
         .downcast_ref::<StringArray>()
         .unwrap();
     let observer = batch
-        .column(5)
+        .column(4)
         .as_any()
         .downcast_ref::<StringArray>()
         .unwrap();
     let title = batch
-        .column(6)
+        .column(5)
         .as_any()
         .downcast_ref::<StringArray>()
         .unwrap();
     let summary = batch
-        .column(7)
+        .column(6)
         .as_any()
         .downcast_ref::<StringArray>()
         .unwrap();
     let tool_calling = batch
-        .column(8)
+        .column(7)
         .as_any()
         .downcast_ref::<ListArray>()
         .unwrap();
     let artifacts_json = batch
-        .column(9)
+        .column(8)
         .as_any()
         .downcast_ref::<StringArray>()
         .unwrap();
     let prompt = batch
-        .column(10)
+        .column(9)
         .as_any()
         .downcast_ref::<StringArray>()
         .unwrap();
     let response = batch
-        .column(11)
+        .column(10)
         .as_any()
         .downcast_ref::<StringArray>()
         .unwrap();
     let observing_epoch = batch
-        .column(12)
+        .column(11)
         .as_any()
         .downcast_ref::<UInt64Array>()
         .unwrap();
     let title_source = batch
-        .column(13)
+        .column(12)
         .as_any()
         .downcast_ref::<StringArray>()
         .unwrap();
     let summary_source = batch
-        .column(14)
+        .column(13)
         .as_any()
         .downcast_ref::<StringArray>()
         .unwrap();
 
     let turns = (0..batch.num_rows())
         .map(|index| SessionTurn {
-            turn_id: turn_ids.value(index).to_string(),
+            turn_id: MemoryId::new(MemoryLayer::Session, row_ids[index]),
             created_at: Utc
                 .timestamp_micros(created_at.value(index))
                 .single()
@@ -967,11 +1169,6 @@ fn optional_artifacts(array: &StringArray, index: usize) -> Option<HashMap<Strin
 fn observings_to_record_batch(
     observings: &[ObservingSnapshot],
 ) -> std::result::Result<RecordBatch, ArrowError> {
-    let snapshot_ids = StringArray::from_iter_values(
-        observings
-            .iter()
-            .map(|observing| observing.snapshot_id.as_str()),
-    );
     let observing_ids = StringArray::from_iter_values(
         observings
             .iter()
@@ -1025,7 +1222,6 @@ fn observings_to_record_batch(
     Ok(RecordBatch::try_new(
         Arc::new(observing_schema()),
         vec![
-            Arc::new(snapshot_ids),
             Arc::new(observing_ids),
             Arc::new(snapshot_sequence),
             Arc::new(created_at),
@@ -1049,58 +1245,61 @@ fn observings_to_reader(
 }
 
 fn record_batch_to_observings(batch: &RecordBatch) -> lance::Result<Vec<ObservingSnapshot>> {
-    let snapshot_ids = batch
+    let row_ids = batch_row_ids(batch)?;
+    record_batch_to_observings_with_row_ids(batch, &row_ids)
+}
+
+fn record_batch_to_observings_with_row_ids(
+    batch: &RecordBatch,
+    row_ids: &[u64],
+) -> lance::Result<Vec<ObservingSnapshot>> {
+    let observing_ids = batch
         .column(0)
         .as_any()
         .downcast_ref::<StringArray>()
         .unwrap();
-    let observing_ids = batch
-        .column(1)
-        .as_any()
-        .downcast_ref::<StringArray>()
-        .unwrap();
     let snapshot_sequence = batch
-        .column(2)
+        .column(1)
         .as_any()
         .downcast_ref::<Int64Array>()
         .unwrap();
     let created_at = batch
-        .column(3)
+        .column(2)
         .as_any()
         .downcast_ref::<TimestampMicrosecondArray>()
         .unwrap();
     let updated_at = batch
-        .column(4)
+        .column(3)
         .as_any()
         .downcast_ref::<TimestampMicrosecondArray>()
         .unwrap();
     let observer = batch
-        .column(5)
+        .column(4)
         .as_any()
         .downcast_ref::<StringArray>()
         .unwrap();
     let title = batch
-        .column(6)
+        .column(5)
         .as_any()
         .downcast_ref::<StringArray>()
         .unwrap();
     let summary = batch
-        .column(7)
+        .column(6)
         .as_any()
         .downcast_ref::<StringArray>()
         .unwrap();
     let content = batch
-        .column(8)
+        .column(7)
         .as_any()
         .downcast_ref::<StringArray>()
         .unwrap();
     let references = batch
-        .column(9)
+        .column(8)
         .as_any()
         .downcast_ref::<ListArray>()
         .unwrap();
     let checkpoint = batch
-        .column(10)
+        .column(9)
         .as_any()
         .downcast_ref::<StringArray>()
         .unwrap();
@@ -1111,7 +1310,7 @@ fn record_batch_to_observings(batch: &RecordBatch) -> lance::Result<Vec<Observin
                 Error::invalid_input(format!("deserialize observing checkpoint: {error}"))
             })?;
             Ok(ObservingSnapshot {
-                snapshot_id: snapshot_ids.value(index).to_string(),
+                snapshot_id: MemoryId::new(MemoryLayer::Observing, row_ids[index]),
                 observing_id: observing_ids.value(index).to_string(),
                 snapshot_sequence: snapshot_sequence.value(index),
                 created_at: Utc
@@ -1132,6 +1331,143 @@ fn record_batch_to_observings(batch: &RecordBatch) -> lance::Result<Vec<Observin
         })
         .collect::<Result<Vec<_>>>()?;
     Ok(observings)
+}
+
+fn batch_row_ids(batch: &RecordBatch) -> Result<Vec<u64>> {
+    let row_ids = batch
+        .column_by_name(ROW_ID)
+        .ok_or_else(|| Error::invalid_input("record batch missing _rowid column"))?
+        .as_any()
+        .downcast_ref::<UInt64Array>()
+        .ok_or_else(|| Error::invalid_input("record batch _rowid column must be UInt64"))?;
+    Ok((0..row_ids.len())
+        .map(|index| row_ids.value(index))
+        .collect())
+}
+
+async fn rewrite_turn_rows_by_row_id(dataset: Dataset, turns: Vec<SessionTurn>) -> Result<Dataset> {
+    let row_ids = turns
+        .iter()
+        .map(|turn| turn.turn_id.memory_point())
+        .collect::<Vec<_>>();
+    let row_addresses = dataset
+        .take_rows(
+            &row_ids,
+            ProjectionRequest::from_sql([("rowaddr", "_rowaddr")]),
+        )
+        .await?;
+    let rowaddr = row_addresses
+        .column_by_name("rowaddr")
+        .ok_or_else(|| Error::invalid_input("record batch missing projected rowaddr column"))?
+        .as_any()
+        .downcast_ref::<UInt64Array>()
+        .ok_or_else(|| Error::invalid_input("projected rowaddr column must be UInt64"))?;
+    if rowaddr.len() != turns.len() {
+        return Err(Error::invalid_input(format!(
+            "expected {} row addresses, got {}",
+            turns.len(),
+            rowaddr.len()
+        )));
+    }
+
+    let mut turns_by_fragment = HashMap::<u64, Vec<SessionTurn>>::new();
+    for (turn, rowaddr) in turns.into_iter().zip(rowaddr.values().iter().copied()) {
+        turns_by_fragment
+            .entry(rowaddr >> 32)
+            .or_default()
+            .push(turn);
+    }
+
+    let mut updated_fragments = Vec::with_capacity(turns_by_fragment.len());
+    let mut fields_modified = Vec::new();
+    for (fragment_id, fragment_turns) in turns_by_fragment {
+        let mut fragment = dataset.get_fragment(fragment_id as usize).ok_or_else(|| {
+            Error::invalid_input(format!("fragment {fragment_id} not found for turn update"))
+        })?;
+        let (updated_fragment, fragment_fields_modified) = fragment
+            .update_columns(turns_to_update_reader(fragment_turns), ROW_ID, ROW_ID)
+            .await?;
+        updated_fragments.push(updated_fragment);
+        fields_modified.extend(fragment_fields_modified);
+    }
+    fields_modified.sort_unstable();
+    fields_modified.dedup();
+
+    let transaction = Transaction::new(
+        dataset.manifest().version,
+        Operation::Update {
+            removed_fragment_ids: vec![],
+            updated_fragments,
+            new_fragments: vec![],
+            fields_modified,
+            merged_generations: Vec::new(),
+            fields_for_preserving_frag_bitmap: vec![],
+            update_mode: Some(UpdateMode::RewriteColumns),
+            inserted_rows_filter: None,
+        },
+        None,
+    );
+
+    CommitBuilder::new(Arc::new(dataset))
+        .execute(transaction)
+        .await
+}
+
+async fn update_observing_rows(
+    mut dataset: Dataset,
+    observings: &[ObservingSnapshot],
+) -> Result<Dataset> {
+    for observing in observings {
+        let mut builder = UpdateBuilder::new(Arc::new(dataset))
+            .update_where(&observing_update_filter(observing))?;
+        builder = builder.set("observing_id", &json_string_expr(&observing.observing_id))?;
+        builder = builder.set(
+            "snapshot_sequence",
+            &observing.snapshot_sequence.to_string(),
+        )?;
+        builder = builder.set(
+            "created_at",
+            &timestamp_expr(observing.created_at.timestamp_micros()),
+        )?;
+        builder = builder.set(
+            "updated_at",
+            &timestamp_expr(observing.updated_at.timestamp_micros()),
+        )?;
+        builder = builder.set("observer", &json_string_expr(&observing.observer))?;
+        builder = builder.set("title", &json_string_expr(&observing.title))?;
+        builder = builder.set("summary", &json_string_expr(&observing.summary))?;
+        builder = builder.set("content", &json_string_expr(&observing.content))?;
+        builder = builder.set("references", &string_list_expr(&observing.references))?;
+        builder =
+            builder.set(
+                "checkpoint",
+                &json_string_expr(&serde_json::to_string(&observing.checkpoint).map_err(
+                    |error| Error::invalid_input(format!("serialize checkpoint: {error}")),
+                )?),
+            )?;
+        dataset = builder.build()?.execute().await?.new_dataset.as_ref().clone();
+    }
+    Ok(dataset)
+}
+
+fn json_string_expr(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
+}
+
+fn observing_update_filter(observing: &ObservingSnapshot) -> String {
+    format!(
+        "observing_id = {} AND snapshot_sequence = {}",
+        json_string_expr(&observing.observing_id),
+        observing.snapshot_sequence
+    )
+}
+
+fn string_list_expr(values: &[String]) -> String {
+    serde_json::to_string(values).expect("string list should serialize")
+}
+
+fn timestamp_expr(micros: i64) -> String {
+    format!("to_timestamp_micros({micros})")
 }
 
 fn semantic_rows_to_record_batch(rows: &[SemanticIndexRow]) -> Result<RecordBatch> {
@@ -1331,6 +1667,7 @@ mod tests {
     use chrono::{Duration, Utc};
 
     use super::{SessionSelect, Storage};
+    use crate::format::memory::{MemoryId, MemoryLayer};
     use crate::format::observing::{ObservingCheckpoint, ObservingSnapshot};
     use crate::format::semantic_index::SemanticIndexRow;
     use crate::format::session::{SessionKey, SessionTurn};
@@ -1342,51 +1679,52 @@ mod tests {
     }
 
     fn make_turn(
-        turn_id: &str,
+        turn_label: &str,
         agent: &str,
         session_id: Option<&str>,
         summary: Option<&str>,
     ) -> SessionTurn {
         let now = Utc::now();
         SessionTurn {
-            turn_id: turn_id.to_string(),
+            turn_id: MemoryId::new(MemoryLayer::Session, u64::MAX),
             created_at: now,
             updated_at: now,
             session_id: session_id.map(str::to_string),
             agent: agent.to_string(),
             observer: "observer-a".to_string(),
-            title: Some(format!("title-{turn_id}")),
+            title: Some(format!("title-{turn_label}")),
             summary: summary.map(str::to_string),
             title_source: None,
             summary_source: None,
             tool_calling: None,
             artifacts: None,
-            prompt: Some(format!("prompt-{turn_id}")),
-            response: Some(format!("response-{turn_id}")),
+            prompt: Some(format!("prompt-{turn_label}")),
+            response: Some(format!("response-{turn_label}")),
             observing_epoch: None,
         }
     }
 
     fn make_observing_snapshot(
-        snapshot_id: &str,
+        snapshot_label: &str,
         observing_id: &str,
         observer: &str,
     ) -> ObservingSnapshot {
         let now = Utc::now();
         ObservingSnapshot {
-            snapshot_id: snapshot_id.to_string(),
+            snapshot_id: MemoryId::new(MemoryLayer::Observing, u64::MAX),
             observing_id: observing_id.to_string(),
             snapshot_sequence: 0,
             created_at: now,
             updated_at: now,
             observer: observer.to_string(),
-            title: format!("title-{snapshot_id}"),
-            summary: format!("summary-{snapshot_id}"),
+            title: format!("title-{snapshot_label}"),
+            summary: format!("summary-{snapshot_label}"),
             content: "{\"memories\":[]}".to_string(),
-            references: vec![format!("SESSION:{snapshot_id}")],
+            references: vec!["session:7".to_string()],
             checkpoint: ObservingCheckpoint {
                 observing_epoch: 0,
                 indexed_snapshot_sequence: Some(0),
+                pending_parent_id: None,
             },
         }
     }
@@ -1398,7 +1736,7 @@ mod tests {
             .collect();
         SemanticIndexRow {
             id: id.to_string(),
-            memory_id: "OBSERVING:01JQ7Y8YQ6V7D4M1N9K2F5T8ZX".to_string(),
+            memory_id: "observing:41".to_string(),
             text: text.to_string(),
             vector,
             importance: 0.7,
@@ -1411,35 +1749,23 @@ mod tests {
     async fn session_store_select_upsert_delete_roundtrip() {
         let storage = test_storage();
         let turns = vec![
-            make_turn(
-                "01JQ7Y8YQ6V7D4M1N9K2F5T8ZA",
-                "agent-a",
-                Some("group-a"),
-                Some("summary-a"),
-            ),
-            make_turn(
-                "01JQ7Y8YQ6V7D4M1N9K2F5T8ZB",
-                "agent-b",
-                Some("group-b"),
-                Some("summary-b"),
-            ),
+            make_turn("turn-a", "agent-a", Some("group-a"), Some("summary-a")),
+            make_turn("turn-b", "agent-b", Some("group-b"), Some("summary-b")),
         ];
 
         storage.sessions().insert(turns.clone()).await.unwrap();
-
+        let persisted = storage.sessions().select(SessionSelect::All).await.unwrap();
+        assert_eq!(persisted.len(), 2);
+        let turn_a = persisted
+            .iter()
+            .find(|turn| turn.agent == "agent-a")
+            .cloned()
+            .unwrap();
+        assert_ne!(turn_a.turn_id.memory_point(), u64::MAX);
         assert_eq!(
             storage
                 .sessions()
-                .select(SessionSelect::All)
-                .await
-                .unwrap()
-                .len(),
-            2
-        );
-        assert_eq!(
-            storage
-                .sessions()
-                .select(SessionSelect::ById(turns[0].turn_id.clone()))
+                .select(SessionSelect::ById(turn_a.turn_id.memory_point()))
                 .await
                 .unwrap()[0]
                 .agent,
@@ -1458,7 +1784,7 @@ mod tests {
             1
         );
 
-        let mut updated = turns[0].clone();
+        let mut updated = turn_a.clone();
         updated.summary = Some("updated summary".to_string());
         updated.updated_at += Duration::seconds(1);
         storage
@@ -1469,7 +1795,7 @@ mod tests {
 
         let reloaded = storage
             .sessions()
-            .select(SessionSelect::ById(updated.turn_id.clone()))
+            .select(SessionSelect::ById(updated.turn_id.memory_point()))
             .await
             .unwrap()
             .into_iter()
@@ -1495,12 +1821,103 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn session_store_assigns_stable_row_ids_on_insert() {
+        let storage = test_storage();
+
+        storage
+            .sessions()
+            .insert(vec![make_turn(
+                "stable-row-id",
+                "agent-a",
+                Some("group-a"),
+                Some("summary-a"),
+            )])
+            .await
+            .unwrap();
+
+        let persisted = storage.sessions().select(SessionSelect::All).await.unwrap();
+        assert_eq!(persisted.len(), 1);
+        assert_ne!(persisted[0].turn_id.memory_point(), u64::MAX);
+    }
+
+    #[tokio::test]
+    async fn session_store_upsert_updates_only_target_row_when_business_fields_collide() {
+        let storage = test_storage();
+        let first = make_turn("collision-a", "agent-a", Some("group-a"), Some("summary-a"));
+        let mut second = make_turn("collision-b", "agent-a", Some("group-a"), Some("summary-b"));
+        second.created_at = first.created_at;
+        second.updated_at = first.updated_at;
+
+        storage
+            .sessions()
+            .insert(vec![first.clone(), second.clone()])
+            .await
+            .unwrap();
+
+        let mut persisted = storage
+            .sessions()
+            .select(SessionSelect::Filter {
+                agent: Some("agent-a".to_string()),
+                session_id: Some("group-a".to_string()),
+            })
+            .await
+            .unwrap();
+        persisted.sort_by(|left, right| left.title.cmp(&right.title));
+        assert_eq!(persisted.len(), 2);
+        assert_eq!(persisted[0].created_at, persisted[1].created_at);
+        assert_ne!(
+            persisted[0].turn_id.memory_point(),
+            persisted[1].turn_id.memory_point()
+        );
+
+        let mut updated = persisted[0].clone();
+        updated.summary = Some("updated summary".to_string());
+        updated.response = Some("updated response".to_string());
+        updated.observing_epoch = Some(7);
+        updated.updated_at += Duration::seconds(1);
+
+        storage
+            .sessions()
+            .upsert(vec![updated.clone()])
+            .await
+            .unwrap();
+
+        let reloaded = storage
+            .sessions()
+            .select(SessionSelect::Filter {
+                agent: Some("agent-a".to_string()),
+                session_id: Some("group-a".to_string()),
+            })
+            .await
+            .unwrap();
+        assert_eq!(reloaded.len(), 2);
+
+        let updated_row = reloaded
+            .iter()
+            .find(|turn| turn.turn_id == updated.turn_id)
+            .unwrap();
+        assert_eq!(updated_row.summary.as_deref(), Some("updated summary"));
+        assert_eq!(updated_row.response.as_deref(), Some("updated response"));
+        assert_eq!(updated_row.observing_epoch, Some(7));
+
+        let untouched_row = reloaded
+            .iter()
+            .find(|turn| turn.turn_id != updated.turn_id)
+            .unwrap();
+        assert_eq!(untouched_row.summary.as_deref(), Some("summary-b"));
+        assert_eq!(
+            untouched_row.response.as_deref(),
+            Some("response-collision-b")
+        );
+        assert_eq!(untouched_row.observing_epoch, None);
+        assert_eq!(untouched_row.updated_at, persisted[1].updated_at);
+    }
+
+    #[tokio::test]
     async fn observing_store_list_get_upsert_delete_roundtrip() {
         let storage = test_storage();
-        let observing_a =
-            make_observing_snapshot("01JQ7Y8YQ6V7D4M1N9K2F5T8ZC", "OBS-A", "observer-a");
-        let observing_b =
-            make_observing_snapshot("01JQ7Y8YQ6V7D4M1N9K2F5T8ZD", "OBS-B", "observer-b");
+        let observing_a = make_observing_snapshot("snapshot-a", "OBS-A", "observer-a");
+        let observing_b = make_observing_snapshot("snapshot-b", "OBS-B", "observer-b");
 
         storage
             .observings()
@@ -1508,7 +1925,18 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(storage.observings().list(None).await.unwrap().len(), 2);
+        let persisted = storage.observings().list(None).await.unwrap();
+        assert_eq!(persisted.len(), 2);
+        let observing_a = persisted
+            .iter()
+            .find(|observing| observing.observing_id == "OBS-A")
+            .cloned()
+            .unwrap();
+        let observing_b = persisted
+            .iter()
+            .find(|observing| observing.observing_id == "OBS-B")
+            .cloned()
+            .unwrap();
         assert_eq!(
             storage
                 .observings()
@@ -1521,7 +1949,7 @@ mod tests {
         assert_eq!(
             storage
                 .observings()
-                .get(&observing_a.snapshot_id)
+                .get(observing_a.snapshot_id.memory_point())
                 .await
                 .unwrap()
                 .unwrap()
@@ -1541,7 +1969,7 @@ mod tests {
         assert_eq!(
             storage
                 .observings()
-                .get(&updated.snapshot_id)
+                .get(updated.snapshot_id.memory_point())
                 .await
                 .unwrap()
                 .unwrap()
@@ -1556,6 +1984,7 @@ mod tests {
             .unwrap();
         assert_eq!(deleted, 1);
         assert_eq!(storage.observings().list(None).await.unwrap().len(), 1);
+        assert_eq!(storage.observings().get(999_999).await.unwrap(), None);
     }
 
     #[tokio::test]
@@ -1600,7 +2029,7 @@ mod tests {
             .unwrap();
         assert_eq!(subset.len(), 1);
         assert_eq!(subset[0].id, "mem-b");
-        assert_eq!(subset[0].memory_id, "OBSERVING:01JQ7Y8YQ6V7D4M1N9K2F5T8ZX");
+        assert_eq!(subset[0].memory_id, "observing:41");
 
         let mut updated = row_a.clone();
         updated.text = "alpha-updated".to_string();
@@ -1613,7 +2042,7 @@ mod tests {
 
         let rows = storage.semantic_index().list().await.unwrap();
         assert!(rows.iter().any(|row| row.id == "mem-a"
-            && row.memory_id == "OBSERVING:01JQ7Y8YQ6V7D4M1N9K2F5T8ZX"
+            && row.memory_id == "observing:41"
             && row.text == "alpha-updated"));
 
         let deleted = storage
@@ -1648,7 +2077,7 @@ mod tests {
         let query = vec![1.0, 0.0, 0.0, 0.0];
         let row_a = SemanticIndexRow {
             id: "mem-a".to_string(),
-            memory_id: "OBSERVING:01JQ7Y8YQ6V7D4M1N9K2F5T8ZY".to_string(),
+            memory_id: "observing:51".to_string(),
             text: "alpha".to_string(),
             vector: vec![1.0, 0.0, 0.0, 0.0],
             importance: 0.7,
@@ -1657,7 +2086,7 @@ mod tests {
         };
         let row_b = SemanticIndexRow {
             id: "mem-b".to_string(),
-            memory_id: "OBSERVING:01JQ7Y8YQ6V7D4M1N9K2F5T8ZZ".to_string(),
+            memory_id: "observing:52".to_string(),
             text: "beta".to_string(),
             vector: vec![0.0, 1.0, 0.0, 0.0],
             importance: 0.7,
@@ -1742,29 +2171,14 @@ mod tests {
     #[tokio::test]
     async fn session_store_load_open_turn_and_turns_after_epoch() {
         let storage = test_storage();
-        let mut open_old = make_turn(
-            "01JQ7Y8YQ6V7D4M1N9K2F5T8ZE",
-            "agent-a",
-            Some("group-a"),
-            None,
-        );
+        let mut open_old = make_turn("open-old", "agent-a", Some("group-a"), None);
         open_old.response = None;
         open_old.updated_at -= Duration::seconds(2);
 
-        let mut open_new = make_turn(
-            "01JQ7Y8YQ6V7D4M1N9K2F5T8ZF",
-            "agent-a",
-            Some("group-a"),
-            None,
-        );
+        let mut open_new = make_turn("open-new", "agent-a", Some("group-a"), None);
         open_new.response = None;
 
-        let mut pending = make_turn(
-            "01JQ7Y8YQ6V7D4M1N9K2F5T8ZG",
-            "agent-a",
-            Some("group-b"),
-            Some("summary-b"),
-        );
+        let mut pending = make_turn("pending", "agent-a", Some("group-b"), Some("summary-b"));
         pending.observing_epoch = Some(3);
 
         storage
@@ -1783,7 +2197,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(latest_open.turn_id, open_new.turn_id);
+        assert_eq!(latest_open.prompt.as_deref(), open_new.prompt.as_deref());
 
         let pending_turns = storage
             .sessions()
@@ -1791,29 +2205,22 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(pending_turns.len(), 1);
-        assert_eq!(pending_turns[0].turn_id, pending.turn_id);
+        assert_eq!(
+            pending_turns[0].summary.as_deref(),
+            pending.summary.as_deref()
+        );
     }
 
     #[tokio::test]
     async fn session_store_load_open_turn_matches_full_session_agent_and_observer_key() {
         let storage = test_storage();
-        let mut explicit_agent_a = make_turn(
-            "01JQ7Y8YQ6V7D4M1N9K2F5T8ZH",
-            "agent-a",
-            Some("group-a"),
-            None,
-        );
+        let mut explicit_agent_a = make_turn("explicit-agent-a", "agent-a", Some("group-a"), None);
         explicit_agent_a.response = None;
 
-        let mut explicit_agent_b = make_turn(
-            "01JQ7Y8YQ6V7D4M1N9K2F5T8ZJ",
-            "agent-b",
-            Some("group-a"),
-            None,
-        );
+        let mut explicit_agent_b = make_turn("explicit-agent-b", "agent-b", Some("group-a"), None);
         explicit_agent_b.response = None;
 
-        let mut agent_default = make_turn("01JQ7Y8YQ6V7D4M1N9K2F5T8ZK", "agent-c", None, None);
+        let mut agent_default = make_turn("agent-default", "agent-c", None, None);
         agent_default.response = None;
 
         storage
@@ -1836,7 +2243,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(explicit_lookup.turn_id, explicit_agent_b.turn_id);
+        assert_eq!(explicit_lookup.agent, "agent-b");
 
         let default_lookup = storage
             .sessions()
@@ -1847,29 +2254,19 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(default_lookup.turn_id, agent_default.turn_id);
+        assert_eq!(default_lookup.agent, "agent-c");
     }
 
     #[tokio::test]
     async fn session_store_reconcile_open_turns_merges_into_latest_row() {
         let storage = test_storage();
-        let mut first = make_turn(
-            "01JQ7Y8YQ6V7D4M1N9K2F5T8ZL",
-            "agent-a",
-            Some("group-a"),
-            Some("summary-a"),
-        );
+        let mut first = make_turn("first", "agent-a", Some("group-a"), Some("summary-a"));
         first.response = None;
         first.prompt = Some("prompt-a".to_string());
         first.tool_calling = Some(vec!["tool-a".to_string()]);
         first.artifacts = Some(HashMap::from([("shared".to_string(), "a".to_string())]));
 
-        let mut second = make_turn(
-            "01JQ7Y8YQ6V7D4M1N9K2F5T8ZM",
-            "agent-a",
-            Some("group-a"),
-            Some("summary-b"),
-        );
+        let mut second = make_turn("second", "agent-a", Some("group-a"), Some("summary-b"));
         second.response = None;
         second.prompt = Some("prompt-b".to_string());
         second.tool_calling = Some(vec!["tool-b".to_string()]);
@@ -1896,7 +2293,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(turns.len(), 1);
-        assert_eq!(turns[0].turn_id, second.turn_id);
+        assert_ne!(turns[0].turn_id.memory_point(), u64::MAX);
         assert_eq!(turns[0].prompt.as_deref(), Some("prompt-a\n\nprompt-b"));
         assert_eq!(
             turns[0].tool_calling.as_deref(),

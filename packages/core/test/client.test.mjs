@@ -71,7 +71,7 @@ test('addMessage and sessions.get roundtrip through the Rust bridge', async (t) 
   assert.ok(typeof created.turnId === 'string');
   assert.equal(created.session_id, 'group-a');
 
-  const detail = await sessions.get(`SESSION:${created.turnId}`);
+  const detail = await sessions.get(created.turnId);
   assert.ok(detail);
   assert.equal(detail.turnId, created.turnId);
   assert.equal(detail.session_id, 'group-a');
@@ -101,7 +101,7 @@ test('addMessage without session_id reuses the agent default session through the
   assert.equal(merged.turnId, first.turnId);
   assert.notEqual(otherAgent.turnId, first.turnId);
 
-  const detail = await sessions.get(`SESSION:${first.turnId}`);
+  const detail = await sessions.get(first.turnId);
   assert.ok(detail);
   assert.equal(detail.session_id, null);
   assert.equal(detail.agent, 'agent-a');
@@ -138,13 +138,13 @@ test('sessions.list returns the recent window in chronological order, and memori
   assert.equal(listed[1].session_id, 'group-b');
 
   const timeline = await memories.timeline({
-    memoryId: `SESSION:${second.turnId}`,
+    memoryId: second.turnId,
     beforeLimit: 1,
     afterLimit: 1,
   });
   assert.ok(timeline.length >= 2);
-  assert.ok(timeline.some((memory) => memory.memoryId === `SESSION:${first.turnId}`));
-  assert.ok(timeline.some((memory) => memory.memoryId === `SESSION:${second.turnId}`));
+  assert.ok(timeline.some((memory) => memory.memoryId === first.turnId));
+  assert.ok(timeline.some((memory) => memory.memoryId === second.turnId));
 });
 
 test('invalid memory ids reject through the bridge', async (t) => {
@@ -159,7 +159,7 @@ test('invalid memory ids reject through the bridge', async (t) => {
   );
 
   await assert.rejects(
-    () => sessions.get('THINKING:01JQ7Y8YQ6V7D4M1N9K2F5T8ZX'),
+    () => sessions.get('thinking:42'),
     /invalid/i,
   );
 });
@@ -187,7 +187,7 @@ test('shutdownCoreForTests allows the daemon to restart cleanly', async (t) => {
   assert.ok(second.turnId);
   assert.equal(second.turnId, first.turnId);
 
-  const detail = await sessions.get(`SESSION:${first.turnId}`);
+  const detail = await sessions.get(first.turnId);
   assert.ok(detail);
   assert.equal(detail.prompt, 'first prompt\n\nsecond prompt');
 });
@@ -221,7 +221,7 @@ test('addMessage summarizes response turns when a summary provider is configured
     response: 'response body',
   });
 
-  const detail = await sessions.get(`SESSION:${created.turnId}`);
+  const detail = await sessions.get(created.turnId);
   assert.ok(detail);
   assert.equal(detail.title, 'summarize this');
   assert.equal(detail.summary, 'summarize this\n\nresponse body');
@@ -240,7 +240,7 @@ test('addMessage persists response turns when the summarizer is not configured',
     response: 'response body',
   });
 
-  const detail = await sessions.get(`SESSION:${created.turnId}`);
+  const detail = await sessions.get(created.turnId);
   assert.ok(detail);
   assert.equal(detail.response, 'response body');
   assert.equal(detail.summary, null);
@@ -264,15 +264,15 @@ test('rendered memory bridge returns unified turn and observing reads', async (t
   await new Promise((resolve) => setTimeout(resolve, 50));
 
   const listed = await memories.list({ mode: { type: 'recency', limit: 10 } });
-  assert.ok(listed.some((memory) => memory.memoryId === `SESSION:${turn.turnId}`));
-  const observing = listed.find((memory) => memory.memoryId.startsWith('OBSERVING:'));
+  assert.ok(listed.some((memory) => memory.memoryId === turn.turnId));
+  const observing = listed.find((memory) => memory.memoryId.startsWith('observing:'));
   assert.ok(observing);
   assert.ok(observing.title);
   assert.ok(observing.summary || observing.detail);
 
-  const turnDetail = await memories.get(`SESSION:${turn.turnId}`);
+  const turnDetail = await memories.get(turn.turnId);
   assert.ok(turnDetail);
-  assert.equal(turnDetail.memoryId, `SESSION:${turn.turnId}`);
+  assert.equal(turnDetail.memoryId, turn.turnId);
   assert.ok(turnDetail.createdAt);
   assert.ok(turnDetail.updatedAt);
   assert.match(turnDetail.summary ?? turnDetail.detail ?? '', /rendered prompt|rendered response/);
@@ -290,8 +290,8 @@ test('rendered memory bridge returns unified turn and observing reads', async (t
   assert.equal(observingTimeline[0].memoryId, observing.memoryId);
 
   const recalled = await memories.recall('rendered', 10);
-  assert.ok(recalled.some((memory) => memory.memoryId === `SESSION:${turn.turnId}`));
-  assert.ok(recalled.some((memory) => memory.memoryId.startsWith('OBSERVING:')));
+  assert.ok(recalled.some((memory) => memory.memoryId.startsWith('observing:')));
+  assert.ok(!recalled.some((memory) => memory.memoryId === turn.turnId));
 });
 
 test('flushObserverForTests seals observer work on demand', async (t) => {
@@ -312,5 +312,5 @@ test('flushObserverForTests seals observer work on demand', async (t) => {
   assert.ok(flushed >= 1);
 
   const listed = await memories.list({ mode: { type: 'recency', limit: 10 } });
-  assert.ok(listed.some((memory) => memory.memoryId.startsWith('OBSERVING:')));
+  assert.ok(listed.some((memory) => memory.memoryId.startsWith('observing:')));
 });
