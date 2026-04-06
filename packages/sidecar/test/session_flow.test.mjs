@@ -890,6 +890,32 @@ test('ui settings config accepts semanticIndex when embedding is omitted', async
   assert.match(persisted, /"defaultImportance": 0.5/);
 });
 
+test('ui settings config rejects semanticIndex.embedding.provider when it is empty', async (t) => {
+  const { dir, homeDir, configPath } = await makeDatasetUri();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+  process.env.MUNINN_HOME = homeDir;
+
+  await mkdir(path.dirname(configPath), { recursive: true });
+
+  const writeResponse = await app.request('/api/v1/ui/settings/config', {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      content: JSON.stringify({
+        semanticIndex: {
+          embedding: {
+            provider: '',
+          },
+        },
+      }, null, 2),
+    }),
+  });
+  assert.equal(writeResponse.status, 400);
+  const body = await json(writeResponse);
+  assert.equal(body.errorCode, 'invalidRequest');
+  assert.match(body.errorMessage, /semanticIndex\.embedding\.provider must be a non-empty string/i);
+});
+
 test('ui settings config rejects observer config without observer.llm', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(async () => rm(dir, { recursive: true, force: true }));

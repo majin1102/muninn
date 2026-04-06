@@ -298,6 +298,24 @@ test('validateSettings accepts semanticIndex config when embedding is omitted', 
   }, null, 2)));
 });
 
+test('validateSettings rejects semanticIndex.embedding.provider when it is empty', async (t) => {
+  const { dir, homeDir } = await makeDatasetUri();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+
+  process.env.MUNINN_HOME = homeDir;
+
+  await assert.rejects(
+    () => validateSettings(JSON.stringify({
+      semanticIndex: {
+        embedding: {
+          provider: '',
+        },
+      },
+    }, null, 2)),
+    /semanticIndex\.embedding\.provider must be a non-empty string/i,
+  );
+});
+
 test('validateSettings rejects observer config without observer.llm', async (t) => {
   const { dir, homeDir } = await makeDatasetUri();
   t.after(async () => rm(dir, { recursive: true, force: true }));

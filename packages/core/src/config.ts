@@ -274,7 +274,11 @@ function validateSemanticIndexConfig(semanticIndex: unknown): void {
   const config = expectRecord(semanticIndex, 'semanticIndex');
   if (config.embedding !== undefined) {
     const embedding = expectRecord(config.embedding, 'semanticIndex.embedding');
-    validateOptionalString(embedding.provider, 'semanticIndex.embedding.provider');
+    const provider = embedding.provider;
+    if (provider !== undefined) {
+      requireNonEmptyString(provider, 'semanticIndex.embedding.provider');
+      parseProvider(provider as string);
+    }
     validateOptionalString(embedding.model, 'semanticIndex.embedding.model');
     validateOptionalString(embedding.apiKey, 'semanticIndex.embedding.apiKey');
     validateOptionalString(embedding.baseUrl, 'semanticIndex.embedding.baseUrl');
