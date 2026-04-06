@@ -3,7 +3,7 @@ import type { ObserverWatermark, SessionTurn } from '../client.js';
 import { getEffectiveObserverName } from '../config.js';
 import { cloneTurn, readSessionTurn, serializeSessionTurn } from '../session/types.js';
 import { ObserverTask } from './task.js';
-import { loadThreads } from './thread.js';
+import { cloneObservingThreads, loadThreads } from './thread.js';
 import { flushObserverWindow, restoreIndexBatches, retryIndexBatches } from './update.js';
 import { Window } from './window.js';
 import type { IndexBatch, ObservingThread } from './types.js';
@@ -147,7 +147,7 @@ export class Observer {
 
   private async runFlushLoop(): Promise<void> {
     while (!this.shutdownRequested) {
-      const flushed = await this.flushOnce().catch((error) => {
+      const flushed = await this.flushWindow().catch((error) => {
         console.error(`[muninn:observer] flush failed: ${String(error)}`);
         return false;
       });
@@ -157,7 +157,10 @@ export class Observer {
     }
   }
 
-  private async flushOnce(): Promise<boolean> {
+  // flushWindow() primarily persists the current observer window. If there are
+  // no new turns buffered, it also advances any semantic-index retries left by
+  // earlier window flushes.
+  private async flushWindow(): Promise<boolean> {
     if (this.flushing || this.sessionWriters > 0) {
       return false;
     }
@@ -168,12 +171,13 @@ export class Observer {
       const turns = this.buffer.map(cloneTurn);
       this.buffer = [];
       this.observingBuffer = turns.map(cloneTurn);
+      const threads = cloneObservingThreads(this.threads);
 
       try {
         const result = await flushObserverWindow({
           client: this.client,
           observerName: this.name,
-          threads: this.threads,
+          threads,
           epoch: this.observingEpoch,
           pendingTurns: turns,
         });

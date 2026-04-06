@@ -23,7 +23,7 @@ export async function flushObserverWindow(params: {
   epoch: number;
   pendingTurns: SessionTurn[];
 }): Promise<{ threads: ObservingThread[]; failedIndexIds: string[] }> {
-  ensureRootThread(params.threads, params.observerName, params.pendingTurns, params.epoch);
+  ensureActiveThreads(params.threads, params.observerName, params.pendingTurns, params.epoch);
 
   const gatewayResult = await routeObservingThreads(
     activeGatewayInputs(params.threads, params.observerName),
@@ -93,7 +93,7 @@ export function restoreIndexBatches(
     });
 }
 
-function ensureRootThread(
+function ensureActiveThreads(
   threads: ObservingThread[],
   observerName: string,
   pendingTurns: SessionTurn[],
@@ -220,7 +220,11 @@ async function flushThreads(
     snapshots: touched.map(toObservingSnapshot),
   });
   updateThreadsFromRows(threads, persistedRows);
-  await applyParentRefs(client, threads, touchedIds);
+  try {
+    await applyParentRefs(client, threads, touchedIds);
+  } catch (error) {
+    console.error(`[muninn:observer] parent ref flush failed: ${String(error)}`);
+  }
 
   const failedIndexIds: string[] = [];
   for (const observingId of touchedIds) {
@@ -372,3 +376,7 @@ function normalizeText(value: string, maxChars: number): string {
   }
   return `${collapsed.slice(0, Math.max(maxChars - 3, 0))}...`;
 }
+
+export const __testing = {
+  flushThreads,
+};

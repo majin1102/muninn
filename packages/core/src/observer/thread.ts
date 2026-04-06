@@ -28,6 +28,44 @@ export function createObservingThread(
   };
 }
 
+export function cloneObservingThread(thread: ObservingThread): ObservingThread {
+  return {
+    ...thread,
+    snapshotIds: [...thread.snapshotIds],
+    references: [...thread.references],
+    snapshots: thread.snapshots.map((snapshot) => ({
+      memories: snapshot.memories.map((memory) => ({
+        id: memory.id ?? null,
+        text: memory.text,
+        category: memory.category,
+        updatedMemory: memory.updatedMemory ?? null,
+      })),
+      openQuestions: [...(snapshot.openQuestions ?? [])],
+      nextSteps: [...(snapshot.nextSteps ?? [])],
+      memoryDelta: {
+        before: snapshot.memoryDelta.before.map((memory) => ({
+          id: memory.id ?? null,
+          text: memory.text,
+          category: memory.category,
+          updatedMemory: memory.updatedMemory ?? null,
+        })),
+        after: snapshot.memoryDelta.after.map((memory) => ({
+          id: memory.id ?? null,
+          text: memory.text,
+          category: memory.category,
+          updatedMemory: memory.updatedMemory ?? null,
+        })),
+      },
+    })),
+    pendingParentId: thread.pendingParentId ?? null,
+    indexedSnapshotSequence: thread.indexedSnapshotSequence ?? null,
+  };
+}
+
+export function cloneObservingThreads(threads: ObservingThread[]): ObservingThread[] {
+  return threads.map(cloneObservingThread);
+}
+
 export function loadThreads(
   snapshots: ObservingSnapshot[],
   observer: string,
