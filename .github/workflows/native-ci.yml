@@ -1,4 +1,4 @@
-name: Lance Rust CI
+name: Lance Rust
 
 on:
   pull_request:
