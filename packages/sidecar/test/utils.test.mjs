@@ -8,9 +8,10 @@ import { resolveConfigPath } from '../dist/utils.js';
 
 test('resolveConfigPath uses MUNINN_HOME/muninn.json when set', async (t) => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'muninn-config-home-'));
+  const originalCwd = process.cwd();
   const originalHome = process.env.HOME;
   t.after(async () => {
-    process.chdir('/Users/Nathan/workspace/muninn');
+    process.chdir(originalCwd);
     delete process.env.MUNINN_HOME;
     if (originalHome === undefined) {
       delete process.env.HOME;
@@ -34,9 +35,10 @@ test('resolveConfigPath uses MUNINN_HOME/muninn.json when set', async (t) => {
 
 test('resolveConfigPath falls back to HOME/.muninn/muninn.json when MUNINN_HOME is missing', async (t) => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'muninn-config-user-'));
+  const originalCwd = process.cwd();
   const originalHome = process.env.HOME;
   t.after(async () => {
-    process.chdir('/Users/Nathan/workspace/muninn');
+    process.chdir(originalCwd);
     delete process.env.MUNINN_HOME;
     if (originalHome === undefined) {
       delete process.env.HOME;
