@@ -1,0 +1,51 @@
+import type { SessionMessageInput } from '../client.js';
+import { resolveTurnMetadata } from '../llm/turn-generator.js';
+import type { Session } from './session.js';
+import { hasText, sessionKey } from './key.js';
+import type { SessionUpdate } from './types.js';
+
+export async function buildSessionUpdate(
+  session: Session,
+  content: SessionMessageInput,
+  observer: string,
+  observingEpoch: number,
+): Promise<SessionUpdate> {
+  validateContent(content);
+  const previewPrompt = session.previewPrompt(content.prompt);
+  const metadata = await resolveTurnMetadata({
+    prompt: previewPrompt,
+    title: content.title,
+    summary: content.summary,
+    response: content.response,
+  });
+  return {
+    sessionId: content.session_id,
+    agent: content.agent,
+    observer,
+    title: metadata.title,
+    summary: metadata.summary,
+    titleSource: metadata.titleSource,
+    summarySource: metadata.summarySource,
+    toolCalling: content.tool_calling,
+    artifacts: content.artifacts,
+    prompt: content.prompt,
+    response: content.response,
+    observingEpoch,
+  };
+}
+
+export function validateContent(content: SessionMessageInput): void {
+  const hasContent = Boolean(
+    (content.tool_calling && content.tool_calling.length > 0)
+      || (content.artifacts && Object.keys(content.artifacts).length > 0)
+      || hasText(content.prompt)
+      || hasText(content.response),
+  );
+  if (!hasContent) {
+    throw new Error('turn must include at least one message field');
+  }
+}
+
+export function sessionUpdateKey(update: SessionUpdate): string {
+  return sessionKey(update.sessionId, update.agent, update.observer);
+}

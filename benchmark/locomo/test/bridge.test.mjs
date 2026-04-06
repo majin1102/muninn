@@ -12,8 +12,6 @@ const repoRoot = path.resolve(import.meta.dirname, '../../..');
 const bridgePath = path.join(repoRoot, 'benchmark/locomo/dist/bridge.js');
 const fixturePath = path.join(repoRoot, 'benchmark/locomo/test/fixtures/mini-locomo.json');
 
-process.env.MUNINN_CORE_ALLOW_CARGO_FALLBACK ??= '1';
-
 async function runBridge(command, options) {
   const args = [bridgePath, command];
   for (const [key, value] of Object.entries(options)) {

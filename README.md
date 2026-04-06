@@ -1,13 +1,14 @@
 # Muninn
 
-Muninn is a memory layer for agents. This repository contains the Rust core, the TypeScript integration packages, the OpenClaw plugin, and the project documentation.
+Muninn is a memory layer for agents. This repository contains the Rust storage core, the TypeScript product/runtime packages, the OpenClaw plugin, and the project documentation.
 
 ## Repository Layout
 
 - `core/`
-  - Rust implementation and long-term home of core memory logic.
+  - Rust typed-table and storage implementation.
+  - Also powers the Node native binding used by `@muninn/core`.
 - `packages/`
-  - TypeScript workspace for the sidecar, MCP adapter, shared types, board UI, and TS core bindings.
+  - TypeScript workspace for the sidecar, MCP adapter, shared types, board UI, and the main Muninn runtime.
 - `openclaw/`
   - OpenClaw integration and plugin code.
 - `docs/`
@@ -29,3 +30,21 @@ Muninn is a memory layer for agents. This repository contains the Rust core, the
   - Briefs and progress notes for active workstreams.
 
 Start with [docs/README.md](docs/README.md) for the simplified documentation map.
+
+## Native Development
+
+`@muninn/core` now talks to Rust through a `napi-rs` native addon.
+
+Local prerequisites:
+
+- Rust toolchain with `cargo`
+- Node.js and `pnpm`
+- `protoc`
+
+Main local build entrypoint:
+
+```bash
+pnpm --filter @muninn/core build
+```
+
+That command builds the native addon first and then compiles the TypeScript package.

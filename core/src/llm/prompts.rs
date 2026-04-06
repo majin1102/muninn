@@ -2,7 +2,9 @@ use std::sync::OnceLock;
 
 use serde::Deserialize;
 
+#[cfg(test)]
 pub const MAX_TURN_TITLE_CHARS: usize = 100;
+#[cfg(test)]
 pub const MAX_TURN_SUMMARY_CHARS: usize = 1000;
 
 #[derive(Debug, Deserialize)]
@@ -11,6 +13,7 @@ struct PromptTemplateFile {
     user_template: String,
 }
 
+#[cfg(test)]
 pub fn build_turn_system_prompt() -> String {
     turn_template()
         .system
@@ -18,6 +21,7 @@ pub fn build_turn_system_prompt() -> String {
         .replace("{{max_summary_chars}}", &MAX_TURN_SUMMARY_CHARS.to_string())
 }
 
+#[cfg(test)]
 pub fn build_turn_user_prompt(prompt: Option<&str>, response: &str) -> String {
     turn_template()
         .user_template
@@ -45,6 +49,7 @@ pub fn build_observing_user_prompt(input_json: &str) -> String {
         .replace("{{input_json}}", input_json)
 }
 
+#[cfg(test)]
 fn turn_template() -> &'static PromptTemplateFile {
     static TEMPLATE: OnceLock<PromptTemplateFile> = OnceLock::new();
     TEMPLATE.get_or_init(|| {

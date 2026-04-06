@@ -9,7 +9,7 @@
     }
   },
   "scripts": {
-    "build": "tsc && tsc -p tsconfig.server.json && cp src/index.html dist/index.html && cp src/styles.css dist/styles.css",
+    "build": "pnpm --filter @muninn/types build && tsc && tsc -p tsconfig.server.json && cp src/index.html dist/index.html && cp src/styles.css dist/styles.css",
     "dev": "tsc --watch"
   },
   "dependencies": {

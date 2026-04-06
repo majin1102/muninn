@@ -26,7 +26,7 @@ import { validateSettingsJson } from './settings.js';
 
 const AGENT_DEFAULT_SESSION_PREFIX = '__agent_default__:';
 const OBSERVER_DEFAULT_SESSION_PREFIX = '__observer_default__:';
-const SESSION_TREE_PAGE_LIMIT = Number.MAX_SAFE_INTEGER;
+const SESSION_TREE_PAGE_LIMIT = 1_000_000;
 const packageDir = path.resolve(__dirname, '..');
 
 export const boardApp = new Hono();
@@ -212,7 +212,7 @@ function toTurnPreview(turn: BoardSessionTurn): TurnPreview {
     memoryId: turn.turnId,
     createdAt: turn.createdAt,
     updatedAt: turn.updatedAt,
-    title: turn.title,
+    title: turn.title ?? undefined,
     summary: turn.summary!,
   };
 }

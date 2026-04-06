@@ -1,0 +1,51 @@
+name: Native CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  native:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+            packages/core/native -> packages/core/native/target
+
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: Install dependencies
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Check Rust core
+        run: cargo check --manifest-path core/Cargo.toml
+
+      - name: Check native addon
+        run: cargo check --manifest-path packages/core/native/Cargo.toml
+
+      - name: Build @muninn/core
+        run: pnpm --filter @muninn/core build
+
+      - name: Test @muninn/core
+        run: node --test packages/core/test/**/*.mjs
+
+      - name: Test sidecar
+        run: pnpm --filter @muninn/sidecar test

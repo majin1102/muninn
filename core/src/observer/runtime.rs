@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::sync::OnceLock;
@@ -6,13 +7,15 @@ use std::time::{Duration, Instant};
 
 use chrono::Utc;
 use lance::Result;
+use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
-use crate::format::memory::semantic_index::SemanticIndexRow;
-use crate::format::memory::session::SessionTurn;
-use crate::format::table::{ObservingTable, SemanticIndexTable, SessionTable, TableOptions};
+use crate::format::{
+    MemoryId, MemoryLayer, ObservingTable, SemanticIndexRow, SemanticIndexTable, SessionTable,
+    SessionTurn, TableOptions,
+};
 use crate::llm::config::{EmbeddingConfig, effective_observer_name};
 use crate::llm::embedding::embed_text;
 use crate::llm::observing::{
@@ -24,6 +27,7 @@ use crate::llm::observing_update::{
 use crate::observer::thread::{
     ObservingThread, SnapshotContent, load_threads, snapshot_ref, turn_ref,
 };
+#[cfg(test)]
 use crate::observer::types::ObserverWatermark;
 
 fn observer_singleton() -> &'static Mutex<Option<Observer>> {
@@ -37,60 +41,60 @@ struct PendingObservingTask {
     input: ObserveRequest,
 }
 
-#[derive(Debug, Clone)]
-struct PendingIndexBatch {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PendingIndexBatch {
     turns: Vec<SessionTurn>,
     observing_ids: HashSet<String>,
 }
 
-#[derive(Debug, Default)]
-struct ObserverState {
-    committed_epoch: Option<u64>,
+#[derive(Debug)]
+struct Window {
+    epoch: u64,
     observing_epoch: Option<u64>,
+    session_writers: usize,
     buffer: Vec<SessionTurn>,
     observing_buffer: Vec<SessionTurn>,
-    index_batches: Vec<PendingIndexBatch>,
-    threads: Vec<ObservingThread>,
-    flushing: bool,
-    shutdown: bool,
-}
-
-#[derive(Debug)]
-struct EpochBarrierState {
-    current_epoch: u64,
-    open_writes: usize,
     blocked_since: Option<Instant>,
     warned_stalled: bool,
+    flushing: bool,
 }
 
 #[derive(Debug)]
-struct ObserverRuntime {
+struct ObserverTask {
     cancel: CancellationToken,
     task: StdMutex<Option<JoinHandle<()>>>,
 }
 
-#[derive(Debug)]
-pub(crate) struct PostWriteGuard {
+pub(crate) struct ObservingWindow {
+    observer: Observer,
     epoch: u64,
-    barrier: Arc<StdMutex<EpochBarrierState>>,
     completed: bool,
 }
 
-impl PostWriteGuard {
+impl ObservingWindow {
     pub(crate) fn epoch(&self) -> u64 {
         self.epoch
     }
 
+    pub(crate) fn observer(&self) -> &str {
+        &self.observer.name
+    }
+
+    pub(crate) async fn include(&self, turn: SessionTurn) {
+        self.observer.include_turn(turn).await;
+    }
+
     pub(crate) fn complete(mut self) {
         self.completed = true;
-        decrement_open_writes(&self.barrier);
+        self.observer.release_session_writer();
     }
 }
 
-impl Drop for PostWriteGuard {
+impl Drop for ObservingWindow {
     fn drop(&mut self) {
         if !self.completed {
-            decrement_open_writes(&self.barrier);
+            self.observer.release_session_writer();
         }
     }
 }
@@ -98,11 +102,13 @@ impl Drop for PostWriteGuard {
 #[derive(Clone)]
 pub struct Observer {
     table_options: TableOptions,
-    observer: String,
-    poll_interval: Duration,
-    barrier: Arc<StdMutex<EpochBarrierState>>,
-    state: Arc<Mutex<ObserverState>>,
-    runtime: Arc<ObserverRuntime>,
+    name: String,
+    window: Arc<StdMutex<Window>>,
+    committed_epoch: Arc<Mutex<Option<u64>>>,
+    threads: Arc<Mutex<Vec<ObservingThread>>>,
+    index_batches: Arc<Mutex<Vec<PendingIndexBatch>>>,
+    shutdown: Arc<AtomicBool>,
+    task: Arc<ObserverTask>,
 }
 
 impl Observer {
@@ -111,7 +117,7 @@ impl Observer {
         let mut singleton = observer_singleton().lock().await;
         if let Some(observer) = singleton.as_ref().cloned() {
             if !observer.is_shutdown().await
-                && observer.observer == observer_name
+                && observer.name == observer_name
                 && observer.table_options.matches(&table_options)
             {
                 return Ok(observer);
@@ -143,7 +149,7 @@ impl Observer {
         let index_batches = restore_index_batches(&table_options, &observer, &threads).await?;
 
         let committed_epoch = load_committed_epoch(&table_options, &observer).await?;
-        let mut inbox = SessionTable::new(table_options.clone())
+        let mut inbox = session_table(&table_options)
             .turns_after_epoch(&observer, committed_epoch)
             .await?;
         if !inbox.is_empty() {
@@ -156,80 +162,81 @@ impl Observer {
                 }
             }
             if repaired {
-                SessionTable::new(table_options.clone())
-                    .upsert(inbox.clone())
+                let mut repaired_turns = inbox.clone();
+                session_table(&table_options)
+                    .upsert(&mut repaired_turns)
                     .await?;
+                inbox = repaired_turns;
             }
         }
 
         let observer = Self {
             table_options,
-            observer,
-            poll_interval: default_poll_interval(),
-            barrier: Arc::new(StdMutex::new(EpochBarrierState {
-                current_epoch: next_epoch(committed_epoch),
-                open_writes: 0,
-                blocked_since: None,
-                warned_stalled: false,
-            })),
-            state: Arc::new(Mutex::new(ObserverState {
-                committed_epoch,
+            name: observer,
+            window: Arc::new(StdMutex::new(Window {
+                epoch: next_epoch(committed_epoch),
                 observing_epoch: None,
+                session_writers: 0,
                 buffer: inbox,
                 observing_buffer: Vec::new(),
-                index_batches,
-                threads,
+                blocked_since: None,
+                warned_stalled: false,
                 flushing: false,
-                shutdown: false,
             })),
-            runtime: Arc::new(ObserverRuntime {
+            committed_epoch: Arc::new(Mutex::new(committed_epoch)),
+            threads: Arc::new(Mutex::new(threads)),
+            index_batches: Arc::new(Mutex::new(index_batches)),
+            shutdown: Arc::new(AtomicBool::new(false)),
+            task: Arc::new(ObserverTask {
                 cancel: CancellationToken::new(),
                 task: StdMutex::new(None),
             }),
         };
-        observer.start_polling();
         Ok(observer)
     }
 
     pub async fn shutdown(&self, wait: bool) {
-        self.state.lock().await.shutdown = true;
-        self.runtime.shutdown(wait).await;
+        self.shutdown.store(true, Ordering::Relaxed);
+        self.task.shutdown(wait).await;
     }
 
-    pub(crate) fn begin_post(&self) -> PostWriteGuard {
-        let mut barrier = self
-            .barrier
-            .lock()
-            .expect("observer epoch barrier poisoned");
-        let epoch = barrier.current_epoch;
-        barrier.open_writes += 1;
-        if barrier.open_writes == 1 {
-            barrier.blocked_since = Some(Instant::now());
-            barrier.warned_stalled = false;
+    pub(crate) fn window(&self) -> ObservingWindow {
+        let mut window = self.window.lock().expect("observer window poisoned");
+        let epoch = window.epoch;
+        window.session_writers += 1;
+        if window.session_writers == 1 {
+            window.blocked_since = Some(Instant::now());
+            window.warned_stalled = false;
         }
-        PostWriteGuard {
+        ObservingWindow {
+            observer: self.clone(),
             epoch,
-            barrier: Arc::clone(&self.barrier),
             completed: false,
         }
     }
 
-    pub(crate) async fn enqueue(&self, turns: Vec<SessionTurn>) {
-        if turns.is_empty() {
+    async fn include_turn(&self, turn: SessionTurn) {
+        if !turn.observable() || self.shutdown.load(Ordering::Relaxed) {
             return;
         }
-        let mut state = self.state.lock().await;
-        if state.shutdown {
-            return;
-        }
-        for turn in turns {
-            enqueue_turn(&mut state.buffer, turn);
-        }
+        let mut window = self.window.lock().expect("observer window poisoned");
+        enqueue_turn(&mut window.buffer, turn);
     }
 
+    #[cfg(test)]
     pub async fn watermark(&self) -> Result<ObserverWatermark> {
-        let state = self.state.lock().await;
-        let pending = collect_pending(&state);
+        let observing_epoch = {
+            self.window
+                .lock()
+                .expect("observer window poisoned")
+                .observing_epoch
+        };
+        let committed_epoch = *self.committed_epoch.lock().await;
+        let index_batches = self.index_batches.lock().await.clone();
+        let pending = {
+            let window = self.window.lock().expect("observer window poisoned");
+            collect_pending(&window, &index_batches)
+        };
         let pending_turn_ids = pending
             .iter()
             .map(|turn| turn.turn_id.to_string())
@@ -237,54 +244,35 @@ impl Observer {
         Ok(ObserverWatermark {
             resolved: pending.is_empty(),
             pending_turn_ids,
-            observing_epoch: state.observing_epoch,
-            committed_epoch: state.committed_epoch,
+            observing_epoch,
+            committed_epoch,
         })
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
     pub async fn flush_epoch(&self) -> Result<usize> {
-        flush_epoch_with(
-            &self.table_options,
-            &self.observer,
-            self.poll_interval,
-            &self.barrier,
-            &self.state,
-        )
-        .await
+        flush_epoch_with(self).await
     }
 
     pub(crate) async fn is_shutdown(&self) -> bool {
-        self.state.lock().await.shutdown
+        self.shutdown.load(Ordering::Relaxed)
     }
 
     #[cfg(test)]
-    pub(crate) fn shares_runtime_with(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.runtime, &other.runtime)
+    pub(crate) fn shares_task_with(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.task, &other.task)
     }
 
     #[cfg(test)]
-    pub(crate) async fn runtime_stopped(&self) -> bool {
-        self.runtime.is_shutdown().await
-    }
-
-    fn session_table(&self) -> SessionTable {
-        SessionTable::new(self.table_options.clone())
-    }
-
-    fn observing_table(&self) -> ObservingTable {
-        ObservingTable::new(self.table_options.clone())
-    }
-
-    fn semantic_index_table(&self) -> SemanticIndexTable {
-        SemanticIndexTable::new(self.table_options.clone())
+    pub(crate) async fn task_stopped(&self) -> bool {
+        self.task.is_shutdown().await
     }
 
     #[cfg(test)]
     pub(crate) async fn snapshot(&self) -> Result<Vec<SessionTurn>> {
-        let state = self.state.lock().await;
-        let mut turns = state.observing_buffer.clone();
-        turns.extend(state.buffer.clone());
+        let window = self.window.lock().expect("observer window poisoned");
+        let mut turns = window.observing_buffer.clone();
+        turns.extend(window.buffer.clone());
         turns.sort_by(|left, right| {
             left.observing_epoch
                 .cmp(&right.observing_epoch)
@@ -296,38 +284,85 @@ impl Observer {
 
     #[cfg(test)]
     pub(crate) async fn threads_snapshot(&self) -> Vec<ObservingThread> {
-        self.state.lock().await.threads.clone()
-    }
-
-    fn start_polling(&self) {
-        let table_options = self.table_options.clone();
-        let observer = self.observer.clone();
-        let poll_interval = self.poll_interval;
-        let barrier = Arc::clone(&self.barrier);
-        let state = Arc::clone(&self.state);
-        let cancel = self.runtime.cancel.clone();
-        let task = tokio::spawn(async move {
-            loop {
-                tokio::select! {
-                    _ = cancel.cancelled() => break,
-                    _ = tokio::time::sleep(poll_interval) => {
-                        let _ =
-                            flush_epoch_with(&table_options, &observer, poll_interval, &barrier, &state)
-                                .await;
-                    }
-                }
-            }
-        });
-        let mut slot = self
-            .runtime
-            .task
-            .lock()
-            .expect("observer runtime task poisoned");
-        *slot = Some(task);
+        self.threads.lock().await.clone()
     }
 }
 
-impl ObserverRuntime {
+impl Observer {
+    fn release_session_writer(&self) {
+        let mut window = self.window.lock().expect("observer window poisoned");
+        if window.session_writers > 0 {
+            window.session_writers -= 1;
+        }
+        if window.session_writers == 0 {
+            window.blocked_since = None;
+            window.warned_stalled = false;
+        }
+        drop(window);
+        self.schedule_task_if_ready();
+    }
+
+    fn schedule_task_if_ready(&self) {
+        if self.shutdown.load(Ordering::Relaxed) || self.task.is_running() {
+            return;
+        }
+
+        {
+            let mut window = self.window.lock().expect("observer window poisoned");
+            if window.session_writers > 0 {
+                maybe_warn_stalled_writers(&self.name, &mut window);
+                return;
+            }
+            if window.flushing || window.buffer.is_empty() {
+                return;
+            }
+        }
+
+        self.task.spawn(self.clone());
+    }
+}
+
+impl ObserverTask {
+    fn spawn(&self, observer: Observer) {
+        if self.cancel.is_cancelled() {
+            return;
+        }
+        self.clear_finished();
+        let mut slot = self.task.lock().expect("observer task poisoned");
+        if slot.as_ref().is_some_and(|task| !task.is_finished()) {
+            return;
+        }
+
+        let cancel = self.cancel.clone();
+        *slot = Some(tokio::spawn(async move {
+            loop {
+                if cancel.is_cancelled() {
+                    break;
+                }
+                match flush_epoch_with(&observer).await {
+                    Ok(0) => break,
+                    Ok(_) => continue,
+                    Err(error) => {
+                        eprintln!("[observer] flush task failed: {}", error);
+                        break;
+                    }
+                }
+            }
+        }));
+    }
+
+    fn clear_finished(&self) {
+        let mut slot = self.task.lock().expect("observer task poisoned");
+        if slot.as_ref().is_some_and(|task| task.is_finished()) {
+            *slot = None;
+        }
+    }
+
+    fn is_running(&self) -> bool {
+        self.clear_finished();
+        self.task.lock().expect("observer task poisoned").is_some()
+    }
+
     async fn shutdown(&self, wait: bool) {
         self.cancel.cancel();
         if !wait {
@@ -344,92 +379,128 @@ impl ObserverRuntime {
 
     #[cfg(test)]
     async fn is_shutdown(&self) -> bool {
+        self.clear_finished();
         self.task
             .lock()
-            .expect("observer runtime task poisoned")
+            .expect("observer task poisoned")
             .is_none()
-    }
+            && self.cancel.is_cancelled()
+        }
 }
 
-impl Drop for ObserverRuntime {
+impl Drop for ObserverTask {
     fn drop(&mut self) {
         self.cancel.cancel();
     }
 }
 
 async fn flush_epoch_with(
-    table_options: &TableOptions,
-    observer: &str,
-    poll_interval: Duration,
-    barrier: &Arc<StdMutex<EpochBarrierState>>,
-    state: &Arc<Mutex<ObserverState>>,
+    observer: &Observer,
 ) -> Result<usize> {
-    let mut state = state.lock().await;
-    if state.shutdown || state.flushing {
-        return Ok(0);
-    }
-    if state.observing_epoch.is_none() && state.buffer.is_empty() {
-        if state.index_batches.is_empty() {
-            return Ok(0);
-        }
-        state.flushing = true;
-        let mut index_batches = std::mem::take(&mut state.index_batches);
-        let result =
-            retry_index_batches(table_options, &mut state.threads, &mut index_batches).await;
-        state.index_batches = index_batches;
-        state.flushing = false;
-        return result.map(|_| 0);
-    }
-    let epoch = if let Some(epoch) = state.observing_epoch {
-        epoch
-    } else {
-        if state.buffer.is_empty() {
-            return Ok(0);
-        }
-        let mut barrier = barrier.lock().expect("observer epoch barrier poisoned");
-        if barrier.open_writes > 0 {
-            maybe_warn_stalled_writes(observer, poll_interval, &mut barrier);
-            return Ok(0);
-        }
-        let epoch = barrier.current_epoch;
-        barrier.current_epoch += 1;
-        state.observing_epoch = Some(epoch);
-        state.observing_buffer = std::mem::take(&mut state.buffer);
-        epoch
-    };
-    if state.observing_buffer.is_empty() {
-        state.observing_epoch = None;
+    if observer.shutdown.load(Ordering::Relaxed) {
         return Ok(0);
     }
 
-    state.flushing = true;
-    let pending_turns = state.observing_buffer.clone();
-    let result = flush_epoch_inner(
-        table_options,
-        observer,
-        &mut state.threads,
-        epoch,
-        &pending_turns,
-    )
-    .await;
-    match result {
-        Ok(failed_index_ids) => {
-            state.committed_epoch = Some(epoch);
-            state.observing_epoch = None;
-            state.observing_buffer.clear();
-            if !failed_index_ids.is_empty() {
-                push_index_batch(
-                    &mut state.index_batches,
-                    pending_turns.clone(),
-                    failed_index_ids,
-                );
-            }
-            state.flushing = false;
-            Ok(pending_turns.len())
+    enum FlushWork {
+        Idle,
+        RetryIndexBatches,
+        FlushTurns { epoch: u64, turns: Vec<SessionTurn> },
+    }
+
+    let has_batches = !observer.index_batches.lock().await.is_empty();
+    let work = {
+        let mut window = observer.window.lock().expect("observer window poisoned");
+        if window.flushing {
+            return Ok(0);
         }
-        Err(error) => {
-            state.flushing = false;
-            Err(error)
+        if window.observing_buffer.is_empty() && window.buffer.is_empty() {
+            if !has_batches {
+                FlushWork::Idle
+            } else {
+                window.flushing = true;
+                FlushWork::RetryIndexBatches
+            }
+        } else {
+            if window.session_writers > 0 {
+                maybe_warn_stalled_writers(&observer.name, &mut window);
+                return Ok(0);
+            }
+            if window.observing_buffer.is_empty() {
+                window.observing_epoch = Some(window.epoch);
+                window.observing_buffer = std::mem::take(&mut window.buffer);
+            }
+            let Some(epoch) = window.observing_epoch else {
+                return Ok(0);
+            };
+            if window.observing_buffer.is_empty() {
+                window.observing_epoch = None;
+                FlushWork::Idle
+            } else {
+                window.flushing = true;
+                FlushWork::FlushTurns {
+                    epoch,
+                    turns: window.observing_buffer.clone(),
+                }
+            }
+        }
+    };
+
+    match work {
+        FlushWork::Idle => Ok(0),
+        FlushWork::RetryIndexBatches => {
+            let mut threads = observer.threads.lock().await;
+            let mut batches = observer.index_batches.lock().await;
+            let result = retry_index_batches(&observer.table_options, &mut threads, &mut batches).await;
+            drop(batches);
+            drop(threads);
+            observer
+                .window
+                .lock()
+                .expect("observer window poisoned")
+                .flushing = false;
+            result.map(|_| 0)
+        }
+        FlushWork::FlushTurns { epoch, turns } => {
+            let mut threads = observer.threads.lock().await;
+            let result = flush_epoch_inner(
+                &observer.table_options,
+                &observer.name,
+                &mut threads,
+                epoch,
+                &turns,
+            )
+            .await;
+            drop(threads);
+
+            match result {
+                Ok(failed_index_ids) => {
+                    {
+                        let mut committed_epoch = observer.committed_epoch.lock().await;
+                        *committed_epoch = Some(epoch);
+                    }
+                    if !failed_index_ids.is_empty() {
+                        let mut batches = observer.index_batches.lock().await;
+                        push_index_batch(&mut batches, turns.clone(), failed_index_ids);
+                    }
+                    {
+                        let mut window = observer.window.lock().expect("observer window poisoned");
+                        window.observing_epoch = None;
+                        window.observing_buffer.clear();
+                        window.epoch += 1;
+                        window.flushing = false;
+                    }
+                    observer.schedule_task_if_ready();
+                    Ok(turns.len())
+                }
+                Err(error) => {
+                    observer
+                        .window
+                        .lock()
+                        .expect("observer window poisoned")
+                        .flushing = false;
+                    Err(error)
+                }
+            }
         }
     }
 }
@@ -438,45 +509,21 @@ fn next_epoch(committed_epoch: Option<u64>) -> u64 {
     committed_epoch.map(|epoch| epoch + 1).unwrap_or(0)
 }
 
-fn default_poll_interval() -> Duration {
-    let millis = std::env::var("MUNINN_OBSERVER_POLL_MS")
-        .ok()
-        .or_else(|| std::env::var("MUNINN_OBSERVE_WINDOW_MS").ok())
-        .and_then(|value| value.parse::<u64>().ok())
-        .unwrap_or(1_000);
-    Duration::from_millis(millis)
-}
-
-fn decrement_open_writes(barrier: &Arc<StdMutex<EpochBarrierState>>) {
-    let mut barrier = barrier.lock().expect("observer epoch barrier poisoned");
-    if barrier.open_writes > 0 {
-        barrier.open_writes -= 1;
-    }
-    if barrier.open_writes == 0 {
-        barrier.blocked_since = None;
-        barrier.warned_stalled = false;
-    }
-}
-
-fn maybe_warn_stalled_writes(
-    observer: &str,
-    poll_interval: Duration,
-    barrier: &mut EpochBarrierState,
-) {
-    let Some(blocked_since) = barrier.blocked_since else {
+fn maybe_warn_stalled_writers(name: &str, window: &mut Window) {
+    let Some(blocked_since) = window.blocked_since else {
         return;
     };
-    if barrier.warned_stalled {
+    if window.warned_stalled {
         return;
     }
-    let threshold = poll_interval.saturating_mul(5);
+    let threshold = Duration::from_secs(5);
     if blocked_since.elapsed() >= threshold {
         eprintln!(
-            "[observer] {} open writes have blocked epoch sealing for {:?}",
-            observer,
+            "[observer] {} session writers have blocked window flush for {:?}",
+            name,
             blocked_since.elapsed()
         );
-        barrier.warned_stalled = true;
+        window.warned_stalled = true;
     }
 }
 
@@ -496,18 +543,14 @@ fn enqueue_turn(buffer: &mut Vec<SessionTurn>, turn: SessionTurn) {
     });
 }
 
-fn collect_pending(state: &ObserverState) -> Vec<SessionTurn> {
+#[cfg(test)]
+fn collect_pending(window: &Window, index_batches: &[PendingIndexBatch]) -> Vec<SessionTurn> {
     let mut turns_by_id = HashMap::new();
-    for turn in state
+    for turn in window
         .observing_buffer
         .iter()
-        .chain(state.buffer.iter())
-        .chain(
-            state
-                .index_batches
-                .iter()
-                .flat_map(|batch| batch.turns.iter()),
-        )
+        .chain(window.buffer.iter())
+        .chain(index_batches.iter().flat_map(|batch| batch.turns.iter()))
     {
         turns_by_id
             .entry(turn.turn_id)
@@ -640,7 +683,7 @@ pub(crate) async fn apply_gateway_updates(
 
     let now = Utc::now();
     let mut observe_turns_by_thread = HashMap::<String, HashMap<String, ObservingTurnInput>>::new();
-    let mut turn_parent_by_id = HashMap::<crate::format::memory::MemoryId, String>::new();
+    let mut turn_parent_by_id = HashMap::<MemoryId, String>::new();
     let mut touched_ids = HashSet::<String>::new();
 
     for update in updates {
@@ -856,7 +899,7 @@ async fn flush_threads(
     threads: &mut [ObservingThread],
     touched_ids: &HashSet<String>,
 ) -> Result<HashSet<String>> {
-    let observings = collect_touched_threads(threads, touched_ids)
+    let mut observings = collect_touched_threads(threads, touched_ids)
         .iter()
         .filter(|thread| !thread.snapshots.is_empty())
         .map(ObservingThread::to_row)
@@ -865,10 +908,8 @@ async fn flush_threads(
         .iter()
         .map(|observing| observing.observing_id.clone())
         .collect::<HashSet<_>>();
-    let inserted = observing_table(table_options)
-        .upsert_and_load_inserted(observings)
-        .await?;
-    let mut inserted_by_id = inserted
+    observing_table(table_options).upsert(&mut observings).await?;
+    let mut observings_by_id = observings
         .into_iter()
         .map(|observing| (observing.observing_id.clone(), observing))
         .collect::<HashMap<_, _>>();
@@ -876,21 +917,21 @@ async fn flush_threads(
         .iter_mut()
         .filter(|thread| persisted_ids.contains(&thread.observing_id))
     {
-        let Some(inserted) = inserted_by_id.remove(&thread.observing_id) else {
+        let Some(observing) = observings_by_id.remove(&thread.observing_id) else {
             return Err(lance::Error::invalid_input(format!(
-                "missing inserted observing row for {} after flush",
+                "missing persisted observing row for {} after flush",
                 thread.observing_id
             )));
         };
-        thread.snapshot_id = Some(inserted.snapshot_id.clone());
-        if thread.snapshot_ids.last() != Some(&inserted.snapshot_id) {
-            thread.snapshot_ids.push(inserted.snapshot_id.clone());
+        thread.snapshot_id = Some(observing.snapshot_id.clone());
+        if thread.snapshot_ids.last() != Some(&observing.snapshot_id) {
+            thread.snapshot_ids.push(observing.snapshot_id.clone());
         }
-        thread.references = inserted.references.clone();
-        thread.pending_parent_id = inserted.checkpoint.pending_parent_id.clone();
-        thread.indexed_snapshot_sequence = inserted.checkpoint.indexed_snapshot_sequence;
-        thread.observing_epoch = inserted.checkpoint.observing_epoch;
-        thread.updated_at = inserted.updated_at;
+        thread.references = observing.references.clone();
+        thread.pending_parent_id = observing.checkpoint.pending_parent_id.clone();
+        thread.indexed_snapshot_sequence = observing.checkpoint.indexed_snapshot_sequence;
+        thread.observing_epoch = observing.checkpoint.observing_epoch;
+        thread.updated_at = observing.updated_at;
     }
     apply_parent_refs(table_options, threads, touched_ids).await?;
 
@@ -1021,10 +1062,10 @@ async fn apply_parent_refs(
                 .skip(1)
                 .position(|reference| {
                     matches!(
-                        reference.parse::<crate::format::memory::MemoryId>(),
+                        reference.parse::<MemoryId>(),
                         Ok(memory_id)
                             if memory_id.memory_layer()
-                                == crate::format::memory::MemoryLayer::Session
+                                == MemoryLayer::Session
                     )
                 })
                 .map(|index| index + 1)
@@ -1039,14 +1080,13 @@ async fn apply_parent_refs(
     if ref_threads.is_empty() {
         return Ok(());
     }
+    let mut observings = ref_threads
+        .iter()
+        .cloned()
+        .map(|thread| thread.to_row())
+        .collect::<Result<Vec<_>>>()?;
     observing_table(table_options)
-        .upsert(
-            ref_threads
-                .iter()
-                .cloned()
-                .map(|thread| thread.to_row())
-                .collect::<Result<Vec<_>>>()?,
-        )
+        .upsert(&mut observings)
         .await?;
     let mut ref_threads_by_id = ref_threads
         .into_iter()
@@ -1093,8 +1133,9 @@ async fn catch_up_index(
             thread.set_indexed_snapshot_sequence(snapshot_sequence);
         }
         if thread.snapshot_id.is_some() {
+            let mut observings = vec![thread.to_row()?];
             observing_table(table_options)
-                .upsert(vec![thread.to_row()?])
+                .upsert(&mut observings)
                 .await?;
         }
     }

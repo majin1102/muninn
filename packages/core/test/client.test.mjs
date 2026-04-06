@@ -12,10 +12,11 @@ const {
   observer,
   sessions,
   shutdownCoreForTests,
+  validateSettings,
 } = core;
 
 async function makeDatasetUri() {
-  const dir = await mkdtemp(path.join(os.tmpdir(), 'muninn-core-test-'));
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'muninn-native-test-'));
   return {
     dir,
     homeDir: path.join(dir, 'muninn'),
@@ -41,6 +42,15 @@ async function writeMuninnConfig(configPath, { turnProvider, observerProvider } 
   if (Object.keys(llm).length > 0) {
     root.llm = llm;
   }
+  if (observerProvider) {
+    root.semanticIndex = {
+      embedding: {
+        provider: 'mock',
+        dimensions: 4,
+      },
+      defaultImportance: 0.7,
+    };
+  }
   await mkdir(path.dirname(configPath), { recursive: true });
   await writeFile(configPath, `${JSON.stringify(root, null, 2)}\n`, 'utf8');
 }
@@ -48,15 +58,10 @@ async function writeMuninnConfig(configPath, { turnProvider, observerProvider } 
 test.afterEach(async () => {
   await shutdownCoreForTests();
   delete process.env.MUNINN_HOME;
-  delete process.env.MUNINN_CORE_ALLOW_CARGO_FALLBACK;
-  delete process.env.MUNINN_OBSERVER_POLL_MS;
+  delete process.env.MUNINN_OBSERVE_WINDOW_MS;
 });
 
-test.beforeEach(() => {
-  process.env.MUNINN_CORE_ALLOW_CARGO_FALLBACK = '1';
-});
-
-test('addMessage and sessions.get roundtrip through the Rust bridge', async (t) => {
+test('addMessage and sessions.get roundtrip through the native binding', async (t) => {
   const { dir, homeDir } = await makeDatasetUri();
   t.after(async () => rm(dir, { recursive: true, force: true }));
 
@@ -80,7 +85,7 @@ test('addMessage and sessions.get roundtrip through the Rust bridge', async (t) 
   assert.equal(detail.summary, 'alpha summary');
 });
 
-test('addMessage without session_id reuses the agent default session through the Rust bridge', async (t) => {
+test('addMessage without session_id reuses the agent default session through the native binding', async (t) => {
   const { dir, homeDir } = await makeDatasetUri();
   t.after(async () => rm(dir, { recursive: true, force: true }));
 
@@ -148,7 +153,7 @@ test('sessions.list returns the recent window in chronological order, and memori
   assert.ok(timeline.some((memory) => memory.memoryId === second.turnId));
 });
 
-test('invalid memory ids reject through the bridge', async (t) => {
+test('invalid memory ids reject through the native binding', async (t) => {
   const { dir, homeDir } = await makeDatasetUri();
   t.after(async () => rm(dir, { recursive: true, force: true }));
 
@@ -165,7 +170,7 @@ test('invalid memory ids reject through the bridge', async (t) => {
   );
 });
 
-test('shutdownCoreForTests allows the daemon to restart cleanly', async (t) => {
+test('shutdownCoreForTests allows the native binding to restart cleanly', async (t) => {
   const { dir, homeDir } = await makeDatasetUri();
   t.after(async () => rm(dir, { recursive: true, force: true }));
 
@@ -193,7 +198,7 @@ test('shutdownCoreForTests allows the daemon to restart cleanly', async (t) => {
   assert.equal(detail.prompt, 'first prompt\n\nsecond prompt');
 });
 
-test('addMessage rejects empty message payloads through the bridge', async (t) => {
+test('addMessage rejects empty message payloads through the native binding', async (t) => {
   const { dir, homeDir } = await makeDatasetUri();
   t.after(async () => rm(dir, { recursive: true, force: true }));
 
@@ -208,12 +213,52 @@ test('addMessage rejects empty message payloads through the bridge', async (t) =
   );
 });
 
+test('validateSettings rejects semantic index dimension changes that mismatch existing data', async (t) => {
+  const { dir, homeDir, configPath } = await makeDatasetUri();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+
+  process.env.MUNINN_HOME = homeDir;
+  process.env.MUNINN_OBSERVE_WINDOW_MS = '10';
+  await writeMuninnConfig(configPath, { observerProvider: 'mock' });
+
+  await addMessage({
+    session_id: 'group-a',
+    agent: 'agent-a',
+    prompt: 'semantic prompt',
+    response: 'semantic response',
+    summary: 'semantic summary',
+  });
+  await new Promise((resolve) => setTimeout(resolve, 50));
+
+  await assert.rejects(
+    () => validateSettings(JSON.stringify({
+      observer: {
+        name: 'test-observer',
+        llm: 'test_observer_llm',
+        maxAttempts: 3,
+      },
+      llm: {
+        test_observer_llm: {
+          provider: 'mock',
+        },
+      },
+      semanticIndex: {
+        embedding: {
+          provider: 'mock',
+          dimensions: 8,
+        },
+        defaultImportance: 0.7,
+      },
+    }, null, 2)),
+    /semantic_index dimension mismatch/i,
+  );
+});
+
 test('observer.watermark reports pending turns until the observer flush completes', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(async () => rm(dir, { recursive: true, force: true }));
 
   process.env.MUNINN_HOME = homeDir;
-  process.env.MUNINN_OBSERVER_POLL_MS = '60000';
   await writeMuninnConfig(configPath, { observerProvider: 'mock' });
 
   const created = await addMessage({
@@ -223,17 +268,12 @@ test('observer.watermark reports pending turns until the observer flush complete
     response: 'observer pending response',
   });
 
-  const current = await observer.watermark();
-  assert.equal(current.resolved, false);
-  assert.deepEqual(current.pendingTurnIds, [created.turnId]);
-
-  process.env.MUNINN_OBSERVER_POLL_MS = '1';
-  await shutdownCoreForTests();
-
   let resolved = null;
   for (let attempt = 0; attempt < 50; attempt += 1) {
     resolved = await observer.watermark();
-    if (resolved.resolved) {
+    if (!resolved.resolved) {
+      assert.deepEqual(resolved.pendingTurnIds, [created.turnId]);
+    } else {
       break;
     }
     await new Promise((resolve) => setTimeout(resolve, 20));
@@ -282,7 +322,7 @@ test('addMessage persists response turns when the summarizer is not configured',
   assert.equal(detail.summary, null);
 });
 
-test('rendered memory bridge returns unified turn and observing reads', async (t) => {
+test('rendered memory binding returns unified turn and observing reads', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(async () => rm(dir, { recursive: true, force: true }));
 

@@ -15,8 +15,7 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 use crate::config::{WatchdogConfig, watchdog_config};
-use crate::format::memory::semantic_index::SemanticIndexRow;
-use crate::format::table::{
+use crate::format::{
     ObservingTable, SemanticIndexTable, SessionTable, TableOptions, TableStats,
 };
 
@@ -57,7 +56,7 @@ pub(crate) struct Watchdog {
 
 pub(crate) struct WatchdogRuntime {
     cancel: CancellationToken,
-    task: Mutex<Option<JoinHandle<()>>>,
+    _task: Mutex<Option<JoinHandle<()>>>,
 }
 
 impl Watchdog {
@@ -111,7 +110,7 @@ impl Watchdog {
         });
         Arc::new(WatchdogRuntime {
             cancel,
-            task: Mutex::new(Some(task)),
+            _task: Mutex::new(Some(task)),
         })
     }
 
@@ -255,19 +254,20 @@ impl Watchdog {
 }
 
 impl WatchdogRuntime {
+    #[cfg(test)]
     pub(crate) async fn shutdown(&self, wait: bool) {
         self.cancel.cancel();
         if !wait {
             return;
         }
-        if let Some(task) = self.task.lock().await.take() {
+        if let Some(task) = self._task.lock().await.take() {
             let _ = task.await;
         }
     }
 
     #[cfg(test)]
     async fn is_shutdown(&self) -> bool {
-        self.task.lock().await.is_none()
+        self._task.lock().await.is_none()
     }
 }
 
@@ -324,9 +324,7 @@ mod tests {
     use serde_json::json;
 
     use super::{ManagedDataset, SEMANTIC_VECTOR_INDEX_NAME, Watchdog};
-    use crate::format::memory::semantic_index::SemanticIndexRow;
-    use crate::format::table::SemanticIndexTable;
-    use crate::format::table::TableOptions;
+    use crate::format::{SemanticIndexRow, SemanticIndexTable, TableOptions};
     use crate::llm::config::llm_test_env_guard;
 
     fn test_table_options() -> TableOptions {

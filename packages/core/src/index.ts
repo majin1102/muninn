@@ -1,2 +1,6 @@
 export * from './client.js';
-export * from './rendered_memory.js';
+export {
+  fallbackRenderedMemoryTitle,
+  inferRenderedMemoryKind,
+  renderRenderedMemoryMarkdown,
+} from './memories/rendered.js';

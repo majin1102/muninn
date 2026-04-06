@@ -1,8 +1,6 @@
 use lance::{Error, Result};
 
-use crate::format::memory::session::SessionTurn;
-use crate::format::memory::{MemoryId, MemoryLayer};
-use crate::format::table::{SessionSelect, SessionTable, TableOptions};
+use crate::format::{MemoryId, MemoryLayer, SessionSelect, SessionTable, SessionTurn, TableOptions};
 use crate::memory::types::ListMode;
 use crate::session::SessionKey;
 
@@ -11,16 +9,6 @@ pub struct SessionListQuery {
     pub mode: ListMode,
     pub agent: Option<String>,
     pub session_id: Option<String>,
-}
-
-pub async fn get(
-    table_options: &TableOptions,
-    memory_id: &MemoryId,
-) -> Result<Option<SessionTurn>> {
-    ensure_session_memory_id(memory_id)?;
-    SessionTable::new(table_options.clone())
-        .get_turn(memory_id.memory_point())
-        .await
 }
 
 pub async fn list(
@@ -78,51 +66,6 @@ pub(crate) fn apply_list_mode(mut turns: Vec<SessionTurn>, mode: ListMode) -> Ve
             turns
         }
         ListMode::Page { offset, limit } => turns.into_iter().skip(offset).take(limit).collect(),
-    }
-}
-
-pub(crate) fn render_session_turn_detail(turn: &SessionTurn) -> Option<String> {
-    let mut lines = Vec::new();
-    if let Some(prompt) = turn
-        .prompt
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())
-    {
-        lines.push(format!("Prompt: {prompt}"));
-    }
-    if let Some(response) = turn
-        .response
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())
-    {
-        lines.push(format!("Response: {response}"));
-    }
-    if let Some(tool_calling) = turn
-        .tool_calling
-        .as_ref()
-        .filter(|entries| !entries.is_empty())
-    {
-        lines.push(format!("Tools: {}", tool_calling.join(", ")));
-    }
-    if let Some(artifacts) = turn
-        .artifacts
-        .as_ref()
-        .filter(|entries| !entries.is_empty())
-    {
-        let mut entries = artifacts.iter().collect::<Vec<_>>();
-        entries.sort_by(|left, right| left.0.cmp(right.0));
-        let rendered = entries
-            .into_iter()
-            .map(|(key, value)| format!("{key}: {value}"))
-            .collect::<Vec<_>>()
-            .join(", ");
-        lines.push(format!("Artifacts: {rendered}"));
-    }
-
-    if lines.is_empty() {
-        None
-    } else {
-        Some(lines.join("\n"))
     }
 }
 
