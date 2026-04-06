@@ -70,7 +70,7 @@ type NativeCoreBinding = {
 };
 
 type NativeModule = {
-  createCoreBinding(): NativeCoreBinding;
+  createCoreBinding(): MaybePromise<NativeCoreBinding>;
   describeSemanticIndexForStorage(storageTarget: StorageTarget | null): MaybePromise<TableDescription | null>;
 };
 
@@ -137,17 +137,30 @@ export interface CoreBinding {
 }
 
 let singleton: CoreBinding | null = null;
+let singletonPromise: Promise<CoreBinding> | null = null;
 
-export function getCoreBinding(): CoreBinding {
-  if (!singleton) {
-    const native = loadNativeModule();
-    singleton = wrapBinding(native.createCoreBinding());
+export async function getCoreBinding(): Promise<CoreBinding> {
+  if (singleton) {
+    return singleton;
   }
-  return singleton;
+  if (!singletonPromise) {
+    const native = loadNativeModule();
+    singletonPromise = resolveNativeResult(native.createCoreBinding())
+      .then((binding) => {
+        singleton = wrapBinding(binding);
+        return singleton;
+      })
+      .catch((error) => {
+        singletonPromise = null;
+        throw error;
+      });
+  }
+  return singletonPromise;
 }
 
 export async function shutdownCoreBindingForTests(): Promise<void> {
   singleton = null;
+  singletonPromise = null;
 }
 
 export async function describeSemanticIndexForStorage(

@@ -383,7 +383,7 @@ test('validateSettings rejects semantic index dimension changes when the table e
   process.env.MUNINN_HOME = homeDir;
   await writeMuninnConfig(configPath, { observerProvider: 'mock' });
 
-  const binding = getCoreBinding();
+  const binding = await getCoreBinding();
   assert.ok(typeof binding.sessionTable.describe === 'function');
   assert.ok(typeof binding.observingTable.describe === 'function');
   assert.ok(typeof binding.semanticIndexTable.describe === 'function');
@@ -507,6 +507,16 @@ test('validateSettings is not blocked by the current config storage when the pen
       defaultImportance: 0.7,
     },
   }, null, 2)));
+});
+
+test('getCoreBinding initializes the native binding only once under concurrent access', async (t) => {
+  const { dir, homeDir } = await makeDatasetUri();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+
+  process.env.MUNINN_HOME = homeDir;
+
+  const [first, second] = await Promise.all([getCoreBinding(), getCoreBinding()]);
+  assert.strictEqual(first, second);
 });
 
 test('observer.watermark reports pending turns until the observer flush completes', async (t) => {

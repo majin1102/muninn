@@ -1,5 +1,5 @@
-use std::future::Future;
 use std::collections::HashMap;
+use std::future::Future;
 use std::sync::Arc;
 
 use lance::Result as LanceResult;
@@ -10,10 +10,8 @@ use napi::{Error, Result as NapiResult};
 use napi_derive::napi;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tokio::runtime::Runtime;
 
 struct CoreState {
-    runtime: Runtime,
     muninn: Muninn,
 }
 
@@ -112,7 +110,7 @@ pub struct CoreBinding {
 #[napi]
 impl CoreBinding {
     #[napi(js_name = "sessionLoadOpenTurn")]
-    pub fn session_load_open_turn(
+    pub async fn session_load_open_turn(
         &self,
         params: Value,
     ) -> NapiResult<Value> {
@@ -122,17 +120,19 @@ impl CoreBinding {
             params.agent,
             params.observer,
         ))
+        .await
         .and_then(to_napi_value)
     }
 
     #[napi(js_name = "sessionGetTurn")]
-    pub fn session_get_turn(&self, turn_id: String) -> NapiResult<Value> {
+    pub async fn session_get_turn(&self, turn_id: String) -> NapiResult<Value> {
         self.call(self.inner.muninn.session_get_turn(&turn_id))
+            .await
             .and_then(to_napi_value)
     }
 
     #[napi(js_name = "sessionListTurns")]
-    pub fn session_list_turns(
+    pub async fn session_list_turns(
         &self,
         params: Value,
     ) -> NapiResult<Value> {
@@ -142,11 +142,12 @@ impl CoreBinding {
             params.agent,
             params.session_id,
         ))
+        .await
         .and_then(to_napi_value)
     }
 
     #[napi(js_name = "sessionTimelineTurns")]
-    pub fn session_timeline_turns(
+    pub async fn session_timeline_turns(
         &self,
         params: Value,
     ) -> NapiResult<Value> {
@@ -156,11 +157,12 @@ impl CoreBinding {
             params.before_limit,
             params.after_limit,
         ))
+        .await
         .and_then(to_napi_value)
     }
 
     #[napi(js_name = "sessionLoadTurnsAfterEpoch")]
-    pub fn session_load_turns_after_epoch(
+    pub async fn session_load_turns_after_epoch(
         &self,
         params: Value,
     ) -> NapiResult<Value> {
@@ -170,140 +172,148 @@ impl CoreBinding {
                 .muninn
                 .session_load_turns_after_epoch(&params.observer, params.committed_epoch),
         )
+        .await
         .and_then(to_napi_value)
     }
 
     #[napi(js_name = "sessionUpsert")]
-    pub fn session_upsert(
+    pub async fn session_upsert(
         &self,
         params: Value,
     ) -> NapiResult<Value> {
         let params = parse_params::<SessionUpsertParams>(params)?;
         self.call(self.inner.muninn.session_upsert(params.turns))
+            .await
             .and_then(to_napi_value)
     }
 
     #[napi(js_name = "describeSessionTable")]
-    pub fn describe_session_table(&self) -> NapiResult<Value> {
+    pub async fn describe_session_table(&self) -> NapiResult<Value> {
         self.call(self.inner.muninn.describe_session_table())
+            .await
             .and_then(to_napi_value)
     }
 
     #[napi(js_name = "observingGetSnapshot")]
-    pub fn observing_get_snapshot(
+    pub async fn observing_get_snapshot(
         &self,
         snapshot_id: String,
     ) -> NapiResult<Value> {
         self.call(self.inner.muninn.observing_get_snapshot(&snapshot_id))
+            .await
             .and_then(to_napi_value)
     }
 
     #[napi(js_name = "observingListSnapshots")]
-    pub fn observing_list_snapshots(
+    pub async fn observing_list_snapshots(
         &self,
         params: Value,
     ) -> NapiResult<Value> {
         let params = parse_params::<ObservingListSnapshotsParams>(params)?;
         self.call(self.inner.muninn.observing_list_snapshots(params.observer.as_deref()))
+            .await
             .and_then(to_napi_value)
     }
 
     #[napi(js_name = "observingThreadSnapshots")]
-    pub fn observing_thread_snapshots(
+    pub async fn observing_thread_snapshots(
         &self,
         observing_id: String,
     ) -> NapiResult<Value> {
         self.call(self.inner.muninn.observing_thread_snapshots(&observing_id))
+            .await
             .and_then(to_napi_value)
     }
 
     #[napi(js_name = "observingUpsert")]
-    pub fn observing_upsert(
+    pub async fn observing_upsert(
         &self,
         params: Value,
     ) -> NapiResult<Value> {
         let params = parse_params::<ObservingUpsertParams>(params)?;
         self.call(self.inner.muninn.observing_upsert(params.snapshots))
+            .await
             .and_then(to_napi_value)
     }
 
     #[napi(js_name = "describeObservingTable")]
-    pub fn describe_observing_table(&self) -> NapiResult<Value> {
+    pub async fn describe_observing_table(&self) -> NapiResult<Value> {
         self.call(self.inner.muninn.describe_observing_table())
+            .await
             .and_then(to_napi_value)
     }
 
     #[napi(js_name = "semanticNearest")]
-    pub fn semantic_nearest(
+    pub async fn semantic_nearest(
         &self,
         params: Value,
     ) -> NapiResult<Value> {
         let params = parse_params::<SemanticNearestParams>(params)?;
         self.call(self.inner.muninn.semantic_nearest(&params.vector, params.limit))
+            .await
             .and_then(to_napi_value)
     }
 
     #[napi(js_name = "semanticLoadByIds")]
-    pub fn semantic_load_by_ids(
+    pub async fn semantic_load_by_ids(
         &self,
         params: Value,
     ) -> NapiResult<Value> {
         let params = parse_params::<SemanticLoadByIdsParams>(params)?;
         self.call(self.inner.muninn.semantic_load_by_ids(&params.ids))
+            .await
             .and_then(to_napi_value)
     }
 
     #[napi(js_name = "semanticUpsert")]
-    pub fn semantic_upsert(
+    pub async fn semantic_upsert(
         &self,
         params: Value,
     ) -> NapiResult<()> {
         let params = parse_params::<SemanticUpsertParams>(params)?;
-        self.call(self.inner.muninn.semantic_upsert(params.rows))
+        self.call(self.inner.muninn.semantic_upsert(params.rows)).await
     }
 
     #[napi(js_name = "semanticDelete")]
-    pub fn semantic_delete(
+    pub async fn semantic_delete(
         &self,
         params: Value,
     ) -> NapiResult<Value> {
         let params = parse_params::<SemanticDeleteParams>(params)?;
         self.call(self.inner.muninn.semantic_delete(params.ids))
+            .await
             .and_then(|deleted| to_napi_value(DeletedCount { deleted }))
     }
 
     #[napi(js_name = "describeSemanticIndexTable")]
-    pub fn describe_semantic_index_table(&self) -> NapiResult<Value> {
+    pub async fn describe_semantic_index_table(&self) -> NapiResult<Value> {
         self.call(self.inner.muninn.describe_semantic_index_table())
+            .await
             .and_then(to_napi_value)
     }
 
 }
 
 impl CoreBinding {
-    fn call<T, F>(&self, future: F) -> NapiResult<T>
+    async fn call<T, F>(&self, future: F) -> NapiResult<T>
     where
         F: Future<Output = LanceResult<T>>,
     {
-        self.inner.runtime.block_on(future).map_err(to_napi_error)
+        future.await.map_err(to_napi_error)
     }
 }
 
 #[napi(js_name = "createCoreBinding")]
-pub fn create_core_binding() -> NapiResult<CoreBinding> {
+pub async fn create_core_binding() -> NapiResult<CoreBinding> {
     let table_options = TableOptions::load().map_err(to_napi_error)?;
-    let runtime = Runtime::new()
-        .map_err(|error| Error::from_reason(error.to_string()))?;
-    let muninn = runtime
-        .block_on(Muninn::new(table_options))
-        .map_err(to_napi_error)?;
+    let muninn = Muninn::new(table_options).await.map_err(to_napi_error)?;
     Ok(CoreBinding {
-        inner: Arc::new(CoreState { runtime, muninn }),
+        inner: Arc::new(CoreState { muninn }),
     })
 }
 
 #[napi(js_name = "describeSemanticIndexForStorage")]
-pub fn describe_semantic_index_for_storage(params: Value) -> NapiResult<Value> {
+pub async fn describe_semantic_index_for_storage(params: Value) -> NapiResult<Value> {
     let table_options = parse_params::<Option<StorageTargetParams>>(params)?
         .map(|params| TableOptions::from_uri(params.uri, params.storage_options))
         .transpose()
@@ -313,10 +323,9 @@ pub fn describe_semantic_index_for_storage(params: Value) -> NapiResult<Value> {
         None => TableOptions::local_read_only(data_root().map_err(to_napi_error)?)
             .map_err(to_napi_error)?,
     };
-    let runtime = Runtime::new()
-        .map_err(|error| Error::from_reason(error.to_string()))?;
-    runtime
-        .block_on(SemanticIndexTable::new(table_options).describe())
+    SemanticIndexTable::new(table_options)
+        .describe()
+        .await
         .map_err(to_napi_error)
         .and_then(to_napi_value)
 }

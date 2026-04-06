@@ -81,16 +81,28 @@ export interface SessionMessageInput {
 }
 
 let singletonMuninn: Muninn | null = null;
+let singletonMuninnPromise: Promise<Muninn> | null = null;
 
-function getMuninn(): Muninn {
-  if (!singletonMuninn) {
-    singletonMuninn = new Muninn(getCoreBinding());
+async function getMuninn(): Promise<Muninn> {
+  if (singletonMuninn) {
+    return singletonMuninn;
   }
-  return singletonMuninn;
+  if (!singletonMuninnPromise) {
+    singletonMuninnPromise = getCoreBinding()
+      .then((binding) => {
+        singletonMuninn = new Muninn(binding);
+        return singletonMuninn;
+      })
+      .catch((error) => {
+        singletonMuninnPromise = null;
+        throw error;
+      });
+  }
+  return singletonMuninnPromise;
 }
 
 export async function addMessage(session: SessionMessageInput): Promise<SessionTurn> {
-  return getMuninn().accept(session);
+  return (await getMuninn()).accept(session);
 }
 
 export async function validateSettings(content: string): Promise<void> {
@@ -102,7 +114,7 @@ export async function validateSettings(content: string): Promise<void> {
 
 export const sessions = {
   async get(memoryId: string): Promise<SessionTurn | null> {
-    return getMuninn().memories.getSession(memoryId);
+    return (await getMuninn()).memories.getSession(memoryId);
   },
 
   async list(params: {
@@ -110,32 +122,32 @@ export const sessions = {
     agent?: string;
     sessionId?: string;
   }): Promise<SessionTurn[]> {
-    return getMuninn().memories.listSessions(params);
+    return (await getMuninn()).memories.listSessions(params);
   },
 };
 
 export const observings = {
   async get(memoryId: string): Promise<ObservingSnapshot | null> {
-    return getMuninn().memories.getObserving(memoryId);
+    return (await getMuninn()).memories.getObserving(memoryId);
   },
 
   async list(params: {
     mode: ListModeInput;
     observer?: string;
   }): Promise<ObservingSnapshot[]> {
-    return getMuninn().memories.listObservings(params);
+    return (await getMuninn()).memories.listObservings(params);
   },
 };
 
 export const memories = {
   async get(memoryId: string): Promise<RenderedMemory | null> {
-    return getMuninn().memories.get(memoryId);
+    return (await getMuninn()).memories.get(memoryId);
   },
 
   async list(params: {
     mode: ListModeInput;
   }): Promise<RenderedMemory[]> {
-    return getMuninn().memories.list(params);
+    return (await getMuninn()).memories.list(params);
   },
 
   async timeline(params: {
@@ -143,25 +155,27 @@ export const memories = {
     beforeLimit?: number;
     afterLimit?: number;
   }): Promise<RenderedMemory[]> {
-    return getMuninn().memories.timeline(params);
+    return (await getMuninn()).memories.timeline(params);
   },
 
   async recall(query: string, limit?: number): Promise<RecallHit[]> {
-    return getMuninn().recallMemories(query, limit);
+    return (await getMuninn()).recallMemories(query, limit);
   },
 };
 
 export const observer = {
   async watermark(): Promise<ObserverWatermark> {
-    return getMuninn().observerWatermark();
+    return (await getMuninn()).observerWatermark();
   },
 };
 
 export async function shutdownCoreForTests(): Promise<void> {
-  if (singletonMuninn) {
-    await singletonMuninn.shutdown();
+  const muninn = singletonMuninn ?? (singletonMuninnPromise ? await singletonMuninnPromise : null);
+  if (muninn) {
+    await muninn.shutdown();
   }
   singletonMuninn = null;
+  singletonMuninnPromise = null;
   await shutdownCoreBindingForTests();
 }
 
