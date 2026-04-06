@@ -88,8 +88,8 @@ export function restoreIndexBatches(
   return [...observingIdsByEpoch.entries()]
     .sort(([left], [right]) => left - right)
     .flatMap(([epoch, ids]) => {
-      const turns = turnsByEpoch.get(epoch);
-      return turns && ids.size > 0 ? [{ turns, observingIds: [...ids] }] : [];
+      const turns = turnsByEpoch.get(epoch) ?? [];
+      return ids.size > 0 ? [{ turns, observingIds: [...ids] }] : [];
     });
 }
 

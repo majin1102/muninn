@@ -77,7 +77,7 @@ export class Observer {
       .sort(compareTurns)
       .map((turn) => turn.turnId);
     return {
-      resolved: pendingTurnIds.length === 0,
+      resolved: pendingTurnIds.length === 0 && this.indexBatches.length === 0,
       pendingTurnIds,
       observingEpoch: this.observingEpoch,
       committedEpoch: this.committedEpoch,
