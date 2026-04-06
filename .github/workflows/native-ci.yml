@@ -43,7 +43,7 @@ jobs:
         run: pnpm --filter @muninn/core build
 
       - name: Test @muninn/core
-        run: node --test packages/core/test/**/*.mjs
+        run: node --test packages/core/test/*.mjs
 
       - name: Test sidecar
         run: pnpm --filter @muninn/sidecar test
