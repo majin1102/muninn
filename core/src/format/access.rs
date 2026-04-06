@@ -3,6 +3,7 @@ use std::path::Path as FsPath;
 use std::sync::Arc;
 
 use arrow_array::RecordBatchReader;
+use serde::{Deserialize, Serialize};
 use lance::dataset::builder::DatasetBuilder;
 use lance::dataset::{ROW_ID, WriteParams};
 use lance::io::{ObjectStoreParams, StorageOptionsAccessor};
@@ -31,6 +32,18 @@ pub struct TableStats {
     pub version: u64,
     pub fragment_count: usize,
     pub row_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TableDescription {
+    /// Table facts that are directly available from the opened dataset schema.
+    pub metadata: HashMap<String, String>,
+    /// Field-level metadata surfaced without promising full schema validation.
+    pub field_metadata: HashMap<String, HashMap<String, String>>,
+    /// Extra dimensions derived by tables that explicitly expose them.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dimensions: Option<HashMap<String, usize>>,
 }
 
 impl TableOptions {
@@ -164,6 +177,23 @@ impl TableAccess {
             fragment_count: dataset.get_fragments().len(),
             row_count: dataset.count_rows(None).await?,
         }))
+    }
+}
+
+pub(crate) fn describe_dataset(dataset: &LanceDataset) -> TableDescription {
+    let schema = dataset.schema();
+    let field_metadata = schema
+        .fields
+        .iter()
+        .filter_map(|field| {
+            let metadata = field.metadata.clone();
+            (!metadata.is_empty()).then(|| (field.name.clone(), metadata))
+        })
+        .collect();
+    TableDescription {
+        metadata: schema.metadata.clone(),
+        field_metadata,
+        dimensions: None,
     }
 }
 

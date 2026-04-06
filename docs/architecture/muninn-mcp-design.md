@@ -31,7 +31,7 @@ Rust storage core in `core/` (typed session / observing / semantic table operati
   - 只做参数校验、sidecar 调用与文本返回
 - Sidecar
   - 提供 HTTP 读写接口
-  - 将 `RenderedMemoryRecord` 渲染为 `MemoryHit[]`
+  - 将 `RenderedMemory` 渲染为 `MemoryHit[]`
 - `@muninn/core`
   - 作为 TS 业务编排层连接 sidecar 和 Rust native binding
   - 持有 session / observer / memories / llm 的主逻辑
@@ -54,9 +54,9 @@ export interface MemoryHit {
 
 - `content` 为 Markdown
 - MCP 直接拼接 `MemoryHit.content`
-- sidecar 是当前的 `RenderedMemoryRecord -> MemoryHit` 渲染边界
+- sidecar 是当前的 `RenderedMemory -> MemoryHit` 渲染边界
 
-`@muninn/core` 当前对 sidecar 暴露的是 `RenderedMemoryRecord` 等 TS contract，但 MCP 并不直接消费它；MCP 仍通过 sidecar 的 `MemoryHit[]` 获得最终文本。
+`@muninn/core` 当前对 sidecar 暴露的是 `RenderedMemory` 等 TS contract，但 MCP 并不直接消费它；MCP 仍通过 sidecar 的 `MemoryHit[]` 获得最终文本。
 
 ## 3. Memory Navigation
 

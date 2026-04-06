@@ -35,7 +35,7 @@ function hasMessageContent(session: SessionMessageInput): boolean {
     || hasTextContent(session.summary)
     || hasTextContent(session.prompt)
     || hasTextContent(session.response)
-    || (session.tool_calling !== undefined && session.tool_calling.length > 0)
+    || (session.toolCalling !== undefined && session.toolCalling.length > 0)
     || (session.artifacts !== undefined && Object.keys(session.artifacts).length > 0);
 }
 
@@ -69,8 +69,8 @@ function validateSession(session: SessionMessageInput | undefined): string | nul
     return 'session.agent is required';
   }
 
-  if (session.session_id !== undefined && typeof session.session_id !== 'string') {
-    return 'session.session_id must be a string';
+  if (session.sessionId !== undefined && typeof session.sessionId !== 'string') {
+    return 'session.sessionId must be a string';
   }
 
   if (session.title !== undefined && typeof session.title !== 'string') {
@@ -89,12 +89,12 @@ function validateSession(session: SessionMessageInput | undefined): string | nul
     return 'session.response must be a string';
   }
 
-  if (session.tool_calling !== undefined && !Array.isArray(session.tool_calling)) {
-    return 'session.tool_calling must be an array of strings';
+  if (session.toolCalling !== undefined && !Array.isArray(session.toolCalling)) {
+    return 'session.toolCalling must be an array of strings';
   }
 
-  if (session.tool_calling && !session.tool_calling.every((entry: string) => typeof entry === 'string')) {
-    return 'session.tool_calling must be an array of strings';
+  if (session.toolCalling && !session.toolCalling.every((entry: string) => typeof entry === 'string')) {
+    return 'session.toolCalling must be an array of strings';
   }
 
   if (session.artifacts !== undefined && !isStringRecord(session.artifacts)) {

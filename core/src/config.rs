@@ -1,5 +1,4 @@
 use std::fs;
-#[cfg(test)]
 use std::path::PathBuf;
 
 use crate::llm::config::{EmbeddingConfig, MuninnConfig, SemanticIndexFileConfig};
@@ -89,7 +88,6 @@ pub fn watchdog_config() -> Result<WatchdogConfig> {
     })
 }
 
-#[cfg(test)]
 pub fn data_root() -> Result<PathBuf> {
     Ok(crate::llm::config::muninn_home())
 }

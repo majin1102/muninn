@@ -24,7 +24,7 @@
 
 **已确认方案：**（见 `../workstreams/progress-openclaw-integration.md`）
 - ✅ Hook 映射已定：`before_model_resolve` → prompt，`after_tool_call` → artifacts，`agent_end` → response
-- ✅ Session ID 映射：`muninn.session.session_id = openclaw.sessionKey`
+- ✅ Session ID 映射：`muninn.session.sessionId = openclaw.sessionKey`
 - ✅ Artifact 采集策略已确认：write/edit 直接读，apply_patch/exec 按需回读
 
 **需要做的：**

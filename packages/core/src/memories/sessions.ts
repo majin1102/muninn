@@ -1,38 +1,38 @@
 import type { CoreBinding } from '../native.js';
-import type { ListModeInput, SessionTurnRecord } from '../client.js';
-import { fromWireTurn, toPublicTurn, type SessionTurnRow } from '../session/types.js';
+import type { ListModeInput, SessionTurn } from '../client.js';
+import { readSessionTurn, toSessionTurn } from '../session/types.js';
 import { assertMemoryIdLayer } from './types.js';
 
 export async function getSessionTurn(
   client: CoreBinding,
   memoryId: string,
-): Promise<SessionTurnRecord | null> {
+): Promise<SessionTurn | null> {
   assertMemoryIdLayer(memoryId, 'session');
-  const turn = await client.sessionGetTurn(memoryId);
-  return turn ? toPublicTurn(fromWireTurn(turn)) : null;
+  const turn = await client.sessionTable.getTurn(memoryId);
+  return turn ? toSessionTurn(readSessionTurn(turn)) : null;
 }
 
 export async function listSessionTurns(
   client: CoreBinding,
   params: { mode: ListModeInput; agent?: string; sessionId?: string },
-): Promise<SessionTurnRecord[]> {
-  const turns = await client.sessionListTurns({
+): Promise<SessionTurn[]> {
+  const turns = await client.sessionTable.listTurns({
     mode: params.mode,
     agent: params.agent,
     sessionId: params.sessionId,
   });
-  return turns.map((turn) => toPublicTurn(fromWireTurn(turn)));
+  return turns.map((turn) => toSessionTurn(readSessionTurn(turn)));
 }
 
 export async function timelineSessionTurns(
   client: CoreBinding,
   params: { memoryId: string; beforeLimit?: number; afterLimit?: number },
-): Promise<SessionTurnRow[]> {
+): Promise<SessionTurn[]> {
   assertMemoryIdLayer(params.memoryId, 'session');
-  const turns = await client.sessionTimelineTurns({
+  const turns = await client.sessionTable.timelineTurns({
     memoryId: params.memoryId,
     beforeLimit: params.beforeLimit,
     afterLimit: params.afterLimit,
   });
-  return turns.map(fromWireTurn);
+  return turns.map(readSessionTurn);
 }

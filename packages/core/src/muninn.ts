@@ -1,9 +1,9 @@
 import type { CoreBinding } from './native.js';
-import type { ObserverWatermarkRecord, RecallHitRecord, SessionMessageInput, SessionTurnRecord } from './client.js';
+import type { ObserverWatermark, RecallHit, SessionMessageInput, SessionTurn } from './client.js';
 import { Memories } from './memories/memories.js';
 import { Observer } from './observer/observer.js';
 import { SessionRegistry } from './session/registry.js';
-import { toPublicTurn } from './session/types.js';
+import { toSessionTurn } from './session/types.js';
 
 export class Muninn {
   readonly memories: Memories;
@@ -14,25 +14,25 @@ export class Muninn {
     this.memories = new Memories(client);
   }
 
-  async accept(content: SessionMessageInput): Promise<SessionTurnRecord> {
+  async accept(content: SessionMessageInput): Promise<SessionTurn> {
     const observer = await this.ensureObserver();
     const registry = this.ensureSessionRegistry(observer.name);
     const window = await observer.window();
     try {
-      const session = await registry.load(content.session_id, content.agent);
+      const session = await registry.load(content.sessionId, content.agent);
       const turn = await session.accept(content, window);
       await window.include(turn);
-      return toPublicTurn(turn);
+      return toSessionTurn(turn);
     } finally {
       window.complete();
     }
   }
 
-  async observerWatermark(): Promise<ObserverWatermarkRecord> {
+  async observerWatermark(): Promise<ObserverWatermark> {
     return (await this.ensureObserver()).watermark();
   }
 
-  async recallMemories(query: string, limit?: number): Promise<RecallHitRecord[]> {
+  async recallMemories(query: string, limit?: number): Promise<RecallHit[]> {
     await (await this.ensureObserver()).flushPending();
     return this.memories.recall(query, limit);
   }

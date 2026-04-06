@@ -17,8 +17,8 @@
 - `tool_result_persist` 已理解其语义，但当前阶段先不纳入 MVP 主链路。
 - OpenClaw 的稳定逻辑会话锚点应使用 `sessionKey`，不是物理 transcript `sessionId`。
 - 对 Muninn 而言，当前可采用：
-  - `muninn.session.session_id = openclaw.sessionKey`
-- 这个 `session.session_id` 语义上是逻辑会话归属，不是 OpenClaw 当前 transcript 文件 id。
+  - `muninn.session.sessionId = openclaw.sessionKey`
+- 这个 `session.sessionId` 语义上是逻辑会话归属，不是 OpenClaw 当前 transcript 文件 id。
 - 在上游 `openclaw` 里，`before_tool_call` / `after_tool_call` 的上下文已经会透传：
   - `agentId`
   - `sessionKey`
@@ -45,7 +45,7 @@
   - OpenClaw MVP 不写 `extra`
   - OpenClaw MVP 不使用 `details`
   - `summary` 属于 Muninn 的派生字段，不是 OpenClaw hook 的输入责任
-  - 缺少 `summary` 不应阻止 `prompt` / `tool_calling` / `artifacts` / `response` 的原始写入
+  - 缺少 `summary` 不应阻止 `prompt` / `toolCalling` / `artifacts` / `response` 的原始写入
 - 因此，对 Muninn 来说：
   - `after_tool_call` 是 artifact 识别入口
   - 文件正文不应只依赖 `after_tool_call.result`
@@ -57,7 +57,7 @@
 - 已梳理 `sessionKey` 与 `sessionId` 的语义边界：
   - `sessionKey` = 稳定逻辑会话桶
   - `sessionId` = 当前物理 transcript 实例
-- 已对照 `../claude-mem`，确认 Claude Code 宿主提供的是稳定 `session_id`，而 OpenClaw 当前最接近这个角色的是 `sessionKey`。
+- 已对照 `../claude-mem`，确认 Claude Code 宿主提供的是稳定 `sessionId`，而 OpenClaw 当前最接近这个角色的是 `sessionKey`。
 - 已确认 `write` / `edit` / `read` 等工具参数会先经规范化处理：
   - `file_path -> path`
   - `old_string -> oldText`
@@ -72,14 +72,14 @@
 
 - `before_model_resolve`
   - 写一条 `session/messages`
-  - `session.session_id = sessionKey`
+  - `session.sessionId = sessionKey`
   - `session.agent = agentId`
   - `before_model_resolve.prompt` 进入 `prompt`
 - `after_tool_call`
   - 每次工具调用写一条 `session/messages`
-  - `session.session_id = sessionKey`
+  - `session.sessionId = sessionKey`
   - `session.agent = agentId`
-  - 完整工具指令字符串进入 `tool_calling`
+  - 完整工具指令字符串进入 `toolCalling`
   - 如能明确识别目标路径，则回读完整文件正文并写入 `artifacts[path]`
   - `write` / `edit` 的目标路径可直接确定
   - `apply_patch` 在能提取受影响路径时写对应 artifact
@@ -88,7 +88,7 @@
   - OpenClaw MVP 不写 `extra`
 - `agent_end`
   - 写一条 `session/messages`
-  - `session.session_id = sessionKey`
+  - `session.sessionId = sessionKey`
   - `session.agent = agentId`
   - 最终 agent 输出进入 `response`
   - OpenClaw MVP 不写 `extra`

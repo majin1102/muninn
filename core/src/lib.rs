@@ -10,3 +10,4 @@ mod watchdog;
 
 pub use format::TableOptions;
 pub use format::{MemoryId, MemoryLayer};
+pub use config::data_root;

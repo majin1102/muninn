@@ -48,11 +48,11 @@ export interface GetDetailRequest {
 }
 
 export interface SessionMessageInput {
-  session_id?: string;
+  sessionId?: string;
   agent: string;
   title?: string;
   summary?: string;
-  tool_calling?: string[];
+  toolCalling?: string[];
   // Tool outputs produced during this session memory row.
   artifacts?: Record<string, string>;
   prompt?: string;

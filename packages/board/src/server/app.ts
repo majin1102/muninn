@@ -22,7 +22,6 @@ import type {
   TurnPreview,
 } from '@muninn/types';
 import { renderRenderedMemoryDocument } from './render.js';
-import { validateSettingsJson } from './settings.js';
 
 const AGENT_DEFAULT_SESSION_PREFIX = '__agent_default__:';
 const OBSERVER_DEFAULT_SESSION_PREFIX = '__observer_default__:';
@@ -127,11 +126,11 @@ function normalizeText(value: string | undefined | null): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
-function resolveSessionNode(turn: Pick<BoardSessionTurn, 'session_id' | 'agent' | 'observer'>): {
+function resolveSessionNode(turn: Pick<BoardSessionTurn, 'sessionId' | 'agent' | 'observer'>): {
   sessionKey: string;
   displaySessionId: string;
 } {
-  const sessionId = normalizeText(turn.session_id);
+  const sessionId = normalizeText(turn.sessionId);
   if (sessionId) {
     return {
       sessionKey: sessionId,
@@ -495,12 +494,6 @@ boardApp.put('/api/v1/ui/settings/config', async (c) => {
   }
 
   try {
-    validateSettingsJson(body.content);
-  } catch (error) {
-    return c.json(errorResponse('invalidRequest', error instanceof Error ? error.message : String(error)), 400);
-  }
-
-  try {
     await validateSettings(body.content);
   } catch (error) {
     return c.json(
@@ -515,6 +508,9 @@ boardApp.put('/api/v1/ui/settings/config', async (c) => {
   } catch {
     return c.json(errorResponse('internalError', 'failed to write muninn.json'), 500);
   }
+
+  // Saving muninn.json updates the persisted config only. The current core/native
+  // runtime stays alive until the process restarts, so changes do not hot-apply.
 
   const response: SettingsConfigResponse = {
     pathLabel: configPath,

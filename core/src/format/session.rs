@@ -14,7 +14,8 @@ use object_store::path::Path;
 use serde::{Deserialize, Serialize};
 
 use super::access::{
-    LanceDataset, TableAccess, TableOptions, TableStats, delete_by_row_ids,
+    LanceDataset, TableAccess, TableDescription, TableOptions, TableStats, delete_by_row_ids,
+    describe_dataset,
     escape_predicate_string,
 };
 use super::codec::{
@@ -197,6 +198,15 @@ impl SessionTable {
 
     pub(crate) async fn maintenance_stats(&self) -> Result<Option<TableStats>> {
         self.access.maintenance_stats().await
+    }
+
+    pub(crate) async fn describe(&self) -> Result<Option<TableDescription>> {
+        let Some(dataset) = self.access.try_open().await? else {
+            return Ok(None);
+        };
+        // describe() only reports facts from an opened table; it does not promise
+        // full turn-schema validation beyond what opening the dataset already enforces.
+        Ok(Some(describe_dataset(&dataset)))
     }
 
     pub(crate) async fn select(&self, selector: SessionSelect) -> Result<Vec<SessionTurn>> {

@@ -1,8 +1,7 @@
 import type { CoreBinding } from '../native.js';
-import type { SessionTurnRecord } from '../client.js';
 import { Session } from './session.js';
 import { sessionKey } from './key.js';
-import { fromWireTurn } from './types.js';
+import { readSessionTurn } from './types.js';
 
 const SESSION_TTL_MS = 2 * 60 * 60 * 1000;
 
@@ -23,7 +22,7 @@ export class SessionRegistry {
       return existing;
     }
 
-    const openTurn = await this.client.sessionLoadOpenTurn({
+    const openTurn = await this.client.sessionTable.loadOpenTurn({
       sessionId,
       agent,
       observer: this.observerName,
@@ -32,7 +31,7 @@ export class SessionRegistry {
       sessionId,
       agent,
       observer: this.observerName,
-      openTurn: openTurn ? fromWireTurn(openTurn) : undefined,
+      openTurn: openTurn ? readSessionTurn(openTurn) : undefined,
     });
     this.sessions.set(key, session);
     return session;

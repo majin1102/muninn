@@ -184,11 +184,11 @@ type ObservedMemory = {
 
 ```ts
 export interface SessionMessageInput {
-  session_id?: string;
+  sessionId?: string;
   agent: string;
   title?: string;
   summary?: string;
-  tool_calling?: string[];
+  toolCalling?: string[];
   artifacts?: Record<string, string>;
   prompt?: string;
   response?: string;

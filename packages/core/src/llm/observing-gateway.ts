@@ -1,3 +1,4 @@
+import type { SessionTurn } from '../client.js';
 import { getObserverLlmConfig } from '../config.js';
 import type {
   GatewayAction,
@@ -10,7 +11,6 @@ import type {
   ObservingContentUpdate,
   ObservingThreadGatewayInput,
 } from '../observer/types.js';
-import type { SessionTurnRow } from '../session/types.js';
 import { generateText } from './provider.js';
 import { loadPromptTemplate, renderPromptTemplate } from './prompt-loader.js';
 
@@ -22,7 +22,7 @@ const MAX_MEMORY_CHARS = 220;
 
 export async function routeObservingThreads(
   observingThreads: ObservingThreadGatewayInput[],
-  pendingTurns: SessionTurnRow[],
+  pendingTurns: SessionTurn[],
 ): Promise<GatewayResult> {
   const config = getObserverLlmConfig();
   if (!config) {

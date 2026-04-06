@@ -1,20 +1,20 @@
 import type { CoreBinding } from '../native.js';
-import type { ListModeInput, ObservingRecord } from '../client.js';
+import type { ListModeInput, ObservingSnapshot } from '../client.js';
 import { assertMemoryIdLayer } from './types.js';
 
 export async function getObservingSnapshot(
   client: CoreBinding,
   memoryId: string,
-): Promise<ObservingRecord | null> {
+): Promise<ObservingSnapshot | null> {
   assertMemoryIdLayer(memoryId, 'observing');
-  return client.observingGetSnapshot(memoryId);
+  return client.observingTable.getSnapshot(memoryId);
 }
 
 export async function listObservingSnapshots(
   client: CoreBinding,
   params: { mode: ListModeInput; observer?: string },
-): Promise<ObservingRecord[]> {
-  const rows = await client.observingListSnapshots({
+): Promise<ObservingSnapshot[]> {
+  const rows = await client.observingTable.listSnapshots({
     observer: params.observer,
   });
   return applyObservingListMode(rows, params.mode);
@@ -23,13 +23,13 @@ export async function listObservingSnapshots(
 export async function timelineObservingSnapshots(
   client: CoreBinding,
   params: { memoryId: string; beforeLimit?: number; afterLimit?: number },
-): Promise<ObservingRecord[]> {
+): Promise<ObservingSnapshot[]> {
   assertMemoryIdLayer(params.memoryId, 'observing');
   const anchor = await getObservingSnapshot(client, params.memoryId);
   if (!anchor) {
     return [];
   }
-  const snapshots = await client.observingThreadSnapshots(anchor.observingId);
+  const snapshots = await client.observingTable.threadSnapshots(anchor.observingId);
   snapshots.sort((left, right) => (
     left.snapshotSequence - right.snapshotSequence
     || left.createdAt.localeCompare(right.createdAt)
@@ -45,8 +45,8 @@ export async function timelineObservingSnapshots(
   return snapshots.slice(start, end);
 }
 
-function applyObservingListMode(rows: ObservingRecord[], mode: ListModeInput): ObservingRecord[] {
-  const latestByObservingId = new Map<string, ObservingRecord>();
+function applyObservingListMode(rows: ObservingSnapshot[], mode: ListModeInput): ObservingSnapshot[] {
+  const latestByObservingId = new Map<string, ObservingSnapshot>();
   for (const row of rows) {
     const current = latestByObservingId.get(row.observingId);
     if (!current

@@ -1,4 +1,4 @@
-import type { SessionTurnRow } from '../session/types.js';
+import type { SessionTurn } from '../client.js';
 
 export type MemoryCategory = 'Preference' | 'Fact' | 'Decision' | 'Entity' | 'Concept' | 'Other';
 
@@ -37,7 +37,7 @@ export type ObservingThread = {
   updatedAt: string;
 };
 
-export type ObservingSnapshotRow = {
+export type ObservingSnapshot = {
   snapshotId: string;
   observingId: string;
   snapshotSequence: number;
@@ -56,7 +56,7 @@ export type ObservingSnapshotRow = {
 };
 
 export type IndexBatch = {
-  turns: SessionTurnRow[];
+  turns: SessionTurn[];
   observingIds: string[];
 };
 

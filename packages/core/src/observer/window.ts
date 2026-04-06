@@ -1,4 +1,4 @@
-import type { SessionTurnRow } from '../session/types.js';
+import type { SessionTurn } from '../client.js';
 import type { Observer } from './observer.js';
 
 export class Window {
@@ -9,7 +9,7 @@ export class Window {
     readonly epoch: number,
   ) {}
 
-  async include(turn: SessionTurnRow): Promise<void> {
+  async include(turn: SessionTurn): Promise<void> {
     await this.observer.include(turn);
   }
 

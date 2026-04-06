@@ -1,12 +1,12 @@
 import type { CoreBinding } from '../native.js';
-import type { ObserverWatermarkRecord } from '../client.js';
+import type { ObserverWatermark, SessionTurn } from '../client.js';
 import { getEffectiveObserverName } from '../config.js';
-import { cloneTurn, fromWireTurn, toWireTurn, type SessionTurnRow } from '../session/types.js';
+import { cloneTurn, readSessionTurn, serializeSessionTurn } from '../session/types.js';
 import { ObserverTask } from './task.js';
 import { loadThreads } from './thread.js';
 import { flushObserverWindow, restoreIndexBatches, retryIndexBatches } from './update.js';
 import { Window } from './window.js';
-import type { IndexBatch, ObservingSnapshotRow, ObservingThread } from './types.js';
+import type { IndexBatch, ObservingThread } from './types.js';
 
 export class Observer {
   name = getEffectiveObserverName();
@@ -14,8 +14,8 @@ export class Observer {
   private observingEpoch?: number;
   private nextEpoch = 0;
   private sessionWriters = 0;
-  private buffer: SessionTurnRow[] = [];
-  private observingBuffer: SessionTurnRow[] = [];
+  private buffer: SessionTurn[] = [];
+  private observingBuffer: SessionTurn[] = [];
   private threads: ObservingThread[] = [];
   private indexBatches: IndexBatch[] = [];
   private flushing = false;
@@ -44,7 +44,7 @@ export class Observer {
     return new Window(this, this.nextEpoch);
   }
 
-  async include(turn: SessionTurnRow): Promise<void> {
+  async include(turn: SessionTurn): Promise<void> {
     if (this.shutdownRequested || !isObservable(turn)) {
       return;
     }
@@ -58,10 +58,10 @@ export class Observer {
     this.scheduleFlushIfReady();
   }
 
-  async watermark(): Promise<ObserverWatermarkRecord> {
+  async watermark(): Promise<ObserverWatermark> {
     await this.ensureBootstrapped();
     this.scheduleFlushIfReady();
-    const pendingById = new Map<string, SessionTurnRow>();
+    const pendingById = new Map<string, SessionTurn>();
     for (const turn of this.observingBuffer) {
       keepNewestTurn(pendingById, turn);
     }
@@ -96,7 +96,7 @@ export class Observer {
   }
 
   private async bootstrapInternal(): Promise<void> {
-    const snapshots = await this.client.observingListSnapshots({
+    const snapshots = await this.client.observingTable.listSnapshots({
       observer: this.name,
     });
     this.threads = loadThreads(snapshots, this.name);
@@ -106,20 +106,20 @@ export class Observer {
     }, undefined);
     this.nextEpoch = this.committedEpoch == null ? 0 : this.committedEpoch + 1;
 
-    let pendingTurns = (await this.client.sessionLoadTurnsAfterEpoch({
+    let pendingTurns = (await this.client.sessionTable.loadTurnsAfterEpoch({
       observer: this.name,
       committedEpoch: this.committedEpoch ?? null,
-    })).map(fromWireTurn);
+    })).map(readSessionTurn);
     const needsRepair = pendingTurns.some((turn) => turn.observingEpoch !== this.nextEpoch);
     if (needsRepair && pendingTurns.length > 0) {
       const repaired = pendingTurns.map((turn) => ({
         ...turn,
         observingEpoch: this.nextEpoch,
       }));
-      const persisted = await this.client.sessionUpsert({
-        turns: repaired.map(toWireTurn),
+      const persisted = await this.client.sessionTable.upsert({
+        turns: repaired.map(serializeSessionTurn),
       });
-      pendingTurns = persisted.map(fromWireTurn);
+      pendingTurns = persisted.map(readSessionTurn);
     }
     this.buffer = pendingTurns.map(cloneTurn);
     this.observingBuffer = [];
@@ -208,11 +208,11 @@ export class Observer {
   }
 }
 
-function isObservable(turn: SessionTurnRow): boolean {
+function isObservable(turn: SessionTurn): boolean {
   return Boolean(turn.response?.trim() && turn.summary?.trim());
 }
 
-function enqueueTurn(buffer: SessionTurnRow[], turn: SessionTurnRow): void {
+function enqueueTurn(buffer: SessionTurn[], turn: SessionTurn): void {
   const index = buffer.findIndex((entry) => entry.turnId === turn.turnId);
   if (index >= 0) {
     buffer[index] = cloneTurn(turn);
@@ -222,14 +222,14 @@ function enqueueTurn(buffer: SessionTurnRow[], turn: SessionTurnRow): void {
   buffer.sort(compareTurns);
 }
 
-function keepNewestTurn(byId: Map<string, SessionTurnRow>, turn: SessionTurnRow): void {
+function keepNewestTurn(byId: Map<string, SessionTurn>, turn: SessionTurn): void {
   const existing = byId.get(turn.turnId);
   if (!existing || existing.updatedAt < turn.updatedAt) {
     byId.set(turn.turnId, cloneTurn(turn));
   }
 }
 
-function compareTurns(left: SessionTurnRow, right: SessionTurnRow): number {
+function compareTurns(left: SessionTurn, right: SessionTurn): number {
   return left.createdAt.localeCompare(right.createdAt)
     || left.updatedAt.localeCompare(right.updatedAt)
     || left.turnId.localeCompare(right.turnId);

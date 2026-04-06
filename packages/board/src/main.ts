@@ -546,8 +546,8 @@ function renderSettingsModal(): string {
   const content = state.settingsEditing ? state.settingsDraft : state.settingsContent;
   const actionLabel = state.settingsEditing ? 'Save' : 'Edit';
   const hint = state.settingsEditing
-    ? 'Click <span class="settings-inline-token">Save</span> to validate and save the setting file.'
-    : 'Click <span class="settings-inline-token">Edit</span> to edit the setting file.';
+    ? 'Click <span class="settings-inline-token">Save</span> to validate and save the setting file. Saved changes take effect after restarting the server.'
+    : 'Click <span class="settings-inline-token">Edit</span> to edit the setting file. Saved changes take effect after restarting the server.';
 
   return `
     <div class="modal-backdrop" data-action="close-settings">

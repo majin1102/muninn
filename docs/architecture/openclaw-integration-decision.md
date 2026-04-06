@@ -111,14 +111,14 @@ export function createMemoryOpenVikingContextEngine(params): ContextEngine {
 根据 `../workstreams/progress-openclaw-integration.md`：
 
 1. **before_model_resolve** → 写入 `prompt`
-2. **after_tool_call** → 写入 `artifacts`（tool_calling + artifacts）
+2. **after_tool_call** → 写入 `artifacts`（toolCalling + artifacts）
 3. **agent_end** → 写入 `response`
 
 ### 数据流特点
 
 - **写入为主**：Muninn 当前主要是捕获上下文，不是召回
 - **分段写入**：prompt、artifacts、response 在不同时机产生
-- **需要 sessionKey 映射**：OpenClaw sessionKey → Muninn session_id
+- **需要 sessionKey 映射**：OpenClaw sessionKey → Muninn sessionId
 - **artifact 采集复杂**：需要根据 tool 类型决定是否回读文件
 
 ### 未来扩展
@@ -163,7 +163,7 @@ export default {
 
   register(api) {
     const sidecarUrl = process.env.MUNINN_SIDECAR_URL || "http://localhost:3100";
-    const sessionMap = new Map<string, string>(); // sessionKey → session_id
+    const sessionMap = new Map<string, string>(); // sessionKey → sessionId
 
     // Hook 1: before_model_resolve → 写入 prompt
     api.on("before_model_resolve", async (event, ctx) => {
@@ -174,7 +174,7 @@ export default {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             session: {
-              session_id: sessionId,
+              sessionId,
               agent: ctx.agentId || "openclaw",
               prompt: event.prompt
             }
@@ -195,9 +195,9 @@ export default {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             session: {
-              session_id: sessionId,
+              sessionId,
               agent: ctx.agentId || "openclaw",
-              tool_calling: [event.toolName],
+              toolCalling: [event.toolName],
               artifacts
             }
           })
@@ -217,7 +217,7 @@ export default {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             session: {
-              session_id: sessionId,
+              sessionId,
               agent: ctx.agentId || "openclaw",
               response
             }
@@ -237,7 +237,7 @@ export default {
    ```typescript
    function getOrCreateSessionId(map: Map<string, string>, sessionKey: string): string {
      if (!map.has(sessionKey)) {
-       map.set(sessionKey, sessionKey); // 直接使用 sessionKey 作为 session_id
+       map.set(sessionKey, sessionKey); // 直接使用 sessionKey 作为 sessionId
      }
      return map.get(sessionKey)!;
    }

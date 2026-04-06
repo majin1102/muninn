@@ -1,44 +1,56 @@
 import { accessSync, constants as fsConstants } from 'node:fs';
 import path from 'node:path';
 
-import type { ObservingRecord, SessionTurnRecord } from './client.js';
-import type { SemanticIndexRow, ObservingSnapshotRow } from './observer/types.js';
-import type { ListModeInput } from './client.js';
+import type { ListModeInput, ObservingSnapshot, SessionTurn } from './client.js';
+import type { SemanticIndexRow, ObservingSnapshot as ObservingSnapshotPayload } from './observer/types.js';
 
 type MaybePromise<T> = Promise<T> | T;
+
+export interface TableDescription {
+  // describe() exposes table facts surfaced by the opened dataset. It does not
+  // imply that every table runs a full schema-health validation before returning.
+  metadata: Record<string, string>;
+  fieldMetadata: Record<string, Record<string, string>>;
+  dimensions?: Record<string, number>;
+}
+
+export interface StorageTarget {
+  uri: string;
+  storageOptions?: Record<string, string>;
+}
 
 type NativeCoreBinding = {
   sessionLoadOpenTurn(params: {
     sessionId?: string;
     agent: string;
     observer: string;
-  }): MaybePromise<SessionTurnRecord | null>;
-  sessionGetTurn(turnId: string): MaybePromise<SessionTurnRecord | null>;
+  }): MaybePromise<SessionTurn | null>;
+  sessionGetTurn(turnId: string): MaybePromise<SessionTurn | null>;
   sessionListTurns(params: {
     mode: ListModeInput;
     agent?: string;
     sessionId?: string;
-  }): MaybePromise<SessionTurnRecord[]>;
+  }): MaybePromise<SessionTurn[]>;
   sessionTimelineTurns(params: {
     memoryId: string;
     beforeLimit?: number;
     afterLimit?: number;
-  }): MaybePromise<SessionTurnRecord[]>;
+  }): MaybePromise<SessionTurn[]>;
   sessionLoadTurnsAfterEpoch(params: {
     observer: string;
     committedEpoch?: number | null;
-  }): MaybePromise<SessionTurnRecord[]>;
+  }): MaybePromise<SessionTurn[]>;
   sessionUpsert(params: {
     turns: Array<Record<string, unknown>>;
-  }): MaybePromise<SessionTurnRecord[]>;
-  observingGetSnapshot(snapshotId: string): MaybePromise<ObservingSnapshotRow | null>;
+  }): MaybePromise<SessionTurn[]>;
+  observingGetSnapshot(snapshotId: string): MaybePromise<ObservingSnapshotPayload | null>;
   observingListSnapshots(params: {
     observer?: string;
-  }): MaybePromise<ObservingSnapshotRow[]>;
-  observingThreadSnapshots(observingId: string): MaybePromise<ObservingSnapshotRow[]>;
+  }): MaybePromise<ObservingSnapshotPayload[]>;
+  observingThreadSnapshots(observingId: string): MaybePromise<ObservingSnapshotPayload[]>;
   observingUpsert(params: {
-    snapshots: ObservingSnapshotRow[];
-  }): MaybePromise<ObservingSnapshotRow[]>;
+    snapshots: ObservingSnapshotPayload[];
+  }): MaybePromise<ObservingSnapshotPayload[]>;
   semanticNearest(params: {
     vector: number[];
     limit: number;
@@ -52,57 +64,76 @@ type NativeCoreBinding = {
   semanticDelete(params: {
     ids: string[];
   }): MaybePromise<{ deleted: number }>;
+  describeSessionTable(): MaybePromise<TableDescription | null>;
+  describeObservingTable(): MaybePromise<TableDescription | null>;
+  describeSemanticIndexTable(): MaybePromise<TableDescription | null>;
 };
 
 type NativeModule = {
   createCoreBinding(): NativeCoreBinding;
+  describeSemanticIndexForStorage(storageTarget: StorageTarget | null): MaybePromise<TableDescription | null>;
 };
 
-export interface CoreBinding {
-  sessionLoadOpenTurn(params: {
+export interface SessionTableBinding {
+  loadOpenTurn(params: {
     sessionId?: string;
     agent: string;
     observer: string;
-  }): Promise<SessionTurnRecord | null>;
-  sessionGetTurn(turnId: string): Promise<SessionTurnRecord | null>;
-  sessionListTurns(params: {
+  }): Promise<SessionTurn | null>;
+  getTurn(turnId: string): Promise<SessionTurn | null>;
+  listTurns(params: {
     mode: ListModeInput;
     agent?: string;
     sessionId?: string;
-  }): Promise<SessionTurnRecord[]>;
-  sessionTimelineTurns(params: {
+  }): Promise<SessionTurn[]>;
+  timelineTurns(params: {
     memoryId: string;
     beforeLimit?: number;
     afterLimit?: number;
-  }): Promise<SessionTurnRecord[]>;
-  sessionLoadTurnsAfterEpoch(params: {
+  }): Promise<SessionTurn[]>;
+  loadTurnsAfterEpoch(params: {
     observer: string;
     committedEpoch?: number | null;
-  }): Promise<SessionTurnRecord[]>;
-  sessionUpsert(params: {
+  }): Promise<SessionTurn[]>;
+  upsert(params: {
     turns: Array<Record<string, unknown>>;
-  }): Promise<SessionTurnRecord[]>;
-  observingGetSnapshot(snapshotId: string): Promise<ObservingRecord | null>;
-  observingListSnapshots(params: {
+  }): Promise<SessionTurn[]>;
+  describe(): Promise<TableDescription | null>;
+}
+
+export interface ObservingTableBinding {
+  getSnapshot(snapshotId: string): Promise<ObservingSnapshot | null>;
+  listSnapshots(params: {
     observer?: string;
-  }): Promise<ObservingSnapshotRow[]>;
-  observingThreadSnapshots(observingId: string): Promise<ObservingSnapshotRow[]>;
-  observingUpsert(params: {
-    snapshots: ObservingSnapshotRow[];
-  }): Promise<ObservingSnapshotRow[]>;
-  semanticNearest(params: {
+  }): Promise<ObservingSnapshotPayload[]>;
+  threadSnapshots(observingId: string): Promise<ObservingSnapshotPayload[]>;
+  upsert(params: {
+    snapshots: ObservingSnapshotPayload[];
+  }): Promise<ObservingSnapshotPayload[]>;
+  describe(): Promise<TableDescription | null>;
+}
+
+export interface SemanticIndexTableBinding {
+  nearest(params: {
     vector: number[];
     limit: number;
   }): Promise<SemanticIndexRow[]>;
-  semanticLoadByIds(params: {
+  loadByIds(params: {
     ids: string[];
   }): Promise<SemanticIndexRow[]>;
-  semanticUpsert(params: {
+  upsert(params: {
     rows: SemanticIndexRow[];
   }): Promise<void>;
-  semanticDelete(params: {
+  delete(params: {
     ids: string[];
   }): Promise<{ deleted: number }>;
+  describe(): Promise<TableDescription | null>;
+}
+
+export interface CoreBinding {
+  sessionTable: SessionTableBinding;
+  observingTable: ObservingTableBinding;
+  semanticIndexTable: SemanticIndexTableBinding;
 }
 
 let singleton: CoreBinding | null = null;
@@ -119,31 +150,47 @@ export async function shutdownCoreBindingForTests(): Promise<void> {
   singleton = null;
 }
 
+export async function describeSemanticIndexForStorage(
+  storageTarget: StorageTarget | null,
+): Promise<TableDescription | null> {
+  const native = loadNativeModule();
+  return resolveNativeResult(native.describeSemanticIndexForStorage(storageTarget));
+}
+
 function wrapBinding(native: NativeCoreBinding): CoreBinding {
   return {
-    sessionLoadOpenTurn: async (params) => normalizeOptionalRecord(
-      await resolveNativeResult(native.sessionLoadOpenTurn(params)),
-      'turnId',
-    ),
-    sessionGetTurn: async (turnId) => normalizeOptionalRecord(
-      await resolveNativeResult(native.sessionGetTurn(turnId)),
-      'turnId',
-    ),
-    sessionListTurns: async (params) => resolveNativeResult(native.sessionListTurns(params)),
-    sessionTimelineTurns: async (params) => resolveNativeResult(native.sessionTimelineTurns(params)),
-    sessionLoadTurnsAfterEpoch: async (params) => resolveNativeResult(native.sessionLoadTurnsAfterEpoch(params)),
-    sessionUpsert: async (params) => resolveNativeResult(native.sessionUpsert(params)),
-    observingGetSnapshot: async (snapshotId) => normalizeOptionalRecord(
-      await resolveNativeResult(native.observingGetSnapshot(snapshotId)),
-      'snapshotId',
-    ),
-    observingListSnapshots: async (params) => resolveNativeResult(native.observingListSnapshots(params)),
-    observingThreadSnapshots: async (observingId) => resolveNativeResult(native.observingThreadSnapshots(observingId)),
-    observingUpsert: async (params) => resolveNativeResult(native.observingUpsert(params)),
-    semanticNearest: async (params) => resolveNativeResult(native.semanticNearest(params)),
-    semanticLoadByIds: async (params) => resolveNativeResult(native.semanticLoadByIds(params)),
-    semanticUpsert: async (params) => resolveNativeResult(native.semanticUpsert(params)),
-    semanticDelete: async (params) => resolveNativeResult(native.semanticDelete(params)),
+    sessionTable: {
+      loadOpenTurn: async (params) => normalizeOptionalRecord(
+        await resolveNativeResult(native.sessionLoadOpenTurn(params)),
+        'turnId',
+      ),
+      getTurn: async (turnId) => normalizeOptionalRecord(
+        await resolveNativeResult(native.sessionGetTurn(turnId)),
+        'turnId',
+      ),
+      listTurns: async (params) => resolveNativeResult(native.sessionListTurns(params)),
+      timelineTurns: async (params) => resolveNativeResult(native.sessionTimelineTurns(params)),
+      loadTurnsAfterEpoch: async (params) => resolveNativeResult(native.sessionLoadTurnsAfterEpoch(params)),
+      upsert: async (params) => resolveNativeResult(native.sessionUpsert(params)),
+      describe: async () => resolveNativeResult(native.describeSessionTable()),
+    },
+    observingTable: {
+      getSnapshot: async (snapshotId) => normalizeOptionalRecord(
+        await resolveNativeResult(native.observingGetSnapshot(snapshotId)),
+        'snapshotId',
+      ),
+      listSnapshots: async (params) => resolveNativeResult(native.observingListSnapshots(params)),
+      threadSnapshots: async (observingId) => resolveNativeResult(native.observingThreadSnapshots(observingId)),
+      upsert: async (params) => resolveNativeResult(native.observingUpsert(params)),
+      describe: async () => resolveNativeResult(native.describeObservingTable()),
+    },
+    semanticIndexTable: {
+      nearest: async (params) => resolveNativeResult(native.semanticNearest(params)),
+      loadByIds: async (params) => resolveNativeResult(native.semanticLoadByIds(params)),
+      upsert: async (params) => resolveNativeResult(native.semanticUpsert(params)),
+      delete: async (params) => resolveNativeResult(native.semanticDelete(params)),
+      describe: async () => resolveNativeResult(native.describeSemanticIndexTable()),
+    },
   };
 }
 

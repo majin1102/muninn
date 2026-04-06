@@ -1,23 +1,11 @@
-import type { SessionTurnRecord } from '../client.js';
+import type { SessionTurn } from '../client.js';
 
 export type TurnMetadataSource = 'fallback' | 'generated' | 'user';
 
-export type SessionTurnRow = {
-  turnId: string;
-  createdAt: string;
-  updatedAt: string;
-  sessionId?: string | null;
-  agent: string;
-  observer: string;
-  title?: string | null;
-  summary?: string | null;
+type SessionTurnPayload = SessionTurn & {
+  session_id?: string | null;
   titleSource?: TurnMetadataSource | null;
   summarySource?: TurnMetadataSource | null;
-  toolCalling?: string[] | null;
-  artifacts?: Record<string, string> | null;
-  prompt?: string | null;
-  response?: string | null;
-  observingEpoch?: number | null;
 };
 
 export type SessionUpdate = {
@@ -35,25 +23,29 @@ export type SessionUpdate = {
   observingEpoch?: number;
 };
 
-export function fromWireTurn(turn: SessionTurnRecord): SessionTurnRow {
+export function readSessionTurn(turn: SessionTurn): SessionTurn {
+  const payload = turn as SessionTurnPayload;
   return {
     turnId: turn.turnId,
     createdAt: turn.createdAt,
     updatedAt: turn.updatedAt,
-    sessionId: turn.session_id,
+    sessionId: turn.sessionId ?? payload.session_id ?? null,
     agent: turn.agent,
     observer: turn.observer,
     title: turn.title,
     summary: turn.summary,
+    titleSource: payload.titleSource ?? null,
+    summarySource: payload.summarySource ?? null,
     toolCalling: turn.toolCalling,
     artifacts: turn.artifacts,
     prompt: turn.prompt,
     response: turn.response,
     observingEpoch: turn.observingEpoch,
-  };
+  } as SessionTurn;
 }
 
-export function toWireTurn(turn: SessionTurnRow): Record<string, unknown> {
+export function serializeSessionTurn(turn: SessionTurn): Record<string, unknown> {
+  const payload = turn as SessionTurnPayload;
   return {
     turnId: turn.turnId,
     createdAt: turn.createdAt,
@@ -63,8 +55,8 @@ export function toWireTurn(turn: SessionTurnRow): Record<string, unknown> {
     observer: turn.observer,
     title: turn.title ?? null,
     summary: turn.summary ?? null,
-    titleSource: turn.titleSource ?? null,
-    summarySource: turn.summarySource ?? null,
+    titleSource: payload.titleSource ?? null,
+    summarySource: payload.summarySource ?? null,
     toolCalling: turn.toolCalling ?? null,
     artifacts: turn.artifacts ?? null,
     prompt: turn.prompt ?? null,
@@ -73,12 +65,12 @@ export function toWireTurn(turn: SessionTurnRow): Record<string, unknown> {
   };
 }
 
-export function toPublicTurn(turn: SessionTurnRow): SessionTurnRecord {
+export function toSessionTurn(turn: SessionTurn): SessionTurn {
   return {
     turnId: turn.turnId,
     createdAt: turn.createdAt,
     updatedAt: turn.updatedAt,
-    session_id: turn.sessionId ?? null,
+    sessionId: turn.sessionId ?? null,
     agent: turn.agent,
     observer: turn.observer,
     title: turn.title ?? null,
@@ -91,10 +83,10 @@ export function toPublicTurn(turn: SessionTurnRow): SessionTurnRecord {
   };
 }
 
-export function cloneTurn(turn: SessionTurnRow): SessionTurnRow {
+export function cloneTurn<T extends SessionTurn>(turn: T): T {
   return {
     ...turn,
     toolCalling: turn.toolCalling ? [...turn.toolCalling] : turn.toolCalling,
     artifacts: turn.artifacts ? { ...turn.artifacts } : turn.artifacts,
-  };
+  } as T;
 }

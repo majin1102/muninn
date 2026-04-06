@@ -1,10 +1,11 @@
 use std::future::Future;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use lance::Result as LanceResult;
-use muninn_sidecar::format::{ObservingSnapshot, SemanticIndexRow, SessionTurn};
+use muninn_sidecar::format::{ObservingSnapshot, SemanticIndexRow, SemanticIndexTable, SessionTurn};
 use muninn_sidecar::muninn::{ListModeInput, Muninn};
-use muninn_sidecar::TableOptions;
+use muninn_sidecar::{TableOptions, data_root};
 use napi::{Error, Result as NapiResult};
 use napi_derive::napi;
 use serde::{Deserialize, Serialize};
@@ -88,6 +89,13 @@ struct SemanticUpsertParams {
 #[serde(rename_all = "camelCase")]
 struct SemanticDeleteParams {
     ids: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StorageTargetParams {
+    uri: String,
+    storage_options: Option<HashMap<String, String>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -175,6 +183,12 @@ impl CoreBinding {
             .and_then(to_napi_value)
     }
 
+    #[napi(js_name = "describeSessionTable")]
+    pub fn describe_session_table(&self) -> NapiResult<Value> {
+        self.call(self.inner.muninn.describe_session_table())
+            .and_then(to_napi_value)
+    }
+
     #[napi(js_name = "observingGetSnapshot")]
     pub fn observing_get_snapshot(
         &self,
@@ -210,6 +224,12 @@ impl CoreBinding {
     ) -> NapiResult<Value> {
         let params = parse_params::<ObservingUpsertParams>(params)?;
         self.call(self.inner.muninn.observing_upsert(params.snapshots))
+            .and_then(to_napi_value)
+    }
+
+    #[napi(js_name = "describeObservingTable")]
+    pub fn describe_observing_table(&self) -> NapiResult<Value> {
+        self.call(self.inner.muninn.describe_observing_table())
             .and_then(to_napi_value)
     }
 
@@ -252,6 +272,12 @@ impl CoreBinding {
             .and_then(|deleted| to_napi_value(DeletedCount { deleted }))
     }
 
+    #[napi(js_name = "describeSemanticIndexTable")]
+    pub fn describe_semantic_index_table(&self) -> NapiResult<Value> {
+        self.call(self.inner.muninn.describe_semantic_index_table())
+            .and_then(to_napi_value)
+    }
+
 }
 
 impl CoreBinding {
@@ -274,6 +300,24 @@ pub fn create_core_binding() -> NapiResult<CoreBinding> {
     Ok(CoreBinding {
         inner: Arc::new(CoreState { runtime, muninn }),
     })
+}
+
+#[napi(js_name = "describeSemanticIndexForStorage")]
+pub fn describe_semantic_index_for_storage(params: Value) -> NapiResult<Value> {
+    let table_options = parse_params::<Option<StorageTargetParams>>(params)?
+        .map(|params| TableOptions::from_uri(params.uri, params.storage_options))
+        .transpose()
+        .map_err(to_napi_error)?;
+    let table_options = match table_options {
+        Some(table_options) => table_options,
+        None => TableOptions::local(data_root().map_err(to_napi_error)?).map_err(to_napi_error)?,
+    };
+    let runtime = Runtime::new()
+        .map_err(|error| Error::from_reason(error.to_string()))?;
+    runtime
+        .block_on(SemanticIndexTable::new(table_options).describe())
+        .map_err(to_napi_error)
+        .and_then(to_napi_value)
 }
 
 fn to_napi_error(error: impl ToString) -> Error {

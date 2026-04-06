@@ -60,14 +60,14 @@ export async function applySemanticMemoryDelta(
     .map((memory) => memory.id)
     .filter((id): id is string => Boolean(id) && !afterIds.has(id));
   if (deletedIds.length > 0) {
-    await client.semanticDelete({ ids: deletedIds });
+    await client.semanticIndexTable.delete({ ids: deletedIds });
   }
 
   const upsertIds = delta.after
     .map((memory) => memory.id)
     .filter((id): id is string => Boolean(id));
   const existingRows = upsertIds.length > 0
-    ? await client.semanticLoadByIds({ ids: upsertIds })
+    ? await client.semanticIndexTable.loadByIds({ ids: upsertIds })
     : [];
   const existingById = new Map(existingRows.map((row) => [row.id, row]));
   const embeddingConfig = getEmbeddingConfig();
@@ -92,7 +92,7 @@ export async function applySemanticMemoryDelta(
   }
 
   if (rows.length > 0) {
-    await client.semanticUpsert({ rows });
+    await client.semanticIndexTable.upsert({ rows });
   }
 }
 

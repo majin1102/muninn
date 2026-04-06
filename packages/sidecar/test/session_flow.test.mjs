@@ -22,13 +22,30 @@ async function makeDatasetUri() {
   };
 }
 
+function toFileStoreUri(dir) {
+  return `file-object-store://${path.resolve(dir)}`;
+}
+
 async function json(response) {
   return response.json();
 }
 
-async function writeMuninnConfig(configPath, { turnProvider, observerProvider } = {}) {
+async function writeMuninnConfig(configPath, {
+  turnProvider,
+  observerProvider,
+  semanticDimensions = 4,
+  storageUri,
+  storageOptions,
+} = {}) {
   const root = {};
   const llm = {};
+
+  if (storageUri) {
+    root.storage = { uri: storageUri };
+    if (storageOptions) {
+      root.storage.storageOptions = storageOptions;
+    }
+  }
 
   if (turnProvider) {
     root.turn = { llm: 'test_turn_llm' };
@@ -36,6 +53,13 @@ async function writeMuninnConfig(configPath, { turnProvider, observerProvider } 
   }
 
   if (observerProvider) {
+    root.semanticIndex = {
+      embedding: {
+        provider: 'mock',
+        dimensions: semanticDimensions,
+      },
+      defaultImportance: 0.7,
+    };
     root.observer = {
       name: 'test-observer',
       llm: 'test_observer_llm',
@@ -72,11 +96,11 @@ test('session/messages writes a message into a session and detail reads it back'
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
       session: {
-        session_id: 'group-a',
+        sessionId: 'group-a',
         agent: 'agent-a',
         prompt: 'alpha prompt',
         response: 'alpha response',
-        tool_calling: ['tool-a'],
+        toolCalling: ['tool-a'],
         artifacts: { key: 'value' },
         extra: { source: 'test' },
       },
@@ -112,7 +136,7 @@ test('session/messages validates request shape and requires at least one message
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         session: {
-          session_id: 123,
+          sessionId: 123,
           agent: 'agent-a',
         },
       }),
@@ -123,8 +147,8 @@ test('session/messages validates request shape and requires at least one message
 
     for (const badSession of [
       { agent: 'agent-a' },
-      { agent: 'agent-a', tool_calling: 'tool-a' },
-      { agent: 'agent-a', prompt: 123, tool_calling: ['tool-a'] },
+      { agent: 'agent-a', toolCalling: 'tool-a' },
+      { agent: 'agent-a', prompt: 123, toolCalling: ['tool-a'] },
       { agent: 'agent-a', artifacts: { key: 1 } },
       { agent: 'agent-a', extra: { key: 1 } },
     ]) {
@@ -150,7 +174,7 @@ test('session/messages maps core write validation failures to invalidRequest', a
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         session: {
-          session_id: 'group-a',
+          sessionId: 'group-a',
           agent: 'agent-a',
           summary: 'summary only',
         },
@@ -173,9 +197,9 @@ test('session/messages accepts prompt-only, response-only, and tool-only payload
     await writeMuninnConfig(configPath, { turnProvider: 'mock' });
 
   for (const payload of [
-    { session_id: 'group-a', agent: 'agent-a', prompt: 'prompt only' },
-    { session_id: 'group-a', agent: 'agent-a', response: 'response only' },
-    { session_id: 'group-a', agent: 'agent-a', tool_calling: ['tool-a'] },
+    { sessionId: 'group-a', agent: 'agent-a', prompt: 'prompt only' },
+    { sessionId: 'group-a', agent: 'agent-a', response: 'response only' },
+    { sessionId: 'group-a', agent: 'agent-a', toolCalling: ['tool-a'] },
   ]) {
     const response = await app.request('/api/v1/session/messages', {
       method: 'POST',
@@ -188,7 +212,7 @@ test('session/messages accepts prompt-only, response-only, and tool-only payload
   }
 });
 
-test('session/messages reuses the agent default session when session_id is omitted', async (t) => {
+test('session/messages reuses the agent default session when sessionId is omitted', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(async () => rm(dir, { recursive: true, force: true }));
 
@@ -214,7 +238,7 @@ test('session/messages reuses the agent default session when session_id is omitt
     body: JSON.stringify({
       session: {
         agent: 'agent-a',
-        tool_calling: ['tool-a'],
+        toolCalling: ['tool-a'],
       },
     }),
   });
@@ -227,7 +251,7 @@ test('session/messages reuses the agent default session when session_id is omitt
     body: JSON.stringify({
       session: {
         agent: 'agent-b',
-        tool_calling: ['tool-b'],
+        toolCalling: ['tool-b'],
       },
     }),
   });
@@ -250,7 +274,7 @@ test('session/messages accepts extra at the API layer but does not treat it as m
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
       session: {
-        session_id: 'group-a',
+        sessionId: 'group-a',
         agent: 'agent-a',
         prompt: 'prompt with extra',
         extra: { source: 'openclaw' },
@@ -264,7 +288,7 @@ test('session/messages accepts extra at the API layer but does not treat it as m
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
       session: {
-        session_id: 'group-a',
+        sessionId: 'group-a',
         agent: 'agent-a',
         extra: { source: 'openclaw' },
       },
@@ -281,10 +305,10 @@ test('list and timeline cover the written flow, and recall is empty without sema
   
   const created = [];
   for (const payload of [
-    { session_id: 'group-a', agent: 'agent-a', prompt: 'first alpha prompt', response: 'first alpha response' },
-    { session_id: 'group-a', agent: 'agent-a', prompt: 'second alpha prompt', response: 'second alpha response' },
-    { session_id: 'group-a', agent: 'agent-a', prompt: 'third alpha prompt', response: 'third alpha response' },
-    { session_id: 'group-b', agent: 'agent-b', prompt: 'other beta prompt' },
+    { sessionId: 'group-a', agent: 'agent-a', prompt: 'first alpha prompt', response: 'first alpha response' },
+    { sessionId: 'group-a', agent: 'agent-a', prompt: 'second alpha prompt', response: 'second alpha response' },
+    { sessionId: 'group-a', agent: 'agent-a', prompt: 'third alpha prompt', response: 'third alpha response' },
+    { sessionId: 'group-b', agent: 'agent-b', prompt: 'other beta prompt' },
   ]) {
     const response = await app.request('/api/v1/session/messages', {
       method: 'POST',
@@ -318,7 +342,7 @@ test('list and timeline cover the written flow, and recall is empty without sema
   assert.equal(recalled.memoryHits.length, 0);
 });
 
-test('timeline stays scoped to the full session key when agents share a session_id', async (t) => {
+test('timeline stays scoped to the full session key when agents share a sessionId', async (t) => {
   const { dir, homeDir } = await makeDatasetUri();
   t.after(async () => rm(dir, { recursive: true, force: true }));
 
@@ -329,7 +353,7 @@ test('timeline stays scoped to the full session key when agents share a session_
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
       session: {
-        session_id: 'group-a',
+        sessionId: 'group-a',
         agent: 'agent-a',
         prompt: 'agent a prompt 1',
         response: 'agent a response 1',
@@ -344,7 +368,7 @@ test('timeline stays scoped to the full session key when agents share a session_
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
       session: {
-        session_id: 'group-a',
+        sessionId: 'group-a',
         agent: 'agent-b',
         prompt: 'agent b prompt',
         response: 'agent b response',
@@ -359,7 +383,7 @@ test('timeline stays scoped to the full session key when agents share a session_
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
       session: {
-        session_id: 'group-a',
+        sessionId: 'group-a',
         agent: 'agent-a',
         prompt: 'agent a prompt 2',
         response: 'agent a response 2',
@@ -459,7 +483,7 @@ test('observer watermark reports pending turns until the observer flush complete
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
       session: {
-        session_id: 'group-a',
+        sessionId: 'group-a',
         agent: 'agent-a',
         prompt: 'watermark prompt',
         response: 'watermark response',
@@ -520,7 +544,7 @@ test('session/messages accepts response payloads when turn summarization is not 
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
       session: {
-        session_id: 'group-a',
+        sessionId: 'group-a',
         agent: 'agent-a',
         response: 'response only',
       },
@@ -548,9 +572,9 @@ test('ui session endpoints group by agent/session and return rendered turn docum
     await writeMuninnConfig(configPath, { turnProvider: 'mock' });
 
   const payloads = [
-    { session_id: 'group-a', agent: 'openclaw', prompt: 'first alpha prompt', response: 'first alpha response' },
-    { session_id: 'group-a', agent: 'openclaw', prompt: 'second alpha prompt', response: 'second alpha response' },
-    { session_id: 'group-b', agent: 'codex_cli', tool_calling: ['grep', 'sed'] },
+    { sessionId: 'group-a', agent: 'openclaw', prompt: 'first alpha prompt', response: 'first alpha response' },
+    { sessionId: 'group-a', agent: 'openclaw', prompt: 'second alpha prompt', response: 'second alpha response' },
+    { sessionId: 'group-b', agent: 'codex_cli', toolCalling: ['grep', 'sed'] },
   ];
 
   const created = [];
@@ -623,7 +647,7 @@ test('ui session endpoints reuse the cached session tree until a write invalidat
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
       session: {
-        session_id: 'group-a',
+        sessionId: 'group-a',
         agent: 'openclaw',
         prompt: 'invalidate cache',
         response: 'invalidate cache response',
@@ -650,7 +674,7 @@ test('observing memories are readable through list/detail/timeline/recall', asyn
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
       session: {
-        session_id: 'group-a',
+        sessionId: 'group-a',
         agent: 'agent-a',
         prompt: 'observe this prompt',
         response: 'observe this response',
@@ -705,7 +729,7 @@ test('ui observing endpoints return live observings and documents', async (t) =>
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
       session: {
-        session_id: 'group-ui',
+        sessionId: 'group-ui',
         agent: 'agent-ui',
         prompt: 'ui observing prompt',
         response: 'ui observing response',
@@ -820,6 +844,52 @@ test('ui settings config rejects invalid watchdog values server-side', async (t)
   assert.match(body.errorMessage, /watchdog\.intervalMs must be a positive integer/i);
 });
 
+test('ui settings config reports invalid JSON before native storage initialization', async (t) => {
+  const { dir, homeDir, configPath } = await makeDatasetUri();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+  process.env.MUNINN_HOME = homeDir;
+
+  await mkdir(path.dirname(configPath), { recursive: true });
+  await writeFile(configPath, '{\n  "storage": {\n    "uri": ""\n  }\n}\n', 'utf8');
+
+  const writeResponse = await app.request('/api/v1/ui/settings/config', {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      content: '{"watchdog": ',
+    }),
+  });
+  assert.equal(writeResponse.status, 400);
+  const body = await json(writeResponse);
+  assert.equal(body.errorCode, 'invalidRequest');
+  assert.match(body.errorMessage, /invalid JSON/i);
+});
+
+test('ui settings config accepts semanticIndex when embedding is omitted', async (t) => {
+  const { dir, homeDir, configPath } = await makeDatasetUri();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+  process.env.MUNINN_HOME = homeDir;
+
+  await mkdir(path.dirname(configPath), { recursive: true });
+
+  const writeResponse = await app.request('/api/v1/ui/settings/config', {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      content: JSON.stringify({
+        semanticIndex: {
+          defaultImportance: 0.5,
+        },
+      }, null, 2),
+    }),
+  });
+  assert.equal(writeResponse.status, 200);
+
+  const persisted = await readFile(configPath, 'utf8');
+  assert.match(persisted, /"semanticIndex"/);
+  assert.match(persisted, /"defaultImportance": 0.5/);
+});
+
 test('ui settings config rejects semantic index dimension changes that mismatch existing dataset', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(async () => rm(dir, { recursive: true, force: true }));
@@ -856,7 +926,7 @@ test('ui settings config rejects semantic index dimension changes that mismatch 
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
       session: {
-        session_id: 'group-a',
+        sessionId: 'group-a',
         agent: 'agent-a',
         prompt: 'semantic prompt',
         response: 'semantic response',
@@ -889,4 +959,77 @@ test('ui settings config rejects semantic index dimension changes that mismatch 
 
   const persisted = await readFile(configPath, 'utf8');
   assert.match(persisted, /"dimensions": 4/);
+});
+
+test('ui settings config validates semantic dimensions against the pending storage target', async (t) => {
+  const { dir, homeDir, configPath } = await makeDatasetUri();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+  process.env.MUNINN_HOME = homeDir;
+  process.env.MUNINN_OBSERVE_WINDOW_MS = '10';
+
+  const storageA = path.join(dir, 'storage-a');
+  const storageB = path.join(dir, 'storage-b');
+
+  await writeMuninnConfig(configPath, {
+    observerProvider: 'mock',
+    storageUri: toFileStoreUri(storageB),
+  });
+
+  const addResponse = await app.request('/api/v1/session/messages', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      session: {
+        sessionId: 'group-b',
+        agent: 'agent-b',
+        prompt: 'storage b prompt',
+        response: 'storage b response',
+      },
+    }),
+  });
+  assert.equal(addResponse.status, 200);
+  await new Promise((resolve) => setTimeout(resolve, 50));
+
+  await shutdownCoreForTests();
+
+  await writeMuninnConfig(configPath, {
+    observerProvider: 'mock',
+    storageUri: toFileStoreUri(storageA),
+  });
+
+  const writeResponse = await app.request('/api/v1/ui/settings/config', {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      content: JSON.stringify({
+        storage: {
+          uri: toFileStoreUri(storageB),
+        },
+        observer: {
+          name: 'test-observer',
+          llm: 'test_observer_llm',
+          maxAttempts: 3,
+        },
+        llm: {
+          test_observer_llm: {
+            provider: 'mock',
+          },
+        },
+        semanticIndex: {
+          embedding: {
+            provider: 'mock',
+            dimensions: 8,
+          },
+          defaultImportance: 0.7,
+        },
+      }, null, 2),
+    }),
+  });
+  assert.equal(writeResponse.status, 400);
+  const body = await json(writeResponse);
+  assert.equal(body.errorCode, 'invalidRequest');
+  assert.match(body.errorMessage, /semantic_index dimension mismatch/i);
+
+  const persisted = await readFile(configPath, 'utf8');
+  assert.match(persisted, new RegExp(`"uri":\\s*"${toFileStoreUri(storageA)}"`));
 });

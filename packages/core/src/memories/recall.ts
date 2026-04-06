@@ -1,5 +1,5 @@
 import type { CoreBinding } from '../native.js';
-import type { RecallHitRecord } from '../client.js';
+import type { RecallHit } from '../client.js';
 import { embedText } from '../llm/embedding-provider.js';
 
 type SemanticIndexRow = {
@@ -26,7 +26,7 @@ export async function recallMemories(
   client: CoreBinding,
   query: string,
   limit = 10,
-): Promise<RecallHitRecord[]> {
+): Promise<RecallHit[]> {
   if (!query.trim() || limit <= 0) {
     return [];
   }
@@ -35,7 +35,7 @@ export async function recallMemories(
   let groups: CandidateGroup[] = [];
 
   while (true) {
-    const rows = await client.semanticNearest({
+    const rows = await client.semanticIndexTable.nearest({
       vector,
       limit: fetchLimit,
     });

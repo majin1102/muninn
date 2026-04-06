@@ -18,11 +18,11 @@
 
 ```ts
 export interface SessionMessageInput {
-  session_id?: string;
+  sessionId?: string;
   agent: string;
   title?: string;
   summary?: string;
-  tool_calling?: string[];
+  toolCalling?: string[];
   artifacts?: Record<string, string>;
   prompt?: string;
   response?: string;
@@ -35,7 +35,7 @@ export interface SessionMessageInput {
 - 当前接口路径为 `POST /api/v1/session/messages`
 - 对外语义统一为“给某个 session 添加一条 message”
 - `agent` 必填，其它 message 字段可选，但至少要有一项 message 内容
-- `tool_calling` 表示本轮调用过的工具
+- `toolCalling` 表示本轮调用过的工具
 - `artifacts` 表示工具调用产生的产出物
 - `extra` 表示接口层可接受的自由附带字符串键值
 - `extra` 仅用于接口传输层，sidecar 可读取它做必要处理，但不会写入持久化 format
@@ -67,5 +67,5 @@ export interface MemoryResponse {
 - 文档术语：`sessionId`
 - public memory id 统一表述为 `memoryId = {memoryLayer}:{memoryPoint}`
 - 当前 session memory row 的 public memory id 为 `session:{row_id}`
-- 可选分组键：`session_id`
+- 可选分组键：`sessionId`
 - 长期格式方向：`memory_id = {memory_layer}:{memory_point}`

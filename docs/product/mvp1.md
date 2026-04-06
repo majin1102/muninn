@@ -53,7 +53,7 @@ MVP 1 的写入接口方向应当是：
 这个接口的产品语义是：
 
 - OpenClaw 在执行过程中持续向某个逻辑 session 添加 message
-- `session_id` 只是逻辑归属参考，不是严格生命周期边界
+- `sessionId` 只是逻辑归属参考，不是严格生命周期边界
 - `agent` 必填，其它 message 字段可按需要单独提供
 - Muninn 自己负责把这些增量整理成可用记忆
 
@@ -106,6 +106,7 @@ MVP 1 里的 Muninn Board 不是编辑器，也不是完整笔记产品，它首
 - 已实现 session 左栏浏览、observation 列表与右侧文档详情区
 - 已接入真实 sidecar UI API，可查看 live 的 session 与 observation
 - 已提供 Settings 弹窗，可查看和保存 `muninn.json`
+  - 当前保存只更新磁盘上的配置文件；变更需要重启 server 才会生效，不提供热加载
 - 当前主要未完成项是 logo / 品牌标识，以及少量视觉与交互细节优化
 
 ## MVP 1 不包含什么

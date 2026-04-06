@@ -1,14 +1,18 @@
 import type { CoreBinding } from '../native.js';
-import type { SessionMessageInput } from '../client.js';
+import type { SessionMessageInput, SessionTurn } from '../client.js';
 import type { Window } from '../observer/window.js';
 import { buildSessionUpdate } from './update.js';
-import { cloneTurn, fromWireTurn, toWireTurn, type SessionTurnRow, type SessionUpdate, type TurnMetadataSource } from './types.js';
+import { cloneTurn, readSessionTurn, serializeSessionTurn, type SessionUpdate, type TurnMetadataSource } from './types.js';
 import { hasText, sessionKey } from './key.js';
 
 const PENDING_TURN_ID = 'session:18446744073709551615';
+type SessionTurnWithSource = SessionTurn & {
+  titleSource?: TurnMetadataSource | null;
+  summarySource?: TurnMetadataSource | null;
+};
 
 export class Session {
-  private openTurn?: SessionTurnRow;
+  private openTurn?: SessionTurn;
   private lastUsedAt = Date.now();
 
   constructor(
@@ -17,7 +21,7 @@ export class Session {
       sessionId?: string;
       agent: string;
       observer: string;
-      openTurn?: SessionTurnRow;
+      openTurn?: SessionTurn;
     },
   ) {
     this.openTurn = config.openTurn ? cloneTurn(config.openTurn) : undefined;
@@ -27,15 +31,15 @@ export class Session {
     return mergePrompt(this.openTurn?.prompt, incoming);
   }
 
-  async accept(content: SessionMessageInput, window: Window): Promise<SessionTurnRow> {
+  async accept(content: SessionMessageInput, window: Window): Promise<SessionTurn> {
     this.touch();
     const update = await buildSessionUpdate(this, content, this.config.observer, window.epoch);
     let turn = this.openTurn ? cloneTurn(this.openTurn) : newPendingTurn(this.config);
     turn = applyUpdate(turn, update);
-    const rows = await this.client.sessionUpsert({
-      turns: [toWireTurn(turn)],
+    const rows = await this.client.sessionTable.upsert({
+      turns: [serializeSessionTurn(turn)],
     });
-    const persisted = fromWireTurn(rows[0]);
+    const persisted = readSessionTurn(rows[0]);
     this.openTurn = isOpen(persisted) ? cloneTurn(persisted) : undefined;
     this.touch();
     return persisted;
@@ -50,7 +54,7 @@ export class Session {
   }
 }
 
-function newPendingTurn(config: { sessionId?: string; agent: string; observer: string }): SessionTurnRow {
+function newPendingTurn(config: { sessionId?: string; agent: string; observer: string }): SessionTurn {
   const now = new Date().toISOString();
   return {
     turnId: PENDING_TURN_ID,
@@ -62,15 +66,33 @@ function newPendingTurn(config: { sessionId?: string; agent: string; observer: s
   };
 }
 
-function applyUpdate(turn: SessionTurnRow, update: SessionUpdate): SessionTurnRow {
+function applyUpdate(turn: SessionTurn, update: SessionUpdate): SessionTurn {
   const next = cloneTurn(turn);
+  const nextWithSource = next as SessionTurnWithSource;
   const currentKey = sessionKey(next.sessionId ?? undefined, next.agent, next.observer);
   const incomingKey = sessionKey(update.sessionId, update.agent, update.observer);
   if (currentKey !== incomingKey) {
     throw new Error('message session does not match open turn');
   }
-  mergeMetadataField(next, 'title', 'titleSource', update.title, update.titleSource);
-  mergeMetadataField(next, 'summary', 'summarySource', update.summary, update.summarySource);
+
+  if (hasText(update.title)) {
+    const currentSource = nextWithSource.titleSource ?? undefined;
+    const shouldReplaceTitle = !hasText(next.title) || sourceRank(update.titleSource) >= sourceRank(currentSource);
+    if (shouldReplaceTitle) {
+      next.title = update.title;
+      nextWithSource.titleSource = update.titleSource;
+    }
+  }
+
+  if (hasText(update.summary)) {
+    const currentSource = nextWithSource.summarySource ?? undefined;
+    const shouldReplaceSummary = !hasText(next.summary) || sourceRank(update.summarySource) >= sourceRank(currentSource);
+    if (shouldReplaceSummary) {
+      next.summary = update.summary;
+      nextWithSource.summarySource = update.summarySource;
+    }
+  }
+
   next.prompt = mergePrompt(next.prompt, update.prompt);
   if (hasText(update.response)) {
     next.response = update.response;
@@ -82,25 +104,6 @@ function applyUpdate(turn: SessionTurnRow, update: SessionUpdate): SessionTurnRo
     next.observingEpoch = update.observingEpoch;
   }
   return next;
-}
-
-function mergeMetadataField(
-  turn: SessionTurnRow,
-  field: 'title' | 'summary',
-  sourceField: 'titleSource' | 'summarySource',
-  incoming: string | undefined,
-  incomingSource: TurnMetadataSource | undefined,
-) {
-  if (!hasText(incoming)) {
-    return;
-  }
-  const currentValue = turn[field] ?? undefined;
-  const currentSource = turn[sourceField] ?? undefined;
-  const shouldReplace = !hasText(currentValue) || sourceRank(incomingSource) >= sourceRank(currentSource);
-  if (shouldReplace) {
-    turn[field] = incoming;
-    turn[sourceField] = incomingSource;
-  }
 }
 
 function sourceRank(source: TurnMetadataSource | undefined): number {
@@ -145,10 +148,10 @@ function mergeArtifacts(
   };
 }
 
-export function isObservable(turn: SessionTurnRow): boolean {
+export function isObservable(turn: SessionTurn): boolean {
   return hasText(turn.response) && hasText(turn.summary);
 }
 
-function isOpen(turn: SessionTurnRow): boolean {
+function isOpen(turn: SessionTurn): boolean {
   return !hasText(turn.response);
 }

@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use lance::Result;
 use serde::{Deserialize, Serialize};
 use crate::config::semantic_index_config;
-use crate::format::{ObservingSnapshot, ObservingTable, SemanticIndexTable, SessionTable, SessionTurn, TableOptions};
+use crate::format::{ObservingSnapshot, ObservingTable, SemanticIndexTable, SessionTable, SessionTurn, TableDescription, TableOptions};
 use crate::memory::sessions::{self as memory_sessions, SessionListQuery};
 use crate::memory::types::ListMode as SessionListMode;
 use crate::watchdog::{Watchdog, WatchdogRuntime};
@@ -185,6 +185,10 @@ impl Muninn {
         Ok(turns)
     }
 
+    pub async fn describe_session_table(&self) -> Result<Option<TableDescription>> {
+        SessionTable::new(self.table_options.clone()).describe().await
+    }
+
     pub async fn observing_get_snapshot(&self, snapshot_id: &str) -> Result<Option<ObservingSnapshot>> {
         let snapshot_id = parse_observing_memory_id(snapshot_id)
             .map_err(lance::Error::invalid_input)?;
@@ -221,6 +225,10 @@ impl Muninn {
         Ok(snapshots)
     }
 
+    pub async fn describe_observing_table(&self) -> Result<Option<TableDescription>> {
+        ObservingTable::new(self.table_options.clone()).describe().await
+    }
+
     pub async fn semantic_nearest(
         &self,
         vector: &[f32],
@@ -253,6 +261,10 @@ impl Muninn {
         SemanticIndexTable::new(self.table_options.clone())
             .delete(ids)
             .await
+    }
+
+    pub async fn describe_semantic_index_table(&self) -> Result<Option<TableDescription>> {
+        SemanticIndexTable::new(self.table_options.clone()).describe().await
     }
 
     #[cfg(test)]
@@ -388,6 +400,8 @@ mod tests {
 
         let persisted = muninn.session_upsert(vec![turn]).await.unwrap().remove(0);
         assert_ne!(persisted.turn_id, MemoryId::new(crate::format::MemoryLayer::Session, u64::MAX));
+        let session_description = muninn.describe_session_table().await.unwrap().unwrap();
+        assert!(session_description.dimensions.is_none());
 
         let loaded = muninn
             .session_load_open_turn(
@@ -426,6 +440,8 @@ mod tests {
             persisted_observing[0].snapshot_id.to_string(),
             "observing:18446744073709551615"
         );
+        let observing_description = muninn.describe_observing_table().await.unwrap().unwrap();
+        assert!(observing_description.dimensions.is_none());
 
         let rows: Vec<crate::format::SemanticIndexRow> = serde_json::from_value(json!([
             {
@@ -440,6 +456,19 @@ mod tests {
         ]))
         .unwrap();
         muninn.semantic_upsert(rows).await.unwrap();
+        let semantic_description = muninn
+            .describe_semantic_index_table()
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            semantic_description
+                .dimensions
+                .as_ref()
+                .and_then(|dimensions| dimensions.get("vector"))
+                .copied(),
+            Some(4)
+        );
 
         let semantic_deleted = muninn
             .semantic_delete(vec!["mem-1".to_string()])

@@ -1,6 +1,6 @@
 import type { CoreBinding } from '../native.js';
+import type { SessionTurn } from '../client.js';
 import { observeThread, routeObservingThreads } from '../llm/observing-gateway.js';
-import type { SessionTurnRow } from '../session/types.js';
 import { applyMemoriesDelta, applySemanticMemoryDelta } from './memory-delta.js';
 import {
   applyObserveResult,
@@ -9,7 +9,7 @@ import {
   pushReference,
   snapshotRef,
   threadHasPendingIndex,
-  toObservingSnapshotRow,
+  toObservingSnapshot,
 } from './thread.js';
 import type { GatewayUpdate, IndexBatch, ObservingThread } from './types.js';
 
@@ -21,7 +21,7 @@ export async function flushObserverWindow(params: {
   observerName: string;
   threads: ObservingThread[];
   epoch: number;
-  pendingTurns: SessionTurnRow[];
+  pendingTurns: SessionTurn[];
 }): Promise<{ threads: ObservingThread[]; failedIndexIds: string[] }> {
   ensureRootThread(params.threads, params.observerName, params.pendingTurns, params.epoch);
 
@@ -63,7 +63,7 @@ export async function retryIndexBatches(
 
 export function restoreIndexBatches(
   threads: ObservingThread[],
-  pendingTurns: SessionTurnRow[],
+  pendingTurns: SessionTurn[],
 ): IndexBatch[] {
   const observingIdsByEpoch = new Map<number, Set<string>>();
   for (const thread of threads.filter(threadHasPendingIndex)) {
@@ -75,7 +75,7 @@ export function restoreIndexBatches(
     return [];
   }
 
-  const turnsByEpoch = new Map<number, SessionTurnRow[]>();
+  const turnsByEpoch = new Map<number, SessionTurn[]>();
   for (const turn of pendingTurns) {
     if (turn.observingEpoch == null) {
       continue;
@@ -96,7 +96,7 @@ export function restoreIndexBatches(
 function ensureRootThread(
   threads: ObservingThread[],
   observerName: string,
-  pendingTurns: SessionTurnRow[],
+  pendingTurns: SessionTurn[],
   epoch: number,
 ): void {
   const cutoff = Date.now() - SEVEN_DAYS_MS;
@@ -129,7 +129,7 @@ function activeGatewayInputs(
 async function applyGatewayUpdates(
   threads: ObservingThread[],
   observerName: string,
-  pendingTurns: SessionTurnRow[],
+  pendingTurns: SessionTurn[],
   observingEpoch: number,
   updates: GatewayUpdate[],
 ): Promise<Set<string>> {
@@ -216,8 +216,8 @@ async function flushThreads(
     return [];
   }
 
-  const persistedRows = await client.observingUpsert({
-    snapshots: touched.map(toObservingSnapshotRow),
+  const persistedRows = await client.observingTable.upsert({
+    snapshots: touched.map(toObservingSnapshot),
   });
   updateThreadsFromRows(threads, persistedRows);
   await applyParentRefs(client, threads, touchedIds);
@@ -278,8 +278,8 @@ async function applyParentRefs(
     return;
   }
 
-  const persisted = await client.observingUpsert({
-    snapshots: pending.map(toObservingSnapshotRow),
+  const persisted = await client.observingTable.upsert({
+    snapshots: pending.map(toObservingSnapshot),
   });
   updateThreadsFromRows(threads, persisted);
 }
@@ -299,8 +299,8 @@ async function catchUpIndex(client: CoreBinding, thread: ObservingThread): Promi
   if (latestIndexedSequence !== thread.indexedSnapshotSequence) {
     thread.indexedSnapshotSequence = latestIndexedSequence;
     if (thread.snapshotId) {
-      const [persisted] = await client.observingUpsert({
-        snapshots: [toObservingSnapshotRow(thread)],
+      const [persisted] = await client.observingTable.upsert({
+        snapshots: [toObservingSnapshot(thread)],
       });
       updateThreadsFromRows([thread], [persisted]);
     }
@@ -330,7 +330,7 @@ async function retryIndexBatch(
 
 function updateThreadsFromRows(
   threads: ObservingThread[],
-  rows: Array<import('./types.js').ObservingSnapshotRow>,
+  rows: Array<import('./types.js').ObservingSnapshot>,
 ): void {
   const rowsById = new Map(rows.map((row) => [row.observingId, row]));
   for (const thread of threads) {

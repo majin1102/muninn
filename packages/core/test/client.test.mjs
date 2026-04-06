@@ -5,6 +5,7 @@ import path from 'node:path';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 
 import core from '../dist/index.js';
+import { getCoreBinding } from '../dist/native.js';
 
 const {
   addMessage,
@@ -24,9 +25,25 @@ async function makeDatasetUri() {
   };
 }
 
-async function writeMuninnConfig(configPath, { turnProvider, observerProvider } = {}) {
+function toFileStoreUri(dir) {
+  return `file-object-store://${path.resolve(dir)}`;
+}
+
+async function writeMuninnConfig(configPath, {
+  turnProvider,
+  observerProvider,
+  semanticDimensions = 4,
+  storageUri,
+  storageOptions,
+} = {}) {
   const root = {};
   const llm = {};
+  if (storageUri) {
+    root.storage = { uri: storageUri };
+    if (storageOptions) {
+      root.storage.storageOptions = storageOptions;
+    }
+  }
   if (turnProvider) {
     root.turn = { llm: 'test_turn_llm' };
     llm.test_turn_llm = { provider: turnProvider };
@@ -46,7 +63,7 @@ async function writeMuninnConfig(configPath, { turnProvider, observerProvider } 
     root.semanticIndex = {
       embedding: {
         provider: 'mock',
-        dimensions: 4,
+        dimensions: semanticDimensions,
       },
       defaultImportance: 0.7,
     };
@@ -68,24 +85,24 @@ test('addMessage and sessions.get roundtrip through the native binding', async (
   process.env.MUNINN_HOME = homeDir;
   
   const created = await addMessage({
-    session_id: 'group-a',
+    sessionId: 'group-a',
     agent: 'agent-a',
     prompt: 'alpha prompt',
     summary: 'alpha summary',
   });
 
   assert.ok(typeof created.turnId === 'string');
-  assert.equal(created.session_id, 'group-a');
+  assert.equal(created.sessionId, 'group-a');
 
   const detail = await sessions.get(created.turnId);
   assert.ok(detail);
   assert.equal(detail.turnId, created.turnId);
-  assert.equal(detail.session_id, 'group-a');
+  assert.equal(detail.sessionId, 'group-a');
   assert.equal(detail.agent, 'agent-a');
   assert.equal(detail.summary, 'alpha summary');
 });
 
-test('addMessage without session_id reuses the agent default session through the native binding', async (t) => {
+test('addMessage without sessionId reuses the agent default session through the native binding', async (t) => {
   const { dir, homeDir } = await makeDatasetUri();
   t.after(async () => rm(dir, { recursive: true, force: true }));
 
@@ -97,11 +114,11 @@ test('addMessage without session_id reuses the agent default session through the
   });
   const merged = await addMessage({
     agent: 'agent-a',
-    tool_calling: ['tool-a'],
+    toolCalling: ['tool-a'],
   });
   const otherAgent = await addMessage({
     agent: 'agent-b',
-    tool_calling: ['tool-b'],
+    toolCalling: ['tool-b'],
   });
 
   assert.equal(merged.turnId, first.turnId);
@@ -109,7 +126,7 @@ test('addMessage without session_id reuses the agent default session through the
 
   const detail = await sessions.get(first.turnId);
   assert.ok(detail);
-  assert.equal(detail.session_id, null);
+  assert.equal(detail.sessionId, null);
   assert.equal(detail.agent, 'agent-a');
   assert.deepEqual(detail.toolCalling, ['tool-a']);
 });
@@ -121,19 +138,19 @@ test('sessions.list returns the recent window in chronological order, and memori
   process.env.MUNINN_HOME = homeDir;
   
   const first = await addMessage({
-    session_id: 'group-a',
+    sessionId: 'group-a',
     agent: 'agent-a',
     prompt: 'first prompt',
     response: 'first response',
   });
   const second = await addMessage({
-    session_id: 'group-a',
+    sessionId: 'group-a',
     agent: 'agent-a',
     prompt: 'second prompt',
     response: 'second response',
   });
   await addMessage({
-    session_id: 'group-b',
+    sessionId: 'group-b',
     agent: 'agent-b',
     prompt: 'other prompt',
   });
@@ -141,7 +158,7 @@ test('sessions.list returns the recent window in chronological order, and memori
   const listed = await sessions.list({ mode: { type: 'recency', limit: 2 } });
   assert.equal(listed.length, 2);
   assert.equal(listed[0].turnId, second.turnId);
-  assert.equal(listed[1].session_id, 'group-b');
+  assert.equal(listed[1].sessionId, 'group-b');
 
   const timeline = await memories.timeline({
     memoryId: second.turnId,
@@ -177,7 +194,7 @@ test('shutdownCoreForTests allows the native binding to restart cleanly', async 
   process.env.MUNINN_HOME = homeDir;
   
   const first = await addMessage({
-    session_id: 'group-a',
+    sessionId: 'group-a',
     agent: 'agent-a',
     prompt: 'first prompt',
   });
@@ -186,7 +203,7 @@ test('shutdownCoreForTests allows the native binding to restart cleanly', async 
   await shutdownCoreForTests();
 
   const second = await addMessage({
-    session_id: 'group-a',
+    sessionId: 'group-a',
     agent: 'agent-a',
     prompt: 'second prompt',
   });
@@ -206,7 +223,7 @@ test('addMessage rejects empty message payloads through the native binding', asy
   
   await assert.rejects(
     () => addMessage({
-      session_id: 'group-a',
+      sessionId: 'group-a',
       agent: 'agent-a',
     }),
     /at least one message field/i,
@@ -222,7 +239,7 @@ test('validateSettings rejects semantic index dimension changes that mismatch ex
   await writeMuninnConfig(configPath, { observerProvider: 'mock' });
 
   await addMessage({
-    session_id: 'group-a',
+    sessionId: 'group-a',
     agent: 'agent-a',
     prompt: 'semantic prompt',
     response: 'semantic response',
@@ -254,6 +271,166 @@ test('validateSettings rejects semantic index dimension changes that mismatch ex
   );
 });
 
+test('validateSettings reports invalid JSON before native storage initialization', async (t) => {
+  const { dir, homeDir, configPath } = await makeDatasetUri();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+
+  process.env.MUNINN_HOME = homeDir;
+  await mkdir(path.dirname(configPath), { recursive: true });
+  await writeFile(configPath, '{\n  "storage": {\n    "uri": ""\n  }\n}\n', 'utf8');
+
+  await assert.rejects(
+    () => validateSettings('{"watchdog": '),
+    /invalid JSON/i,
+  );
+});
+
+test('validateSettings accepts semanticIndex config when embedding is omitted', async (t) => {
+  const { dir, homeDir } = await makeDatasetUri();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+
+  process.env.MUNINN_HOME = homeDir;
+
+  await assert.doesNotReject(() => validateSettings(JSON.stringify({
+    semanticIndex: {
+      defaultImportance: 0.5,
+    },
+  }, null, 2)));
+});
+
+test('validateSettings rejects semantic index dimension changes when the table exists but is empty', async (t) => {
+  const { dir, homeDir, configPath } = await makeDatasetUri();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+
+  process.env.MUNINN_HOME = homeDir;
+  await writeMuninnConfig(configPath, { observerProvider: 'mock' });
+
+  const binding = getCoreBinding();
+  assert.ok(typeof binding.sessionTable.describe === 'function');
+  assert.ok(typeof binding.observingTable.describe === 'function');
+  assert.ok(typeof binding.semanticIndexTable.describe === 'function');
+
+  await binding.semanticIndexTable.upsert({
+    rows: [{
+      id: 'mem-1',
+      memoryId: 'observing:1',
+      text: 'semantic text',
+      vector: [0.1, 0.2, 0.3, 0.4],
+      importance: 0.7,
+      category: 'fact',
+      createdAt: '2024-01-01T00:00:00Z',
+    }],
+  });
+  await binding.semanticIndexTable.delete({ ids: ['mem-1'] });
+
+  const description = await binding.semanticIndexTable.describe();
+  assert.ok(description);
+  assert.equal(description.dimensions?.vector, 4);
+
+  await assert.rejects(
+    () => validateSettings(JSON.stringify({
+      observer: {
+        name: 'test-observer',
+        llm: 'test_observer_llm',
+        maxAttempts: 3,
+      },
+      llm: {
+        test_observer_llm: {
+          provider: 'mock',
+        },
+      },
+      semanticIndex: {
+        embedding: {
+          provider: 'mock',
+          dimensions: 8,
+        },
+        defaultImportance: 0.7,
+      },
+    }, null, 2)),
+    /semantic_index dimension mismatch/i,
+  );
+});
+
+test('validateSettings checks the pending storage target instead of the current config storage', async (t) => {
+  const { dir, homeDir, configPath } = await makeDatasetUri();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+
+  const storageA = path.join(dir, 'storage-a');
+  const storageB = path.join(dir, 'storage-b');
+
+  process.env.MUNINN_HOME = homeDir;
+  process.env.MUNINN_OBSERVE_WINDOW_MS = '10';
+
+  await writeMuninnConfig(configPath, {
+    observerProvider: 'mock',
+    storageUri: toFileStoreUri(storageB),
+  });
+  await addMessage({
+    sessionId: 'group-b',
+    agent: 'agent-b',
+    prompt: 'storage b prompt',
+    response: 'storage b response',
+  });
+  await new Promise((resolve) => setTimeout(resolve, 50));
+
+  await shutdownCoreForTests();
+
+  await writeMuninnConfig(configPath, {
+    observerProvider: 'mock',
+    storageUri: toFileStoreUri(storageA),
+  });
+
+  await assert.rejects(
+    () => validateSettings(JSON.stringify({
+      storage: {
+        uri: toFileStoreUri(storageB),
+      },
+      observer: {
+        name: 'test-observer',
+        llm: 'test_observer_llm',
+        maxAttempts: 3,
+      },
+      llm: {
+        test_observer_llm: {
+          provider: 'mock',
+        },
+      },
+      semanticIndex: {
+        embedding: {
+          provider: 'mock',
+          dimensions: 8,
+        },
+        defaultImportance: 0.7,
+      },
+    }, null, 2)),
+    /semantic_index dimension mismatch/i,
+  );
+});
+
+test('validateSettings is not blocked by the current config storage when the pending storage target is valid', async (t) => {
+  const { dir, homeDir, configPath } = await makeDatasetUri();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+
+  const storageB = path.join(dir, 'storage-b');
+
+  process.env.MUNINN_HOME = homeDir;
+  await mkdir(path.dirname(configPath), { recursive: true });
+  await writeFile(configPath, '{\n  "storage": {\n    "uri": ""\n  }\n}\n', 'utf8');
+
+  await assert.doesNotReject(() => validateSettings(JSON.stringify({
+    storage: {
+      uri: toFileStoreUri(storageB),
+    },
+    semanticIndex: {
+      embedding: {
+        provider: 'mock',
+        dimensions: 8,
+      },
+      defaultImportance: 0.7,
+    },
+  }, null, 2)));
+});
+
 test('observer.watermark reports pending turns until the observer flush completes', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(async () => rm(dir, { recursive: true, force: true }));
@@ -262,7 +439,7 @@ test('observer.watermark reports pending turns until the observer flush complete
   await writeMuninnConfig(configPath, { observerProvider: 'mock' });
 
   const created = await addMessage({
-    session_id: 'group-a',
+    sessionId: 'group-a',
     agent: 'agent-a',
     prompt: 'observer pending prompt',
     response: 'observer pending response',
@@ -291,7 +468,7 @@ test('addMessage summarizes response turns when a summary provider is configured
     await writeMuninnConfig(configPath, { turnProvider: 'mock' });
 
   const created = await addMessage({
-    session_id: 'group-a',
+    sessionId: 'group-a',
     agent: 'agent-a',
     prompt: 'summarize this',
     response: 'response body',
@@ -311,7 +488,7 @@ test('addMessage persists response turns when the summarizer is not configured',
   process.env.MUNINN_HOME = homeDir;
   
   const created = await addMessage({
-    session_id: 'group-a',
+    sessionId: 'group-a',
     agent: 'agent-a',
     response: 'response body',
   });
@@ -331,7 +508,7 @@ test('rendered memory binding returns unified turn and observing reads', async (
   await writeMuninnConfig(configPath, { turnProvider: 'mock', observerProvider: 'mock' });
 
   const turn = await addMessage({
-    session_id: 'group-a',
+    sessionId: 'group-a',
     agent: 'agent-a',
     prompt: 'rendered prompt',
     response: 'rendered response',

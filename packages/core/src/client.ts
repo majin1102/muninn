@@ -1,12 +1,21 @@
-import { __testing as nativeTesting, getCoreBinding, shutdownCoreBindingForTests } from './native.js';
-import { validateMuninnConfigContent } from './config.js';
+import {
+  __testing as nativeTesting,
+  describeSemanticIndexForStorage,
+  getCoreBinding,
+  shutdownCoreBindingForTests,
+} from './native.js';
+import {
+  resolveStorageTarget,
+  validateMuninnConfigInput,
+  validateMuninnConfigStorage,
+} from './config.js';
 import { Muninn } from './muninn.js';
 
-export interface SessionTurnRecord {
+export interface SessionTurn {
   turnId: string;
   createdAt: string;
   updatedAt: string;
-  session_id?: string | null;
+  sessionId?: string | null;
   agent: string;
   observer: string;
   title?: string | null;
@@ -18,7 +27,7 @@ export interface SessionTurnRecord {
   observingEpoch?: number | null;
 }
 
-export interface ObservingRecord {
+export interface ObservingSnapshot {
   snapshotId: string;
   observingId: string;
   snapshotSequence: number;
@@ -35,7 +44,7 @@ export interface ObservingRecord {
   };
 }
 
-export interface RenderedMemoryRecord {
+export interface RenderedMemory {
   memoryId: string;
   title?: string;
   summary?: string;
@@ -44,12 +53,12 @@ export interface RenderedMemoryRecord {
   updatedAt: string;
 }
 
-export interface RecallHitRecord {
+export interface RecallHit {
   memoryId: string;
   text: string;
 }
 
-export interface ObserverWatermarkRecord {
+export interface ObserverWatermark {
   resolved: boolean;
   pendingTurnIds: string[];
   observingEpoch?: number;
@@ -61,11 +70,11 @@ export type ListModeInput =
   | { type: 'page'; offset: number; limit: number };
 
 export interface SessionMessageInput {
-  session_id?: string;
+  sessionId?: string;
   agent: string;
   title?: string;
   summary?: string;
-  tool_calling?: string[];
+  toolCalling?: string[];
   artifacts?: Record<string, string>;
   prompt?: string;
   response?: string;
@@ -80,16 +89,19 @@ function getMuninn(): Muninn {
   return singletonMuninn;
 }
 
-export async function addMessage(session: SessionMessageInput): Promise<SessionTurnRecord> {
+export async function addMessage(session: SessionMessageInput): Promise<SessionTurn> {
   return getMuninn().accept(session);
 }
 
 export async function validateSettings(content: string): Promise<void> {
-  await validateMuninnConfigContent(content, getCoreBinding());
+  const config = validateMuninnConfigInput(content);
+  const storage = resolveStorageTarget(config);
+  const description = await describeSemanticIndexForStorage(storage);
+  await validateMuninnConfigStorage(config, description);
 }
 
 export const sessions = {
-  async get(memoryId: string): Promise<SessionTurnRecord | null> {
+  async get(memoryId: string): Promise<SessionTurn | null> {
     return getMuninn().memories.getSession(memoryId);
   },
 
@@ -97,32 +109,32 @@ export const sessions = {
     mode: ListModeInput;
     agent?: string;
     sessionId?: string;
-  }): Promise<SessionTurnRecord[]> {
+  }): Promise<SessionTurn[]> {
     return getMuninn().memories.listSessions(params);
   },
 };
 
 export const observings = {
-  async get(memoryId: string): Promise<ObservingRecord | null> {
+  async get(memoryId: string): Promise<ObservingSnapshot | null> {
     return getMuninn().memories.getObserving(memoryId);
   },
 
   async list(params: {
     mode: ListModeInput;
     observer?: string;
-  }): Promise<ObservingRecord[]> {
+  }): Promise<ObservingSnapshot[]> {
     return getMuninn().memories.listObservings(params);
   },
 };
 
 export const memories = {
-  async get(memoryId: string): Promise<RenderedMemoryRecord | null> {
+  async get(memoryId: string): Promise<RenderedMemory | null> {
     return getMuninn().memories.get(memoryId);
   },
 
   async list(params: {
     mode: ListModeInput;
-  }): Promise<RenderedMemoryRecord[]> {
+  }): Promise<RenderedMemory[]> {
     return getMuninn().memories.list(params);
   },
 
@@ -130,17 +142,17 @@ export const memories = {
     memoryId: string;
     beforeLimit?: number;
     afterLimit?: number;
-  }): Promise<RenderedMemoryRecord[]> {
+  }): Promise<RenderedMemory[]> {
     return getMuninn().memories.timeline(params);
   },
 
-  async recall(query: string, limit?: number): Promise<RecallHitRecord[]> {
+  async recall(query: string, limit?: number): Promise<RecallHit[]> {
     return getMuninn().recallMemories(query, limit);
   },
 };
 
 export const observer = {
-  async watermark(): Promise<ObserverWatermarkRecord> {
+  async watermark(): Promise<ObserverWatermark> {
     return getMuninn().observerWatermark();
   },
 };

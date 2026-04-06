@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import type { ObserveResult, ObservedMemory, ObservingContent, ObservingSnapshotRow, ObservingThread, SnapshotContent } from './types.js';
+import type { ObserveResult, ObservedMemory, ObservingContent, ObservingSnapshot, ObservingThread, SnapshotContent } from './types.js';
 
 const PENDING_SNAPSHOT_ID = 'observing:18446744073709551615';
 const MAX_REFERENCES = 1000;
@@ -29,11 +29,11 @@ export function createObservingThread(
 }
 
 export function loadThreads(
-  snapshots: ObservingSnapshotRow[],
+  snapshots: ObservingSnapshot[],
   observer: string,
 ): ObservingThread[] {
   const cutoff = Date.now() - SEVEN_DAYS_MS;
-  const grouped = new Map<string, ObservingSnapshotRow[]>();
+  const grouped = new Map<string, ObservingSnapshot[]>();
   for (const snapshot of snapshots) {
     if (snapshot.observer !== observer) {
       continue;
@@ -50,7 +50,7 @@ export function loadThreads(
     .sort((left, right) => left.updatedAt.localeCompare(right.updatedAt));
 }
 
-export function threadFromSnapshots(rows: ObservingSnapshotRow[]): ObservingThread {
+export function threadFromSnapshots(rows: ObservingSnapshot[]): ObservingThread {
   const ordered = [...rows].sort((left, right) => (
     left.snapshotSequence - right.snapshotSequence
     || left.updatedAt.localeCompare(right.updatedAt)
@@ -119,7 +119,7 @@ export function pushReference(thread: ObservingThread, reference: string): void 
   }
 }
 
-export function toObservingSnapshotRow(thread: ObservingThread): ObservingSnapshotRow {
+export function toObservingSnapshot(thread: ObservingThread): ObservingSnapshot {
   if (thread.snapshots.length === 0) {
     throw new Error(`missing snapshots for observing thread ${thread.observingId}`);
   }
@@ -163,7 +163,7 @@ export function threadHasPendingIndex(thread: ObservingThread): boolean {
   return thread.indexedSnapshotSequence == null || thread.indexedSnapshotSequence < latestSnapshotSequence;
 }
 
-function deserializeSnapshot(row: ObservingSnapshotRow): SnapshotContent {
+function deserializeSnapshot(row: ObservingSnapshot): SnapshotContent {
   const parsed = JSON.parse(row.content) as Partial<SnapshotContent>;
   return {
     memories: Array.isArray(parsed.memories) ? parsed.memories as ObservedMemory[] : [],

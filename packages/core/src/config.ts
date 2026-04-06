@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import type { CoreBinding } from './native.js';
+import type { StorageTarget, TableDescription } from './native.js';
 
 const CONFIG_FILE_NAME = 'muninn.json';
 const DEFAULT_SUMMARY_THRESHOLD = 500;
@@ -40,7 +40,7 @@ type EmbeddingConfigRecord = {
 };
 
 type SemanticIndexConfigRecord = {
-  embedding: EmbeddingConfigRecord;
+  embedding?: EmbeddingConfigRecord;
   defaultImportance?: number;
 };
 
@@ -138,12 +138,13 @@ export function getEffectiveObserverName(): string {
 
 export function getEmbeddingConfig(): EmbeddingConfig {
   const semanticIndex = loadMuninnConfig()?.semanticIndex;
+  const embedding = semanticIndex?.embedding;
   return {
-    provider: parseProvider(semanticIndex?.embedding.provider ?? 'mock'),
-    model: semanticIndex?.embedding.model,
-    apiKey: semanticIndex?.embedding.apiKey,
-    baseUrl: semanticIndex?.embedding.baseUrl,
-    dimensions: semanticIndex?.embedding.dimensions ?? DEFAULT_EMBEDDING_DIMENSIONS,
+    provider: parseProvider(embedding?.provider ?? 'mock'),
+    model: embedding?.model,
+    apiKey: embedding?.apiKey,
+    baseUrl: embedding?.baseUrl,
+    dimensions: embedding?.dimensions ?? DEFAULT_EMBEDDING_DIMENSIONS,
     defaultImportance: semanticIndex?.defaultImportance ?? DEFAULT_IMPORTANCE,
   };
 }
@@ -163,24 +164,33 @@ export function parseMuninnConfigContent(content: string): MuninnConfigRecord {
   return config;
 }
 
-export async function validateMuninnConfigContent(
-  content: string,
-  binding?: Pick<CoreBinding, 'semanticNearest'>,
-): Promise<void> {
+export function validateMuninnConfigInput(content: string): MuninnConfigRecord {
   const config = parseMuninnConfigContent(content);
   validateConfiguredProviders(config);
-  if (!binding) {
+  return config;
+}
+
+export function resolveStorageTarget(config: MuninnConfigRecord): StorageTarget | null {
+  const storage = config.storage;
+  if (storage?.uri) {
+    return {
+      uri: storage.uri as string,
+      storageOptions: storage.storageOptions as Record<string, string> | undefined,
+    };
+  }
+  return null;
+}
+
+export async function validateMuninnConfigStorage(
+  config: MuninnConfigRecord,
+  description?: TableDescription | null,
+): Promise<void> {
+  if (!description) {
     return;
   }
-  const expectedDimensions = config.semanticIndex?.embedding.dimensions ?? DEFAULT_EMBEDDING_DIMENSIONS;
-  const rows = await binding.semanticNearest({
-    vector: new Array(expectedDimensions).fill(0),
-    limit: 1,
-  });
-  if (rows.length === 0) {
-    return;
-  }
-  const actualDimensions = rows[0]?.vector?.length ?? 0;
+  const embedding = config.semanticIndex?.embedding;
+  const expectedDimensions = embedding?.dimensions ?? DEFAULT_EMBEDDING_DIMENSIONS;
+  const actualDimensions = description.dimensions?.vector ?? 0;
   if (actualDimensions !== expectedDimensions) {
     throw new Error(
       `semantic_index dimension mismatch: muninn.json expects ${expectedDimensions}, but the existing semantic_index table stores ${actualDimensions}; update semanticIndex.embedding.dimensions or rebuild the semantic_index table`,
@@ -217,7 +227,7 @@ function validateConfiguredProviders(config: MuninnConfigRecord): void {
       parseProvider(provider);
     }
   }
-  const embeddingProvider = config.semanticIndex?.embedding.provider;
+  const embeddingProvider = config.semanticIndex?.embedding?.provider;
   if (embeddingProvider) {
     parseProvider(embeddingProvider);
   }

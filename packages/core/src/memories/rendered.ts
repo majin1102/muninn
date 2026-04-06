@@ -1,16 +1,14 @@
-import type { RenderedMemoryRecord } from '../client.js';
-import type { SessionTurnRow } from '../session/types.js';
-import type { ObservingRecord } from '../client.js';
+import type { ObservingSnapshot, RenderedMemory, SessionTurn } from '../client.js';
 
 export function inferRenderedMemoryKind(memoryId: string): 'session' | 'observing' {
   return memoryId.startsWith('observing:') ? 'observing' : 'session';
 }
 
-export function fallbackRenderedMemoryTitle(memory: RenderedMemoryRecord): string {
+export function fallbackRenderedMemoryTitle(memory: RenderedMemory): string {
   return memory.title ?? memory.summary ?? memory.detail ?? memory.memoryId;
 }
 
-export function renderRenderedMemoryMarkdown(memory: RenderedMemoryRecord): string {
+export function renderRenderedMemoryMarkdown(memory: RenderedMemory): string {
   const sections = [`# ${memory.memoryId}`];
   if (memory.title) {
     sections.push('', '## Title', '', memory.title);
@@ -26,7 +24,7 @@ export function renderRenderedMemoryMarkdown(memory: RenderedMemoryRecord): stri
   return sections.join('\n');
 }
 
-export function renderSessionTurn(memory: SessionTurnRow): RenderedMemoryRecord | null {
+export function renderSessionTurn(memory: SessionTurn): RenderedMemory | null {
   const title = trimText(memory.title);
   const summary = trimText(memory.summary);
   const detail = renderSessionTurnDetail(memory);
@@ -43,7 +41,7 @@ export function renderSessionTurn(memory: SessionTurnRow): RenderedMemoryRecord 
   };
 }
 
-export function renderObservingSnapshot(memory: ObservingRecord): RenderedMemoryRecord | null {
+export function renderObservingSnapshot(memory: ObservingSnapshot): RenderedMemory | null {
   const title = trimText(memory.title);
   const summary = trimText(memory.summary);
   const detail = trimText(memory.content);
@@ -60,7 +58,7 @@ export function renderObservingSnapshot(memory: ObservingRecord): RenderedMemory
   };
 }
 
-export function renderSessionTurnDetail(turn: SessionTurnRow): string | undefined {
+export function renderSessionTurnDetail(turn: SessionTurn): string | undefined {
   const lines: string[] = [];
   if (trimText(turn.prompt)) {
     lines.push(`Prompt: ${turn.prompt!.trim()}`);

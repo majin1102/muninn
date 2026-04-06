@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow_array::Float32Array;
@@ -8,7 +9,7 @@ use lance::{Error, Result};
 use object_store::path::Path;
 use serde::{Deserialize, Serialize};
 
-use super::access::{LanceDataset, TableAccess, TableOptions, delete_by_ids};
+use super::access::{LanceDataset, TableAccess, TableDescription, TableOptions, delete_by_ids, describe_dataset};
 use super::codec::{record_batch_to_semantic_rows, semantic_rows_to_reader};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -24,12 +25,12 @@ pub struct SemanticIndexRow {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct SemanticIndexTable {
+pub struct SemanticIndexTable {
     access: TableAccess,
 }
 
 impl SemanticIndexTable {
-    pub(crate) fn new(options: TableOptions) -> Self {
+    pub fn new(options: TableOptions) -> Self {
         Self {
             access: TableAccess::new(
                 options,
@@ -64,6 +65,22 @@ impl SemanticIndexTable {
             )));
         }
         Ok(())
+    }
+
+    pub async fn describe(&self) -> Result<Option<TableDescription>> {
+        let Some(dataset) = self.access.try_open().await? else {
+            return Ok(None);
+        };
+        // describe() reports table facts and the semantic-index-specific schema checks
+        // that this table already enforces for vector and memory_id compatibility.
+        let actual_dimensions = semantic_index_vector_dimensions(&dataset)?;
+        semantic_index_memory_id_field(&dataset)?;
+        let mut description = describe_dataset(&dataset);
+        description.dimensions = Some(HashMap::from([(
+            "vector".to_string(),
+            actual_dimensions,
+        )]));
+        Ok(Some(description))
     }
 
     #[cfg(test)]

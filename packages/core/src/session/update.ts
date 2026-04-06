@@ -19,14 +19,14 @@ export async function buildSessionUpdate(
     response: content.response,
   });
   return {
-    sessionId: content.session_id,
+    sessionId: content.sessionId,
     agent: content.agent,
     observer,
     title: metadata.title,
     summary: metadata.summary,
     titleSource: metadata.titleSource,
     summarySource: metadata.summarySource,
-    toolCalling: content.tool_calling,
+    toolCalling: content.toolCalling,
     artifacts: content.artifacts,
     prompt: content.prompt,
     response: content.response,
@@ -36,7 +36,7 @@ export async function buildSessionUpdate(
 
 export function validateContent(content: SessionMessageInput): void {
   const hasContent = Boolean(
-    (content.tool_calling && content.tool_calling.length > 0)
+    (content.toolCalling && content.toolCalling.length > 0)
       || (content.artifacts && Object.keys(content.artifacts).length > 0)
       || hasText(content.prompt)
       || hasText(content.response),
