@@ -310,7 +310,8 @@ pub fn describe_semantic_index_for_storage(params: Value) -> NapiResult<Value> {
         .map_err(to_napi_error)?;
     let table_options = match table_options {
         Some(table_options) => table_options,
-        None => TableOptions::local(data_root().map_err(to_napi_error)?).map_err(to_napi_error)?,
+        None => TableOptions::local_read_only(data_root().map_err(to_napi_error)?)
+            .map_err(to_napi_error)?,
     };
     let runtime = Runtime::new()
         .map_err(|error| Error::from_reason(error.to_string()))?;

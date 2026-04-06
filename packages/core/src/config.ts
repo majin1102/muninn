@@ -215,18 +215,8 @@ function validateTopLevelConfig(config: MuninnConfigRecord): void {
 }
 
 function validateConfiguredProviders(config: MuninnConfigRecord): void {
-  if (config.turn?.llm) {
-    const provider = config.llm?.[config.turn.llm]?.provider;
-    if (provider) {
-      parseProvider(provider);
-    }
-  }
-  if (config.observer?.llm) {
-    const provider = config.llm?.[config.observer.llm]?.provider;
-    if (provider) {
-      parseProvider(provider);
-    }
-  }
+  validateReferencedProvider(config.llm, config.turn?.llm, 'turn.llm');
+  validateReferencedProvider(config.llm, config.observer?.llm, 'observer.llm');
   const embeddingProvider = config.semanticIndex?.embedding?.provider;
   if (embeddingProvider) {
     parseProvider(embeddingProvider);
@@ -257,8 +247,8 @@ function validateObserverConfig(observer: unknown): void {
     return;
   }
   const config = expectRecord(observer, 'observer');
-  validateOptionalString(config.name, 'observer.name');
-  validateOptionalString(config.llm, 'observer.llm');
+  requireNonEmptyString(config.name, 'observer.name');
+  requireNonEmptyString(config.llm, 'observer.llm');
   validateOptionalPositiveInteger(config.maxAttempts, 'observer.maxAttempts');
 }
 
@@ -312,6 +302,22 @@ function validateWatchdogConfig(watchdog: unknown): void {
       'watchdog.semanticIndex.optimizeMergeCount',
     );
   }
+}
+
+function validateReferencedProvider(
+  llmConfigs: Record<string, LlmConfigRecord> | undefined,
+  llmName: string | undefined,
+  sourceLabel: string,
+): void {
+  if (!llmName) {
+    return;
+  }
+  const config = llmConfigs?.[llmName];
+  if (!config) {
+    throw new Error(`${sourceLabel} references missing llm.${llmName}.`);
+  }
+  requireNonEmptyString(config.provider, `llm.${llmName}.provider`);
+  parseProvider(config.provider);
 }
 
 function expectRecord(value: unknown, label: string): Record<string, unknown> {

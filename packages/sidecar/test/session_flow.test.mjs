@@ -890,6 +890,58 @@ test('ui settings config accepts semanticIndex when embedding is omitted', async
   assert.match(persisted, /"defaultImportance": 0.5/);
 });
 
+test('ui settings config rejects observer config without observer.llm', async (t) => {
+  const { dir, homeDir, configPath } = await makeDatasetUri();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+  process.env.MUNINN_HOME = homeDir;
+
+  await mkdir(path.dirname(configPath), { recursive: true });
+
+  const writeResponse = await app.request('/api/v1/ui/settings/config', {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      content: JSON.stringify({
+        observer: {
+          name: 'test-observer',
+        },
+      }, null, 2),
+    }),
+  });
+  assert.equal(writeResponse.status, 400);
+  const body = await json(writeResponse);
+  assert.equal(body.errorCode, 'invalidRequest');
+  assert.match(body.errorMessage, /observer\.llm must be a non-empty string/i);
+});
+
+test('ui settings config rejects referenced llm entries without provider', async (t) => {
+  const { dir, homeDir, configPath } = await makeDatasetUri();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+  process.env.MUNINN_HOME = homeDir;
+
+  await mkdir(path.dirname(configPath), { recursive: true });
+
+  const writeResponse = await app.request('/api/v1/ui/settings/config', {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      content: JSON.stringify({
+        observer: {
+          name: 'test-observer',
+          llm: 'test_observer_llm',
+        },
+        llm: {
+          test_observer_llm: {},
+        },
+      }, null, 2),
+    }),
+  });
+  assert.equal(writeResponse.status, 400);
+  const body = await json(writeResponse);
+  assert.equal(body.errorCode, 'invalidRequest');
+  assert.match(body.errorMessage, /llm\.test_observer_llm\.provider must be a non-empty string/i);
+});
+
 test('ui settings config rejects semantic index dimension changes that mismatch existing dataset', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(async () => rm(dir, { recursive: true, force: true }));

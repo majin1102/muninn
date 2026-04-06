@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 
 import core from '../dist/index.js';
 import { getCoreBinding } from '../dist/native.js';
@@ -296,6 +296,66 @@ test('validateSettings accepts semanticIndex config when embedding is omitted', 
       defaultImportance: 0.5,
     },
   }, null, 2)));
+});
+
+test('validateSettings rejects observer config without observer.llm', async (t) => {
+  const { dir, homeDir } = await makeDatasetUri();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+
+  process.env.MUNINN_HOME = homeDir;
+
+  await assert.rejects(
+    () => validateSettings(JSON.stringify({
+      observer: {
+        name: 'test-observer',
+      },
+      llm: {
+        test_observer_llm: {
+          provider: 'mock',
+        },
+      },
+    }, null, 2)),
+    /observer\.llm must be a non-empty string/i,
+  );
+});
+
+test('validateSettings rejects referenced llm entries without provider', async (t) => {
+  const { dir, homeDir } = await makeDatasetUri();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+
+  process.env.MUNINN_HOME = homeDir;
+
+  await assert.rejects(
+    () => validateSettings(JSON.stringify({
+      turn: {
+        llm: 'test_turn_llm',
+      },
+      observer: {
+        name: 'test-observer',
+        llm: 'test_observer_llm',
+      },
+      llm: {
+        test_turn_llm: {},
+        test_observer_llm: {},
+      },
+    }, null, 2)),
+    /llm\.(test_turn_llm|test_observer_llm)\.provider must be a non-empty string/i,
+  );
+});
+
+test('validateSettings does not create the default storage root while checking settings', async (t) => {
+  const { dir, homeDir } = await makeDatasetUri();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+
+  process.env.MUNINN_HOME = homeDir;
+
+  await assert.doesNotReject(() => validateSettings(JSON.stringify({
+    semanticIndex: {
+      defaultImportance: 0.5,
+    },
+  }, null, 2)));
+
+  await assert.rejects(() => access(homeDir));
 });
 
 test('validateSettings rejects semantic index dimension changes when the table exists but is empty', async (t) => {

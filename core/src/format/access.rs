@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::Path as FsPath;
+use std::path::{Path as FsPath, PathBuf};
 use std::sync::Arc;
 
 use arrow_array::RecordBatchReader;
@@ -70,18 +70,15 @@ impl TableOptions {
     }
 
     pub fn local(root_path: impl AsRef<FsPath>) -> Result<Self> {
-        std::fs::create_dir_all(root_path.as_ref()).map_err(|error| {
-            Error::io(format!(
-                "create storage root {:?}: {error}",
-                root_path.as_ref()
-            ))
-        })?;
-        let canonical = std::fs::canonicalize(root_path.as_ref()).map_err(|error| {
-            Error::io(format!(
-                "canonicalize storage root {:?}: {error}",
-                root_path.as_ref()
-            ))
-        })?;
+        let canonical = resolve_local_root(root_path.as_ref(), true)?;
+        Self::from_uri(
+            format!("file-object-store://{}", canonical.to_string_lossy()),
+            None,
+        )
+    }
+
+    pub fn local_read_only(root_path: impl AsRef<FsPath>) -> Result<Self> {
+        let canonical = resolve_local_root(root_path.as_ref(), false)?;
         Self::from_uri(
             format!("file-object-store://{}", canonical.to_string_lossy()),
             None,
@@ -132,6 +129,31 @@ impl TableOptions {
             };
         }
         Some(params)
+    }
+}
+
+fn resolve_local_root(root_path: &FsPath, create: bool) -> Result<PathBuf> {
+    if create {
+        std::fs::create_dir_all(root_path).map_err(|error| {
+            Error::io(format!("create storage root {:?}: {error}", root_path))
+        })?;
+    }
+
+    let absolute = if root_path.is_absolute() {
+        root_path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map_err(|error| Error::io(format!("resolve storage root {:?}: {error}", root_path)))?
+            .join(root_path)
+    };
+
+    match std::fs::canonicalize(&absolute) {
+        Ok(canonical) => Ok(canonical),
+        Err(error) if !create && error.kind() == std::io::ErrorKind::NotFound => Ok(absolute),
+        Err(error) => Err(Error::io(format!(
+            "canonicalize storage root {:?}: {error}",
+            root_path
+        ))),
     }
 }
 
@@ -234,6 +256,27 @@ pub(crate) async fn delete_by_row_ids(
         .join(" OR ");
     let result = dataset.delete(&predicate).await?;
     Ok(result.num_deleted_rows as usize)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TableOptions;
+
+    #[test]
+    fn local_read_only_does_not_create_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("missing");
+        assert!(!root.exists());
+
+        let options = TableOptions::local_read_only(&root).unwrap();
+
+        assert!(!root.exists());
+        assert!(
+            options
+                .uri_for(options.root())
+                .starts_with("file-object-store://")
+        );
+    }
 }
 
 pub(crate) fn escape_predicate_string(value: &str) -> String {
