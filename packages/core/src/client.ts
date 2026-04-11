@@ -81,22 +81,22 @@ let singletonMuninnPromise: Promise<Muninn> | null = null;
 let bootstrapPromise: Promise<void> | null = null;
 let watchdog: Watchdog | null = null;
 
-async function ensureBootstrappedNativeTables() {
-  const binding = await getNativeTables();
+async function ensureBootstrapped() {
+  const tables = await getNativeTables();
   if (!bootstrapPromise) {
-    bootstrapPromise = bootstrapCore(binding).catch((error) => {
+    bootstrapPromise = bootstrap(tables).catch((error) => {
       bootstrapPromise = null;
       throw error;
     });
   }
   await bootstrapPromise;
-  return binding;
+  return tables;
 }
 
-async function bootstrapCore(binding: Awaited<ReturnType<typeof getNativeTables>>): Promise<void> {
+async function bootstrap(tables: Awaited<ReturnType<typeof getNativeTables>>): Promise<void> {
   const embedding = getEmbeddingConfig();
-  await binding.semanticIndexTable.validateDimensions({ expected: embedding.dimensions });
-  await binding.sessionTable.reconcileOpenTurns();
+  await tables.semanticIndexTable.validateDimensions({ expected: embedding.dimensions });
+  await tables.sessionTable.reconcileOpenTurns();
 
   const watchdogConfig = getWatchdogConfig();
   if (!watchdogConfig.enabled) {
@@ -104,7 +104,7 @@ async function bootstrapCore(binding: Awaited<ReturnType<typeof getNativeTables>
     return;
   }
 
-  watchdog = new Watchdog(binding, watchdogConfig);
+  watchdog = new Watchdog(tables, watchdogConfig);
   watchdog.start();
 }
 
@@ -113,9 +113,9 @@ async function getMuninn(): Promise<Muninn> {
     return singletonMuninn;
   }
   if (!singletonMuninnPromise) {
-    singletonMuninnPromise = ensureBootstrappedNativeTables()
-      .then((binding) => {
-        singletonMuninn = new Muninn(binding);
+    singletonMuninnPromise = ensureBootstrapped()
+      .then((tables) => {
+        singletonMuninn = new Muninn(tables);
         return singletonMuninn;
       })
       .catch((error) => {
