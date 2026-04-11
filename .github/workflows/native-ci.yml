@@ -33,8 +33,8 @@ jobs:
       - name: Install dependencies
         run: pnpm install --no-frozen-lockfile
 
-      - name: Check Rust core
-        run: cargo check --manifest-path core/Cargo.toml
+      - name: Check Rust format
+        run: cargo check --manifest-path format/Cargo.toml
 
       - name: Check native addon
         run: cargo check --manifest-path packages/core/native/Cargo.toml
