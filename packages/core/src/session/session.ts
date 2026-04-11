@@ -1,6 +1,5 @@
-import type { CoreBinding } from '../native.js';
-import type { SessionMessageInput, SessionTurn } from '../client.js';
-import type { Window } from '../observer/window.js';
+import type { NativeTables } from '../native.js';
+import type { SessionTurn, TurnContent } from '../client.js';
 import { buildSessionUpdate } from './update.js';
 import { cloneTurn, readSessionTurn, serializeSessionTurn, type SessionUpdate, type TurnMetadataSource } from './types.js';
 import { hasText, sessionKey } from './key.js';
@@ -14,9 +13,10 @@ type SessionTurnWithSource = SessionTurn & {
 export class Session {
   private openTurn?: SessionTurn;
   private lastUsedAt = Date.now();
+  private acceptQueue: Promise<void> = Promise.resolve();
 
   constructor(
-    private readonly client: CoreBinding,
+    private readonly client: NativeTables,
     private readonly config: {
       sessionId?: string;
       agent: string;
@@ -31,18 +31,24 @@ export class Session {
     return mergePrompt(this.openTurn?.prompt, incoming);
   }
 
-  async accept(content: SessionMessageInput, window: Window): Promise<SessionTurn> {
-    this.touch();
-    const update = await buildSessionUpdate(this, content, this.config.observer, window.epoch);
-    let turn = this.openTurn ? cloneTurn(this.openTurn) : newPendingTurn(this.config);
-    turn = applyUpdate(turn, update);
-    const rows = await this.client.sessionTable.upsert({
-      turns: [serializeSessionTurn(turn)],
+  async accept(content: TurnContent, observingEpoch: number): Promise<SessionTurn> {
+    return this.runAcceptExclusive(async () => {
+      this.touch();
+      const update = await buildSessionUpdate(this, content, this.config.observer, observingEpoch);
+      let turn = this.openTurn ? cloneTurn(this.openTurn) : newPendingTurn(this.config);
+      turn = applyUpdate(turn, update);
+      const rows = this.openTurn
+        ? await this.client.sessionTable.update({
+          turns: [serializeSessionTurn(turn)],
+        })
+        : await this.client.sessionTable.insert({
+        turns: [serializeSessionTurn(turn)],
+      });
+      const persisted = readSessionTurn(rows[0]);
+      this.openTurn = isOpen(persisted) ? cloneTurn(persisted) : undefined;
+      this.touch();
+      return persisted;
     });
-    const persisted = readSessionTurn(rows[0]);
-    this.openTurn = isOpen(persisted) ? cloneTurn(persisted) : undefined;
-    this.touch();
-    return persisted;
   }
 
   touch(): void {
@@ -51,6 +57,21 @@ export class Session {
 
   expired(ttlMs: number): boolean {
     return Date.now() - this.lastUsedAt > ttlMs;
+  }
+
+  private async runAcceptExclusive<T>(operation: () => Promise<T>): Promise<T> {
+    const previous = this.acceptQueue;
+    let releaseCurrent: (() => void) | undefined;
+    this.acceptQueue = new Promise((resolve) => {
+      releaseCurrent = resolve;
+    });
+
+    await previous;
+    try {
+      return await operation();
+    } finally {
+      releaseCurrent?.();
+    }
   }
 }
 

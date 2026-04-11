@@ -6,10 +6,13 @@ import type { StorageTarget, TableDescription } from './native.js';
 const CONFIG_FILE_NAME = 'muninn.json';
 const DEFAULT_SUMMARY_THRESHOLD = 500;
 const DEFAULT_TITLE_MAX_CHARS = 100;
-const DEFAULT_OBSERVER_NAME = 'default-observer';
 const DEFAULT_OBSERVER_MAX_ATTEMPTS = 3;
-const DEFAULT_EMBEDDING_DIMENSIONS = 8;
 const DEFAULT_IMPORTANCE = 0.7;
+const DEFAULT_WATCHDOG_INTERVAL_MS = 60_000;
+const DEFAULT_WATCHDOG_COMPACT_MIN_FRAGMENTS = 8;
+const DEFAULT_WATCHDOG_TARGET_PARTITION_SIZE = 1_024;
+const DEFAULT_WATCHDOG_OPTIMIZE_MERGE_COUNT = 4;
+const DEFAULT_SEMANTIC_INDEX_DIMENSIONS = 8;
 
 type LlmConfigRecord = {
   provider: string;
@@ -80,6 +83,23 @@ export type EmbeddingConfig = {
   defaultImportance: number;
 };
 
+export type WatchdogConfig = {
+  enabled: boolean;
+  intervalMs: number;
+  compactMinFragments: number;
+  semanticIndex: {
+    targetPartitionSize: number;
+    optimizeMergeCount: number;
+  };
+};
+
+type CoreRuntimeConfig = {
+  observer: ObserverConfigRecord;
+  observerLlm: LlmConfigRecord;
+  semanticIndex: SemanticIndexConfigRecord;
+  embedding: EmbeddingConfigRecord & { dimensions: number };
+};
+
 export function resolveMuninnHome(): string {
   return process.env.MUNINN_HOME ?? path.join(os.homedir(), '.muninn');
 }
@@ -115,12 +135,7 @@ export function getTurnLlmConfig(): TurnLlmConfig | null {
 }
 
 export function getObserverLlmConfig(): ObserverLlmConfig | null {
-  const config = loadMuninnConfig();
-  const observer = config?.observer;
-  const llm = observer ? config?.llm?.[observer.llm] : undefined;
-  if (!observer || !llm) {
-    return null;
-  }
+  const { observer, observerLlm: llm } = requireCoreRuntimeConfig(loadMuninnConfig());
   return {
     name: observer.name,
     maxAttempts: observer.maxAttempts ?? DEFAULT_OBSERVER_MAX_ATTEMPTS,
@@ -133,19 +148,40 @@ export function getObserverLlmConfig(): ObserverLlmConfig | null {
 }
 
 export function getEffectiveObserverName(): string {
-  return loadMuninnConfig()?.observer?.name ?? DEFAULT_OBSERVER_NAME;
+  return requireCoreRuntimeConfig(loadMuninnConfig()).observer.name;
 }
 
 export function getEmbeddingConfig(): EmbeddingConfig {
-  const semanticIndex = loadMuninnConfig()?.semanticIndex;
-  const embedding = semanticIndex?.embedding;
+  const { semanticIndex, embedding } = requireCoreRuntimeConfig(loadMuninnConfig());
   return {
-    provider: parseProvider(embedding?.provider ?? 'mock'),
-    model: embedding?.model,
-    apiKey: embedding?.apiKey,
-    baseUrl: embedding?.baseUrl,
-    dimensions: embedding?.dimensions ?? DEFAULT_EMBEDDING_DIMENSIONS,
-    defaultImportance: semanticIndex?.defaultImportance ?? DEFAULT_IMPORTANCE,
+    provider: parseProvider(embedding.provider),
+    model: embedding.model,
+    apiKey: embedding.apiKey,
+    baseUrl: embedding.baseUrl,
+    dimensions: embedding.dimensions,
+    defaultImportance: semanticIndex.defaultImportance ?? DEFAULT_IMPORTANCE,
+  };
+}
+
+export function getWatchdogConfig(): WatchdogConfig {
+  const watchdog = loadMuninnConfig()?.watchdog as Record<string, unknown> | undefined;
+  const semanticIndex = watchdog?.semanticIndex as Record<string, unknown> | undefined;
+  return {
+    enabled: typeof watchdog?.enabled === 'boolean' ? watchdog.enabled : true,
+    intervalMs: typeof watchdog?.intervalMs === 'number'
+      ? watchdog.intervalMs
+      : DEFAULT_WATCHDOG_INTERVAL_MS,
+    compactMinFragments: typeof watchdog?.compactMinFragments === 'number'
+      ? watchdog.compactMinFragments
+      : DEFAULT_WATCHDOG_COMPACT_MIN_FRAGMENTS,
+    semanticIndex: {
+      targetPartitionSize: typeof semanticIndex?.targetPartitionSize === 'number'
+        ? semanticIndex.targetPartitionSize
+        : DEFAULT_WATCHDOG_TARGET_PARTITION_SIZE,
+      optimizeMergeCount: typeof semanticIndex?.optimizeMergeCount === 'number'
+        ? semanticIndex.optimizeMergeCount
+        : DEFAULT_WATCHDOG_OPTIMIZE_MERGE_COUNT,
+    },
   };
 }
 
@@ -166,7 +202,11 @@ export function parseMuninnConfigContent(content: string): MuninnConfigRecord {
 
 export function validateMuninnConfigInput(content: string): MuninnConfigRecord {
   const config = parseMuninnConfigContent(content);
+  if (config.observer && !config.llm) {
+    throw new Error('llm is required.');
+  }
   validateConfiguredProviders(config);
+  requireCoreRuntimeConfig(config);
   return config;
 }
 
@@ -188,14 +228,59 @@ export async function validateMuninnConfigStorage(
   if (!description) {
     return;
   }
-  const embedding = config.semanticIndex?.embedding;
-  const expectedDimensions = embedding?.dimensions ?? DEFAULT_EMBEDDING_DIMENSIONS;
-  const actualDimensions = description.dimensions?.vector ?? 0;
+  const expectedDimensions = effectiveEmbeddingDimensions(config);
+  const actualDimensions = description.dimensions?.vector;
+  if (actualDimensions === undefined) {
+    return;
+  }
   if (actualDimensions !== expectedDimensions) {
     throw new Error(
       `semantic_index dimension mismatch: muninn.json expects ${expectedDimensions}, but the existing semantic_index table stores ${actualDimensions}; update semanticIndex.embedding.dimensions or rebuild the semantic_index table`,
     );
   }
+}
+
+function requireCoreRuntimeConfig(config: MuninnConfigRecord | null): CoreRuntimeConfig {
+  if (!config?.observer) {
+    throw new Error('observer is required.');
+  }
+  if (!config.llm) {
+    throw new Error('llm is required.');
+  }
+  if (!config.semanticIndex) {
+    throw new Error('semanticIndex is required.');
+  }
+  if (!config.semanticIndex.embedding) {
+    throw new Error('semanticIndex.embedding is required.');
+  }
+
+  const observer = config.observer;
+  const llm = config.llm;
+  const semanticIndex = config.semanticIndex;
+  const embedding = config.semanticIndex.embedding;
+
+  requireNonEmptyString(observer.name, 'observer.name');
+  requireNonEmptyString(observer.llm, 'observer.llm');
+  requireNonEmptyString(embedding.provider, 'semanticIndex.embedding.provider');
+  const dimensions = effectiveEmbeddingDimensions(config);
+  parseProvider(embedding.provider);
+
+  const observerLlm = llm[observer.llm];
+  if (!observerLlm) {
+    throw new Error(`observer.llm references missing llm.${observer.llm}.`);
+  }
+  requireNonEmptyString(observerLlm.provider, `llm.${observer.llm}.provider`);
+  parseProvider(observerLlm.provider);
+
+  return {
+    observer,
+    observerLlm,
+    semanticIndex,
+    embedding: {
+      ...embedding,
+      dimensions,
+    },
+  };
 }
 
 function parseProvider(provider: string): 'mock' | 'openai' {
@@ -272,19 +357,28 @@ function validateSemanticIndexConfig(semanticIndex: unknown): void {
     return;
   }
   const config = expectRecord(semanticIndex, 'semanticIndex');
-  if (config.embedding !== undefined) {
-    const embedding = expectRecord(config.embedding, 'semanticIndex.embedding');
-    const provider = embedding.provider;
-    if (provider !== undefined) {
-      requireNonEmptyString(provider, 'semanticIndex.embedding.provider');
-      parseProvider(provider as string);
-    }
-    validateOptionalString(embedding.model, 'semanticIndex.embedding.model');
-    validateOptionalString(embedding.apiKey, 'semanticIndex.embedding.apiKey');
-    validateOptionalString(embedding.baseUrl, 'semanticIndex.embedding.baseUrl');
-    validateOptionalPositiveInteger(embedding.dimensions, 'semanticIndex.embedding.dimensions');
+  if (config.embedding === undefined) {
+    throw new Error('semanticIndex.embedding is required.');
   }
+  const embedding = expectRecord(config.embedding, 'semanticIndex.embedding');
+  requireNonEmptyString(embedding.provider, 'semanticIndex.embedding.provider');
+  const provider = parseProvider(embedding.provider as string);
+  validateOptionalString(embedding.model, 'semanticIndex.embedding.model');
+  validateOptionalString(embedding.apiKey, 'semanticIndex.embedding.apiKey');
+  validateOptionalString(embedding.baseUrl, 'semanticIndex.embedding.baseUrl');
+  validateOptionalPositiveInteger(embedding.dimensions, 'semanticIndex.embedding.dimensions');
   validateOptionalNumber(config.defaultImportance, 'semanticIndex.defaultImportance');
+  if (provider === 'openai') {
+    requireNonEmptyString(embedding.apiKey, 'semanticIndex.embedding.apiKey');
+  }
+}
+
+function effectiveEmbeddingDimensions(config: MuninnConfigRecord | null): number {
+  const dimensions = config?.semanticIndex?.embedding?.dimensions;
+  if (dimensions === undefined) {
+    return DEFAULT_SEMANTIC_INDEX_DIMENSIONS;
+  }
+  return requirePositiveInteger(dimensions, 'semanticIndex.embedding.dimensions');
 }
 
 function validateWatchdogConfig(watchdog: unknown): void {
@@ -321,7 +415,10 @@ function validateReferencedProvider(
     throw new Error(`${sourceLabel} references missing llm.${llmName}.`);
   }
   requireNonEmptyString(config.provider, `llm.${llmName}.provider`);
-  parseProvider(config.provider);
+  const provider = parseProvider(config.provider);
+  if (provider === 'openai') {
+    requireNonEmptyString(config.apiKey, `llm.${llmName}.apiKey`);
+  }
 }
 
 function expectRecord(value: unknown, label: string): Record<string, unknown> {
@@ -335,6 +432,13 @@ function requireNonEmptyString(value: unknown, label: string): void {
   if (typeof value !== 'string' || !value.trim()) {
     throw new Error(`${label} must be a non-empty string.`);
   }
+}
+
+function requirePositiveInteger(value: unknown, label: string): number {
+  if (!Number.isInteger(value) || (value as number) <= 0) {
+    throw new Error(`${label} must be a positive integer.`);
+  }
+  return value as number;
 }
 
 function validateOptionalString(value: unknown, label: string): void {

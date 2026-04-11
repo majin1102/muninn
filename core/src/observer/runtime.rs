@@ -13,8 +13,7 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 use crate::format::{
-    MemoryId, MemoryLayer, ObservingTable, SemanticIndexRow, SemanticIndexTable, SessionTable,
-    SessionTurn, TableOptions,
+    ObservingTable, SemanticIndexRow, SemanticIndexTable, SessionTable, SessionTurn, TableOptions,
 };
 use crate::llm::config::{EmbeddingConfig, effective_observer_name};
 use crate::llm::embedding::embed_text;
@@ -25,7 +24,7 @@ use crate::llm::observing_update::{
     ObserveRequest, ObserveResult, ObservingTurnInput, ObservingUpdater,
 };
 use crate::observer::thread::{
-    ObservingThread, SnapshotContent, load_threads, snapshot_ref, turn_ref,
+    ObservingThread, SnapshotContent, load_threads, turn_ref,
 };
 #[cfg(test)]
 use crate::observer::types::ObserverWatermark;
@@ -133,11 +132,6 @@ impl Observer {
     async fn build(table_options: TableOptions, observer: String) -> Result<Self> {
         let semantic_config = crate::config::semantic_index_config()?;
         let mut threads = load_threads(&table_options, &observer).await?;
-        let thread_ids = threads
-            .iter()
-            .map(|thread| thread.observing_id.clone())
-            .collect::<HashSet<_>>();
-        apply_parent_refs(&table_options, &mut threads, &thread_ids).await?;
         for thread in &mut threads {
             if let Err(error) = catch_up_index(&table_options, thread, &semantic_config).await {
                 eprintln!(
@@ -164,7 +158,7 @@ impl Observer {
             if repaired {
                 let mut repaired_turns = inbox.clone();
                 session_table(&table_options)
-                    .upsert(&mut repaired_turns)
+                    .update(&repaired_turns)
                     .await?;
                 inbox = repaired_turns;
             }
@@ -683,7 +677,6 @@ pub(crate) async fn apply_gateway_updates(
 
     let now = Utc::now();
     let mut observe_turns_by_thread = HashMap::<String, HashMap<String, ObservingTurnInput>>::new();
-    let mut turn_parent_by_id = HashMap::<MemoryId, String>::new();
     let mut touched_ids = HashSet::<String>::new();
 
     for update in updates {
@@ -708,9 +701,6 @@ pub(crate) async fn apply_gateway_updates(
                     .iter()
                     .any(|thread| thread.observing_id == *target_id)
                 {
-                    turn_parent_by_id
-                        .entry(turn.turn_id.clone())
-                        .or_insert_with(|| target_id.clone());
                     touched_ids.insert(target_id.clone());
                     merge_observing_turn_input(
                         &mut observe_turns_by_thread,
@@ -741,7 +731,7 @@ pub(crate) async fn apply_gateway_updates(
                     }
                     references
                 };
-                let mut thread = ObservingThread::new(
+                let thread = ObservingThread::new(
                     observer,
                     &new_thread.title,
                     &new_thread.summary,
@@ -749,7 +739,6 @@ pub(crate) async fn apply_gateway_updates(
                     observing_epoch,
                     now,
                 );
-                thread.pending_parent_id = turn_parent_by_id.get(&turn.turn_id).cloned();
                 let observing_id = thread.observing_id.clone();
                 threads.push(thread);
                 touched_ids.insert(observing_id.clone());
@@ -908,7 +897,7 @@ async fn flush_threads(
         .iter()
         .map(|observing| observing.observing_id.clone())
         .collect::<HashSet<_>>();
-    observing_table(table_options).upsert(&mut observings).await?;
+    observing_table(table_options).insert(&mut observings).await?;
     let mut observings_by_id = observings
         .into_iter()
         .map(|observing| (observing.observing_id.clone(), observing))
@@ -928,12 +917,10 @@ async fn flush_threads(
             thread.snapshot_ids.push(observing.snapshot_id.clone());
         }
         thread.references = observing.references.clone();
-        thread.pending_parent_id = observing.checkpoint.pending_parent_id.clone();
         thread.indexed_snapshot_sequence = observing.checkpoint.indexed_snapshot_sequence;
         thread.observing_epoch = observing.checkpoint.observing_epoch;
         thread.updated_at = observing.updated_at;
     }
-    apply_parent_refs(table_options, threads, touched_ids).await?;
 
     let semantic_config = crate::config::semantic_index_config()?;
     let mut failed_index_ids = HashSet::new();
@@ -1017,93 +1004,6 @@ async fn retry_index_batch(
     Ok(failed_ids)
 }
 
-async fn apply_parent_refs(
-    table_options: &TableOptions,
-    threads: &mut [ObservingThread],
-    ids: &HashSet<String>,
-) -> Result<()> {
-    let snapshot_by_id = threads
-        .iter()
-        .filter_map(|thread| {
-            thread
-                .snapshot_id
-                .map(|snapshot_id| (thread.observing_id.clone(), snapshot_id))
-        })
-        .collect::<HashMap<_, _>>();
-
-    let mut ref_threads = Vec::new();
-    for thread in threads
-        .iter()
-        .filter(|thread| ids.contains(&thread.observing_id))
-    {
-        let Some(parent_id) = thread.pending_parent_id.as_ref() else {
-            continue;
-        };
-        let Some(snapshot_id) = snapshot_by_id.get(parent_id).copied() else {
-            continue;
-        };
-        let mut ref_thread = thread.clone();
-        let parent_ref = snapshot_ref(snapshot_id);
-
-        // Keep the structural parent observing reference at the front so the
-        // lineage anchor is stable even as turn references keep accumulating.
-        ref_thread
-            .references
-            .retain(|reference| reference != &parent_ref);
-        ref_thread.references.insert(0, parent_ref);
-
-        // Bound the accumulated provenance without dropping the front parent
-        // reference we just repaired. When we need room, evict the oldest
-        // session-scoped turn reference first.
-        while ref_thread.references.len() > crate::observer::thread::MAX_REFERENCES {
-            let index = ref_thread
-                .references
-                .iter()
-                .skip(1)
-                .position(|reference| {
-                    matches!(
-                        reference.parse::<MemoryId>(),
-                        Ok(memory_id)
-                            if memory_id.memory_layer()
-                                == MemoryLayer::Session
-                    )
-                })
-                .map(|index| index + 1)
-                .unwrap_or(ref_thread.references.len() - 1);
-            ref_thread.references.remove(index);
-        }
-
-        ref_thread.pending_parent_id = None;
-        ref_threads.push(ref_thread);
-    }
-
-    if ref_threads.is_empty() {
-        return Ok(());
-    }
-    let mut observings = ref_threads
-        .iter()
-        .cloned()
-        .map(|thread| thread.to_row())
-        .collect::<Result<Vec<_>>>()?;
-    observing_table(table_options)
-        .upsert(&mut observings)
-        .await?;
-    let mut ref_threads_by_id = ref_threads
-        .into_iter()
-        .map(|thread| (thread.observing_id.clone(), thread))
-        .collect::<HashMap<_, _>>();
-    for thread in threads
-        .iter_mut()
-        .filter(|thread| ids.contains(&thread.observing_id))
-    {
-        let Some(updated) = ref_threads_by_id.remove(&thread.observing_id) else {
-            continue;
-        };
-        *thread = updated;
-    }
-    Ok(())
-}
-
 async fn catch_up_index(
     table_options: &TableOptions,
     thread: &mut ObservingThread,
@@ -1135,7 +1035,7 @@ async fn catch_up_index(
         if thread.snapshot_id.is_some() {
             let mut observings = vec![thread.to_row()?];
             observing_table(table_options)
-                .upsert(&mut observings)
+                .update(&observings)
                 .await?;
         }
     }

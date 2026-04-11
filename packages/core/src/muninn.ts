@@ -1,5 +1,5 @@
-import type { CoreBinding } from './native.js';
-import type { ObserverWatermark, RecallHit, SessionMessageInput, SessionTurn } from './client.js';
+import type { NativeTables } from './native.js';
+import type { ObserverWatermark, RecallHit, SessionTurn, TurnContent } from './client.js';
 import { Memories } from './memories/memories.js';
 import { Observer } from './observer/observer.js';
 import { SessionRegistry } from './session/registry.js';
@@ -10,22 +10,14 @@ export class Muninn {
   private observerRuntime: Observer | null = null;
   private sessionRegistry: SessionRegistry | null = null;
 
-  constructor(private readonly client: CoreBinding) {
+  constructor(private readonly client: NativeTables) {
     this.memories = new Memories(client);
   }
 
-  async accept(content: SessionMessageInput): Promise<SessionTurn> {
+  async accept(turnContent: TurnContent): Promise<SessionTurn> {
     const observer = await this.ensureObserver();
     const registry = this.ensureSessionRegistry(observer.name);
-    const window = await observer.window();
-    try {
-      const session = await registry.load(content.sessionId, content.agent);
-      const turn = await session.accept(content, window);
-      await window.include(turn);
-      return toSessionTurn(turn);
-    } finally {
-      window.complete();
-    }
+    return toSessionTurn(await observer.accept(turnContent, registry));
   }
 
   async observerWatermark(): Promise<ObserverWatermark> {
@@ -33,12 +25,12 @@ export class Muninn {
   }
 
   async recallMemories(query: string, limit?: number): Promise<RecallHit[]> {
-    await (await this.ensureObserver()).flushPending();
     return this.memories.recall(query, limit);
   }
 
   async shutdown(): Promise<void> {
     if (this.observerRuntime) {
+      // Fast stop only: use flushPending() beforehand when the caller needs a barrier-drain.
       await this.observerRuntime.shutdown();
     }
     this.observerRuntime = null;

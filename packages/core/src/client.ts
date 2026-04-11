@@ -1,15 +1,20 @@
 import {
   __testing as nativeTesting,
   describeSemanticIndexForStorage,
-  getCoreBinding,
-  shutdownCoreBindingForTests,
+  getNativeTables,
+  shutdownNativeTablesForTests,
 } from './native.js';
 import {
   resolveStorageTarget,
+  getEmbeddingConfig,
+  getWatchdogConfig,
   validateMuninnConfigInput,
   validateMuninnConfigStorage,
 } from './config.js';
+import { Memories } from './memories/memories.js';
 import { Muninn } from './muninn.js';
+import { Watchdog } from './watchdog.js';
+import type { TurnContent } from '@muninn/types';
 
 export interface SessionTurn {
   turnId: string;
@@ -69,26 +74,46 @@ export type ListModeInput =
   | { type: 'recency'; limit: number }
   | { type: 'page'; offset: number; limit: number };
 
-export interface SessionMessageInput {
-  sessionId?: string;
-  agent: string;
-  title?: string;
-  summary?: string;
-  toolCalling?: string[];
-  artifacts?: Record<string, string>;
-  prompt?: string;
-  response?: string;
-}
+export type { TurnContent } from '@muninn/types';
 
 let singletonMuninn: Muninn | null = null;
 let singletonMuninnPromise: Promise<Muninn> | null = null;
+let bootstrapPromise: Promise<void> | null = null;
+let watchdog: Watchdog | null = null;
+
+async function ensureBootstrappedNativeTables() {
+  const binding = await getNativeTables();
+  if (!bootstrapPromise) {
+    bootstrapPromise = bootstrapCore(binding).catch((error) => {
+      bootstrapPromise = null;
+      throw error;
+    });
+  }
+  await bootstrapPromise;
+  return binding;
+}
+
+async function bootstrapCore(binding: Awaited<ReturnType<typeof getNativeTables>>): Promise<void> {
+  const embedding = getEmbeddingConfig();
+  await binding.semanticIndexTable.validateDimensions({ expected: embedding.dimensions });
+  await binding.sessionTable.reconcileOpenTurns();
+
+  const watchdogConfig = getWatchdogConfig();
+  if (!watchdogConfig.enabled) {
+    watchdog = null;
+    return;
+  }
+
+  watchdog = new Watchdog(binding, watchdogConfig);
+  watchdog.start();
+}
 
 async function getMuninn(): Promise<Muninn> {
   if (singletonMuninn) {
     return singletonMuninn;
   }
   if (!singletonMuninnPromise) {
-    singletonMuninnPromise = getCoreBinding()
+    singletonMuninnPromise = ensureBootstrappedNativeTables()
       .then((binding) => {
         singletonMuninn = new Muninn(binding);
         return singletonMuninn;
@@ -101,8 +126,8 @@ async function getMuninn(): Promise<Muninn> {
   return singletonMuninnPromise;
 }
 
-export async function addMessage(session: SessionMessageInput): Promise<SessionTurn> {
-  return (await getMuninn()).accept(session);
+export async function addMessage(turnContent: TurnContent): Promise<SessionTurn> {
+  return (await getMuninn()).accept(turnContent);
 }
 
 export async function validateSettings(content: string): Promise<void> {
@@ -114,7 +139,7 @@ export async function validateSettings(content: string): Promise<void> {
 
 export const sessions = {
   async get(memoryId: string): Promise<SessionTurn | null> {
-    return (await getMuninn()).memories.getSession(memoryId);
+    return new Memories(await getNativeTables()).getSession(memoryId);
   },
 
   async list(params: {
@@ -122,32 +147,32 @@ export const sessions = {
     agent?: string;
     sessionId?: string;
   }): Promise<SessionTurn[]> {
-    return (await getMuninn()).memories.listSessions(params);
+    return new Memories(await getNativeTables()).listSessions(params);
   },
 };
 
 export const observings = {
   async get(memoryId: string): Promise<ObservingSnapshot | null> {
-    return (await getMuninn()).memories.getObserving(memoryId);
+    return new Memories(await getNativeTables()).getObserving(memoryId);
   },
 
   async list(params: {
     mode: ListModeInput;
     observer?: string;
   }): Promise<ObservingSnapshot[]> {
-    return (await getMuninn()).memories.listObservings(params);
+    return new Memories(await getNativeTables()).listObservings(params);
   },
 };
 
 export const memories = {
   async get(memoryId: string): Promise<RenderedMemory | null> {
-    return (await getMuninn()).memories.get(memoryId);
+    return new Memories(await getNativeTables()).get(memoryId);
   },
 
   async list(params: {
     mode: ListModeInput;
   }): Promise<RenderedMemory[]> {
-    return (await getMuninn()).memories.list(params);
+    return new Memories(await getNativeTables()).list(params);
   },
 
   async timeline(params: {
@@ -155,7 +180,7 @@ export const memories = {
     beforeLimit?: number;
     afterLimit?: number;
   }): Promise<RenderedMemory[]> {
-    return (await getMuninn()).memories.timeline(params);
+    return new Memories(await getNativeTables()).timeline(params);
   },
 
   async recall(query: string, limit?: number): Promise<RecallHit[]> {
@@ -174,9 +199,14 @@ export async function shutdownCoreForTests(): Promise<void> {
   if (muninn) {
     await muninn.shutdown();
   }
+  if (watchdog) {
+    await watchdog.stop();
+  }
   singletonMuninn = null;
   singletonMuninnPromise = null;
-  await shutdownCoreBindingForTests();
+  bootstrapPromise = null;
+  watchdog = null;
+  await shutdownNativeTablesForTests();
 }
 
 export const __testing = {

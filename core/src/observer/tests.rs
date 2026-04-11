@@ -14,7 +14,7 @@ use crate::llm::config::{effective_observer_name, llm_test_env_guard, write_test
 use crate::llm::observing::{GatewayAction, GatewayUpdate, NewThreadHint};
 use crate::observer::runtime::{Observer, apply_gateway_updates, apply_memory_delta};
 use crate::observer::thread::{ObservingThread, SnapshotContent};
-use crate::muninn::{Muninn, TurnContent};
+use crate::test_support::{TestService, TurnContent};
 use crate::session::SessionUpdate;
 
 async fn wait_until<F, Fut>(mut check: F)
@@ -122,8 +122,20 @@ async fn post_observable(
     response: &str,
     summary: &str,
 ) -> SessionTurn {
-    let muninn = Muninn::new(table_options.clone()).await.unwrap();
-    muninn
+    let service = TestService::new(table_options.clone()).await.unwrap();
+    post_observable_with_service(&service, table_options, session_id, prompt, response, summary)
+        .await
+}
+
+async fn post_observable_with_service(
+    service: &TestService,
+    table_options: &TableOptions,
+    session_id: &str,
+    prompt: &str,
+    response: &str,
+    summary: &str,
+) -> SessionTurn {
+    service
         .accept(TurnContent {
             session_id: Some(session_id.to_string()),
             agent: "agent-a".to_string(),
@@ -205,8 +217,11 @@ async fn different_sessions_flush_in_separate_epochs() {
         std::env::set_var("MUNINN_OBSERVER_POLL_MS", "60000");
     }
     let table_options = test_table_options();
+    let observer = Observer::new(table_options.clone()).await.unwrap();
+    let service = TestService::new(table_options.clone()).await.unwrap();
 
-    let first = post_observable(
+    let first = post_observable_with_service(
+        &service,
         &table_options,
         "group-a",
         "prompt-a",
@@ -215,17 +230,14 @@ async fn different_sessions_flush_in_separate_epochs() {
     )
     .await;
     wait_until(|| {
-        let table_options = table_options.clone();
+        let observer = observer.clone();
         async move {
-            observing_table(&table_options)
-                .list(Some("test-observer"))
-                .await
-                .map(|rows| !rows.is_empty())
-                .unwrap_or(false)
+            observer.window().epoch() == 1
         }
     })
     .await;
-    let second = post_observable(
+    let second = post_observable_with_service(
+        &service,
         &table_options,
         "group-b",
         "prompt-b",
@@ -273,7 +285,7 @@ async fn failed_post_does_not_leak_open_write_barrier() {
         std::env::set_var("MUNINN_OBSERVER_POLL_MS", "60000");
     }
     let table_options = test_table_options();
-    let service = Muninn::new(table_options.clone()).await.unwrap();
+    let service = TestService::new(table_options.clone()).await.unwrap();
 
     let error = service
         .accept(TurnContent {
@@ -578,11 +590,10 @@ async fn recovery_requeues_observable_turns_without_an_epoch() {
             checkpoint: ObservingCheckpoint {
                 observing_epoch: 0,
                 indexed_snapshot_sequence: Some(0),
-                pending_parent_id: None,
             },
         }];
     observing_table(&table_options)
-        .upsert(&mut observings)
+        .insert(&mut observings)
         .await
         .unwrap();
 
@@ -605,7 +616,7 @@ async fn recovery_requeues_observable_turns_without_an_epoch() {
         observing_epoch: None,
     };
     let mut turns = vec![turn.clone()];
-    session_table(&table_options).upsert(&mut turns).await.unwrap();
+    session_table(&table_options).insert(&mut turns).await.unwrap();
     let persisted_turn = session_table(&table_options)
         .select(SessionSelect::Filter {
             agent: Some("agent-a".to_string()),
@@ -662,7 +673,6 @@ async fn gateway_can_append_or_spawn_observing() {
         observing_id: "OBS-A".to_string(),
         snapshot_id: Some(MemoryId::new(MemoryLayer::Observing, 42)),
         snapshot_ids: vec![MemoryId::new(MemoryLayer::Observing, 42)],
-        pending_parent_id: None,
         observing_epoch: 0,
         title: "Session A".to_string(),
         summary: "Existing line A".to_string(),
@@ -728,7 +738,6 @@ async fn gateway_can_append_or_spawn_observing() {
             .iter()
             .any(|reference| *reference == turn.turn_id.to_string())
     );
-    assert_eq!(session_b.pending_parent_id.as_deref(), Some("OBS-A"));
 
     clear_data_root();
 }
@@ -760,12 +769,11 @@ async fn load_runtime_restores_observings() {
         checkpoint: ObservingCheckpoint {
             observing_epoch: 3,
             indexed_snapshot_sequence: Some(0),
-            pending_parent_id: None,
         },
     };
     let mut observings = vec![observing];
     observing_table(&table_options)
-        .upsert(&mut observings)
+        .insert(&mut observings)
         .await
         .unwrap();
 
@@ -783,180 +791,6 @@ async fn load_runtime_restores_observings() {
     assert_eq!(sessions[0].references, vec!["session:77".to_string()]);
     assert_eq!(sessions[0].indexed_snapshot_sequence, Some(0));
     assert_eq!(sessions[0].observing_epoch, 3);
-
-    clear_data_root();
-}
-
-#[tokio::test]
-async fn append_preserves_existing_parent_snapshot_reference() {
-    let _guard = llm_test_env_guard();
-    let dir = tempfile::tempdir().unwrap();
-    set_test_config(&dir, None, Some("mock"), None);
-    set_data_root(&dir);
-
-    let mut turn = SessionTurn::new(&SessionUpdate {
-        session_id: Some("group-a".to_string()),
-        agent: "agent-a".to_string(),
-        observer: "test-observer".to_string(),
-        title: None,
-        summary: Some("turn summary".to_string()),
-        title_source: None,
-        summary_source: None,
-        tool_calling: None,
-        artifacts: None,
-        prompt: Some("prompt".to_string()),
-        response: Some("response".to_string()),
-        observing_epoch: None,
-    })
-    .with_row_id(88);
-    turn.summary = Some("turn summary".to_string());
-    turn.prompt = Some("prompt".to_string());
-    turn.response = Some("response".to_string());
-
-    let parent_ref = MemoryId::new(MemoryLayer::Observing, 42).to_string();
-    let mut threads = vec![ObservingThread {
-        observing_id: "OBS-CHILD".to_string(),
-        snapshot_id: Some(MemoryId::new(MemoryLayer::Observing, 52)),
-        snapshot_ids: vec![MemoryId::new(MemoryLayer::Observing, 52)],
-        pending_parent_id: None,
-        observing_epoch: 0,
-        title: "Child".to_string(),
-        summary: "Child summary".to_string(),
-        snapshots: Vec::new(),
-        references: vec!["session:77".to_string(), parent_ref.clone()],
-        indexed_snapshot_sequence: None,
-        observer: "test-observer".to_string(),
-        created_at: Utc::now(),
-        updated_at: Utc::now(),
-    }];
-
-    apply_gateway_updates(
-        &mut threads,
-        "test-observer",
-        std::slice::from_ref(&turn),
-        3,
-        vec![GatewayUpdate {
-            turn_id: turn.turn_id.to_string(),
-            action: GatewayAction::Append,
-            observing_id: Some("OBS-CHILD".to_string()),
-            summary: "continue child".to_string(),
-            new_thread: None,
-            why: "same thread".to_string(),
-        }],
-    )
-    .await
-    .unwrap();
-
-    let child = threads
-        .iter()
-        .find(|thread| thread.observing_id == "OBS-CHILD")
-        .unwrap();
-    assert!(
-        child
-            .references
-            .iter()
-            .any(|reference| reference == &parent_ref)
-    );
-    assert!(
-        child
-            .references
-            .iter()
-            .any(|reference| reference == &turn.turn_id.to_string())
-    );
-    assert_eq!(child.pending_parent_id, None);
-
-    clear_data_root();
-}
-
-#[tokio::test]
-async fn observer_startup_reconciles_pending_parent_references() {
-    let _guard = llm_test_env_guard();
-    let dir = tempfile::tempdir().unwrap();
-    set_test_config(&dir, None, Some("mock"), None);
-    set_data_root(&dir);
-    let table_options = test_table_options();
-
-    let now = Utc::now();
-    let mut observings = vec![
-            ObservingSnapshot {
-                snapshot_id: pending_snapshot_id(),
-                observing_id: "OBS-PARENT".to_string(),
-                snapshot_sequence: 0,
-                created_at: now,
-                updated_at: now,
-                observer: "test-observer".to_string(),
-                title: "Parent".to_string(),
-                summary: "Parent summary".to_string(),
-                content: serde_json::json!({"memories":[],"openQuestions":[],"nextSteps":[]})
-                    .to_string(),
-                references: vec!["session:10".to_string()],
-                checkpoint: ObservingCheckpoint {
-                    observing_epoch: 1,
-                    indexed_snapshot_sequence: Some(0),
-                    pending_parent_id: None,
-                },
-            },
-            ObservingSnapshot {
-                snapshot_id: pending_snapshot_id(),
-                observing_id: "OBS-CHILD".to_string(),
-                snapshot_sequence: 0,
-                created_at: now,
-                updated_at: now,
-                observer: "test-observer".to_string(),
-                title: "Child".to_string(),
-                summary: "Child summary".to_string(),
-                content: serde_json::json!({"memories":[],"openQuestions":[],"nextSteps":[]})
-                    .to_string(),
-                references: vec!["session:11".to_string()],
-                checkpoint: ObservingCheckpoint {
-                    observing_epoch: 1,
-                    indexed_snapshot_sequence: Some(0),
-                    pending_parent_id: Some("OBS-PARENT".to_string()),
-                },
-            },
-        ];
-    observing_table(&table_options)
-        .upsert(&mut observings)
-        .await
-        .unwrap();
-
-    let observer = Observer::new(test_table_options()).await.unwrap();
-    let threads = observer.threads_snapshot().await;
-    let parent = threads
-        .iter()
-        .find(|thread| thread.observing_id == "OBS-PARENT")
-        .unwrap();
-    let child = threads
-        .iter()
-        .find(|thread| thread.observing_id == "OBS-CHILD")
-        .unwrap();
-    let parent_ref = parent.snapshot_id.as_ref().unwrap().to_string();
-
-    assert!(
-        child
-            .references
-            .iter()
-            .any(|reference| reference == &parent_ref)
-    );
-    assert_eq!(child.references.first(), Some(&parent_ref));
-    assert_eq!(child.pending_parent_id, None);
-
-    let persisted = observing_table(&table_options)
-        .list(Some("test-observer"))
-        .await
-        .unwrap();
-    let latest_child = persisted
-        .into_iter()
-        .find(|snapshot| snapshot.observing_id == "OBS-CHILD")
-        .unwrap();
-    assert!(
-        latest_child
-            .references
-            .iter()
-            .any(|reference| reference == &parent_ref)
-    );
-    assert_eq!(latest_child.references.first(), Some(&parent_ref));
-    assert_eq!(latest_child.checkpoint.pending_parent_id, None);
 
     clear_data_root();
 }
@@ -1042,7 +876,6 @@ async fn catches_up_semantic_index_from_checkpoint() {
                 checkpoint: ObservingCheckpoint {
                     observing_epoch: 0,
                     indexed_snapshot_sequence: None,
-                    pending_parent_id: None,
                 },
             },
             ObservingSnapshot {
@@ -1059,12 +892,11 @@ async fn catches_up_semantic_index_from_checkpoint() {
                 checkpoint: ObservingCheckpoint {
                     observing_epoch: 0,
                     indexed_snapshot_sequence: Some(0),
-                    pending_parent_id: None,
                 },
             },
         ];
     observing_table(&table_options)
-        .upsert(&mut observings)
+        .insert(&mut observings)
         .await
         .unwrap();
 

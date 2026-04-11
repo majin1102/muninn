@@ -99,7 +99,7 @@ impl Session {
 
     pub(crate) async fn accept(
         &self,
-        turn_content: crate::muninn::TurnContent,
+        turn_content: crate::test_support::TurnContent,
         window: &ObservingWindow,
     ) -> Result<SessionTurn> {
         self.touch();
@@ -125,7 +125,11 @@ impl Session {
         if turn.observable() {
             turn.observing_epoch = update.observing_epoch;
         }
-        self.table.upsert(std::slice::from_mut(&mut turn)).await?;
+        if turn.turn_id.memory_point() == u64::MAX {
+            self.table.insert(std::slice::from_mut(&mut turn)).await?;
+        } else {
+            self.table.update(std::slice::from_ref(&turn)).await?;
+        }
 
         if turn.is_open() {
             *open_turn = Some(turn.clone());

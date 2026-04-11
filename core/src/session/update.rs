@@ -5,7 +5,7 @@ use lance::{Error, Result};
 use crate::format::session::TurnMetadataSource;
 
 #[cfg(test)]
-use crate::muninn::TurnContent;
+use crate::test_support::TurnContent;
 #[cfg(test)]
 use super::{Session, resolve_turn_metadata};
 use super::{SessionKey, has_text_content};

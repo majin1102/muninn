@@ -35,8 +35,6 @@ pub(crate) struct ObservingThread {
     pub(crate) snapshot_id: Option<MemoryId>,
     #[serde(default)]
     pub(crate) snapshot_ids: Vec<MemoryId>,
-    #[serde(default)]
-    pub(crate) pending_parent_id: Option<String>,
     pub(crate) observing_epoch: u64,
     pub(crate) title: String,
     pub(crate) summary: String,
@@ -61,7 +59,6 @@ impl ObservingThread {
             observing_id: new_observing_id(),
             snapshot_id: None,
             snapshot_ids: Vec::new(),
-            pending_parent_id: None,
             observing_epoch,
             title: normalize_title(title),
             summary: normalize_summary(summary),
@@ -98,7 +95,6 @@ impl ObservingThread {
             observing_id: latest_row.observing_id.clone(),
             snapshot_id: Some(latest_row.snapshot_id.clone()),
             snapshot_ids: rows.iter().map(|row| row.snapshot_id.clone()).collect(),
-            pending_parent_id: latest_row.checkpoint.pending_parent_id.clone(),
             observing_epoch: latest_row.checkpoint.observing_epoch,
             title: latest_row.title.clone(),
             summary: latest_row.summary.clone(),
@@ -201,7 +197,6 @@ impl ObservingThread {
             checkpoint: ObservingCheckpoint {
                 observing_epoch: self.observing_epoch,
                 indexed_snapshot_sequence: self.indexed_snapshot_sequence,
-                pending_parent_id: self.pending_parent_id.clone(),
             },
         })
     }
@@ -240,10 +235,6 @@ pub(crate) async fn load_threads(
 
 pub(crate) fn turn_ref(turn: &SessionTurn) -> String {
     turn.turn_id.to_string()
-}
-
-pub(crate) fn snapshot_ref(snapshot_id: MemoryId) -> String {
-    snapshot_id.to_string()
 }
 
 fn deserialize_snapshot(observing: &ObservingSnapshot) -> Result<SnapshotContent> {

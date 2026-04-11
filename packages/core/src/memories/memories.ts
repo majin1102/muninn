@@ -1,4 +1,4 @@
-import type { CoreBinding } from '../native.js';
+import type { NativeTables } from '../native.js';
 import type { ListModeInput, ObservingSnapshot, RecallHit, RenderedMemory, SessionTurn } from '../client.js';
 import { getObservingSnapshot, listObservingSnapshots, timelineObservingSnapshots } from './observings.js';
 import { recallMemories } from './recall.js';
@@ -6,7 +6,7 @@ import { renderObservingSnapshot, renderSessionTurn } from './rendered.js';
 import { getSessionTurn, listSessionTurns, timelineSessionTurns } from './sessions.js';
 
 export class Memories {
-  constructor(private readonly client: CoreBinding) {}
+  constructor(private readonly client: NativeTables) {}
 
   async getSession(memoryId: string): Promise<SessionTurn | null> {
     return getSessionTurn(this.client, memoryId);
@@ -41,9 +41,12 @@ export class Memories {
   }
 
   async list(params: { mode: ListModeInput }): Promise<RenderedMemory[]> {
+    const sourceMode = params.mode.type === 'page'
+      ? { type: 'recency', limit: params.mode.offset + params.mode.limit } as const
+      : params.mode;
     const [turns, observings] = await Promise.all([
-      listSessionTurns(this.client, { mode: params.mode }),
-      listObservingSnapshots(this.client, { mode: params.mode }),
+      listSessionTurns(this.client, { mode: sourceMode }),
+      listObservingSnapshots(this.client, { mode: sourceMode }),
     ]);
     const combined = turns
       .map(renderSessionTurn)

@@ -126,7 +126,7 @@ Query 参数：
 请求体语义：
 
 ```ts
-export interface SessionMessageInput {
+export interface TurnContent {
   sessionId?: string;
   agent: string;
   title?: string;
@@ -135,7 +135,6 @@ export interface SessionMessageInput {
   artifacts?: Record<string, string>;
   prompt?: string;
   response?: string;
-  extra?: Record<string, string>;
 }
 ```
 
@@ -143,7 +142,6 @@ export interface SessionMessageInput {
 
 - `sessionId` 是逻辑分组键
 - 至少要有一项 message 内容
-- `extra` 仅属于 API 传输层，不写入持久化 schema
 - `response` 可独立持久化，不依赖 `summary` 是否生成
 
 ## 4. Rendering Boundary

@@ -1,30 +1,42 @@
-import type { CoreBinding } from '../native.js';
-import type { ObserverWatermark, SessionTurn } from '../client.js';
+import type { NativeTables } from '../native.js';
+import type { ObserverWatermark, SessionTurn, TurnContent } from '../client.js';
 import { getEffectiveObserverName } from '../config.js';
+import type { SessionRegistry } from '../session/registry.js';
 import { cloneTurn, readSessionTurn, serializeSessionTurn } from '../session/types.js';
-import { ObserverTask } from './task.js';
-import { cloneObservingThreads, loadThreads } from './thread.js';
-import { flushObserverWindow, restoreIndexBatches, retryIndexBatches } from './update.js';
-import { Window } from './window.js';
-import type { IndexBatch, ObservingThread } from './types.js';
+import { EpochQueue, EpochSealedError, OpenEpoch, type SealedEpoch } from './epoch.js';
+import {
+  cloneObservingThreads,
+  getPendingIndex,
+  getPendingIndexUpTo,
+  loadThreads,
+} from './thread.js';
+import type { ObservingThread } from './types.js';
+import { buildSemanticIndex, buildTouchedIndex, observeEpoch } from './update.js';
+
+const BASE_RETRY_DELAY_MS = 100;
+const MAX_RETRY_DELAY_MS = 2_000;
+const INDEX_RETRY_DELAY_MS = 5_000;
 
 export class Observer {
   name = getEffectiveObserverName();
   private committedEpoch?: number;
-  private observingEpoch?: number;
-  private nextEpoch = 0;
-  private sessionWriters = 0;
-  private buffer: SessionTurn[] = [];
-  private observingBuffer: SessionTurn[] = [];
+  private openEpoch!: OpenEpoch;
+  private currentEpoch: SealedEpoch | null = null;
+  private publishingEpochs: OpenEpoch[] = [];
   private threads: ObservingThread[] = [];
-  private indexBatches: IndexBatch[] = [];
-  private flushing = false;
-  private shutdownRequested = false;
+  private nextIndexRetryAt?: number;
+  private shuttingDown = false;
   private bootstrapped = false;
   private bootstrapPromise: Promise<void> | null = null;
-  private readonly task = new ObserverTask();
+  // Serializes sealed epoch publish order so epoch N never lands after epoch N+1.
+  private publishChain: Promise<void> = Promise.resolve();
+  private loopPromise: Promise<void> | null = null;
+  private changeVersion = 0;
+  private readonly changeWaiters = new Set<() => void>();
+  private readonly shutdownController = new AbortController();
+  private readonly epochQueue = new EpochQueue();
 
-  constructor(private readonly client: CoreBinding) {}
+  constructor(private readonly client: NativeTables) {}
 
   async ensureBootstrapped(): Promise<void> {
     if (this.bootstrapped) {
@@ -38,61 +50,100 @@ export class Observer {
     await this.bootstrapPromise;
   }
 
-  async window(): Promise<Window> {
+  async accept(
+    turnContent: TurnContent,
+    sessionRegistry: SessionRegistry,
+  ): Promise<SessionTurn> {
+    if (this.shuttingDown) {
+      throw new Error('observer is shutting down');
+    }
     await this.ensureBootstrapped();
-    this.sessionWriters += 1;
-    return new Window(this, this.nextEpoch);
-  }
-
-  async include(turn: SessionTurn): Promise<void> {
-    if (this.shutdownRequested || !isObservable(turn)) {
-      return;
+    if (this.shuttingDown) {
+      throw new Error('observer is shutting down');
     }
-    enqueueTurn(this.buffer, turn);
-  }
-
-  completeWindow(): void {
-    if (this.sessionWriters > 0) {
-      this.sessionWriters -= 1;
+    while (true) {
+      const openEpoch = this.openEpoch;
+      try {
+        const turn = await openEpoch.accept(turnContent, sessionRegistry);
+        if (isObservable(turn)) {
+          this.sealOpenEpoch(openEpoch);
+        }
+        return turn;
+      } catch (error) {
+        if (error instanceof EpochSealedError && openEpoch !== this.openEpoch) {
+          continue;
+        }
+        throw error;
+      }
     }
-    this.scheduleFlushIfReady();
   }
 
   async watermark(): Promise<ObserverWatermark> {
     await this.ensureBootstrapped();
-    this.scheduleFlushIfReady();
     const pendingById = new Map<string, SessionTurn>();
-    for (const turn of this.observingBuffer) {
+    for (const turn of this.openEpoch.stagedTurns()) {
       keepNewestTurn(pendingById, turn);
     }
-    for (const turn of this.buffer) {
-      keepNewestTurn(pendingById, turn);
-    }
-    for (const batch of this.indexBatches) {
-      for (const turn of batch.turns) {
+    for (const publishingEpoch of this.publishingEpochs) {
+      for (const turn of publishingEpoch.stagedTurns()) {
         keepNewestTurn(pendingById, turn);
       }
+    }
+    for (const turn of this.epochQueue.pendingTurns()) {
+      keepNewestTurn(pendingById, turn);
+    }
+    for (const turn of this.currentEpoch?.turns ?? []) {
+      keepNewestTurn(pendingById, turn);
     }
     const pendingTurnIds = [...pendingById.values()]
       .sort(compareTurns)
       .map((turn) => turn.turnId);
     return {
-      resolved: pendingTurnIds.length === 0 && this.indexBatches.length === 0,
+      resolved: pendingTurnIds.length === 0 && !this.hasPendingSemanticIndex() && !this.currentEpoch,
       pendingTurnIds,
-      observingEpoch: this.observingEpoch,
+      observingEpoch: this.currentEpoch?.epoch,
       committedEpoch: this.committedEpoch,
     };
   }
 
   async shutdown(): Promise<void> {
-    this.shutdownRequested = true;
-    await this.task.wait();
+    // Fast stop: abort in-flight network work and exit without draining observer backlog.
+    this.shuttingDown = true;
+    this.shutdownController.abort(abortError('observer shutdown'));
+    this.epochQueue.close();
+    this.notifyChange();
+    if (this.loopPromise) {
+      await this.loopPromise.catch(() => undefined);
+    }
   }
 
   async flushPending(): Promise<void> {
+    // Explicit barrier-drain: only work that has entered the observer before this call is guaranteed to drain.
     await this.ensureBootstrapped();
-    this.scheduleFlushIfReady();
-    await this.task.wait();
+    const barrier = this.sealOpenEpoch(this.openEpoch, true);
+    if (!barrier) {
+      return;
+    }
+    const sealedEpoch = await barrier.sealed;
+    const barrierRequiresObserve = sealedEpoch.turns.length > 0;
+    const barrierComplete = () => {
+      const observed = !barrierRequiresObserve || (this.committedEpoch ?? -1) >= barrier.epoch;
+      return observed && !this.hasPendingSemanticIndexUpTo(barrier.epoch);
+    };
+
+    while (true) {
+      if (this.shuttingDown) {
+        return;
+      }
+      if (barrierComplete()) {
+        return;
+      }
+      const version = this.changeVersion;
+      if (barrierComplete()) {
+        return;
+      }
+      await this.waitForChange(version);
+    }
   }
 
   private async bootstrapInternal(): Promise<void> {
@@ -104,126 +155,242 @@ export class Observer {
       const epoch = snapshot.checkpoint.observingEpoch;
       return max == null || epoch > max ? epoch : max;
     }, undefined);
-    this.nextEpoch = this.committedEpoch == null ? 0 : this.committedEpoch + 1;
 
+    let nextEpoch = this.committedEpoch == null ? 0 : this.committedEpoch + 1;
     let pendingTurns = (await this.client.sessionTable.loadTurnsAfterEpoch({
       observer: this.name,
       committedEpoch: this.committedEpoch ?? null,
     })).map(readSessionTurn);
-    const needsRepair = pendingTurns.some((turn) => turn.observingEpoch !== this.nextEpoch);
+    const needsRepair = pendingTurns.some((turn) => turn.observingEpoch !== nextEpoch);
     if (needsRepair && pendingTurns.length > 0) {
       const repaired = pendingTurns.map((turn) => ({
         ...turn,
-        observingEpoch: this.nextEpoch,
+        observingEpoch: nextEpoch,
       }));
-      const persisted = await this.client.sessionTable.upsert({
+      const persisted = await this.client.sessionTable.update({
         turns: repaired.map(serializeSessionTurn),
       });
       pendingTurns = persisted.map(readSessionTurn);
     }
-    this.buffer = pendingTurns.map(cloneTurn);
-    this.observingBuffer = [];
-    this.indexBatches = restoreIndexBatches(this.threads, pendingTurns);
-    this.observingEpoch = undefined;
-    this.flushing = false;
+
+    if (pendingTurns.length > 0) {
+      this.epochQueue.publishEpoch({
+        epoch: nextEpoch,
+        turns: pendingTurns.map(cloneTurn),
+      });
+      nextEpoch += 1;
+    }
+
+    this.openEpoch = new OpenEpoch(nextEpoch);
     this.bootstrapped = true;
-    this.scheduleFlushIfReady();
+    this.start();
+    this.notifyChange();
   }
 
-  private scheduleFlushIfReady(): void {
-    if (this.shutdownRequested || this.task.active || this.flushing) {
+  private start(): void {
+    if (!this.loopPromise) {
+      this.loopPromise = this.run();
+    }
+  }
+
+  private async run(): Promise<void> {
+    let retryDelayMs = BASE_RETRY_DELAY_MS;
+    while (true) {
+      try {
+        if (this.currentEpoch) {
+          await this.observeCurrentEpoch();
+          retryDelayMs = BASE_RETRY_DELAY_MS;
+          continue;
+        }
+
+        if (this.shouldRetrySemanticIndex()) {
+          await this.retrySemanticIndex();
+          retryDelayMs = BASE_RETRY_DELAY_MS;
+          continue;
+        }
+
+        const sealedEpoch = this.epochQueue.shift();
+        if (sealedEpoch) {
+          this.currentEpoch = sealedEpoch;
+          retryDelayMs = BASE_RETRY_DELAY_MS;
+          continue;
+        }
+
+        if (this.hasPendingSemanticIndex()) {
+          await this.waitForIndexRetryOrChange();
+          retryDelayMs = BASE_RETRY_DELAY_MS;
+          continue;
+        }
+
+        const nextEpoch = await this.epochQueue.take();
+        if (!nextEpoch) {
+          break;
+        }
+        this.currentEpoch = nextEpoch;
+      } catch (error) {
+        if (this.shuttingDown || isAbortError(error)) {
+          break;
+        }
+        console.error(`[muninn:observer] epoch processing failed: ${String(error)}`);
+        await sleep(retryDelayMs);
+        retryDelayMs = Math.min(retryDelayMs * 2, MAX_RETRY_DELAY_MS);
+      }
+    }
+  }
+
+  private async observeCurrentEpoch(): Promise<void> {
+    if (!this.currentEpoch) {
       return;
     }
-    if (this.sessionWriters > 0) {
-      return;
+
+    const threads = cloneObservingThreads(this.threads);
+    const result = await observeEpoch({
+      client: this.client,
+      observerName: this.name,
+      threads,
+      sealedEpoch: this.currentEpoch,
+      signal: this.shutdownController.signal,
+    });
+    this.threads = result.threads;
+    try {
+      await this.buildCurrentEpochIndex(result.touchedIds);
+      if (!this.hasPendingSemanticIndex()) {
+        this.nextIndexRetryAt = undefined;
+      }
+    } catch (error) {
+      if (this.shuttingDown || isAbortError(error)) {
+        throw error;
+      }
+      console.error(`[muninn:observer] semantic index build failed: ${String(error)}`);
+      this.nextIndexRetryAt = Date.now() + INDEX_RETRY_DELAY_MS;
     }
-    if (this.buffer.length === 0 && this.indexBatches.length === 0) {
-      return;
+    this.committedEpoch = this.currentEpoch.epoch;
+    this.currentEpoch = null;
+    this.notifyChange();
+  }
+
+  private buildCurrentEpochIndex(touchedIds: Set<string>): Promise<void> {
+    return buildTouchedIndex(
+      this.client,
+      this.threads,
+      touchedIds,
+      this.shutdownController.signal,
+    );
+  }
+
+  private sealOpenEpoch(
+    openEpoch: OpenEpoch,
+    force = false,
+  ): { epoch: number; sealed: Promise<SealedEpoch> } | null {
+    if (this.shuttingDown || this.openEpoch !== openEpoch || (!force && !openEpoch.hasStagedTurns())) {
+      return null;
     }
-    this.task.run(async () => {
-      await this.runFlushLoop();
+    // Swap to the next epoch synchronously so any later accept() starts in the next generation.
+    this.openEpoch = new OpenEpoch(openEpoch.epoch + 1);
+    this.publishingEpochs.push(openEpoch);
+    let resolveSealed!: (sealedEpoch: SealedEpoch) => void;
+    let rejectSealed!: (error: unknown) => void;
+    const sealed = new Promise<SealedEpoch>((resolve, reject) => {
+      resolveSealed = resolve;
+      rejectSealed = reject;
+    });
+    // Fast-stop shutdown may leave staged turns unpublished; bootstrap replay recovers them from session rows.
+    this.publishChain = this.publishChain.then(async () => {
+      try {
+        if (this.shuttingDown || this.shutdownController.signal.aborted) {
+          resolveSealed({ epoch: openEpoch.epoch, turns: [] });
+          return;
+        }
+        const sealedEpoch = await openEpoch.seal();
+        resolveSealed(sealedEpoch);
+        if (this.shuttingDown || this.shutdownController.signal.aborted) {
+          return;
+        }
+        this.epochQueue.publishEpoch(sealedEpoch);
+        this.notifyChange();
+      } catch (error) {
+        rejectSealed(error);
+        console.error(`[muninn:observer] failed to publish epoch ${openEpoch.epoch}: ${String(error)}`);
+      } finally {
+        const index = this.publishingEpochs.indexOf(openEpoch);
+        if (index >= 0) {
+          this.publishingEpochs.splice(index, 1);
+        }
+      }
+    });
+    return {
+      epoch: openEpoch.epoch,
+      sealed,
+    };
+  }
+
+  private hasPendingSemanticIndex(): boolean {
+    return this.threads.some((thread) => getPendingIndex(thread) !== null);
+  }
+
+  private hasPendingSemanticIndexUpTo(maxEpoch: number): boolean {
+    return this.threads.some((thread) => getPendingIndexUpTo(thread, maxEpoch) !== null);
+  }
+
+  private shouldRetrySemanticIndex(): boolean {
+    return this.hasPendingSemanticIndex()
+      && (this.nextIndexRetryAt == null || Date.now() >= this.nextIndexRetryAt);
+  }
+
+  private async retrySemanticIndex(): Promise<void> {
+    try {
+      await buildSemanticIndex(this.client, this.threads, this.shutdownController.signal);
+      this.nextIndexRetryAt = undefined;
+    } catch (error) {
+      if (this.shuttingDown || isAbortError(error)) {
+        throw error;
+      }
+      console.error(`[muninn:observer] semantic index retry failed: ${String(error)}`);
+      this.nextIndexRetryAt = Date.now() + INDEX_RETRY_DELAY_MS;
+    } finally {
+      if (!this.hasPendingSemanticIndex()) {
+        this.nextIndexRetryAt = undefined;
+      }
+      this.notifyChange();
+    }
+  }
+
+  private waitForChange(version: number): Promise<void> {
+    if (this.changeVersion !== version || this.shuttingDown) {
+      return Promise.resolve();
+    }
+    return new Promise((resolve) => {
+      const waiter = () => {
+        this.changeWaiters.delete(waiter);
+        resolve();
+      };
+      this.changeWaiters.add(waiter);
     });
   }
 
-  private async runFlushLoop(): Promise<void> {
-    while (!this.shutdownRequested) {
-      const flushed = await this.flushWindow().catch((error) => {
-        console.error(`[muninn:observer] flush failed: ${String(error)}`);
-        return false;
-      });
-      if (!flushed) {
-        break;
-      }
+  private async waitForIndexRetryOrChange(): Promise<void> {
+    const version = this.changeVersion;
+    const retryDelay = Math.max((this.nextIndexRetryAt ?? Date.now()) - Date.now(), 0);
+    if (retryDelay === 0) {
+      return;
     }
+    await Promise.race([
+      sleep(retryDelay),
+      this.waitForChange(version),
+    ]);
   }
 
-  // flushWindow() primarily persists the current observer window. If there are
-  // no new turns buffered, it also advances any semantic-index retries left by
-  // earlier window flushes.
-  private async flushWindow(): Promise<boolean> {
-    if (this.flushing || this.sessionWriters > 0) {
-      return false;
+  private notifyChange(): void {
+    this.changeVersion += 1;
+    for (const waiter of this.changeWaiters) {
+      waiter();
     }
-
-    if (this.buffer.length > 0) {
-      this.flushing = true;
-      this.observingEpoch = this.nextEpoch;
-      const turns = this.buffer.map(cloneTurn);
-      this.buffer = [];
-      this.observingBuffer = turns.map(cloneTurn);
-      const threads = cloneObservingThreads(this.threads);
-
-      try {
-        const result = await flushObserverWindow({
-          client: this.client,
-          observerName: this.name,
-          threads,
-          epoch: this.observingEpoch,
-          pendingTurns: turns,
-        });
-        this.threads = result.threads;
-        if (result.failedIndexIds.length > 0) {
-          this.indexBatches.push({
-            turns: turns.map(cloneTurn),
-            observingIds: result.failedIndexIds,
-          });
-        }
-        this.committedEpoch = this.observingEpoch;
-        this.observingEpoch = undefined;
-        this.observingBuffer = [];
-        this.nextEpoch += 1;
-        this.flushing = false;
-        return this.buffer.length > 0 || this.indexBatches.length > 0;
-      } catch (error) {
-        this.buffer = [...this.observingBuffer.map(cloneTurn), ...this.buffer];
-        this.observingBuffer = [];
-        this.observingEpoch = undefined;
-        this.flushing = false;
-        throw error;
-      }
-    }
-
-    if (this.indexBatches.length > 0) {
-      this.indexBatches = await retryIndexBatches(this.client, this.threads, this.indexBatches);
-      return this.buffer.length > 0 || this.indexBatches.length > 0;
-    }
-
-    return false;
+    this.changeWaiters.clear();
   }
 }
 
 function isObservable(turn: SessionTurn): boolean {
   return Boolean(turn.response?.trim() && turn.summary?.trim());
-}
-
-function enqueueTurn(buffer: SessionTurn[], turn: SessionTurn): void {
-  const index = buffer.findIndex((entry) => entry.turnId === turn.turnId);
-  if (index >= 0) {
-    buffer[index] = cloneTurn(turn);
-  } else {
-    buffer.push(cloneTurn(turn));
-  }
-  buffer.sort(compareTurns);
 }
 
 function keepNewestTurn(byId: Map<string, SessionTurn>, turn: SessionTurn): void {
@@ -237,4 +404,18 @@ function compareTurns(left: SessionTurn, right: SessionTurn): number {
   return left.createdAt.localeCompare(right.createdAt)
     || left.updatedAt.localeCompare(right.updatedAt)
     || left.turnId.localeCompare(right.turnId);
+}
+
+function sleep(delayMs: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, delayMs));
+}
+
+function abortError(message: string): Error {
+  const error = new Error(message);
+  error.name = 'AbortError';
+  return error;
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === 'AbortError';
 }

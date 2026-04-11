@@ -1,10 +1,10 @@
-import type { CoreBinding } from '../native.js';
+import type { NativeTables } from '../native.js';
 import type { ListModeInput, SessionTurn } from '../client.js';
 import { readSessionTurn, toSessionTurn } from '../session/types.js';
 import { assertMemoryIdLayer } from './types.js';
 
 export async function getSessionTurn(
-  client: CoreBinding,
+  client: NativeTables,
   memoryId: string,
 ): Promise<SessionTurn | null> {
   assertMemoryIdLayer(memoryId, 'session');
@@ -13,7 +13,7 @@ export async function getSessionTurn(
 }
 
 export async function listSessionTurns(
-  client: CoreBinding,
+  client: NativeTables,
   params: { mode: ListModeInput; agent?: string; sessionId?: string },
 ): Promise<SessionTurn[]> {
   const turns = await client.sessionTable.listTurns({
@@ -25,7 +25,7 @@ export async function listSessionTurns(
 }
 
 export async function timelineSessionTurns(
-  client: CoreBinding,
+  client: NativeTables,
   params: { memoryId: string; beforeLimit?: number; afterLimit?: number },
 ): Promise<SessionTurn[]> {
   assertMemoryIdLayer(params.memoryId, 'session');

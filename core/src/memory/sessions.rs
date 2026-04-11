@@ -24,6 +24,16 @@ pub async fn list(
     Ok(apply_list_mode(turns, query.mode))
 }
 
+pub(crate) async fn get(
+    table_options: &TableOptions,
+    memory_id: &MemoryId,
+) -> Result<Option<SessionTurn>> {
+    ensure_session_memory_id(memory_id)?;
+    SessionTable::new(table_options.clone())
+        .get_turn(memory_id.memory_point())
+        .await
+}
+
 pub(crate) async fn timeline(
     table_options: &TableOptions,
     memory_id: &MemoryId,

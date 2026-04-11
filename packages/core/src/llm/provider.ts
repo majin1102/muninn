@@ -5,6 +5,7 @@ export type LlmTask = 'turn' | 'observer';
 export type LlmTextRequest = {
   system: string;
   prompt: string;
+  signal?: AbortSignal;
 };
 
 export async function generateText(
@@ -50,6 +51,7 @@ async function generateOpenAiText(
   config: TextProviderConfig,
   request: LlmTextRequest,
 ): Promise<string> {
+  throwIfAborted(request.signal);
   if (!config.apiKey?.trim()) {
     throw new Error('llm.apiKey is required for openai llm provider');
   }
@@ -68,6 +70,7 @@ async function generateOpenAiText(
         authorization: `Bearer ${config.apiKey}`,
         'content-type': 'application/json',
       },
+      signal: request.signal,
       body: JSON.stringify(
         apiStyle === 'chatCompletions'
           ? {
@@ -163,4 +166,17 @@ function extractBlock(input: string, startLabel: string, endLabel: string): stri
 function excerpt(value: string): string {
   const collapsed = value.split(/\s+/).join(' ').trim();
   return collapsed.length > 80 ? `${collapsed.slice(0, 77)}...` : collapsed;
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (!signal?.aborted) {
+    return;
+  }
+  const reason = signal.reason;
+  if (reason instanceof Error) {
+    throw reason;
+  }
+  const error = new Error('operation aborted');
+  error.name = 'AbortError';
+  throw error;
 }

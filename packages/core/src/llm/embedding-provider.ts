@@ -1,10 +1,11 @@
 import { getEmbeddingConfig } from './config.js';
 
-export async function embedText(text: string): Promise<number[]> {
+export async function embedText(text: string, signal?: AbortSignal): Promise<number[]> {
   const config = getEmbeddingConfig();
   if (config.provider === 'mock') {
     return mockEmbedding(text, config.dimensions);
   }
+  throwIfAborted(signal);
   if (!config.apiKey?.trim()) {
     throw new Error('semanticIndex.embedding.apiKey is required for openai embeddings');
   }
@@ -15,6 +16,7 @@ export async function embedText(text: string): Promise<number[]> {
       authorization: `Bearer ${config.apiKey}`,
       'content-type': 'application/json',
     },
+    signal,
     body: JSON.stringify({
       model: config.model ?? 'text-embedding-3-small',
       input: text,
@@ -45,4 +47,17 @@ function mockEmbedding(text: string, dimensions: number): number[] {
     return values.map((value) => value / norm);
   }
   return values;
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (!signal?.aborted) {
+    return;
+  }
+  const reason = signal.reason;
+  if (reason instanceof Error) {
+    throw reason;
+  }
+  const error = new Error('operation aborted');
+  error.name = 'AbortError';
+  throw error;
 }

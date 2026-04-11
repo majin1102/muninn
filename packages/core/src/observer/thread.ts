@@ -1,6 +1,14 @@
 import { randomUUID } from 'node:crypto';
 
-import type { ObserveResult, ObservedMemory, ObservingContent, ObservingSnapshot, ObservingThread, SnapshotContent } from './types.js';
+import type {
+  ObserveResult,
+  ObservedMemory,
+  ObservingContent,
+  ObservingSnapshot,
+  ObservingThread,
+  PendingIndex,
+  SnapshotContent,
+} from './types.js';
 
 const PENDING_SNAPSHOT_ID = 'observing:18446744073709551615';
 const MAX_REFERENCES = 1000;
@@ -17,6 +25,7 @@ export function createObservingThread(
   return {
     observingId: randomUUID(),
     snapshotIds: [],
+    snapshotEpochs: [],
     observingEpoch,
     title: normalizeTitle(title),
     summary: normalizeSummary(summary),
@@ -32,6 +41,7 @@ export function cloneObservingThread(thread: ObservingThread): ObservingThread {
   return {
     ...thread,
     snapshotIds: [...thread.snapshotIds],
+    snapshotEpochs: [...(thread.snapshotEpochs ?? [])],
     references: [...thread.references],
     snapshots: thread.snapshots.map((snapshot) => ({
       memories: snapshot.memories.map((memory) => ({
@@ -57,7 +67,6 @@ export function cloneObservingThread(thread: ObservingThread): ObservingThread {
         })),
       },
     })),
-    pendingParentId: thread.pendingParentId ?? null,
     indexedSnapshotSequence: thread.indexedSnapshotSequence ?? null,
   };
 }
@@ -101,7 +110,7 @@ export function threadFromSnapshots(rows: ObservingSnapshot[]): ObservingThread 
     observingId: latest.observingId,
     snapshotId: latest.snapshotId,
     snapshotIds: ordered.map((row) => row.snapshotId),
-    pendingParentId: latest.checkpoint.pendingParentId ?? null,
+    snapshotEpochs: ordered.map((row) => row.checkpoint.observingEpoch),
     observingEpoch: latest.checkpoint.observingEpoch,
     title: latest.title,
     summary: latest.summary,
@@ -146,6 +155,7 @@ export function applyObserveResult(
     nextSteps: result.observingContentUpdate.nextSteps,
     memoryDelta: patched.memoryDelta,
   });
+  thread.snapshotEpochs = [...(thread.snapshotEpochs ?? []), observingEpoch];
   thread.snapshotId = undefined;
   thread.updatedAt = now;
 }
@@ -176,7 +186,6 @@ export function toObservingSnapshot(thread: ObservingThread): ObservingSnapshot 
     checkpoint: {
       observingEpoch: thread.observingEpoch,
       indexedSnapshotSequence: thread.indexedSnapshotSequence ?? null,
-      pendingParentId: thread.pendingParentId ?? null,
     },
   };
 }
@@ -193,12 +202,45 @@ export function snapshotRef(thread: ObservingThread, snapshotIndex: number): str
   return snapshotId;
 }
 
-export function threadHasPendingIndex(thread: ObservingThread): boolean {
+export function getPendingIndex(thread: ObservingThread): PendingIndex | null {
   const latestSnapshotSequence = thread.snapshots.length - 1;
   if (latestSnapshotSequence < 0) {
-    return false;
+    return null;
   }
-  return thread.indexedSnapshotSequence == null || thread.indexedSnapshotSequence < latestSnapshotSequence;
+  const start = (thread.indexedSnapshotSequence ?? -1) + 1;
+  if (start > latestSnapshotSequence) {
+    return null;
+  }
+  return {
+    start,
+    end: latestSnapshotSequence,
+  };
+}
+
+export function getPendingIndexUpTo(
+  thread: ObservingThread,
+  maxEpoch: number,
+): PendingIndex | null {
+  const snapshotEpochs = thread.snapshotEpochs ?? [];
+  let latestSnapshotSequence = -1;
+  for (let index = thread.snapshots.length - 1; index >= 0; index -= 1) {
+    const snapshotEpoch = snapshotEpochs[index] ?? thread.observingEpoch;
+    if (snapshotEpoch <= maxEpoch) {
+      latestSnapshotSequence = index;
+      break;
+    }
+  }
+  if (latestSnapshotSequence < 0) {
+    return null;
+  }
+  const start = (thread.indexedSnapshotSequence ?? -1) + 1;
+  if (start > latestSnapshotSequence) {
+    return null;
+  }
+  return {
+    start,
+    end: latestSnapshotSequence,
+  };
 }
 
 function deserializeSnapshot(row: ObservingSnapshot): SnapshotContent {

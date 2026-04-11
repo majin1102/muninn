@@ -11,6 +11,8 @@ use serde::{Deserialize, Serialize};
 
 use super::access::{LanceDataset, TableAccess, TableDescription, TableOptions, delete_by_ids, describe_dataset};
 use super::codec::{record_batch_to_semantic_rows, semantic_rows_to_reader};
+use super::TableStats;
+use crate::watchdog::{compact_dataset, ensure_semantic_vector_index, optimize_semantic_index};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -39,12 +41,11 @@ impl SemanticIndexTable {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) async fn try_open_dataset(&self) -> Result<Option<LanceDataset>> {
+    pub async fn try_open_dataset(&self) -> Result<Option<LanceDataset>> {
         self.access.try_open().await
     }
 
-    pub(crate) async fn ensure_dataset(&self) -> Result<LanceDataset> {
+    pub async fn ensure_dataset(&self) -> Result<LanceDataset> {
         if let Some(dataset) = self.access.try_open().await? {
             return Ok(dataset);
         }
@@ -53,7 +54,7 @@ impl SemanticIndexTable {
             .await
     }
 
-    pub(crate) async fn validate_dimensions(&self, expected_dimensions: usize) -> Result<()> {
+    pub async fn validate_dimensions(&self, expected_dimensions: usize) -> Result<()> {
         let Some(dataset) = self.access.try_open().await? else {
             return Ok(());
         };
@@ -83,6 +84,28 @@ impl SemanticIndexTable {
         Ok(Some(description))
     }
 
+    pub async fn stats(&self) -> Result<Option<TableStats>> {
+        self.access.maintenance_stats().await
+    }
+
+    pub async fn ensure_vector_index(&self, target_partition_size: usize) -> Result<bool> {
+        let Some(mut dataset) = self.access.try_open().await? else {
+            return Ok(false);
+        };
+        ensure_semantic_vector_index(&mut dataset, target_partition_size).await
+    }
+
+    pub async fn compact(&self) -> Result<bool> {
+        compact_dataset(self.access.try_open().await?).await
+    }
+
+    pub async fn optimize(&self, merge_count: usize) -> Result<bool> {
+        let Some(mut dataset) = self.access.try_open().await? else {
+            return Ok(false);
+        };
+        optimize_semantic_index(&mut dataset, merge_count).await
+    }
+
     #[cfg(test)]
     pub(crate) async fn list(&self) -> Result<Vec<SemanticIndexRow>> {
         let Some(dataset) = self.access.try_open().await? else {
@@ -95,7 +118,7 @@ impl SemanticIndexTable {
         record_batch_to_semantic_rows(&batch)
     }
 
-    pub(crate) async fn load_by_ids(&self, ids: &[String]) -> Result<Vec<SemanticIndexRow>> {
+    pub async fn load_by_ids(&self, ids: &[String]) -> Result<Vec<SemanticIndexRow>> {
         if ids.is_empty() {
             return Ok(Vec::new());
         }
@@ -119,7 +142,7 @@ impl SemanticIndexTable {
         record_batch_to_semantic_rows(&batch)
     }
 
-    pub(crate) async fn nearest(
+    pub async fn nearest(
         &self,
         query_vector: &[f32],
         limit: usize,
@@ -173,7 +196,7 @@ impl SemanticIndexTable {
         Ok(())
     }
 
-    pub(crate) async fn upsert(&self, rows: Vec<SemanticIndexRow>) -> Result<()> {
+    pub async fn upsert(&self, rows: Vec<SemanticIndexRow>) -> Result<()> {
         if rows.is_empty() {
             return Ok(());
         }
@@ -191,7 +214,7 @@ impl SemanticIndexTable {
         Ok(())
     }
 
-    pub(crate) async fn delete(&self, ids: Vec<String>) -> Result<usize> {
+    pub async fn delete(&self, ids: Vec<String>) -> Result<usize> {
         delete_by_ids(self.access.try_open().await?, "id", ids).await
     }
 }

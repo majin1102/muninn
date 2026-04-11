@@ -114,7 +114,6 @@ type Observing = {
   checkpoint: {
     observingEpoch: number;
     indexedSnapshotSequence?: number | null;
-    pendingParentId?: string | null;
   };
 };
 ```
@@ -137,8 +136,12 @@ type Observing = {
   - 默认最多保留 `1000` 条，超限时优先淘汰最老的 `session:*` 引用
 - `checkpoint`
   - 当前 observing line 的 checkpoint 状态
-  - 包含 `observingEpoch`、`indexedSnapshotSequence` 和可选的 `pendingParentId`
-  - `pendingParentId` 仅用于父 observing 引用的补偿恢复，不是公开导航字段
+  - 包含 `observingEpoch` 和 `indexedSnapshotSequence`
+
+补充约束：
+
+- `references` 只表示 provenance，不维护 observing-to-observing 的父子关系
+- 不保证包含 parent observing ref
 
 当前 `ObservingSnapshot.content` 承载的 payload 形状为：
 
@@ -183,7 +186,7 @@ type ObservedMemory = {
 当前正式写接口仍然是 session message write：
 
 ```ts
-export interface SessionMessageInput {
+export interface TurnContent {
   sessionId?: string;
   agent: string;
   title?: string;
@@ -192,13 +195,11 @@ export interface SessionMessageInput {
   artifacts?: Record<string, string>;
   prompt?: string;
   response?: string;
-  extra?: Record<string, string>;
 }
 ```
 
 补充说明：
 
-- `extra` 仅用于接口传输层扩展输入，不属于持久化 format 承诺
 - `summary` 是可选派生字段
 - `response` 可独立持久化
 

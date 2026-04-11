@@ -1,4 +1,4 @@
-import type { SessionMessageInput } from '../client.js';
+import type { TurnContent } from '../client.js';
 import { resolveTurnMetadata } from '../llm/turn-generator.js';
 import type { Session } from './session.js';
 import { hasText, sessionKey } from './key.js';
@@ -6,7 +6,7 @@ import type { SessionUpdate } from './types.js';
 
 export async function buildSessionUpdate(
   session: Session,
-  content: SessionMessageInput,
+  content: TurnContent,
   observer: string,
   observingEpoch: number,
 ): Promise<SessionUpdate> {
@@ -34,7 +34,7 @@ export async function buildSessionUpdate(
   };
 }
 
-export function validateContent(content: SessionMessageInput): void {
+export function validateContent(content: TurnContent): void {
   const hasContent = Boolean(
     (content.toolCalling && content.toolCalling.length > 0)
       || (content.artifacts && Object.keys(content.artifacts).length > 0)

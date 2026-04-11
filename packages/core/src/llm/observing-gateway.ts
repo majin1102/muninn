@@ -23,7 +23,9 @@ const MAX_MEMORY_CHARS = 220;
 export async function routeObservingThreads(
   observingThreads: ObservingThreadGatewayInput[],
   pendingTurns: SessionTurn[],
+  signal?: AbortSignal,
 ): Promise<GatewayResult> {
+  throwIfAborted(signal);
   const config = getObserverLlmConfig();
   if (!config) {
     throw new Error('observer gateway is not configured');
@@ -62,6 +64,7 @@ export async function routeObservingThreads(
 
   let lastError = 'observer gateway returned no output';
   for (let attempt = 1; attempt <= config.maxAttempts; attempt += 1) {
+    throwIfAborted(signal);
     const raw = await generateText('observer', {
       system: template.system,
       prompt: buildRetryPrompt(
@@ -70,10 +73,12 @@ export async function routeObservingThreads(
         lastError,
         'Make sure every pending turn_id appears in at least one update.',
       ),
+      signal,
     });
     if (!raw) {
       throw new Error('observer gateway is not configured');
     }
+    throwIfAborted(signal);
 
     try {
       const parsed = parseJson<GatewayResult>(raw);
@@ -86,7 +91,8 @@ export async function routeObservingThreads(
   throw new Error(`observer gateway returned invalid output: ${lastError}`);
 }
 
-export async function observeThread(input: ObserveRequest): Promise<ObserveResult> {
+export async function observeThread(input: ObserveRequest, signal?: AbortSignal): Promise<ObserveResult> {
+  throwIfAborted(signal);
   const config = getObserverLlmConfig();
   if (!config) {
     throw new Error('observing update is not configured');
@@ -119,6 +125,7 @@ export async function observeThread(input: ObserveRequest): Promise<ObserveResul
 
   let lastError = 'observing update returned no output';
   for (let attempt = 1; attempt <= config.maxAttempts; attempt += 1) {
+    throwIfAborted(signal);
     const raw = await generateText('observer', {
       system: template.system,
       prompt: buildRetryPrompt(
@@ -127,10 +134,12 @@ export async function observeThread(input: ObserveRequest): Promise<ObserveResul
         lastError,
         'Keep all required content fields and memoryDelta arrays present.',
       ),
+      signal,
     });
     if (!raw) {
       throw new Error('observing update is not configured');
     }
+    throwIfAborted(signal);
 
     try {
       return validateObserveResult(parseJson<ObserveResult>(raw));
@@ -361,4 +370,17 @@ function normalizeText(value: string, maxChars: number): string {
     return collapsed.slice(0, maxChars);
   }
   return `${collapsed.slice(0, maxChars - 3)}...`;
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (!signal?.aborted) {
+    return;
+  }
+  const reason = signal.reason;
+  if (reason instanceof Error) {
+    throw reason;
+  }
+  const error = new Error('operation aborted');
+  error.name = 'AbortError';
+  throw error;
 }

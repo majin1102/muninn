@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import { getEmbeddingConfig } from '../config.js';
-import type { CoreBinding } from '../native.js';
+import type { NativeTables } from '../native.js';
 import { embedText } from '../llm/embedding-provider.js';
 import type { LlmFieldUpdate, ObserveResult, ObservedMemory, SemanticIndexRow, SnapshotContent } from './types.js';
 
@@ -50,10 +50,12 @@ export function applyMemoriesDelta(
 }
 
 export async function applySemanticMemoryDelta(
-  client: CoreBinding,
+  client: NativeTables,
   snapshot: SnapshotContent,
   memoryId: string,
+  signal?: AbortSignal,
 ): Promise<void> {
+  throwIfAborted(signal);
   const delta = snapshot.memoryDelta;
   const afterIds = new Set(delta.after.map((memory) => memory.id).filter(Boolean));
   const deletedIds = delta.before
@@ -84,7 +86,7 @@ export async function applySemanticMemoryDelta(
       id,
       memoryId,
       text,
-      vector: await embedText(text),
+      vector: await embedText(text, signal),
       importance: existing?.importance ?? embeddingConfig.defaultImportance,
       category: semanticCategory(memory.category),
       createdAt: existing?.createdAt ?? new Date().toISOString(),
@@ -136,4 +138,17 @@ function semanticCategory(category: ObservedMemory['category']): string {
     default:
       return 'other';
   }
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (!signal?.aborted) {
+    return;
+  }
+  const reason = signal.reason;
+  if (reason instanceof Error) {
+    throw reason;
+  }
+  const error = new Error('operation aborted');
+  error.name = 'AbortError';
+  throw error;
 }

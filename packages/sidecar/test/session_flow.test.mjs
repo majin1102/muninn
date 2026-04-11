@@ -32,7 +32,7 @@ async function json(response) {
 
 async function writeMuninnConfig(configPath, {
   turnProvider,
-  observerProvider,
+  observerProvider = 'openai',
   semanticDimensions = 4,
   storageUri,
   storageOptions,
@@ -76,6 +76,52 @@ async function writeMuninnConfig(configPath, {
   await writeFile(configPath, `${JSON.stringify(root, null, 2)}\n`, 'utf8');
 }
 
+function createValidSettings({
+  turnProvider,
+  observerProvider = 'mock',
+  semanticDimensions = 8,
+  includeWatchdog = false,
+} = {}) {
+  const config = {
+    observer: {
+      name: 'default-observer',
+      llm: 'default_observer_llm',
+      maxAttempts: 3,
+    },
+    llm: {
+      default_observer_llm: {
+        provider: observerProvider,
+      },
+    },
+    semanticIndex: {
+      embedding: {
+        provider: 'mock',
+        dimensions: semanticDimensions,
+      },
+      defaultImportance: 0.7,
+    },
+  };
+
+  if (turnProvider) {
+    config.turn = { llm: 'default_turn_llm' };
+    config.llm.default_turn_llm = { provider: turnProvider };
+  }
+
+  if (includeWatchdog) {
+    config.watchdog = {
+      enabled: true,
+      intervalMs: 60000,
+      compactMinFragments: 8,
+      semanticIndex: {
+        targetPartitionSize: 1024,
+        optimizeMergeCount: 4,
+      },
+    };
+  }
+
+  return config;
+}
+
 test.afterEach(async () => {
   await shutdownCoreForTests();
   resetSessionTreeCacheForTests();
@@ -102,7 +148,6 @@ test('session/messages writes a message into a session and detail reads it back'
         response: 'alpha response',
         toolCalling: ['tool-a'],
         artifacts: { key: 'value' },
-        extra: { source: 'test' },
       },
     }),
   });
@@ -124,6 +169,32 @@ test('session/messages writes a message into a session and detail reads it back'
   assert.match(detail.memoryHits[0].content, /## Detail/);
   assert.match(detail.memoryHits[0].content, /alpha prompt/);
   assert.match(detail.memoryHits[0].content, /alpha response/);
+});
+
+test('session/messages rejects legacy snake_case session fields', async (t) => {
+  const { dir, homeDir, configPath } = await makeDatasetUri();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+
+  process.env.MUNINN_HOME = homeDir;
+  await writeMuninnConfig(configPath, { turnProvider: 'mock' });
+
+  const addResponse = await app.request('/api/v1/session/messages', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      session: {
+        session_id: 'group-a',
+        agent: 'agent-a',
+        prompt: 'legacy prompt',
+        response: 'legacy response',
+        tool_calling: ['tool-a'],
+      },
+    }),
+  });
+  assert.equal(addResponse.status, 400);
+  const body = await json(addResponse);
+  assert.equal(body.errorCode, 'invalidRequest');
+  assert.match(body.errorMessage, /unexpected fields: session_id, tool_calling/i);
 });
 
 test('session/messages validates request shape and requires at least one message field', async () => {
@@ -150,7 +221,6 @@ test('session/messages validates request shape and requires at least one message
       { agent: 'agent-a', toolCalling: 'tool-a' },
       { agent: 'agent-a', prompt: 123, toolCalling: ['tool-a'] },
       { agent: 'agent-a', artifacts: { key: 1 } },
-      { agent: 'agent-a', extra: { key: 1 } },
     ]) {
       const invalidResponse = await app.request('/api/v1/session/messages', {
         method: 'POST',
@@ -165,10 +235,12 @@ test('session/messages validates request shape and requires at least one message
 });
 
 test('session/messages maps core write validation failures to invalidRequest', async () => {
-  const { dir, homeDir } = await makeDatasetUri();
+  const { dir, homeDir, configPath } = await makeDatasetUri();
   process.env.MUNINN_HOME = homeDir;
 
   try {
+    await writeMuninnConfig(configPath);
+
     const response = await app.request('/api/v1/session/messages', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -262,47 +334,13 @@ test('session/messages reuses the agent default session when sessionId is omitte
   assert.notEqual(otherAgentBody.turnId, firstBody.turnId);
 });
 
-test('session/messages accepts extra at the API layer but does not treat it as message content', async (t) => {
+test('list and timeline cover the written flow, and recall is empty when observing work does not index memories', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(async () => rm(dir, { recursive: true, force: true }));
 
   process.env.MUNINN_HOME = homeDir;
-    await writeMuninnConfig(configPath, { turnProvider: 'mock' });
+  await writeMuninnConfig(configPath);
 
-  const success = await app.request('/api/v1/session/messages', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      session: {
-        sessionId: 'group-a',
-        agent: 'agent-a',
-        prompt: 'prompt with extra',
-        extra: { source: 'openclaw' },
-      },
-    }),
-  });
-  assert.equal(success.status, 200);
-
-  const rejected = await app.request('/api/v1/session/messages', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      session: {
-        sessionId: 'group-a',
-        agent: 'agent-a',
-        extra: { source: 'openclaw' },
-      },
-    }),
-  });
-  assert.equal(rejected.status, 400);
-});
-
-test('list and timeline cover the written flow, and recall is empty without semantic index', async (t) => {
-  const { dir, homeDir } = await makeDatasetUri();
-  t.after(async () => rm(dir, { recursive: true, force: true }));
-
-  process.env.MUNINN_HOME = homeDir;
-  
   const created = [];
   for (const payload of [
     { sessionId: 'group-a', agent: 'agent-a', prompt: 'first alpha prompt', response: 'first alpha response' },
@@ -343,10 +381,11 @@ test('list and timeline cover the written flow, and recall is empty without sema
 });
 
 test('timeline stays scoped to the full session key when agents share a sessionId', async (t) => {
-  const { dir, homeDir } = await makeDatasetUri();
+  const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(async () => rm(dir, { recursive: true, force: true }));
 
   process.env.MUNINN_HOME = homeDir;
+  await writeMuninnConfig(configPath);
 
   const first = await app.request('/api/v1/session/messages', {
     method: 'POST',
@@ -407,10 +446,12 @@ test('timeline stays scoped to the full session key when agents share a sessionI
 });
 
 test('recall and timeline surface request and not-found errors', async () => {
-  const { dir, homeDir } = await makeDatasetUri();
+  const { dir, homeDir, configPath } = await makeDatasetUri();
   process.env.MUNINN_HOME = homeDir;
   
   try {
+    await writeMuninnConfig(configPath);
+
     const missingQuery = await app.request('/api/v1/recall');
     assert.equal(missingQuery.status, 400);
 
@@ -450,10 +491,12 @@ test('recall, list, and timeline reject invalid numeric query parameters', async
 });
 
 test('detail and timeline map invalid memoryId inputs to invalidRequest', async () => {
-  const { dir, homeDir } = await makeDatasetUri();
+  const { dir, homeDir, configPath } = await makeDatasetUri();
   process.env.MUNINN_HOME = homeDir;
   
   try {
+    await writeMuninnConfig(configPath);
+
     const badDetail = await app.request('/api/v1/detail?memoryId=bad');
     assert.equal(badDetail.status, 400);
     const badDetailBody = await json(badDetail);
@@ -518,10 +561,12 @@ test('observer watermark reports pending turns until the observer flush complete
 });
 
 test('detail returns notFound for missing observing memoryId', async () => {
-  const { dir, homeDir } = await makeDatasetUri();
+  const { dir, homeDir, configPath } = await makeDatasetUri();
   process.env.MUNINN_HOME = homeDir;
 
   try {
+    await writeMuninnConfig(configPath);
+
     const missingDetail = await app.request(
       `/api/v1/detail?memoryId=${encodeURIComponent('observing:999999')}`
     );
@@ -534,11 +579,12 @@ test('detail returns notFound for missing observing memoryId', async () => {
 });
 
 test('session/messages accepts response payloads when turn summarization is not configured', async (t) => {
-  const { dir, homeDir } = await makeDatasetUri();
+  const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(async () => rm(dir, { recursive: true, force: true }));
 
   process.env.MUNINN_HOME = homeDir;
-  
+  await writeMuninnConfig(configPath);
+
   const response = await app.request('/api/v1/session/messages', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -764,26 +810,33 @@ test('ui settings config reads and writes muninn.json through sidecar', async (t
   t.after(async () => rm(dir, { recursive: true, force: true }));
   process.env.MUNINN_HOME = homeDir;
 
+  const initialConfig = createValidSettings();
+  initialConfig.observer.name = 'test-observer';
+
   await mkdir(path.dirname(configPath), { recursive: true });
-  await writeFile(configPath, '{\n  "provider": "mock"\n}\n', 'utf8');
+  await writeFile(configPath, `${JSON.stringify(initialConfig, null, 2)}\n`, 'utf8');
 
   const readResponse = await app.request('/api/v1/ui/settings/config');
   assert.equal(readResponse.status, 200);
   const readBody = await json(readResponse);
   assert.equal(readBody.pathLabel, configPath);
-  assert.match(readBody.content, /"provider": "mock"/);
+  assert.match(readBody.content, /"name": "test-observer"/);
 
+  const updatedConfig = createValidSettings({ includeWatchdog: true });
+  updatedConfig.observer.name = 'live-observer';
+  updatedConfig.semanticIndex.defaultImportance = 0.5;
   const writeResponse = await app.request('/api/v1/ui/settings/config', {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
-      content: '{\n  "provider": "live"\n}\n',
+      content: JSON.stringify(updatedConfig, null, 2),
     }),
   });
   assert.equal(writeResponse.status, 200);
 
   const persisted = await readFile(configPath, 'utf8');
-  assert.match(persisted, /"provider": "live"/);
+  assert.match(persisted, /"name": "live-observer"/);
+  assert.match(persisted, /"defaultImportance": 0.5/);
 });
 
 test('ui settings config creates the parent directory on first save', async (t) => {
@@ -791,20 +844,23 @@ test('ui settings config creates the parent directory on first save', async (t) 
   t.after(async () => rm(dir, { recursive: true, force: true }));
   process.env.MUNINN_HOME = homeDir;
 
+  const content = JSON.stringify(createValidSettings({ includeWatchdog: true }), null, 2);
   const writeResponse = await app.request('/api/v1/ui/settings/config', {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
-      content: '{\n  "watchdog": {\n    "enabled": true\n  }\n}\n',
+      content,
     }),
   });
   assert.equal(writeResponse.status, 200);
 
   const persisted = await readFile(configPath, 'utf8');
+  assert.match(persisted, /"observer"/);
+  assert.match(persisted, /"semanticIndex"/);
   assert.match(persisted, /"watchdog"/);
 });
 
-test('ui settings config returns default watchdog template when muninn.json is missing', async (t) => {
+test('ui settings config returns a saveable default template when muninn.json is missing', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(async () => rm(dir, { recursive: true, force: true }));
   process.env.MUNINN_HOME = homeDir;
@@ -815,9 +871,25 @@ test('ui settings config returns default watchdog template when muninn.json is m
   assert.equal(readResponse.status, 200);
   const readBody = await json(readResponse);
   assert.equal(readBody.pathLabel, configPath);
+  assert.match(readBody.content, /"name": "default-observer"/);
+  assert.match(readBody.content, /"default_observer_llm"/);
+  assert.match(readBody.content, /"semanticIndex": \{/);
+  assert.match(readBody.content, /"dimensions": 8/);
   assert.match(readBody.content, /"watchdog": \{/);
   assert.match(readBody.content, /"intervalMs": 60000/);
   assert.match(readBody.content, /"optimizeMergeCount": 4/);
+
+  const writeResponse = await app.request('/api/v1/ui/settings/config', {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      content: readBody.content,
+    }),
+  });
+  assert.equal(writeResponse.status, 200);
+
+  const persisted = await readFile(configPath, 'utf8');
+  assert.match(persisted, /"default_observer_llm"/);
 });
 
 test('ui settings config rejects invalid watchdog values server-side', async (t) => {
@@ -826,16 +898,14 @@ test('ui settings config rejects invalid watchdog values server-side', async (t)
   process.env.MUNINN_HOME = homeDir;
 
   await mkdir(path.dirname(configPath), { recursive: true });
+  const config = createValidSettings({ includeWatchdog: true });
+  config.watchdog.intervalMs = 0;
 
   const writeResponse = await app.request('/api/v1/ui/settings/config', {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
-      content: JSON.stringify({
-        watchdog: {
-          intervalMs: 0,
-        },
-      }, null, 2),
+      content: JSON.stringify(config, null, 2),
     }),
   });
   assert.equal(writeResponse.status, 400);
@@ -865,29 +935,168 @@ test('ui settings config reports invalid JSON before native storage initializati
   assert.match(body.errorMessage, /invalid JSON/i);
 });
 
-test('ui settings config accepts semanticIndex when embedding is omitted', async (t) => {
+test('ui settings config rejects missing observer config', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(async () => rm(dir, { recursive: true, force: true }));
   process.env.MUNINN_HOME = homeDir;
 
   await mkdir(path.dirname(configPath), { recursive: true });
+  const config = createValidSettings();
+  delete config.observer;
+
+  const writeResponse = await app.request('/api/v1/ui/settings/config', {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      content: JSON.stringify(config, null, 2),
+    }),
+  });
+  assert.equal(writeResponse.status, 400);
+  const body = await json(writeResponse);
+  assert.equal(body.errorCode, 'invalidRequest');
+  assert.match(body.errorMessage, /observer is required/i);
+});
+
+test('ui settings config rejects missing llm config', async (t) => {
+  const { dir, homeDir, configPath } = await makeDatasetUri();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+  process.env.MUNINN_HOME = homeDir;
+
+  await mkdir(path.dirname(configPath), { recursive: true });
+  const config = createValidSettings();
+  delete config.llm;
+
+  const writeResponse = await app.request('/api/v1/ui/settings/config', {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      content: JSON.stringify(config, null, 2),
+    }),
+  });
+  assert.equal(writeResponse.status, 400);
+  const body = await json(writeResponse);
+  assert.equal(body.errorCode, 'invalidRequest');
+  assert.match(body.errorMessage, /llm is required/i);
+});
+
+test('ui settings config rejects missing semanticIndex config', async (t) => {
+  const { dir, homeDir, configPath } = await makeDatasetUri();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+  process.env.MUNINN_HOME = homeDir;
+
+  await mkdir(path.dirname(configPath), { recursive: true });
+  const config = createValidSettings();
+  delete config.semanticIndex;
+
+  const writeResponse = await app.request('/api/v1/ui/settings/config', {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      content: JSON.stringify(config, null, 2),
+    }),
+  });
+  assert.equal(writeResponse.status, 400);
+  const body = await json(writeResponse);
+  assert.equal(body.errorCode, 'invalidRequest');
+  assert.match(body.errorMessage, /semanticIndex is required/i);
+});
+
+test('ui settings config rejects missing semanticIndex.embedding config', async (t) => {
+  const { dir, homeDir, configPath } = await makeDatasetUri();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+  process.env.MUNINN_HOME = homeDir;
+
+  await mkdir(path.dirname(configPath), { recursive: true });
+  const config = createValidSettings();
+  delete config.semanticIndex.embedding;
+
+  const writeResponse = await app.request('/api/v1/ui/settings/config', {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      content: JSON.stringify(config, null, 2),
+    }),
+  });
+  assert.equal(writeResponse.status, 400);
+  const body = await json(writeResponse);
+  assert.equal(body.errorCode, 'invalidRequest');
+  assert.match(body.errorMessage, /semanticIndex\.embedding is required/i);
+});
+
+test('ui settings config accepts omitted semanticIndex.embedding.dimensions when the default runtime dimensions apply', async (t) => {
+  const { dir, homeDir, configPath } = await makeDatasetUri();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+  process.env.MUNINN_HOME = homeDir;
+
+  await mkdir(path.dirname(configPath), { recursive: true });
+  const config = createValidSettings();
+  delete config.semanticIndex.embedding.dimensions;
+
+  const writeResponse = await app.request('/api/v1/ui/settings/config', {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      content: JSON.stringify(config, null, 2),
+    }),
+  });
+  assert.equal(writeResponse.status, 200);
+});
+
+test('ui settings config rejects omitted semantic dimensions for an existing non-default table', async (t) => {
+  const { dir, homeDir, configPath } = await makeDatasetUri();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+  process.env.MUNINN_HOME = homeDir;
+  process.env.MUNINN_OBSERVE_WINDOW_MS = '10';
+
+  await writeMuninnConfig(configPath, {
+    observerProvider: 'mock',
+    semanticDimensions: 4,
+  });
+
+  const addResponse = await app.request('/api/v1/session/messages', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      session: {
+        sessionId: 'group-a',
+        agent: 'agent-a',
+        prompt: 'semantic prompt',
+        response: 'semantic response',
+        summary: 'semantic summary',
+      },
+    }),
+  });
+  assert.equal(addResponse.status, 200);
+  await new Promise((resolve) => setTimeout(resolve, 50));
 
   const writeResponse = await app.request('/api/v1/ui/settings/config', {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
       content: JSON.stringify({
+        observer: {
+          name: 'test-observer',
+          llm: 'test_observer_llm',
+          maxAttempts: 3,
+        },
+        llm: {
+          test_observer_llm: {
+            provider: 'mock',
+          },
+        },
         semanticIndex: {
+          embedding: {
+            provider: 'mock',
+          },
           defaultImportance: 0.5,
         },
       }, null, 2),
     }),
   });
-  assert.equal(writeResponse.status, 200);
-
-  const persisted = await readFile(configPath, 'utf8');
-  assert.match(persisted, /"semanticIndex"/);
-  assert.match(persisted, /"defaultImportance": 0.5/);
+  assert.equal(writeResponse.status, 400);
+  const body = await json(writeResponse);
+  assert.equal(body.errorCode, 'invalidRequest');
+  assert.match(body.errorMessage, /semantic_index dimension mismatch/i);
 });
 
 test('ui settings config rejects semanticIndex.embedding.provider when it is empty', async (t) => {
@@ -914,6 +1123,51 @@ test('ui settings config rejects semanticIndex.embedding.provider when it is emp
   const body = await json(writeResponse);
   assert.equal(body.errorCode, 'invalidRequest');
   assert.match(body.errorMessage, /semanticIndex\.embedding\.provider must be a non-empty string/i);
+});
+
+test('ui settings config rejects openai observer llm without apiKey', async (t) => {
+  const { dir, homeDir, configPath } = await makeDatasetUri();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+  process.env.MUNINN_HOME = homeDir;
+
+  await mkdir(path.dirname(configPath), { recursive: true });
+  const config = createValidSettings({ observerProvider: 'openai' });
+  delete config.llm.default_observer_llm.apiKey;
+
+  const writeResponse = await app.request('/api/v1/ui/settings/config', {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      content: JSON.stringify(config, null, 2),
+    }),
+  });
+  assert.equal(writeResponse.status, 400);
+  const body = await json(writeResponse);
+  assert.equal(body.errorCode, 'invalidRequest');
+  assert.match(body.errorMessage, /llm\.default_observer_llm\.apiKey must be a non-empty string/i);
+});
+
+test('ui settings config rejects openai semantic embeddings without apiKey', async (t) => {
+  const { dir, homeDir, configPath } = await makeDatasetUri();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+  process.env.MUNINN_HOME = homeDir;
+
+  await mkdir(path.dirname(configPath), { recursive: true });
+  const config = createValidSettings();
+  config.semanticIndex.embedding.provider = 'openai';
+  delete config.semanticIndex.embedding.apiKey;
+
+  const writeResponse = await app.request('/api/v1/ui/settings/config', {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      content: JSON.stringify(config, null, 2),
+    }),
+  });
+  assert.equal(writeResponse.status, 400);
+  const body = await json(writeResponse);
+  assert.equal(body.errorCode, 'invalidRequest');
+  assert.match(body.errorMessage, /semanticIndex\.embedding\.apiKey must be a non-empty string/i);
 });
 
 test('ui settings config rejects observer config without observer.llm', async (t) => {
@@ -1020,6 +1274,16 @@ test('ui settings config rejects semantic index dimension changes that mismatch 
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
       content: JSON.stringify({
+        observer: {
+          name: 'test-observer',
+          llm: 'test_observer_llm',
+          maxAttempts: 3,
+        },
+        llm: {
+          test_observer_llm: {
+            provider: 'mock',
+          },
+        },
         semanticIndex: {
           embedding: {
             provider: 'mock',

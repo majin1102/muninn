@@ -1,5 +1,3 @@
-import type { SessionTurn } from '../client.js';
-
 export type MemoryCategory = 'Preference' | 'Fact' | 'Decision' | 'Entity' | 'Concept' | 'Other';
 
 export type ObservedMemory = {
@@ -25,7 +23,7 @@ export type ObservingThread = {
   observingId: string;
   snapshotId?: string;
   snapshotIds: string[];
-  pendingParentId?: string | null;
+  snapshotEpochs?: number[];
   observingEpoch: number;
   title: string;
   summary: string;
@@ -51,13 +49,12 @@ export type ObservingSnapshot = {
   checkpoint: {
     observingEpoch: number;
     indexedSnapshotSequence?: number | null;
-    pendingParentId?: string | null;
   };
 };
 
-export type IndexBatch = {
-  turns: SessionTurn[];
-  observingIds: string[];
+export type PendingIndex = {
+  start: number;
+  end: number;
 };
 
 export type SemanticIndexRow = {

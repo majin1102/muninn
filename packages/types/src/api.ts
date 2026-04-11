@@ -47,7 +47,7 @@ export interface GetDetailRequest {
   memoryId: string;
 }
 
-export interface SessionMessageInput {
+export interface TurnContent {
   sessionId?: string;
   agent: string;
   title?: string;
@@ -57,12 +57,10 @@ export interface SessionMessageInput {
   artifacts?: Record<string, string>;
   prompt?: string;
   response?: string;
-  // Free-form extra input accepted at the API layer.
-  extra?: Record<string, string>;
 }
 
 export interface AddMessageToSessionRequest {
-  session: SessionMessageInput;
+  session: TurnContent;
 }
 
 export interface AddMessageToSessionResponse {

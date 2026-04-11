@@ -10,9 +10,9 @@
       "default": "./dist/index.js"
     }
   },
-  "files": ["dist", "native/muninn_native.node"],
+  "files": ["dist", "native/muninn_native.node", "prompts"],
   "scripts": {
-    "build": "pnpm run build:native && tsc",
+    "build": "pnpm --filter @muninn/types build && pnpm run build:native && tsc",
     "build:native": "node ./scripts/build-native.mjs",
     "check:native": "cargo check --manifest-path native/Cargo.toml",
     "dev": "tsc --watch",

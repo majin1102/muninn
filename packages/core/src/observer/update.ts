@@ -1,96 +1,54 @@
-import type { CoreBinding } from '../native.js';
+import type { NativeTables } from '../native.js';
 import type { SessionTurn } from '../client.js';
 import { observeThread, routeObservingThreads } from '../llm/observing-gateway.js';
 import { applyMemoriesDelta, applySemanticMemoryDelta } from './memory-delta.js';
+import type { SealedEpoch } from './epoch.js';
 import {
   applyObserveResult,
   createObservingThread,
   currentObservingContent,
+  getPendingIndex,
   pushReference,
   snapshotRef,
-  threadHasPendingIndex,
   toObservingSnapshot,
 } from './thread.js';
-import type { GatewayUpdate, IndexBatch, ObservingThread } from './types.js';
+import type { GatewayUpdate, ObservingThread } from './types.js';
 
 const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
-const MAX_REFERENCES = 1000;
 
-export async function flushObserverWindow(params: {
-  client: CoreBinding;
+export async function observeEpoch(params: {
+  client: NativeTables;
   observerName: string;
   threads: ObservingThread[];
-  epoch: number;
-  pendingTurns: SessionTurn[];
-}): Promise<{ threads: ObservingThread[]; failedIndexIds: string[] }> {
-  ensureActiveThreads(params.threads, params.observerName, params.pendingTurns, params.epoch);
+  sealedEpoch: SealedEpoch;
+  signal?: AbortSignal;
+}): Promise<{ threads: ObservingThread[]; touchedIds: Set<string> }> {
+  throwIfAborted(params.signal);
+  ensureActiveThreads(
+    params.threads,
+    params.observerName,
+    params.sealedEpoch.turns,
+    params.sealedEpoch.epoch,
+  );
 
   const gatewayResult = await routeObservingThreads(
     activeGatewayInputs(params.threads, params.observerName),
-    params.pendingTurns,
+    params.sealedEpoch.turns,
+    params.signal,
   );
   const touchedIds = await applyGatewayUpdates(
     params.threads,
     params.observerName,
-    params.pendingTurns,
-    params.epoch,
+    params.sealedEpoch.turns,
+    params.sealedEpoch.epoch,
     gatewayResult.updates,
+    params.signal,
   );
-  const failedIndexIds = await flushThreads(params.client, params.threads, touchedIds);
+  await flushThreads(params.client, params.threads, touchedIds);
   return {
     threads: params.threads,
-    failedIndexIds,
+    touchedIds,
   };
-}
-
-export async function retryIndexBatches(
-  client: CoreBinding,
-  threads: ObservingThread[],
-  indexBatches: IndexBatch[],
-): Promise<IndexBatch[]> {
-  const nextBatches: IndexBatch[] = [];
-  for (const batch of indexBatches) {
-    const failedIds = await retryIndexBatch(client, threads, batch.observingIds);
-    if (failedIds.length > 0) {
-      nextBatches.push({
-        turns: batch.turns,
-        observingIds: failedIds,
-      });
-    }
-  }
-  return nextBatches;
-}
-
-export function restoreIndexBatches(
-  threads: ObservingThread[],
-  pendingTurns: SessionTurn[],
-): IndexBatch[] {
-  const observingIdsByEpoch = new Map<number, Set<string>>();
-  for (const thread of threads.filter(threadHasPendingIndex)) {
-    const ids = observingIdsByEpoch.get(thread.observingEpoch) ?? new Set<string>();
-    ids.add(thread.observingId);
-    observingIdsByEpoch.set(thread.observingEpoch, ids);
-  }
-  if (observingIdsByEpoch.size === 0) {
-    return [];
-  }
-
-  const turnsByEpoch = new Map<number, SessionTurn[]>();
-  for (const turn of pendingTurns) {
-    if (turn.observingEpoch == null) {
-      continue;
-    }
-    const turns = turnsByEpoch.get(turn.observingEpoch) ?? [];
-    turns.push(turn);
-    turnsByEpoch.set(turn.observingEpoch, turns);
-  }
-
-  return [...observingIdsByEpoch.entries()]
-    .sort(([left], [right]) => left - right)
-    .flatMap(([epoch, ids]) => {
-      const turns = turnsByEpoch.get(epoch) ?? [];
-      return ids.size > 0 ? [{ turns, observingIds: [...ids] }] : [];
-    });
 }
 
 function ensureActiveThreads(
@@ -132,10 +90,11 @@ async function applyGatewayUpdates(
   pendingTurns: SessionTurn[],
   observingEpoch: number,
   updates: GatewayUpdate[],
+  signal?: AbortSignal,
 ): Promise<Set<string>> {
+  throwIfAborted(signal);
   const turnMap = new Map(pendingTurns.map((turn) => [turn.turnId, turn]));
   const observeTurnsByThread = new Map<string, Map<string, { turnId: string; summary: string; whyRelated: string }>>();
-  const turnParentById = new Map<string, string>();
   const touchedIds = new Set<string>();
   const now = new Date().toISOString();
 
@@ -159,9 +118,6 @@ async function applyGatewayUpdates(
       if (!thread) {
         continue;
       }
-      if (!turnParentById.has(turn.turnId)) {
-        turnParentById.set(turn.turnId, targetId);
-      }
       touchedIds.add(targetId);
       mergeObservingTurnInput(observeTurnsByThread, targetId, observeTurn);
       pushReference(thread, turn.turnId);
@@ -182,13 +138,13 @@ async function applyGatewayUpdates(
       observingEpoch,
       now,
     );
-    thread.pendingParentId = turnParentById.get(turn.turnId) ?? null;
     threads.push(thread);
     touchedIds.add(thread.observingId);
     mergeObservingTurnInput(observeTurnsByThread, thread.observingId, observeTurn);
   }
 
   for (const [observingId, turnsById] of observeTurnsByThread.entries()) {
+    throwIfAborted(signal);
     const thread = threads.find((candidate) => candidate.observingId === observingId);
     if (!thread) {
       continue;
@@ -196,7 +152,7 @@ async function applyGatewayUpdates(
     const result = await observeThread({
       observingContent: currentObservingContent(thread),
       pendingTurns: [...turnsById.values()],
-    });
+    }, signal);
     applyObserveResult(thread, result, observingEpoch, applyMemoriesDelta);
     touchedIds.add(observingId);
   }
@@ -205,105 +161,49 @@ async function applyGatewayUpdates(
 }
 
 async function flushThreads(
-  client: CoreBinding,
+  client: NativeTables,
   threads: ObservingThread[],
   touchedIds: Set<string>,
-): Promise<string[]> {
+): Promise<void> {
   const touched = threads
     .filter((thread) => touchedIds.has(thread.observingId))
     .filter((thread) => thread.snapshots.length > 0);
   if (touched.length === 0) {
-    return [];
-  }
-
-  const persistedRows = await client.observingTable.upsert({
-    snapshots: touched.map(toObservingSnapshot),
-  });
-  updateThreadsFromRows(threads, persistedRows);
-  try {
-    await applyParentRefs(client, threads, touchedIds);
-  } catch (error) {
-    console.error(`[muninn:observer] parent ref flush failed: ${String(error)}`);
-  }
-
-  const failedIndexIds: string[] = [];
-  for (const observingId of touchedIds) {
-    const thread = threads.find((candidate) => candidate.observingId === observingId);
-    if (!thread) {
-      continue;
-    }
-    try {
-      await catchUpIndex(client, thread);
-    } catch (error) {
-      console.error(`[muninn:observer] semantic index flush failed for ${thread.observingId}: ${String(error)}`);
-      failedIndexIds.push(thread.observingId);
-    }
-  }
-  return failedIndexIds;
-}
-
-async function applyParentRefs(
-  client: CoreBinding,
-  threads: ObservingThread[],
-  touchedIds: Set<string>,
-): Promise<void> {
-  const snapshotById = new Map(
-    threads
-      .filter((thread) => thread.snapshotId)
-      .map((thread) => [thread.observingId, thread.snapshotId!]),
-  );
-
-  const pending = threads
-    .filter((thread) => touchedIds.has(thread.observingId))
-    .filter((thread) => thread.pendingParentId)
-    .map((thread) => {
-      const parentSnapshotId = snapshotById.get(thread.pendingParentId!);
-      if (!parentSnapshotId) {
-        return null;
-      }
-      const updated: ObservingThread = {
-        ...thread,
-        references: [...thread.references],
-        pendingParentId: null,
-      };
-      updated.references = updated.references.filter((reference) => reference !== parentSnapshotId);
-      updated.references.unshift(parentSnapshotId);
-      while (updated.references.length > MAX_REFERENCES) {
-        const removableIndex = updated.references.findIndex((reference, index) => (
-          index > 0 && reference.startsWith('session:')
-        ));
-        updated.references.splice(removableIndex >= 0 ? removableIndex : updated.references.length - 1, 1);
-      }
-      return updated;
-    })
-    .filter((thread): thread is ObservingThread => Boolean(thread));
-
-  if (pending.length === 0) {
     return;
   }
 
-  const persisted = await client.observingTable.upsert({
-    snapshots: pending.map(toObservingSnapshot),
+  const persistedRows = await client.observingTable.insert({
+    snapshots: touched.map(toObservingSnapshot),
   });
-  updateThreadsFromRows(threads, persisted);
+  updateThreadsFromRows(threads, persistedRows);
 }
 
-async function catchUpIndex(client: CoreBinding, thread: ObservingThread): Promise<void> {
-  const start = (thread.indexedSnapshotSequence ?? -1) + 1;
-  if (start >= thread.snapshots.length) {
+async function catchUpIndex(
+  client: NativeTables,
+  thread: ObservingThread,
+  signal?: AbortSignal,
+): Promise<void> {
+  const pending = getPendingIndex(thread);
+  if (!pending) {
     return;
   }
 
   let latestIndexedSequence = thread.indexedSnapshotSequence ?? null;
-  for (let snapshotIndex = start; snapshotIndex < thread.snapshots.length; snapshotIndex += 1) {
-    await applySemanticMemoryDelta(client, thread.snapshots[snapshotIndex], snapshotRef(thread, snapshotIndex));
+  for (let snapshotIndex = pending.start; snapshotIndex <= pending.end; snapshotIndex += 1) {
+    throwIfAborted(signal);
+    await applySemanticMemoryDelta(
+      client,
+      thread.snapshots[snapshotIndex],
+      snapshotRef(thread, snapshotIndex),
+      signal,
+    );
     latestIndexedSequence = snapshotIndex;
   }
 
   if (latestIndexedSequence !== thread.indexedSnapshotSequence) {
     thread.indexedSnapshotSequence = latestIndexedSequence;
     if (thread.snapshotId) {
-      const [persisted] = await client.observingTable.upsert({
+      const [persisted] = await client.observingTable.update({
         snapshots: [toObservingSnapshot(thread)],
       });
       updateThreadsFromRows([thread], [persisted]);
@@ -311,25 +211,49 @@ async function catchUpIndex(client: CoreBinding, thread: ObservingThread): Promi
   }
 }
 
-async function retryIndexBatch(
-  client: CoreBinding,
+export async function buildSemanticIndex(
+  client: NativeTables,
   threads: ObservingThread[],
-  observingIds: string[],
-): Promise<string[]> {
-  const failedIds: string[] = [];
-  for (const observingId of observingIds) {
-    const thread = threads.find((candidate) => candidate.observingId === observingId);
-    if (!thread) {
+  signal?: AbortSignal,
+): Promise<void> {
+  let firstError: unknown = null;
+  for (const thread of threads) {
+    throwIfAborted(signal);
+    if (!getPendingIndex(thread)) {
       continue;
     }
     try {
-      await catchUpIndex(client, thread);
+      await catchUpIndex(client, thread, signal);
     } catch (error) {
-      console.error(`[muninn:observer] semantic index retry failed for ${thread.observingId}: ${String(error)}`);
-      failedIds.push(thread.observingId);
+      firstError ??= error;
     }
   }
-  return failedIds;
+  if (firstError) {
+    throw firstError;
+  }
+}
+
+export async function buildTouchedIndex(
+  client: NativeTables,
+  threads: ObservingThread[],
+  touchedIds: Set<string>,
+  signal?: AbortSignal,
+): Promise<void> {
+  let firstError: unknown = null;
+  for (const thread of threads) {
+    throwIfAborted(signal);
+    if (!touchedIds.has(thread.observingId) || !getPendingIndex(thread)) {
+      continue;
+    }
+    try {
+      await catchUpIndex(client, thread, signal);
+    } catch (error) {
+      firstError ??= error;
+    }
+  }
+  if (firstError) {
+    throw firstError;
+  }
 }
 
 function updateThreadsFromRows(
@@ -347,7 +271,6 @@ function updateThreadsFromRows(
       thread.snapshotIds.push(row.snapshotId);
     }
     thread.references = [...row.references];
-    thread.pendingParentId = row.checkpoint.pendingParentId ?? null;
     thread.indexedSnapshotSequence = row.checkpoint.indexedSnapshotSequence ?? null;
     thread.observingEpoch = row.checkpoint.observingEpoch;
     thread.updatedAt = row.updatedAt;
@@ -379,4 +302,20 @@ function normalizeText(value: string, maxChars: number): string {
 
 export const __testing = {
   flushThreads,
+  buildTouchedIndex,
+  buildSemanticIndex,
+  observeEpoch,
 };
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (!signal?.aborted) {
+    return;
+  }
+  const reason = signal.reason;
+  if (reason instanceof Error) {
+    throw reason;
+  }
+  const error = new Error('operation aborted');
+  error.name = 'AbortError';
+  throw error;
+}

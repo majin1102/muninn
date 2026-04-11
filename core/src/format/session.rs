@@ -24,6 +24,7 @@ use super::codec::{
 };
 use super::memory_id::{MemoryId, MemoryLayer, deserialize_memory_id, serialize_memory_id};
 use crate::session::{SessionKey, has_text_content, reconcile_open_turns as reconcile_session_open_turns};
+use crate::watchdog::compact_dataset;
 #[cfg(test)]
 use crate::session::{
     SessionUpdate, merge_artifacts, merge_metadata_field, merge_prompt, merge_tool_calling,
@@ -181,26 +182,30 @@ pub(crate) enum SessionSelect {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct SessionTable {
+pub struct SessionTable {
     access: TableAccess,
 }
 
 impl SessionTable {
-    pub(crate) fn new(options: TableOptions) -> Self {
+    pub fn new(options: TableOptions) -> Self {
         Self {
             access: TableAccess::new(options, Path::parse("turn").expect("valid turn table path")),
         }
     }
 
-    pub(crate) async fn try_open_dataset(&self) -> Result<Option<LanceDataset>> {
+    pub async fn try_open_dataset(&self) -> Result<Option<LanceDataset>> {
         self.access.try_open().await
     }
 
-    pub(crate) async fn maintenance_stats(&self) -> Result<Option<TableStats>> {
+    pub async fn stats(&self) -> Result<Option<TableStats>> {
         self.access.maintenance_stats().await
     }
 
-    pub(crate) async fn describe(&self) -> Result<Option<TableDescription>> {
+    pub async fn compact(&self) -> Result<bool> {
+        compact_dataset(self.access.try_open().await?).await
+    }
+
+    pub async fn describe(&self) -> Result<Option<TableDescription>> {
         let Some(dataset) = self.access.try_open().await? else {
             return Ok(None);
         };
@@ -220,57 +225,25 @@ impl SessionTable {
         }
     }
 
-    #[allow(dead_code)]
-    pub(crate) async fn insert(&self, turns: Vec<SessionTurn>) -> Result<()> {
+    pub async fn insert(&self, turns: &mut [SessionTurn]) -> Result<()> {
         if turns.is_empty() {
             return Ok(());
         }
-        if let Some(mut dataset) = self.access.try_open().await? {
-            dataset.append(turns_to_reader(turns), None).await?;
-            return Ok(());
+        if turns
+            .iter()
+            .any(|turn| turn.turn_id.memory_point() != u64::MAX)
+        {
+            return Err(Error::invalid_input(
+                "session insert requires pending turn ids",
+            ));
         }
-        let retry_turns = turns.clone();
-        match self.access.write(turns_to_reader(turns)).await {
-            Ok(_) => Ok(()),
-            Err(Error::DatasetAlreadyExists { .. }) => {
-                let mut dataset = self.access.try_open().await?.ok_or_else(|| {
-                    Error::io(
-                        "turn dataset existed after concurrent create but could not be reopened",
-                    )
-                })?;
-                dataset.append(turns_to_reader(retry_turns), None).await?;
-                Ok(())
-            }
-            Err(error) => Err(error),
-        }
-    }
-
-    pub(crate) async fn upsert(&self, turns: &mut [SessionTurn]) -> Result<()> {
-        if turns.is_empty() {
-            return Ok(());
-        }
+        let new_indexes = (0..turns.len()).collect::<Vec<_>>();
         if let Some(mut dataset) = self.access.try_open().await? {
             let before_version = dataset.version().version;
-            let mut existing = Vec::new();
-            let mut new = Vec::new();
-            let mut new_indexes = Vec::new();
-            for (index, turn) in turns.iter().cloned().enumerate() {
-                if turn.turn_id.memory_point() != u64::MAX {
-                    existing.push(turn);
-                } else {
-                    new.push(turn);
-                    new_indexes.push(index);
-                }
-            }
-            if !existing.is_empty() {
-                dataset = self.update_existing(dataset, existing).await?;
-            }
-            if !new.is_empty() {
-                dataset.append(turns_to_reader(new), None).await?;
-                self.assign_inserted_ids_from_delta(&dataset, before_version, turns, &new_indexes)
-                    .await?;
-            }
-            return Ok(());
+            dataset.append(turns_to_reader(turns.to_vec()), None).await?;
+            return self
+                .assign_inserted_ids_from_delta(&dataset, before_version, turns, &new_indexes)
+                .await;
         }
         let retry_turns = turns.to_vec();
         match self.access.write(turns_to_reader(retry_turns.clone())).await {
@@ -282,34 +255,30 @@ impl SessionTable {
                     )
                 })?;
                 let before_version = dataset.version().version;
-                let mut existing = Vec::new();
-                let mut new = Vec::new();
-                let mut new_indexes = Vec::new();
-                for (index, turn) in retry_turns.into_iter().enumerate() {
-                    if turn.turn_id.memory_point() != u64::MAX {
-                        existing.push(turn);
-                    } else {
-                        new.push(turn);
-                        new_indexes.push(index);
-                    }
-                }
-                if !existing.is_empty() {
-                    dataset = self.update_existing(dataset, existing).await?;
-                }
-                if !new.is_empty() {
-                    dataset.append(turns_to_reader(new), None).await?;
-                    self.assign_inserted_ids_from_delta(
-                        &dataset,
-                        before_version,
-                        turns,
-                        &new_indexes,
-                    )
-                    .await?;
-                }
-                Ok(())
+                dataset.append(turns_to_reader(retry_turns), None).await?;
+                self.assign_inserted_ids_from_delta(&dataset, before_version, turns, &new_indexes)
+                    .await
             }
             Err(error) => Err(error),
         }
+    }
+
+    pub async fn update(&self, turns: &[SessionTurn]) -> Result<()> {
+        if turns.is_empty() {
+            return Ok(());
+        }
+        if turns.iter().any(|turn| turn.turn_id.memory_point() == u64::MAX) {
+            return Err(Error::invalid_input(
+                "session update requires persisted turn ids",
+            ));
+        }
+        let Some(dataset) = self.access.try_open().await? else {
+            return Err(Error::invalid_input(
+                "cannot update session rows before dataset exists",
+            ));
+        };
+        self.update_existing(dataset, turns.to_vec()).await?;
+        Ok(())
     }
 
     #[allow(dead_code)]
@@ -325,7 +294,7 @@ impl SessionTable {
     }
 
     #[allow(dead_code)]
-    pub(crate) async fn get_turn(&self, turn_id: u64) -> Result<Option<SessionTurn>> {
+    pub async fn get_turn(&self, turn_id: u64) -> Result<Option<SessionTurn>> {
         let Some(dataset) = self.access.try_open().await? else {
             return Ok(None);
         };
@@ -367,6 +336,16 @@ impl SessionTable {
         Ok(turns.into_iter().next())
     }
 
+    pub async fn load_open_turn_for(
+        &self,
+        session_id: Option<&str>,
+        agent: &str,
+        observer: &str,
+    ) -> Result<Option<SessionTurn>> {
+        self.load_open_turn(&SessionKey::from(session_id, agent, observer))
+            .await
+    }
+
     #[cfg(test)]
     pub(crate) async fn load_latest_turn(
         &self,
@@ -383,7 +362,7 @@ impl SessionTable {
         Ok(turns.into_iter().next())
     }
 
-    pub(crate) async fn reconcile_open_turns(&self) -> Result<usize> {
+    pub async fn reconcile_open_turns(&self) -> Result<usize> {
         let mut open_turns_by_key = HashMap::<SessionKey, Vec<SessionTurn>>::new();
         for turn in self
             .load_all_turns()
@@ -403,8 +382,8 @@ impl SessionTable {
             .filter(|turns| turns.len() > 1)
         {
             let reconciliation = reconcile_session_open_turns(turns)?;
-            let mut canonical_turn = vec![reconciliation.canonical_turn];
-            self.upsert(&mut canonical_turn).await?;
+            let canonical_turn = vec![reconciliation.canonical_turn];
+            self.update(&canonical_turn).await?;
             self.delete(reconciliation.discarded_turn_ids).await?;
             repaired_sessions += 1;
         }
@@ -430,7 +409,7 @@ impl SessionTable {
         record_batch_to_turns(&batch)
     }
 
-    pub(crate) async fn turns_after_epoch(
+    pub async fn turns_after_epoch(
         &self,
         observer: &str,
         committed_epoch: Option<u64>,
@@ -626,6 +605,63 @@ impl SessionTable {
         }
         Ok(())
     }
+
+    pub async fn list_turns(
+        &self,
+        agent: Option<String>,
+        session_id: Option<String>,
+        offset: usize,
+        limit: usize,
+    ) -> Result<Vec<SessionTurn>> {
+        let turns = self
+            .select(SessionSelect::Filter { agent, session_id })
+            .await?;
+        Ok(crate::memory::sessions::apply_list_mode(
+            turns,
+            crate::memory::types::ListMode::Page { offset, limit },
+        ))
+    }
+
+    pub async fn list_recent_turns(
+        &self,
+        agent: Option<String>,
+        session_id: Option<String>,
+        limit: usize,
+    ) -> Result<Vec<SessionTurn>> {
+        let turns = self
+            .select(SessionSelect::Filter { agent, session_id })
+            .await?;
+        Ok(crate::memory::sessions::apply_list_mode(
+            turns,
+            crate::memory::types::ListMode::Recency { limit },
+        ))
+    }
+
+    pub async fn timeline_turns(
+        &self,
+        memory_id: MemoryId,
+        before_limit: usize,
+        after_limit: usize,
+    ) -> Result<Vec<SessionTurn>> {
+        if memory_id.memory_layer() != MemoryLayer::Session {
+            return Err(Error::invalid_input(format!(
+                "invalid memory layer for session lookup: {}",
+                memory_id.memory_layer()
+            )));
+        }
+        let Some(anchor) = self.get_turn(memory_id.memory_point()).await? else {
+            return Ok(Vec::new());
+        };
+        let turns = self.load_session_turns(&anchor.session_key()).await?;
+        Ok(crate::memory::sessions::timeline_from_source(
+            &turns,
+            memory_id,
+            before_limit,
+            after_limit,
+            &anchor.session_key(),
+        )
+        .unwrap_or_default())
+    }
 }
 
 fn filter_turns(
@@ -679,7 +715,7 @@ mod tests {
     use crate::format::{MemoryId, MemoryLayer, SessionSelect, SessionTable, TableOptions};
     use crate::memory::sessions::{apply_list_mode, get, timeline, timeline_from_source};
     use crate::memory::types::{ListMode, MemoryView};
-    use crate::muninn::{Muninn, TurnContent};
+    use crate::test_support::{TestService, TurnContent};
     use crate::session::{Session, SessionKey, SessionUpdate, reconcile_open_turns};
     use chrono::{TimeZone, Utc};
     use tokio::sync::Barrier;
@@ -724,7 +760,7 @@ mod tests {
         prompt: Option<&str>,
         response: Option<&str>,
     ) -> SessionTurn {
-        let muninn = Muninn::new(table_options.clone()).await.unwrap();
+        let muninn = TestService::new(table_options.clone()).await.unwrap();
         let observer = crate::llm::config::effective_observer_name().unwrap();
         muninn
             .accept(TurnContent {
@@ -1249,7 +1285,7 @@ mod tests {
         let _guard = crate::llm::config::llm_test_env_guard();
         let dir = tempfile::tempdir().unwrap();
         let table_options = TableOptions::local(dir.path()).unwrap();
-        let service = Muninn::new(table_options.clone()).await.unwrap();
+        let service = TestService::new(table_options.clone()).await.unwrap();
         let barrier = Arc::new(Barrier::new(3));
 
         let first_service = service.clone();
@@ -1316,7 +1352,7 @@ mod tests {
         let _guard = crate::llm::config::llm_test_env_guard();
         let dir = tempfile::tempdir().unwrap();
         let table_options = TableOptions::local(dir.path()).unwrap();
-        let service = Muninn::new(table_options.clone()).await.unwrap();
+        let service = TestService::new(table_options.clone()).await.unwrap();
         let barrier = Arc::new(Barrier::new(3));
 
         let first_service = service.clone();
@@ -1378,6 +1414,51 @@ mod tests {
         assert_eq!(group_a_turns.len(), 1);
         assert_eq!(group_b_turns.len(), 1);
         assert_ne!(group_a_turns[0].turn_id, group_b_turns[0].turn_id);
+    }
+
+    #[tokio::test]
+    async fn insert_assigns_row_id_and_update_rejects_pending_turns() {
+        let _guard = crate::llm::config::llm_test_env_guard();
+        let dir = tempfile::tempdir().unwrap();
+        let table_options = TableOptions::local(dir.path()).unwrap();
+        let mut pending = vec![SessionTurn::new_pending(&SessionUpdate {
+            session_id: Some("group-a".to_string()),
+            agent: "agent-a".to_string(),
+            observer: "observer-a".to_string(),
+            title: None,
+            title_source: None,
+            summary: None,
+            summary_source: None,
+            tool_calling: None,
+            artifacts: None,
+            prompt: Some("prompt-a".to_string()),
+            response: None,
+            observing_epoch: None,
+        })];
+
+        session_table(&table_options).insert(&mut pending).await.unwrap();
+        assert_ne!(pending[0].turn_id.memory_point(), u64::MAX);
+
+        let err = session_table(&table_options)
+            .update(&[SessionTurn::new_pending(&SessionUpdate {
+                session_id: Some("group-a".to_string()),
+                agent: "agent-a".to_string(),
+                observer: "observer-a".to_string(),
+                title: None,
+                title_source: None,
+                summary: None,
+                summary_source: None,
+                tool_calling: None,
+                artifacts: None,
+                prompt: Some("prompt-a".to_string()),
+                response: None,
+                observing_epoch: None,
+            })])
+            .await
+            .unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("session update requires persisted turn ids"));
     }
 
     #[tokio::test]

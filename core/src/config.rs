@@ -30,6 +30,14 @@ pub fn semantic_index_config() -> Result<EmbeddingConfig> {
     Ok(embedding_config_from_file_config(file_config.as_ref()))
 }
 
+#[cfg(test)]
+pub fn semantic_index_config_from_raw(raw: &str) -> Result<EmbeddingConfig> {
+    let parsed = parse_muninn_config(raw, "provided Muninn config")?;
+    Ok(embedding_config_from_file_config(
+        parsed.semantic_index.as_ref(),
+    ))
+}
+
 pub fn watchdog_config() -> Result<WatchdogConfig> {
     let file_config = load_muninn_config()?.and_then(|config| config.watchdog);
     let semantic_file_config = file_config

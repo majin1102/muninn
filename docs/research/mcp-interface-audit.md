@@ -17,7 +17,7 @@
 写入对象的 format 语义：
 
 ```ts
-export interface SessionMessageInput {
+export interface TurnContent {
   sessionId?: string;
   agent: string;
   title?: string;
@@ -26,7 +26,6 @@ export interface SessionMessageInput {
   artifacts?: Record<string, string>;
   prompt?: string;
   response?: string;
-  extra?: Record<string, string>;
 }
 ```
 
@@ -37,8 +36,6 @@ export interface SessionMessageInput {
 - `agent` 必填，其它 message 字段可选，但至少要有一项 message 内容
 - `toolCalling` 表示本轮调用过的工具
 - `artifacts` 表示工具调用产生的产出物
-- `extra` 表示接口层可接受的自由附带字符串键值
-- `extra` 仅用于接口传输层，sidecar 可读取它做必要处理，但不会写入持久化 format
 
 ## 3. 当前 sidecar 读接口
 

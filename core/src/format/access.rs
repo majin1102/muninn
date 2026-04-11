@@ -27,7 +27,8 @@ pub struct TableAccess {
     path: Path,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct TableStats {
     pub version: u64,
     pub fragment_count: usize,

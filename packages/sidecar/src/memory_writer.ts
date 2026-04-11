@@ -4,11 +4,22 @@ import { Hono } from 'hono';
 import type {
   AddMessageToSessionRequest,
   ErrorResponse,
-  SessionMessageInput,
+  TurnContent,
 } from '@muninn/types';
 import { generateRequestId } from './utils.js';
 
 export const memoryWriter = new Hono();
+
+const TURN_CONTENT_FIELDS = new Set([
+  'sessionId',
+  'agent',
+  'title',
+  'summary',
+  'toolCalling',
+  'artifacts',
+  'prompt',
+  'response',
+]);
 
 function errorResponse(errorCode: string, errorMessage: string): ErrorResponse {
   return {
@@ -30,7 +41,7 @@ function hasTextContent(value: string | undefined): boolean {
   return typeof value === 'string' && value.trim().length > 0;
 }
 
-function hasMessageContent(session: SessionMessageInput): boolean {
+function hasMessageContent(session: TurnContent): boolean {
   return hasTextContent(session.title)
     || hasTextContent(session.summary)
     || hasTextContent(session.prompt)
@@ -60,9 +71,14 @@ function mapCoreWriteError(error: unknown): { status: number; body: ErrorRespons
   };
 }
 
-function validateSession(session: SessionMessageInput | undefined): string | null {
+function validateSession(session: TurnContent | undefined): string | null {
   if (!session) {
     return 'session is required';
+  }
+
+  const unknownFields = Object.keys(session).filter((key) => !TURN_CONTENT_FIELDS.has(key));
+  if (unknownFields.length > 0) {
+    return `session contains unexpected fields: ${unknownFields.join(', ')}`;
   }
 
   if (!session.agent || typeof session.agent !== 'string') {
@@ -101,10 +117,6 @@ function validateSession(session: SessionMessageInput | undefined): string | nul
     return 'session.artifacts must be a record of string values';
   }
 
-  if (session.extra !== undefined && !isStringRecord(session.extra)) {
-    return 'session.extra must be a record of string values';
-  }
-
   if (!hasMessageContent(session)) {
     return 'session must include at least one message field';
   }
@@ -126,11 +138,13 @@ memoryWriter.post('/api/v1/session/messages', async (c) => {
   if (validationError) {
     return c.json(errorResponse('invalidRequest', validationError), 400);
   }
+  if (!body.session) {
+    return c.json(errorResponse('invalidRequest', 'session is required'), 400);
+  }
 
-  const { extra: _extra, ...persistedSession } = body.session;
   let storedTurn;
   try {
-    storedTurn = await addMessage(persistedSession);
+    storedTurn = await addMessage(body.session);
   } catch (error) {
     const mapped = mapCoreWriteError(error);
     return c.json(mapped.body, mapped.status as 400 | 500);

@@ -14,14 +14,13 @@ use super::codec::{
     observings_to_reader, record_batch_to_observings, record_batch_to_observings_with_row_ids,
 };
 use super::memory_id::{MemoryId, MemoryLayer, deserialize_memory_id, serialize_memory_id};
+use crate::watchdog::compact_dataset;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ObservingCheckpoint {
     pub observing_epoch: u64,
     pub indexed_snapshot_sequence: Option<i64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pending_parent_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -91,12 +90,12 @@ impl ObservingSnapshot {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct ObservingTable {
+pub struct ObservingTable {
     access: TableAccess,
 }
 
 impl ObservingTable {
-    pub(crate) fn new(options: TableOptions) -> Self {
+    pub fn new(options: TableOptions) -> Self {
         Self {
             access: TableAccess::new(
                 options,
@@ -105,15 +104,19 @@ impl ObservingTable {
         }
     }
 
-    pub(crate) async fn try_open_dataset(&self) -> Result<Option<LanceDataset>> {
+    pub async fn try_open_dataset(&self) -> Result<Option<LanceDataset>> {
         self.access.try_open().await
     }
 
-    pub(crate) async fn maintenance_stats(&self) -> Result<Option<TableStats>> {
+    pub async fn stats(&self) -> Result<Option<TableStats>> {
         self.access.maintenance_stats().await
     }
 
-    pub(crate) async fn describe(&self) -> Result<Option<TableDescription>> {
+    pub async fn compact(&self) -> Result<bool> {
+        compact_dataset(self.access.try_open().await?).await
+    }
+
+    pub async fn describe(&self) -> Result<Option<TableDescription>> {
         let Some(dataset) = self.access.try_open().await? else {
             return Ok(None);
         };
@@ -122,7 +125,7 @@ impl ObservingTable {
         Ok(Some(describe_dataset(&dataset)))
     }
 
-    pub(crate) async fn list(&self, observer: Option<&str>) -> Result<Vec<ObservingSnapshot>> {
+    pub async fn list(&self, observer: Option<&str>) -> Result<Vec<ObservingSnapshot>> {
         let mut observings = self.load_all().await?;
         if let Some(observer) = observer {
             observings.retain(|observing| observing.observer == observer);
@@ -130,7 +133,7 @@ impl ObservingTable {
         Ok(observings)
     }
 
-    pub(crate) async fn get(&self, row_id: u64) -> Result<Option<ObservingSnapshot>> {
+    pub async fn get(&self, row_id: u64) -> Result<Option<ObservingSnapshot>> {
         let Some(dataset) = self.access.try_open().await? else {
             return Ok(None);
         };
@@ -145,54 +148,55 @@ impl ObservingTable {
             .next())
     }
 
-    #[allow(dead_code)]
-    pub(crate) async fn insert(&self, observings: Vec<ObservingSnapshot>) -> Result<()> {
+    pub async fn insert(&self, observings: &mut [ObservingSnapshot]) -> Result<()> {
         if observings.is_empty() {
             return Ok(());
         }
+        if observings
+            .iter()
+            .any(|observing| observing.snapshot_id.memory_point() != u64::MAX)
+        {
+            return Err(Error::invalid_input(
+                "observing insert requires pending snapshot ids",
+            ));
+        }
+        let new_indexes = (0..observings.len()).collect::<Vec<_>>();
         if let Some(mut dataset) = self.access.try_open().await? {
+            let before_version = dataset.version().version;
             dataset
-                .append(observings_to_reader(observings), None)
+                .append(observings_to_reader(observings.to_vec()), None)
+                .await?;
+            assign_inserted_snapshot_ids_from_delta(&dataset, before_version, observings, &new_indexes)
                 .await?;
         } else {
-            self.access.write(observings_to_reader(observings)).await?;
+            let dataset = self
+                .access
+                .write(observings_to_reader(observings.to_vec()))
+                .await?;
+            assign_inserted_snapshot_ids_from_scan(&dataset, observings).await?;
         }
         Ok(())
     }
 
-    pub(crate) async fn upsert(&self, observings: &mut [ObservingSnapshot]) -> Result<()> {
+    pub async fn update(&self, observings: &[ObservingSnapshot]) -> Result<()> {
         if observings.is_empty() {
             return Ok(());
         }
-        if let Some(dataset) = self.access.try_open().await? {
-            let before_version = dataset.version().version;
-            let mut existing = Vec::new();
-            let mut new = Vec::new();
-            let mut new_indexes = Vec::new();
-            for (index, observing) in observings.iter().cloned().enumerate() {
-                if observing.snapshot_id.memory_point() != u64::MAX {
-                    existing.push(observing);
-                } else {
-                    new.push(observing);
-                    new_indexes.push(index);
-                }
-            }
-            let mut dataset = update_observing_rows(dataset, &existing).await?;
-            if !new.is_empty() {
-                dataset.append(observings_to_reader(new), None).await?;
-                assign_inserted_snapshot_ids_from_delta(
-                    &dataset,
-                    before_version,
-                    observings,
-                    &new_indexes,
-                )
-                .await?;
-            }
-            Ok(())
-        } else {
-            let dataset = self.access.write(observings_to_reader(observings.to_vec())).await?;
-            assign_inserted_snapshot_ids_from_scan(&dataset, observings).await
+        if observings
+            .iter()
+            .any(|observing| observing.snapshot_id.memory_point() == u64::MAX)
+        {
+            return Err(Error::invalid_input(
+                "observing update requires persisted snapshot ids",
+            ));
         }
+        let Some(dataset) = self.access.try_open().await? else {
+            return Err(Error::invalid_input(
+                "cannot update observing rows before dataset exists",
+            ));
+        };
+        update_observing_rows(dataset, observings).await?;
+        Ok(())
     }
 
     #[allow(dead_code)]
@@ -207,7 +211,7 @@ impl ObservingTable {
         .await
     }
 
-    pub(crate) async fn load_thread_snapshots(
+    pub async fn load_thread_snapshots(
         &self,
         observing_id: &str,
     ) -> Result<Vec<ObservingSnapshot>> {
@@ -360,8 +364,8 @@ fn timestamp_expr(micros: i64) -> String {
 mod tests {
     use chrono::Utc;
 
-    use super::{ObservingCheckpoint, ObservingSnapshot};
-    use crate::format::{MemoryId, MemoryLayer};
+    use super::{ObservingCheckpoint, ObservingSnapshot, ObservingTable};
+    use crate::format::{MemoryId, MemoryLayer, TableOptions};
     use crate::memory::types::MemoryView;
 
     #[test]
@@ -380,7 +384,6 @@ mod tests {
             checkpoint: ObservingCheckpoint {
                 observing_epoch: 1,
                 indexed_snapshot_sequence: Some(1),
-                pending_parent_id: None,
             },
         };
 
@@ -403,7 +406,6 @@ mod tests {
             checkpoint: ObservingCheckpoint {
                 observing_epoch: 1,
                 indexed_snapshot_sequence: Some(1),
-                pending_parent_id: None,
             },
         };
 
@@ -412,5 +414,53 @@ mod tests {
         assert_eq!(rendered.title.as_deref(), Some("Observing Title"));
         assert_eq!(rendered.summary.as_deref(), Some("Observing summary"));
         assert_eq!(rendered.detail.as_deref(), Some("{\"memories\":[]}"));
+    }
+
+    #[tokio::test]
+    async fn insert_assigns_snapshot_id_and_update_rejects_pending_snapshots() {
+        let dir = tempfile::tempdir().unwrap();
+        let table = ObservingTable::new(TableOptions::local(dir.path()).unwrap());
+        let mut pending = vec![ObservingSnapshot {
+            snapshot_id: MemoryId::new(MemoryLayer::Observing, u64::MAX),
+            observing_id: "OBS-LINE".to_string(),
+            snapshot_sequence: 0,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            observer: "observer-a".to_string(),
+            title: "Observing Title".to_string(),
+            summary: "Observing summary".to_string(),
+            content: "{\"memories\":[]}".to_string(),
+            references: vec!["session:7".to_string()],
+            checkpoint: ObservingCheckpoint {
+                observing_epoch: 1,
+                indexed_snapshot_sequence: Some(0),
+            },
+        }];
+
+        table.insert(&mut pending).await.unwrap();
+        assert_ne!(pending[0].snapshot_id.memory_point(), u64::MAX);
+
+        let err = table
+            .update(&[ObservingSnapshot {
+                snapshot_id: MemoryId::new(MemoryLayer::Observing, u64::MAX),
+                observing_id: "OBS-LINE".to_string(),
+                snapshot_sequence: 1,
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+                observer: "observer-a".to_string(),
+                title: "Observing Title".to_string(),
+                summary: "Observing summary".to_string(),
+                content: "{\"memories\":[]}".to_string(),
+                references: vec!["session:7".to_string()],
+                checkpoint: ObservingCheckpoint {
+                    observing_epoch: 1,
+                    indexed_snapshot_sequence: Some(0),
+                },
+            }])
+            .await
+            .unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("observing update requires persisted snapshot ids"));
     }
 }

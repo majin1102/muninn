@@ -41,6 +41,12 @@ Local prerequisites:
 - Node.js and `pnpm`
 - `protoc`
 
+Runtime prerequisites:
+
+- `@muninn/core` bootstraps the observer and validates semantic index dimensions on first use.
+- `muninn.json` therefore needs a complete runtime config for normal startup: `observer`, `llm`, and `semanticIndex`.
+- The current runtime does not support a turn/session-only startup path without observer config.
+
 Main local build entrypoint:
 
 ```bash

@@ -1,9 +1,9 @@
-import type { CoreBinding } from '../native.js';
+import type { NativeTables } from '../native.js';
 import type { ListModeInput, ObservingSnapshot } from '../client.js';
 import { assertMemoryIdLayer } from './types.js';
 
 export async function getObservingSnapshot(
-  client: CoreBinding,
+  client: NativeTables,
   memoryId: string,
 ): Promise<ObservingSnapshot | null> {
   assertMemoryIdLayer(memoryId, 'observing');
@@ -11,7 +11,7 @@ export async function getObservingSnapshot(
 }
 
 export async function listObservingSnapshots(
-  client: CoreBinding,
+  client: NativeTables,
   params: { mode: ListModeInput; observer?: string },
 ): Promise<ObservingSnapshot[]> {
   const rows = await client.observingTable.listSnapshots({
@@ -21,7 +21,7 @@ export async function listObservingSnapshots(
 }
 
 export async function timelineObservingSnapshots(
-  client: CoreBinding,
+  client: NativeTables,
   params: { memoryId: string; beforeLimit?: number; afterLimit?: number },
 ): Promise<ObservingSnapshot[]> {
   assertMemoryIdLayer(params.memoryId, 'observing');

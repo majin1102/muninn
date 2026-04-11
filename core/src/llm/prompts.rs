@@ -53,7 +53,7 @@ pub fn build_observing_user_prompt(input_json: &str) -> String {
 fn turn_template() -> &'static PromptTemplateFile {
     static TEMPLATE: OnceLock<PromptTemplateFile> = OnceLock::new();
     TEMPLATE.get_or_init(|| {
-        serde_yaml::from_str(include_str!("../../prompts/turn.yaml"))
+        serde_yaml::from_str(include_str!("../../../packages/core/prompts/turn.yaml"))
             .expect("turn.yaml must be valid")
     })
 }
@@ -61,15 +61,17 @@ fn turn_template() -> &'static PromptTemplateFile {
 fn observing_gateway_template() -> &'static PromptTemplateFile {
     static TEMPLATE: OnceLock<PromptTemplateFile> = OnceLock::new();
     TEMPLATE.get_or_init(|| {
-        serde_yaml::from_str(include_str!("../../prompts/observing_gateway.yaml"))
-            .expect("observing_gateway.yaml must be valid")
+        serde_yaml::from_str(include_str!(
+            "../../../packages/core/prompts/observing-gateway.yaml"
+        ))
+        .expect("observing-gateway.yaml must be valid")
     })
 }
 
 fn observing_template() -> &'static PromptTemplateFile {
     static TEMPLATE: OnceLock<PromptTemplateFile> = OnceLock::new();
     TEMPLATE.get_or_init(|| {
-        serde_yaml::from_str(include_str!("../../prompts/observing.yaml"))
+        serde_yaml::from_str(include_str!("../../../packages/core/prompts/observing.yaml"))
             .expect("observing.yaml must be valid")
     })
 }

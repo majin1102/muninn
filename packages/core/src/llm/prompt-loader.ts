@@ -7,6 +7,11 @@ type PromptTemplate = {
 };
 
 const promptCache = new Map<string, PromptTemplate>();
+const PROMPT_FILE_NAMES = {
+  turn: 'turn',
+  observing: 'observing',
+  observing_gateway: 'observing-gateway',
+} as const;
 
 export function loadPromptTemplate(name: 'turn' | 'observing' | 'observing_gateway'): PromptTemplate {
   const cached = promptCache.get(name);
@@ -14,7 +19,7 @@ export function loadPromptTemplate(name: 'turn' | 'observing' | 'observing_gatew
     return cached;
   }
 
-  const filePath = path.resolve(__dirname, '..', '..', '..', '..', 'core', 'prompts', `${name}.yaml`);
+  const filePath = path.resolve(__dirname, '..', '..', 'prompts', `${PROMPT_FILE_NAMES[name]}.yaml`);
   const raw = fs.readFileSync(filePath, 'utf8');
   const template = {
     system: readYamlBlock(raw, 'system'),

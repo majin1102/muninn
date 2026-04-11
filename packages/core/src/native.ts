@@ -19,7 +19,26 @@ export interface StorageTarget {
   storageOptions?: Record<string, string>;
 }
 
+export interface TableStats {
+  version: number;
+  fragmentCount: number;
+  rowCount: number;
+}
+
+export interface CompactResult {
+  changed: boolean;
+}
+
+export interface EnsureVectorIndexResult {
+  created: boolean;
+}
+
+export interface ReconcileOpenTurnsResult {
+  repaired: number;
+}
+
 type NativeCoreBinding = {
+  close(): MaybePromise<void>;
   sessionLoadOpenTurn(params: {
     sessionId?: string;
     agent: string;
@@ -40,17 +59,28 @@ type NativeCoreBinding = {
     observer: string;
     committedEpoch?: number | null;
   }): MaybePromise<SessionTurn[]>;
-  sessionUpsert(params: {
+  sessionInsert(params: {
     turns: Array<Record<string, unknown>>;
   }): MaybePromise<SessionTurn[]>;
+  sessionUpdate(params: {
+    turns: Array<Record<string, unknown>>;
+  }): MaybePromise<SessionTurn[]>;
+  sessionReconcileOpenTurns(): MaybePromise<ReconcileOpenTurnsResult>;
+  sessionTableStats(): MaybePromise<TableStats | null>;
+  sessionCompact(): MaybePromise<CompactResult>;
   observingGetSnapshot(snapshotId: string): MaybePromise<ObservingSnapshotPayload | null>;
   observingListSnapshots(params: {
     observer?: string;
   }): MaybePromise<ObservingSnapshotPayload[]>;
   observingThreadSnapshots(observingId: string): MaybePromise<ObservingSnapshotPayload[]>;
-  observingUpsert(params: {
+  observingInsert(params: {
     snapshots: ObservingSnapshotPayload[];
   }): MaybePromise<ObservingSnapshotPayload[]>;
+  observingUpdate(params: {
+    snapshots: ObservingSnapshotPayload[];
+  }): MaybePromise<ObservingSnapshotPayload[]>;
+  observingTableStats(): MaybePromise<TableStats | null>;
+  observingCompact(): MaybePromise<CompactResult>;
   semanticNearest(params: {
     vector: number[];
     limit: number;
@@ -64,6 +94,17 @@ type NativeCoreBinding = {
   semanticDelete(params: {
     ids: string[];
   }): MaybePromise<{ deleted: number }>;
+  semanticValidateDimensions(params: {
+    expected: number;
+  }): MaybePromise<void>;
+  semanticTableStats(): MaybePromise<TableStats | null>;
+  semanticEnsureVectorIndex(params: {
+    targetPartitionSize: number;
+  }): MaybePromise<EnsureVectorIndexResult>;
+  semanticCompact(): MaybePromise<CompactResult>;
+  semanticOptimize(params: {
+    mergeCount: number;
+  }): MaybePromise<CompactResult>;
   describeSessionTable(): MaybePromise<TableDescription | null>;
   describeObservingTable(): MaybePromise<TableDescription | null>;
   describeSemanticIndexTable(): MaybePromise<TableDescription | null>;
@@ -95,9 +136,15 @@ export interface SessionTableBinding {
     observer: string;
     committedEpoch?: number | null;
   }): Promise<SessionTurn[]>;
-  upsert(params: {
+  insert(params: {
     turns: Array<Record<string, unknown>>;
   }): Promise<SessionTurn[]>;
+  update(params: {
+    turns: Array<Record<string, unknown>>;
+  }): Promise<SessionTurn[]>;
+  reconcileOpenTurns(): Promise<ReconcileOpenTurnsResult>;
+  stats(): Promise<TableStats | null>;
+  compact(): Promise<CompactResult>;
   describe(): Promise<TableDescription | null>;
 }
 
@@ -107,9 +154,14 @@ export interface ObservingTableBinding {
     observer?: string;
   }): Promise<ObservingSnapshotPayload[]>;
   threadSnapshots(observingId: string): Promise<ObservingSnapshotPayload[]>;
-  upsert(params: {
+  insert(params: {
     snapshots: ObservingSnapshotPayload[];
   }): Promise<ObservingSnapshotPayload[]>;
+  update(params: {
+    snapshots: ObservingSnapshotPayload[];
+  }): Promise<ObservingSnapshotPayload[]>;
+  stats(): Promise<TableStats | null>;
+  compact(): Promise<CompactResult>;
   describe(): Promise<TableDescription | null>;
 }
 
@@ -127,19 +179,31 @@ export interface SemanticIndexTableBinding {
   delete(params: {
     ids: string[];
   }): Promise<{ deleted: number }>;
+  validateDimensions(params: {
+    expected: number;
+  }): Promise<void>;
+  stats(): Promise<TableStats | null>;
+  ensureVectorIndex(params: {
+    targetPartitionSize: number;
+  }): Promise<EnsureVectorIndexResult>;
+  compact(): Promise<CompactResult>;
+  optimize(params: {
+    mergeCount: number;
+  }): Promise<CompactResult>;
   describe(): Promise<TableDescription | null>;
 }
 
-export interface CoreBinding {
+export interface NativeTables {
+  close(): Promise<void>;
   sessionTable: SessionTableBinding;
   observingTable: ObservingTableBinding;
   semanticIndexTable: SemanticIndexTableBinding;
 }
 
-let singleton: CoreBinding | null = null;
-let singletonPromise: Promise<CoreBinding> | null = null;
+let singleton: NativeTables | null = null;
+let singletonPromise: Promise<NativeTables> | null = null;
 
-export async function getCoreBinding(): Promise<CoreBinding> {
+export async function getNativeTables(): Promise<NativeTables> {
   if (singleton) {
     return singleton;
   }
@@ -158,7 +222,11 @@ export async function getCoreBinding(): Promise<CoreBinding> {
   return singletonPromise;
 }
 
-export async function shutdownCoreBindingForTests(): Promise<void> {
+export async function shutdownNativeTablesForTests(): Promise<void> {
+  const binding = singleton ?? (singletonPromise ? await singletonPromise : null);
+  if (binding) {
+    await binding.close();
+  }
   singleton = null;
   singletonPromise = null;
 }
@@ -170,8 +238,9 @@ export async function describeSemanticIndexForStorage(
   return resolveNativeResult(native.describeSemanticIndexForStorage(storageTarget));
 }
 
-function wrapBinding(native: NativeCoreBinding): CoreBinding {
+function wrapBinding(native: NativeCoreBinding): NativeTables {
   return {
+    close: async () => resolveNativeResult(native.close()),
     sessionTable: {
       loadOpenTurn: async (params) => normalizeOptionalRecord(
         await resolveNativeResult(native.sessionLoadOpenTurn(params)),
@@ -184,7 +253,11 @@ function wrapBinding(native: NativeCoreBinding): CoreBinding {
       listTurns: async (params) => resolveNativeResult(native.sessionListTurns(params)),
       timelineTurns: async (params) => resolveNativeResult(native.sessionTimelineTurns(params)),
       loadTurnsAfterEpoch: async (params) => resolveNativeResult(native.sessionLoadTurnsAfterEpoch(params)),
-      upsert: async (params) => resolveNativeResult(native.sessionUpsert(params)),
+      insert: async (params) => resolveNativeResult(native.sessionInsert(params)),
+      update: async (params) => resolveNativeResult(native.sessionUpdate(params)),
+      reconcileOpenTurns: async () => resolveNativeResult(native.sessionReconcileOpenTurns()),
+      stats: async () => resolveNativeResult(native.sessionTableStats()),
+      compact: async () => resolveNativeResult(native.sessionCompact()),
       describe: async () => resolveNativeResult(native.describeSessionTable()),
     },
     observingTable: {
@@ -194,7 +267,10 @@ function wrapBinding(native: NativeCoreBinding): CoreBinding {
       ),
       listSnapshots: async (params) => resolveNativeResult(native.observingListSnapshots(params)),
       threadSnapshots: async (observingId) => resolveNativeResult(native.observingThreadSnapshots(observingId)),
-      upsert: async (params) => resolveNativeResult(native.observingUpsert(params)),
+      insert: async (params) => resolveNativeResult(native.observingInsert(params)),
+      update: async (params) => resolveNativeResult(native.observingUpdate(params)),
+      stats: async () => resolveNativeResult(native.observingTableStats()),
+      compact: async () => resolveNativeResult(native.observingCompact()),
       describe: async () => resolveNativeResult(native.describeObservingTable()),
     },
     semanticIndexTable: {
@@ -202,6 +278,11 @@ function wrapBinding(native: NativeCoreBinding): CoreBinding {
       loadByIds: async (params) => resolveNativeResult(native.semanticLoadByIds(params)),
       upsert: async (params) => resolveNativeResult(native.semanticUpsert(params)),
       delete: async (params) => resolveNativeResult(native.semanticDelete(params)),
+      validateDimensions: async (params) => resolveNativeResult(native.semanticValidateDimensions(params)),
+      stats: async () => resolveNativeResult(native.semanticTableStats()),
+      ensureVectorIndex: async (params) => resolveNativeResult(native.semanticEnsureVectorIndex(params)),
+      compact: async () => resolveNativeResult(native.semanticCompact()),
+      optimize: async (params) => resolveNativeResult(native.semanticOptimize(params)),
       describe: async () => resolveNativeResult(native.describeSemanticIndexTable()),
     },
   };

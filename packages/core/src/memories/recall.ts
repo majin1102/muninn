@@ -1,4 +1,4 @@
-import type { CoreBinding } from '../native.js';
+import type { NativeTables } from '../native.js';
 import type { RecallHit } from '../client.js';
 import { embedText } from '../llm/embedding-provider.js';
 
@@ -23,7 +23,7 @@ type CandidateGroup = {
 };
 
 export async function recallMemories(
-  client: CoreBinding,
+  client: NativeTables,
   query: string,
   limit = 10,
 ): Promise<RecallHit[]> {
