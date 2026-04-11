@@ -2,7 +2,7 @@ import type { NativeTables } from '../native.js';
 import type { SessionTurn, TurnContent } from '../client.js';
 import { buildSessionUpdate } from './update.js';
 import { cloneTurn, readSessionTurn, serializeSessionTurn, type SessionUpdate, type TurnMetadataSource } from './types.js';
-import { hasText, sessionKey } from './key.js';
+import { hasText, normalizeSessionId, sessionKey } from './key.js';
 
 const PENDING_TURN_ID = 'session:18446744073709551615';
 type SessionTurnWithSource = SessionTurn & {
@@ -25,6 +25,7 @@ export class Session {
     },
   ) {
     this.openTurn = config.openTurn ? cloneTurn(config.openTurn) : undefined;
+    this.config.sessionId = normalizeSessionId(this.config.sessionId);
   }
 
   previewPrompt(incoming?: string): string | undefined {
@@ -81,7 +82,7 @@ function newPendingTurn(config: { sessionId?: string; agent: string; observer: s
     turnId: PENDING_TURN_ID,
     createdAt: now,
     updatedAt: now,
-    sessionId: config.sessionId ?? null,
+    sessionId: normalizeSessionId(config.sessionId) ?? null,
     agent: config.agent,
     observer: config.observer,
   };

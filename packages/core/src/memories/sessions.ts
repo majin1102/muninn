@@ -1,5 +1,6 @@
 import type { NativeTables } from '../native.js';
 import type { ListModeInput, SessionTurn } from '../client.js';
+import { normalizeSessionId } from '../session/key.js';
 import { readSessionTurn, toSessionTurn } from '../session/types.js';
 import { assertMemoryIdLayer } from './types.js';
 
@@ -19,7 +20,7 @@ export async function listSessionTurns(
   const turns = await client.sessionTable.listTurns({
     mode: params.mode,
     agent: params.agent,
-    sessionId: params.sessionId,
+    sessionId: normalizeSessionId(params.sessionId),
   });
   return turns.map((turn) => toSessionTurn(readSessionTurn(turn)));
 }

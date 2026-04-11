@@ -3,10 +3,18 @@ export function sessionKey(
   agent: string,
   observer: string,
 ): string {
-  if (hasText(sessionId)) {
-    return `session:${sessionId}|agent:${agent}|observer:${observer}`;
+  const normalizedSessionId = normalizeSessionId(sessionId);
+  if (normalizedSessionId) {
+    return `session:${normalizedSessionId}|agent:${agent}|observer:${observer}`;
   }
   return `agent:${agent}|observer:${observer}`;
+}
+
+export function normalizeSessionId(sessionId: string | null | undefined): string | undefined {
+  if (!hasText(sessionId)) {
+    return undefined;
+  }
+  return sessionId.trim();
 }
 
 export function hasText(value: string | null | undefined): value is string {

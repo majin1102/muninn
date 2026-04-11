@@ -10,6 +10,7 @@ import { Muninn } from '../dist/muninn.js';
 import { Observer } from '../dist/observer/observer.js';
 import { EpochQueue, OpenEpoch } from '../dist/observer/epoch.js';
 import { SessionRegistry } from '../dist/session/registry.js';
+import { normalizeSessionId, sessionKey } from '../dist/session/key.js';
 import { Session } from '../dist/session/session.js';
 import { Watchdog } from '../dist/watchdog.js';
 import updateModule from '../dist/observer/update.js';
@@ -669,6 +670,35 @@ test('session registry reuses one in-flight session load per key', async () => {
   releaseLoad();
 
   const [firstSession, secondSession] = await Promise.all([first, second]);
+  assert.strictEqual(firstSession, secondSession);
+});
+
+test('session key normalizes sessionId whitespace', async () => {
+  assert.equal(
+    sessionKey('group-a', 'agent-a', 'default-observer'),
+    sessionKey(' group-a ', 'agent-a', 'default-observer'),
+  );
+  assert.equal(normalizeSessionId(' group-a '), 'group-a');
+  assert.equal(normalizeSessionId('   '), undefined);
+});
+
+test('session registry reuses the same load for trimmed session ids', async () => {
+  let loadOpenTurnCalls = 0;
+  const registry = new SessionRegistry({
+    sessionTable: {
+      loadOpenTurn: async ({ sessionId }) => {
+        loadOpenTurnCalls += 1;
+        assert.equal(sessionId, 'group-a');
+        return null;
+      },
+    },
+  }, 'default-observer');
+
+  const first = registry.load('group-a', 'agent-a');
+  const second = registry.load(' group-a ', 'agent-a');
+  const [firstSession, secondSession] = await Promise.all([first, second]);
+
+  assert.equal(loadOpenTurnCalls, 1);
   assert.strictEqual(firstSession, secondSession);
 });
 

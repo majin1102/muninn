@@ -1,7 +1,7 @@
 import type { TurnContent } from '../client.js';
 import { resolveTurnMetadata } from '../llm/turn-generator.js';
 import type { Session } from './session.js';
-import { hasText, sessionKey } from './key.js';
+import { hasText, normalizeSessionId, sessionKey } from './key.js';
 import type { SessionUpdate } from './types.js';
 
 export async function buildSessionUpdate(
@@ -19,7 +19,7 @@ export async function buildSessionUpdate(
     response: content.response,
   });
   return {
-    sessionId: content.sessionId,
+    sessionId: normalizeSessionId(content.sessionId),
     agent: content.agent,
     observer,
     title: metadata.title,

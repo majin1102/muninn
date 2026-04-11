@@ -108,6 +108,63 @@ test('addMessage and sessions.get roundtrip through the native binding', async (
   assert.equal(detail.summary, 'alpha summary');
 });
 
+test('addMessage normalizes sessionId whitespace through the native binding', async (t) => {
+  const { dir, homeDir, configPath } = await makeDatasetUri();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+
+  process.env.MUNINN_HOME = homeDir;
+  await writeMuninnConfig(configPath);
+
+  const first = await addMessage({
+    sessionId: ' group-a ',
+    agent: 'agent-a',
+    prompt: 'first prompt',
+  });
+  const second = await addMessage({
+    sessionId: 'group-a',
+    agent: 'agent-a',
+    toolCalling: ['tool-a'],
+  });
+
+  assert.equal(first.sessionId, 'group-a');
+  assert.equal(second.sessionId, 'group-a');
+  assert.equal(second.turnId, first.turnId);
+
+  const detail = await sessions.get(first.turnId);
+  assert.ok(detail);
+  assert.equal(detail.sessionId, 'group-a');
+
+  const listed = await sessions.list({
+    mode: { type: 'recency', limit: 10 },
+    sessionId: ' group-a ',
+  });
+  assert.equal(listed.length, 1);
+  assert.equal(listed[0].turnId, first.turnId);
+  assert.equal(listed[0].sessionId, 'group-a');
+});
+
+test('blank sessionId falls back to the agent default session', async (t) => {
+  const { dir, homeDir, configPath } = await makeDatasetUri();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+
+  process.env.MUNINN_HOME = homeDir;
+  await writeMuninnConfig(configPath);
+
+  const first = await addMessage({
+    sessionId: '   ',
+    agent: 'agent-a',
+    prompt: 'default prompt',
+  });
+  const second = await addMessage({
+    agent: 'agent-a',
+    toolCalling: ['tool-a'],
+  });
+
+  assert.equal(first.sessionId, null);
+  assert.equal(second.sessionId, null);
+  assert.equal(second.turnId, first.turnId);
+});
+
 test('addMessage without sessionId reuses the agent default session through the native binding', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(async () => rm(dir, { recursive: true, force: true }));
