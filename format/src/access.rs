@@ -10,7 +10,7 @@ use lance::io::{ObjectStoreParams, StorageOptionsAccessor};
 use lance::{Error, Result};
 use object_store::path::Path;
 
-use crate::llm::config::{current_storage_config, muninn_home};
+use crate::config::{current_storage_config, muninn_home};
 
 pub(crate) use lance::Dataset as LanceDataset;
 
@@ -91,6 +91,7 @@ impl TableOptions {
     }
 
     #[cfg(test)]
+    #[allow(dead_code)]
     pub(crate) fn matches(&self, other: &Self) -> bool {
         self.uri_root == other.uri_root && self.storage_options == other.storage_options
     }

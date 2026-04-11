@@ -2,11 +2,10 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use muninn_sidecar::format::{
-    ObservingSnapshot, ObservingTable, SemanticIndexRow, SemanticIndexTable, SessionTable,
-    SessionTurn,
+use muninn_format::{
+    MemoryId, MemoryLayer, ObservingSnapshot, ObservingTable, SemanticIndexRow,
+    SemanticIndexTable, SessionTable, SessionTurn, TableOptions, data_root,
 };
-use muninn_sidecar::{MemoryId, MemoryLayer, TableOptions, data_root};
 use napi::{Error, Result as NapiResult};
 use napi_derive::napi;
 use serde::{Deserialize, Serialize};

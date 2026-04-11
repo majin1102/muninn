@@ -21,7 +21,7 @@ Muninn Sidecar
   │
   │  native binding
   ▼
-Rust storage core in `core/` (typed session / observing / semantic table operations)
+Rust format subsystem in `format/` (typed session / observing / semantic table operations)
 ```
 
 ### Component Responsibilities
@@ -35,7 +35,7 @@ Rust storage core in `core/` (typed session / observing / semantic table operati
 - `@muninn/core`
   - 作为 TS 业务编排层连接 sidecar 和 Rust native binding
   - 持有 session / observer / memories / llm 的主逻辑
-- Rust core in `core/`
+- Rust format subsystem in `format/`
   - 提供 typed table 读写能力
   - 维护底层存储、typed rows 与 semantic index 表操作
 
@@ -104,4 +104,4 @@ MCP 暴露的结构化读能力对应 core 内部的统一读语义：
 - 文本渲染策略
 - semantic index / observer 业务逻辑
 
-这些职责都留在 sidecar 和 `@muninn/core`；Rust `core/` 只负责 typed table / storage 能力。
+这些职责都留在 sidecar 和 `@muninn/core`；Rust `format/` 只负责 typed table / storage 能力。

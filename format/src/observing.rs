@@ -14,7 +14,7 @@ use super::codec::{
     observings_to_reader, record_batch_to_observings, record_batch_to_observings_with_row_ids,
 };
 use super::memory_id::{MemoryId, MemoryLayer, deserialize_memory_id, serialize_memory_id};
-use crate::watchdog::compact_dataset;
+use crate::maintenance::compact_dataset;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -365,8 +365,8 @@ mod tests {
     use chrono::Utc;
 
     use super::{ObservingCheckpoint, ObservingSnapshot, ObservingTable};
-    use crate::format::{MemoryId, MemoryLayer, TableOptions};
-    use crate::memory::types::MemoryView;
+    use crate::access::TableOptions;
+    use crate::memory_id::{MemoryId, MemoryLayer};
 
     #[test]
     fn observing_memory_id_roundtrip() {
@@ -388,32 +388,6 @@ mod tests {
         };
 
         assert_eq!(observing.memory_id().unwrap().to_string(), "observing:42");
-    }
-
-    #[test]
-    fn observing_try_into_rendered_memory_prefers_summary() {
-        let observing = ObservingSnapshot {
-            snapshot_id: MemoryId::new(MemoryLayer::Observing, 42),
-            observing_id: "OBS-LINE".to_string(),
-            snapshot_sequence: 1,
-            created_at: Utc::now(),
-            updated_at: Utc::now(),
-            observer: "observer-a".to_string(),
-            title: "Observing Title".to_string(),
-            summary: "Observing summary".to_string(),
-            content: "{\"memories\":[]}".to_string(),
-            references: vec!["session:7".to_string()],
-            checkpoint: ObservingCheckpoint {
-                observing_epoch: 1,
-                indexed_snapshot_sequence: Some(1),
-            },
-        };
-
-        let rendered = MemoryView::try_from(&observing).unwrap();
-        assert_eq!(rendered.memory_id.to_string(), "observing:42");
-        assert_eq!(rendered.title.as_deref(), Some("Observing Title"));
-        assert_eq!(rendered.summary.as_deref(), Some("Observing summary"));
-        assert_eq!(rendered.detail.as_deref(), Some("{\"memories\":[]}"));
     }
 
     #[tokio::test]

@@ -1,11 +1,11 @@
 # Muninn
 
-Muninn is a memory layer for agents. This repository contains the Rust storage core, the TypeScript product/runtime packages, the OpenClaw plugin, and the project documentation.
+Muninn is a memory layer for agents. This repository contains the Rust `format/` subsystem, the TypeScript product/runtime packages, the OpenClaw plugin, and the project documentation.
 
 ## Repository Layout
 
-- `core/`
-  - Rust typed-table and storage implementation.
+- `format/`
+  - Rust typed-table, format, and storage implementation.
   - Also powers the Node native binding used by `@muninn/core`.
 - `packages/`
   - TypeScript workspace for the sidecar, MCP adapter, shared types, board UI, and the main Muninn runtime.

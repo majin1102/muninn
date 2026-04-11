@@ -74,8 +74,8 @@ mod tests {
         SEMANTIC_VECTOR_INDEX_NAME, compact_dataset, ensure_semantic_vector_index,
         optimize_semantic_index,
     };
-    use crate::format::{SemanticIndexRow, SemanticIndexTable, SessionTable, TableOptions};
-    use crate::llm::config::llm_test_env_guard;
+    use crate::config::{CONFIG_FILE_NAME, llm_test_env_guard};
+    use crate::{SemanticIndexRow, SemanticIndexTable, SessionTable, TableOptions};
 
     fn test_table_options() -> TableOptions {
         TableOptions::local(crate::config::data_root().unwrap()).unwrap()
@@ -85,15 +85,8 @@ mod tests {
         let home = dir.path().join("muninn");
         fs::create_dir_all(&home).unwrap();
         fs::write(
-            home.join(crate::llm::config::CONFIG_FILE_NAME),
+            home.join(CONFIG_FILE_NAME),
             serde_json::to_string_pretty(&json!({
-                "watchdog": {
-                    "compactMinFragments": 2,
-                    "semanticIndex": {
-                        "targetPartitionSize": 2,
-                        "optimizeMergeCount": 2
-                    }
-                },
                 "semanticIndex": {
                     "embedding": {
                         "provider": "mock",
