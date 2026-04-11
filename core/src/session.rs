@@ -1,29 +1,54 @@
 use std::collections::HashMap;
+#[cfg(test)]
+use std::sync::Arc;
+#[cfg(test)]
+use std::sync::atomic::{AtomicI64, Ordering};
+#[cfg(test)]
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use lance::{Error, Result};
+#[cfg(test)]
+use serde::{Deserialize, Serialize};
+#[cfg(test)]
+use tokio::sync::Mutex;
 
-use crate::format::memory::session::{SessionTurn, TurnMetadataSource};
+use crate::format::session::SessionTurn;
+#[cfg(test)]
+use crate::format::session::TurnMetadataSource;
+#[cfg(test)]
 use crate::llm::turn::TurnGenerator;
+#[cfg(test)]
+use crate::observer::runtime::ObservingWindow;
 
 mod key;
+#[cfg(test)]
+mod registry;
+#[cfg(test)]
 mod update;
 
 pub(crate) use key::SessionKey;
+#[cfg(test)]
+pub(crate) use registry::SessionRegistry;
+#[cfg(test)]
 pub(crate) use update::SessionUpdate;
 
-#[derive(Debug, Clone)]
+#[cfg(test)]
 pub struct Session {
     key: SessionKey,
-    open_turn: Option<SessionTurn>,
+    table: Arc<crate::format::SessionTable>,
+    open_turn: Mutex<Option<SessionTurn>>,
+    last_used: AtomicI64,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct OpenTurnReconciliation {
     pub(crate) canonical_turn: SessionTurn,
-    pub(crate) discarded_turn_ids: Vec<crate::format::memory::MemoryId>,
+    pub(crate) discarded_turn_ids: Vec<crate::format::MemoryId>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg(test)]
 pub(crate) struct ResolvedTurnMetadata {
     pub(crate) title: Option<String>,
     pub(crate) title_source: Option<TurnMetadataSource>,
@@ -31,8 +56,13 @@ pub(crate) struct ResolvedTurnMetadata {
     pub(crate) summary_source: Option<TurnMetadataSource>,
 }
 
+#[cfg(test)]
 impl Session {
-    pub(crate) fn new(key: SessionKey, open_turn: Option<SessionTurn>) -> Result<Self> {
+    pub(crate) fn new(
+        key: SessionKey,
+        table: Arc<crate::format::SessionTable>,
+        open_turn: Option<SessionTurn>,
+    ) -> Result<Self> {
         if let Some(turn) = open_turn.as_ref() {
             if turn.session_key() != key {
                 return Err(Error::invalid_input(
@@ -45,48 +75,82 @@ impl Session {
                 ));
             }
         }
-        Ok(Self { key, open_turn })
+        Ok(Self {
+            key,
+            table,
+            open_turn: Mutex::new(open_turn),
+            last_used: AtomicI64::new(current_timestamp()),
+        })
     }
 
-    pub(crate) fn key(&self) -> &SessionKey {
-        &self.key
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) async fn open_turn(&self) -> Option<SessionTurn> {
+        self.open_turn.lock().await.clone()
     }
 
-    pub(crate) fn open_turn(&self) -> Option<&SessionTurn> {
-        self.open_turn.as_ref()
-    }
-
-    pub(crate) fn preview_prompt(&self, incoming: Option<&str>) -> Option<String> {
-        let current = self
-            .open_turn
+    pub(crate) async fn preview_prompt(&self, incoming: Option<&str>) -> Option<String> {
+        let open_turn = self.open_turn.lock().await;
+        let current = open_turn
             .as_ref()
             .filter(|turn| turn.is_open())
             .and_then(|turn| turn.prompt.as_deref());
         merge_prompt(current, incoming)
     }
 
-    pub(crate) fn apply(&mut self, update: SessionUpdate) -> Result<Option<SessionTurn>> {
+    pub(crate) async fn accept(
+        &self,
+        turn_content: crate::test_support::TurnContent,
+        window: &ObservingWindow,
+    ) -> Result<SessionTurn> {
+        self.touch();
+        let mut update = SessionUpdate::from(self, turn_content, window.observer().to_string()).await?;
+        update.observing_epoch = Some(window.epoch());
+        self.apply(update).await
+    }
+
+    pub(crate) async fn apply(&self, update: SessionUpdate) -> Result<SessionTurn> {
         if self.key != update.session_key() {
             return Err(Error::invalid_input(
                 "message session does not match session",
             ));
         }
 
-        let mut turn = if let Some(open_turn) = self.open_turn.take() {
+        let mut open_turn = self.open_turn.lock().await;
+        let mut turn = if let Some(open_turn) = open_turn.take() {
             open_turn
         } else {
             SessionTurn::new_pending(&update)
         };
         turn.merge(&update)?;
-        if turn.is_open() {
-            self.open_turn = Some(turn);
-            Ok(None)
-        } else {
-            Ok(Some(turn))
+        if turn.observable() {
+            turn.observing_epoch = update.observing_epoch;
         }
+        if turn.turn_id.memory_point() == u64::MAX {
+            self.table.insert(std::slice::from_mut(&mut turn)).await?;
+        } else {
+            self.table.update(std::slice::from_ref(&turn)).await?;
+        }
+
+        if turn.is_open() {
+            *open_turn = Some(turn.clone());
+        } else {
+            *open_turn = None;
+        }
+        self.touch();
+
+        Ok(turn)
+    }
+
+    pub(crate) fn touch(&self) {
+        self.last_used.store(current_timestamp(), Ordering::Relaxed);
+    }
+
+    pub(crate) fn expired(&self, max_idle_secs: i64) -> bool {
+        current_timestamp() - self.last_used.load(Ordering::Relaxed) > max_idle_secs
     }
 }
 
+#[cfg(test)]
 pub(crate) async fn resolve_turn_metadata(
     prompt: Option<&str>,
     title: Option<String>,
@@ -175,6 +239,15 @@ pub(crate) fn merge_artifacts(
     }
 }
 
+#[cfg(test)]
+fn current_timestamp() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64
+}
+
+#[cfg(test)]
 pub(crate) fn merge_metadata_field(
     current: &mut Option<String>,
     current_source: &mut Option<TurnMetadataSource>,
@@ -246,6 +319,7 @@ pub(crate) fn reconcile_open_turns(turns: Vec<SessionTurn>) -> Result<OpenTurnRe
     })
 }
 
+#[cfg(test)]
 fn sanitized_text(value: Option<String>) -> Option<String> {
     value.filter(|value| !value.trim().is_empty())
 }

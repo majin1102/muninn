@@ -24,7 +24,7 @@
 
 **已确认方案：**（见 `../workstreams/progress-openclaw-integration.md`）
 - ✅ Hook 映射已定：`before_model_resolve` → prompt，`after_tool_call` → artifacts，`agent_end` → response
-- ✅ Session ID 映射：`muninn.session.session_id = openclaw.sessionKey`
+- ✅ Session ID 映射：`muninn.session.sessionId = openclaw.sessionKey`
 - ✅ Artifact 采集策略已确认：write/edit 直接读，apply_patch/exec 按需回读
 
 **需要做的：**
@@ -82,13 +82,13 @@
 
 ## 3. 技术债务
 
-### 3.1 Rust 核心路径问题（低优先级）
-**问题：** `packages/core/src/client.ts` 中硬编码了 Rust 路径查找逻辑
+### 3.1 Native 构建与分发（低优先级）
+**问题：** `@muninn/core` 已切到 native addon，本地构建和分发策略还可以继续收敛
 
 **需要做的：**
-- [ ] 检查 `resolveRepoRoot()` 和 `resolveManifestPath()` 是否正确指向 `core/Cargo.toml`
-- [ ] 确保 `MUNINN_PATH` 环境变量正确传递
-- [ ] 添加错误处理：Rust daemon 启动失败时的友好提示
+- [ ] 明确 native addon 的 CI 构建与缓存策略
+- [ ] 评估是否需要 prebuild 分发
+- [ ] 补一份 native 开发/调试说明
 
 ### 3.2 Memory Layer 命名（已统一）
 **状态：** ✅ 已统一为 `OBSERVING`，文档已更新

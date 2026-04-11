@@ -10,15 +10,14 @@
       "default": "./dist/index.js"
     }
   },
-  "files": ["dist", "bin"],
+  "files": ["dist", "native/muninn_native.node", "prompts"],
   "scripts": {
-    "build": "tsc",
-    "build:daemon": "cargo build --release --manifest-path ../../core/Cargo.toml --bin muninn-core",
-    "export:daemon": "sh ../../scripts/export-daemon.sh",
-    "install:daemon": "sh ../../scripts/install-daemon.sh",
+    "build": "pnpm --filter @muninn/types build && pnpm run build:native && tsc",
+    "build:native": "node ./scripts/build-native.mjs",
+    "check:native": "cargo check --manifest-path native/Cargo.toml",
     "dev": "tsc --watch",
-    "pretest": "pnpm export:daemon",
-    "test": "pnpm build && node --test test/**/*.test.mjs"
+    "test:node": "node --test test/*.mjs",
+    "test": "pnpm build && pnpm run test:node"
   },
   "dependencies": {
     "@muninn/types": "workspace:*"

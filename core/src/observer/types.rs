@@ -23,6 +23,7 @@ impl<T> Default for LlmFieldUpdate<T> {
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+#[cfg(test)]
 pub struct ObserverWatermark {
     pub resolved: bool,
     pub pending_turn_ids: Vec<String>,

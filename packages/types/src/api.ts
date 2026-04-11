@@ -47,22 +47,20 @@ export interface GetDetailRequest {
   memoryId: string;
 }
 
-export interface SessionMessageInput {
-  session_id?: string;
+export interface TurnContent {
+  sessionId?: string;
   agent: string;
   title?: string;
   summary?: string;
-  tool_calling?: string[];
+  toolCalling?: string[];
   // Tool outputs produced during this session memory row.
   artifacts?: Record<string, string>;
   prompt?: string;
   response?: string;
-  // Free-form extra input accepted at the API layer.
-  extra?: Record<string, string>;
 }
 
 export interface AddMessageToSessionRequest {
-  session: SessionMessageInput;
+  session: TurnContent;
 }
 
 export interface AddMessageToSessionResponse {

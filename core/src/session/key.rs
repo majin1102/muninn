@@ -15,7 +15,7 @@ pub(crate) enum SessionKey {
 }
 
 impl SessionKey {
-    pub(crate) fn from_parts(session_id: Option<&str>, agent: &str, observer: &str) -> Self {
+    pub(crate) fn from(session_id: Option<&str>, agent: &str, observer: &str) -> Self {
         if let Some(session_id) = session_id.map(str::trim).filter(|value| !value.is_empty()) {
             return Self::Session {
                 session_id: session_id.to_string(),

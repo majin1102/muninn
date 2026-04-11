@@ -1,11 +1,15 @@
 import { serve } from '@hono/node-server';
 import { app } from './app.js';
 
-const port = parseInt(process.env.PORT || '8080', 10);
+export { app } from './app.js';
 
-console.log(`Muninn Sidecar running on http://localhost:${port}`);
+if (require.main === module) {
+  const port = parseInt(process.env.PORT || '8080', 10);
 
-serve({
-  fetch: app.fetch,
-  port,
-});
+  console.log(`Muninn Sidecar running on http://localhost:${port}`);
+
+  serve({
+    fetch: app.fetch,
+    port,
+  });
+}

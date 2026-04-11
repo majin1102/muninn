@@ -6,5 +6,5 @@ ROOT_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/../../.." && pwd)
 
 cd "$ROOT_DIR"
 pnpm --filter @muninn/core build
-pnpm --filter @muninn/core export:daemon
+pnpm --filter @muninn/sidecar build
 pnpm --filter @muninn/benchmark-locomo build

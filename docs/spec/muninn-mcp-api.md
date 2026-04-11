@@ -37,7 +37,7 @@ export interface MemoryHit {
 - `content` 为 Markdown 文本
 - `MemoryHit[]` 是 sidecar 与 MCP 之间的统一读结果载体
 
-MCP 仍保持 text-first；当前不直接暴露 `@muninn/core` 的 `RenderedMemoryRecord`，而是通过 sidecar 将其渲染为 `MemoryHit[]`。
+MCP 仍保持 text-first；当前不直接暴露 `@muninn/core` 的 `RenderedMemory`，而是通过 sidecar 将其渲染为 `MemoryHit[]`。
 
 ## 2. Tool Semantics
 

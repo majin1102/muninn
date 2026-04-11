@@ -8,7 +8,7 @@ By default, this crate depends on the official published `lance` crate from crat
 
 Do not commit a repository-external `path` dependency for `lance` into the main branch.
 
-Current default dependency lives in [Cargo.toml](/Users/Nathan/Documents/Playground/muninn/core/Cargo.toml).
+Current default dependency lives in [`core/Cargo.toml`](./Cargo.toml).
 
 ## Local Lance Development
 
@@ -30,7 +30,7 @@ lance = { path = "/absolute/path/to/your/lance/rust/lance" }
 With that override in place:
 
 - `cargo test` in `core/` will use your local Lance source
-- `packages/core` will also use that same local Lance source when it spawns the Rust bridge
+- `packages/core` will also use that same local Lance source when it builds and loads the native addon
 - changes made in your local Lance checkout can take effect immediately after rebuild/restart
 
 ## Why This Policy Exists
@@ -46,26 +46,37 @@ Using `[patch.crates-io]` for local experimentation preserves those guarantees w
 
 ## Rust Boundaries
 
-Current Rust-side boundaries are intentionally layered:
+Current Rust-side boundaries are intentionally narrow:
 
 - `muninn.rs`
-  - Top-level Rust application facade.
-  - `Muninn` is the preferred entrypoint for higher layers.
-- `format/table/`
-  - Internal table boundary.
-  - `TableOptions` owns object-store configuration and table wiring.
-  - `SessionTable`, `ObservingTable`, and `SemanticIndexTable` are crate-internal typed tables used by Rust modules.
+  - Native-addon-facing service surface.
+  - Exposes typed session / observing / semantic operations to `packages/core`.
 - `format/`
-  - Pure persisted row and memory-id models.
-  - Row structs do not carry persistence behavior.
-- `observer/`
-  - Observing domain state and orchestration.
-- `memory/`
-  - Read-side memory composition over `SESSION` and `OBSERVING`.
+  - Persisted row models plus typed table access.
+  - `TableOptions` owns object-store configuration and table wiring.
+  - `SessionTable`, `ObservingTable`, and `SemanticIndexTable` are the stable Rust-side table boundary.
+- `llm/prompts.rs`
+  - Prompt asset loading helpers that remain shared with the TS layer.
+- `watchdog.rs`
+  - Minimal storage maintenance entrypoint.
 
 Practical rule:
 
-- Higher-level callers should prefer `Muninn`.
-- Internal Rust modules can use `TableOptions` and the typed tables under `format/table/`.
-- Table APIs expose internal domain structs, not Arrow types.
+- `packages/core` owns session / observer / memories / LLM orchestration.
+- Rust owns typed tables, persistence, and native storage operations.
+- Table APIs expose persisted/domain structs, not Arrow types.
 - Arrow/codec conversion stays below the table boundary.
+
+## Native Addon Workflow
+
+`packages/core/native/` is the `napi-rs` addon that loads this crate from Node.
+
+Useful local commands:
+
+```bash
+cargo check --manifest-path core/Cargo.toml
+cargo check --manifest-path packages/core/native/Cargo.toml
+pnpm --filter @muninn/core build
+```
+
+If you use a local `[patch.crates-io]` override for Lance, it affects both `core/` and `packages/core/native/`, because the addon links against this crate directly.

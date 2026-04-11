@@ -4,11 +4,22 @@ import { Hono } from 'hono';
 import type {
   AddMessageToSessionRequest,
   ErrorResponse,
-  SessionMessageInput,
+  TurnContent,
 } from '@muninn/types';
 import { generateRequestId } from './utils.js';
 
 export const memoryWriter = new Hono();
+
+const TURN_CONTENT_FIELDS = new Set([
+  'sessionId',
+  'agent',
+  'title',
+  'summary',
+  'toolCalling',
+  'artifacts',
+  'prompt',
+  'response',
+]);
 
 function errorResponse(errorCode: string, errorMessage: string): ErrorResponse {
   return {
@@ -30,12 +41,12 @@ function hasTextContent(value: string | undefined): boolean {
   return typeof value === 'string' && value.trim().length > 0;
 }
 
-function hasMessageContent(session: SessionMessageInput): boolean {
+function hasMessageContent(session: TurnContent): boolean {
   return hasTextContent(session.title)
     || hasTextContent(session.summary)
     || hasTextContent(session.prompt)
     || hasTextContent(session.response)
-    || (session.tool_calling !== undefined && session.tool_calling.length > 0)
+    || (session.toolCalling !== undefined && session.toolCalling.length > 0)
     || (session.artifacts !== undefined && Object.keys(session.artifacts).length > 0);
 }
 
@@ -60,17 +71,22 @@ function mapCoreWriteError(error: unknown): { status: number; body: ErrorRespons
   };
 }
 
-function validateSession(session: SessionMessageInput | undefined): string | null {
+function validateSession(session: TurnContent | undefined): string | null {
   if (!session) {
     return 'session is required';
+  }
+
+  const unknownFields = Object.keys(session).filter((key) => !TURN_CONTENT_FIELDS.has(key));
+  if (unknownFields.length > 0) {
+    return `session contains unexpected fields: ${unknownFields.join(', ')}`;
   }
 
   if (!session.agent || typeof session.agent !== 'string') {
     return 'session.agent is required';
   }
 
-  if (session.session_id !== undefined && typeof session.session_id !== 'string') {
-    return 'session.session_id must be a string';
+  if (session.sessionId !== undefined && typeof session.sessionId !== 'string') {
+    return 'session.sessionId must be a string';
   }
 
   if (session.title !== undefined && typeof session.title !== 'string') {
@@ -89,20 +105,16 @@ function validateSession(session: SessionMessageInput | undefined): string | nul
     return 'session.response must be a string';
   }
 
-  if (session.tool_calling !== undefined && !Array.isArray(session.tool_calling)) {
-    return 'session.tool_calling must be an array of strings';
+  if (session.toolCalling !== undefined && !Array.isArray(session.toolCalling)) {
+    return 'session.toolCalling must be an array of strings';
   }
 
-  if (session.tool_calling && !session.tool_calling.every((entry: string) => typeof entry === 'string')) {
-    return 'session.tool_calling must be an array of strings';
+  if (session.toolCalling && !session.toolCalling.every((entry: string) => typeof entry === 'string')) {
+    return 'session.toolCalling must be an array of strings';
   }
 
   if (session.artifacts !== undefined && !isStringRecord(session.artifacts)) {
     return 'session.artifacts must be a record of string values';
-  }
-
-  if (session.extra !== undefined && !isStringRecord(session.extra)) {
-    return 'session.extra must be a record of string values';
   }
 
   if (!hasMessageContent(session)) {
@@ -126,11 +138,13 @@ memoryWriter.post('/api/v1/session/messages', async (c) => {
   if (validationError) {
     return c.json(errorResponse('invalidRequest', validationError), 400);
   }
+  if (!body.session) {
+    return c.json(errorResponse('invalidRequest', 'session is required'), 400);
+  }
 
-  const { extra: _extra, ...persistedSession } = body.session;
   let storedTurn;
   try {
-    storedTurn = await addMessage(persistedSession);
+    storedTurn = await addMessage(body.session);
   } catch (error) {
     const mapped = mapCoreWriteError(error);
     return c.json(mapped.body, mapped.status as 400 | 500);

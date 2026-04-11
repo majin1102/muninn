@@ -1,16 +1,14 @@
-pub mod config;
+pub(crate) mod config;
 pub mod format;
-pub mod llm;
-pub mod memory;
-pub mod observer;
-pub mod muninn;
-pub mod session;
+pub(crate) mod llm;
+pub(crate) mod memory;
+#[cfg(test)]
+pub(crate) mod observer;
+pub(crate) mod session;
+#[cfg(test)]
+pub(crate) mod test_support;
 mod watchdog;
 
-pub use format::table::TableOptions;
-pub use format::{MemoryId, MemoryLayer};
-pub use memory::types::{ListMode, MemoryView, RecallHit};
-pub use muninn::{
-    Memories, MemoryRecall, MemoryTimeline, ObserverWatermark, ObservingList, Observings,
-    PostMessage, Muninn, SessionList, Sessions,
-};
+pub use format::TableOptions;
+pub use format::{MemoryId, MemoryLayer, ObservingTable, SemanticIndexTable, SessionTable, TableDescription, TableStats};
+pub use config::data_root;

@@ -5,9 +5,6 @@
   "packageManager": "pnpm@9.0.0",
   "scripts": {
     "build": "pnpm -r build",
-    "build:daemon": "cargo build --release --manifest-path core/Cargo.toml --bin muninn-core",
-    "export:daemon": "sh ./scripts/export-daemon.sh",
-    "install:daemon": "sh ./scripts/install-daemon.sh",
     "dev": "pnpm -r dev"
   },
   "devDependencies": {

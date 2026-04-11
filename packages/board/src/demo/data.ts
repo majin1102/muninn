@@ -89,7 +89,7 @@ export const demoSessionTurns: Record<string, DemoSessionTimelineItem[]> = {
       memoryId: 'session:1005',
       createdAt: '2026-03-20T11:26:00.000Z',
       updatedAt: '2026-03-20T11:26:00.000Z',
-      summary: '确定 session 左栏采用 agent -> session_id -> timeline 的树状组织，并要求 agent 与 session 节点统一显示最后更新时间，而不是无助于浏览路径判断的数量统计',
+      summary: '确定 session 左栏采用 agent -> sessionId -> timeline 的树状组织，并要求 agent 与 session 节点统一显示最后更新时间，而不是无助于浏览路径判断的数量统计',
     },
     {
       memoryId: 'session:1006',
@@ -230,7 +230,7 @@ export const demoDocuments: Record<string, DemoMemoryDocument> = {
   'session:1005': {
     memoryId: 'session:1005',
     kind: 'session',
-    title: '确定 session 左栏采用 agent -> session_id -> timeline 的树状组织',
+    title: '确定 session 左栏采用 agent -> sessionId -> timeline 的树状组织',
     agent: 'openclaw',
     sessionId: 'auth-refactor',
     updatedAt: '2026-03-20T11:26:00.000Z',
@@ -245,7 +245,7 @@ export const demoDocuments: Record<string, DemoMemoryDocument> = {
 
 ## Summary
 
-确定 session 左栏采用 agent -> session_id -> timeline 的树状组织
+确定 session 左栏采用 agent -> sessionId -> timeline 的树状组织
 
 ## Prompt
 
@@ -393,7 +393,7 @@ export const demoObservings: DemoObservingListItem[] = [
       {
         memoryId: 'session:1005',
         timestamp: '2026-03-20T11:26:00.000Z',
-        summary: '确定 session 左栏采用 agent -> session_id -> timeline 的树状组织',
+        summary: '确定 session 左栏采用 agent -> sessionId -> timeline 的树状组织',
       },
     ],
   },

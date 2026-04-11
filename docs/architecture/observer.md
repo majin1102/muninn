@@ -60,8 +60,12 @@
   - 默认最多保留 `1000` 条，超限时优先淘汰最老的 `session:*` 引用
 - `checkpoint`
   - 当前 row 持久化的 checkpoint 信息
-  - 包含 `observingEpoch`、`indexedSnapshotSequence` 和可选的 `pendingParentId`
-  - `pendingParentId` 是父 observing 引用尚未补进 `references` 时的内部恢复状态
+  - 包含 `observingEpoch` 和 `indexedSnapshotSequence`
+
+当前 `references` 只表示 provenance。
+
+- 不维护 observing-to-observing 的父子关系
+- 不保证包含 parent observing ref
 
 ## 3. Runtime And Persistence Boundary
 
@@ -98,6 +102,22 @@
 
 - 盘上保留的是完整内容快照
 - semantic index 追平时只消费 `memory_delta`
+
+当前 lifecycle 语义：
+
+- `shutdown()`
+  - fast stop
+  - 停止接收新的 observer 工作
+  - 尽快中断 in-flight 的网络型 observe/index 请求
+  - 不保证排干 staged epoch、queued epoch 或 semantic index backlog
+- `flushPending()`
+  - 显式 barrier-drain
+  - 调用瞬间会先封口当前 `openEpoch`
+  - 只保证排干 barrier 之前已经进入 observer 的工作
+  - barrier 之后新进入的 `accept` 不属于这次 flush
+- restart replay
+  - shutdown 时未 publish / 未 observe 的 observable turns 不靠内存态续跑
+  - 下次启动时通过 `loadTurnsAfterEpoch(committedEpoch)` 从 session rows 重新恢复
 
 ## 4. Observe LLM Contract
 

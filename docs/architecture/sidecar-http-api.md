@@ -54,8 +54,8 @@ Query 参数：
 说明：
 
 - sidecar 通过 `@muninn/core` 的统一 rendered 读接口读取 cross-layer recall 结果
-- `@muninn/core` 返回 `RenderedMemoryRecord[]`
-- sidecar 仅负责将 `RenderedMemoryRecord` 渲染为统一 `MemoryHit[]`
+- `@muninn/core` 返回 `RenderedMemory[]`
+- sidecar 仅负责将 `RenderedMemory` 渲染为统一 `MemoryHit[]`
 
 ### 2.2 `GET /api/v1/list`
 
@@ -75,7 +75,7 @@ Query 参数：
 - lance core 内部会：
   - 读取 `SESSION` 层最近 session memory points（内部来源于 session turn rows）
   - 读取 `OBSERVING` 层每条 observing line 的 latest snapshot row
-  - 按 recency 合并成统一 `RenderedMemoryRecord[]`
+  - 按 recency 合并成统一 `RenderedMemory[]`
 - sidecar 再将其渲染为 `MemoryHit[]`
 - 输出顺序从旧到新，便于直接注入 LLM context
 
@@ -126,32 +126,30 @@ Query 参数：
 请求体语义：
 
 ```ts
-export interface SessionMessageInput {
-  session_id?: string;
+export interface TurnContent {
+  sessionId?: string;
   agent: string;
   title?: string;
   summary?: string;
-  tool_calling?: string[];
+  toolCalling?: string[];
   artifacts?: Record<string, string>;
   prompt?: string;
   response?: string;
-  extra?: Record<string, string>;
 }
 ```
 
 说明：
 
-- `session_id` 是逻辑分组键
+- `sessionId` 是逻辑分组键
 - 至少要有一项 message 内容
-- `extra` 仅属于 API 传输层，不写入持久化 schema
 - `response` 可独立持久化，不依赖 `summary` 是否生成
 
 ## 4. Rendering Boundary
 
 当前 sidecar 的渲染边界已经收敛为：
 
-- lance core 负责把不同 layer 的结构化 record 统一为 `RenderedMemoryRecord`
-- sidecar 负责把 `RenderedMemoryRecord` 渲染为 Markdown `MemoryHit`
+- lance core 负责把不同 layer 的结构化 record 统一为 `RenderedMemory`
+- sidecar 负责把 `RenderedMemory` 渲染为 Markdown `MemoryHit`
 
 也就是说：
 

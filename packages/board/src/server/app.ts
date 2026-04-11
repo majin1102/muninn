@@ -22,11 +22,10 @@ import type {
   TurnPreview,
 } from '@muninn/types';
 import { renderRenderedMemoryDocument } from './render.js';
-import { validateSettingsJson } from './settings.js';
 
 const AGENT_DEFAULT_SESSION_PREFIX = '__agent_default__:';
 const OBSERVER_DEFAULT_SESSION_PREFIX = '__observer_default__:';
-const SESSION_TREE_PAGE_LIMIT = Number.MAX_SAFE_INTEGER;
+const SESSION_TREE_PAGE_LIMIT = 1_000_000;
 const packageDir = path.resolve(__dirname, '..');
 
 export const boardApp = new Hono();
@@ -103,6 +102,23 @@ function resolveBoardDistPath(): string {
 function defaultConfigContent(): string {
   return [
     '{',
+    '  "observer": {',
+    '    "name": "default-observer",',
+    '    "llm": "default_observer_llm",',
+    '    "maxAttempts": 3',
+    '  },',
+    '  "llm": {',
+    '    "default_observer_llm": {',
+    '      "provider": "mock"',
+    '    }',
+    '  },',
+    '  "semanticIndex": {',
+    '    "embedding": {',
+    '      "provider": "mock",',
+    '      "dimensions": 8',
+    '    },',
+    '    "defaultImportance": 0.7',
+    '  },',
     '  "watchdog": {',
     '    "enabled": true,',
     '    "intervalMs": 60000,',
@@ -127,11 +143,11 @@ function normalizeText(value: string | undefined | null): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
-function resolveSessionNode(turn: Pick<BoardSessionTurn, 'session_id' | 'agent' | 'observer'>): {
+function resolveSessionNode(turn: Pick<BoardSessionTurn, 'sessionId' | 'agent' | 'observer'>): {
   sessionKey: string;
   displaySessionId: string;
 } {
-  const sessionId = normalizeText(turn.session_id);
+  const sessionId = normalizeText(turn.sessionId);
   if (sessionId) {
     return {
       sessionKey: sessionId,
@@ -212,7 +228,7 @@ function toTurnPreview(turn: BoardSessionTurn): TurnPreview {
     memoryId: turn.turnId,
     createdAt: turn.createdAt,
     updatedAt: turn.updatedAt,
-    title: turn.title,
+    title: turn.title ?? undefined,
     summary: turn.summary!,
   };
 }
@@ -495,12 +511,6 @@ boardApp.put('/api/v1/ui/settings/config', async (c) => {
   }
 
   try {
-    validateSettingsJson(body.content);
-  } catch (error) {
-    return c.json(errorResponse('invalidRequest', error instanceof Error ? error.message : String(error)), 400);
-  }
-
-  try {
     await validateSettings(body.content);
   } catch (error) {
     return c.json(
@@ -515,6 +525,9 @@ boardApp.put('/api/v1/ui/settings/config', async (c) => {
   } catch {
     return c.json(errorResponse('internalError', 'failed to write muninn.json'), 500);
   }
+
+  // Saving muninn.json updates the persisted config only. The current core/native
+  // runtime stays alive until the process restarts, so changes do not hot-apply.
 
   const response: SettingsConfigResponse = {
     pathLabel: configPath,

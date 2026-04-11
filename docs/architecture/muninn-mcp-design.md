@@ -19,9 +19,9 @@ Muninn Sidecar
   ▼
 @muninn/core
   │
-  │  daemon bridge
+  │  native binding
   ▼
-Rust daemon in `core/` (session-layer queries backed by session turn rows / observing queries)
+Rust storage core in `core/` (typed session / observing / semantic table operations)
 ```
 
 ### Component Responsibilities
@@ -31,14 +31,13 @@ Rust daemon in `core/` (session-layer queries backed by session turn rows / obse
   - 只做参数校验、sidecar 调用与文本返回
 - Sidecar
   - 提供 HTTP 读写接口
-  - 将 `RenderedMemoryRecord` 渲染为 `MemoryHit[]`
+  - 将 `RenderedMemory` 渲染为 `MemoryHit[]`
 - `@muninn/core`
-  - 作为 TS binding layer 连接 sidecar 和 Rust daemon
-  - 暴露结构化读写调用给 sidecar
-- Rust daemon in `core/`
-  - 提供 layer-specific 结构化读取能力
-  - 提供 cross-layer rendered 读接口
-  - 维护 observing / semantic index 等核心状态
+  - 作为 TS 业务编排层连接 sidecar 和 Rust native binding
+  - 持有 session / observer / memories / llm 的主逻辑
+- Rust core in `core/`
+  - 提供 typed table 读写能力
+  - 维护底层存储、typed rows 与 semantic index 表操作
 
 ## 2. Text-First Output
 
@@ -55,9 +54,9 @@ export interface MemoryHit {
 
 - `content` 为 Markdown
 - MCP 直接拼接 `MemoryHit.content`
-- sidecar 是当前的 `RenderedMemoryRecord -> MemoryHit` 渲染边界
+- sidecar 是当前的 `RenderedMemory -> MemoryHit` 渲染边界
 
-`@muninn/core` 当前对 sidecar 暴露的是 `RenderedMemoryRecord` 等 TS contract，但 MCP 并不直接消费它；MCP 仍通过 sidecar 的 `MemoryHit[]` 获得最终文本。
+`@muninn/core` 当前对 sidecar 暴露的是 `RenderedMemory` 等 TS contract，但 MCP 并不直接消费它；MCP 仍通过 sidecar 的 `MemoryHit[]` 获得最终文本。
 
 ## 3. Memory Navigation
 
@@ -105,4 +104,4 @@ MCP 暴露的结构化读能力对应 core 内部的统一读语义：
 - 文本渲染策略
 - semantic index / observer 业务逻辑
 
-这些职责都留在 sidecar/core。
+这些职责都留在 sidecar 和 `@muninn/core`；Rust `core/` 只负责 typed table / storage 能力。

@@ -3,10 +3,6 @@ name = "muninn-sidecar"
 version = "0.1.0"
 edition = "2024"
 
-[[bin]]
-name = "muninn-core"
-path = "src/main.rs"
-
 [lib]
 name = "muninn_sidecar"
 path = "src/lib.rs"
@@ -16,6 +12,7 @@ arrow-array = "57.0.0"
 arrow-schema = "57.0.0"
 async-trait = "0.1"
 chrono = { version = "0.4", features = ["serde"] }
+dashmap = "6.1.0"
 futures-util = "0.3"
 lance = { version = "3.0.0", default-features = false }
 lance-index = "3.0.0"

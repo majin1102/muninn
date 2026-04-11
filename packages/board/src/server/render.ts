@@ -2,11 +2,11 @@ import {
   fallbackRenderedMemoryTitle,
   inferRenderedMemoryKind,
   renderRenderedMemoryMarkdown,
-  type RenderedMemoryRecord,
+  type RenderedMemory,
 } from '@muninn/core';
 import type { MemoryDocument } from '@muninn/types';
 
-export function renderRenderedMemoryDocument(memory: RenderedMemoryRecord): MemoryDocument {
+export function renderRenderedMemoryDocument(memory: RenderedMemory): MemoryDocument {
   return {
     memoryId: memory.memoryId,
     kind: inferRenderedMemoryKind(memory.memoryId) as MemoryDocument['kind'],

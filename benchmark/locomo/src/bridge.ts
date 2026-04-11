@@ -2,14 +2,17 @@
 
 import os from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { access, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
-import type { RenderedMemoryRecord } from '@muninn/core';
+import type { RenderedMemory } from '@muninn/core';
 import * as coreClient from '@muninn/core';
 
 const CONFIG_FILE_NAME = 'muninn.json';
 const WATERMARK_POLL_MS = 2_000;
 const WATERMARK_TIMEOUT_MS = 10 * 60 * 1_000;
 const WATERMARK_WARNING_DELAY_MS = 60_000;
+const REPO_ROOT = path.resolve(__dirname, '../../..');
+const SIDECAR_APP_PATH = path.join(REPO_ROOT, 'packages/sidecar/dist/app.js');
 
 type LocomoDialog = {
   speaker: string;
@@ -100,7 +103,7 @@ async function importSampleCommand(options: Map<string, string>) {
   await mkdir(home, { recursive: true });
   await bootstrapHome(home, templateConfigPath, sourceConfigPath);
   process.env.MUNINN_HOME = home;
-  const baselineWatermark = await coreClient.observer.watermark();
+  const baselineWatermark = await fetchObserverWatermark();
 
   const sample = await loadSample(dataFile, sampleId);
   const manifestTurns: ManifestTurn[] = [];
@@ -113,7 +116,7 @@ async function importSampleCommand(options: Map<string, string>) {
     for (const dialog of dialogs) {
       const text = dialogLine(dialog);
       const turn = await coreClient.addMessage({
-        session_id: sessionId,
+        sessionId,
         agent: dialog.speaker,
         summary: text,
         prompt: text,
@@ -195,7 +198,7 @@ export async function waitForImportWatermark(
   let stalledWarningEmitted = false;
 
   while (Date.now() - startedAt <= timeoutMs) {
-    const watermark = await coreClient.observer.watermark();
+    const watermark = await fetchObserverWatermark();
     pendingTurnIds = watermark.pendingTurnIds;
     const preview = pendingTurnIds.slice(0, 5).join(', ') || '(none)';
     console.error(
@@ -227,6 +230,32 @@ export async function waitForImportWatermark(
   );
 }
 
+async function fetchObserverWatermark() {
+  const { app: sidecarApp } = await import(pathToFileURL(SIDECAR_APP_PATH).href);
+  const response = await sidecarApp.request('http://sidecar.local/api/v1/observer/watermark');
+  const payload = await response.json() as {
+    errorMessage?: string;
+    resolved?: boolean;
+    pendingTurnIds?: unknown[];
+    observingEpoch?: number;
+    committedEpoch?: number;
+  };
+  if (!response.ok) {
+    const message = typeof payload?.errorMessage === 'string'
+      ? payload.errorMessage
+      : `sidecar watermark request failed with status ${response.status}`;
+    throw new Error(message);
+  }
+  return {
+    resolved: payload.resolved === true,
+    pendingTurnIds: Array.isArray(payload.pendingTurnIds)
+      ? payload.pendingTurnIds.map((value) => String(value))
+      : [],
+    observingEpoch: typeof payload.observingEpoch === 'number' ? payload.observingEpoch : undefined,
+    committedEpoch: typeof payload.committedEpoch === 'number' ? payload.committedEpoch : undefined,
+  };
+}
+
 async function recallHits(
   query: string,
   limit: number,
@@ -248,7 +277,7 @@ async function recallHits(
 }
 
 async function toBridgeHit(
-  rendered: RenderedMemoryRecord,
+  rendered: RenderedMemory,
   turnMap: Map<string, ManifestTurn>,
 ): Promise<BridgeHit> {
   const evidenceIds = await resolveEvidenceIds(rendered.memoryId, turnMap);

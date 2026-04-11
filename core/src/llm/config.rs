@@ -7,18 +7,21 @@ use serde::Deserialize;
 
 pub(crate) const CONFIG_FILE_NAME: &str = "muninn.json";
 
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LlmProviderKind {
     Mock,
     OpenAi,
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LlmTask {
     Turn,
     Observer,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct EmbeddingConfig {
     pub provider: String,
@@ -29,6 +32,7 @@ pub struct EmbeddingConfig {
     pub default_importance: f32,
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone)]
 pub struct LlmTaskConfig {
     pub provider: LlmProviderKind,
@@ -40,6 +44,7 @@ pub struct LlmTaskConfig {
     pub title_max_chars: usize,
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone)]
 pub struct ObserverConfig {
     pub name: String,
@@ -53,10 +58,14 @@ pub struct StorageConfig {
     pub storage_options: Option<HashMap<String, String>>,
 }
 
+#[cfg(test)]
 const DEFAULT_LLM_SUMMARY_THRESHOLD_CHARS: usize = 500;
+#[cfg(test)]
 pub(crate) const DEFAULT_TITLE_MAX_CHARS: usize = 100;
+#[cfg(test)]
 const DEFAULT_OBSERVER_MAX_ATTEMPTS: usize = 3;
 
+#[cfg(test)]
 pub fn task_config(task: LlmTask) -> Result<Option<LlmTaskConfig>> {
     let config = load_muninn_config()?;
     let file_config = config
@@ -99,6 +108,7 @@ pub fn task_config(task: LlmTask) -> Result<Option<LlmTaskConfig>> {
     }))
 }
 
+#[cfg(test)]
 pub fn current_observer_config() -> Result<Option<ObserverConfig>> {
     Ok(load_muninn_config()?.and_then(|config| {
         config.observer.map(|observer| ObserverConfig {
@@ -120,20 +130,24 @@ pub fn current_storage_config() -> Result<Option<StorageConfig>> {
     }))
 }
 
+#[cfg(test)]
 pub fn observing_max_attempts() -> Result<usize> {
     Ok(current_observer_config()?
         .map(|config| config.max_attempts)
         .unwrap_or(DEFAULT_OBSERVER_MAX_ATTEMPTS))
 }
 
+#[cfg(test)]
 pub fn current_observer_name() -> Result<Option<String>> {
     Ok(current_observer_config()?.map(|config| config.name))
 }
 
+#[cfg(test)]
 pub fn effective_observer_name() -> Result<String> {
     Ok(current_observer_name()?.unwrap_or_else(|| "default-observer".to_string()))
 }
 
+#[cfg(test)]
 fn parse_provider(value: &str) -> Result<LlmProviderKind> {
     match value {
         "mock" => Ok(LlmProviderKind::Mock),
@@ -144,6 +158,7 @@ fn parse_provider(value: &str) -> Result<LlmProviderKind> {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct MuninnConfig {
@@ -162,6 +177,7 @@ pub(crate) struct StorageFileConfig {
     pub storage_options: Option<HashMap<String, String>>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct TurnFileConfig {
@@ -170,6 +186,7 @@ pub(crate) struct TurnFileConfig {
     pub title_max_chars: Option<usize>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ObserverFileConfig {
@@ -178,6 +195,7 @@ pub(crate) struct ObserverFileConfig {
     pub max_attempts: Option<usize>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct LlmFileConfig {
@@ -221,6 +239,7 @@ pub(crate) struct EmbeddingFileConfig {
     pub dimensions: Option<usize>,
 }
 
+#[cfg(test)]
 fn resolve_task_llm_config(config: &MuninnConfig, task: LlmTask) -> Option<LlmFileConfig> {
     let llm_name = match task {
         LlmTask::Turn => config.turn.as_ref()?.llm.as_deref()?,
@@ -263,6 +282,7 @@ pub(crate) fn muninn_home() -> PathBuf {
         .join(".muninn")
 }
 
+#[cfg(test)]
 fn resolve_file_api_key(config: &LlmFileConfig) -> Option<String> {
     config.api_key.clone()
 }

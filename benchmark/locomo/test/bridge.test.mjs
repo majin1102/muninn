@@ -12,8 +12,6 @@ const repoRoot = path.resolve(import.meta.dirname, '../../..');
 const bridgePath = path.join(repoRoot, 'benchmark/locomo/dist/bridge.js');
 const fixturePath = path.join(repoRoot, 'benchmark/locomo/test/fixtures/mini-locomo.json');
 
-process.env.MUNINN_CORE_ALLOW_CARGO_FALLBACK ??= '1';
-
 async function runBridge(command, options) {
   const args = [bridgePath, command];
   for (const [key, value] of Object.entries(options)) {
@@ -258,4 +256,39 @@ test('waitForImportWatermark emits a delayed unresolved-watermark warning', asyn
   }
 
   assert.ok(messages.some((message) => /no observing progress detected/i.test(message)));
+});
+
+test('waitForImportWatermark does not depend on repo-root cwd to load sidecar app', async (t) => {
+  const home = await mkdtemp(path.join(os.tmpdir(), 'muninn-locomo-cwd-'));
+  const originalCwd = process.cwd();
+  t.after(async () => rm(home, { recursive: true, force: true }));
+  t.after(async () => core.shutdownCoreForTests());
+  t.after(() => {
+    process.chdir(originalCwd);
+    delete process.env.MUNINN_OBSERVER_POLL_MS;
+  });
+
+  await prepareSourceConfig(t, {
+    semanticIndexProvider: 'mock',
+  });
+  await runBridge('reset-home', { 'muninn-home': home });
+  await runBridge('import-sample', {
+    'data-file': fixturePath,
+    'sample-id': 'sample-a',
+    'muninn-home': home,
+  });
+
+  process.env.MUNINN_HOME = home;
+  process.env.MUNINN_OBSERVER_POLL_MS = '60000';
+  process.chdir(path.join(repoRoot, 'benchmark/locomo'));
+  const bridgeModule = await import(bridgePath);
+  const manifest = JSON.parse(await readFile(path.join(home, 'locomo-manifest.json'), 'utf8'));
+
+  await assert.rejects(
+    () => bridgeModule.waitForImportWatermark(manifest, {
+      pollMs: 10,
+      timeoutMs: 50,
+    }),
+    /observer watermark timeout.*pending turn ids/i,
+  );
 });
