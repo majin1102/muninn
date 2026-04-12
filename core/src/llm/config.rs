@@ -48,7 +48,6 @@ pub struct LlmTaskConfig {
 #[derive(Debug, Clone)]
 pub struct ObserverConfig {
     pub name: String,
-    pub llm: String,
     pub max_attempts: usize,
 }
 
@@ -113,7 +112,6 @@ pub fn current_observer_config() -> Result<Option<ObserverConfig>> {
     Ok(load_muninn_config()?.and_then(|config| {
         config.observer.map(|observer| ObserverConfig {
             name: observer.name,
-            llm: observer.llm,
             max_attempts: observer
                 .max_attempts
                 .unwrap_or(DEFAULT_OBSERVER_MAX_ATTEMPTS),

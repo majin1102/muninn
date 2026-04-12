@@ -19,15 +19,6 @@ pub enum ListMode {
     Page { offset: usize, limit: usize },
 }
 
-impl ListMode {
-    #[cfg(test)]
-    pub fn limit(self) -> usize {
-        match self {
-            Self::Recency { limit } | Self::Page { limit, .. } => limit,
-        }
-    }
-}
-
 #[cfg(test)]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -42,18 +33,6 @@ pub struct MemoryView {
     pub detail: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
-}
-
-#[cfg(test)]
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct RecallHit {
-    #[serde(
-        serialize_with = "serialize_memory_id",
-        deserialize_with = "deserialize_memory_id"
-    )]
-    pub memory_id: MemoryId,
-    pub text: String,
 }
 
 #[cfg(test)]

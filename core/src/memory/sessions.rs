@@ -1,28 +1,7 @@
 use lance::{Error, Result};
 
-use crate::format::{MemoryId, MemoryLayer, SessionSelect, SessionTable, SessionTurn, TableOptions};
+use crate::format::{MemoryId, MemoryLayer, SessionTable, SessionTurn, TableOptions};
 use crate::memory::types::ListMode;
-use crate::session::SessionKey;
-
-#[derive(Debug, Clone)]
-pub struct SessionListQuery {
-    pub mode: ListMode,
-    pub agent: Option<String>,
-    pub session_id: Option<String>,
-}
-
-pub async fn list(
-    table_options: &TableOptions,
-    query: SessionListQuery,
-) -> Result<Vec<SessionTurn>> {
-    let turns = SessionTable::new(table_options.clone())
-        .select(SessionSelect::Filter {
-            agent: query.agent.clone(),
-            session_id: query.session_id.clone(),
-        })
-        .await?;
-    Ok(apply_list_mode(turns, query.mode))
-}
 
 pub(crate) async fn get(
     table_options: &TableOptions,
@@ -41,20 +20,9 @@ pub(crate) async fn timeline(
     after_limit: usize,
 ) -> Result<Vec<SessionTurn>> {
     ensure_session_memory_id(memory_id)?;
-    let table = SessionTable::new(table_options.clone());
-    let Some(anchor) = table.get_turn(memory_id.memory_point()).await? else {
-        return Ok(Vec::new());
-    };
-    let turns = table.load_session_turns(&anchor.session_key()).await?;
-
-    Ok(timeline_from_source(
-        &turns,
-        *memory_id,
-        before_limit,
-        after_limit,
-        &anchor.session_key(),
-    )
-    .unwrap_or_default())
+    SessionTable::new(table_options.clone())
+        .timeline_turns(*memory_id, before_limit, after_limit)
+        .await
 }
 
 fn ensure_session_memory_id(memory_id: &MemoryId) -> Result<()> {
@@ -77,24 +45,4 @@ pub(crate) fn apply_list_mode(mut turns: Vec<SessionTurn>, mode: ListMode) -> Ve
         }
         ListMode::Page { offset, limit } => turns.into_iter().skip(offset).take(limit).collect(),
     }
-}
-
-pub(crate) fn timeline_from_source(
-    turns: &[SessionTurn],
-    memory_id: MemoryId,
-    before_limit: usize,
-    after_limit: usize,
-    session: &SessionKey,
-) -> Option<Vec<SessionTurn>> {
-    let mut filtered = turns
-        .iter()
-        .filter(|turn| turn.session_key().same_group_as(session))
-        .cloned()
-        .collect::<Vec<SessionTurn>>();
-    filtered.sort_by(|left, right| left.created_at.cmp(&right.created_at));
-
-    let anchor_index = filtered.iter().position(|turn| turn.turn_id == memory_id)?;
-    let start = anchor_index.saturating_sub(before_limit);
-    let end = (anchor_index + after_limit + 1).min(filtered.len());
-    Some(filtered[start..end].to_vec())
 }

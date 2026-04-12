@@ -29,8 +29,6 @@ pub fn turn_schema() -> Schema {
         Field::new("prompt", DataType::Utf8, true),
         Field::new("response", DataType::Utf8, true),
         Field::new("observing_epoch", DataType::UInt64, true),
-        Field::new("title_source", DataType::Utf8, true),
-        Field::new("summary_source", DataType::Utf8, true),
     ])
 }
 

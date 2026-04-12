@@ -24,8 +24,6 @@ export async function buildSessionUpdate(
     observer,
     title: metadata.title,
     summary: metadata.summary,
-    titleSource: metadata.titleSource,
-    summarySource: metadata.summarySource,
     toolCalling: content.toolCalling,
     artifacts: content.artifacts,
     prompt: content.prompt,

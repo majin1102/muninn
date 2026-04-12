@@ -1,7 +1,5 @@
 use std::collections::BTreeSet;
 
-use serde::Deserialize;
-
 use crate::llm::prompts::{MAX_TURN_SUMMARY_CHARS, MAX_TURN_TITLE_CHARS};
 use crate::llm::turn::TurnOutput;
 
@@ -35,21 +33,6 @@ pub struct TurnEvaluation {
     pub score: u8,
     pub passed: bool,
     pub issues: Vec<TurnEvaluationIssue>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct TurnCase {
-    pub name: String,
-    pub prompt: String,
-    pub response: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TurnCaseEvaluation {
-    pub name: String,
-    pub title: String,
-    pub summary: String,
-    pub evaluation: TurnEvaluation,
 }
 
 pub fn evaluate_turn_output(

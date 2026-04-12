@@ -4,13 +4,9 @@ import { loadPromptTemplate, renderPromptTemplate } from './prompt-loader.js';
 
 const MAX_SUMMARY_CHARS = 1000;
 
-export type TurnMetadataSource = 'fallback' | 'generated' | 'user';
-
 export type ResolvedTurnMetadata = {
   title?: string;
-  titleSource?: TurnMetadataSource;
   summary?: string;
-  summarySource?: TurnMetadataSource;
 };
 
 type TurnOutput = {
@@ -26,8 +22,6 @@ export async function resolveTurnMetadata(params: {
 }): Promise<ResolvedTurnMetadata> {
   let title = sanitizeText(params.title);
   let summary = sanitizeText(params.summary);
-  let titleSource: TurnMetadataSource | undefined = title ? 'user' : undefined;
-  let summarySource: TurnMetadataSource | undefined = summary ? 'user' : undefined;
   const prompt = hasText(params.prompt) ? params.prompt!.trim() : undefined;
   const response = hasText(params.response) ? params.response!.trim() : undefined;
 
@@ -36,24 +30,19 @@ export async function resolveTurnMetadata(params: {
       const generated = await generateIfConfigured(prompt, response);
       if (!title && generated?.title) {
         title = generated.title;
-        titleSource = 'generated';
       }
       if (!summary && generated?.summary) {
         summary = generated.summary;
-        summarySource = 'generated';
       }
     }
     if (!summary) {
       summary = `${prompt}\n\n${response}`;
-      summarySource = 'fallback';
     }
   }
 
   return {
     title,
-    titleSource,
     summary,
-    summarySource,
   };
 }
 

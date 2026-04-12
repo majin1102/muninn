@@ -32,7 +32,10 @@ impl SessionRegistry {
             return Ok(session);
         }
 
-        let open_turn = self.table.load_open_turn(&key).await?;
+        let open_turn = self
+            .table
+            .load_open_turn_for(key.session_id(), key.agent(), key.observer())
+            .await?;
         let created = Arc::new(Session::new(
             key.clone(),
             Arc::clone(&self.table),

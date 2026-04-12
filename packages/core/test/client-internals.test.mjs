@@ -702,6 +702,81 @@ test('session registry reuses the same load for trimmed session ids', async () =
   assert.strictEqual(firstSession, secondSession);
 });
 
+test('repairOpenTurns groups duplicates with TS session semantics', async () => {
+  const updated = [];
+  const deleted = [];
+
+  const repaired = await __testing.repairOpenTurns({
+    sessionTable: {
+      listTurns: async () => [
+        {
+          turnId: 'session:1',
+          createdAt: '2024-01-01T00:00:00Z',
+          updatedAt: '2024-01-01T00:00:00Z',
+          session_id: ' group-a ',
+          agent: 'agent-a',
+          observer: 'default-observer',
+          prompt: 'first prompt',
+        },
+        {
+          turnId: 'session:2',
+          createdAt: '2024-01-01T00:00:01Z',
+          updatedAt: '2024-01-01T00:00:01Z',
+          sessionId: 'group-a',
+          agent: 'agent-a',
+          observer: 'default-observer',
+          toolCalling: ['tool-a'],
+        },
+        {
+          turnId: 'session:3',
+          createdAt: '2024-01-01T00:00:02Z',
+          updatedAt: '2024-01-01T00:00:02Z',
+          session_id: '   ',
+          agent: 'agent-a',
+          observer: 'default-observer',
+          prompt: 'default prompt',
+        },
+        {
+          turnId: 'session:4',
+          createdAt: '2024-01-01T00:00:03Z',
+          updatedAt: '2024-01-01T00:00:03Z',
+          sessionId: null,
+          agent: 'agent-a',
+          observer: 'default-observer',
+          artifacts: { key: 'value' },
+        },
+        {
+          turnId: 'session:5',
+          createdAt: '2024-01-01T00:00:04Z',
+          updatedAt: '2024-01-01T00:00:04Z',
+          sessionId: null,
+          agent: 'agent-b',
+          observer: 'default-observer',
+          prompt: 'other agent',
+        },
+      ],
+      update: async ({ turns }) => {
+        updated.push(turns[0]);
+        return turns;
+      },
+      deleteTurns: async ({ turnIds }) => {
+        deleted.push(turnIds);
+        return { deleted: turnIds.length };
+      },
+    },
+  });
+
+  assert.equal(repaired, 2);
+  assert.equal(updated.length, 2);
+  assert.equal(updated[0].session_id, 'group-a');
+  assert.equal(updated[0].prompt, 'first prompt');
+  assert.deepEqual(updated[0].toolCalling, ['tool-a']);
+  assert.equal(updated[1].session_id, null);
+  assert.equal(updated[1].prompt, 'default prompt');
+  assert.deepEqual(updated[1].artifacts, { key: 'value' });
+  assert.deepEqual(deleted, [['session:1'], ['session:3']]);
+});
+
 test('session.accept serializes concurrent updates on the same open turn', async () => {
   let concurrentUpdates = 0;
   let maxConcurrentUpdates = 0;

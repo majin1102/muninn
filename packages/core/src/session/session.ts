@@ -1,14 +1,10 @@
 import type { NativeTables } from '../native.js';
 import type { SessionTurn, TurnContent } from '../client.js';
 import { buildSessionUpdate } from './update.js';
-import { cloneTurn, readSessionTurn, serializeSessionTurn, type SessionUpdate, type TurnMetadataSource } from './types.js';
+import { cloneTurn, readSessionTurn, serializeSessionTurn, type SessionUpdate } from './types.js';
 import { hasText, normalizeSessionId, sessionKey } from './key.js';
 
 const PENDING_TURN_ID = 'session:18446744073709551615';
-type SessionTurnWithSource = SessionTurn & {
-  titleSource?: TurnMetadataSource | null;
-  summarySource?: TurnMetadataSource | null;
-};
 
 export class Session {
   private openTurn?: SessionTurn;
@@ -90,7 +86,6 @@ function newPendingTurn(config: { sessionId?: string; agent: string; observer: s
 
 function applyUpdate(turn: SessionTurn, update: SessionUpdate): SessionTurn {
   const next = cloneTurn(turn);
-  const nextWithSource = next as SessionTurnWithSource;
   const currentKey = sessionKey(next.sessionId ?? undefined, next.agent, next.observer);
   const incomingKey = sessionKey(update.sessionId, update.agent, update.observer);
   if (currentKey !== incomingKey) {
@@ -98,21 +93,11 @@ function applyUpdate(turn: SessionTurn, update: SessionUpdate): SessionTurn {
   }
 
   if (hasText(update.title)) {
-    const currentSource = nextWithSource.titleSource ?? undefined;
-    const shouldReplaceTitle = !hasText(next.title) || sourceRank(update.titleSource) >= sourceRank(currentSource);
-    if (shouldReplaceTitle) {
-      next.title = update.title;
-      nextWithSource.titleSource = update.titleSource;
-    }
+    next.title = update.title;
   }
 
   if (hasText(update.summary)) {
-    const currentSource = nextWithSource.summarySource ?? undefined;
-    const shouldReplaceSummary = !hasText(next.summary) || sourceRank(update.summarySource) >= sourceRank(currentSource);
-    if (shouldReplaceSummary) {
-      next.summary = update.summary;
-      nextWithSource.summarySource = update.summarySource;
-    }
+    next.summary = update.summary;
   }
 
   next.prompt = mergePrompt(next.prompt, update.prompt);
@@ -126,19 +111,6 @@ function applyUpdate(turn: SessionTurn, update: SessionUpdate): SessionTurn {
     next.observingEpoch = update.observingEpoch;
   }
   return next;
-}
-
-function sourceRank(source: TurnMetadataSource | undefined): number {
-  switch (source) {
-    case 'fallback':
-      return 0;
-    case 'generated':
-      return 1;
-    case 'user':
-      return 2;
-    default:
-      return -1;
-  }
 }
 
 function mergePrompt(current?: string | null, incoming?: string): string | undefined {

@@ -1,13 +1,7 @@
 import type { SessionTurn } from '../client.js';
 import { normalizeSessionId } from './key.js';
 
-export type TurnMetadataSource = 'fallback' | 'generated' | 'user';
-
-type SessionTurnPayload = SessionTurn & {
-  session_id?: string | null;
-  titleSource?: TurnMetadataSource | null;
-  summarySource?: TurnMetadataSource | null;
-};
+type SessionTurnPayload = SessionTurn & { session_id?: string | null };
 
 export type SessionUpdate = {
   sessionId?: string;
@@ -15,8 +9,6 @@ export type SessionUpdate = {
   observer: string;
   title?: string;
   summary?: string;
-  titleSource?: TurnMetadataSource;
-  summarySource?: TurnMetadataSource;
   toolCalling?: string[];
   artifacts?: Record<string, string>;
   prompt?: string;
@@ -36,8 +28,6 @@ export function readSessionTurn(turn: SessionTurn): SessionTurn {
     observer: turn.observer,
     title: turn.title,
     summary: turn.summary,
-    titleSource: payload.titleSource ?? null,
-    summarySource: payload.summarySource ?? null,
     toolCalling: turn.toolCalling,
     artifacts: turn.artifacts,
     prompt: turn.prompt,
@@ -58,8 +48,6 @@ export function serializeSessionTurn(turn: SessionTurn): Record<string, unknown>
     observer: turn.observer,
     title: turn.title ?? null,
     summary: turn.summary ?? null,
-    titleSource: payload.titleSource ?? null,
-    summarySource: payload.summarySource ?? null,
     toolCalling: turn.toolCalling ?? null,
     artifacts: turn.artifacts ?? null,
     prompt: turn.prompt ?? null,

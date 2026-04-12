@@ -70,6 +70,12 @@ struct SessionUpsertParams {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct SessionDeleteTurnsParams {
+    turn_ids: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct ObservingListSnapshotsParams {
     observer: Option<String>,
 }
@@ -134,12 +140,6 @@ struct OptimizeParams {
 #[serde(rename_all = "camelCase")]
 struct DeletedCount {
     deleted: usize,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct RepairedCount {
-    repaired: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -263,15 +263,21 @@ impl CoreBinding {
         to_napi_value(turns)
     }
 
-    #[napi(js_name = "sessionReconcileOpenTurns")]
-    pub async fn session_reconcile_open_turns(&self) -> NapiResult<Value> {
+    #[napi(js_name = "sessionDeleteTurns")]
+    pub async fn session_delete_turns(&self, params: Value) -> NapiResult<Value> {
+        let params = parse_params::<SessionDeleteTurnsParams>(params)?;
         let resources = self.resources().await?;
-        let repaired = resources
+        let turn_ids = params
+            .turn_ids
+            .iter()
+            .map(|turn_id| parse_memory_id(turn_id, MemoryLayer::Session))
+            .collect::<NapiResult<Vec<_>>>()?;
+        let deleted = resources
             .session_table
-            .reconcile_open_turns()
+            .delete(turn_ids)
             .await
             .map_err(to_napi_error)?;
-        to_napi_value(RepairedCount { repaired })
+        to_napi_value(DeletedCount { deleted })
     }
 
     #[napi(js_name = "sessionTableStats")]
