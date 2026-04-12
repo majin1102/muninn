@@ -4,6 +4,7 @@ pub(crate) mod llm;
 pub(crate) mod memory;
 #[cfg(test)]
 pub(crate) mod observer;
+#[cfg(test)]
 pub(crate) mod session;
 #[cfg(test)]
 pub(crate) mod test_support;

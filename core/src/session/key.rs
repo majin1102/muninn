@@ -34,10 +34,6 @@ impl SessionKey {
         }
     }
 
-    pub(crate) fn same_group_as(&self, other: &Self) -> bool {
-        self == other
-    }
-
     pub(crate) fn session_id(&self) -> Option<&str> {
         match self {
             Self::Session { session_id, .. } => Some(session_id),

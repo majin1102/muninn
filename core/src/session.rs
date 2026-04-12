@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 #[cfg(test)]
 use std::sync::Arc;
 #[cfg(test)]
@@ -221,60 +220,12 @@ pub(crate) fn merge_prompt(current: Option<&str>, incoming: Option<&str>) -> Opt
     }
 }
 
-pub(crate) fn merge_tool_calling(
-    current: &mut Option<Vec<String>>,
-    incoming: Option<&Vec<String>>,
-) {
-    let Some(incoming) = incoming else {
-        return;
-    };
-    if incoming.is_empty() {
-        return;
-    }
-    let current_values = current.get_or_insert_with(Vec::new);
-    current_values.extend(incoming.iter().cloned());
-}
-
-pub(crate) fn merge_artifacts(
-    current: &mut Option<HashMap<String, String>>,
-    incoming: Option<&HashMap<String, String>>,
-) {
-    let Some(incoming) = incoming else {
-        return;
-    };
-    if incoming.is_empty() {
-        return;
-    }
-    let current_values = current.get_or_insert_with(HashMap::new);
-    for (key, value) in incoming {
-        current_values.insert(key.clone(), value.clone());
-    }
-}
-
 #[cfg(test)]
 fn current_timestamp() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs() as i64
-}
-
-#[cfg(test)]
-pub(crate) fn merge_metadata_field(
-    current: &mut Option<String>,
-    current_source: &mut Option<TurnMetadataSource>,
-    incoming: Option<&str>,
-    incoming_source: Option<TurnMetadataSource>,
-) {
-    let Some(incoming) = incoming.filter(|value| !value.trim().is_empty()) else {
-        return;
-    };
-    let should_replace =
-        !has_text_content(current.as_deref()) || incoming_source >= *current_source;
-    if should_replace {
-        *current = Some(incoming.to_string());
-        *current_source = incoming_source;
-    }
 }
 
 #[cfg(test)]

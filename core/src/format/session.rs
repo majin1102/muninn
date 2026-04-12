@@ -23,12 +23,9 @@ use super::codec::{
     turns_to_update_reader,
 };
 use super::memory_id::{MemoryId, MemoryLayer, deserialize_memory_id, serialize_memory_id};
-use crate::session::has_text_content;
 use crate::watchdog::compact_dataset;
 #[cfg(test)]
-use crate::session::{
-    SessionUpdate, merge_artifacts, merge_metadata_field, merge_prompt, merge_tool_calling,
-};
+use crate::session::SessionUpdate;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
@@ -198,7 +195,6 @@ impl SessionQuery {
 #[derive(Debug, Clone)]
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) enum SessionSelect {
-    All,
     ById(u64),
     Filter {
         agent: Option<String>,
@@ -241,7 +237,6 @@ impl SessionTable {
 
     pub(crate) async fn select(&self, selector: SessionSelect) -> Result<Vec<SessionTurn>> {
         match selector {
-            SessionSelect::All => self.load_all_turns().await,
             SessionSelect::ById(turn_id) => Ok(self.get_turn(turn_id).await?.into_iter().collect()),
             SessionSelect::Filter { agent, session_id } => {
                 let turns = self.load_all_turns().await?;
@@ -674,6 +669,70 @@ fn filter_turns(
             agent_match && session_match
         })
         .collect()
+}
+
+fn has_text_content(value: Option<&str>) -> bool {
+    value.map(|value| !value.trim().is_empty()).unwrap_or(false)
+}
+
+#[cfg(test)]
+fn merge_prompt(current: Option<&str>, incoming: Option<&str>) -> Option<String> {
+    let current = current.filter(|value| !value.trim().is_empty());
+    let incoming = incoming.filter(|value| !value.trim().is_empty());
+    match (current, incoming) {
+        (Some(current), Some(incoming)) if current == incoming => Some(current.to_string()),
+        (Some(current), Some(incoming)) => Some(format!("{current}\n\n{incoming}")),
+        (Some(current), None) => Some(current.to_string()),
+        (None, Some(incoming)) => Some(incoming.to_string()),
+        (None, None) => None,
+    }
+}
+
+#[cfg(test)]
+fn merge_tool_calling(current: &mut Option<Vec<String>>, incoming: Option<&Vec<String>>) {
+    let Some(incoming) = incoming else {
+        return;
+    };
+    if incoming.is_empty() {
+        return;
+    }
+    let current_values = current.get_or_insert_with(Vec::new);
+    current_values.extend(incoming.iter().cloned());
+}
+
+#[cfg(test)]
+fn merge_artifacts(
+    current: &mut Option<HashMap<String, String>>,
+    incoming: Option<&HashMap<String, String>>,
+) {
+    let Some(incoming) = incoming else {
+        return;
+    };
+    if incoming.is_empty() {
+        return;
+    }
+    let current_values = current.get_or_insert_with(HashMap::new);
+    for (key, value) in incoming {
+        current_values.insert(key.clone(), value.clone());
+    }
+}
+
+#[cfg(test)]
+fn merge_metadata_field(
+    current: &mut Option<String>,
+    current_source: &mut Option<TurnMetadataSource>,
+    incoming: Option<&str>,
+    incoming_source: Option<TurnMetadataSource>,
+) {
+    let Some(incoming) = incoming.filter(|value| !value.trim().is_empty()) else {
+        return;
+    };
+    let should_replace =
+        !has_text_content(current.as_deref()) || incoming_source >= *current_source;
+    if should_replace {
+        *current = Some(incoming.to_string());
+        *current_source = incoming_source;
+    }
 }
 
 fn session_query_filter(query: &SessionQuery) -> String {
@@ -1507,6 +1566,9 @@ mod tests {
     async fn public_timeline_uses_memory_ids_and_returns_empty_for_missing_anchor() {
         let _guard = crate::llm::config::llm_test_env_guard();
         let dir = tempfile::tempdir().unwrap();
+        unsafe {
+            std::env::set_var("MUNINN_HOME", dir.path().join("missing-muninn-home"));
+        }
         let table_options = TableOptions::local(dir.path()).unwrap();
 
         let a = post(
@@ -1580,6 +1642,9 @@ mod tests {
         .await
         .unwrap();
         assert!(missing.is_empty());
+        unsafe {
+            std::env::remove_var("MUNINN_HOME");
+        }
     }
 
     #[test]

@@ -9,9 +9,6 @@ use crate::test_support::TurnContent;
 #[cfg(test)]
 use super::{Session, resolve_turn_metadata};
 use super::has_text_content;
-#[cfg(test)]
-use super::SessionKey;
-
 #[derive(Debug, Clone)]
 pub(crate) struct SessionUpdate {
     pub(crate) session_id: Option<String>,
@@ -59,11 +56,6 @@ impl SessionUpdate {
         };
         update.validate()?;
         Ok(update)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn session_key(&self) -> SessionKey {
-        SessionKey::from(self.session_id.as_deref(), &self.agent, &self.observer)
     }
 
     pub(crate) fn title_source(&self) -> Option<TurnMetadataSource> {

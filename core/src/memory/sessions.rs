@@ -1,27 +1,7 @@
 use lance::{Error, Result};
 
-use crate::format::{MemoryId, MemoryLayer, SessionSelect, SessionTable, SessionTurn, TableOptions};
+use crate::format::{MemoryId, MemoryLayer, SessionTable, SessionTurn, TableOptions};
 use crate::memory::types::ListMode;
-
-#[derive(Debug, Clone)]
-pub struct SessionListQuery {
-    pub mode: ListMode,
-    pub agent: Option<String>,
-    pub session_id: Option<String>,
-}
-
-pub async fn list(
-    table_options: &TableOptions,
-    query: SessionListQuery,
-) -> Result<Vec<SessionTurn>> {
-    let turns = SessionTable::new(table_options.clone())
-        .select(SessionSelect::Filter {
-            agent: query.agent.clone(),
-            session_id: query.session_id.clone(),
-        })
-        .await?;
-    Ok(apply_list_mode(turns, query.mode))
-}
 
 pub(crate) async fn get(
     table_options: &TableOptions,

@@ -156,7 +156,7 @@ impl Observer {
                 }
             }
             if repaired {
-                let mut repaired_turns = inbox.clone();
+                let repaired_turns = inbox.clone();
                 session_table(&table_options)
                     .update(&repaired_turns)
                     .await?;
@@ -1033,7 +1033,7 @@ async fn catch_up_index(
             thread.set_indexed_snapshot_sequence(snapshot_sequence);
         }
         if thread.snapshot_id.is_some() {
-            let mut observings = vec![thread.to_row()?];
+            let observings = vec![thread.to_row()?];
             observing_table(table_options)
                 .update(&observings)
                 .await?;
