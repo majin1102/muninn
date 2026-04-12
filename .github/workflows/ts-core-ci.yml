@@ -1,0 +1,52 @@
+name: TS Core CI
+
+on:
+  pull_request:
+    paths:
+      - "packages/core/**"
+      - "packages/types/**"
+      - "pnpm-workspace.yaml"
+      - "package.json"
+      - ".github/workflows/ts-core-ci.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "packages/core/**"
+      - "packages/types/**"
+      - "pnpm-workspace.yaml"
+      - "package.json"
+      - ".github/workflows/ts-core-ci.yml"
+
+jobs:
+  ts-core:
+    name: ts-core
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+            packages/core/native -> packages/core/native/target
+
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: Install dependencies
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Build @muninn/core
+        run: pnpm --filter @muninn/core build
+
+      - name: Test @muninn/core
+        run: pnpm --filter @muninn/core test:node
