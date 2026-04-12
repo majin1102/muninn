@@ -37,4 +37,26 @@ impl SessionKey {
     pub(crate) fn same_group_as(&self, other: &Self) -> bool {
         self == other
     }
+
+    pub(crate) fn session_id(&self) -> Option<&str> {
+        match self {
+            Self::Session { session_id, .. } => Some(session_id),
+            Self::Agent { .. } | Self::Observer { .. } => None,
+        }
+    }
+
+    pub(crate) fn agent(&self) -> &str {
+        match self {
+            Self::Session { agent, .. } | Self::Agent { agent, .. } => agent,
+            Self::Observer { .. } => "",
+        }
+    }
+
+    pub(crate) fn observer(&self) -> &str {
+        match self {
+            Self::Session { observer, .. }
+            | Self::Agent { observer, .. }
+            | Self::Observer { observer } => observer,
+        }
+    }
 }

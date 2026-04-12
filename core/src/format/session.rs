@@ -23,7 +23,7 @@ use super::codec::{
     turns_to_update_reader,
 };
 use super::memory_id::{MemoryId, MemoryLayer, deserialize_memory_id, serialize_memory_id};
-use crate::session::{SessionKey, has_text_content, reconcile_open_turns as reconcile_session_open_turns};
+use crate::session::has_text_content;
 use crate::watchdog::compact_dataset;
 #[cfg(test)]
 use crate::session::{
@@ -96,19 +96,12 @@ impl SessionTurn {
 
     #[cfg(test)]
     pub(crate) fn merge(&mut self, update: &SessionUpdate) -> Result<()> {
-        if self.session_key() != update.session_key() {
+        if self.session_id != update.session_id
+            || self.agent != update.agent
+            || self.observer != update.observer
+        {
             return Err(Error::invalid_input(
                 "message session does not match open turn",
-            ));
-        }
-        if self.agent != update.agent {
-            return Err(Error::invalid_input(
-                "message agent does not match open turn",
-            ));
-        }
-        if self.observer != update.observer {
-            return Err(Error::invalid_input(
-                "message observer does not match open turn",
             ));
         }
 
@@ -165,8 +158,40 @@ impl SessionTurn {
         self.turn_id = MemoryId::new(MemoryLayer::Session, row_id);
     }
 
-    pub(crate) fn session_key(&self) -> SessionKey {
-        SessionKey::from(self.session_id.as_deref(), &self.agent, &self.observer)
+}
+
+#[derive(Debug, Clone)]
+enum SessionQuery {
+    ByIdentity {
+        session_id: Option<String>,
+        agent: String,
+        observer: String,
+    },
+}
+
+impl SessionQuery {
+    fn by_identity(session_id: Option<&str>, agent: &str, observer: &str) -> Self {
+        Self::ByIdentity {
+            session_id: session_id.map(str::to_string),
+            agent: agent.to_string(),
+            observer: observer.to_string(),
+        }
+    }
+
+    fn from_turn(turn: &SessionTurn) -> Self {
+        Self::by_identity(turn.session_id.as_deref(), &turn.agent, &turn.observer)
+    }
+
+    fn matches_turn(&self, turn: &SessionTurn) -> bool {
+        match self {
+            Self::ByIdentity {
+                session_id,
+                agent,
+                observer,
+            } => {
+                turn.session_id == *session_id && turn.agent == *agent && turn.observer == *observer
+            }
+        }
     }
 }
 
@@ -281,8 +306,7 @@ impl SessionTable {
         Ok(())
     }
 
-    #[allow(dead_code)]
-    pub(crate) async fn delete(&self, turn_ids: Vec<MemoryId>) -> Result<usize> {
+    pub async fn delete(&self, turn_ids: Vec<MemoryId>) -> Result<usize> {
         delete_by_row_ids(
             self.access.try_open().await?,
             &turn_ids
@@ -320,9 +344,9 @@ impl SessionTable {
         record_batch_to_turns_with_row_ids(&batch, turn_ids)
     }
 
-    pub(crate) async fn load_open_turn(&self, session: &SessionKey) -> Result<Option<SessionTurn>> {
+    async fn load_open_turn(&self, query: &SessionQuery) -> Result<Option<SessionTurn>> {
         let mut turns = self
-            .load_session_turns(session)
+            .load_session_turns(query)
             .await?
             .into_iter()
             .filter(|turn| turn.is_open())
@@ -342,16 +366,24 @@ impl SessionTable {
         agent: &str,
         observer: &str,
     ) -> Result<Option<SessionTurn>> {
-        self.load_open_turn(&SessionKey::from(session_id, agent, observer))
+        self.load_open_turn(&SessionQuery::by_identity(session_id, agent, observer))
             .await
     }
 
     #[cfg(test)]
-    pub(crate) async fn load_latest_turn(
+    pub(crate) async fn load_latest_turn_for(
         &self,
-        session: &SessionKey,
+        session_id: Option<&str>,
+        agent: &str,
+        observer: &str,
     ) -> Result<Option<SessionTurn>> {
-        let mut turns = self.load_session_turns(session).await?;
+        let query = SessionQuery::by_identity(session_id, agent, observer);
+        self.load_latest_turn(&query).await
+    }
+
+    #[cfg(test)]
+    async fn load_latest_turn(&self, query: &SessionQuery) -> Result<Option<SessionTurn>> {
+        let mut turns = self.load_session_turns(query).await?;
         turns.sort_by(|left, right| {
             right
                 .updated_at
@@ -362,45 +394,14 @@ impl SessionTable {
         Ok(turns.into_iter().next())
     }
 
-    pub async fn reconcile_open_turns(&self) -> Result<usize> {
-        let mut open_turns_by_key = HashMap::<SessionKey, Vec<SessionTurn>>::new();
-        for turn in self
-            .load_all_turns()
-            .await?
-            .into_iter()
-            .filter(|turn| turn.is_open())
-        {
-            open_turns_by_key
-                .entry(turn.session_key())
-                .or_default()
-                .push(turn);
-        }
-
-        let mut repaired_sessions = 0;
-        for turns in open_turns_by_key
-            .into_values()
-            .filter(|turns| turns.len() > 1)
-        {
-            let reconciliation = reconcile_session_open_turns(turns)?;
-            let canonical_turn = vec![reconciliation.canonical_turn];
-            self.update(&canonical_turn).await?;
-            self.delete(reconciliation.discarded_turn_ids).await?;
-            repaired_sessions += 1;
-        }
-        Ok(repaired_sessions)
-    }
-
-    pub(crate) async fn load_session_turns(
-        &self,
-        session: &SessionKey,
-    ) -> Result<Vec<SessionTurn>> {
+    async fn load_session_turns(&self, query: &SessionQuery) -> Result<Vec<SessionTurn>> {
         let Some(dataset) = self.access.try_open().await? else {
             return Ok(Vec::new());
         };
         let batch = dataset
             .scan()
             .with_row_id()
-            .filter(&session_key_filter(session))?
+            .filter(&session_query_filter(query))?
             .try_into_batch()
             .await?;
         if batch.num_rows() == 0 {
@@ -652,15 +653,9 @@ impl SessionTable {
         let Some(anchor) = self.get_turn(memory_id.memory_point()).await? else {
             return Ok(Vec::new());
         };
-        let turns = self.load_session_turns(&anchor.session_key()).await?;
-        Ok(crate::memory::sessions::timeline_from_source(
-            &turns,
-            memory_id,
-            before_limit,
-            after_limit,
-            &anchor.session_key(),
-        )
-        .unwrap_or_default())
+        let query = SessionQuery::from_turn(&anchor);
+        let turns = self.load_session_turns(&query).await?;
+        Ok(timeline_from_source(&turns, memory_id, before_limit, after_limit, &query).unwrap_or_default())
     }
 }
 
@@ -681,10 +676,10 @@ fn filter_turns(
         .collect()
 }
 
-fn session_key_filter(session: &SessionKey) -> String {
-    match session {
-        SessionKey::Session {
-            session_id,
+fn session_query_filter(query: &SessionQuery) -> String {
+    match query {
+        SessionQuery::ByIdentity {
+            session_id: Some(session_id),
             agent,
             observer,
         } => format!(
@@ -693,16 +688,36 @@ fn session_key_filter(session: &SessionKey) -> String {
             escape_predicate_string(agent),
             escape_predicate_string(observer),
         ),
-        SessionKey::Agent { agent, observer } => format!(
+        SessionQuery::ByIdentity {
+            session_id: None,
+            agent,
+            observer,
+        } => format!(
             "session_id IS NULL AND agent = '{}' AND observer = '{}'",
             escape_predicate_string(agent),
             escape_predicate_string(observer),
         ),
-        SessionKey::Observer { observer } => format!(
-            "session_id IS NULL AND agent = '' AND observer = '{}'",
-            escape_predicate_string(observer),
-        ),
     }
+}
+
+fn timeline_from_source(
+    turns: &[SessionTurn],
+    memory_id: MemoryId,
+    before_limit: usize,
+    after_limit: usize,
+    query: &SessionQuery,
+) -> Option<Vec<SessionTurn>> {
+    let mut filtered = turns
+        .iter()
+        .filter(|turn| query.matches_turn(turn))
+        .cloned()
+        .collect::<Vec<SessionTurn>>();
+    filtered.sort_by(|left, right| left.created_at.cmp(&right.created_at));
+
+    let anchor_index = filtered.iter().position(|turn| turn.turn_id == memory_id)?;
+    let start = anchor_index.saturating_sub(before_limit);
+    let end = (anchor_index + after_limit + 1).min(filtered.len());
+    Some(filtered[start..end].to_vec())
 }
 
 #[cfg(test)]
@@ -711,12 +726,12 @@ mod tests {
     use std::str::FromStr;
     use std::sync::Arc;
 
-    use super::{SessionTurn, TurnMetadataSource};
+    use super::{SessionQuery, SessionTurn, TurnMetadataSource, session_query_filter, timeline_from_source};
     use crate::format::{MemoryId, MemoryLayer, SessionSelect, SessionTable, TableOptions};
-    use crate::memory::sessions::{apply_list_mode, get, timeline, timeline_from_source};
+    use crate::memory::sessions::{apply_list_mode, get, timeline};
     use crate::memory::types::{ListMode, MemoryView};
     use crate::test_support::{TestService, TurnContent};
-    use crate::session::{Session, SessionKey, SessionUpdate, reconcile_open_turns};
+    use crate::session::{Session, SessionKey, SessionUpdate};
     use chrono::{TimeZone, Utc};
     use tokio::sync::Barrier;
 
@@ -776,7 +791,7 @@ mod tests {
             .await
             .unwrap();
         session_table(table_options)
-            .load_latest_turn(&SessionKey::from(session_id, agent, &observer))
+            .load_latest_turn_for(session_id, agent, &observer)
             .await
             .unwrap()
             .expect("accepted turn should be persisted")
@@ -800,6 +815,26 @@ mod tests {
     }
 
     #[test]
+    fn session_query_filter_uses_exact_identity_predicate() {
+        assert_eq!(
+            session_query_filter(&SessionQuery::by_identity(
+                Some("group-a"),
+                "agent-a",
+                "observer-a",
+            )),
+            "session_id = 'group-a' AND agent = 'agent-a' AND observer = 'observer-a'"
+        );
+    }
+
+    #[test]
+    fn session_query_filter_uses_is_null_for_missing_session_id() {
+        assert_eq!(
+            session_query_filter(&SessionQuery::by_identity(None, "agent-a", "observer-a")),
+            "session_id IS NULL AND agent = 'agent-a' AND observer = 'observer-a'"
+        );
+    }
+
+    #[test]
     fn timeline_honors_filters() {
         let turns = [
             make_turn(1, 1, "agent-a", Some("group")),
@@ -811,9 +846,14 @@ mod tests {
             .iter()
             .find(|turn| turn.turn_id == session_memory_id(2))
             .unwrap();
-        let result =
-            timeline_from_source(&turns, session_memory_id(2), 1, 1, &anchor.session_key())
-                .unwrap();
+        let result = timeline_from_source(
+            &turns,
+            session_memory_id(2),
+            1,
+            1,
+            &SessionQuery::from_turn(anchor),
+        )
+        .unwrap();
         let ids = result
             .iter()
             .map(|turn| turn.turn_id.to_string())
@@ -833,14 +873,71 @@ mod tests {
             .iter()
             .find(|turn| turn.turn_id == session_memory_id(3))
             .unwrap();
-        let result =
-            timeline_from_source(&turns, session_memory_id(3), 1, 1, &anchor.session_key())
-                .unwrap();
+        let result = timeline_from_source(
+            &turns,
+            session_memory_id(3),
+            1,
+            1,
+            &SessionQuery::from_turn(anchor),
+        )
+        .unwrap();
         let ids = result
             .iter()
             .map(|turn| turn.turn_id.to_string())
             .collect::<Vec<_>>();
         assert_eq!(ids, vec!["session:2", "session:3", "session:4"]);
+    }
+
+    #[tokio::test]
+    async fn load_open_turn_for_matches_exact_identity() {
+        let dir = tempfile::tempdir().unwrap();
+        let table = SessionTable::new(TableOptions::local(dir.path()).unwrap());
+        let now = Utc::now();
+        let mut turns = vec![
+            SessionTurn {
+                turn_id: MemoryId::new(MemoryLayer::Session, u64::MAX),
+                created_at: now,
+                updated_at: now,
+                session_id: Some("group-a".to_string()),
+                agent: "agent-a".to_string(),
+                observer: "observer-a".to_string(),
+                title: None,
+                summary: None,
+                title_source: None,
+                summary_source: None,
+                tool_calling: None,
+                artifacts: None,
+                prompt: Some("matched".to_string()),
+                response: None,
+                observing_epoch: None,
+            },
+            SessionTurn {
+                turn_id: MemoryId::new(MemoryLayer::Session, u64::MAX),
+                created_at: now,
+                updated_at: now,
+                session_id: Some(" group-a ".to_string()),
+                agent: "agent-a".to_string(),
+                observer: "observer-a".to_string(),
+                title: None,
+                summary: None,
+                title_source: None,
+                summary_source: None,
+                tool_calling: None,
+                artifacts: None,
+                prompt: Some("not-matched".to_string()),
+                response: None,
+                observing_epoch: None,
+            },
+        ];
+
+        table.insert(&mut turns).await.unwrap();
+        let loaded = table
+            .load_open_turn_for(Some("group-a"), "agent-a", "observer-a")
+            .await
+            .unwrap()
+            .expect("expected exact open turn");
+
+        assert_eq!(loaded.prompt.as_deref(), Some("matched"));
     }
 
     #[test]
@@ -981,61 +1078,6 @@ mod tests {
         .unwrap();
         assert_eq!(turn.summary.as_deref(), Some("user"));
         assert_eq!(turn.summary_source, Some(TurnMetadataSource::User));
-    }
-
-    #[test]
-    fn reconcile_open_turns_merges_content_into_latest_turn_id() {
-        let mut first = make_turn(101, 1, "agent", Some("group"));
-        first.prompt = Some("prompt-a".to_string());
-        first.tool_calling = Some(vec!["tool-a".to_string()]);
-        first.artifacts = Some(HashMap::from([("shared".to_string(), "a".to_string())]));
-        first.title = Some("title-a".to_string());
-        first.summary = Some("summary-a".to_string());
-
-        let mut second = make_turn(102, 2, "agent", Some("group"));
-        second.prompt = Some("prompt-b".to_string());
-        second.tool_calling = Some(vec!["tool-b".to_string()]);
-        second.artifacts = Some(HashMap::from([
-            ("shared".to_string(), "b".to_string()),
-            ("new".to_string(), "v".to_string()),
-        ]));
-        second.title = Some("title-b".to_string());
-        second.summary = Some("summary-b".to_string());
-
-        let repaired = reconcile_open_turns(vec![second.clone(), first.clone()]).unwrap();
-        assert_eq!(repaired.canonical_turn.turn_id, second.turn_id);
-        assert_eq!(
-            repaired.canonical_turn.prompt.as_deref(),
-            Some("prompt-a\n\nprompt-b")
-        );
-        assert_eq!(
-            repaired.canonical_turn.tool_calling.as_deref(),
-            Some(&["tool-a".to_string(), "tool-b".to_string()][..])
-        );
-        assert_eq!(
-            repaired
-                .canonical_turn
-                .artifacts
-                .as_ref()
-                .and_then(|artifacts| artifacts.get("shared"))
-                .map(String::as_str),
-            Some("b")
-        );
-        assert_eq!(
-            repaired
-                .canonical_turn
-                .artifacts
-                .as_ref()
-                .and_then(|artifacts| artifacts.get("new"))
-                .map(String::as_str),
-            Some("v")
-        );
-        assert_eq!(repaired.canonical_turn.title.as_deref(), Some("title-b"));
-        assert_eq!(
-            repaired.canonical_turn.summary.as_deref(),
-            Some("summary-b")
-        );
-        assert_eq!(repaired.discarded_turn_ids, vec![first.turn_id]);
     }
 
     #[tokio::test]
@@ -1571,58 +1613,6 @@ mod tests {
     }
 
     #[test]
-    fn session_prefers_explicit_session_id_then_agent_default_then_observer_default() {
-        let explicit = make_turn(1, 1, "agent-a", Some("group-a"));
-        assert_eq!(
-            explicit.session_key(),
-            SessionKey::Session {
-                session_id: "group-a".to_string(),
-                agent: "agent-a".to_string(),
-                observer: "observer-a".to_string(),
-            }
-        );
-
-        let agent_default = make_turn(2, 2, "agent-a", None);
-        assert_eq!(
-            agent_default.session_key(),
-            SessionKey::Agent {
-                agent: "agent-a".to_string(),
-                observer: "observer-a".to_string(),
-            }
-        );
-
-        let observer_default = SessionKey::from(None, "", "observer-a");
-        assert_eq!(
-            observer_default,
-            SessionKey::Observer {
-                observer: "observer-a".to_string()
-            }
-        );
-    }
-
-    #[test]
-    fn timeline_uses_resolved_default_session_when_session_id_is_missing() {
-        let turns = [
-            make_turn(1, 1, "agent-a", None),
-            make_turn(2, 2, "agent-a", None),
-            make_turn(3, 3, "agent-b", None),
-            make_turn(4, 4, "agent-a", Some("group-a")),
-        ];
-        let anchor = turns
-            .iter()
-            .find(|turn| turn.turn_id == session_memory_id(2))
-            .unwrap();
-        let result =
-            timeline_from_source(&turns, session_memory_id(2), 1, 1, &anchor.session_key())
-                .unwrap();
-        let ids = result
-            .iter()
-            .map(|turn| turn.turn_id.to_string())
-            .collect::<Vec<_>>();
-        assert_eq!(ids, vec!["session:1", "session:2"]);
-    }
-
-    #[test]
     fn timeline_with_explicit_session_id_stays_scoped_to_the_full_session_key() {
         let turns = [
             make_turn(1, 1, "agent-a", Some("group-a")),
@@ -1634,9 +1624,14 @@ mod tests {
             .iter()
             .find(|turn| turn.turn_id == session_memory_id(2))
             .unwrap();
-        let result =
-            timeline_from_source(&turns, session_memory_id(2), 1, 1, &anchor.session_key())
-                .unwrap();
+        let result = timeline_from_source(
+            &turns,
+            session_memory_id(2),
+            1,
+            1,
+            &SessionQuery::from_turn(anchor),
+        )
+        .unwrap();
         let ids = result
             .iter()
             .map(|turn| turn.turn_id.to_string())

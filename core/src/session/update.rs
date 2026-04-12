@@ -8,7 +8,9 @@ use crate::format::session::TurnMetadataSource;
 use crate::test_support::TurnContent;
 #[cfg(test)]
 use super::{Session, resolve_turn_metadata};
-use super::{SessionKey, has_text_content};
+use super::has_text_content;
+#[cfg(test)]
+use super::SessionKey;
 
 #[derive(Debug, Clone)]
 pub(crate) struct SessionUpdate {
@@ -59,6 +61,7 @@ impl SessionUpdate {
         Ok(update)
     }
 
+    #[cfg(test)]
     pub(crate) fn session_key(&self) -> SessionKey {
         SessionKey::from(self.session_id.as_deref(), &self.agent, &self.observer)
     }

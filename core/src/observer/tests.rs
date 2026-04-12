@@ -149,11 +149,11 @@ async fn post_observable_with_service(
         .await
         .unwrap();
     session_table(table_options)
-        .load_latest_turn(&crate::session::SessionKey::from(
+        .load_latest_turn_for(
             Some(session_id),
             "agent-a",
             &effective_observer_name().unwrap(),
-        ))
+        )
         .await
         .unwrap()
         .expect("observable turn should be persisted")

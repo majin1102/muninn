@@ -26,6 +26,33 @@ async function makeDatasetUri() {
   };
 }
 
+function makePendingSessionTurn({
+  sessionId,
+  agent,
+  observer,
+  prompt = null,
+  toolCalling = null,
+}) {
+  const now = new Date().toISOString();
+  return {
+    turnId: 'session:18446744073709551615',
+    createdAt: now,
+    updatedAt: now,
+    session_id: sessionId ?? null,
+    agent,
+    observer,
+    title: null,
+    summary: null,
+    titleSource: null,
+    summarySource: null,
+    toolCalling,
+    artifacts: null,
+    prompt,
+    response: null,
+    observingEpoch: null,
+  };
+}
+
 function toFileStoreUri(dir) {
   return `file-object-store://${path.resolve(dir)}`;
 }
@@ -163,6 +190,54 @@ test('blank sessionId falls back to the agent default session', async (t) => {
   assert.equal(first.sessionId, null);
   assert.equal(second.sessionId, null);
   assert.equal(second.turnId, first.turnId);
+});
+
+test('bootstrap repairs duplicate open turns before loading the session', async (t) => {
+  const { dir, homeDir, configPath } = await makeDatasetUri();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+
+  process.env.MUNINN_HOME = homeDir;
+  await writeMuninnConfig(configPath);
+
+  const tables = await getNativeTables();
+  await tables.sessionTable.insert({
+    turns: [
+      makePendingSessionTurn({
+        sessionId: ' group-a ',
+        agent: 'agent-a',
+        observer: 'test-observer',
+        prompt: 'first prompt',
+      }),
+      makePendingSessionTurn({
+        sessionId: 'group-a',
+        agent: 'agent-a',
+        observer: 'test-observer',
+        toolCalling: ['tool-a'],
+      }),
+    ],
+  });
+
+  const sealed = await addMessage({
+    sessionId: 'group-a',
+    agent: 'agent-a',
+    summary: 'merged summary',
+    response: 'merged response',
+  });
+
+  const detail = await sessions.get(sealed.turnId);
+  assert.ok(detail);
+  assert.equal(detail.sessionId, 'group-a');
+  assert.equal(detail.prompt, 'first prompt');
+  assert.deepEqual(detail.toolCalling, ['tool-a']);
+  assert.equal(detail.summary, 'merged summary');
+  assert.equal(detail.response, 'merged response');
+
+  const listed = await sessions.list({
+    mode: { type: 'recency', limit: 10 },
+    sessionId: 'group-a',
+  });
+  assert.equal(listed.length, 1);
+  assert.equal(listed[0].turnId, sealed.turnId);
 });
 
 test('addMessage without sessionId reuses the agent default session through the native binding', async (t) => {

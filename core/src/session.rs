@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicI64, Ordering};
 #[cfg(test)]
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[cfg(test)]
 use lance::{Error, Result};
 #[cfg(test)]
 use serde::{Deserialize, Serialize};
@@ -20,12 +21,14 @@ use crate::llm::turn::TurnGenerator;
 #[cfg(test)]
 use crate::observer::runtime::ObservingWindow;
 
+#[cfg(test)]
 mod key;
 #[cfg(test)]
 mod registry;
 #[cfg(test)]
 mod update;
 
+#[cfg(test)]
 pub(crate) use key::SessionKey;
 #[cfg(test)]
 pub(crate) use registry::SessionRegistry;
@@ -38,12 +41,6 @@ pub struct Session {
     table: Arc<crate::format::SessionTable>,
     open_turn: Mutex<Option<SessionTurn>>,
     last_used: AtomicI64,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct OpenTurnReconciliation {
-    pub(crate) canonical_turn: SessionTurn,
-    pub(crate) discarded_turn_ids: Vec<crate::format::MemoryId>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -64,7 +61,7 @@ impl Session {
         open_turn: Option<SessionTurn>,
     ) -> Result<Self> {
         if let Some(turn) = open_turn.as_ref() {
-            if turn.session_key() != key {
+            if !matches_session_key(turn.session_id.as_deref(), &turn.agent, &turn.observer, &key) {
                 return Err(Error::invalid_input(
                     "open turn session key does not match session",
                 ));
@@ -109,7 +106,12 @@ impl Session {
     }
 
     pub(crate) async fn apply(&self, update: SessionUpdate) -> Result<SessionTurn> {
-        if self.key != update.session_key() {
+        if !matches_session_key(
+            update.session_id.as_deref(),
+            &update.agent,
+            &update.observer,
+            &self.key,
+        ) {
             return Err(Error::invalid_input(
                 "message session does not match session",
             ));
@@ -148,6 +150,16 @@ impl Session {
     pub(crate) fn expired(&self, max_idle_secs: i64) -> bool {
         current_timestamp() - self.last_used.load(Ordering::Relaxed) > max_idle_secs
     }
+}
+
+#[cfg(test)]
+fn matches_session_key(
+    session_id: Option<&str>,
+    agent: &str,
+    observer: &str,
+    key: &SessionKey,
+) -> bool {
+    key.session_id() == session_id && key.agent() == agent && key.observer() == observer
 }
 
 #[cfg(test)]
@@ -263,60 +275,6 @@ pub(crate) fn merge_metadata_field(
         *current = Some(incoming.to_string());
         *current_source = incoming_source;
     }
-}
-
-pub(crate) fn reconcile_open_turns(turns: Vec<SessionTurn>) -> Result<OpenTurnReconciliation> {
-    if turns.is_empty() {
-        return Err(Error::invalid_input(
-            "open turn reconciliation requires turns",
-        ));
-    }
-
-    let mut sorted = turns;
-    sorted.sort_by(|left, right| left.turn_id.cmp(&right.turn_id));
-    let expected_key = sorted[0].session_key();
-    if sorted
-        .iter()
-        .any(|turn| turn.session_key() != expected_key || !turn.is_open())
-    {
-        return Err(Error::invalid_input(
-            "open turn reconciliation requires turns from one open session",
-        ));
-    }
-
-    let mut canonical_turn = sorted
-        .last()
-        .cloned()
-        .expect("sorted turns should contain canonical turn");
-    let discarded_turn_ids = sorted[..sorted.len() - 1]
-        .iter()
-        .map(|turn| turn.turn_id)
-        .collect::<Vec<_>>();
-
-    let mut merged_prompt = None;
-    let mut merged_tool_calling = None;
-    let mut merged_artifacts = None;
-    let mut latest_updated_at = canonical_turn.updated_at;
-    for turn in &sorted {
-        merged_prompt = merge_prompt(merged_prompt.as_deref(), turn.prompt.as_deref());
-        merge_tool_calling(&mut merged_tool_calling, turn.tool_calling.as_ref());
-        merge_artifacts(&mut merged_artifacts, turn.artifacts.as_ref());
-        if turn.updated_at > latest_updated_at {
-            latest_updated_at = turn.updated_at;
-        }
-    }
-
-    canonical_turn.prompt = merged_prompt;
-    canonical_turn.tool_calling = merged_tool_calling;
-    canonical_turn.artifacts = merged_artifacts;
-    canonical_turn.response = None;
-    canonical_turn.observing_epoch = None;
-    canonical_turn.updated_at = latest_updated_at;
-
-    Ok(OpenTurnReconciliation {
-        canonical_turn,
-        discarded_turn_ids,
-    })
 }
 
 #[cfg(test)]

@@ -33,10 +33,6 @@ export interface EnsureVectorIndexResult {
   created: boolean;
 }
 
-export interface ReconcileOpenTurnsResult {
-  repaired: number;
-}
-
 type NativeCoreBinding = {
   close(): MaybePromise<void>;
   sessionLoadOpenTurn(params: {
@@ -65,7 +61,9 @@ type NativeCoreBinding = {
   sessionUpdate(params: {
     turns: Array<Record<string, unknown>>;
   }): MaybePromise<SessionTurn[]>;
-  sessionReconcileOpenTurns(): MaybePromise<ReconcileOpenTurnsResult>;
+  sessionDeleteTurns(params: {
+    turnIds: string[];
+  }): MaybePromise<{ deleted: number }>;
   sessionTableStats(): MaybePromise<TableStats | null>;
   sessionCompact(): MaybePromise<CompactResult>;
   observingGetSnapshot(snapshotId: string): MaybePromise<ObservingSnapshotPayload | null>;
@@ -142,7 +140,9 @@ export interface SessionTableBinding {
   update(params: {
     turns: Array<Record<string, unknown>>;
   }): Promise<SessionTurn[]>;
-  reconcileOpenTurns(): Promise<ReconcileOpenTurnsResult>;
+  deleteTurns(params: {
+    turnIds: string[];
+  }): Promise<{ deleted: number }>;
   stats(): Promise<TableStats | null>;
   compact(): Promise<CompactResult>;
   describe(): Promise<TableDescription | null>;
@@ -255,7 +255,7 @@ function wrapBinding(native: NativeCoreBinding): NativeTables {
       loadTurnsAfterEpoch: async (params) => resolveNativeResult(native.sessionLoadTurnsAfterEpoch(params)),
       insert: async (params) => resolveNativeResult(native.sessionInsert(params)),
       update: async (params) => resolveNativeResult(native.sessionUpdate(params)),
-      reconcileOpenTurns: async () => resolveNativeResult(native.sessionReconcileOpenTurns()),
+      deleteTurns: async (params) => resolveNativeResult(native.sessionDeleteTurns(params)),
       stats: async () => resolveNativeResult(native.sessionTableStats()),
       compact: async () => resolveNativeResult(native.sessionCompact()),
       describe: async () => resolveNativeResult(native.describeSessionTable()),
