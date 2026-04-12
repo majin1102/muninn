@@ -2,8 +2,6 @@ use std::collections::HashMap;
 
 use lance::{Error, Result};
 
-use crate::format::session::TurnMetadataSource;
-
 #[cfg(test)]
 use crate::test_support::TurnContent;
 #[cfg(test)]
@@ -16,8 +14,6 @@ pub(crate) struct SessionUpdate {
     pub(crate) observer: String,
     pub(crate) title: Option<String>,
     pub(crate) summary: Option<String>,
-    pub(crate) title_source: Option<TurnMetadataSource>,
-    pub(crate) summary_source: Option<TurnMetadataSource>,
     pub(crate) tool_calling: Option<Vec<String>>,
     pub(crate) artifacts: Option<HashMap<String, String>>,
     pub(crate) prompt: Option<String>,
@@ -46,8 +42,6 @@ impl SessionUpdate {
             observer,
             title: metadata.title,
             summary: metadata.summary,
-            title_source: metadata.title_source,
-            summary_source: metadata.summary_source,
             tool_calling: turn_content.tool_calling,
             artifacts: turn_content.artifacts,
             prompt: turn_content.prompt,
@@ -56,16 +50,6 @@ impl SessionUpdate {
         };
         update.validate()?;
         Ok(update)
-    }
-
-    pub(crate) fn title_source(&self) -> Option<TurnMetadataSource> {
-        has_text_content(self.title.as_deref())
-            .then(|| self.title_source.unwrap_or(TurnMetadataSource::User))
-    }
-
-    pub(crate) fn summary_source(&self) -> Option<TurnMetadataSource> {
-        has_text_content(self.summary.as_deref())
-            .then(|| self.summary_source.unwrap_or(TurnMetadataSource::User))
     }
 
     pub(crate) fn validate(&self) -> Result<()> {

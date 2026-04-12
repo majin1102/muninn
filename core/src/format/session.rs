@@ -27,14 +27,6 @@ use crate::watchdog::compact_dataset;
 #[cfg(test)]
 use crate::session::SessionUpdate;
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum TurnMetadataSource {
-    Fallback,
-    Generated,
-    User,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionTurn {
@@ -51,10 +43,6 @@ pub struct SessionTurn {
     pub observer: String,
     pub title: Option<String>,
     pub summary: Option<String>,
-    #[serde(default)]
-    pub(crate) title_source: Option<TurnMetadataSource>,
-    #[serde(default)]
-    pub(crate) summary_source: Option<TurnMetadataSource>,
     pub tool_calling: Option<Vec<String>>,
     pub artifacts: Option<HashMap<String, String>>,
     pub prompt: Option<String>,
@@ -81,8 +69,6 @@ impl SessionTurn {
             observer: write.observer.clone(),
             title: None,
             summary: None,
-            title_source: None,
-            summary_source: None,
             tool_calling: None,
             artifacts: None,
             prompt: None,
@@ -102,18 +88,12 @@ impl SessionTurn {
             ));
         }
 
-        merge_metadata_field(
-            &mut self.title,
-            &mut self.title_source,
-            update.title.as_deref(),
-            update.title_source(),
-        );
-        merge_metadata_field(
-            &mut self.summary,
-            &mut self.summary_source,
-            update.summary.as_deref(),
-            update.summary_source(),
-        );
+        if let Some(title) = update.title.as_deref().filter(|value| !value.trim().is_empty()) {
+            self.title = Some(title.to_string());
+        }
+        if let Some(summary) = update.summary.as_deref().filter(|value| !value.trim().is_empty()) {
+            self.summary = Some(summary.to_string());
+        }
         self.prompt = merge_prompt(self.prompt.as_deref(), update.prompt.as_deref());
         if update
             .response
@@ -717,24 +697,6 @@ fn merge_artifacts(
     }
 }
 
-#[cfg(test)]
-fn merge_metadata_field(
-    current: &mut Option<String>,
-    current_source: &mut Option<TurnMetadataSource>,
-    incoming: Option<&str>,
-    incoming_source: Option<TurnMetadataSource>,
-) {
-    let Some(incoming) = incoming.filter(|value| !value.trim().is_empty()) else {
-        return;
-    };
-    let should_replace =
-        !has_text_content(current.as_deref()) || incoming_source >= *current_source;
-    if should_replace {
-        *current = Some(incoming.to_string());
-        *current_source = incoming_source;
-    }
-}
-
 fn session_query_filter(query: &SessionQuery) -> String {
     match query {
         SessionQuery::ByIdentity {
@@ -785,7 +747,7 @@ mod tests {
     use std::str::FromStr;
     use std::sync::Arc;
 
-    use super::{SessionQuery, SessionTurn, TurnMetadataSource, session_query_filter, timeline_from_source};
+    use super::{SessionQuery, SessionTurn, session_query_filter, timeline_from_source};
     use crate::format::{MemoryId, MemoryLayer, SessionSelect, SessionTable, TableOptions};
     use crate::memory::sessions::{apply_list_mode, get, timeline};
     use crate::memory::types::{ListMode, MemoryView};
@@ -809,8 +771,6 @@ mod tests {
             observer: "observer-a".to_string(),
             title: None,
             summary: None,
-            title_source: None,
-            summary_source: None,
             tool_calling: None,
             artifacts: None,
             prompt: None,
@@ -962,8 +922,6 @@ mod tests {
                 observer: "observer-a".to_string(),
                 title: None,
                 summary: None,
-                title_source: None,
-                summary_source: None,
                 tool_calling: None,
                 artifacts: None,
                 prompt: Some("matched".to_string()),
@@ -979,8 +937,6 @@ mod tests {
                 observer: "observer-a".to_string(),
                 title: None,
                 summary: None,
-                title_source: None,
-                summary_source: None,
                 tool_calling: None,
                 artifacts: None,
                 prompt: Some("not-matched".to_string()),
@@ -1007,8 +963,6 @@ mod tests {
             observer: "observer".to_string(),
             title: None,
             summary: None,
-            title_source: None,
-            summary_source: None,
             tool_calling: None,
             artifacts: None,
             prompt: None,
@@ -1033,8 +987,6 @@ mod tests {
                 observer: "observer".to_string(),
                 title: None,
                 summary: None,
-                title_source: None,
-                summary_source: None,
                 tool_calling: None,
                 artifacts: None,
                 prompt: Some("prompt".to_string()),
@@ -1053,8 +1005,6 @@ mod tests {
                 observer: "observer".to_string(),
                 title: None,
                 summary: Some("summary".to_string()),
-                title_source: None,
-                summary_source: None,
                 tool_calling: None,
                 artifacts: None,
                 prompt: None,
@@ -1068,15 +1018,13 @@ mod tests {
     }
 
     #[test]
-    fn summary_priority_allows_upgrading_fallback_to_generated_to_user() {
+    fn later_summary_updates_replace_previous_value() {
         let mut turn = SessionTurn::new(&SessionUpdate {
             session_id: Some("group".to_string()),
             agent: "agent".to_string(),
             observer: "observer".to_string(),
             title: None,
             summary: None,
-            title_source: None,
-            summary_source: None,
             tool_calling: None,
             artifacts: None,
             prompt: Some("prompt".to_string()),
@@ -1090,8 +1038,6 @@ mod tests {
             observer: "observer".to_string(),
             title: None,
             summary: Some("fallback".to_string()),
-            title_source: None,
-            summary_source: Some(TurnMetadataSource::Fallback),
             tool_calling: None,
             artifacts: None,
             prompt: None,
@@ -1100,7 +1046,6 @@ mod tests {
         })
         .unwrap();
         assert_eq!(turn.summary.as_deref(), Some("fallback"));
-        assert_eq!(turn.summary_source, Some(TurnMetadataSource::Fallback));
 
         turn.merge(&SessionUpdate {
             session_id: Some("group".to_string()),
@@ -1108,8 +1053,6 @@ mod tests {
             observer: "observer".to_string(),
             title: None,
             summary: Some("generated".to_string()),
-            title_source: None,
-            summary_source: Some(TurnMetadataSource::Generated),
             tool_calling: None,
             artifacts: None,
             prompt: None,
@@ -1118,7 +1061,6 @@ mod tests {
         })
         .unwrap();
         assert_eq!(turn.summary.as_deref(), Some("generated"));
-        assert_eq!(turn.summary_source, Some(TurnMetadataSource::Generated));
 
         turn.merge(&SessionUpdate {
             session_id: Some("group".to_string()),
@@ -1126,8 +1068,6 @@ mod tests {
             observer: "observer".to_string(),
             title: None,
             summary: Some("user".to_string()),
-            title_source: None,
-            summary_source: Some(TurnMetadataSource::User),
             tool_calling: None,
             artifacts: None,
             prompt: None,
@@ -1136,7 +1076,6 @@ mod tests {
         })
         .unwrap();
         assert_eq!(turn.summary.as_deref(), Some("user"));
-        assert_eq!(turn.summary_source, Some(TurnMetadataSource::User));
     }
 
     #[tokio::test]
@@ -1527,9 +1466,7 @@ mod tests {
             agent: "agent-a".to_string(),
             observer: "observer-a".to_string(),
             title: None,
-            title_source: None,
             summary: None,
-            summary_source: None,
             tool_calling: None,
             artifacts: None,
             prompt: Some("prompt-a".to_string()),
@@ -1546,9 +1483,7 @@ mod tests {
                 agent: "agent-a".to_string(),
                 observer: "observer-a".to_string(),
                 title: None,
-                title_source: None,
                 summary: None,
-                summary_source: None,
                 tool_calling: None,
                 artifacts: None,
                 prompt: Some("prompt-a".to_string()),

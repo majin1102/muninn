@@ -14,8 +14,6 @@ use tokio::sync::Mutex;
 
 use crate::format::session::SessionTurn;
 #[cfg(test)]
-use crate::format::session::TurnMetadataSource;
-#[cfg(test)]
 use crate::llm::turn::TurnGenerator;
 #[cfg(test)]
 use crate::observer::runtime::ObservingWindow;
@@ -47,9 +45,7 @@ pub struct Session {
 #[cfg(test)]
 pub(crate) struct ResolvedTurnMetadata {
     pub(crate) title: Option<String>,
-    pub(crate) title_source: Option<TurnMetadataSource>,
     pub(crate) summary: Option<String>,
-    pub(crate) summary_source: Option<TurnMetadataSource>,
 }
 
 #[cfg(test)]
@@ -170,8 +166,6 @@ pub(crate) async fn resolve_turn_metadata(
 ) -> ResolvedTurnMetadata {
     let mut title = sanitized_text(title);
     let mut summary = sanitized_text(summary);
-    let mut title_source = title.as_ref().map(|_| TurnMetadataSource::User);
-    let mut summary_source = summary.as_ref().map(|_| TurnMetadataSource::User);
     let response = response.filter(|value| !value.trim().is_empty());
     let prompt = prompt.filter(|value| !value.trim().is_empty());
 
@@ -182,25 +176,20 @@ pub(crate) async fn resolve_turn_metadata(
             {
                 if title.is_none() && !generated.title.trim().is_empty() {
                     title = Some(generated.title);
-                    title_source = Some(TurnMetadataSource::Generated);
                 }
                 if summary.is_none() && !generated.summary.trim().is_empty() {
                     summary = Some(generated.summary);
-                    summary_source = Some(TurnMetadataSource::Generated);
                 }
             }
         }
         if summary.is_none() {
             summary = Some(format!("{}\n\n{}", prompt.trim(), response.trim()));
-            summary_source = Some(TurnMetadataSource::Fallback);
         }
     }
 
     ResolvedTurnMetadata {
         title,
-        title_source,
         summary,
-        summary_source,
     }
 }
 

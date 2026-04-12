@@ -17,7 +17,7 @@ use crate::config::semantic_index_config;
 use crate::format::memory_id::{MemoryId, MemoryLayer};
 use crate::format::observing::ObservingSnapshot;
 use crate::format::semantic_index::SemanticIndexRow;
-use crate::format::session::{SessionTurn, TurnMetadataSource};
+use crate::format::session::SessionTurn;
 
 pub(crate) fn turns_to_record_batch(
     turns: &[SessionTurn],
@@ -75,19 +75,6 @@ pub(crate) fn turns_to_record_batch(
             .map(|turn| turn.observing_epoch)
             .collect::<Vec<_>>(),
     );
-    let title_source = StringArray::from(
-        turns
-            .iter()
-            .map(|turn| turn.title_source.map(metadata_source_to_str))
-            .collect::<Vec<_>>(),
-    );
-    let summary_source = StringArray::from(
-        turns
-            .iter()
-            .map(|turn| turn.summary_source.map(metadata_source_to_str))
-            .collect::<Vec<_>>(),
-    );
-
     Ok(RecordBatch::try_new(
         Arc::new(turn_schema()),
         vec![
@@ -103,8 +90,6 @@ pub(crate) fn turns_to_record_batch(
             Arc::new(prompt),
             Arc::new(response),
             Arc::new(observing_epoch),
-            Arc::new(title_source),
-            Arc::new(summary_source),
         ],
     )?)
 }
@@ -224,16 +209,6 @@ pub(crate) fn record_batch_to_turns_with_row_ids(
         .as_any()
         .downcast_ref::<UInt64Array>()
         .unwrap();
-    let title_source = batch
-        .column(12)
-        .as_any()
-        .downcast_ref::<StringArray>()
-        .unwrap();
-    let summary_source = batch
-        .column(13)
-        .as_any()
-        .downcast_ref::<StringArray>()
-        .unwrap();
 
     let turns = (0..batch.num_rows())
         .map(|index| SessionTurn {
@@ -251,8 +226,6 @@ pub(crate) fn record_batch_to_turns_with_row_ids(
             observer: observer.value(index).to_string(),
             title: optional_string(title, index),
             summary: optional_string(summary, index),
-            title_source: optional_metadata_source(title_source, index),
-            summary_source: optional_metadata_source(summary_source, index),
             tool_calling: optional_string_list(tool_calling, index),
             artifacts: optional_artifacts(artifacts_json, index),
             prompt: optional_string(prompt, index),
@@ -286,29 +259,6 @@ pub(crate) fn optional_string(array: &StringArray, index: usize) -> Option<Strin
 
 pub(crate) fn optional_u64(array: &UInt64Array, index: usize) -> Option<u64> {
     (!array.is_null(index)).then(|| array.value(index))
-}
-
-pub(crate) fn metadata_source_to_str(source: TurnMetadataSource) -> &'static str {
-    match source {
-        TurnMetadataSource::Fallback => "fallback",
-        TurnMetadataSource::Generated => "generated",
-        TurnMetadataSource::User => "user",
-    }
-}
-
-pub(crate) fn optional_metadata_source(
-    array: &StringArray,
-    index: usize,
-) -> Option<TurnMetadataSource> {
-    if array.is_null(index) {
-        return None;
-    }
-    match array.value(index) {
-        "fallback" => Some(TurnMetadataSource::Fallback),
-        "generated" => Some(TurnMetadataSource::Generated),
-        "user" => Some(TurnMetadataSource::User),
-        _ => None,
-    }
 }
 
 pub(crate) fn optional_string_list(array: &ListArray, index: usize) -> Option<Vec<String>> {

@@ -43,8 +43,6 @@ function makePendingSessionTurn({
     observer,
     title: null,
     summary: null,
-    titleSource: null,
-    summarySource: null,
     toolCalling,
     artifacts: null,
     prompt,
