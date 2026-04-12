@@ -1,10 +1,12 @@
 import { accessSync, constants as fsConstants } from 'node:fs';
 import path from 'node:path';
 
+import type { OpenTurnSourceRef } from './checkpoint.js';
 import type { ListModeInput, ObservingSnapshot, SessionTurn } from './client.js';
 import type { SemanticIndexRow, ObservingSnapshot as ObservingSnapshotPayload } from './observer/types.js';
 
 type MaybePromise<T> = Promise<T> | T;
+const EXPORT_PAGE_SIZE = 1_000;
 
 export interface TableDescription {
   // describe() exposes table facts surfaced by the opened dataset. It does not
@@ -143,6 +145,10 @@ export interface SessionTableBinding {
   deleteTurns(params: {
     turnIds: string[];
   }): Promise<{ deleted: number }>;
+  exportOpenTurnRefs(): Promise<{
+    version: number;
+    turns: OpenTurnSourceRef[];
+  }>;
   stats(): Promise<TableStats | null>;
   compact(): Promise<CompactResult>;
   describe(): Promise<TableDescription | null>;
@@ -239,27 +245,29 @@ export async function describeSemanticIndexForStorage(
 }
 
 function wrapBinding(native: NativeCoreBinding): NativeTables {
+  const sessionTable: SessionTableBinding = {
+    loadOpenTurn: async (params) => normalizeOptionalRecord(
+      await resolveNativeResult(native.sessionLoadOpenTurn(params)),
+      'turnId',
+    ),
+    getTurn: async (turnId) => normalizeOptionalRecord(
+      await resolveNativeResult(native.sessionGetTurn(turnId)),
+      'turnId',
+    ),
+    listTurns: async (params) => resolveNativeResult(native.sessionListTurns(params)),
+    timelineTurns: async (params) => resolveNativeResult(native.sessionTimelineTurns(params)),
+    loadTurnsAfterEpoch: async (params) => resolveNativeResult(native.sessionLoadTurnsAfterEpoch(params)),
+    insert: async (params) => resolveNativeResult(native.sessionInsert(params)),
+    update: async (params) => resolveNativeResult(native.sessionUpdate(params)),
+    deleteTurns: async (params) => resolveNativeResult(native.sessionDeleteTurns(params)),
+    exportOpenTurnRefs: async () => exportOpenTurnRefs(sessionTable),
+    stats: async () => resolveNativeResult(native.sessionTableStats()),
+    compact: async () => resolveNativeResult(native.sessionCompact()),
+    describe: async () => resolveNativeResult(native.describeSessionTable()),
+  };
   return {
     close: async () => resolveNativeResult(native.close()),
-    sessionTable: {
-      loadOpenTurn: async (params) => normalizeOptionalRecord(
-        await resolveNativeResult(native.sessionLoadOpenTurn(params)),
-        'turnId',
-      ),
-      getTurn: async (turnId) => normalizeOptionalRecord(
-        await resolveNativeResult(native.sessionGetTurn(turnId)),
-        'turnId',
-      ),
-      listTurns: async (params) => resolveNativeResult(native.sessionListTurns(params)),
-      timelineTurns: async (params) => resolveNativeResult(native.sessionTimelineTurns(params)),
-      loadTurnsAfterEpoch: async (params) => resolveNativeResult(native.sessionLoadTurnsAfterEpoch(params)),
-      insert: async (params) => resolveNativeResult(native.sessionInsert(params)),
-      update: async (params) => resolveNativeResult(native.sessionUpdate(params)),
-      deleteTurns: async (params) => resolveNativeResult(native.sessionDeleteTurns(params)),
-      stats: async () => resolveNativeResult(native.sessionTableStats()),
-      compact: async () => resolveNativeResult(native.sessionCompact()),
-      describe: async () => resolveNativeResult(native.describeSessionTable()),
-    },
+    sessionTable,
     observingTable: {
       getSnapshot: async (snapshotId) => normalizeOptionalRecord(
         await resolveNativeResult(native.observingGetSnapshot(snapshotId)),
@@ -319,4 +327,45 @@ async function resolveNativeResult<T>(value: MaybePromise<T>): Promise<T> {
     throw resolved;
   }
   return resolved;
+}
+
+async function exportOpenTurnRefs(
+  sessionTable: SessionTableBinding,
+): Promise<{ version: number; turns: OpenTurnSourceRef[] }> {
+  const stats = await sessionTable.stats();
+  if (!stats) {
+    return {
+      version: 0,
+      turns: [],
+    };
+  }
+  const turns: OpenTurnSourceRef[] = [];
+  for (let offset = 0; ; offset += EXPORT_PAGE_SIZE) {
+    const page = await sessionTable.listTurns({
+      mode: { type: 'page', offset, limit: EXPORT_PAGE_SIZE },
+    });
+    for (const turn of page) {
+      if (!isOpenTurn(turn)) {
+        continue;
+      }
+      turns.push({
+        sessionId: turn.sessionId ?? null,
+        agent: turn.agent,
+        observer: turn.observer,
+        turnId: turn.turnId,
+        updatedAt: turn.updatedAt,
+      });
+    }
+    if (page.length < EXPORT_PAGE_SIZE) {
+      break;
+    }
+  }
+  return {
+    version: stats.version,
+    turns,
+  };
+}
+
+function isOpenTurn(turn: SessionTurn): boolean {
+  return typeof turn.response !== 'string' || turn.response.trim().length === 0;
 }

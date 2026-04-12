@@ -36,6 +36,7 @@ async function writeMuninnConfig(configPath, {
   semanticDimensions = 4,
   storageUri,
   storageOptions,
+  activeWindowDays,
 } = {}) {
   const root = {};
   const llm = {};
@@ -64,6 +65,7 @@ async function writeMuninnConfig(configPath, {
       name: 'test-observer',
       llm: 'test_observer_llm',
       maxAttempts: 3,
+      ...(activeWindowDays === undefined ? {} : { activeWindowDays }),
     };
     llm.test_observer_llm = { provider: observerProvider };
   }
@@ -81,12 +83,14 @@ function createValidSettings({
   observerProvider = 'mock',
   semanticDimensions = 8,
   includeWatchdog = false,
+  activeWindowDays = 7,
 } = {}) {
   const config = {
     observer: {
       name: 'default-observer',
       llm: 'default_observer_llm',
       maxAttempts: 3,
+      activeWindowDays,
     },
     llm: {
       default_observer_llm: {
@@ -126,7 +130,6 @@ test.afterEach(async () => {
   await shutdownCoreForTests();
   resetSessionTreeCacheForTests();
   delete process.env.MUNINN_HOME;
-  delete process.env.MUNINN_OBSERVE_WINDOW_MS;
   delete process.env.MUNINN_OBSERVER_POLL_MS;
 });
 
@@ -712,7 +715,6 @@ test('observing memories are readable through list/detail/timeline/recall', asyn
   t.after(async () => rm(dir, { recursive: true, force: true }));
 
   process.env.MUNINN_HOME = homeDir;
-    process.env.MUNINN_OBSERVE_WINDOW_MS = '10';
   await writeMuninnConfig(configPath, { turnProvider: 'mock', observerProvider: 'mock' });
 
   const addResponse = await app.request('/api/v1/session/messages', {
@@ -767,7 +769,6 @@ test('ui observing endpoints return live observings and documents', async (t) =>
   t.after(async () => rm(dir, { recursive: true, force: true }));
 
   process.env.MUNINN_HOME = homeDir;
-    process.env.MUNINN_OBSERVE_WINDOW_MS = '10';
   await writeMuninnConfig(configPath, { turnProvider: 'mock', observerProvider: 'mock' });
 
   const addResponse = await app.request('/api/v1/session/messages', {
@@ -873,6 +874,7 @@ test('ui settings config returns a saveable default template when muninn.json is
   assert.equal(readBody.pathLabel, configPath);
   assert.match(readBody.content, /"name": "default-observer"/);
   assert.match(readBody.content, /"default_observer_llm"/);
+  assert.match(readBody.content, /"activeWindowDays": 7/);
   assert.match(readBody.content, /"semanticIndex": \{/);
   assert.match(readBody.content, /"dimensions": 8/);
   assert.match(readBody.content, /"watchdog": \{/);
@@ -912,6 +914,28 @@ test('ui settings config rejects invalid watchdog values server-side', async (t)
   const body = await json(writeResponse);
   assert.equal(body.errorCode, 'invalidRequest');
   assert.match(body.errorMessage, /watchdog\.intervalMs must be a positive integer/i);
+});
+
+test('ui settings config rejects invalid observer.activeWindowDays server-side', async (t) => {
+  const { dir, homeDir, configPath } = await makeDatasetUri();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+  process.env.MUNINN_HOME = homeDir;
+
+  await mkdir(path.dirname(configPath), { recursive: true });
+  const config = createValidSettings({ includeWatchdog: true });
+  config.observer.activeWindowDays = 0;
+
+  const writeResponse = await app.request('/api/v1/ui/settings/config', {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      content: JSON.stringify(config, null, 2),
+    }),
+  });
+  assert.equal(writeResponse.status, 400);
+  const body = await json(writeResponse);
+  assert.equal(body.errorCode, 'invalidRequest');
+  assert.match(body.errorMessage, /observer\.activeWindowDays must be a positive integer/i);
 });
 
 test('ui settings config reports invalid JSON before native storage initialization', async (t) => {
@@ -1046,7 +1070,6 @@ test('ui settings config rejects omitted semantic dimensions for an existing non
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(async () => rm(dir, { recursive: true, force: true }));
   process.env.MUNINN_HOME = homeDir;
-  process.env.MUNINN_OBSERVE_WINDOW_MS = '10';
 
   await writeMuninnConfig(configPath, {
     observerProvider: 'mock',
@@ -1226,7 +1249,6 @@ test('ui settings config rejects semantic index dimension changes that mismatch 
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(async () => rm(dir, { recursive: true, force: true }));
   process.env.MUNINN_HOME = homeDir;
-  process.env.MUNINN_OBSERVE_WINDOW_MS = '10';
 
   await mkdir(path.dirname(configPath), { recursive: true });
   await writeFile(
@@ -1307,7 +1329,6 @@ test('ui settings config validates semantic dimensions against the pending stora
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(async () => rm(dir, { recursive: true, force: true }));
   process.env.MUNINN_HOME = homeDir;
-  process.env.MUNINN_OBSERVE_WINDOW_MS = '10';
 
   const storageA = path.join(dir, 'storage-a');
   const storageB = path.join(dir, 'storage-b');

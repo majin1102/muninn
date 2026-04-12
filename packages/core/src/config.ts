@@ -7,6 +7,7 @@ const CONFIG_FILE_NAME = 'muninn.json';
 const DEFAULT_SUMMARY_THRESHOLD = 500;
 const DEFAULT_TITLE_MAX_CHARS = 100;
 const DEFAULT_OBSERVER_MAX_ATTEMPTS = 3;
+const DEFAULT_OBSERVER_ACTIVE_WINDOW_DAYS = 7;
 const DEFAULT_IMPORTANCE = 0.7;
 const DEFAULT_WATCHDOG_INTERVAL_MS = 60_000;
 const DEFAULT_WATCHDOG_COMPACT_MIN_FRAGMENTS = 8;
@@ -32,6 +33,7 @@ type ObserverConfigRecord = {
   name: string;
   llm: string;
   maxAttempts?: number;
+  activeWindowDays?: number;
 };
 
 type EmbeddingConfigRecord = {
@@ -72,6 +74,7 @@ export type TurnLlmConfig = TextProviderConfig & {
 export type ObserverLlmConfig = TextProviderConfig & {
   name: string;
   maxAttempts: number;
+  activeWindowDays: number;
 };
 
 export type EmbeddingConfig = {
@@ -139,6 +142,7 @@ export function getObserverLlmConfig(): ObserverLlmConfig | null {
   return {
     name: observer.name,
     maxAttempts: observer.maxAttempts ?? DEFAULT_OBSERVER_MAX_ATTEMPTS,
+    activeWindowDays: observer.activeWindowDays ?? DEFAULT_OBSERVER_ACTIVE_WINDOW_DAYS,
     provider: parseProvider(llm.provider),
     model: llm.model,
     api: llm.api,
@@ -335,6 +339,7 @@ function validateObserverConfig(observer: unknown): void {
   requireNonEmptyString(config.name, 'observer.name');
   requireNonEmptyString(config.llm, 'observer.llm');
   validateOptionalPositiveInteger(config.maxAttempts, 'observer.maxAttempts');
+  validateOptionalPositiveInteger(config.activeWindowDays, 'observer.activeWindowDays');
 }
 
 function validateLlmConfig(llm: unknown): void {

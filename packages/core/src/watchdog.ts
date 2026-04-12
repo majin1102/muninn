@@ -1,6 +1,13 @@
-import { appendFile, mkdir } from 'node:fs/promises';
+import { access, appendFile, mkdir, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
+import {
+  groupOpenTurnsByObserver,
+  resolveCheckpointPath,
+  type CheckpointContributor,
+  type CheckpointFile,
+  type ObserverSection,
+} from './checkpoint.js';
 import { resolveMuninnHome, type WatchdogConfig } from './config.js';
 import type { NativeTables, TableStats } from './native.js';
 
@@ -34,6 +41,7 @@ export class Watchdog {
   private timer: NodeJS.Timeout | null = null;
   private stopped = false;
   private inFlight: Promise<void> | null = null;
+  private lastCheckpointContent: string | null = null;
   private readonly state = new Map<DatasetName, DatasetState>(
     DATASETS.map((dataset) => [dataset, {
       lastSeenVersion: null,
@@ -45,7 +53,11 @@ export class Watchdog {
   constructor(
     private readonly binding: NativeTables,
     private readonly config: WatchdogConfig,
-  ) {}
+    private readonly contributors: CheckpointContributor[] = [],
+    lastCheckpointContent: string | null = null,
+  ) {
+    this.lastCheckpointContent = lastCheckpointContent;
+  }
 
   start(): void {
     this.stopped = false;
@@ -55,7 +67,7 @@ export class Watchdog {
     this.schedule();
   }
 
-  async stop(): Promise<void> {
+  async stop(options: { flushCheckpoint?: boolean } = {}): Promise<void> {
     if (this.stopped) {
       await this.inFlight;
       return;
@@ -66,6 +78,9 @@ export class Watchdog {
       this.timer = null;
     }
     await this.inFlight;
+    if (options.flushCheckpoint) {
+      await this.flushCheckpoint();
+    }
   }
 
   private schedule(): void {
@@ -92,11 +107,117 @@ export class Watchdog {
       await this.maintainTurns();
       await this.maintainObservings();
       await this.maintainSemanticIndex();
+      await this.flushCheckpoint();
     })()
       .finally(() => {
         this.inFlight = null;
       });
     await this.inFlight;
+  }
+
+  private async flushCheckpoint(): Promise<void> {
+    try {
+      const observers = await this.buildCheckpointPayload();
+      // No contributor state means there is nothing new to commit; keep the
+      // last durable checkpoint instead of overwriting it with an empty file.
+      if (Object.keys(observers).length === 0) {
+        return;
+      }
+      const checkpointContent = this.serializeCheckpointPayload(observers);
+      if (checkpointContent === this.lastCheckpointContent) {
+        try {
+          await access(this.checkpointPath());
+          return;
+        } catch (error) {
+          if (!(error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT')) {
+            throw error;
+          }
+        }
+      }
+      const file = this.buildCheckpointFile(observers);
+      await this.writeCheckpointAtomically(this.serializeCheckpoint(file));
+      this.lastCheckpointContent = checkpointContent;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`[muninn:watchdog] checkpoint flush failed: ${message}`);
+    }
+  }
+
+  private async buildCheckpointPayload(): Promise<Record<string, ObserverSection>> {
+    const openTurns = await this.gatherOpenTurnsByObserver();
+    const observers: Record<string, ObserverSection> = {};
+    for (const contributor of this.contributors) {
+      const fragment = await contributor();
+      if (!fragment) {
+        continue;
+      }
+      observers[fragment.observerName] = {
+        baseline: {
+          turn: openTurns.version,
+          observing: fragment.baseline.observing,
+          semanticIndex: fragment.baseline.semanticIndex,
+        },
+        committedEpoch: fragment.committedEpoch,
+        nextEpoch: fragment.nextEpoch,
+        openTurns: openTurns.grouped.get(fragment.observerName) ?? [],
+        threads: fragment.threads,
+      };
+    }
+    return observers;
+  }
+
+  private buildCheckpointFile(
+    observers: Record<string, ObserverSection>,
+  ): CheckpointFile {
+    return {
+      schemaVersion: 1,
+      writtenAt: new Date().toISOString(),
+      writerPid: process.pid,
+      observers,
+    };
+  }
+
+  private checkpointPath(): string {
+    return resolveCheckpointPath();
+  }
+
+  private serializeCheckpoint(file: CheckpointFile): string {
+    return `${JSON.stringify(file, null, 2)}\n`;
+  }
+
+  private serializeCheckpointPayload(
+    observers: Record<string, ObserverSection>,
+  ): string {
+    return JSON.stringify({
+      schemaVersion: 1,
+      observers,
+    });
+  }
+
+  private async writeCheckpointAtomically(content: string): Promise<void> {
+    const targetPath = this.checkpointPath();
+    const directory = path.dirname(targetPath);
+    const tmpPath = `${targetPath}.tmp`;
+    await mkdir(directory, { recursive: true });
+    await writeFile(tmpPath, content, 'utf8');
+    await rename(tmpPath, targetPath);
+  }
+
+  private async gatherOpenTurnsByObserver(): Promise<{
+    version: number;
+    grouped: Map<string, ObserverSection['openTurns']>;
+  }> {
+    if (typeof this.binding.sessionTable.exportOpenTurnRefs !== 'function') {
+      return {
+        version: 0,
+        grouped: new Map(),
+      };
+    }
+    const exported = await this.binding.sessionTable.exportOpenTurnRefs();
+    return {
+      version: exported.version,
+      grouped: groupOpenTurnsByObserver(exported.turns),
+    };
   }
 
   private async maintainTurns(): Promise<void> {

@@ -1,3 +1,4 @@
+import type { CheckpointContributor } from './checkpoint.js';
 import type { NativeTables } from './native.js';
 import type { ObserverWatermark, RecallHit, SessionTurn, TurnContent } from './client.js';
 import { Memories } from './memories/memories.js';
@@ -7,7 +8,7 @@ import { toSessionTurn } from './session/types.js';
 
 export class Muninn {
   readonly memories: Memories;
-  private observerRuntime: Observer | null = null;
+  private observer: Observer | null = null;
   private sessionRegistry: SessionRegistry | null = null;
 
   constructor(private readonly client: NativeTables) {
@@ -28,26 +29,34 @@ export class Muninn {
     return this.memories.recall(query, limit);
   }
 
+  getCheckpointContributors(): CheckpointContributor[] {
+    return [() => this.observer?.exportCheckpointFragment() ?? null];
+  }
+
   async shutdown(): Promise<void> {
-    if (this.observerRuntime) {
+    if (this.observer) {
       // Fast stop only: use flushPending() beforehand when the caller needs a barrier-drain.
-      await this.observerRuntime.shutdown();
+      await this.observer.shutdown();
     }
-    this.observerRuntime = null;
+    this.observer = null;
     this.sessionRegistry = null;
   }
 
   private async ensureObserver(): Promise<Observer> {
-    if (!this.observerRuntime) {
-      this.observerRuntime = new Observer(this.client);
+    if (!this.observer) {
+      this.observer = new Observer(this.client);
     }
-    await this.observerRuntime.ensureBootstrapped();
-    return this.observerRuntime;
+    await this.observer.ensureBootstrapped();
+    return this.observer;
   }
 
   private ensureSessionRegistry(observerName: string): SessionRegistry {
     if (!this.sessionRegistry || this.sessionRegistry.observerName !== observerName) {
-      this.sessionRegistry = new SessionRegistry(this.client, observerName);
+      this.sessionRegistry = new SessionRegistry(
+        this.client,
+        observerName,
+        (sessionId, agent) => this.observer?.checkpointOpenTurnId(sessionId, agent),
+      );
     }
     return this.sessionRegistry;
   }

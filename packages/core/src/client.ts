@@ -12,6 +12,7 @@ import {
   validateMuninnConfigInput,
   validateMuninnConfigStorage,
 } from './config.js';
+import { readCheckpointFile } from './checkpoint.js';
 import { Memories } from './memories/memories.js';
 import { Muninn } from './muninn.js';
 import { hasText, sessionKey } from './session/key.js';
@@ -101,15 +102,6 @@ async function bootstrap(tables: Awaited<ReturnType<typeof getNativeTables>>): P
   const embedding = getEmbeddingConfig();
   await tables.semanticIndexTable.validateDimensions({ expected: embedding.dimensions });
   await repairOpenTurns(tables);
-
-  const watchdogConfig = getWatchdogConfig();
-  if (!watchdogConfig.enabled) {
-    watchdog = null;
-    return;
-  }
-
-  watchdog = new Watchdog(tables, watchdogConfig);
-  watchdog.start();
 }
 
 async function repairOpenTurns(tables: NativeTables): Promise<number> {
@@ -238,12 +230,14 @@ function turnRowId(turnId: string): bigint {
 
 async function getMuninn(): Promise<Muninn> {
   if (singletonMuninn) {
+    await ensureWatchdog(await getNativeTables(), singletonMuninn);
     return singletonMuninn;
   }
   if (!singletonMuninnPromise) {
     singletonMuninnPromise = ensureBootstrapped()
-      .then((tables) => {
+      .then(async (tables) => {
         singletonMuninn = new Muninn(tables);
+        await ensureWatchdog(tables, singletonMuninn);
         return singletonMuninn;
       })
       .catch((error) => {
@@ -324,11 +318,11 @@ export const observer = {
 
 export async function shutdownCoreForTests(): Promise<void> {
   const muninn = singletonMuninn ?? (singletonMuninnPromise ? await singletonMuninnPromise : null);
+  if (watchdog) {
+    await watchdog.stop({ flushCheckpoint: true });
+  }
   if (muninn) {
     await muninn.shutdown();
-  }
-  if (watchdog) {
-    await watchdog.stop();
   }
   singletonMuninn = null;
   singletonMuninnPromise = null;
@@ -342,6 +336,31 @@ export const __testing = {
   repairOpenTurns,
   shutdownCoreForTests,
 };
+
+async function ensureWatchdog(tables: NativeTables, muninn: Muninn): Promise<void> {
+  if (watchdog) {
+    return;
+  }
+  const watchdogConfig = getWatchdogConfig();
+  if (!watchdogConfig.enabled) {
+    watchdog = null;
+    return;
+  }
+  const checkpoint = await readCheckpointFile();
+  const lastCheckpointContent = checkpoint
+    ? JSON.stringify({
+      schemaVersion: checkpoint.schemaVersion,
+      observers: checkpoint.observers,
+    })
+    : null;
+  watchdog = new Watchdog(
+    tables,
+    watchdogConfig,
+    muninn.getCheckpointContributors(),
+    lastCheckpointContent,
+  );
+  watchdog.start();
+}
 
 const core = {
   addMessage,

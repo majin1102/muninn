@@ -69,6 +69,11 @@ function validateSettingsJson(text) {
             (!Number.isInteger(maxAttempts) || maxAttempts <= 0)) {
             throw new Error('observer.maxAttempts must be a positive integer.');
         }
+        const activeWindowDays = config.activeWindowDays;
+        if (activeWindowDays !== undefined &&
+            (!Number.isInteger(activeWindowDays) || activeWindowDays <= 0)) {
+            throw new Error('observer.activeWindowDays must be a positive integer.');
+        }
     }
     const llm = root.llm;
     if (llm !== undefined) {

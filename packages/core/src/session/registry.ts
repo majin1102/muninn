@@ -1,6 +1,6 @@
 import type { NativeTables } from '../native.js';
 import { Session } from './session.js';
-import { normalizeSessionId, sessionKey } from './key.js';
+import { hasText, normalizeSessionId, sessionKey } from './key.js';
 import { readSessionTurn } from './types.js';
 
 const SESSION_TTL_MS = 2 * 60 * 60 * 1000;
@@ -16,6 +16,10 @@ export class SessionRegistry {
   constructor(
     private readonly client: NativeTables,
     readonly observerName: string,
+    private readonly lookupCheckpointTurnId?: (
+      sessionId: string | undefined,
+      agent: string,
+    ) => string | undefined,
   ) {}
 
   async load(sessionId: string | undefined, agent: string): Promise<Session> {
@@ -31,11 +35,8 @@ export class SessionRegistry {
 
     const entry: SessionEntry = {
       promise: Promise.resolve().then(async () => {
-        const openTurn = await this.client.sessionTable.loadOpenTurn({
-          sessionId: normalizedSessionId,
-          agent,
-          observer: this.observerName,
-        });
+        const hintedTurnId = this.lookupCheckpointTurnId?.(normalizedSessionId, agent);
+        const openTurn = await this.loadOpenTurn(normalizedSessionId, agent, hintedTurnId);
         const session = new Session(this.client, {
           sessionId: normalizedSessionId,
           agent,
@@ -66,5 +67,37 @@ export class SessionRegistry {
         this.sessions.delete(key);
       }
     }
+  }
+
+  private async loadOpenTurn(
+    sessionId: string | undefined,
+    agent: string,
+    hintedTurnId?: string,
+  ) {
+    if (hintedTurnId) {
+      const hinted = await this.client.sessionTable.getTurn(hintedTurnId);
+      if (hinted && this.matchesOpenTurn(hinted, sessionId, agent)) {
+        return hinted;
+      }
+    }
+    return this.client.sessionTable.loadOpenTurn({
+      sessionId,
+      agent,
+      observer: this.observerName,
+    });
+  }
+
+  private matchesOpenTurn(
+    turn: Awaited<ReturnType<NativeTables['sessionTable']['getTurn']>>,
+    sessionId: string | undefined,
+    agent: string,
+  ): boolean {
+    if (!turn) {
+      return false;
+    }
+    return normalizeSessionId(turn.sessionId) === sessionId
+      && turn.agent === agent
+      && turn.observer === this.observerName
+      && !hasText(turn.response);
   }
 }

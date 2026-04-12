@@ -6,6 +6,7 @@ import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promise
 
 import core from '../dist/index.js';
 import { getNativeTables } from '../dist/native.js';
+import { getObserverLlmConfig } from '../dist/config.js';
 
 const {
   addMessage,
@@ -62,6 +63,7 @@ async function writeMuninnConfig(configPath, {
   storageUri,
   storageOptions,
   watchdog,
+  activeWindowDays,
 } = {}) {
   const root = {};
   const llm = {};
@@ -80,6 +82,7 @@ async function writeMuninnConfig(configPath, {
       name: 'test-observer',
       llm: 'test_observer_llm',
       maxAttempts: 3,
+      ...(activeWindowDays === undefined ? {} : { activeWindowDays }),
     };
     llm.test_observer_llm = { provider: observerProvider };
   }
@@ -105,7 +108,23 @@ async function writeMuninnConfig(configPath, {
 test.afterEach(async () => {
   await shutdownCoreForTests();
   delete process.env.MUNINN_HOME;
-  delete process.env.MUNINN_OBSERVE_WINDOW_MS;
+});
+
+test('observer config defaults activeWindowDays to 7 and accepts explicit overrides', async (t) => {
+  const { dir, homeDir, configPath } = await makeDatasetUri();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+
+  process.env.MUNINN_HOME = homeDir;
+  await writeMuninnConfig(configPath, { observerProvider: 'mock' });
+
+  let observerConfig = getObserverLlmConfig();
+  assert.ok(observerConfig);
+  assert.equal(observerConfig.activeWindowDays, 7);
+
+  await writeMuninnConfig(configPath, { observerProvider: 'mock', activeWindowDays: 14 });
+  observerConfig = getObserverLlmConfig();
+  assert.ok(observerConfig);
+  assert.equal(observerConfig.activeWindowDays, 14);
 });
 
 test('addMessage and sessions.get roundtrip through the native binding', async (t) => {
@@ -472,7 +491,6 @@ test('validateSettings rejects semantic index dimension changes that mismatch ex
   t.after(async () => rm(dir, { recursive: true, force: true }));
 
   process.env.MUNINN_HOME = homeDir;
-  process.env.MUNINN_OBSERVE_WINDOW_MS = '10';
   await writeMuninnConfig(configPath, { observerProvider: 'mock' });
 
   await addMessage({
@@ -519,6 +537,38 @@ test('validateSettings reports invalid JSON before native storage initialization
   await assert.rejects(
     () => validateSettings('{"watchdog": '),
     /invalid JSON/i,
+  );
+});
+
+test('validateSettings rejects invalid observer.activeWindowDays', async (t) => {
+  const { dir, homeDir, configPath } = await makeDatasetUri();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+
+  process.env.MUNINN_HOME = homeDir;
+  await mkdir(path.dirname(configPath), { recursive: true });
+  await writeFile(configPath, '{\n  "storage": {\n    "uri": ""\n  }\n}\n', 'utf8');
+
+  await assert.rejects(
+    () => validateSettings(JSON.stringify({
+      observer: {
+        name: 'test-observer',
+        llm: 'test_observer_llm',
+        activeWindowDays: 0,
+      },
+      llm: {
+        test_observer_llm: {
+          provider: 'mock',
+        },
+      },
+      semanticIndex: {
+        embedding: {
+          provider: 'mock',
+          dimensions: 8,
+        },
+        defaultImportance: 0.7,
+      },
+    }, null, 2)),
+    /observer\.activeWindowDays must be a positive integer/i,
   );
 });
 
@@ -926,7 +976,6 @@ test('validateSettings checks the pending storage target instead of the current 
   const storageB = path.join(dir, 'storage-b');
 
   process.env.MUNINN_HOME = homeDir;
-  process.env.MUNINN_OBSERVE_WINDOW_MS = '10';
 
   await writeMuninnConfig(configPath, {
     observerProvider: 'mock',
@@ -1094,7 +1143,6 @@ test('rendered memory binding returns unified turn and observing reads', async (
   t.after(async () => rm(dir, { recursive: true, force: true }));
 
   process.env.MUNINN_HOME = homeDir;
-  process.env.MUNINN_OBSERVE_WINDOW_MS = '10';
   await writeMuninnConfig(configPath, { turnProvider: 'mock', observerProvider: 'mock' });
 
   const turn = await addMessage({
@@ -1141,7 +1189,6 @@ test('rendered memory page mode paginates after combining session and observing 
   t.after(async () => rm(dir, { recursive: true, force: true }));
 
   process.env.MUNINN_HOME = homeDir;
-  process.env.MUNINN_OBSERVE_WINDOW_MS = '10';
   await writeMuninnConfig(configPath, { turnProvider: 'mock', observerProvider: 'mock' });
 
   for (let index = 0; index < 3; index += 1) {

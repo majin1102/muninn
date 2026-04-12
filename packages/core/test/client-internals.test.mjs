@@ -2,13 +2,15 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
-import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 
 import core from '../dist/index.js';
 import { __testing } from '../dist/client.js';
+import { getObserverLlmConfig } from '../dist/config.js';
 import { Muninn } from '../dist/muninn.js';
 import { Observer } from '../dist/observer/observer.js';
 import { EpochQueue, OpenEpoch } from '../dist/observer/epoch.js';
+import { readCheckpointFile, resolveCheckpointPath } from '../dist/checkpoint.js';
 import { SessionRegistry } from '../dist/session/registry.js';
 import { normalizeSessionId, sessionKey } from '../dist/session/key.js';
 import { Session } from '../dist/session/session.js';
@@ -17,7 +19,7 @@ import updateModule from '../dist/observer/update.js';
 import threadModule from '../dist/observer/thread.js';
 
 const { __testing: updateTesting } = updateModule;
-const { getPendingIndex, getPendingIndexUpTo } = threadModule;
+const { getPendingIndex, getPendingIndexUpTo, loadThreads } = threadModule;
 const { addMessage, observer: observerApi, shutdownCoreForTests } = core;
 
 async function makeConfigHome() {
@@ -29,13 +31,14 @@ async function makeConfigHome() {
   };
 }
 
-async function writeObserverConfig(configPath) {
+async function writeObserverConfig(configPath, { activeWindowDays = 3650 } = {}) {
   await mkdir(path.dirname(configPath), { recursive: true });
   await writeFile(configPath, `${JSON.stringify({
     observer: {
       name: 'default-observer',
       llm: 'observer_llm',
       maxAttempts: 3,
+      activeWindowDays,
     },
     llm: {
       observer_llm: {
@@ -62,6 +65,7 @@ async function writeOpenAiObserverConfig(configPath) {
       name: 'default-observer',
       llm: 'observer_llm',
       maxAttempts: 3,
+      activeWindowDays: 3650,
     },
     llm: {
       turn_llm: {
@@ -151,6 +155,10 @@ async function readWatchdogLog(homeDir) {
   }
 }
 
+async function readCheckpoint() {
+  return JSON.parse(await readFile(resolveCheckpointPath(), 'utf8'));
+}
+
 function createWatchdogConfig(overrides = {}) {
   return {
     enabled: true,
@@ -167,6 +175,37 @@ function createWatchdogConfig(overrides = {}) {
 test.afterEach(async () => {
   await __testing.shutdownCoreForTests();
   delete process.env.MUNINN_HOME;
+});
+
+test('getObserverLlmConfig defaults activeWindowDays to 7', async (t) => {
+  const { dir, homeDir, configPath } = await makeConfigHome();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+  process.env.MUNINN_HOME = homeDir;
+
+  await mkdir(path.dirname(configPath), { recursive: true });
+  await writeFile(configPath, `${JSON.stringify({
+    observer: {
+      name: 'default-observer',
+      llm: 'observer_llm',
+      maxAttempts: 3,
+    },
+    llm: {
+      observer_llm: {
+        provider: 'mock',
+      },
+    },
+    semanticIndex: {
+      embedding: {
+        provider: 'mock',
+        dimensions: 8,
+      },
+      defaultImportance: 0.7,
+    },
+  }, null, 2)}\n`, 'utf8');
+
+  const config = getObserverLlmConfig();
+  assert.ok(config);
+  assert.equal(config.activeWindowDays, 7);
 });
 
 test('resolveNativeBindingPath points at the packaged addon', async () => {
@@ -509,6 +548,474 @@ test('watchdog logs null version when stats fails before reading the current dat
   )));
 });
 
+test('watchdog writes observer checkpoint files', async (t) => {
+  const { dir, homeDir, configPath } = await makeConfigHome();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+  process.env.MUNINN_HOME = homeDir;
+  await writeObserverConfig(configPath);
+
+  const runtime = new Watchdog({
+    sessionTable: {
+      stats: async () => ({
+        version: 10,
+        fragmentCount: 1,
+        rowCount: 1,
+      }),
+      compact: async () => ({ changed: false }),
+      exportOpenTurnRefs: async () => ({
+        version: 10,
+        turns: [{
+          sessionId: 'group-a',
+          agent: 'agent-a',
+          observer: 'default-observer',
+          turnId: 'session:101',
+          updatedAt: '2024-01-01T00:00:00Z',
+        }],
+      }),
+    },
+    observingTable: {
+      stats: async () => null,
+      compact: async () => ({ changed: false }),
+    },
+    semanticIndexTable: {
+      ensureVectorIndex: async () => ({ created: false }),
+      stats: async () => null,
+      compact: async () => ({ changed: false }),
+      optimize: async () => ({ changed: false }),
+    },
+  }, createWatchdogConfig({ intervalMs: 25, compactMinFragments: 3 }), [
+    async () => ({
+      observerName: 'default-observer',
+      baseline: {
+        observing: 21,
+        semanticIndex: 8,
+      },
+      committedEpoch: 12,
+      nextEpoch: 13,
+      threads: [{
+        observingId: 'obs-1',
+        latestSnapshotId: 'observing:42',
+        latestSnapshotSequence: 2,
+        indexedSnapshotSequence: 1,
+        updatedAt: '2024-01-01T00:00:00Z',
+      }],
+    }),
+  ]);
+  t.after(async () => runtime.stop());
+
+  runtime.start();
+  await waitFor(async () => {
+    try {
+      const checkpoint = await readCheckpoint();
+      return checkpoint.observers?.['default-observer']?.threads?.length === 1;
+    } catch {
+      return false;
+    }
+  });
+
+  const checkpoint = await readCheckpoint();
+  assert.equal(checkpoint.schemaVersion, 1);
+  assert.deepEqual(checkpoint.observers['default-observer'], {
+    baseline: {
+      turn: 10,
+      observing: 21,
+      semanticIndex: 8,
+    },
+    committedEpoch: 12,
+    nextEpoch: 13,
+    openTurns: [{
+      sessionId: 'group-a',
+      agent: 'agent-a',
+      turnId: 'session:101',
+      updatedAt: '2024-01-01T00:00:00Z',
+    }],
+    threads: [{
+      observingId: 'obs-1',
+      latestSnapshotId: 'observing:42',
+      latestSnapshotSequence: 2,
+      indexedSnapshotSequence: 1,
+      updatedAt: '2024-01-01T00:00:00Z',
+    }],
+  });
+});
+
+test('watchdog skips checkpoint writes when contributors return no observer state', async (t) => {
+  const { dir, homeDir, configPath } = await makeConfigHome();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+  process.env.MUNINN_HOME = homeDir;
+  await writeObserverConfig(configPath);
+
+  await mkdir(path.dirname(resolveCheckpointPath()), { recursive: true });
+  const existing = {
+    schemaVersion: 1,
+    writtenAt: '2024-01-01T00:00:00Z',
+    writerPid: 123,
+    observers: {
+      'default-observer': {
+        baseline: {
+          turn: 10,
+          observing: 21,
+          semanticIndex: 8,
+        },
+        committedEpoch: 12,
+        nextEpoch: 13,
+        openTurns: [],
+        threads: [],
+      },
+    },
+  };
+  await writeFile(resolveCheckpointPath(), `${JSON.stringify(existing, null, 2)}\n`, 'utf8');
+  const before = await readFile(resolveCheckpointPath(), 'utf8');
+  const beforeStat = await stat(resolveCheckpointPath());
+
+  const runtime = new Watchdog({
+    sessionTable: {
+      stats: async () => null,
+      compact: async () => ({ changed: false }),
+      exportOpenTurnRefs: async () => ({ version: 0, turns: [] }),
+    },
+    observingTable: {
+      stats: async () => null,
+      compact: async () => ({ changed: false }),
+    },
+    semanticIndexTable: {
+      ensureVectorIndex: async () => ({ created: false }),
+      stats: async () => null,
+      compact: async () => ({ changed: false }),
+      optimize: async () => ({ changed: false }),
+    },
+  }, createWatchdogConfig({ intervalMs: 25 }), [
+    async () => null,
+  ]);
+  t.after(async () => runtime.stop());
+
+  runtime.start();
+  await new Promise((resolve) => setTimeout(resolve, 80));
+
+  const after = await readFile(resolveCheckpointPath(), 'utf8');
+  const afterStat = await stat(resolveCheckpointPath());
+  assert.equal(after, before);
+  assert.equal(afterStat.mtimeMs, beforeStat.mtimeMs);
+});
+
+test('watchdog skips checkpoint writes when observer payload is unchanged', async (t) => {
+  const { dir, homeDir, configPath } = await makeConfigHome();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+  process.env.MUNINN_HOME = homeDir;
+  await writeObserverConfig(configPath);
+
+  const fragment = {
+    observerName: 'default-observer',
+    baseline: {
+      observing: 21,
+      semanticIndex: 8,
+    },
+    committedEpoch: 12,
+    nextEpoch: 13,
+    threads: [{
+      observingId: 'obs-1',
+      latestSnapshotId: 'observing:42',
+      latestSnapshotSequence: 2,
+      indexedSnapshotSequence: 1,
+      updatedAt: '2024-01-01T00:00:00Z',
+    }],
+  };
+  const openTurns = [{
+    sessionId: 'group-a',
+    agent: 'agent-a',
+    observer: 'default-observer',
+    turnId: 'session:101',
+    updatedAt: '2024-01-01T00:00:00Z',
+  }];
+  await mkdir(path.dirname(resolveCheckpointPath()), { recursive: true });
+  await writeFile(resolveCheckpointPath(), `${JSON.stringify({
+    schemaVersion: 1,
+    writtenAt: '2024-01-01T00:00:00Z',
+    writerPid: 123,
+    observers: {
+      'default-observer': {
+        baseline: {
+          turn: 10,
+          observing: 21,
+          semanticIndex: 8,
+        },
+        committedEpoch: 12,
+        nextEpoch: 13,
+        openTurns: [{
+          sessionId: 'group-a',
+          agent: 'agent-a',
+          turnId: 'session:101',
+          updatedAt: '2024-01-01T00:00:00Z',
+        }],
+        threads: fragment.threads,
+      },
+    },
+  }, null, 2)}\n`, 'utf8');
+  const before = await readFile(resolveCheckpointPath(), 'utf8');
+  const beforeStat = await stat(resolveCheckpointPath());
+  const lastCheckpointContent = JSON.stringify({
+    schemaVersion: 1,
+    observers: {
+      'default-observer': {
+        baseline: {
+          turn: 10,
+          observing: 21,
+          semanticIndex: 8,
+        },
+        committedEpoch: 12,
+        nextEpoch: 13,
+        openTurns: [{
+          sessionId: 'group-a',
+          agent: 'agent-a',
+          turnId: 'session:101',
+          updatedAt: '2024-01-01T00:00:00Z',
+        }],
+        threads: fragment.threads,
+      },
+    },
+  });
+
+  const runtime = new Watchdog({
+    sessionTable: {
+      stats: async () => ({
+        version: 10,
+        fragmentCount: 1,
+        rowCount: 1,
+      }),
+      compact: async () => ({ changed: false }),
+      exportOpenTurnRefs: async () => ({
+        version: 10,
+        turns: openTurns,
+      }),
+    },
+    observingTable: {
+      stats: async () => null,
+      compact: async () => ({ changed: false }),
+    },
+    semanticIndexTable: {
+      ensureVectorIndex: async () => ({ created: false }),
+      stats: async () => null,
+      compact: async () => ({ changed: false }),
+      optimize: async () => ({ changed: false }),
+    },
+  }, createWatchdogConfig({ intervalMs: 25 }), [
+    async () => fragment,
+  ], lastCheckpointContent);
+  t.after(async () => runtime.stop());
+
+  runtime.start();
+  await new Promise((resolve) => setTimeout(resolve, 80));
+
+  const after = await readFile(resolveCheckpointPath(), 'utf8');
+  const afterStat = await stat(resolveCheckpointPath());
+  assert.equal(after, before);
+  assert.equal(afterStat.mtimeMs, beforeStat.mtimeMs);
+});
+
+test('watchdog rewrites checkpoint when the file is deleted after startup', async (t) => {
+  const { dir, homeDir, configPath } = await makeConfigHome();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+  process.env.MUNINN_HOME = homeDir;
+  await writeObserverConfig(configPath);
+
+  const fragment = {
+    observerName: 'default-observer',
+    baseline: {
+      observing: 21,
+      semanticIndex: 8,
+    },
+    committedEpoch: 12,
+    nextEpoch: 13,
+    threads: [{
+      observingId: 'obs-1',
+      latestSnapshotId: 'observing:42',
+      latestSnapshotSequence: 2,
+      indexedSnapshotSequence: 1,
+      updatedAt: '2024-01-01T00:00:00Z',
+    }],
+  };
+  const openTurns = [{
+    sessionId: 'group-a',
+    agent: 'agent-a',
+    observer: 'default-observer',
+    turnId: 'session:101',
+    updatedAt: '2024-01-01T00:00:00Z',
+  }];
+  const lastCheckpointContent = JSON.stringify({
+    schemaVersion: 1,
+    observers: {
+      'default-observer': {
+        baseline: {
+          turn: 10,
+          observing: 21,
+          semanticIndex: 8,
+        },
+        committedEpoch: 12,
+        nextEpoch: 13,
+        openTurns: [{
+          sessionId: 'group-a',
+          agent: 'agent-a',
+          turnId: 'session:101',
+          updatedAt: '2024-01-01T00:00:00Z',
+        }],
+        threads: fragment.threads,
+      },
+    },
+  });
+  await mkdir(path.dirname(resolveCheckpointPath()), { recursive: true });
+  await writeFile(resolveCheckpointPath(), `${JSON.stringify({
+    schemaVersion: 1,
+    writtenAt: '2024-01-01T00:00:00Z',
+    writerPid: 123,
+    observers: {
+      'default-observer': {
+        baseline: {
+          turn: 10,
+          observing: 21,
+          semanticIndex: 8,
+        },
+        committedEpoch: 12,
+        nextEpoch: 13,
+        openTurns: [{
+          sessionId: 'group-a',
+          agent: 'agent-a',
+          turnId: 'session:101',
+          updatedAt: '2024-01-01T00:00:00Z',
+        }],
+        threads: fragment.threads,
+      },
+    },
+  }, null, 2)}\n`, 'utf8');
+  await rm(resolveCheckpointPath());
+
+  const runtime = new Watchdog({
+    sessionTable: {
+      stats: async () => ({
+        version: 10,
+        fragmentCount: 1,
+        rowCount: 1,
+      }),
+      compact: async () => ({ changed: false }),
+      exportOpenTurnRefs: async () => ({
+        version: 10,
+        turns: openTurns,
+      }),
+    },
+    observingTable: {
+      stats: async () => null,
+      compact: async () => ({ changed: false }),
+    },
+    semanticIndexTable: {
+      ensureVectorIndex: async () => ({ created: false }),
+      stats: async () => null,
+      compact: async () => ({ changed: false }),
+      optimize: async () => ({ changed: false }),
+    },
+  }, createWatchdogConfig({ intervalMs: 25 }), [
+    async () => fragment,
+  ], lastCheckpointContent);
+  t.after(async () => runtime.stop());
+
+  runtime.start();
+  await waitFor(async () => {
+    try {
+      await access(resolveCheckpointPath());
+      return true;
+    } catch {
+      return false;
+    }
+  });
+
+  const checkpoint = await readCheckpoint();
+  assert.equal(checkpoint.observers['default-observer'].committedEpoch, 12);
+});
+
+test('readCheckpointFile throws when the checkpoint file is invalid JSON', async (t) => {
+  const { dir, homeDir } = await makeConfigHome();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+  process.env.MUNINN_HOME = homeDir;
+
+  await mkdir(path.dirname(resolveCheckpointPath()), { recursive: true });
+  await writeFile(resolveCheckpointPath(), '{invalid-json', 'utf8');
+
+  await assert.rejects(() => readCheckpointFile(), /Unexpected token|JSON/i);
+});
+
+test('watchdog rewrites checkpoint when observer payload changes', async (t) => {
+  const { dir, homeDir, configPath } = await makeConfigHome();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+  process.env.MUNINN_HOME = homeDir;
+  await writeObserverConfig(configPath);
+
+  await mkdir(path.dirname(resolveCheckpointPath()), { recursive: true });
+  await writeFile(resolveCheckpointPath(), `${JSON.stringify({
+    schemaVersion: 1,
+    writtenAt: '2024-01-01T00:00:00Z',
+    writerPid: 123,
+    observers: {
+      'default-observer': {
+        baseline: {
+          turn: 10,
+          observing: 21,
+          semanticIndex: 8,
+        },
+        committedEpoch: 11,
+        nextEpoch: 12,
+        openTurns: [],
+        threads: [],
+      },
+    },
+  }, null, 2)}\n`, 'utf8');
+  const beforeStat = await stat(resolveCheckpointPath());
+
+  const runtime = new Watchdog({
+    sessionTable: {
+      stats: async () => ({
+        version: 10,
+        fragmentCount: 1,
+        rowCount: 0,
+      }),
+      compact: async () => ({ changed: false }),
+      exportOpenTurnRefs: async () => ({ version: 10, turns: [] }),
+    },
+    observingTable: {
+      stats: async () => null,
+      compact: async () => ({ changed: false }),
+    },
+    semanticIndexTable: {
+      ensureVectorIndex: async () => ({ created: false }),
+      stats: async () => null,
+      compact: async () => ({ changed: false }),
+      optimize: async () => ({ changed: false }),
+    },
+  }, createWatchdogConfig({ intervalMs: 25 }), [
+    async () => ({
+      observerName: 'default-observer',
+      baseline: {
+        observing: 21,
+        semanticIndex: 8,
+      },
+      committedEpoch: 12,
+      nextEpoch: 13,
+      threads: [],
+    }),
+  ]);
+  t.after(async () => runtime.stop());
+
+  runtime.start();
+  await waitFor(async () => {
+    const checkpoint = await readCheckpoint();
+    return checkpoint.observers['default-observer']?.committedEpoch === 12;
+  });
+
+  const after = await readCheckpoint();
+  const afterStat = await stat(resolveCheckpointPath());
+  assert.equal(after.observers['default-observer'].committedEpoch, 12);
+  assert.equal(after.observers['default-observer'].nextEpoch, 13);
+  assert.ok(after.writtenAt !== '2024-01-01T00:00:00Z');
+  assert.ok(afterStat.mtimeMs >= beforeStat.mtimeMs);
+});
+
 test('getPendingIndex returns the unindexed snapshot range', () => {
   const pending = getPendingIndex({
     observingId: 'observing-a',
@@ -555,6 +1062,115 @@ test('getPendingIndexUpTo only reports snapshots at or before the barrier epoch'
     start: 1,
     end: 1,
   });
+});
+
+test('loadThreads filters snapshots by the configured active window', () => {
+  const freshUpdatedAt = new Date().toISOString();
+  const staleUpdatedAt = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString();
+  const snapshots = [
+    {
+      snapshotId: 'fresh-snapshot',
+      observingId: 'fresh-thread',
+      snapshotSequence: 0,
+      createdAt: freshUpdatedAt,
+      updatedAt: freshUpdatedAt,
+      observer: 'default-observer',
+      title: 'Fresh thread',
+      summary: 'Fresh summary',
+      content: JSON.stringify({
+        memories: [],
+        openQuestions: [],
+        nextSteps: [],
+        memoryDelta: { before: [], after: [] },
+      }),
+      references: [],
+      checkpoint: {
+        observingEpoch: 1,
+        indexedSnapshotSequence: 0,
+      },
+    },
+    {
+      snapshotId: 'stale-snapshot',
+      observingId: 'stale-thread',
+      snapshotSequence: 0,
+      createdAt: staleUpdatedAt,
+      updatedAt: staleUpdatedAt,
+      observer: 'default-observer',
+      title: 'Stale thread',
+      summary: 'Stale summary',
+      content: JSON.stringify({
+        memories: [],
+        openQuestions: [],
+        nextSteps: [],
+        memoryDelta: { before: [], after: [] },
+      }),
+      references: [],
+      checkpoint: {
+        observingEpoch: 1,
+        indexedSnapshotSequence: 0,
+      },
+    },
+  ];
+
+  const threads = loadThreads(snapshots, 'default-observer', 7);
+  assert.equal(threads.length, 1);
+  assert.equal(threads[0].observingId, 'fresh-thread');
+});
+
+test('loadThreads keeps full history for active threads', () => {
+  const freshUpdatedAt = new Date().toISOString();
+  const staleUpdatedAt = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString();
+  const snapshots = [
+    {
+      snapshotId: 'snapshot-0',
+      observingId: 'mixed-thread',
+      snapshotSequence: 0,
+      createdAt: staleUpdatedAt,
+      updatedAt: staleUpdatedAt,
+      observer: 'default-observer',
+      title: 'Thread',
+      summary: 'Summary',
+      content: JSON.stringify({
+        memories: [],
+        openQuestions: [],
+        nextSteps: [],
+        memoryDelta: { before: [], after: [] },
+      }),
+      references: [],
+      checkpoint: {
+        observingEpoch: 1,
+        indexedSnapshotSequence: 0,
+      },
+    },
+    {
+      snapshotId: 'snapshot-1',
+      observingId: 'mixed-thread',
+      snapshotSequence: 1,
+      createdAt: freshUpdatedAt,
+      updatedAt: freshUpdatedAt,
+      observer: 'default-observer',
+      title: 'Thread',
+      summary: 'Summary',
+      content: JSON.stringify({
+        memories: [],
+        openQuestions: [],
+        nextSteps: [],
+        memoryDelta: { before: [], after: [] },
+      }),
+      references: [],
+      checkpoint: {
+        observingEpoch: 2,
+        indexedSnapshotSequence: 1,
+      },
+    },
+  ];
+
+  const threads = loadThreads(snapshots, 'default-observer', 7);
+  assert.equal(threads.length, 1);
+  assert.equal(threads[0].observingId, 'mixed-thread');
+  assert.deepEqual(threads[0].snapshotIds, ['snapshot-0', 'snapshot-1']);
+  assert.deepEqual(threads[0].snapshotEpochs, [1, 2]);
+  assert.equal(threads[0].snapshots.length, 2);
 });
 
 test('epochQueue.shift returns a published epoch without waiting', () => {
@@ -616,6 +1232,658 @@ test('observer.watermark stays unresolved when only semantic index work is pendi
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+test('observer checkpoint export omits threads outside the active window', async (t) => {
+  const { dir, homeDir, configPath } = await makeConfigHome();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+  process.env.MUNINN_HOME = homeDir;
+  await writeObserverConfig(configPath, { activeWindowDays: 7 });
+
+  const freshUpdatedAt = new Date().toISOString();
+  const staleUpdatedAt = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString();
+  const observer = new Observer({});
+  t.after(async () => observer.shutdown());
+
+  observer.bootstrapped = true;
+  observer.committedEpoch = 1;
+  observer.openEpoch = new OpenEpoch(2);
+  observer.threads = [
+    {
+      observingId: 'fresh-thread',
+      snapshotId: 'fresh-snapshot',
+      snapshotIds: ['fresh-snapshot'],
+      observingEpoch: 1,
+      title: 'Fresh',
+      summary: 'Fresh',
+      snapshots: [{ memories: [], openQuestions: [], nextSteps: [], memoryDelta: { before: [], after: [] } }],
+      references: [],
+      indexedSnapshotSequence: 0,
+      observer: 'default-observer',
+      createdAt: freshUpdatedAt,
+      updatedAt: freshUpdatedAt,
+    },
+    {
+      observingId: 'stale-thread',
+      snapshotId: 'stale-snapshot',
+      snapshotIds: ['stale-snapshot'],
+      observingEpoch: 1,
+      title: 'Stale',
+      summary: 'Stale',
+      snapshots: [{ memories: [], openQuestions: [], nextSteps: [], memoryDelta: { before: [], after: [] } }],
+      references: [],
+      indexedSnapshotSequence: 0,
+      observer: 'default-observer',
+      createdAt: staleUpdatedAt,
+      updatedAt: staleUpdatedAt,
+    },
+  ];
+  observer.recordObservingBaseline(21);
+  observer.recordSemanticIndexBaseline(8);
+  observer.refreshCheckpointSnapshot();
+
+  assert.deepEqual(observer.exportCheckpointFragment().threads, [{
+    observingId: 'fresh-thread',
+    latestSnapshotId: 'fresh-snapshot',
+    latestSnapshotSequence: 0,
+    indexedSnapshotSequence: 0,
+    updatedAt: freshUpdatedAt,
+  }]);
+});
+
+test('observer checkpoint export returns null before bootstrap completes', async (t) => {
+  const { dir, homeDir, configPath } = await makeConfigHome();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+  process.env.MUNINN_HOME = homeDir;
+  await writeObserverConfig(configPath);
+
+  const observer = new Observer({});
+  t.after(async () => observer.shutdown());
+
+  assert.equal(observer.exportCheckpointFragment(), null);
+});
+
+test('observer bootstrap restores committed state from checkpoint when baselines match', async (t) => {
+  const { dir, homeDir, configPath } = await makeConfigHome();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+  process.env.MUNINN_HOME = homeDir;
+  await writeObserverConfig(configPath);
+
+  await mkdir(path.dirname(resolveCheckpointPath()), { recursive: true });
+  await writeFile(resolveCheckpointPath(), `${JSON.stringify({
+    schemaVersion: 1,
+    writtenAt: '2024-01-01T00:00:00Z',
+    writerPid: 123,
+    observers: {
+      'default-observer': {
+        baseline: {
+          turn: 10,
+          observing: 21,
+          semanticIndex: 8,
+        },
+        committedEpoch: 12,
+        nextEpoch: 13,
+        openTurns: [{
+          sessionId: 'group-a',
+          agent: 'agent-a',
+          turnId: 'session:101',
+          updatedAt: '2024-01-01T00:00:00Z',
+        }],
+        threads: [{
+          observingId: 'obs-1',
+          latestSnapshotId: 'observing:42',
+          latestSnapshotSequence: 1,
+          indexedSnapshotSequence: 1,
+          updatedAt: '2024-01-01T00:00:01Z',
+        }],
+      },
+    },
+  }, null, 2)}\n`, 'utf8');
+
+  let listSnapshotsCalls = 0;
+  let loadTurnsAfterEpochCalls = 0;
+  const observer = new Observer({
+    sessionTable: {
+      stats: async () => ({
+        version: 10,
+        fragmentCount: 1,
+        rowCount: 1,
+      }),
+      loadTurnsAfterEpoch: async () => {
+        loadTurnsAfterEpochCalls += 1;
+        return [];
+      },
+    },
+    observingTable: {
+      stats: async () => ({
+        version: 21,
+        fragmentCount: 1,
+        rowCount: 2,
+      }),
+      listSnapshots: async () => {
+        listSnapshotsCalls += 1;
+        return [];
+      },
+      threadSnapshots: async (observingId) => {
+        assert.equal(observingId, 'obs-1');
+        return [
+          {
+            snapshotId: 'observing:41',
+            observingId: 'obs-1',
+            snapshotSequence: 0,
+            createdAt: '2024-01-01T00:00:00Z',
+            updatedAt: '2024-01-01T00:00:00Z',
+            observer: 'default-observer',
+            title: 'Thread',
+            summary: 'Summary',
+            content: JSON.stringify({
+              memories: [],
+              openQuestions: [],
+              nextSteps: [],
+              memoryDelta: { before: [], after: [] },
+            }),
+            references: [],
+            checkpoint: {
+              observingEpoch: 11,
+              indexedSnapshotSequence: 0,
+            },
+          },
+          {
+            snapshotId: 'observing:42',
+            observingId: 'obs-1',
+            snapshotSequence: 1,
+            createdAt: '2024-01-01T00:00:01Z',
+            updatedAt: '2024-01-01T00:00:01Z',
+            observer: 'default-observer',
+            title: 'Thread',
+            summary: 'Summary',
+            content: JSON.stringify({
+              memories: [],
+              openQuestions: [],
+              nextSteps: [],
+              memoryDelta: { before: [], after: [] },
+            }),
+            references: [],
+            checkpoint: {
+              observingEpoch: 12,
+              indexedSnapshotSequence: 1,
+            },
+          },
+        ];
+      },
+    },
+    semanticIndexTable: {
+      stats: async () => ({
+        version: 8,
+        fragmentCount: 1,
+        rowCount: 0,
+      }),
+    },
+  });
+  t.after(async () => observer.shutdown());
+
+  await observer.ensureBootstrapped();
+
+  assert.equal(listSnapshotsCalls, 0);
+  assert.equal(loadTurnsAfterEpochCalls, 1);
+  assert.equal(observer.checkpointOpenTurnId('group-a', 'agent-a'), 'session:101');
+  assert.deepEqual(observer.exportCheckpointFragment(), {
+    observerName: 'default-observer',
+    baseline: {
+      observing: 21,
+      semanticIndex: 8,
+    },
+    committedEpoch: 12,
+    nextEpoch: 13,
+    threads: [{
+      observingId: 'obs-1',
+      latestSnapshotId: 'observing:42',
+      latestSnapshotSequence: 1,
+      indexedSnapshotSequence: 1,
+      updatedAt: '2024-01-01T00:00:01Z',
+    }],
+  });
+});
+
+test('observer checkpoint restore keeps full history for active threads', async (t) => {
+  const { dir, homeDir, configPath } = await makeConfigHome();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+  process.env.MUNINN_HOME = homeDir;
+  await writeObserverConfig(configPath, { activeWindowDays: 7 });
+
+  const staleUpdatedAt = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString();
+  const freshUpdatedAt = new Date().toISOString();
+  await mkdir(path.dirname(resolveCheckpointPath()), { recursive: true });
+  await writeFile(resolveCheckpointPath(), `${JSON.stringify({
+    schemaVersion: 1,
+    writtenAt: new Date().toISOString(),
+    writerPid: 123,
+    observers: {
+      'default-observer': {
+        baseline: {
+          turn: 10,
+          observing: 21,
+          semanticIndex: 8,
+        },
+        committedEpoch: 12,
+        nextEpoch: 13,
+        openTurns: [],
+        threads: [{
+          observingId: 'mixed-thread',
+          latestSnapshotId: 'snapshot-1',
+          latestSnapshotSequence: 1,
+          indexedSnapshotSequence: 1,
+          updatedAt: freshUpdatedAt,
+        }],
+      },
+    },
+  }, null, 2)}\n`, 'utf8');
+
+  const observer = new Observer({
+    sessionTable: {
+      stats: async () => ({
+        version: 10,
+        fragmentCount: 1,
+        rowCount: 0,
+      }),
+      loadTurnsAfterEpoch: async () => [],
+    },
+    observingTable: {
+      stats: async () => ({
+        version: 21,
+        fragmentCount: 1,
+        rowCount: 2,
+      }),
+      listSnapshots: async () => [],
+      threadSnapshots: async (observingId) => {
+        assert.equal(observingId, 'mixed-thread');
+        return [
+          {
+            snapshotId: 'snapshot-0',
+            observingId: 'mixed-thread',
+            snapshotSequence: 0,
+            createdAt: staleUpdatedAt,
+            updatedAt: staleUpdatedAt,
+            observer: 'default-observer',
+            title: 'Thread',
+            summary: 'Summary',
+            content: JSON.stringify({
+              memories: [],
+              openQuestions: [],
+              nextSteps: [],
+              memoryDelta: { before: [], after: [] },
+            }),
+            references: [],
+            checkpoint: {
+              observingEpoch: 11,
+              indexedSnapshotSequence: 0,
+            },
+          },
+          {
+            snapshotId: 'snapshot-1',
+            observingId: 'mixed-thread',
+            snapshotSequence: 1,
+            createdAt: freshUpdatedAt,
+            updatedAt: freshUpdatedAt,
+            observer: 'default-observer',
+            title: 'Thread',
+            summary: 'Summary',
+            content: JSON.stringify({
+              memories: [],
+              openQuestions: [],
+              nextSteps: [],
+              memoryDelta: { before: [], after: [] },
+            }),
+            references: [],
+            checkpoint: {
+              observingEpoch: 12,
+              indexedSnapshotSequence: 1,
+            },
+          },
+        ];
+      },
+    },
+    semanticIndexTable: {
+      stats: async () => ({
+        version: 8,
+        fragmentCount: 1,
+        rowCount: 0,
+      }),
+    },
+  });
+  t.after(async () => observer.shutdown());
+
+  await observer.ensureBootstrapped();
+
+  assert.equal(observer.threads.length, 1);
+  assert.deepEqual(observer.threads[0].snapshotIds, ['snapshot-0', 'snapshot-1']);
+  assert.deepEqual(observer.threads[0].snapshotEpochs, [11, 12]);
+  assert.equal(observer.threads[0].snapshots.length, 2);
+});
+
+test('observer bootstrap skips stale checkpoint threads', async (t) => {
+  const { dir, homeDir, configPath } = await makeConfigHome();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+  process.env.MUNINN_HOME = homeDir;
+  await writeObserverConfig(configPath, { activeWindowDays: 7 });
+
+  const staleUpdatedAt = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString();
+  await mkdir(path.dirname(resolveCheckpointPath()), { recursive: true });
+  await writeFile(resolveCheckpointPath(), `${JSON.stringify({
+    schemaVersion: 1,
+    writtenAt: new Date().toISOString(),
+    writerPid: 123,
+    observers: {
+      'default-observer': {
+        baseline: {
+          turn: 10,
+          observing: 21,
+          semanticIndex: 8,
+        },
+        committedEpoch: 12,
+        nextEpoch: 13,
+        openTurns: [],
+        threads: [{
+          observingId: 'stale-thread',
+          latestSnapshotId: 'observing:42',
+          latestSnapshotSequence: 0,
+          indexedSnapshotSequence: 0,
+          updatedAt: staleUpdatedAt,
+        }],
+      },
+    },
+  }, null, 2)}\n`, 'utf8');
+
+  const observer = new Observer({
+    sessionTable: {
+      stats: async () => ({
+        version: 10,
+        fragmentCount: 1,
+        rowCount: 0,
+      }),
+      loadTurnsAfterEpoch: async () => [],
+    },
+    observingTable: {
+      stats: async () => ({
+        version: 21,
+        fragmentCount: 1,
+        rowCount: 1,
+      }),
+      listSnapshots: async () => [],
+      threadSnapshots: async () => {
+        throw new Error('stale checkpoint thread should not be loaded');
+      },
+    },
+    semanticIndexTable: {
+      stats: async () => ({
+        version: 8,
+        fragmentCount: 1,
+        rowCount: 0,
+      }),
+    },
+  });
+  t.after(async () => observer.shutdown());
+
+  await observer.ensureBootstrapped();
+
+  assert.equal(observer.threads.length, 0);
+  assert.equal(observer.committedEpoch, 12);
+  assert.equal(observer.openEpoch.epoch, 13);
+});
+
+test('observer exportCheckpointFragment keeps the last committed snapshot while observeCurrentEpoch is mid-flight', async (t) => {
+  const { dir, homeDir, configPath } = await makeConfigHome();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+  process.env.MUNINN_HOME = homeDir;
+  await writeObserverConfig(configPath);
+
+  const entered = deferred();
+  const release = deferred();
+  const observer = new Observer({
+    observingTable: {
+      insert: async ({ snapshots }) => snapshots.map((snapshot) => ({
+        ...snapshot,
+        snapshotId: 'snapshot-1',
+      })),
+      stats: async () => ({
+        version: 5,
+        fragmentCount: 1,
+        rowCount: 2,
+      }),
+    },
+    semanticIndexTable: {
+      stats: async () => ({
+        version: 7,
+        fragmentCount: 1,
+        rowCount: 1,
+      }),
+    },
+  });
+  t.after(async () => observer.shutdown());
+
+  observer.bootstrapped = true;
+  observer.committedEpoch = 0;
+  observer.openEpoch = new OpenEpoch(2);
+  observer.threads = [{
+    observingId: 'observing-a',
+    snapshotId: 'snapshot-0',
+    snapshotIds: ['snapshot-0'],
+    observingEpoch: 0,
+    title: 'Existing title',
+    summary: 'Existing summary',
+    snapshots: [
+      { memories: [], openQuestions: [], nextSteps: [], memoryDelta: { before: [], after: [] } },
+    ],
+    references: ['session:existing'],
+    indexedSnapshotSequence: 0,
+    observer: 'default-observer',
+    createdAt: '2024-01-01T00:00:00Z',
+    updatedAt: '2024-01-01T00:00:00Z',
+  }];
+  observer.recordObservingBaseline(4);
+  observer.recordSemanticIndexBaseline(6);
+  observer.refreshCheckpointSnapshot();
+  observer.currentEpoch = {
+    epoch: 1,
+    turns: [makeObservableTurn('turn-1', 1, 'first')],
+  };
+
+  let midFlight;
+  observer.buildCurrentEpochIndex = async () => {
+    midFlight = observer.exportCheckpointFragment();
+    entered.resolve();
+    await release.promise;
+  };
+
+  const observePromise = observer.observeCurrentEpoch();
+  await entered.promise;
+
+  assert.deepEqual(midFlight, {
+    observerName: 'default-observer',
+    baseline: {
+      observing: 4,
+      semanticIndex: 6,
+    },
+    committedEpoch: 0,
+    nextEpoch: 2,
+    threads: [{
+      observingId: 'observing-a',
+      latestSnapshotId: 'snapshot-0',
+      latestSnapshotSequence: 0,
+      indexedSnapshotSequence: 0,
+      updatedAt: '2024-01-01T00:00:00Z',
+    }],
+  });
+
+  release.resolve();
+  await observePromise;
+
+  const committed = observer.exportCheckpointFragment();
+  assert.deepEqual(committed.baseline, {
+    observing: 5,
+    semanticIndex: 7,
+  });
+  assert.equal(committed.committedEpoch, 1);
+  assert.equal(committed.nextEpoch, 2);
+  assert.deepEqual(committed.threads, observer.threads.map((thread) => ({
+    observingId: thread.observingId,
+    latestSnapshotId: thread.snapshotId,
+    latestSnapshotSequence: thread.snapshots.length - 1,
+    indexedSnapshotSequence: thread.indexedSnapshotSequence ?? null,
+    updatedAt: thread.updatedAt,
+  })));
+});
+
+test('observer bootstrap ignores semanticIndex version mismatches when observing baseline matches', async (t) => {
+  const { dir, homeDir, configPath } = await makeConfigHome();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+  process.env.MUNINN_HOME = homeDir;
+  await writeObserverConfig(configPath);
+
+  await mkdir(path.dirname(resolveCheckpointPath()), { recursive: true });
+  await writeFile(resolveCheckpointPath(), `${JSON.stringify({
+    schemaVersion: 1,
+    writtenAt: '2024-01-01T00:00:00Z',
+    writerPid: 123,
+    observers: {
+      'default-observer': {
+        baseline: {
+          turn: 10,
+          observing: 21,
+          semanticIndex: 8,
+        },
+        committedEpoch: 12,
+        nextEpoch: 13,
+        openTurns: [],
+        threads: [{
+          observingId: 'obs-1',
+          latestSnapshotId: 'observing:42',
+          latestSnapshotSequence: 1,
+          indexedSnapshotSequence: 1,
+          updatedAt: '2024-01-01T00:00:01Z',
+        }],
+      },
+    },
+  }, null, 2)}\n`, 'utf8');
+
+  let listSnapshotsCalls = 0;
+  const observer = new Observer({
+    sessionTable: {
+      stats: async () => ({
+        version: 10,
+        fragmentCount: 1,
+        rowCount: 1,
+      }),
+      loadTurnsAfterEpoch: async () => [],
+    },
+    observingTable: {
+      stats: async () => ({
+        version: 21,
+        fragmentCount: 1,
+        rowCount: 2,
+      }),
+      listSnapshots: async () => {
+        listSnapshotsCalls += 1;
+        return [];
+      },
+      threadSnapshots: async () => [
+        {
+          snapshotId: 'observing:41',
+          observingId: 'obs-1',
+          snapshotSequence: 0,
+          createdAt: '2024-01-01T00:00:00Z',
+          updatedAt: '2024-01-01T00:00:00Z',
+          observer: 'default-observer',
+          title: 'Thread',
+          summary: 'Summary',
+          content: JSON.stringify({
+            memories: [],
+            openQuestions: [],
+            nextSteps: [],
+            memoryDelta: { before: [], after: [] },
+          }),
+          references: [],
+          checkpoint: {
+            observingEpoch: 11,
+            indexedSnapshotSequence: 0,
+          },
+        },
+        {
+          snapshotId: 'observing:42',
+          observingId: 'obs-1',
+          snapshotSequence: 1,
+          createdAt: '2024-01-01T00:00:01Z',
+          updatedAt: '2024-01-01T00:00:01Z',
+          observer: 'default-observer',
+          title: 'Thread',
+          summary: 'Summary',
+          content: JSON.stringify({
+            memories: [],
+            openQuestions: [],
+            nextSteps: [],
+            memoryDelta: { before: [], after: [] },
+          }),
+          references: [],
+          checkpoint: {
+            observingEpoch: 12,
+            indexedSnapshotSequence: 1,
+          },
+        },
+      ],
+    },
+    semanticIndexTable: {
+      stats: async () => ({
+        version: 99,
+        fragmentCount: 1,
+        rowCount: 0,
+      }),
+    },
+  });
+  t.after(async () => observer.shutdown());
+
+  await observer.ensureBootstrapped();
+
+  assert.equal(listSnapshotsCalls, 0);
+  assert.equal(observer.exportCheckpointFragment().baseline.semanticIndex, 99);
+  assert.equal(observer.exportCheckpointFragment().committedEpoch, 12);
+});
+
+test('readCheckpointFile throws when the checkpoint section is structurally invalid', async (t) => {
+  const { dir, homeDir, configPath } = await makeConfigHome();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+  process.env.MUNINN_HOME = homeDir;
+  await writeObserverConfig(configPath);
+
+  await mkdir(path.dirname(resolveCheckpointPath()), { recursive: true });
+  await writeFile(resolveCheckpointPath(), `${JSON.stringify({
+    schemaVersion: 1,
+    writtenAt: '2024-01-01T00:00:00Z',
+    writerPid: 123,
+    observers: {
+      'default-observer': {
+        baseline: {
+          turn: 10,
+          observing: 21,
+          semanticIndex: 8,
+        },
+        committedEpoch: 12,
+        nextEpoch: 13,
+        openTurns: [],
+        threads: [{
+          observingId: 'obs-1',
+          latestSnapshotId: 'observing:42',
+          latestSnapshotSequence: 'bad-sequence',
+          indexedSnapshotSequence: 1,
+          updatedAt: '2024-01-01T00:00:01Z',
+        }],
+      },
+    },
+  }, null, 2)}\n`, 'utf8');
+
+  await assert.rejects(
+    () => readCheckpointFile(),
+    /invalid checkpoint observer section: default-observer/i,
+  );
 });
 
 test('muninn.recallMemories does not wait for observer flushes', async () => {
@@ -700,6 +1968,38 @@ test('session registry reuses the same load for trimmed session ids', async () =
 
   assert.equal(loadOpenTurnCalls, 1);
   assert.strictEqual(firstSession, secondSession);
+});
+
+test('session registry prefers checkpoint open-turn hints before scanning', async () => {
+  let getTurnCalls = 0;
+  let loadOpenTurnCalls = 0;
+  const registry = new SessionRegistry({
+    sessionTable: {
+      getTurn: async (turnId) => {
+        getTurnCalls += 1;
+        assert.equal(turnId, 'session:101');
+        return {
+          turnId,
+          createdAt: '2024-01-01T00:00:00Z',
+          updatedAt: '2024-01-01T00:00:00Z',
+          sessionId: 'group-a',
+          agent: 'agent-a',
+          observer: 'default-observer',
+          prompt: 'pending prompt',
+          response: null,
+        };
+      },
+      loadOpenTurn: async () => {
+        loadOpenTurnCalls += 1;
+        return null;
+      },
+    },
+  }, 'default-observer', () => 'session:101');
+
+  await registry.load('group-a', 'agent-a');
+
+  assert.equal(getTurnCalls, 1);
+  assert.equal(loadOpenTurnCalls, 0);
 });
 
 test('repairOpenTurns groups duplicates with TS session semantics', async () => {
@@ -989,6 +2289,87 @@ test('buildTouchedIndex immediately advances semantic index for touched threads'
   assert.equal(semanticUpserts, 1);
   assert.equal(threads[0].indexedSnapshotSequence, 1);
   assert.equal(getPendingIndex(threads[0]), null);
+});
+
+test('observer.retrySemanticIndex refreshes the committed checkpoint snapshot after observing rows are updated', async (t) => {
+  const { dir, homeDir, configPath } = await makeConfigHome();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+
+  process.env.MUNINN_HOME = homeDir;
+  await writeObserverConfig(configPath);
+
+  const observer = new Observer({
+    observingTable: {
+      update: async ({ snapshots }) => snapshots,
+      stats: async () => ({
+        version: 22,
+        fragmentCount: 1,
+        rowCount: 1,
+      }),
+    },
+    semanticIndexTable: {
+      delete: async () => ({ deleted: 0 }),
+      loadByIds: async () => [],
+      upsert: async () => undefined,
+      stats: async () => ({
+        version: 9,
+        fragmentCount: 1,
+        rowCount: 1,
+      }),
+    },
+  });
+  t.after(async () => observer.shutdown());
+
+  observer.bootstrapped = true;
+  observer.committedEpoch = 1;
+  observer.openEpoch = new OpenEpoch(2);
+  observer.threads = [{
+    observingId: 'observing-a',
+    snapshotId: 'snapshot-1',
+    snapshotIds: ['snapshot-0', 'snapshot-1'],
+    observingEpoch: 1,
+    title: 'Existing title',
+    summary: 'Existing summary',
+    snapshots: [
+      { memories: [], openQuestions: [], nextSteps: [], memoryDelta: { before: [], after: [] } },
+      {
+        memories: [],
+        openQuestions: [],
+        nextSteps: [],
+        memoryDelta: {
+          before: [],
+          after: [{ id: 'memory-1', text: 'remember this', category: 'Fact', updatedMemory: null }],
+        },
+      },
+    ],
+    references: ['session:existing'],
+    indexedSnapshotSequence: 0,
+    observer: 'default-observer',
+    createdAt: '2024-01-01T00:00:00Z',
+    updatedAt: '2024-01-01T00:00:00Z',
+  }];
+  observer.recordObservingBaseline(21);
+  observer.recordSemanticIndexBaseline(8);
+  observer.refreshCheckpointSnapshot();
+
+  await observer.retrySemanticIndex();
+
+  assert.deepEqual(observer.exportCheckpointFragment(), {
+    observerName: 'default-observer',
+    baseline: {
+      observing: 22,
+      semanticIndex: 9,
+    },
+    committedEpoch: 1,
+    nextEpoch: 2,
+    threads: [{
+      observingId: 'observing-a',
+      latestSnapshotId: 'snapshot-1',
+      latestSnapshotSequence: 1,
+      indexedSnapshotSequence: 1,
+      updatedAt: '2024-01-01T00:00:00Z',
+    }],
+  });
 });
 
 test('observer.observeCurrentEpoch commits observing rows and schedules semantic index retry', async (t) => {
