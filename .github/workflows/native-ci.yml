@@ -1,4 +1,4 @@
-name: Lance Rust
+name: Format CI
 
 on:
   pull_request:
@@ -8,7 +8,7 @@ on:
 
 jobs:
   native:
-    name: lance-rust
+    name: format-ci
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
