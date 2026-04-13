@@ -16,9 +16,9 @@ import {
 } from './config.js';
 import {
   readCheckpointFile,
+  type CheckpointContent,
   type CheckpointFile,
   type ObserverCheckpoint,
-  type OpenTurnRef,
 } from './checkpoint.js';
 import { Memories } from './memories/memories.js';
 import { Observer } from './observer/observer.js';
@@ -26,7 +26,6 @@ import { hasText, sessionKey } from './session/key.js';
 import { SessionRegistry } from './session/registry.js';
 import { readSessionTurn, serializeSessionTurn, toSessionTurn } from './session/types.js';
 import { Watchdog } from './watchdog.js';
-import type { OpenTurnSourceRef } from './native.js';
 import type { TurnContent } from '@muninn/types';
 
 export interface SessionTurn {
@@ -89,10 +88,87 @@ export type ListModeInput =
 
 export type { TurnContent } from '@muninn/types';
 
-type CheckpointExport = {
-  checkpoint: CheckpointFile;
-  content: string;
-};
+export interface CheckpointLock {
+  shared<T>(operation: () => Promise<T> | T): Promise<T>;
+  exclusive<T>(operation: () => Promise<T> | T): Promise<T>;
+}
+
+class AsyncCheckpointLock implements CheckpointLock {
+  private activeReaders = 0;
+  private activeWriter = false;
+  private readonly readerWaiters: Array<() => void> = [];
+  private readonly writerWaiters: Array<() => void> = [];
+
+  async shared<T>(operation: () => Promise<T> | T): Promise<T> {
+    await this.acquireShared();
+    try {
+      return await operation();
+    } finally {
+      this.releaseShared();
+    }
+  }
+
+  async exclusive<T>(operation: () => Promise<T> | T): Promise<T> {
+    await this.acquireExclusive();
+    try {
+      return await operation();
+    } finally {
+      this.releaseExclusive();
+    }
+  }
+
+  private acquireShared(): Promise<void> {
+    if (!this.activeWriter && this.writerWaiters.length === 0) {
+      this.activeReaders += 1;
+      return Promise.resolve();
+    }
+    return new Promise((resolve) => {
+      this.readerWaiters.push(() => {
+        this.activeReaders += 1;
+        resolve();
+      });
+    });
+  }
+
+  private releaseShared(): void {
+    this.activeReaders -= 1;
+    if (this.activeReaders === 0) {
+      this.wakeWaiters();
+    }
+  }
+
+  private acquireExclusive(): Promise<void> {
+    if (!this.activeWriter && this.activeReaders === 0) {
+      this.activeWriter = true;
+      return Promise.resolve();
+    }
+    return new Promise((resolve) => {
+      this.writerWaiters.push(() => {
+        this.activeWriter = true;
+        resolve();
+      });
+    });
+  }
+
+  private releaseExclusive(): void {
+    this.activeWriter = false;
+    this.wakeWaiters();
+  }
+
+  private wakeWaiters(): void {
+    if (this.activeWriter) {
+      return;
+    }
+    const writer = this.writerWaiters.shift();
+    if (writer) {
+      writer();
+      return;
+    }
+    while (this.readerWaiters.length > 0) {
+      this.readerWaiters.shift()?.();
+    }
+  }
+}
 
 let singletonBackend: MuninnBackend | null = null;
 let singletonBackendPromise: Promise<MuninnBackend> | null = null;
@@ -101,6 +177,7 @@ const REPAIR_PAGE_SIZE = 1_000;
 
 export class MuninnBackend {
   readonly memories: Memories;
+  readonly checkpointLock: CheckpointLock;
   private observer: Observer | null = null;
   private sessionRegistry: SessionRegistry | null = null;
   private watchdog: Watchdog | null = null;
@@ -110,21 +187,31 @@ export class MuninnBackend {
     private readonly checkpoint: CheckpointFile | null = null,
   ) {
     this.memories = new Memories(client);
+    this.checkpointLock = new AsyncCheckpointLock();
+    const observerName = loadMuninnConfig()?.observer?.name;
+    this.sessionRegistry = observerName
+      ? new SessionRegistry(client, observerName)
+      : null;
   }
 
   static async create(client: NativeTables): Promise<MuninnBackend> {
     const checkpoint = await readCheckpointFile();
     const backend = new MuninnBackend(client, checkpoint);
+    await backend.restoreCheckpointSessions();
     const watchdogConfig = getWatchdogConfig();
     if (watchdogConfig.enabled) {
-      const lastCheckpointContent = checkpoint
-        ? backend.serializeCheckpointContent(checkpoint)
+      const lastCheckpointJson = checkpoint
+        ? JSON.stringify({
+          schemaVersion: checkpoint.schemaVersion,
+          observers: checkpoint.observers,
+        })
         : null;
       backend.watchdog = new Watchdog(
         client,
         watchdogConfig,
         backend,
-        lastCheckpointContent,
+        lastCheckpointJson,
+        backend.checkpointLock,
       );
       backend.watchdog.start();
     }
@@ -132,54 +219,51 @@ export class MuninnBackend {
   }
 
   async accept(turnContent: TurnContent): Promise<SessionTurn> {
-    const observer = await this.ensureObserver();
-    const registry = this.ensureSessionRegistry(observer.name);
-    return toSessionTurn(await observer.accept(turnContent, registry));
+    return this.checkpointLock.shared(async () => {
+      const observer = await this.ensureObserver();
+      const registry = this.ensureSessionRegistry(observer.name);
+      return toSessionTurn(await observer.accept(turnContent, registry));
+    });
   }
 
   async observerWatermark(): Promise<ObserverWatermark> {
-    return (await this.ensureObserver()).watermark();
+    return this.checkpointLock.shared(async () => (await this.ensureObserver()).watermark());
   }
 
   async recallMemories(query: string, limit?: number): Promise<RecallHit[]> {
     return this.memories.recall(query, limit);
   }
 
-  async exportCheckpoint(): Promise<CheckpointExport | null> {
-    const fragment = this.observer?.exportCheckpointFragment();
-    if (!fragment) {
-      if (!this.checkpoint) {
+  async exportCheckpoint(): Promise<CheckpointContent | null> {
+    return this.checkpointLock.exclusive(async () => {
+      const observer = this.observer;
+      const observerCheckpoint = observer?.exportCheckpoint();
+      if (!observer || !observerCheckpoint) {
         return null;
       }
-      return {
-        checkpoint: this.checkpoint,
-        content: this.serializeCheckpointContent(this.checkpoint),
+      const [turnStats, observingStats, semanticIndexStats] = await Promise.all([
+        this.client.sessionTable.stats(),
+        this.client.observingTable.stats(),
+        this.client.semanticIndexTable.stats(),
+      ]);
+      const checkpoint: ObserverCheckpoint = {
+        baseline: {
+          turn: turnStats?.version ?? 0,
+          observing: observingStats?.version ?? 0,
+          semanticIndex: semanticIndexStats?.version ?? 0,
+        },
+        committedEpoch: observerCheckpoint.committedEpoch,
+        nextEpoch: observerCheckpoint.nextEpoch,
+        openTurns: this.sessionRegistry?.exportOpenTurns() ?? [],
+        threads: observerCheckpoint.threads,
       };
-    }
-    const openTurns = await this.exportOpenTurns();
-    const observerCheckpoint: ObserverCheckpoint = {
-      baseline: {
-        turn: openTurns.version,
-        observing: fragment.baseline.observing,
-        semanticIndex: fragment.baseline.semanticIndex,
-      },
-      committedEpoch: fragment.committedEpoch,
-      nextEpoch: fragment.nextEpoch,
-      openTurns: openTurns.grouped.get(fragment.observerName) ?? [],
-      threads: fragment.threads,
-    };
-    const checkpoint: CheckpointFile = {
-      schemaVersion: 1,
-      writtenAt: new Date().toISOString(),
-      writerPid: process.pid,
-      observers: {
-        [fragment.observerName]: observerCheckpoint,
-      },
-    };
-    return {
-      checkpoint,
-      content: this.serializeCheckpointContent(checkpoint),
-    };
+      return {
+        schemaVersion: 1,
+        observers: {
+          [observer.name]: checkpoint,
+        },
+      };
+    });
   }
 
   async shutdown(): Promise<void> {
@@ -200,7 +284,7 @@ export class MuninnBackend {
       const checkpoint = observerName
         ? this.checkpoint?.observers[observerName] ?? null
         : null;
-      this.observer = new Observer(this.client, checkpoint);
+      this.observer = new Observer(this.client, checkpoint, this.checkpointLock);
     }
     await this.observer.ensureBootstrapped();
     return this.observer;
@@ -208,37 +292,27 @@ export class MuninnBackend {
 
   private ensureSessionRegistry(observerName: string): SessionRegistry {
     if (!this.sessionRegistry || this.sessionRegistry.observerName !== observerName) {
-      this.sessionRegistry = new SessionRegistry(
-        this.client,
-        observerName,
-        (sessionId, agent) => this.observer?.checkpointOpenTurnId(sessionId, agent),
-      );
+      this.sessionRegistry = new SessionRegistry(this.client, observerName);
     }
     return this.sessionRegistry;
   }
 
-  private serializeCheckpointContent(checkpoint: CheckpointFile): string {
-    return JSON.stringify({
-      schemaVersion: checkpoint.schemaVersion,
-      observers: checkpoint.observers,
-    });
-  }
-
-  private async exportOpenTurns(): Promise<{
-    version: number;
-    grouped: Map<string, OpenTurnRef[]>;
-  }> {
-    if (typeof this.client.sessionTable.exportOpenTurnRefs !== 'function') {
-      return {
-        version: 0,
-        grouped: new Map(),
-      };
+  private async restoreCheckpointSessions(): Promise<void> {
+    if (!this.sessionRegistry || !this.checkpoint) {
+      return;
     }
-    const exported = await this.client.sessionTable.exportOpenTurnRefs();
-    return {
-      version: exported.version,
-      grouped: groupOpenTurnsByObserver(exported.turns),
-    };
+    const section = this.checkpoint.observers[this.sessionRegistry.observerName];
+    if (!section) {
+      return;
+    }
+    for (const turnRef of section.openTurns) {
+      const row = await this.client.sessionTable.getTurn(turnRef.turnId);
+      const turn = row ? readSessionTurn(row) : null;
+      if (!turn || !matchesOpenTurn(turn, turnRef.sessionId ?? undefined, turnRef.agent, this.sessionRegistry.observerName)) {
+        throw new Error(`invalid checkpoint open turn: ${turnRef.turnId}`);
+      }
+      this.sessionRegistry.restoreSession(turnRef.sessionId ?? undefined, turnRef.agent, turn);
+    }
   }
 }
 
@@ -386,23 +460,17 @@ function turnRowId(turnId: string): bigint {
   return BigInt(rawRowId);
 }
 
-function groupOpenTurnsByObserver(turns: OpenTurnSourceRef[]): Map<string, OpenTurnRef[]> {
-  const grouped = new Map<string, OpenTurnRef[]>();
-  for (const turn of turns) {
-    const group = grouped.get(turn.observer);
-    const entry: OpenTurnRef = {
-      sessionId: turn.sessionId ?? null,
-      agent: turn.agent,
-      turnId: turn.turnId,
-      updatedAt: turn.updatedAt,
-    };
-    if (group) {
-      group.push(entry);
-    } else {
-      grouped.set(turn.observer, [entry]);
-    }
+function matchesOpenTurn(
+  turn: SessionTurn | null,
+  sessionId: string | undefined,
+  agent: string,
+  observer: string,
+): boolean {
+  if (!turn) {
+    return false;
   }
-  return grouped;
+  return sessionKey(turn.sessionId ?? undefined, turn.agent, turn.observer) === sessionKey(sessionId, agent, observer)
+    && !hasText(turn.response);
 }
 
 export async function getBackend(): Promise<MuninnBackend> {

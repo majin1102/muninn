@@ -2,11 +2,13 @@ import { access, appendFile, mkdir, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import {
+  type CheckpointContent,
+  type CheckpointFile,
   resolveCheckpointPath,
   serializeCheckpointFile,
 } from './checkpoint.js';
 import { resolveMuninnHome, type WatchdogConfig } from './config.js';
-import type { MuninnBackend } from './backend.js';
+import type { CheckpointLock, MuninnBackend } from './backend.js';
 import type { NativeTables, TableStats } from './native.js';
 
 type DatasetName = 'turn' | 'observing' | 'semanticIndex';
@@ -34,12 +36,16 @@ type DatasetState = {
 
 const WATCHDOG_LOG_FILE_NAME = 'watchdog.jsonl';
 const DATASETS: DatasetName[] = ['turn', 'observing', 'semanticIndex'];
+const noopCheckpointLock: CheckpointLock = {
+  shared: async (operation) => operation(),
+  exclusive: async (operation) => operation(),
+};
 
 export class Watchdog {
   private timer: NodeJS.Timeout | null = null;
   private stopped = false;
   private inFlight: Promise<void> | null = null;
-  private lastCheckpointContent: string | null = null;
+  private lastCheckpointJson: string | null = null;
   private readonly state = new Map<DatasetName, DatasetState>(
     DATASETS.map((dataset) => [dataset, {
       lastSeenVersion: null,
@@ -54,9 +60,10 @@ export class Watchdog {
     private readonly backend: Pick<MuninnBackend, 'exportCheckpoint'> = {
       exportCheckpoint: async () => null,
     },
-    lastCheckpointContent: string | null = null,
+    lastCheckpointJson: string | null = null,
+    private readonly checkpointLock: CheckpointLock = noopCheckpointLock,
   ) {
-    this.lastCheckpointContent = lastCheckpointContent;
+    this.lastCheckpointJson = lastCheckpointJson;
   }
 
   start(): void {
@@ -121,8 +128,8 @@ export class Watchdog {
       if (!exported) {
         return;
       }
-      const { checkpoint, content: checkpointContent } = exported;
-      if (checkpointContent === this.lastCheckpointContent) {
+      const checkpointJson = JSON.stringify(exported);
+      if (checkpointJson === this.lastCheckpointJson) {
         try {
           await access(this.checkpointPath());
           return;
@@ -132,8 +139,13 @@ export class Watchdog {
           }
         }
       }
+      const checkpoint: CheckpointFile = {
+        ...exported,
+        writtenAt: new Date().toISOString(),
+        writerPid: process.pid,
+      };
       await this.writeCheckpointAtomically(serializeCheckpointFile(checkpoint));
-      this.lastCheckpointContent = checkpointContent;
+      this.lastCheckpointJson = checkpointJson;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.error(`[muninn:watchdog] checkpoint flush failed: ${message}`);
@@ -154,7 +166,7 @@ export class Watchdog {
   }
 
   private async maintainTurns(): Promise<void> {
-    await this.runDatasetMaintenance('turn', async (setVersion) => {
+    await this.checkpointLock.shared(() => this.runDatasetMaintenance('turn', async (setVersion) => {
       const stats = await this.binding.sessionTable.stats();
       if (!stats) {
         this.resetState('turn');
@@ -181,11 +193,11 @@ export class Watchdog {
         fragmentCount: finalStats.fragmentCount,
         rowCount: finalStats.rowCount,
       });
-    });
+    }));
   }
 
   private async maintainObservings(): Promise<void> {
-    await this.runDatasetMaintenance('observing', async (setVersion) => {
+    await this.checkpointLock.shared(() => this.runDatasetMaintenance('observing', async (setVersion) => {
       const stats = await this.binding.observingTable.stats();
       if (!stats) {
         this.resetState('observing');
@@ -212,11 +224,11 @@ export class Watchdog {
         fragmentCount: finalStats.fragmentCount,
         rowCount: finalStats.rowCount,
       });
-    });
+    }));
   }
 
   private async maintainSemanticIndex(): Promise<void> {
-    await this.runDatasetMaintenance('semanticIndex', async (setVersion) => {
+    await this.checkpointLock.shared(() => this.runDatasetMaintenance('semanticIndex', async (setVersion) => {
       const ensured = await this.binding.semanticIndexTable.ensureVectorIndex({
         targetPartitionSize: this.config.semanticIndex.targetPartitionSize,
       });
@@ -265,7 +277,7 @@ export class Watchdog {
         rowCount: finalStats.rowCount,
         indexCreated: ensured.created,
       });
-    });
+    }));
   }
 
   private async runDatasetMaintenance(

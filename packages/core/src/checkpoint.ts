@@ -31,11 +31,14 @@ export type ObserverCheckpoint = {
   threads: ThreadRef[];
 };
 
-export type CheckpointFile = {
+export type CheckpointContent = {
   schemaVersion: 1;
+  observers: Record<string, ObserverCheckpoint>;
+};
+
+export type CheckpointFile = CheckpointContent & {
   writtenAt: string;
   writerPid: number;
-  observers: Record<string, ObserverCheckpoint>;
 };
 
 export function parseCheckpointFile(raw: string): CheckpointFile {
