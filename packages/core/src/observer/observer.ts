@@ -1,8 +1,5 @@
 import {
-  readCheckpointFile,
-  resolveObserverCheckpointSection,
-  type ObserverState,
-  type ObserverSection,
+  type ObserverCheckpoint,
   type ThreadRef,
 } from '../checkpoint.js';
 import type { NativeTables } from '../native.js';
@@ -26,6 +23,17 @@ import { buildSemanticIndex, buildTouchedIndex, observeEpoch } from './update.js
 const BASE_RETRY_DELAY_MS = 100;
 const MAX_RETRY_DELAY_MS = 2_000;
 const INDEX_RETRY_DELAY_MS = 5_000;
+
+export type ObserverCheckpointFragment = {
+  observerName: string;
+  baseline: {
+    observing: number;
+    semanticIndex: number;
+  };
+  committedEpoch?: number;
+  nextEpoch: number;
+  threads: ThreadRef[];
+};
 
 export class Observer {
   name: string;
@@ -55,7 +63,10 @@ export class Observer {
   private readonly shutdownController = new AbortController();
   private readonly epochQueue = new EpochQueue();
 
-  constructor(private readonly client: NativeTables) {
+  constructor(
+    private readonly client: NativeTables,
+    private readonly checkpoint: ObserverCheckpoint | null = null,
+  ) {
     const config = getObserverLlmConfig();
     if (!config) {
       throw new Error('observer is required.');
@@ -143,7 +154,7 @@ export class Observer {
     }
   }
 
-  exportCheckpointFragment(): ObserverState | null {
+  exportCheckpointFragment(): ObserverCheckpointFragment | null {
     if (!this.bootstrapped) {
       return null;
     }
@@ -446,8 +457,7 @@ export class Observer {
   }
 
   private async tryBootstrapFromCheckpoint(): Promise<boolean> {
-    const file = await readCheckpointFile();
-    const section = resolveObserverCheckpointSection(file, this.name);
+    const section = this.checkpoint;
     if (!section) {
       await this.refreshObservingBaseline();
       return false;
@@ -483,7 +493,7 @@ export class Observer {
   }
 
   private async restoreThreadsFromCheckpoint(
-    section: ObserverSection,
+    section: ObserverCheckpoint,
   ): Promise<ObservingThread[] | null> {
     const restored: ObservingThread[] = [];
     for (const threadRef of section.threads) {
@@ -507,7 +517,7 @@ export class Observer {
     return restored.sort((left, right) => left.updatedAt.localeCompare(right.updatedAt));
   }
 
-  private seedCheckpointOpenTurns(section: ObserverSection): void {
+  private seedCheckpointOpenTurns(section: ObserverCheckpoint): void {
     this.checkpointOpenTurnIds.clear();
     for (const turn of section.openTurns) {
       this.checkpointOpenTurnIds.set(

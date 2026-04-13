@@ -11,10 +11,6 @@ export type OpenTurnRef = {
   updatedAt: string;
 };
 
-export type OpenTurnSourceRef = OpenTurnRef & {
-  observer: string;
-};
-
 export type ThreadRef = {
   observingId: string;
   latestSnapshotId: string;
@@ -23,18 +19,7 @@ export type ThreadRef = {
   updatedAt: string;
 };
 
-export type ObserverState = {
-  observerName: string;
-  baseline: {
-    observing: number;
-    semanticIndex: number;
-  };
-  committedEpoch?: number;
-  nextEpoch: number;
-  threads: ThreadRef[];
-};
-
-export type ObserverSection = {
+export type ObserverCheckpoint = {
   baseline: {
     turn: number;
     observing: number;
@@ -50,13 +35,8 @@ export type CheckpointFile = {
   schemaVersion: 1;
   writtenAt: string;
   writerPid: number;
-  observers: Record<string, ObserverSection>;
+  observers: Record<string, ObserverCheckpoint>;
 };
-
-export type CheckpointContributor = () =>
-  | Promise<ObserverState | null>
-  | ObserverState
-  | null;
 
 export function parseCheckpointFile(raw: string): CheckpointFile {
   const parsed = JSON.parse(raw) as Partial<CheckpointFile>;
@@ -89,25 +69,15 @@ export async function readCheckpointFile(): Promise<CheckpointFile | null> {
   }
 }
 
-export function resolveObserverCheckpointSection(
-  file: CheckpointFile | null,
-  observerName: string,
-): ObserverSection | null {
-  if (!file) {
-    return null;
-  }
-  const section = file.observers[observerName];
-  if (!section) {
-    return null;
-  }
-  return section;
+export function serializeCheckpointFile(file: CheckpointFile): string {
+  return `${JSON.stringify(file, null, 2)}\n`;
 }
 
-function parseObserverSections(value: unknown): Record<string, ObserverSection> {
+function parseObserverSections(value: unknown): Record<string, ObserverCheckpoint> {
   if (!isObjectRecord(value)) {
     return {};
   }
-  const sections: Record<string, ObserverSection> = {};
+  const sections: Record<string, ObserverCheckpoint> = {};
   for (const [observerName, section] of Object.entries(value)) {
     const parsed = parseObserverSection(section);
     if (!parsed) {
@@ -118,7 +88,7 @@ function parseObserverSections(value: unknown): Record<string, ObserverSection> 
   return sections;
 }
 
-function parseObserverSection(value: unknown): ObserverSection | null {
+function parseObserverSection(value: unknown): ObserverCheckpoint | null {
   if (!isObjectRecord(value)) {
     return null;
   }
@@ -142,7 +112,7 @@ function parseObserverSection(value: unknown): ObserverSection | null {
   };
 }
 
-function parseBaseline(value: unknown): ObserverSection['baseline'] | null {
+function parseBaseline(value: unknown): ObserverCheckpoint['baseline'] | null {
   if (!isObjectRecord(value)) {
     return null;
   }
@@ -221,27 +191,6 @@ function parseThreads(value: unknown): ThreadRef[] | null {
 
 function isObjectRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
-}
-
-export function groupOpenTurnsByObserver(
-  turns: OpenTurnSourceRef[],
-): Map<string, OpenTurnRef[]> {
-  const grouped = new Map<string, OpenTurnRef[]>();
-  for (const turn of turns) {
-    const group = grouped.get(turn.observer);
-    const entry: OpenTurnRef = {
-      sessionId: turn.sessionId ?? null,
-      agent: turn.agent,
-      turnId: turn.turnId,
-      updatedAt: turn.updatedAt,
-    };
-    if (group) {
-      group.push(entry);
-      continue;
-    }
-    grouped.set(turn.observer, [entry]);
-  }
-  return grouped;
 }
 
 export function resolveCheckpointPath(): string {

@@ -2,13 +2,11 @@ import { access, appendFile, mkdir, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import {
-  groupOpenTurnsByObserver,
   resolveCheckpointPath,
-  type CheckpointContributor,
-  type CheckpointFile,
-  type ObserverSection,
+  serializeCheckpointFile,
 } from './checkpoint.js';
 import { resolveMuninnHome, type WatchdogConfig } from './config.js';
+import type { MuninnBackend } from './backend.js';
 import type { NativeTables, TableStats } from './native.js';
 
 type DatasetName = 'turn' | 'observing' | 'semanticIndex';
@@ -53,7 +51,9 @@ export class Watchdog {
   constructor(
     private readonly binding: NativeTables,
     private readonly config: WatchdogConfig,
-    private readonly contributors: CheckpointContributor[] = [],
+    private readonly backend: Pick<MuninnBackend, 'exportCheckpoint'> = {
+      exportCheckpoint: async () => null,
+    },
     lastCheckpointContent: string | null = null,
   ) {
     this.lastCheckpointContent = lastCheckpointContent;
@@ -117,13 +117,11 @@ export class Watchdog {
 
   private async flushCheckpoint(): Promise<void> {
     try {
-      const observers = await this.buildCheckpointPayload();
-      // No contributor state means there is nothing new to commit; keep the
-      // last durable checkpoint instead of overwriting it with an empty file.
-      if (Object.keys(observers).length === 0) {
+      const exported = await this.backend.exportCheckpoint();
+      if (!exported) {
         return;
       }
-      const checkpointContent = this.serializeCheckpointPayload(observers);
+      const { checkpoint, content: checkpointContent } = exported;
       if (checkpointContent === this.lastCheckpointContent) {
         try {
           await access(this.checkpointPath());
@@ -134,8 +132,7 @@ export class Watchdog {
           }
         }
       }
-      const file = this.buildCheckpointFile(observers);
-      await this.writeCheckpointAtomically(this.serializeCheckpoint(file));
+      await this.writeCheckpointAtomically(serializeCheckpointFile(checkpoint));
       this.lastCheckpointContent = checkpointContent;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -143,55 +140,8 @@ export class Watchdog {
     }
   }
 
-  private async buildCheckpointPayload(): Promise<Record<string, ObserverSection>> {
-    const openTurns = await this.gatherOpenTurnsByObserver();
-    const observers: Record<string, ObserverSection> = {};
-    for (const contributor of this.contributors) {
-      const fragment = await contributor();
-      if (!fragment) {
-        continue;
-      }
-      observers[fragment.observerName] = {
-        baseline: {
-          turn: openTurns.version,
-          observing: fragment.baseline.observing,
-          semanticIndex: fragment.baseline.semanticIndex,
-        },
-        committedEpoch: fragment.committedEpoch,
-        nextEpoch: fragment.nextEpoch,
-        openTurns: openTurns.grouped.get(fragment.observerName) ?? [],
-        threads: fragment.threads,
-      };
-    }
-    return observers;
-  }
-
-  private buildCheckpointFile(
-    observers: Record<string, ObserverSection>,
-  ): CheckpointFile {
-    return {
-      schemaVersion: 1,
-      writtenAt: new Date().toISOString(),
-      writerPid: process.pid,
-      observers,
-    };
-  }
-
   private checkpointPath(): string {
     return resolveCheckpointPath();
-  }
-
-  private serializeCheckpoint(file: CheckpointFile): string {
-    return `${JSON.stringify(file, null, 2)}\n`;
-  }
-
-  private serializeCheckpointPayload(
-    observers: Record<string, ObserverSection>,
-  ): string {
-    return JSON.stringify({
-      schemaVersion: 1,
-      observers,
-    });
   }
 
   private async writeCheckpointAtomically(content: string): Promise<void> {
@@ -201,23 +151,6 @@ export class Watchdog {
     await mkdir(directory, { recursive: true });
     await writeFile(tmpPath, content, 'utf8');
     await rename(tmpPath, targetPath);
-  }
-
-  private async gatherOpenTurnsByObserver(): Promise<{
-    version: number;
-    grouped: Map<string, ObserverSection['openTurns']>;
-  }> {
-    if (typeof this.binding.sessionTable.exportOpenTurnRefs !== 'function') {
-      return {
-        version: 0,
-        grouped: new Map(),
-      };
-    }
-    const exported = await this.binding.sessionTable.exportOpenTurnRefs();
-    return {
-      version: exported.version,
-      grouped: groupOpenTurnsByObserver(exported.turns),
-    };
   }
 
   private async maintainTurns(): Promise<void> {

@@ -1,12 +1,19 @@
 import { accessSync, constants as fsConstants } from 'node:fs';
 import path from 'node:path';
 
-import type { OpenTurnSourceRef } from './checkpoint.js';
 import type { ListModeInput, ObservingSnapshot, SessionTurn } from './client.js';
 import type { SemanticIndexRow, ObservingSnapshot as ObservingSnapshotPayload } from './observer/types.js';
 
 type MaybePromise<T> = Promise<T> | T;
 const EXPORT_PAGE_SIZE = 1_000;
+
+export type OpenTurnSourceRef = {
+  sessionId?: string | null;
+  agent: string;
+  observer: string;
+  turnId: string;
+  updatedAt: string;
+};
 
 export interface TableDescription {
   // describe() exposes table facts surfaced by the opened dataset. It does not
