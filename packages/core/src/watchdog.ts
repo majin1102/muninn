@@ -1,7 +1,14 @@
-import { appendFile, mkdir } from 'node:fs/promises';
+import { access, appendFile, mkdir, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
+import {
+  type CheckpointContent,
+  type CheckpointFile,
+  resolveCheckpointPath,
+  serializeCheckpointFile,
+} from './checkpoint.js';
 import { resolveMuninnHome, type WatchdogConfig } from './config.js';
+import type { CheckpointLock, MuninnBackend } from './backend.js';
 import type { NativeTables, TableStats } from './native.js';
 
 type DatasetName = 'turn' | 'observing' | 'semanticIndex';
@@ -29,11 +36,16 @@ type DatasetState = {
 
 const WATCHDOG_LOG_FILE_NAME = 'watchdog.jsonl';
 const DATASETS: DatasetName[] = ['turn', 'observing', 'semanticIndex'];
+const noopCheckpointLock: CheckpointLock = {
+  shared: async (operation) => operation(),
+  exclusive: async (operation) => operation(),
+};
 
 export class Watchdog {
   private timer: NodeJS.Timeout | null = null;
   private stopped = false;
   private inFlight: Promise<void> | null = null;
+  private lastCheckpointJson: string | null = null;
   private readonly state = new Map<DatasetName, DatasetState>(
     DATASETS.map((dataset) => [dataset, {
       lastSeenVersion: null,
@@ -45,7 +57,14 @@ export class Watchdog {
   constructor(
     private readonly binding: NativeTables,
     private readonly config: WatchdogConfig,
-  ) {}
+    private readonly backend: Pick<MuninnBackend, 'exportCheckpoint'> = {
+      exportCheckpoint: async () => null,
+    },
+    lastCheckpointJson: string | null = null,
+    private readonly checkpointLock: CheckpointLock = noopCheckpointLock,
+  ) {
+    this.lastCheckpointJson = lastCheckpointJson;
+  }
 
   start(): void {
     this.stopped = false;
@@ -55,7 +74,7 @@ export class Watchdog {
     this.schedule();
   }
 
-  async stop(): Promise<void> {
+  async stop(options: { flushCheckpoint?: boolean } = {}): Promise<void> {
     if (this.stopped) {
       await this.inFlight;
       return;
@@ -66,6 +85,9 @@ export class Watchdog {
       this.timer = null;
     }
     await this.inFlight;
+    if (options.flushCheckpoint) {
+      await this.flushCheckpoint();
+    }
   }
 
   private schedule(): void {
@@ -92,6 +114,7 @@ export class Watchdog {
       await this.maintainTurns();
       await this.maintainObservings();
       await this.maintainSemanticIndex();
+      await this.flushCheckpoint();
     })()
       .finally(() => {
         this.inFlight = null;
@@ -99,8 +122,51 @@ export class Watchdog {
     await this.inFlight;
   }
 
+  private async flushCheckpoint(): Promise<void> {
+    try {
+      const exported = await this.backend.exportCheckpoint();
+      if (!exported) {
+        return;
+      }
+      const checkpointJson = JSON.stringify(exported);
+      if (checkpointJson === this.lastCheckpointJson) {
+        try {
+          await access(this.checkpointPath());
+          return;
+        } catch (error) {
+          if (!(error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT')) {
+            throw error;
+          }
+        }
+      }
+      const checkpoint: CheckpointFile = {
+        ...exported,
+        writtenAt: new Date().toISOString(),
+        writerPid: process.pid,
+      };
+      await this.writeCheckpointAtomically(serializeCheckpointFile(checkpoint));
+      this.lastCheckpointJson = checkpointJson;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`[muninn:watchdog] checkpoint flush failed: ${message}`);
+    }
+  }
+
+  private checkpointPath(): string {
+    return resolveCheckpointPath();
+  }
+
+  private async writeCheckpointAtomically(content: string): Promise<void> {
+    const targetPath = this.checkpointPath();
+    const directory = path.dirname(targetPath);
+    const tmpPath = `${targetPath}.tmp`;
+    await mkdir(directory, { recursive: true });
+    await writeFile(tmpPath, content, 'utf8');
+    await rename(tmpPath, targetPath);
+  }
+
   private async maintainTurns(): Promise<void> {
-    await this.runDatasetMaintenance('turn', async (setVersion) => {
+    await this.checkpointLock.shared(() => this.runDatasetMaintenance('turn', async (setVersion) => {
       const stats = await this.binding.sessionTable.stats();
       if (!stats) {
         this.resetState('turn');
@@ -127,11 +193,11 @@ export class Watchdog {
         fragmentCount: finalStats.fragmentCount,
         rowCount: finalStats.rowCount,
       });
-    });
+    }));
   }
 
   private async maintainObservings(): Promise<void> {
-    await this.runDatasetMaintenance('observing', async (setVersion) => {
+    await this.checkpointLock.shared(() => this.runDatasetMaintenance('observing', async (setVersion) => {
       const stats = await this.binding.observingTable.stats();
       if (!stats) {
         this.resetState('observing');
@@ -158,11 +224,11 @@ export class Watchdog {
         fragmentCount: finalStats.fragmentCount,
         rowCount: finalStats.rowCount,
       });
-    });
+    }));
   }
 
   private async maintainSemanticIndex(): Promise<void> {
-    await this.runDatasetMaintenance('semanticIndex', async (setVersion) => {
+    await this.checkpointLock.shared(() => this.runDatasetMaintenance('semanticIndex', async (setVersion) => {
       const ensured = await this.binding.semanticIndexTable.ensureVectorIndex({
         targetPartitionSize: this.config.semanticIndex.targetPartitionSize,
       });
@@ -211,7 +277,7 @@ export class Watchdog {
         rowCount: finalStats.rowCount,
         indexCreated: ensured.created,
       });
-    });
+    }));
   }
 
   private async runDatasetMaintenance(

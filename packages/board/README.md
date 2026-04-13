@@ -38,7 +38,8 @@
   "observer": {
     "name": "default-observer",
     "llm": "default_observer_llm",
-    "maxAttempts": 3
+    "maxAttempts": 3,
+    "activeWindowDays": 7
   },
   "semanticIndex": {
     "embedding": {
@@ -84,6 +85,7 @@
 - `turn.llmSummaryThresholdChars` 决定 turn 在多长输入下切换到 LLM summary 路径
 - `turn.titleMaxChars` 控制 turn title 的最大长度
 - `observer.maxAttempts` 会同时作用于 observing gateway 和 observing update 的 LLM 重试次数
+- `observer.activeWindowDays` 控制 observing thread 进入活跃工作集、checkpoint 导出和 checkpoint 恢复时的活跃窗口，单位是天
 - `semanticIndex` 相关配置也统一使用 camelCase，例如 `semanticIndex.embedding.apiKey` 和 `semanticIndex.defaultImportance`
 - `watchdog.enabled=false` 会关闭启动检查和后台维护
 - `watchdog.intervalMs` 控制 watchdog 的维护间隔

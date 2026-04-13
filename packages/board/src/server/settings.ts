@@ -76,6 +76,13 @@ export function validateSettingsJson(text: string): void {
     ) {
       throw new Error('observer.maxAttempts must be a positive integer.');
     }
+    const activeWindowDays = config.activeWindowDays;
+    if (
+      activeWindowDays !== undefined &&
+      (!Number.isInteger(activeWindowDays) || (activeWindowDays as number) <= 0)
+    ) {
+      throw new Error('observer.activeWindowDays must be a positive integer.');
+    }
   }
 
   const llm = root.llm;

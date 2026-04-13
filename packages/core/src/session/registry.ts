@@ -1,7 +1,9 @@
+import type { OpenTurnRef } from '../checkpoint.js';
 import type { NativeTables } from '../native.js';
+import type { SessionTurn } from '../client.js';
 import { Session } from './session.js';
 import { normalizeSessionId, sessionKey } from './key.js';
-import { readSessionTurn } from './types.js';
+import { cloneTurn, readSessionTurn } from './types.js';
 
 const SESSION_TTL_MS = 2 * 60 * 60 * 1000;
 
@@ -18,6 +20,21 @@ export class SessionRegistry {
     readonly observerName: string,
   ) {}
 
+  restoreSession(sessionId: string | undefined, agent: string, openTurn: SessionTurn): void {
+    const normalizedSessionId = normalizeSessionId(sessionId);
+    const key = sessionKey(normalizedSessionId, agent, this.observerName);
+    const session = new Session(this.client, {
+      sessionId: normalizedSessionId,
+      agent,
+      observer: this.observerName,
+      openTurn: cloneTurn(openTurn),
+    });
+    this.sessions.set(key, {
+      promise: Promise.resolve(session),
+      resolved: session,
+    });
+  }
+
   async load(sessionId: string | undefined, agent: string): Promise<Session> {
     this.evictExpired();
     const normalizedSessionId = normalizeSessionId(sessionId);
@@ -31,11 +48,7 @@ export class SessionRegistry {
 
     const entry: SessionEntry = {
       promise: Promise.resolve().then(async () => {
-        const openTurn = await this.client.sessionTable.loadOpenTurn({
-          sessionId: normalizedSessionId,
-          agent,
-          observer: this.observerName,
-        });
+        const openTurn = await this.loadOpenTurn(normalizedSessionId, agent);
         const session = new Session(this.client, {
           sessionId: normalizedSessionId,
           agent,
@@ -62,9 +75,29 @@ export class SessionRegistry {
 
   private evictExpired() {
     for (const [key, entry] of this.sessions.entries()) {
-      if (entry.resolved?.expired(SESSION_TTL_MS)) {
+      if (entry.resolved?.expired(SESSION_TTL_MS) && !entry.resolved.exportOpenTurn()) {
         this.sessions.delete(key);
       }
     }
+  }
+
+  exportOpenTurns(): OpenTurnRef[] {
+    const turns: OpenTurnRef[] = [];
+    for (const entry of this.sessions.values()) {
+      const turn = entry.resolved?.exportOpenTurn();
+      if (turn) {
+        turns.push(turn);
+      }
+    }
+    turns.sort((left, right) => left.updatedAt.localeCompare(right.updatedAt));
+    return turns;
+  }
+
+  private async loadOpenTurn(sessionId: string | undefined, agent: string) {
+    return this.client.sessionTable.loadOpenTurn({
+      sessionId,
+      agent,
+      observer: this.observerName,
+    });
   }
 }

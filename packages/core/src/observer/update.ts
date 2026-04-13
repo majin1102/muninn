@@ -4,6 +4,7 @@ import { observeThread, routeObservingThreads } from '../llm/observing-gateway.j
 import { applyMemoriesDelta, applySemanticMemoryDelta } from './memory-delta.js';
 import type { SealedEpoch } from './epoch.js';
 import {
+  isActiveThread,
   applyObserveResult,
   createObservingThread,
   currentObservingContent,
@@ -14,11 +15,10 @@ import {
 } from './thread.js';
 import type { GatewayUpdate, ObservingThread } from './types.js';
 
-const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
-
 export async function observeEpoch(params: {
   client: NativeTables;
   observerName: string;
+  activeWindowDays: number;
   threads: ObservingThread[];
   sealedEpoch: SealedEpoch;
   signal?: AbortSignal;
@@ -27,12 +27,13 @@ export async function observeEpoch(params: {
   ensureActiveThreads(
     params.threads,
     params.observerName,
+    params.activeWindowDays,
     params.sealedEpoch.turns,
     params.sealedEpoch.epoch,
   );
 
   const gatewayResult = await routeObservingThreads(
-    activeGatewayInputs(params.threads, params.observerName),
+    activeGatewayInputs(params.threads, params.observerName, params.activeWindowDays),
     params.sealedEpoch.turns,
     params.signal,
   );
@@ -54,11 +55,11 @@ export async function observeEpoch(params: {
 function ensureActiveThreads(
   threads: ObservingThread[],
   observerName: string,
+  activeWindowDays: number,
   pendingTurns: SessionTurn[],
   epoch: number,
 ): void {
-  const cutoff = Date.now() - SEVEN_DAYS_MS;
-  const activeThreads = threads.filter((thread) => Date.parse(thread.updatedAt) >= cutoff);
+  const activeThreads = threads.filter((thread) => isActiveThread(thread.updatedAt, activeWindowDays));
   threads.splice(0, threads.length, ...activeThreads);
   if (threads.length > 0) {
     return;
@@ -72,11 +73,11 @@ function ensureActiveThreads(
 function activeGatewayInputs(
   threads: ObservingThread[],
   observerName: string,
+  activeWindowDays: number,
 ) {
-  const cutoff = Date.now() - SEVEN_DAYS_MS;
   return threads
     .filter((thread) => thread.observer === observerName)
-    .filter((thread) => Date.parse(thread.updatedAt) >= cutoff)
+    .filter((thread) => isActiveThread(thread.updatedAt, activeWindowDays))
     .map((thread) => ({
       observingId: thread.observingId,
       title: thread.title,

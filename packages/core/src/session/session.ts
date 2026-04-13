@@ -1,3 +1,4 @@
+import type { OpenTurnRef } from '../checkpoint.js';
 import type { NativeTables } from '../native.js';
 import type { SessionTurn, TurnContent } from '../client.js';
 import { buildSessionUpdate } from './update.js';
@@ -54,6 +55,18 @@ export class Session {
 
   expired(ttlMs: number): boolean {
     return Date.now() - this.lastUsedAt > ttlMs;
+  }
+
+  exportOpenTurn(): OpenTurnRef | null {
+    if (!this.openTurn) {
+      return null;
+    }
+    return {
+      sessionId: this.openTurn.sessionId ?? null,
+      agent: this.openTurn.agent,
+      turnId: this.openTurn.turnId,
+      updatedAt: this.openTurn.updatedAt,
+    };
   }
 
   private async runAcceptExclusive<T>(operation: () => Promise<T>): Promise<T> {

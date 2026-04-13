@@ -1,6 +1,11 @@
+import {
+  type ObserverCheckpoint,
+  type ThreadRef,
+} from '../checkpoint.js';
+import type { CheckpointLock } from '../backend.js';
 import type { NativeTables } from '../native.js';
 import type { ObserverWatermark, SessionTurn, TurnContent } from '../client.js';
-import { getEffectiveObserverName } from '../config.js';
+import { getObserverLlmConfig } from '../config.js';
 import type { SessionRegistry } from '../session/registry.js';
 import { cloneTurn, readSessionTurn, serializeSessionTurn } from '../session/types.js';
 import { EpochQueue, EpochSealedError, OpenEpoch, type SealedEpoch } from './epoch.js';
@@ -8,7 +13,9 @@ import {
   cloneObservingThreads,
   getPendingIndex,
   getPendingIndexUpTo,
+  isActiveThread,
   loadThreads,
+  threadFromSnapshots,
 } from './thread.js';
 import type { ObservingThread } from './types.js';
 import { buildSemanticIndex, buildTouchedIndex, observeEpoch } from './update.js';
@@ -17,8 +24,20 @@ const BASE_RETRY_DELAY_MS = 100;
 const MAX_RETRY_DELAY_MS = 2_000;
 const INDEX_RETRY_DELAY_MS = 5_000;
 
+export type ObserverCheckpointState = {
+  committedEpoch?: number;
+  nextEpoch: number;
+  threads: ThreadRef[];
+};
+
+const noopCheckpointLock: CheckpointLock = {
+  shared: async (operation) => operation(),
+  exclusive: async (operation) => operation(),
+};
+
 export class Observer {
-  name = getEffectiveObserverName();
+  name: string;
+  private readonly activeWindowDays: number;
   private committedEpoch?: number;
   private openEpoch!: OpenEpoch;
   private currentEpoch: SealedEpoch | null = null;
@@ -28,6 +47,9 @@ export class Observer {
   private shuttingDown = false;
   private bootstrapped = false;
   private bootstrapPromise: Promise<void> | null = null;
+  private checkpointCommittedEpoch?: number;
+  private checkpointNextEpoch = 0;
+  private checkpointThreads: ThreadRef[] = [];
   // Serializes sealed epoch publish order so epoch N never lands after epoch N+1.
   private publishChain: Promise<void> = Promise.resolve();
   private loopPromise: Promise<void> | null = null;
@@ -36,7 +58,18 @@ export class Observer {
   private readonly shutdownController = new AbortController();
   private readonly epochQueue = new EpochQueue();
 
-  constructor(private readonly client: NativeTables) {}
+  constructor(
+    private readonly client: NativeTables,
+    private readonly checkpoint: ObserverCheckpoint | null = null,
+    private readonly checkpointLock: CheckpointLock = noopCheckpointLock,
+  ) {
+    const config = getObserverLlmConfig();
+    if (!config) {
+      throw new Error('observer is required.');
+    }
+    this.name = config.name;
+    this.activeWindowDays = config.activeWindowDays;
+  }
 
   async ensureBootstrapped(): Promise<void> {
     if (this.bootstrapped) {
@@ -117,6 +150,17 @@ export class Observer {
     }
   }
 
+  exportCheckpoint(): ObserverCheckpointState | null {
+    if (!this.bootstrapped) {
+      return null;
+    }
+    return {
+      committedEpoch: this.checkpointCommittedEpoch,
+      nextEpoch: this.checkpointNextEpoch,
+      threads: this.checkpointThreads.map((thread) => ({ ...thread })),
+    };
+  }
+
   async flushPending(): Promise<void> {
     // Explicit barrier-drain: only work that has entered the observer before this call is guaranteed to drain.
     await this.ensureBootstrapped();
@@ -147,16 +191,21 @@ export class Observer {
   }
 
   private async bootstrapInternal(): Promise<void> {
-    const snapshots = await this.client.observingTable.listSnapshots({
-      observer: this.name,
-    });
-    this.threads = loadThreads(snapshots, this.name);
-    this.committedEpoch = snapshots.reduce<number | undefined>((max, snapshot) => {
-      const epoch = snapshot.checkpoint.observingEpoch;
-      return max == null || epoch > max ? epoch : max;
-    }, undefined);
+    const restoredFromCheckpoint = await this.tryBootstrapFromCheckpoint();
+    if (!restoredFromCheckpoint) {
+      const snapshots = await this.client.observingTable.listSnapshots({
+        observer: this.name,
+      });
+      this.threads = loadThreads(snapshots, this.name, this.activeWindowDays);
+      this.committedEpoch = snapshots.reduce<number | undefined>((max, snapshot) => {
+        const epoch = snapshot.checkpoint.observingEpoch;
+        return max == null || epoch > max ? epoch : max;
+      }, undefined);
+    }
 
-    let nextEpoch = this.committedEpoch == null ? 0 : this.committedEpoch + 1;
+    let nextEpoch = restoredFromCheckpoint
+      ? Math.max(this.openEpoch?.epoch ?? 0, (this.committedEpoch ?? -1) + 1)
+      : this.committedEpoch == null ? 0 : this.committedEpoch + 1;
     let pendingTurns = (await this.client.sessionTable.loadTurnsAfterEpoch({
       observer: this.name,
       committedEpoch: this.committedEpoch ?? null,
@@ -182,6 +231,7 @@ export class Observer {
     }
 
     this.openEpoch = new OpenEpoch(nextEpoch);
+    this.refreshCheckpointSnapshot();
     this.bootstrapped = true;
     this.start();
     this.notifyChange();
@@ -243,30 +293,34 @@ export class Observer {
       return;
     }
 
-    const threads = cloneObservingThreads(this.threads);
-    const result = await observeEpoch({
-      client: this.client,
-      observerName: this.name,
-      threads,
-      sealedEpoch: this.currentEpoch,
-      signal: this.shutdownController.signal,
+    await this.checkpointLock.shared(async () => {
+      const threads = cloneObservingThreads(this.threads);
+      const result = await observeEpoch({
+        client: this.client,
+        observerName: this.name,
+        activeWindowDays: this.activeWindowDays,
+        threads,
+        sealedEpoch: this.currentEpoch!,
+        signal: this.shutdownController.signal,
+      });
+      this.threads = result.threads;
+      try {
+        await this.buildCurrentEpochIndex(result.touchedIds);
+        if (!this.hasPendingSemanticIndex()) {
+          this.nextIndexRetryAt = undefined;
+        }
+      } catch (error) {
+        if (this.shuttingDown || isAbortError(error)) {
+          throw error;
+        }
+        console.error(`[muninn:observer] semantic index build failed: ${String(error)}`);
+        this.nextIndexRetryAt = Date.now() + INDEX_RETRY_DELAY_MS;
+      }
+      this.committedEpoch = this.currentEpoch?.epoch;
+      this.currentEpoch = null;
+      this.refreshCheckpointSnapshot();
+      this.notifyChange();
     });
-    this.threads = result.threads;
-    try {
-      await this.buildCurrentEpochIndex(result.touchedIds);
-      if (!this.hasPendingSemanticIndex()) {
-        this.nextIndexRetryAt = undefined;
-      }
-    } catch (error) {
-      if (this.shuttingDown || isAbortError(error)) {
-        throw error;
-      }
-      console.error(`[muninn:observer] semantic index build failed: ${String(error)}`);
-      this.nextIndexRetryAt = Date.now() + INDEX_RETRY_DELAY_MS;
-    }
-    this.committedEpoch = this.currentEpoch.epoch;
-    this.currentEpoch = null;
-    this.notifyChange();
   }
 
   private buildCurrentEpochIndex(touchedIds: Set<string>): Promise<void> {
@@ -339,8 +393,11 @@ export class Observer {
 
   private async retrySemanticIndex(): Promise<void> {
     try {
-      await buildSemanticIndex(this.client, this.threads, this.shutdownController.signal);
-      this.nextIndexRetryAt = undefined;
+      await this.checkpointLock.shared(async () => {
+        await buildSemanticIndex(this.client, this.threads, this.shutdownController.signal);
+        this.refreshCheckpointSnapshot();
+        this.nextIndexRetryAt = undefined;
+      });
     } catch (error) {
       if (this.shuttingDown || isAbortError(error)) {
         throw error;
@@ -353,6 +410,75 @@ export class Observer {
       }
       this.notifyChange();
     }
+  }
+
+  private exportCheckpointThreads(): ThreadRef[] {
+    return this.threads
+      .filter((thread) => isActiveThread(thread.updatedAt, this.activeWindowDays))
+      .map((thread) => ({
+        observingId: thread.observingId,
+        latestSnapshotId: thread.snapshotId ?? '',
+        latestSnapshotSequence: thread.snapshots.length - 1,
+        indexedSnapshotSequence: thread.indexedSnapshotSequence ?? null,
+        updatedAt: thread.updatedAt,
+      }))
+      .filter((thread) => thread.latestSnapshotId.length > 0);
+  }
+
+  private refreshCheckpointSnapshot(): void {
+    this.checkpointCommittedEpoch = this.committedEpoch;
+    this.checkpointNextEpoch = this.openEpoch?.epoch ?? (this.committedEpoch ?? -1) + 1;
+    this.checkpointThreads = this.exportCheckpointThreads();
+  }
+
+  private async tryBootstrapFromCheckpoint(): Promise<boolean> {
+    const section = this.checkpoint;
+    if (!section) {
+      return false;
+    }
+
+    const stats = typeof this.client.observingTable.stats === 'function'
+      ? await this.client.observingTable.stats()
+      : null;
+    const observingVersion = stats?.version ?? 0;
+    if (observingVersion !== section.baseline.observing) {
+      return false;
+    }
+
+    const restoredThreads = await this.restoreThreadsFromCheckpoint(section);
+    if (!restoredThreads) {
+      return false;
+    }
+
+    this.threads = restoredThreads;
+    this.committedEpoch = section.committedEpoch;
+    this.openEpoch = new OpenEpoch(section.nextEpoch);
+    return true;
+  }
+
+  private async restoreThreadsFromCheckpoint(
+    section: ObserverCheckpoint,
+  ): Promise<ObservingThread[] | null> {
+    const restored: ObservingThread[] = [];
+    for (const threadRef of section.threads) {
+      if (!isActiveThread(threadRef.updatedAt, this.activeWindowDays)) {
+        continue;
+      }
+      const rows = await this.client.observingTable.threadSnapshots(threadRef.observingId);
+      if (rows.length === 0) {
+        return null;
+      }
+      const thread = threadFromSnapshots(rows);
+      if (thread.snapshotId !== threadRef.latestSnapshotId) {
+        return null;
+      }
+      if (thread.snapshots.length - 1 !== threadRef.latestSnapshotSequence) {
+        return null;
+      }
+      thread.indexedSnapshotSequence = threadRef.indexedSnapshotSequence ?? null;
+      restored.push(thread);
+    }
+    return restored.sort((left, right) => left.updatedAt.localeCompare(right.updatedAt));
   }
 
   private waitForChange(version: number): Promise<void> {

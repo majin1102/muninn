@@ -12,7 +12,18 @@ import type {
 
 const PENDING_SNAPSHOT_ID = 'observing:18446744073709551615';
 const MAX_REFERENCES = 1000;
-const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+
+export function activeWindowMs(activeWindowDays: number): number {
+  return activeWindowDays * 24 * 60 * 60 * 1000;
+}
+
+export function isActiveThread(
+  updatedAt: string,
+  activeWindowDays: number,
+  nowMs = Date.now(),
+): boolean {
+  return Date.parse(updatedAt) >= nowMs - activeWindowMs(activeWindowDays);
+}
 
 export function createObservingThread(
   observer: string,
@@ -78,14 +89,11 @@ export function cloneObservingThreads(threads: ObservingThread[]): ObservingThre
 export function loadThreads(
   snapshots: ObservingSnapshot[],
   observer: string,
+  activeWindowDays: number,
 ): ObservingThread[] {
-  const cutoff = Date.now() - SEVEN_DAYS_MS;
   const grouped = new Map<string, ObservingSnapshot[]>();
   for (const snapshot of snapshots) {
     if (snapshot.observer !== observer) {
-      continue;
-    }
-    if (Date.parse(snapshot.updatedAt) < cutoff) {
       continue;
     }
     const rows = grouped.get(snapshot.observingId) ?? [];
@@ -94,6 +102,7 @@ export function loadThreads(
   }
   return [...grouped.values()]
     .map((rows) => threadFromSnapshots(rows))
+    .filter((thread) => isActiveThread(thread.updatedAt, activeWindowDays))
     .sort((left, right) => left.updatedAt.localeCompare(right.updatedAt));
 }
 

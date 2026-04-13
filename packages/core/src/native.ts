@@ -239,27 +239,28 @@ export async function describeSemanticIndexForStorage(
 }
 
 function wrapBinding(native: NativeCoreBinding): NativeTables {
+  const sessionTable: SessionTableBinding = {
+    loadOpenTurn: async (params) => normalizeOptionalRecord(
+      await resolveNativeResult(native.sessionLoadOpenTurn(params)),
+      'turnId',
+    ),
+    getTurn: async (turnId) => normalizeOptionalRecord(
+      await resolveNativeResult(native.sessionGetTurn(turnId)),
+      'turnId',
+    ),
+    listTurns: async (params) => resolveNativeResult(native.sessionListTurns(params)),
+    timelineTurns: async (params) => resolveNativeResult(native.sessionTimelineTurns(params)),
+    loadTurnsAfterEpoch: async (params) => resolveNativeResult(native.sessionLoadTurnsAfterEpoch(params)),
+    insert: async (params) => resolveNativeResult(native.sessionInsert(params)),
+    update: async (params) => resolveNativeResult(native.sessionUpdate(params)),
+    deleteTurns: async (params) => resolveNativeResult(native.sessionDeleteTurns(params)),
+    stats: async () => resolveNativeResult(native.sessionTableStats()),
+    compact: async () => resolveNativeResult(native.sessionCompact()),
+    describe: async () => resolveNativeResult(native.describeSessionTable()),
+  };
   return {
     close: async () => resolveNativeResult(native.close()),
-    sessionTable: {
-      loadOpenTurn: async (params) => normalizeOptionalRecord(
-        await resolveNativeResult(native.sessionLoadOpenTurn(params)),
-        'turnId',
-      ),
-      getTurn: async (turnId) => normalizeOptionalRecord(
-        await resolveNativeResult(native.sessionGetTurn(turnId)),
-        'turnId',
-      ),
-      listTurns: async (params) => resolveNativeResult(native.sessionListTurns(params)),
-      timelineTurns: async (params) => resolveNativeResult(native.sessionTimelineTurns(params)),
-      loadTurnsAfterEpoch: async (params) => resolveNativeResult(native.sessionLoadTurnsAfterEpoch(params)),
-      insert: async (params) => resolveNativeResult(native.sessionInsert(params)),
-      update: async (params) => resolveNativeResult(native.sessionUpdate(params)),
-      deleteTurns: async (params) => resolveNativeResult(native.sessionDeleteTurns(params)),
-      stats: async () => resolveNativeResult(native.sessionTableStats()),
-      compact: async () => resolveNativeResult(native.sessionCompact()),
-      describe: async () => resolveNativeResult(native.describeSessionTable()),
-    },
+    sessionTable,
     observingTable: {
       getSnapshot: async (snapshotId) => normalizeOptionalRecord(
         await resolveNativeResult(native.observingGetSnapshot(snapshotId)),
