@@ -267,13 +267,13 @@ export class MuninnBackend {
   }
 
   async shutdown(): Promise<void> {
+    if (this.observer) {
+      await this.observer.shutdown();
+    }
     if (this.watchdog) {
       await this.watchdog.stop({ flushCheckpoint: true });
     }
     this.watchdog = null;
-    if (this.observer) {
-      await this.observer.shutdown();
-    }
     this.observer = null;
     this.sessionRegistry = null;
   }
