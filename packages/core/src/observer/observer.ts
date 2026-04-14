@@ -206,14 +206,33 @@ export class Observer {
         observer: this.name,
         committedEpoch: null,
       })).map(readSessionTurn);
-      this.committedEpoch = maxCommittedEpoch(turns);
-      this.threads = loadThreads(
-        snapshots,
-        this.name,
-        this.activeWindowDays,
-        this.committedEpoch ?? 0,
-      );
-      pendingTurns = pendingObservableTurns(turns, this.committedEpoch);
+      const fallback = await this.restoreThreadsFromCheckpoint({
+        baseline: {
+          turn: 0,
+          observing: 0,
+          semanticIndex: 0,
+        },
+        nextEpoch: 0,
+        openTurns: [],
+        threads: [],
+      }, snapshots, new Map(turns.map((turn) => [turn.turnId, turn])));
+      if (fallback) {
+        this.threads = fallback.threads;
+        this.committedEpoch = fallback.committedEpoch;
+        pendingTurns = pendingObservableTurns(
+          turns.filter((turn) => !fallback.observedTurnIds.has(turn.turnId)),
+          fallback.committedEpoch,
+        );
+      } else {
+        this.committedEpoch = undefined;
+        this.threads = loadThreads(
+          snapshots,
+          this.name,
+          this.activeWindowDays,
+          0,
+        );
+        pendingTurns = pendingObservableTurns(turns, undefined);
+      }
     }
 
     let nextEpoch = this.committedEpoch == null ? 0 : this.committedEpoch + 1;
@@ -623,16 +642,6 @@ function keepNewestTurn(byId: Map<string, SessionTurn>, turn: SessionTurn): void
   if (!existing || existing.updatedAt < turn.updatedAt) {
     byId.set(turn.turnId, cloneTurn(turn));
   }
-}
-
-function maxCommittedEpoch(turns: SessionTurn[], baseline?: number): number | undefined {
-  return turns.reduce<number | undefined>((max, turn) => {
-    const epoch = turn.observingEpoch;
-    if (epoch == null) {
-      return max;
-    }
-    return max == null || epoch > max ? epoch : max;
-  }, baseline);
 }
 
 function pendingObservableTurns(

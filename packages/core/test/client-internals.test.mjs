@@ -1210,6 +1210,70 @@ test('observer checkpoint export returns null before bootstrap completes', async
   assert.equal(observer.exportCheckpoint(), null);
 });
 
+test('observer bootstrap without checkpoint derives committedEpoch from observing snapshots', async (t) => {
+  const { dir, homeDir, configPath } = await makeConfigHome();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+  process.env.MUNINN_HOME = homeDir;
+  await writeObserverConfig(configPath);
+
+  const snapshot1At = new Date(Date.now() - 1_000).toISOString();
+  const snapshot2At = new Date().toISOString();
+  const observer = new Observer({
+    sessionTable: {
+      loadTurnsAfterEpoch: async () => [
+        makeObservableTurn('turn-13', 13, 'epoch13'),
+        makeObservableTurn('turn-14', 14, 'epoch14'),
+      ],
+    },
+    observingTable: {
+      listSnapshots: async () => [
+        {
+          snapshotId: 'snapshot-1',
+          observingId: 'obs-1',
+          snapshotSequence: 0,
+          createdAt: snapshot1At,
+          updatedAt: snapshot1At,
+          observer: 'default-observer',
+          title: 'Thread',
+          summary: 'Summary',
+          content: JSON.stringify({
+            memories: [],
+            openQuestions: [],
+            nextSteps: [],
+            memoryDelta: { before: [], after: [] },
+          }),
+          references: ['turn-13'],
+        },
+        {
+          snapshotId: 'snapshot-2',
+          observingId: 'obs-1',
+          snapshotSequence: 1,
+          createdAt: snapshot2At,
+          updatedAt: snapshot2At,
+          observer: 'default-observer',
+          title: 'Thread',
+          summary: 'Summary',
+          content: JSON.stringify({
+            memories: [],
+            openQuestions: [],
+            nextSteps: [],
+            memoryDelta: { before: [], after: [] },
+          }),
+          references: ['turn-13', 'turn-14'],
+        },
+      ],
+    },
+    semanticIndexTable: {},
+  });
+  t.after(async () => observer.shutdown());
+
+  await observer.ensureBootstrapped();
+
+  assert.equal(observer.committedEpoch, 14);
+  assert.deepEqual((await observer.watermark()).pendingTurnIds, []);
+  assert.deepEqual(observer.threads[0].snapshotIds, ['snapshot-1', 'snapshot-2']);
+});
+
 test('observer bootstrap restores committed state from checkpoint when baselines match', async (t) => {
   const { dir, homeDir, configPath } = await makeConfigHome();
   t.after(async () => rm(dir, { recursive: true, force: true }));
