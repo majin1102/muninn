@@ -1,6 +1,6 @@
-# Core Module
+# Format Module
 
-This crate is Muninn's current Rust core implementation layer.
+This crate is Muninn's current Rust format and storage implementation layer.
 
 ## Dependency Policy
 
@@ -8,7 +8,7 @@ By default, this crate depends on the official published `lance` crate from crat
 
 Do not commit a repository-external `path` dependency for `lance` into the main branch.
 
-Current default dependency lives in [`core/Cargo.toml`](./Cargo.toml).
+Current default dependency lives in [`format/Cargo.toml`](./Cargo.toml).
 
 ## Local Lance Development
 
@@ -29,7 +29,7 @@ lance = { path = "/absolute/path/to/your/lance/rust/lance" }
 
 With that override in place:
 
-- `cargo test` in `core/` will use your local Lance source
+- `cargo test` in `format/` will use your local Lance source
 - `packages/core` will also use that same local Lance source when it builds and loads the native addon
 - changes made in your local Lance checkout can take effect immediately after rebuild/restart
 
@@ -48,17 +48,14 @@ Using `[patch.crates-io]` for local experimentation preserves those guarantees w
 
 Current Rust-side boundaries are intentionally narrow:
 
-- `muninn.rs`
-  - Native-addon-facing service surface.
-  - Exposes typed session / observing / semantic operations to `packages/core`.
-- `format/`
-  - Persisted row models plus typed table access.
-  - `TableOptions` owns object-store configuration and table wiring.
-  - `SessionTable`, `ObservingTable`, and `SemanticIndexTable` are the stable Rust-side table boundary.
-- `llm/prompts.rs`
-  - Prompt asset loading helpers that remain shared with the TS layer.
-- `watchdog.rs`
-  - Minimal storage maintenance entrypoint.
+- `src/session.rs`, `src/observing.rs`, `src/semantic_index.rs`
+  - Typed session / observing / semantic table operations.
+- `src/access.rs`, `src/codec.rs`, `src/schema.rs`, `src/memory_id.rs`
+  - Shared table infrastructure below the table API boundary.
+- `src/config.rs`
+  - Minimal format/storage config loading.
+- `src/maintenance.rs`
+  - Storage maintenance helpers for compact / vector index / optimize.
 
 Practical rule:
 
@@ -74,9 +71,9 @@ Practical rule:
 Useful local commands:
 
 ```bash
-cargo check --manifest-path core/Cargo.toml
+cargo check --manifest-path format/Cargo.toml
 cargo check --manifest-path packages/core/native/Cargo.toml
 pnpm --filter @muninn/core build
 ```
 
-If you use a local `[patch.crates-io]` override for Lance, it affects both `core/` and `packages/core/native/`, because the addon links against this crate directly.
+If you use a local `[patch.crates-io]` override for Lance, it affects both `format/` and `packages/core/native/`, because the addon links against this crate directly.

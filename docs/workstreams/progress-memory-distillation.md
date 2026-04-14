@@ -19,8 +19,7 @@
 - 已落地 `turn` 生成双路径：
   - 短 turn：direct summary + title-only LLM
   - 长 / 过程化 turn：full LLM title + summary
-- 已新增 `turn_title.yaml`，并在 `core/src/llm/prompts.rs` 中补齐 title-only prompt loader
-- 已在 `core/src/llm/turn.rs` 中加入 summary gate、direct summary builder、title-only 生成逻辑
+- 相关 Rust `llm` 目录已删除；summary / title 生成逻辑现已全部收口到 TS `packages/core`
 - 已补齐相关 mock 兼容、单测和 fixture
 - 已构建 `turn` 评测模块，并能对真实 provider 输出跑 fixture-based live evaluation
 - 已通过多轮 live 对比，确认当前主要剩余问题不再是 User 约束丢失或 Agent next step 丢失，而是 Agent 段仍偏长
@@ -47,7 +46,7 @@
 ## 下一步建议
 
 - 先停止继续细抠 prompt 文案，把当前实现作为 `v1`
-- 下一步优先把 `core/src/llm/turn.rs` 中的 `normalize_agent_source(...)` 和相关后处理再压一轮
+- 下一步优先继续压缩 TS 侧 summary / title 生成和后处理逻辑
 - 再下一步用真实 OpenClaw 输入做批量评测，观察 direct summary 命中比例、token 节省和 recall 质量
 
 ## 需要记录的风险

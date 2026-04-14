@@ -14,7 +14,7 @@ import { app } from '../dist/app.js';
 const { shutdownCoreForTests } = core;
 
 async function makeDatasetUri() {
-  const dir = await mkdtemp(path.join(os.tmpdir(), 'muninn-sidecar-test-'));
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'muninn-format-test-'));
   return {
     dir,
     homeDir: path.join(dir, 'muninn'),

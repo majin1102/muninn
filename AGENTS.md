@@ -39,9 +39,9 @@ Current strategic direction:
 - `packages/core`
   - TS binding layer for the Lance-backed core implementation.
   - Shared entrypoint for sidecar and other TS integrations.
-- `core/`
-  - Intended long-term home of core logic and domain behavior.
-  - Defaults to the published `lance` crate; see `core/README.md` for local override workflow.
+- `format/`
+  - Rust typed-table, format, and storage implementation.
+  - Defaults to the published `lance` crate; see `format/README.md` for local override workflow.
 - `docs/`
   - Design notes, product plans, specs, architecture notes, comparisons, research documents, and workstream trackers.
 - `examples/`
@@ -52,7 +52,7 @@ Current strategic direction:
 Preferred dependency direction:
 
 - `packages/sidecar` should depend on `packages/core`.
-- `packages/core` should depend on the Rust core implementation.
+- `packages/core` should depend on the Rust `format/` implementation.
 - `packages/mcp` should talk to `packages/sidecar`, not directly to Rust/core by default.
 
 Working principle:

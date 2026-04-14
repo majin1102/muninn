@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use super::access::{LanceDataset, TableAccess, TableDescription, TableOptions, delete_by_ids, describe_dataset};
 use super::codec::{record_batch_to_semantic_rows, semantic_rows_to_reader};
 use super::TableStats;
-use crate::watchdog::{compact_dataset, ensure_semantic_vector_index, optimize_semantic_index};
+use crate::maintenance::{compact_dataset, ensure_semantic_vector_index, optimize_semantic_index};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -107,6 +107,7 @@ impl SemanticIndexTable {
     }
 
     #[cfg(test)]
+    #[allow(dead_code)]
     pub(crate) async fn list(&self) -> Result<Vec<SemanticIndexRow>> {
         let Some(dataset) = self.access.try_open().await? else {
             return Ok(Vec::new());

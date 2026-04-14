@@ -1,10 +1,10 @@
 [package]
-name = "muninn-sidecar"
+name = "muninn-format"
 version = "0.1.0"
 edition = "2024"
 
 [lib]
-name = "muninn_sidecar"
+name = "muninn_format"
 path = "src/lib.rs"
 
 [dependencies]

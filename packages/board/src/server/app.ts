@@ -527,7 +527,7 @@ boardApp.put('/api/v1/ui/settings/config', async (c) => {
     return c.json(errorResponse('internalError', 'failed to write muninn.json'), 500);
   }
 
-  // Saving muninn.json updates the persisted config only. The current core/native
+  // Saving muninn.json updates the persisted config only. The current format/native
   // runtime stays alive until the process restarts, so changes do not hot-apply.
 
   const response: SettingsConfigResponse = {

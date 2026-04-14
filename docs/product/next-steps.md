@@ -15,9 +15,7 @@
 - ✅ Lance 存储持久化
 
 **代码位置：**
-- `core/src/observer/mod.rs` - 核心 Observer 实现
-- `core/src/llm/observing.rs` - Gateway 路由逻辑
-- `core/src/llm/observing_update.rs` - Observe 生成逻辑
+- Rust observer/LLM runtime 已删除；相关运行时逻辑现在只保留在 TS `packages/core` 中
 
 ### 1.2 OpenClaw 对接（高优先级）
 **状态：** 调研收敛中，MVP hook 面已初步定稿，等待实现
@@ -102,7 +100,7 @@
 - [ ] 性能测试：对比 Muninn vs OpenClaw 自带 LanceDB plugin 的召回质量和 token 消耗
 
 ### 4.2 单元测试补充（中优先级）
-**状态：** Observer 相关测试已存在（`core/src/observer/tests.rs`）
+**状态：** Rust observer 旧测试已删除；当前以 Rust table 测试和 TS 集成测试为主
 
 **需要做的：**
 - [ ] 补充 direct-summary path 的集成测试

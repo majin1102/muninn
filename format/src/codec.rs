@@ -14,10 +14,10 @@ use serde_json::Value;
 
 use super::schema::{observing_schema, semantic_index_schema, turn_schema};
 use crate::config::semantic_index_config;
-use crate::format::memory_id::{MemoryId, MemoryLayer};
-use crate::format::observing::ObservingSnapshot;
-use crate::format::semantic_index::SemanticIndexRow;
-use crate::format::session::SessionTurn;
+use crate::memory_id::{MemoryId, MemoryLayer};
+use crate::observing::ObservingSnapshot;
+use crate::semantic_index::SemanticIndexRow;
+use crate::session::SessionTurn;
 
 pub(crate) fn turns_to_record_batch(
     turns: &[SessionTurn],
@@ -75,6 +75,7 @@ pub(crate) fn turns_to_record_batch(
             .map(|turn| turn.observing_epoch)
             .collect::<Vec<_>>(),
     );
+
     Ok(RecordBatch::try_new(
         Arc::new(turn_schema()),
         vec![
