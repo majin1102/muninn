@@ -1746,6 +1746,71 @@ test('observer restoreCheckpointState falls back when observing delta refs are m
   assert.equal(restored, null);
 });
 
+test('observer restoreCheckpointState skips stale threads recovered only from observing delta', async (t) => {
+  const { dir, homeDir, configPath } = await makeConfigHome();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+  process.env.MUNINN_HOME = homeDir;
+  await writeObserverConfig(configPath, { activeWindowDays: 7 });
+  const staleUpdatedAt = new Date(Date.now() - 4000 * 24 * 60 * 60 * 1000).toISOString();
+
+  await mkdir(path.dirname(resolveCheckpointPath()), { recursive: true });
+  await writeFile(resolveCheckpointPath(), `${JSON.stringify({
+    schemaVersion: 1,
+    writtenAt: '2024-01-01T00:00:00Z',
+    writerPid: 123,
+    observers: {
+      'default-observer': {
+        baseline: {
+          turn: 10,
+          observing: 21,
+          semanticIndex: 8,
+        },
+        committedEpoch: 12,
+        nextEpoch: 13,
+        openTurns: [],
+        threads: [],
+      },
+    },
+  }, null, 2)}\n`, 'utf8');
+
+  const checkpoint = (await readCheckpointFile())?.observers['default-observer'] ?? null;
+  const observer = new Observer({
+    sessionTable: {
+      loadTurnsAfterEpoch: async () => [makeObservableTurn('turn-13', 13, 'epoch13')],
+    },
+    observingTable: {
+      delta: async () => [
+        {
+          snapshotId: 'snapshot-1',
+          observingId: 'obs-stale',
+          snapshotSequence: 0,
+          createdAt: staleUpdatedAt,
+          updatedAt: staleUpdatedAt,
+          observer: 'default-observer',
+          title: 'Stale Thread',
+          summary: 'Summary',
+          content: JSON.stringify({
+            memories: [],
+            openQuestions: [],
+            nextSteps: [],
+            memoryDelta: { before: [], after: [] },
+          }),
+          references: ['turn-13'],
+        },
+      ],
+      threadSnapshots: async () => [],
+    },
+    semanticIndexTable: {},
+  }, checkpoint);
+  t.after(async () => observer.shutdown());
+
+  const restored = await observer.restoreCheckpointState();
+
+  assert.equal(restored.committedEpoch, 13);
+  assert.equal(restored.threads.length, 0);
+  assert.deepEqual(restored.pendingTurns, []);
+});
+
 test('observer bootstrap skips stale checkpoint threads', async (t) => {
   const { dir, homeDir, configPath } = await makeConfigHome();
   t.after(async () => rm(dir, { recursive: true, force: true }));

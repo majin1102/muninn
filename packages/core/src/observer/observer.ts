@@ -590,6 +590,9 @@ export class Observer {
       if (!thread) {
         continue;
       }
+      if (!isActiveThread(thread.updatedAt, this.activeWindowDays)) {
+        continue;
+      }
       restored.push(thread);
     }
     return {
