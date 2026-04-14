@@ -55,10 +55,6 @@ export interface ObservingSnapshot {
   summary: string;
   content: string;
   references: string[];
-  checkpoint: {
-    observingEpoch: number;
-    indexedSnapshotSequence?: number | null;
-  };
 }
 
 export interface RenderedMemory {
@@ -305,13 +301,21 @@ export class MuninnBackend {
     if (!section) {
       return;
     }
-    for (const turnRef of section.openTurns) {
-      const row = await this.client.sessionTable.getTurn(turnRef.turnId);
-      const turn = row ? readSessionTurn(row) : null;
-      if (!turn || !matchesOpenTurn(turn, turnRef.sessionId ?? undefined, turnRef.agent, this.sessionRegistry.observerName)) {
-        throw new Error(`invalid checkpoint open turn: ${turnRef.turnId}`);
+    const delta = await this.client.sessionTable.delta({
+      observer: this.sessionRegistry.observerName,
+      baselineVersion: section.baseline.turn,
+    });
+    const refs = replayOpenTurns(section.openTurns, delta.map(readSessionTurn));
+    for (const ref of refs) {
+      const turn = ref.turn ?? await loadOpenTurnRef(
+        this.client,
+        ref.turnRef,
+        this.sessionRegistry.observerName,
+      );
+      if (!turn) {
+        continue;
       }
-      this.sessionRegistry.restoreSession(turnRef.sessionId ?? undefined, turnRef.agent, turn);
+      this.sessionRegistry.restoreSession(ref.turnRef.sessionId ?? undefined, ref.turnRef.agent, turn);
     }
   }
 }
@@ -471,6 +475,58 @@ function matchesOpenTurn(
   }
   return sessionKey(turn.sessionId ?? undefined, turn.agent, turn.observer) === sessionKey(sessionId, agent, observer)
     && !hasText(turn.response);
+}
+
+function replayOpenTurns(
+  baseline: import('./checkpoint.js').OpenTurnRef[],
+  rows: SessionTurn[],
+): Array<{ turnRef: import('./checkpoint.js').OpenTurnRef; turn?: SessionTurn }> {
+  const turns = new Map<string, { turnRef: import('./checkpoint.js').OpenTurnRef; turn?: SessionTurn }>();
+  for (const turnRef of baseline) {
+    const key = openTurnKey(turnRef.sessionId ?? undefined, turnRef.agent);
+    turns.set(key, { turnRef });
+  }
+  const ordered = [...rows].sort((left, right) => (
+    left.createdAt.localeCompare(right.createdAt)
+    || left.updatedAt.localeCompare(right.updatedAt)
+    || left.turnId.localeCompare(right.turnId)
+  ));
+  for (const turn of ordered) {
+    const key = openTurnKey(turn.sessionId ?? undefined, turn.agent);
+    if (hasText(turn.response)) {
+      turns.delete(key);
+      continue;
+    }
+    turns.set(key, {
+      turnRef: {
+        sessionId: turn.sessionId ?? null,
+        agent: turn.agent,
+        turnId: turn.turnId,
+        updatedAt: turn.updatedAt,
+      },
+      turn,
+    });
+  }
+  return [...turns.values()].sort((left, right) => (
+    left.turnRef.updatedAt.localeCompare(right.turnRef.updatedAt)
+  ));
+}
+
+function openTurnKey(sessionId: string | undefined, agent: string): string {
+  return sessionId ? `${sessionId}\u0000${agent}` : `\u0000${agent}`;
+}
+
+async function loadOpenTurnRef(
+  client: NativeTables,
+  turnRef: import('./checkpoint.js').OpenTurnRef,
+  observer: string,
+): Promise<SessionTurn | null> {
+  const row = await client.sessionTable.getTurn(turnRef.turnId);
+  const turn = row ? readSessionTurn(row) : null;
+  if (!turn || !matchesOpenTurn(turn, turnRef.sessionId ?? undefined, turnRef.agent, observer)) {
+    return null;
+  }
+  return turn;
 }
 
 export async function getBackend(): Promise<MuninnBackend> {

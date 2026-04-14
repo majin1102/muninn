@@ -63,6 +63,13 @@ struct SessionLoadTurnsAfterEpochParams {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct TableDeltaParams {
+    observer: String,
+    baseline_version: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct SessionUpsertParams {
     turns: Vec<SessionTurn>,
 }
@@ -236,6 +243,18 @@ impl CoreBinding {
         )
     }
 
+    #[napi(js_name = "sessionDelta")]
+    pub async fn session_delta(&self, params: Value) -> NapiResult<Value> {
+        let params = parse_params::<TableDeltaParams>(params)?;
+        let resources = self.resources().await?;
+        into_napi_value(
+            resources
+                .session_table
+                .delta(&params.observer, params.baseline_version)
+                .await,
+        )
+    }
+
     #[napi(js_name = "sessionInsert")]
     pub async fn session_insert(&self, params: Value) -> NapiResult<Value> {
         let params = parse_params::<SessionUpsertParams>(params)?;
@@ -320,6 +339,18 @@ impl CoreBinding {
     pub async fn observing_thread_snapshots(&self, observing_id: String) -> NapiResult<Value> {
         let resources = self.resources().await?;
         into_napi_value(resources.observing_table.load_thread_snapshots(&observing_id).await)
+    }
+
+    #[napi(js_name = "observingDelta")]
+    pub async fn observing_delta(&self, params: Value) -> NapiResult<Value> {
+        let params = parse_params::<TableDeltaParams>(params)?;
+        let resources = self.resources().await?;
+        into_napi_value(
+            resources
+                .observing_table
+                .delta(&params.observer, params.baseline_version)
+                .await,
+        )
     }
 
     #[napi(js_name = "observingInsert")]

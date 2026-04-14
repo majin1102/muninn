@@ -458,6 +458,43 @@ impl SessionTable {
         Ok(turns)
     }
 
+    pub async fn delta(
+        &self,
+        observer: &str,
+        baseline_version: u64,
+    ) -> Result<Vec<SessionTurn>> {
+        let Some(dataset) = self.access.try_open().await? else {
+            return Ok(Vec::new());
+        };
+        let version = dataset.version().version;
+        if version <= baseline_version {
+            return Ok(Vec::new());
+        }
+        let delta = dataset
+            .delta()
+            .compared_against_version(baseline_version)
+            .build()?;
+        let mut inserted = delta.get_inserted_rows().await?;
+        let mut rows = Vec::new();
+        while let Some(batch) = inserted.try_next().await? {
+            if batch.num_rows() == 0 {
+                continue;
+            }
+            rows.extend(
+                record_batch_to_turns(&batch)?
+                    .into_iter()
+                    .filter(|turn| turn.observer == observer),
+            );
+        }
+        rows.sort_by(|left, right| {
+            left.created_at
+                .cmp(&right.created_at)
+                .then(left.updated_at.cmp(&right.updated_at))
+                .then(left.turn_id.cmp(&right.turn_id))
+        });
+        Ok(rows)
+    }
+
     #[cfg(test)]
     #[allow(dead_code)]
     pub(crate) async fn turns_for_observing_epochs(

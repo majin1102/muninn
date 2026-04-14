@@ -55,6 +55,10 @@ type NativeCoreBinding = {
     observer: string;
     committedEpoch?: number | null;
   }): MaybePromise<SessionTurn[]>;
+  sessionDelta(params: {
+    observer: string;
+    baselineVersion: number;
+  }): MaybePromise<SessionTurn[]>;
   sessionInsert(params: {
     turns: Array<Record<string, unknown>>;
   }): MaybePromise<SessionTurn[]>;
@@ -71,6 +75,10 @@ type NativeCoreBinding = {
     observer?: string;
   }): MaybePromise<ObservingSnapshotPayload[]>;
   observingThreadSnapshots(observingId: string): MaybePromise<ObservingSnapshotPayload[]>;
+  observingDelta(params: {
+    observer: string;
+    baselineVersion: number;
+  }): MaybePromise<ObservingSnapshotPayload[]>;
   observingInsert(params: {
     snapshots: ObservingSnapshotPayload[];
   }): MaybePromise<ObservingSnapshotPayload[]>;
@@ -134,6 +142,10 @@ export interface SessionTableBinding {
     observer: string;
     committedEpoch?: number | null;
   }): Promise<SessionTurn[]>;
+  delta(params: {
+    observer: string;
+    baselineVersion: number;
+  }): Promise<SessionTurn[]>;
   insert(params: {
     turns: Array<Record<string, unknown>>;
   }): Promise<SessionTurn[]>;
@@ -154,6 +166,10 @@ export interface ObservingTableBinding {
     observer?: string;
   }): Promise<ObservingSnapshotPayload[]>;
   threadSnapshots(observingId: string): Promise<ObservingSnapshotPayload[]>;
+  delta(params: {
+    observer: string;
+    baselineVersion: number;
+  }): Promise<ObservingSnapshotPayload[]>;
   insert(params: {
     snapshots: ObservingSnapshotPayload[];
   }): Promise<ObservingSnapshotPayload[]>;
@@ -251,6 +267,7 @@ function wrapBinding(native: NativeCoreBinding): NativeTables {
     listTurns: async (params) => resolveNativeResult(native.sessionListTurns(params)),
     timelineTurns: async (params) => resolveNativeResult(native.sessionTimelineTurns(params)),
     loadTurnsAfterEpoch: async (params) => resolveNativeResult(native.sessionLoadTurnsAfterEpoch(params)),
+    delta: async (params) => resolveNativeResult(native.sessionDelta(params)),
     insert: async (params) => resolveNativeResult(native.sessionInsert(params)),
     update: async (params) => resolveNativeResult(native.sessionUpdate(params)),
     deleteTurns: async (params) => resolveNativeResult(native.sessionDeleteTurns(params)),
@@ -268,6 +285,7 @@ function wrapBinding(native: NativeCoreBinding): NativeTables {
       ),
       listSnapshots: async (params) => resolveNativeResult(native.observingListSnapshots(params)),
       threadSnapshots: async (observingId) => resolveNativeResult(native.observingThreadSnapshots(observingId)),
+      delta: async (params) => resolveNativeResult(native.observingDelta(params)),
       insert: async (params) => resolveNativeResult(native.observingInsert(params)),
       update: async (params) => resolveNativeResult(native.observingUpdate(params)),
       stats: async () => resolveNativeResult(native.observingTableStats()),

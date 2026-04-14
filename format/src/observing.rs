@@ -1,6 +1,5 @@
-use futures_util::TryStreamExt;
 use chrono::{DateTime, Utc};
-use lance::dataset::UpdateBuilder;
+use futures_util::TryStreamExt;
 use lance::{Error, Result};
 use object_store::path::Path;
 use serde::{Deserialize, Serialize};
@@ -15,13 +14,6 @@ use super::codec::{
 };
 use super::memory_id::{MemoryId, MemoryLayer, deserialize_memory_id, serialize_memory_id};
 use crate::maintenance::compact_dataset;
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct ObservingCheckpoint {
-    pub observing_epoch: u64,
-    pub indexed_snapshot_sequence: Option<i64>,
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -40,7 +32,6 @@ pub struct ObservingSnapshot {
     pub summary: String,
     pub content: String,
     pub references: Vec<String>,
-    pub checkpoint: ObservingCheckpoint,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -179,24 +170,10 @@ impl ObservingTable {
     }
 
     pub async fn update(&self, observings: &[ObservingSnapshot]) -> Result<()> {
-        if observings.is_empty() {
-            return Ok(());
-        }
-        if observings
-            .iter()
-            .any(|observing| observing.snapshot_id.memory_point() == u64::MAX)
-        {
-            return Err(Error::invalid_input(
-                "observing update requires persisted snapshot ids",
-            ));
-        }
-        let Some(dataset) = self.access.try_open().await? else {
-            return Err(Error::invalid_input(
-                "cannot update observing rows before dataset exists",
-            ));
-        };
-        update_observing_rows(dataset, observings).await?;
-        Ok(())
+        let _ = observings;
+        Err(Error::invalid_input(
+            "observing update is no longer supported",
+        ))
     }
 
     #[allow(dead_code)]
@@ -233,6 +210,44 @@ impl ObservingTable {
         record_batch_to_observings(&batch)
     }
 
+    pub async fn delta(
+        &self,
+        observer: &str,
+        baseline_version: u64,
+    ) -> Result<Vec<ObservingSnapshot>> {
+        let Some(dataset) = self.access.try_open().await? else {
+            return Ok(Vec::new());
+        };
+        let version = dataset.version().version;
+        if version <= baseline_version {
+            return Ok(Vec::new());
+        }
+        let delta = dataset
+            .delta()
+            .compared_against_version(baseline_version)
+            .build()?;
+        let mut inserted = delta.get_inserted_rows().await?;
+        let mut rows = Vec::new();
+        while let Some(batch) = inserted.try_next().await? {
+            if batch.num_rows() == 0 {
+                continue;
+            }
+            rows.extend(
+                record_batch_to_observings(&batch)?
+                    .into_iter()
+                    .filter(|row| row.observer == observer),
+            );
+        }
+        rows.sort_by(|left, right| {
+            left.snapshot_sequence
+                .cmp(&right.snapshot_sequence)
+                .then(left.created_at.cmp(&right.created_at))
+                .then(left.updated_at.cmp(&right.updated_at))
+                .then(left.snapshot_id.cmp(&right.snapshot_id))
+        });
+        Ok(rows)
+    }
+
     async fn load_all(&self) -> Result<Vec<ObservingSnapshot>> {
         let Some(dataset) = self.access.try_open().await? else {
             return Ok(Vec::new());
@@ -243,48 +258,6 @@ impl ObservingTable {
         }
         record_batch_to_observings(&batch)
     }
-}
-
-async fn update_observing_rows(
-    mut dataset: LanceDataset,
-    observings: &[ObservingSnapshot],
-) -> Result<LanceDataset> {
-    for observing in observings {
-        let mut builder = UpdateBuilder::new(std::sync::Arc::new(dataset))
-            .update_where(&observing_update_filter(observing))?;
-        builder = builder.set("observing_id", &json_string_expr(&observing.observing_id))?;
-        builder = builder.set(
-            "snapshot_sequence",
-            &observing.snapshot_sequence.to_string(),
-        )?;
-        builder = builder.set(
-            "created_at",
-            &timestamp_expr(observing.created_at.timestamp_micros()),
-        )?;
-        builder = builder.set(
-            "updated_at",
-            &timestamp_expr(observing.updated_at.timestamp_micros()),
-        )?;
-        builder = builder.set("observer", &json_string_expr(&observing.observer))?;
-        builder = builder.set("title", &json_string_expr(&observing.title))?;
-        builder = builder.set("summary", &json_string_expr(&observing.summary))?;
-        builder = builder.set("content", &json_string_expr(&observing.content))?;
-        builder = builder.set("references", &string_list_expr(&observing.references))?;
-        builder = builder.set(
-            "checkpoint",
-            &json_string_expr(&serde_json::to_string(&observing.checkpoint).map_err(
-                |error| Error::invalid_input(format!("serialize checkpoint: {error}")),
-            )?),
-        )?;
-        dataset = builder
-            .build()?
-            .execute()
-            .await?
-            .new_dataset
-            .as_ref()
-            .clone();
-    }
-    Ok(dataset)
 }
 
 async fn assign_inserted_snapshot_ids_from_delta(
@@ -340,33 +313,13 @@ async fn assign_inserted_snapshot_ids_from_scan(
     Ok(())
 }
 
-fn json_string_expr(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "''"))
-}
-
-fn observing_update_filter(observing: &ObservingSnapshot) -> String {
-    format!(
-        "observing_id = {} AND snapshot_sequence = {}",
-        json_string_expr(&observing.observing_id),
-        observing.snapshot_sequence
-    )
-}
-
-fn string_list_expr(values: &[String]) -> String {
-    serde_json::to_string(values).expect("string list should serialize")
-}
-
-fn timestamp_expr(micros: i64) -> String {
-    format!("to_timestamp_micros({micros})")
-}
-
 #[cfg(test)]
 mod tests {
     use chrono::Utc;
 
-    use super::{ObservingCheckpoint, ObservingSnapshot, ObservingTable};
-    use crate::access::TableOptions;
-    use crate::memory_id::{MemoryId, MemoryLayer};
+    use super::{ObservingSnapshot, ObservingTable};
+    use crate::format::{MemoryId, MemoryLayer, TableOptions};
+    use crate::memory::types::MemoryView;
 
     #[test]
     fn observing_memory_id_roundtrip() {
@@ -381,15 +334,32 @@ mod tests {
             summary: "Observing summary".to_string(),
             content: "{\"memories\":[]}".to_string(),
             references: vec!["session:7".to_string()],
-            checkpoint: ObservingCheckpoint {
-                observing_epoch: 1,
-                indexed_snapshot_sequence: Some(1),
-            },
         };
 
         assert_eq!(observing.memory_id().unwrap().to_string(), "observing:42");
     }
 
+    #[test]
+    fn observing_try_into_rendered_memory_prefers_summary() {
+        let observing = ObservingSnapshot {
+            snapshot_id: MemoryId::new(MemoryLayer::Observing, 42),
+            observing_id: "OBS-LINE".to_string(),
+            snapshot_sequence: 1,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            observer: "observer-a".to_string(),
+            title: "Observing Title".to_string(),
+            summary: "Observing summary".to_string(),
+            content: "{\"memories\":[]}".to_string(),
+            references: vec!["session:7".to_string()],
+        };
+
+        let rendered = MemoryView::try_from(&observing).unwrap();
+        assert_eq!(rendered.memory_id.to_string(), "observing:42");
+        assert_eq!(rendered.title.as_deref(), Some("Observing Title"));
+        assert_eq!(rendered.summary.as_deref(), Some("Observing summary"));
+        assert_eq!(rendered.detail.as_deref(), Some("{\"memories\":[]}"));
+    }
     #[tokio::test]
     async fn insert_assigns_snapshot_id_and_update_rejects_pending_snapshots() {
         let dir = tempfile::tempdir().unwrap();
@@ -405,10 +375,6 @@ mod tests {
             summary: "Observing summary".to_string(),
             content: "{\"memories\":[]}".to_string(),
             references: vec!["session:7".to_string()],
-            checkpoint: ObservingCheckpoint {
-                observing_epoch: 1,
-                indexed_snapshot_sequence: Some(0),
-            },
         }];
 
         table.insert(&mut pending).await.unwrap();
@@ -426,15 +392,9 @@ mod tests {
                 summary: "Observing summary".to_string(),
                 content: "{\"memories\":[]}".to_string(),
                 references: vec!["session:7".to_string()],
-                checkpoint: ObservingCheckpoint {
-                    observing_epoch: 1,
-                    indexed_snapshot_sequence: Some(0),
-                },
             }])
             .await
             .unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("observing update requires persisted snapshot ids"));
+        assert!(err.to_string().contains("observing update is no longer supported"));
     }
 }

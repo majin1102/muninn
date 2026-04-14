@@ -1009,10 +1009,6 @@ test('loadThreads filters snapshots by the configured active window', () => {
         memoryDelta: { before: [], after: [] },
       }),
       references: [],
-      checkpoint: {
-        observingEpoch: 1,
-        indexedSnapshotSequence: 0,
-      },
     },
     {
       snapshotId: 'stale-snapshot',
@@ -1030,10 +1026,6 @@ test('loadThreads filters snapshots by the configured active window', () => {
         memoryDelta: { before: [], after: [] },
       }),
       references: [],
-      checkpoint: {
-        observingEpoch: 1,
-        indexedSnapshotSequence: 0,
-      },
     },
   ];
 
@@ -1062,10 +1054,6 @@ test('loadThreads keeps full history for active threads', () => {
         memoryDelta: { before: [], after: [] },
       }),
       references: [],
-      checkpoint: {
-        observingEpoch: 1,
-        indexedSnapshotSequence: 0,
-      },
     },
     {
       snapshotId: 'snapshot-1',
@@ -1083,10 +1071,6 @@ test('loadThreads keeps full history for active threads', () => {
         memoryDelta: { before: [], after: [] },
       }),
       references: [],
-      checkpoint: {
-        observingEpoch: 2,
-        indexedSnapshotSequence: 1,
-      },
     },
   ];
 
@@ -1094,8 +1078,8 @@ test('loadThreads keeps full history for active threads', () => {
   assert.equal(threads.length, 1);
   assert.equal(threads[0].observingId, 'mixed-thread');
   assert.deepEqual(threads[0].snapshotIds, ['snapshot-0', 'snapshot-1']);
-  assert.deepEqual(threads[0].snapshotEpochs, [1, 2]);
   assert.equal(threads[0].snapshots.length, 2);
+  assert.equal(threads[0].indexedSnapshotSequence, null);
 });
 
 test('epochQueue.shift returns a published epoch without waiting', () => {
@@ -1279,6 +1263,7 @@ test('observer bootstrap restores committed state from checkpoint when baselines
       },
     },
     observingTable: {
+      delta: async () => [],
       stats: async () => ({
         version: 21,
         fragmentCount: 1,
@@ -1307,10 +1292,6 @@ test('observer bootstrap restores committed state from checkpoint when baselines
               memoryDelta: { before: [], after: [] },
             }),
             references: [],
-            checkpoint: {
-              observingEpoch: 11,
-              indexedSnapshotSequence: 0,
-            },
           },
           {
             snapshotId: 'observing:42',
@@ -1328,10 +1309,6 @@ test('observer bootstrap restores committed state from checkpoint when baselines
               memoryDelta: { before: [], after: [] },
             }),
             references: [],
-            checkpoint: {
-              observingEpoch: 12,
-              indexedSnapshotSequence: 1,
-            },
           },
         ];
       },
@@ -1408,6 +1385,7 @@ test('observer checkpoint restore keeps full history for active threads', async 
       loadTurnsAfterEpoch: async () => [],
     },
     observingTable: {
+      delta: async () => [],
       stats: async () => ({
         version: 21,
         fragmentCount: 1,
@@ -1433,10 +1411,6 @@ test('observer checkpoint restore keeps full history for active threads', async 
               memoryDelta: { before: [], after: [] },
             }),
             references: [],
-            checkpoint: {
-              observingEpoch: 11,
-              indexedSnapshotSequence: 0,
-            },
           },
           {
             snapshotId: 'snapshot-1',
@@ -1454,10 +1428,6 @@ test('observer checkpoint restore keeps full history for active threads', async 
               memoryDelta: { before: [], after: [] },
             }),
             references: [],
-            checkpoint: {
-              observingEpoch: 12,
-              indexedSnapshotSequence: 1,
-            },
           },
         ];
       },
@@ -1476,8 +1446,240 @@ test('observer checkpoint restore keeps full history for active threads', async 
 
   assert.equal(observer.threads.length, 1);
   assert.deepEqual(observer.threads[0].snapshotIds, ['snapshot-0', 'snapshot-1']);
-  assert.deepEqual(observer.threads[0].snapshotEpochs, [11, 12]);
   assert.equal(observer.threads[0].snapshots.length, 2);
+  assert.equal(observer.threads[0].indexedSnapshotSequence, 1);
+});
+
+test('observer restoreCheckpointState advances committedEpoch and excludes observed turns from pending', async (t) => {
+  const { dir, homeDir, configPath } = await makeConfigHome();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+  process.env.MUNINN_HOME = homeDir;
+  await writeObserverConfig(configPath, { activeWindowDays: 7 });
+  const snapshot0At = new Date(Date.now() - 2_000).toISOString();
+  const snapshot1At = new Date(Date.now() - 1_000).toISOString();
+  const snapshot2At = new Date().toISOString();
+
+  await mkdir(path.dirname(resolveCheckpointPath()), { recursive: true });
+  await writeFile(resolveCheckpointPath(), `${JSON.stringify({
+    schemaVersion: 1,
+    writtenAt: '2024-01-01T00:00:00Z',
+    writerPid: 123,
+    observers: {
+      'default-observer': {
+        baseline: {
+          turn: 10,
+          observing: 21,
+          semanticIndex: 8,
+        },
+        committedEpoch: 12,
+        nextEpoch: 13,
+        openTurns: [],
+        threads: [{
+          observingId: 'obs-1',
+          latestSnapshotId: 'snapshot-0',
+          latestSnapshotSequence: 0,
+          indexedSnapshotSequence: 0,
+          updatedAt: snapshot0At,
+        }],
+      },
+    },
+  }, null, 2)}\n`, 'utf8');
+
+  const checkpoint = (await readCheckpointFile())?.observers['default-observer'] ?? null;
+  const observer = new Observer({
+    sessionTable: {
+      loadTurnsAfterEpoch: async () => [
+        makeObservableTurn('turn-13', 13, 'epoch13'),
+        makeObservableTurn('turn-14', 14, 'epoch14'),
+      ],
+    },
+    observingTable: {
+      delta: async () => [
+        {
+          snapshotId: 'snapshot-1',
+          observingId: 'obs-1',
+          snapshotSequence: 1,
+          createdAt: snapshot1At,
+          updatedAt: snapshot1At,
+          observer: 'default-observer',
+          title: 'Thread',
+          summary: 'Summary',
+          content: JSON.stringify({
+            memories: [],
+            openQuestions: [],
+            nextSteps: [],
+            memoryDelta: { before: [], after: [] },
+          }),
+          references: ['turn-13'],
+        },
+        {
+          snapshotId: 'snapshot-2',
+          observingId: 'obs-1',
+          snapshotSequence: 2,
+          createdAt: snapshot2At,
+          updatedAt: snapshot2At,
+          observer: 'default-observer',
+          title: 'Thread',
+          summary: 'Summary',
+          content: JSON.stringify({
+            memories: [],
+            openQuestions: [],
+            nextSteps: [],
+            memoryDelta: { before: [], after: [] },
+          }),
+          references: ['turn-13', 'turn-14'],
+        },
+      ],
+      threadSnapshots: async () => [
+        {
+          snapshotId: 'snapshot-0',
+          observingId: 'obs-1',
+          snapshotSequence: 0,
+          createdAt: snapshot0At,
+          updatedAt: snapshot0At,
+          observer: 'default-observer',
+          title: 'Thread',
+          summary: 'Summary',
+          content: JSON.stringify({
+            memories: [],
+            openQuestions: [],
+            nextSteps: [],
+            memoryDelta: { before: [], after: [] },
+          }),
+          references: [],
+        },
+        {
+          snapshotId: 'snapshot-1',
+          observingId: 'obs-1',
+          snapshotSequence: 1,
+          createdAt: snapshot1At,
+          updatedAt: snapshot1At,
+          observer: 'default-observer',
+          title: 'Thread',
+          summary: 'Summary',
+          content: JSON.stringify({
+            memories: [],
+            openQuestions: [],
+            nextSteps: [],
+            memoryDelta: { before: [], after: [] },
+          }),
+          references: ['turn-13'],
+        },
+        {
+          snapshotId: 'snapshot-2',
+          observingId: 'obs-1',
+          snapshotSequence: 2,
+          createdAt: snapshot2At,
+          updatedAt: snapshot2At,
+          observer: 'default-observer',
+          title: 'Thread',
+          summary: 'Summary',
+          content: JSON.stringify({
+            memories: [],
+            openQuestions: [],
+            nextSteps: [],
+            memoryDelta: { before: [], after: [] },
+          }),
+          references: ['turn-13', 'turn-14'],
+        },
+      ],
+    },
+    semanticIndexTable: {},
+  }, checkpoint);
+  t.after(async () => observer.shutdown());
+
+  const restored = await observer.restoreCheckpointState();
+
+  assert.equal(restored.committedEpoch, 14);
+  assert.deepEqual(restored.pendingTurns, []);
+  assert.deepEqual(restored.threads[0].snapshotIds, ['snapshot-0', 'snapshot-1', 'snapshot-2']);
+  assert.deepEqual(restored.threads[0].snapshotEpochs, [12, 13, 14]);
+});
+
+test('observer restoreCheckpointState falls back when observing delta refs are missing turn epochs', async (t) => {
+  const { dir, homeDir, configPath } = await makeConfigHome();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+  process.env.MUNINN_HOME = homeDir;
+  await writeObserverConfig(configPath, { activeWindowDays: 7 });
+
+  await mkdir(path.dirname(resolveCheckpointPath()), { recursive: true });
+  await writeFile(resolveCheckpointPath(), `${JSON.stringify({
+    schemaVersion: 1,
+    writtenAt: '2024-01-01T00:00:00Z',
+    writerPid: 123,
+    observers: {
+      'default-observer': {
+        baseline: {
+          turn: 10,
+          observing: 21,
+          semanticIndex: 8,
+        },
+        committedEpoch: 12,
+        nextEpoch: 13,
+        openTurns: [],
+        threads: [{
+          observingId: 'obs-1',
+          latestSnapshotId: 'snapshot-0',
+          latestSnapshotSequence: 0,
+          indexedSnapshotSequence: 0,
+          updatedAt: '2024-01-01T00:00:00Z',
+        }],
+      },
+    },
+  }, null, 2)}\n`, 'utf8');
+
+  const checkpoint = (await readCheckpointFile())?.observers['default-observer'] ?? null;
+  const observer = new Observer({
+    sessionTable: {
+      loadTurnsAfterEpoch: async () => [makeObservableTurn('turn-13', 13, 'epoch13')],
+    },
+    observingTable: {
+      delta: async () => [
+        {
+          snapshotId: 'snapshot-1',
+          observingId: 'obs-1',
+          snapshotSequence: 1,
+          createdAt: '2024-01-01T00:00:01Z',
+          updatedAt: '2024-01-01T00:00:01Z',
+          observer: 'default-observer',
+          title: 'Thread',
+          summary: 'Summary',
+          content: JSON.stringify({
+            memories: [],
+            openQuestions: [],
+            nextSteps: [],
+            memoryDelta: { before: [], after: [] },
+          }),
+          references: ['missing-turn'],
+        },
+      ],
+      threadSnapshots: async () => [
+        {
+          snapshotId: 'snapshot-0',
+          observingId: 'obs-1',
+          snapshotSequence: 0,
+          createdAt: '2024-01-01T00:00:00Z',
+          updatedAt: '2024-01-01T00:00:00Z',
+          observer: 'default-observer',
+          title: 'Thread',
+          summary: 'Summary',
+          content: JSON.stringify({
+            memories: [],
+            openQuestions: [],
+            nextSteps: [],
+            memoryDelta: { before: [], after: [] },
+          }),
+          references: [],
+        },
+      ],
+    },
+    semanticIndexTable: {},
+  }, checkpoint);
+  t.after(async () => observer.shutdown());
+
+  const restored = await observer.restoreCheckpointState();
+
+  assert.equal(restored, null);
 });
 
 test('observer bootstrap skips stale checkpoint threads', async (t) => {
@@ -1524,6 +1726,7 @@ test('observer bootstrap skips stale checkpoint threads', async (t) => {
       loadTurnsAfterEpoch: async () => [],
     },
     observingTable: {
+      delta: async () => [],
       stats: async () => ({
         version: 21,
         fragmentCount: 1,
@@ -1688,6 +1891,7 @@ test('observer bootstrap ignores semanticIndex version mismatches when observing
       loadTurnsAfterEpoch: async () => [],
     },
     observingTable: {
+      delta: async () => [],
       stats: async () => ({
         version: 21,
         fragmentCount: 1,
@@ -1714,10 +1918,6 @@ test('observer bootstrap ignores semanticIndex version mismatches when observing
             memoryDelta: { before: [], after: [] },
           }),
           references: [],
-          checkpoint: {
-            observingEpoch: 11,
-            indexedSnapshotSequence: 0,
-          },
         },
         {
           snapshotId: 'observing:42',
@@ -1735,10 +1935,6 @@ test('observer bootstrap ignores semanticIndex version mismatches when observing
             memoryDelta: { before: [], after: [] },
           }),
           references: [],
-          checkpoint: {
-            observingEpoch: 12,
-            indexedSnapshotSequence: 1,
-          },
         },
       ],
     },

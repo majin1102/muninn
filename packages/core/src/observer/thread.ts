@@ -90,6 +90,7 @@ export function loadThreads(
   snapshots: ObservingSnapshot[],
   observer: string,
   activeWindowDays: number,
+  observingEpoch = 0,
 ): ObservingThread[] {
   const grouped = new Map<string, ObservingSnapshot[]>();
   for (const snapshot of snapshots) {
@@ -101,12 +102,16 @@ export function loadThreads(
     grouped.set(snapshot.observingId, rows);
   }
   return [...grouped.values()]
-    .map((rows) => threadFromSnapshots(rows))
+    .map((rows) => threadFromSnapshots(rows, observingEpoch))
     .filter((thread) => isActiveThread(thread.updatedAt, activeWindowDays))
     .sort((left, right) => left.updatedAt.localeCompare(right.updatedAt));
 }
 
-export function threadFromSnapshots(rows: ObservingSnapshot[]): ObservingThread {
+export function threadFromSnapshots(
+  rows: ObservingSnapshot[],
+  observingEpoch = 0,
+  indexedSnapshotSequence: number | null = null,
+): ObservingThread {
   const ordered = [...rows].sort((left, right) => (
     left.snapshotSequence - right.snapshotSequence
     || left.updatedAt.localeCompare(right.updatedAt)
@@ -119,17 +124,45 @@ export function threadFromSnapshots(rows: ObservingSnapshot[]): ObservingThread 
     observingId: latest.observingId,
     snapshotId: latest.snapshotId,
     snapshotIds: ordered.map((row) => row.snapshotId),
-    snapshotEpochs: ordered.map((row) => row.checkpoint.observingEpoch),
-    observingEpoch: latest.checkpoint.observingEpoch,
+    snapshotEpochs: ordered.map(() => observingEpoch),
+    observingEpoch,
     title: latest.title,
     summary: latest.summary,
     snapshots: ordered.map(deserializeSnapshot),
     references: [...latest.references],
-    indexedSnapshotSequence: latest.checkpoint.indexedSnapshotSequence ?? null,
+    indexedSnapshotSequence,
     observer: latest.observer,
     createdAt: ordered[0]?.createdAt ?? latest.createdAt,
     updatedAt: latest.updatedAt,
   };
+}
+
+export function replaySnapshots(
+  thread: ObservingThread,
+  rows: ObservingSnapshot[],
+  observingEpoch = thread.observingEpoch,
+): void {
+  const ordered = [...rows].sort((left, right) => (
+    left.snapshotSequence - right.snapshotSequence
+    || left.updatedAt.localeCompare(right.updatedAt)
+  ));
+  for (const row of ordered) {
+    if (row.snapshotSequence < thread.snapshots.length) {
+      continue;
+    }
+    if (row.snapshotSequence !== thread.snapshots.length) {
+      throw new Error(`unexpected snapshot gap for observing thread ${thread.observingId}`);
+    }
+    thread.snapshotId = row.snapshotId;
+    thread.snapshotIds.push(row.snapshotId);
+    thread.snapshotEpochs = [...(thread.snapshotEpochs ?? []), observingEpoch];
+    thread.observingEpoch = observingEpoch;
+    thread.title = row.title;
+    thread.summary = row.summary;
+    thread.snapshots.push(deserializeSnapshot(row));
+    thread.references = [...row.references];
+    thread.updatedAt = row.updatedAt;
+  }
 }
 
 export function currentObservingContent(thread: ObservingThread): ObservingContent {
@@ -192,10 +225,6 @@ export function toObservingSnapshot(thread: ObservingThread): ObservingSnapshot 
     summary: thread.summary,
     content: JSON.stringify(snapshot, null, 2),
     references: [...thread.references],
-    checkpoint: {
-      observingEpoch: thread.observingEpoch,
-      indexedSnapshotSequence: thread.indexedSnapshotSequence ?? null,
-    },
   };
 }
 
