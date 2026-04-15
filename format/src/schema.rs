@@ -55,7 +55,6 @@ pub fn observing_schema() -> Schema {
             DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
             false,
         ),
-        Field::new("checkpoint", DataType::Utf8, false),
     ])
 }
 

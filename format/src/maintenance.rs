@@ -1,4 +1,5 @@
 use lance::Dataset;
+use lance::dataset::cleanup::CleanupPolicy;
 use lance::Result;
 use lance::dataset::optimize::{CompactionOptions, compact_files};
 use lance::index::vector::VectorIndexParams;
@@ -16,6 +17,19 @@ pub(crate) async fn compact_dataset(dataset: Option<Dataset>) -> Result<bool> {
     let before = dataset.version().version;
     compact_files(&mut dataset, CompactionOptions::default(), None).await?;
     Ok(dataset.version().version != before)
+}
+
+pub(crate) async fn cleanup_dataset(dataset: Option<Dataset>, floor_version: u64) -> Result<bool> {
+    let Some(dataset) = dataset else {
+        return Ok(false);
+    };
+    let removed = dataset
+        .cleanup_with_policy(CleanupPolicy {
+            before_version: Some(floor_version),
+            ..CleanupPolicy::default()
+        })
+        .await?;
+    Ok(removed.old_versions > 0 || removed.bytes_removed > 0)
 }
 
 pub(crate) async fn ensure_semantic_vector_index(
@@ -71,11 +85,11 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        SEMANTIC_VECTOR_INDEX_NAME, compact_dataset, ensure_semantic_vector_index,
+        SEMANTIC_VECTOR_INDEX_NAME, cleanup_dataset, compact_dataset, ensure_semantic_vector_index,
         optimize_semantic_index,
     };
     use crate::config::{CONFIG_FILE_NAME, llm_test_env_guard};
-    use crate::{SemanticIndexRow, SemanticIndexTable, SessionTable, TableOptions};
+    use crate::{MemoryId, MemoryLayer, SemanticIndexRow, SemanticIndexTable, SessionTable, SessionTurn, TableOptions};
 
     fn test_table_options() -> TableOptions {
         TableOptions::local(crate::config::data_root().unwrap()).unwrap()
@@ -179,5 +193,51 @@ mod tests {
         let mut dataset = table.try_open_dataset().await.unwrap().unwrap();
         let optimized = optimize_semantic_index(&mut dataset, 2).await.unwrap();
         assert!(!optimized);
+    }
+
+    #[tokio::test]
+    async fn cleanup_dataset_keeps_floor_version() {
+        let _guard = llm_test_env_guard();
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("muninn");
+        fs::create_dir_all(&home).unwrap();
+        unsafe {
+            std::env::set_var("MUNINN_HOME", &home);
+        }
+
+        let table = SessionTable::new(test_table_options());
+        let now = chrono::Utc::now();
+        let mut turn = SessionTurn {
+            turn_id: MemoryId::new(MemoryLayer::Session, u64::MAX),
+            created_at: now,
+            updated_at: now,
+            session_id: Some("group-a".to_string()),
+            agent: "agent-a".to_string(),
+            observer: "default-observer".to_string(),
+            title: None,
+            summary: Some("summary".to_string()),
+            tool_calling: None,
+            artifacts: None,
+            prompt: Some("prompt".to_string()),
+            response: None,
+            observing_epoch: None,
+        };
+        table.insert(std::slice::from_mut(&mut turn)).await.unwrap();
+        turn.updated_at = chrono::Utc::now();
+        turn.response = Some("response".to_string());
+        table.update(&[turn.clone()]).await.unwrap();
+
+        let dataset = table.try_open_dataset().await.unwrap().unwrap();
+        let versions = dataset.versions().await.unwrap();
+        assert!(versions.iter().any(|version| version.version == 1));
+        assert!(versions.iter().any(|version| version.version == 2));
+
+        let changed = cleanup_dataset(Some(dataset), 2).await.unwrap();
+        assert!(changed);
+
+        let reopened = table.try_open_dataset().await.unwrap().unwrap();
+        let versions = reopened.versions().await.unwrap();
+        assert!(!versions.iter().any(|version| version.version == 1));
+        assert!(versions.iter().any(|version| version.version == 2));
     }
 }

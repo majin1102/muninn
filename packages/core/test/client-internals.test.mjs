@@ -581,8 +581,7 @@ test('watchdog writes observer checkpoint files', async (t) => {
     },
   }, createWatchdogConfig({ intervalMs: 25, compactMinFragments: 3 }), createCheckpointBackend({
     schemaVersion: 1,
-    observers: {
-      'default-observer': {
+    observer: {
         baseline: {
           turn: 10,
           observing: 21,
@@ -604,7 +603,6 @@ test('watchdog writes observer checkpoint files', async (t) => {
           updatedAt: '2024-01-01T00:00:00Z',
         }],
       },
-    },
   }));
   t.after(async () => runtime.stop());
 
@@ -612,7 +610,7 @@ test('watchdog writes observer checkpoint files', async (t) => {
   await waitFor(async () => {
     try {
       const checkpoint = await readCheckpoint();
-      return checkpoint.observers?.['default-observer']?.threads?.length === 1;
+      return checkpoint.observer?.threads?.length === 1;
     } catch {
       return false;
     }
@@ -620,7 +618,7 @@ test('watchdog writes observer checkpoint files', async (t) => {
 
   const checkpoint = await readCheckpoint();
   assert.equal(checkpoint.schemaVersion, 1);
-  assert.deepEqual(checkpoint.observers['default-observer'], {
+  assert.deepEqual(checkpoint.observer, {
     baseline: {
       turn: 10,
       observing: 21,
@@ -655,8 +653,7 @@ test('watchdog skips checkpoint writes when contributors return no observer stat
     schemaVersion: 1,
     writtenAt: '2024-01-01T00:00:00Z',
     writerPid: 123,
-    observers: {
-      'default-observer': {
+    observer: {
         baseline: {
           turn: 10,
           observing: 21,
@@ -667,7 +664,6 @@ test('watchdog skips checkpoint writes when contributors return no observer stat
         openTurns: [],
         threads: [],
       },
-    },
   };
   await writeFile(resolveCheckpointPath(), `${JSON.stringify(existing, null, 2)}\n`, 'utf8');
   const before = await readFile(resolveCheckpointPath(), 'utf8');
@@ -708,8 +704,7 @@ test('watchdog skips checkpoint writes when observer content is unchanged', asyn
 
   const checkpointContent = {
     schemaVersion: 1,
-    observers: {
-      'default-observer': {
+    observer: {
         baseline: {
           turn: 10,
           observing: 21,
@@ -731,7 +726,6 @@ test('watchdog skips checkpoint writes when observer content is unchanged', asyn
           updatedAt: '2024-01-01T00:00:00Z',
         }],
       },
-    },
   };
   await mkdir(path.dirname(resolveCheckpointPath()), { recursive: true });
   await writeFile(resolveCheckpointPath(), `${JSON.stringify({
@@ -782,8 +776,7 @@ test('watchdog rewrites checkpoint when the file is deleted after startup', asyn
 
   const checkpointContent = {
     schemaVersion: 1,
-    observers: {
-      'default-observer': {
+    observer: {
         baseline: {
           turn: 10,
           observing: 21,
@@ -805,7 +798,6 @@ test('watchdog rewrites checkpoint when the file is deleted after startup', asyn
           updatedAt: '2024-01-01T00:00:00Z',
         }],
       },
-    },
   };
   const lastCheckpointJson = JSON.stringify(checkpointContent);
   await mkdir(path.dirname(resolveCheckpointPath()), { recursive: true });
@@ -849,7 +841,7 @@ test('watchdog rewrites checkpoint when the file is deleted after startup', asyn
   });
 
   const checkpoint = await readCheckpoint();
-  assert.equal(checkpoint.observers['default-observer'].committedEpoch, 12);
+  assert.equal(checkpoint.observer.committedEpoch, 12);
 });
 
 test('readCheckpointFile throws when the checkpoint file is invalid JSON', async (t) => {
@@ -863,11 +855,10 @@ test('readCheckpointFile throws when the checkpoint file is invalid JSON', async
   await assert.rejects(() => readCheckpointFile(), /Unexpected token|JSON/i);
 });
 
-test('watchdog rewrites checkpoint when observer content changes', async (t) => {
-  const { dir, homeDir, configPath } = await makeConfigHome();
+test('readCheckpointFile rejects the legacy observers checkpoint schema', async (t) => {
+  const { dir, homeDir } = await makeConfigHome();
   t.after(async () => rm(dir, { recursive: true, force: true }));
   process.env.MUNINN_HOME = homeDir;
-  await writeObserverConfig(configPath);
 
   await mkdir(path.dirname(resolveCheckpointPath()), { recursive: true });
   await writeFile(resolveCheckpointPath(), `${JSON.stringify({
@@ -881,12 +872,42 @@ test('watchdog rewrites checkpoint when observer content changes', async (t) => 
           observing: 21,
           semanticIndex: 8,
         },
+        committedEpoch: 12,
+        nextEpoch: 13,
+        openTurns: [],
+        threads: [],
+      },
+    },
+  }, null, 2)}\n`, 'utf8');
+
+  await assert.rejects(
+    () => readCheckpointFile(),
+    /checkpoint observer section is invalid/i,
+  );
+});
+
+test('watchdog rewrites checkpoint when observer content changes', async (t) => {
+  const { dir, homeDir, configPath } = await makeConfigHome();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+  process.env.MUNINN_HOME = homeDir;
+  await writeObserverConfig(configPath);
+
+  await mkdir(path.dirname(resolveCheckpointPath()), { recursive: true });
+  await writeFile(resolveCheckpointPath(), `${JSON.stringify({
+    schemaVersion: 1,
+    writtenAt: '2024-01-01T00:00:00Z',
+    writerPid: 123,
+    observer: {
+        baseline: {
+          turn: 10,
+          observing: 21,
+          semanticIndex: 8,
+        },
         committedEpoch: 11,
         nextEpoch: 12,
         openTurns: [],
         threads: [],
       },
-    },
   }, null, 2)}\n`, 'utf8');
   const beforeStat = await stat(resolveCheckpointPath());
 
@@ -911,8 +932,7 @@ test('watchdog rewrites checkpoint when observer content changes', async (t) => 
     },
   }, createWatchdogConfig({ intervalMs: 25 }), createCheckpointBackend({
     schemaVersion: 1,
-    observers: {
-      'default-observer': {
+    observer: {
         baseline: {
           turn: 10,
           observing: 21,
@@ -923,20 +943,19 @@ test('watchdog rewrites checkpoint when observer content changes', async (t) => 
         openTurns: [],
         threads: [],
       },
-    },
   }));
   t.after(async () => runtime.stop());
 
   runtime.start();
   await waitFor(async () => {
     const checkpoint = await readCheckpoint();
-    return checkpoint.observers['default-observer']?.committedEpoch === 12;
+    return checkpoint.observer?.committedEpoch === 12;
   });
 
   const after = await readCheckpoint();
   const afterStat = await stat(resolveCheckpointPath());
-  assert.equal(after.observers['default-observer'].committedEpoch, 12);
-  assert.equal(after.observers['default-observer'].nextEpoch, 13);
+  assert.equal(after.observer.committedEpoch, 12);
+  assert.equal(after.observer.nextEpoch, 13);
   assert.ok(after.writtenAt !== '2024-01-01T00:00:00Z');
   assert.ok(afterStat.mtimeMs >= beforeStat.mtimeMs);
 });
@@ -1009,10 +1028,6 @@ test('loadThreads filters snapshots by the configured active window', () => {
         memoryDelta: { before: [], after: [] },
       }),
       references: [],
-      checkpoint: {
-        observingEpoch: 1,
-        indexedSnapshotSequence: 0,
-      },
     },
     {
       snapshotId: 'stale-snapshot',
@@ -1030,10 +1045,6 @@ test('loadThreads filters snapshots by the configured active window', () => {
         memoryDelta: { before: [], after: [] },
       }),
       references: [],
-      checkpoint: {
-        observingEpoch: 1,
-        indexedSnapshotSequence: 0,
-      },
     },
   ];
 
@@ -1062,10 +1073,6 @@ test('loadThreads keeps full history for active threads', () => {
         memoryDelta: { before: [], after: [] },
       }),
       references: [],
-      checkpoint: {
-        observingEpoch: 1,
-        indexedSnapshotSequence: 0,
-      },
     },
     {
       snapshotId: 'snapshot-1',
@@ -1083,10 +1090,6 @@ test('loadThreads keeps full history for active threads', () => {
         memoryDelta: { before: [], after: [] },
       }),
       references: [],
-      checkpoint: {
-        observingEpoch: 2,
-        indexedSnapshotSequence: 1,
-      },
     },
   ];
 
@@ -1094,8 +1097,8 @@ test('loadThreads keeps full history for active threads', () => {
   assert.equal(threads.length, 1);
   assert.equal(threads[0].observingId, 'mixed-thread');
   assert.deepEqual(threads[0].snapshotIds, ['snapshot-0', 'snapshot-1']);
-  assert.deepEqual(threads[0].snapshotEpochs, [1, 2]);
   assert.equal(threads[0].snapshots.length, 2);
+  assert.equal(threads[0].indexedSnapshotSequence, null);
 });
 
 test('epochQueue.shift returns a published epoch without waiting', () => {
@@ -1226,6 +1229,109 @@ test('observer checkpoint export returns null before bootstrap completes', async
   assert.equal(observer.exportCheckpoint(), null);
 });
 
+test('observer bootstrap without checkpoint derives committedEpoch from observing snapshots', async (t) => {
+  const { dir, homeDir, configPath } = await makeConfigHome();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+  process.env.MUNINN_HOME = homeDir;
+  await writeObserverConfig(configPath);
+
+  const snapshot1At = new Date(Date.now() - 1_000).toISOString();
+  const snapshot2At = new Date().toISOString();
+  const rows = [
+    {
+      snapshotId: 'snapshot-1',
+      observingId: 'obs-1',
+      snapshotSequence: 0,
+      createdAt: snapshot1At,
+      updatedAt: snapshot1At,
+      observer: 'default-observer',
+      title: 'Thread',
+      summary: 'Summary',
+      content: JSON.stringify({
+        memories: [],
+        openQuestions: [],
+        nextSteps: [],
+        memoryDelta: { before: [], after: [] },
+      }),
+      references: ['turn-13'],
+    },
+    {
+      snapshotId: 'snapshot-2',
+      observingId: 'obs-1',
+      snapshotSequence: 1,
+      createdAt: snapshot2At,
+      updatedAt: snapshot2At,
+      observer: 'default-observer',
+      title: 'Thread',
+      summary: 'Summary',
+      content: JSON.stringify({
+        memories: [],
+        openQuestions: [],
+        nextSteps: [],
+        memoryDelta: { before: [], after: [] },
+      }),
+      references: ['turn-13', 'turn-14'],
+    },
+  ];
+  const observer = new Observer({
+    sessionTable: {
+      loadTurnsAfterEpoch: async () => [
+        makeObservableTurn('turn-13', 13, 'epoch13'),
+        makeObservableTurn('turn-14', 14, 'epoch14'),
+      ],
+    },
+    observingTable: {
+      listSnapshots: async () => rows,
+      threadSnapshots: async () => rows,
+    },
+    semanticIndexTable: {},
+  });
+  t.after(async () => observer.shutdown());
+
+  await observer.ensureBootstrapped();
+
+  assert.equal(observer.committedEpoch, 14);
+  assert.deepEqual((await observer.watermark()).pendingTurnIds, []);
+  assert.deepEqual(observer.threads[0].snapshotIds, ['snapshot-1', 'snapshot-2']);
+});
+
+test('observer bootstrap publishes pending turns by their observingEpoch', async (t) => {
+  const { dir, homeDir, configPath } = await makeConfigHome();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+  process.env.MUNINN_HOME = homeDir;
+  await writeObserverConfig(configPath);
+
+  const published = [];
+  const observer = new Observer({
+    sessionTable: {
+      loadTurnsAfterEpoch: async () => [
+        makeObservableTurn('turn-13', 13, 'epoch13'),
+        makeObservableTurn('turn-14', 14, 'epoch14'),
+      ],
+    },
+    observingTable: {
+      listSnapshots: async () => [],
+    },
+    semanticIndexTable: {},
+  });
+  t.after(async () => observer.shutdown());
+
+  observer.epochQueue.publishEpoch = (sealedEpoch) => {
+    published.push({
+      epoch: sealedEpoch.epoch,
+      turnIds: sealedEpoch.turns.map((turn) => turn.turnId),
+    });
+  };
+
+  await observer.ensureBootstrapped();
+
+  assert.deepEqual(published, [
+    { epoch: 13, turnIds: ['turn-13'] },
+    { epoch: 14, turnIds: ['turn-14'] },
+  ]);
+  assert.equal(observer.openEpoch.epoch, 15);
+});
+
 test('observer bootstrap restores committed state from checkpoint when baselines match', async (t) => {
   const { dir, homeDir, configPath } = await makeConfigHome();
   t.after(async () => rm(dir, { recursive: true, force: true }));
@@ -1237,8 +1343,7 @@ test('observer bootstrap restores committed state from checkpoint when baselines
     schemaVersion: 1,
     writtenAt: '2024-01-01T00:00:00Z',
     writerPid: 123,
-    observers: {
-      'default-observer': {
+    observer: {
         baseline: {
           turn: 10,
           observing: 21,
@@ -1260,12 +1365,11 @@ test('observer bootstrap restores committed state from checkpoint when baselines
           updatedAt: '2024-01-01T00:00:01Z',
         }],
       },
-    },
   }, null, 2)}\n`, 'utf8');
 
   let listSnapshotsCalls = 0;
   let loadTurnsAfterEpochCalls = 0;
-  const checkpoint = (await readCheckpointFile())?.observers['default-observer'] ?? null;
+  const checkpoint = (await readCheckpointFile())?.observer ?? null;
   const observer = new Observer({
     sessionTable: {
       stats: async () => ({
@@ -1279,6 +1383,7 @@ test('observer bootstrap restores committed state from checkpoint when baselines
       },
     },
     observingTable: {
+      delta: async () => [],
       stats: async () => ({
         version: 21,
         fragmentCount: 1,
@@ -1307,10 +1412,6 @@ test('observer bootstrap restores committed state from checkpoint when baselines
               memoryDelta: { before: [], after: [] },
             }),
             references: [],
-            checkpoint: {
-              observingEpoch: 11,
-              indexedSnapshotSequence: 0,
-            },
           },
           {
             snapshotId: 'observing:42',
@@ -1328,10 +1429,6 @@ test('observer bootstrap restores committed state from checkpoint when baselines
               memoryDelta: { before: [], after: [] },
             }),
             references: [],
-            checkpoint: {
-              observingEpoch: 12,
-              indexedSnapshotSequence: 1,
-            },
           },
         ];
       },
@@ -1376,8 +1473,7 @@ test('observer checkpoint restore keeps full history for active threads', async 
     schemaVersion: 1,
     writtenAt: new Date().toISOString(),
     writerPid: 123,
-    observers: {
-      'default-observer': {
+    observer: {
         baseline: {
           turn: 10,
           observing: 21,
@@ -1394,10 +1490,9 @@ test('observer checkpoint restore keeps full history for active threads', async 
           updatedAt: freshUpdatedAt,
         }],
       },
-    },
   }, null, 2)}\n`, 'utf8');
 
-  const checkpoint = (await readCheckpointFile())?.observers['default-observer'] ?? null;
+  const checkpoint = (await readCheckpointFile())?.observer ?? null;
   const observer = new Observer({
     sessionTable: {
       stats: async () => ({
@@ -1408,6 +1503,7 @@ test('observer checkpoint restore keeps full history for active threads', async 
       loadTurnsAfterEpoch: async () => [],
     },
     observingTable: {
+      delta: async () => [],
       stats: async () => ({
         version: 21,
         fragmentCount: 1,
@@ -1433,10 +1529,6 @@ test('observer checkpoint restore keeps full history for active threads', async 
               memoryDelta: { before: [], after: [] },
             }),
             references: [],
-            checkpoint: {
-              observingEpoch: 11,
-              indexedSnapshotSequence: 0,
-            },
           },
           {
             snapshotId: 'snapshot-1',
@@ -1454,10 +1546,6 @@ test('observer checkpoint restore keeps full history for active threads', async 
               memoryDelta: { before: [], after: [] },
             }),
             references: [],
-            checkpoint: {
-              observingEpoch: 12,
-              indexedSnapshotSequence: 1,
-            },
           },
         ];
       },
@@ -1476,8 +1564,372 @@ test('observer checkpoint restore keeps full history for active threads', async 
 
   assert.equal(observer.threads.length, 1);
   assert.deepEqual(observer.threads[0].snapshotIds, ['snapshot-0', 'snapshot-1']);
-  assert.deepEqual(observer.threads[0].snapshotEpochs, [11, 12]);
   assert.equal(observer.threads[0].snapshots.length, 2);
+  assert.equal(observer.threads[0].indexedSnapshotSequence, 1);
+});
+
+test('observer restoreCheckpointState advances committedEpoch and excludes observed turns from pending', async (t) => {
+  const { dir, homeDir, configPath } = await makeConfigHome();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+  process.env.MUNINN_HOME = homeDir;
+  await writeObserverConfig(configPath, { activeWindowDays: 7 });
+  const snapshot0At = new Date(Date.now() - 2_000).toISOString();
+  const snapshot1At = new Date(Date.now() - 1_000).toISOString();
+  const snapshot2At = new Date().toISOString();
+
+  await mkdir(path.dirname(resolveCheckpointPath()), { recursive: true });
+  await writeFile(resolveCheckpointPath(), `${JSON.stringify({
+    schemaVersion: 1,
+    writtenAt: '2024-01-01T00:00:00Z',
+    writerPid: 123,
+    observer: {
+        baseline: {
+          turn: 10,
+          observing: 21,
+          semanticIndex: 8,
+        },
+        committedEpoch: 12,
+        nextEpoch: 13,
+        openTurns: [],
+        threads: [{
+          observingId: 'obs-1',
+          latestSnapshotId: 'snapshot-0',
+          latestSnapshotSequence: 0,
+          indexedSnapshotSequence: 0,
+          updatedAt: snapshot0At,
+        }],
+      },
+  }, null, 2)}\n`, 'utf8');
+
+  const checkpoint = (await readCheckpointFile())?.observer ?? null;
+  const observer = new Observer({
+    sessionTable: {
+      loadTurnsAfterEpoch: async () => [
+        makeObservableTurn('turn-13', 13, 'epoch13'),
+        makeObservableTurn('turn-14', 14, 'epoch14'),
+      ],
+    },
+    observingTable: {
+      delta: async () => [
+        {
+          snapshotId: 'snapshot-1',
+          observingId: 'obs-1',
+          snapshotSequence: 1,
+          createdAt: snapshot1At,
+          updatedAt: snapshot1At,
+          observer: 'default-observer',
+          title: 'Thread',
+          summary: 'Summary',
+          content: JSON.stringify({
+            memories: [],
+            openQuestions: [],
+            nextSteps: [],
+            memoryDelta: { before: [], after: [] },
+          }),
+          references: ['turn-13'],
+        },
+        {
+          snapshotId: 'snapshot-2',
+          observingId: 'obs-1',
+          snapshotSequence: 2,
+          createdAt: snapshot2At,
+          updatedAt: snapshot2At,
+          observer: 'default-observer',
+          title: 'Thread',
+          summary: 'Summary',
+          content: JSON.stringify({
+            memories: [],
+            openQuestions: [],
+            nextSteps: [],
+            memoryDelta: { before: [], after: [] },
+          }),
+          references: ['turn-13', 'turn-14'],
+        },
+      ],
+      threadSnapshots: async () => [
+        {
+          snapshotId: 'snapshot-0',
+          observingId: 'obs-1',
+          snapshotSequence: 0,
+          createdAt: snapshot0At,
+          updatedAt: snapshot0At,
+          observer: 'default-observer',
+          title: 'Thread',
+          summary: 'Summary',
+          content: JSON.stringify({
+            memories: [],
+            openQuestions: [],
+            nextSteps: [],
+            memoryDelta: { before: [], after: [] },
+          }),
+          references: [],
+        },
+        {
+          snapshotId: 'snapshot-1',
+          observingId: 'obs-1',
+          snapshotSequence: 1,
+          createdAt: snapshot1At,
+          updatedAt: snapshot1At,
+          observer: 'default-observer',
+          title: 'Thread',
+          summary: 'Summary',
+          content: JSON.stringify({
+            memories: [],
+            openQuestions: [],
+            nextSteps: [],
+            memoryDelta: { before: [], after: [] },
+          }),
+          references: ['turn-13'],
+        },
+        {
+          snapshotId: 'snapshot-2',
+          observingId: 'obs-1',
+          snapshotSequence: 2,
+          createdAt: snapshot2At,
+          updatedAt: snapshot2At,
+          observer: 'default-observer',
+          title: 'Thread',
+          summary: 'Summary',
+          content: JSON.stringify({
+            memories: [],
+            openQuestions: [],
+            nextSteps: [],
+            memoryDelta: { before: [], after: [] },
+          }),
+          references: ['turn-13', 'turn-14'],
+        },
+      ],
+    },
+    semanticIndexTable: {},
+  }, checkpoint);
+  t.after(async () => observer.shutdown());
+
+  const restored = await observer.restoreCheckpointState();
+
+  assert.equal(restored.committedEpoch, 14);
+  assert.deepEqual(restored.pendingTurns, []);
+  assert.deepEqual(restored.threads[0].snapshotIds, ['snapshot-0', 'snapshot-1', 'snapshot-2']);
+  assert.deepEqual(restored.threads[0].snapshotEpochs, [12, 13, 14]);
+});
+
+test('observer restoreCheckpointState falls back when observing delta refs are missing turn epochs', async (t) => {
+  const { dir, homeDir, configPath } = await makeConfigHome();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+  process.env.MUNINN_HOME = homeDir;
+  await writeObserverConfig(configPath, { activeWindowDays: 7 });
+
+  await mkdir(path.dirname(resolveCheckpointPath()), { recursive: true });
+  await writeFile(resolveCheckpointPath(), `${JSON.stringify({
+    schemaVersion: 1,
+    writtenAt: '2024-01-01T00:00:00Z',
+    writerPid: 123,
+    observer: {
+        baseline: {
+          turn: 10,
+          observing: 21,
+          semanticIndex: 8,
+        },
+        committedEpoch: 12,
+        nextEpoch: 13,
+        openTurns: [],
+        threads: [{
+          observingId: 'obs-1',
+          latestSnapshotId: 'snapshot-0',
+          latestSnapshotSequence: 0,
+          indexedSnapshotSequence: 0,
+          updatedAt: '2024-01-01T00:00:00Z',
+        }],
+      },
+  }, null, 2)}\n`, 'utf8');
+
+  const checkpoint = (await readCheckpointFile())?.observer ?? null;
+  const observer = new Observer({
+    sessionTable: {
+      loadTurnsAfterEpoch: async () => [makeObservableTurn('turn-13', 13, 'epoch13')],
+    },
+    observingTable: {
+      delta: async () => [
+        {
+          snapshotId: 'snapshot-1',
+          observingId: 'obs-1',
+          snapshotSequence: 1,
+          createdAt: '2024-01-01T00:00:01Z',
+          updatedAt: '2024-01-01T00:00:01Z',
+          observer: 'default-observer',
+          title: 'Thread',
+          summary: 'Summary',
+          content: JSON.stringify({
+            memories: [],
+            openQuestions: [],
+            nextSteps: [],
+            memoryDelta: { before: [], after: [] },
+          }),
+          references: ['missing-turn'],
+        },
+      ],
+      threadSnapshots: async () => [
+        {
+          snapshotId: 'snapshot-0',
+          observingId: 'obs-1',
+          snapshotSequence: 0,
+          createdAt: '2024-01-01T00:00:00Z',
+          updatedAt: '2024-01-01T00:00:00Z',
+          observer: 'default-observer',
+          title: 'Thread',
+          summary: 'Summary',
+          content: JSON.stringify({
+            memories: [],
+            openQuestions: [],
+            nextSteps: [],
+            memoryDelta: { before: [], after: [] },
+          }),
+          references: [],
+        },
+      ],
+    },
+    semanticIndexTable: {},
+  }, checkpoint);
+  t.after(async () => observer.shutdown());
+
+  const restored = await observer.restoreCheckpointState();
+
+  assert.equal(restored, null);
+});
+
+test('observer restoreCheckpointState skips stale threads recovered only from observing delta', async (t) => {
+  const { dir, homeDir, configPath } = await makeConfigHome();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+  process.env.MUNINN_HOME = homeDir;
+  await writeObserverConfig(configPath, { activeWindowDays: 7 });
+  const staleUpdatedAt = new Date(Date.now() - 4000 * 24 * 60 * 60 * 1000).toISOString();
+
+  await mkdir(path.dirname(resolveCheckpointPath()), { recursive: true });
+  await writeFile(resolveCheckpointPath(), `${JSON.stringify({
+    schemaVersion: 1,
+    writtenAt: '2024-01-01T00:00:00Z',
+    writerPid: 123,
+    observer: {
+        baseline: {
+          turn: 10,
+          observing: 21,
+          semanticIndex: 8,
+        },
+        committedEpoch: 12,
+        nextEpoch: 13,
+        openTurns: [],
+        threads: [],
+      },
+  }, null, 2)}\n`, 'utf8');
+
+  const checkpoint = (await readCheckpointFile())?.observer ?? null;
+  const staleRow = {
+    snapshotId: 'snapshot-1',
+    observingId: 'obs-stale',
+    snapshotSequence: 0,
+    createdAt: staleUpdatedAt,
+    updatedAt: staleUpdatedAt,
+    observer: 'default-observer',
+    title: 'Stale Thread',
+    summary: 'Summary',
+    content: JSON.stringify({
+      memories: [],
+      openQuestions: [],
+      nextSteps: [],
+      memoryDelta: { before: [], after: [] },
+    }),
+    references: ['turn-13'],
+  };
+  const observer = new Observer({
+    sessionTable: {
+      loadTurnsAfterEpoch: async () => [makeObservableTurn('turn-13', 13, 'epoch13')],
+    },
+    observingTable: {
+      delta: async () => [staleRow],
+      threadSnapshots: async () => [staleRow],
+    },
+    semanticIndexTable: {},
+  }, checkpoint);
+  t.after(async () => observer.shutdown());
+
+  const restored = await observer.restoreCheckpointState();
+
+  assert.equal(restored.committedEpoch, 13);
+  assert.equal(restored.threads.length, 0);
+  assert.deepEqual(restored.pendingTurns, []);
+});
+
+test('observer restoreCheckpointState rebuilds delta-only threads from full history', async (t) => {
+  const { dir, homeDir, configPath } = await makeConfigHome();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+  process.env.MUNINN_HOME = homeDir;
+  await writeObserverConfig(configPath, { activeWindowDays: 7 });
+  const rowTimes = Array.from({ length: 8 }, (_, index) => new Date(Date.now() - (8 - index) * 1000).toISOString());
+
+  await mkdir(path.dirname(resolveCheckpointPath()), { recursive: true });
+  await writeFile(resolveCheckpointPath(), `${JSON.stringify({
+    schemaVersion: 1,
+    writtenAt: '2024-01-01T00:00:00Z',
+    writerPid: 123,
+    observer: {
+        baseline: {
+          turn: 10,
+          observing: 21,
+          semanticIndex: 8,
+        },
+        committedEpoch: 5,
+        nextEpoch: 6,
+        openTurns: [],
+        threads: [],
+      },
+  }, null, 2)}\n`, 'utf8');
+
+  const checkpoint = (await readCheckpointFile())?.observer ?? null;
+  const fullRows = Array.from({ length: 8 }, (_, index) => ({
+    snapshotId: `snapshot-${index}`,
+    observingId: 'obs-legacy',
+    snapshotSequence: index,
+    createdAt: rowTimes[index],
+    updatedAt: rowTimes[index],
+    observer: 'default-observer',
+    title: 'Legacy Thread',
+    summary: `Summary ${index}`,
+    content: JSON.stringify({
+      memories: [],
+      openQuestions: [],
+      nextSteps: [],
+      memoryDelta: { before: [], after: [] },
+    }),
+    references: Array.from({ length: index + 1 }, (_, turnIndex) => `turn-${turnIndex + 1}`),
+  }));
+  const turnById = new Map(fullRows.map((row, index) => [
+    `turn-${index + 1}`,
+    makeObservableTurn(`turn-${index + 1}`, index + 1, `epoch${index + 1}`),
+  ]));
+  const observer = new Observer({
+    sessionTable: {
+      loadTurnsAfterEpoch: async () => [
+        turnById.get('turn-6'),
+        turnById.get('turn-7'),
+        turnById.get('turn-8'),
+      ],
+      getTurn: async (turnId) => turnById.get(turnId) ?? null,
+    },
+    observingTable: {
+      delta: async () => [fullRows[6], fullRows[7]],
+      threadSnapshots: async () => fullRows,
+    },
+    semanticIndexTable: {},
+  }, checkpoint);
+  t.after(async () => observer.shutdown());
+
+  const restored = await observer.restoreCheckpointState();
+
+  assert.equal(restored.committedEpoch, 8);
+  assert.deepEqual(restored.pendingTurns, []);
+  assert.deepEqual(
+    restored.threads[0].snapshotIds,
+    fullRows.map((row) => row.snapshotId),
+  );
 });
 
 test('observer bootstrap skips stale checkpoint threads', async (t) => {
@@ -1492,8 +1944,7 @@ test('observer bootstrap skips stale checkpoint threads', async (t) => {
     schemaVersion: 1,
     writtenAt: new Date().toISOString(),
     writerPid: 123,
-    observers: {
-      'default-observer': {
+    observer: {
         baseline: {
           turn: 10,
           observing: 21,
@@ -1510,10 +1961,9 @@ test('observer bootstrap skips stale checkpoint threads', async (t) => {
           updatedAt: staleUpdatedAt,
         }],
       },
-    },
   }, null, 2)}\n`, 'utf8');
 
-  const checkpoint = (await readCheckpointFile())?.observers['default-observer'] ?? null;
+  const checkpoint = (await readCheckpointFile())?.observer ?? null;
   const observer = new Observer({
     sessionTable: {
       stats: async () => ({
@@ -1524,6 +1974,7 @@ test('observer bootstrap skips stale checkpoint threads', async (t) => {
       loadTurnsAfterEpoch: async () => [],
     },
     observingTable: {
+      delta: async () => [],
       stats: async () => ({
         version: 21,
         fragmentCount: 1,
@@ -1559,7 +2010,7 @@ test('observer exportCheckpoint keeps the last committed snapshot while observeC
 
   const entered = deferred();
   const release = deferred();
-  const checkpoint = (await readCheckpointFile())?.observers['default-observer'] ?? null;
+  const checkpoint = (await readCheckpointFile())?.observer ?? null;
   const observer = new Observer({
     observingTable: {
       insert: async ({ snapshots }) => snapshots.map((snapshot) => ({
@@ -1655,8 +2106,7 @@ test('observer bootstrap ignores semanticIndex version mismatches when observing
     schemaVersion: 1,
     writtenAt: '2024-01-01T00:00:00Z',
     writerPid: 123,
-    observers: {
-      'default-observer': {
+    observer: {
         baseline: {
           turn: 10,
           observing: 21,
@@ -1673,11 +2123,10 @@ test('observer bootstrap ignores semanticIndex version mismatches when observing
           updatedAt: '2024-01-01T00:00:01Z',
         }],
       },
-    },
   }, null, 2)}\n`, 'utf8');
 
   let listSnapshotsCalls = 0;
-  const checkpoint = (await readCheckpointFile())?.observers['default-observer'] ?? null;
+  const checkpoint = (await readCheckpointFile())?.observer ?? null;
   const observer = new Observer({
     sessionTable: {
       stats: async () => ({
@@ -1688,6 +2137,7 @@ test('observer bootstrap ignores semanticIndex version mismatches when observing
       loadTurnsAfterEpoch: async () => [],
     },
     observingTable: {
+      delta: async () => [],
       stats: async () => ({
         version: 21,
         fragmentCount: 1,
@@ -1714,10 +2164,6 @@ test('observer bootstrap ignores semanticIndex version mismatches when observing
             memoryDelta: { before: [], after: [] },
           }),
           references: [],
-          checkpoint: {
-            observingEpoch: 11,
-            indexedSnapshotSequence: 0,
-          },
         },
         {
           snapshotId: 'observing:42',
@@ -1735,10 +2181,6 @@ test('observer bootstrap ignores semanticIndex version mismatches when observing
             memoryDelta: { before: [], after: [] },
           }),
           references: [],
-          checkpoint: {
-            observingEpoch: 12,
-            indexedSnapshotSequence: 1,
-          },
         },
       ],
     },
@@ -1769,8 +2211,7 @@ test('readCheckpointFile throws when the checkpoint section is structurally inva
     schemaVersion: 1,
     writtenAt: '2024-01-01T00:00:00Z',
     writerPid: 123,
-    observers: {
-      'default-observer': {
+    observer: {
         baseline: {
           turn: 10,
           observing: 21,
@@ -1787,12 +2228,11 @@ test('readCheckpointFile throws when the checkpoint section is structurally inva
           updatedAt: '2024-01-01T00:00:01Z',
         }],
       },
-    },
   }, null, 2)}\n`, 'utf8');
 
   await assert.rejects(
     () => readCheckpointFile(),
-    /invalid checkpoint observer section: default-observer/i,
+    /checkpoint observer section is invalid/i,
   );
 });
 
@@ -1828,8 +2268,7 @@ test('backend exportCheckpoint returns null before observer creation', async () 
     schemaVersion: 1,
     writtenAt: '2024-01-01T00:00:00Z',
     writerPid: 123,
-    observers: {
-      'default-observer': {
+    observer: {
         baseline: {
           turn: 10,
           observing: 21,
@@ -1840,7 +2279,6 @@ test('backend exportCheckpoint returns null before observer creation', async () 
         openTurns: [],
         threads: [],
       },
-    },
   };
   const backend = new MuninnBackend({}, checkpoint);
 

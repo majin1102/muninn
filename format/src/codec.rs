@@ -343,11 +343,6 @@ pub(crate) fn observings_to_record_batch(
             .iter()
             .map(|observing| Some(&observing.references)),
     );
-    let checkpoint = StringArray::from_iter_values(
-        observings
-            .iter()
-            .map(|observing| serde_json::to_string(&observing.checkpoint).expect("checkpoint")),
-    );
 
     Ok(RecordBatch::try_new(
         Arc::new(observing_schema()),
@@ -361,7 +356,6 @@ pub(crate) fn observings_to_record_batch(
             Arc::new(summary),
             Arc::new(content),
             Arc::new(references),
-            Arc::new(checkpoint),
         ],
     )?)
 }
@@ -428,17 +422,9 @@ pub(crate) fn record_batch_to_observings_with_row_ids(
         .as_any()
         .downcast_ref::<ListArray>()
         .unwrap();
-    let checkpoint = batch
-        .column(9)
-        .as_any()
-        .downcast_ref::<StringArray>()
-        .unwrap();
 
     let observings = (0..batch.num_rows())
         .map(|index| {
-            let checkpoint = serde_json::from_str(checkpoint.value(index)).map_err(|error| {
-                Error::invalid_input(format!("deserialize observing checkpoint: {error}"))
-            })?;
             Ok(ObservingSnapshot {
                 snapshot_id: MemoryId::new(MemoryLayer::Observing, row_ids[index]),
                 observing_id: observing_ids.value(index).to_string(),
@@ -456,7 +442,6 @@ pub(crate) fn record_batch_to_observings_with_row_ids(
                 summary: summary.value(index).to_string(),
                 content: content.value(index).to_string(),
                 references: optional_string_list(references, index).unwrap_or_default(),
-                checkpoint,
             })
         })
         .collect::<Result<Vec<_>>>()?;

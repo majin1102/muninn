@@ -4,6 +4,7 @@ import path from 'node:path';
 import {
   type CheckpointContent,
   type CheckpointFile,
+  readCheckpointFile,
   resolveCheckpointPath,
   serializeCheckpointFile,
 } from './checkpoint.js';
@@ -17,6 +18,7 @@ type WatchdogEvent =
   | 'failed'
   | 'index_created'
   | 'compacted'
+  | 'cleaned'
   | 'optimized';
 
 type WatchdogLogRecord = {
@@ -32,6 +34,8 @@ type DatasetState = {
   lastSeenVersion: number | null;
   lastMaintainedVersion: number | null;
   lastFragmentCount: number | null;
+  checkpointFloorVersion: number | null;
+  lastCleanedFloorVersion: number | null;
 };
 
 const WATCHDOG_LOG_FILE_NAME = 'watchdog.jsonl';
@@ -46,11 +50,14 @@ export class Watchdog {
   private stopped = false;
   private inFlight: Promise<void> | null = null;
   private lastCheckpointJson: string | null = null;
+  private checkpointStateLoaded = false;
   private readonly state = new Map<DatasetName, DatasetState>(
     DATASETS.map((dataset) => [dataset, {
       lastSeenVersion: null,
       lastMaintainedVersion: null,
       lastFragmentCount: null,
+      checkpointFloorVersion: null,
+      lastCleanedFloorVersion: null,
     }]),
   );
 
@@ -106,6 +113,7 @@ export class Watchdog {
     if (this.stopped) {
       return;
     }
+    await this.ensureCheckpointStateLoaded();
     if (this.inFlight) {
       await this.inFlight;
       return;
@@ -124,6 +132,7 @@ export class Watchdog {
 
   private async flushCheckpoint(): Promise<void> {
     try {
+      await this.ensureCheckpointStateLoaded();
       const exported = await this.backend.exportCheckpoint();
       if (!exported) {
         return;
@@ -132,6 +141,7 @@ export class Watchdog {
       if (checkpointJson === this.lastCheckpointJson) {
         try {
           await access(this.checkpointPath());
+          await this.cleanupCheckpointFloors();
           return;
         } catch (error) {
           if (!(error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT')) {
@@ -146,10 +156,13 @@ export class Watchdog {
       };
       await this.writeCheckpointAtomically(serializeCheckpointFile(checkpoint));
       this.lastCheckpointJson = checkpointJson;
+      this.updateCheckpointFloors(exported);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.error(`[muninn:watchdog] checkpoint flush failed: ${message}`);
+      return;
     }
+    await this.cleanupCheckpointFloors();
   }
 
   private checkpointPath(): string {
@@ -303,10 +316,13 @@ export class Watchdog {
   }
 
   private resetState(dataset: DatasetName): void {
+    const current = this.state.get(dataset);
     this.state.set(dataset, {
       lastSeenVersion: null,
       lastMaintainedVersion: null,
       lastFragmentCount: null,
+      checkpointFloorVersion: current?.checkpointFloorVersion ?? null,
+      lastCleanedFloorVersion: current?.lastCleanedFloorVersion ?? null,
     });
   }
 
@@ -316,15 +332,93 @@ export class Watchdog {
       lastSeenVersion: stats.version,
       lastMaintainedVersion: current?.lastMaintainedVersion ?? null,
       lastFragmentCount: stats.fragmentCount,
+      checkpointFloorVersion: current?.checkpointFloorVersion ?? null,
+      lastCleanedFloorVersion: current?.lastCleanedFloorVersion ?? null,
     });
   }
 
   private updateMaintainedState(dataset: DatasetName, stats: TableStats): void {
+    const current = this.state.get(dataset);
     this.state.set(dataset, {
       lastSeenVersion: stats.version,
       lastMaintainedVersion: stats.version,
       lastFragmentCount: stats.fragmentCount,
+      checkpointFloorVersion: current?.checkpointFloorVersion ?? null,
+      lastCleanedFloorVersion: current?.lastCleanedFloorVersion ?? null,
     });
+  }
+
+  private async ensureCheckpointStateLoaded(): Promise<void> {
+    if (this.checkpointStateLoaded) {
+      return;
+    }
+    this.checkpointStateLoaded = true;
+    const checkpoint = await readCheckpointFile();
+    if (!checkpoint) {
+      return;
+    }
+    this.lastCheckpointJson ??= JSON.stringify({
+      schemaVersion: checkpoint.schemaVersion,
+      observer: checkpoint.observer,
+    });
+    this.updateCheckpointFloors(checkpoint);
+  }
+
+  private updateCheckpointFloors(checkpoint: CheckpointContent | CheckpointFile): void {
+    const floors = checkpointFloors(checkpoint);
+    for (const dataset of DATASETS) {
+      const current = this.state.get(dataset);
+      this.state.set(dataset, {
+        lastSeenVersion: current?.lastSeenVersion ?? null,
+        lastMaintainedVersion: current?.lastMaintainedVersion ?? null,
+        lastFragmentCount: current?.lastFragmentCount ?? null,
+        checkpointFloorVersion: floors[dataset],
+        lastCleanedFloorVersion: current?.lastCleanedFloorVersion ?? null,
+      });
+    }
+  }
+
+  private async cleanupCheckpointFloors(): Promise<void> {
+    await Promise.all(DATASETS.map(async (dataset) => {
+      const state = this.state.get(dataset);
+      const floorVersion = state?.checkpointFloorVersion ?? null;
+      if (floorVersion == null || state?.lastCleanedFloorVersion === floorVersion) {
+        return;
+      }
+      try {
+        const result = await this.cleanupDataset(dataset, floorVersion);
+        const current = this.state.get(dataset);
+        this.state.set(dataset, {
+          lastSeenVersion: current?.lastSeenVersion ?? null,
+          lastMaintainedVersion: current?.lastMaintainedVersion ?? null,
+          lastFragmentCount: current?.lastFragmentCount ?? null,
+          checkpointFloorVersion: current?.checkpointFloorVersion ?? null,
+          lastCleanedFloorVersion: floorVersion,
+        });
+        if (result.changed) {
+          await this.logInfo(dataset, 'cleaned', floorVersion, { floorVersion });
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        await this.logError(dataset, 'failed', floorVersion, {
+          errorMessage: message,
+          phase: 'cleanup',
+          floorVersion,
+        });
+        console.error(`[muninn:watchdog] ${dataset} cleanup failed: ${message}`);
+      }
+    }));
+  }
+
+  private cleanupDataset(dataset: DatasetName, floorVersion: number): Promise<{ changed: boolean }> {
+    switch (dataset) {
+      case 'turn':
+        return this.binding.sessionTable.cleanup?.({ floorVersion }) ?? Promise.resolve({ changed: false });
+      case 'observing':
+        return this.binding.observingTable.cleanup?.({ floorVersion }) ?? Promise.resolve({ changed: false });
+      case 'semanticIndex':
+        return this.binding.semanticIndexTable.cleanup?.({ floorVersion }) ?? Promise.resolve({ changed: false });
+    }
   }
 
   private async logInfo(
@@ -369,4 +463,12 @@ export class Watchdog {
       console.error(`[muninn:watchdog] failed to write ${WATCHDOG_LOG_FILE_NAME}: ${message}`);
     }
   }
+}
+
+function checkpointFloors(checkpoint: CheckpointContent | CheckpointFile): Record<DatasetName, number | null> {
+  return {
+    turn: checkpoint.observer.baseline.turn,
+    observing: checkpoint.observer.baseline.observing,
+    semanticIndex: checkpoint.observer.baseline.semanticIndex,
+  };
 }

@@ -7,7 +7,7 @@ import type { NativeTables } from '../native.js';
 import type { ObserverWatermark, SessionTurn, TurnContent } from '../client.js';
 import { getObserverLlmConfig } from '../config.js';
 import type { SessionRegistry } from '../session/registry.js';
-import { cloneTurn, readSessionTurn, serializeSessionTurn } from '../session/types.js';
+import { cloneTurn, readSessionTurn } from '../session/types.js';
 import { EpochQueue, EpochSealedError, OpenEpoch, type SealedEpoch } from './epoch.js';
 import {
   cloneObservingThreads,
@@ -15,6 +15,7 @@ import {
   getPendingIndexUpTo,
   isActiveThread,
   loadThreads,
+  replaySnapshots,
   threadFromSnapshots,
 } from './thread.js';
 import type { ObservingThread } from './types.js';
@@ -191,43 +192,68 @@ export class Observer {
   }
 
   private async bootstrapInternal(): Promise<void> {
-    const restoredFromCheckpoint = await this.tryBootstrapFromCheckpoint();
-    if (!restoredFromCheckpoint) {
+    let pendingTurns: SessionTurn[] = [];
+    const restored = await this.restoreCheckpointState();
+    if (restored) {
+      this.threads = restored.threads;
+      this.committedEpoch = restored.committedEpoch;
+      pendingTurns = restored.pendingTurns;
+    } else {
       const snapshots = await this.client.observingTable.listSnapshots({
         observer: this.name,
       });
-      this.threads = loadThreads(snapshots, this.name, this.activeWindowDays);
-      this.committedEpoch = snapshots.reduce<number | undefined>((max, snapshot) => {
-        const epoch = snapshot.checkpoint.observingEpoch;
-        return max == null || epoch > max ? epoch : max;
-      }, undefined);
+      const turns = (await this.client.sessionTable.loadTurnsAfterEpoch({
+        observer: this.name,
+        committedEpoch: null,
+      })).map(readSessionTurn);
+      const fallback = await this.restoreThreadsFromCheckpoint({
+        baseline: {
+          turn: 0,
+          observing: 0,
+          semanticIndex: 0,
+        },
+        nextEpoch: 0,
+        openTurns: [],
+        threads: [],
+      }, snapshots, new Map(turns.map((turn) => [turn.turnId, turn])));
+      if (fallback) {
+        this.threads = fallback.threads;
+        this.committedEpoch = fallback.committedEpoch;
+        pendingTurns = pendingObservableTurns(
+          turns.filter((turn) => !fallback.observedTurnIds.has(turn.turnId)),
+          fallback.committedEpoch,
+        );
+      } else {
+        this.committedEpoch = undefined;
+        this.threads = loadThreads(
+          snapshots,
+          this.name,
+          this.activeWindowDays,
+          0,
+        );
+        pendingTurns = pendingObservableTurns(turns, undefined);
+      }
     }
 
-    let nextEpoch = restoredFromCheckpoint
-      ? Math.max(this.openEpoch?.epoch ?? 0, (this.committedEpoch ?? -1) + 1)
-      : this.committedEpoch == null ? 0 : this.committedEpoch + 1;
-    let pendingTurns = (await this.client.sessionTable.loadTurnsAfterEpoch({
-      observer: this.name,
-      committedEpoch: this.committedEpoch ?? null,
-    })).map(readSessionTurn);
-    const needsRepair = pendingTurns.some((turn) => turn.observingEpoch !== nextEpoch);
-    if (needsRepair && pendingTurns.length > 0) {
-      const repaired = pendingTurns.map((turn) => ({
-        ...turn,
-        observingEpoch: nextEpoch,
-      }));
-      const persisted = await this.client.sessionTable.update({
-        turns: repaired.map(serializeSessionTurn),
-      });
-      pendingTurns = persisted.map(readSessionTurn);
-    }
-
+    let nextEpoch = this.committedEpoch == null ? 0 : this.committedEpoch + 1;
     if (pendingTurns.length > 0) {
-      this.epochQueue.publishEpoch({
-        epoch: nextEpoch,
-        turns: pendingTurns.map(cloneTurn),
-      });
-      nextEpoch += 1;
+      const turnsByEpoch = new Map<number, SessionTurn[]>();
+      for (const turn of pendingTurns) {
+        if (turn.observingEpoch == null) {
+          throw new Error(`pending observable turn ${turn.turnId} is missing observingEpoch`);
+        }
+        const turns = turnsByEpoch.get(turn.observingEpoch) ?? [];
+        turns.push(cloneTurn(turn));
+        turnsByEpoch.set(turn.observingEpoch, turns);
+      }
+      const epochs = [...turnsByEpoch.keys()].sort((left, right) => left - right);
+      for (const epoch of epochs) {
+        this.epochQueue.publishEpoch({
+          epoch,
+          turns: turnsByEpoch.get(epoch) ?? [],
+        });
+      }
+      nextEpoch = (epochs[epochs.length - 1] ?? nextEpoch) + 1;
     }
 
     this.openEpoch = new OpenEpoch(nextEpoch);
@@ -431,35 +457,61 @@ export class Observer {
     this.checkpointThreads = this.exportCheckpointThreads();
   }
 
-  private async tryBootstrapFromCheckpoint(): Promise<boolean> {
+  private async restoreCheckpointState(): Promise<{
+    threads: ObservingThread[];
+    committedEpoch?: number;
+    pendingTurns: SessionTurn[];
+  } | null> {
     const section = this.checkpoint;
     if (!section) {
-      return false;
+      return null;
     }
-
-    const stats = typeof this.client.observingTable.stats === 'function'
-      ? await this.client.observingTable.stats()
-      : null;
-    const observingVersion = stats?.version ?? 0;
-    if (observingVersion !== section.baseline.observing) {
-      return false;
+    const observingDelta = await this.client.observingTable.delta({
+      observer: this.name,
+      baselineVersion: section.baseline.observing,
+    });
+    const turns = (await this.client.sessionTable.loadTurnsAfterEpoch({
+      observer: this.name,
+      committedEpoch: section.committedEpoch ?? null,
+    })).map(readSessionTurn);
+    const turnById = new Map(turns.map((turn) => [turn.turnId, turn]));
+    const restored = await this.restoreThreadsFromCheckpoint(
+      section,
+      observingDelta,
+      turnById,
+    );
+    if (!restored) {
+      return null;
     }
-
-    const restoredThreads = await this.restoreThreadsFromCheckpoint(section);
-    if (!restoredThreads) {
-      return false;
-    }
-
-    this.threads = restoredThreads;
-    this.committedEpoch = section.committedEpoch;
-    this.openEpoch = new OpenEpoch(section.nextEpoch);
-    return true;
+    return {
+      threads: restored.threads,
+      committedEpoch: restored.committedEpoch,
+      pendingTurns: pendingObservableTurns(
+        turns.filter((turn) => !restored.observedTurnIds.has(turn.turnId)),
+        restored.committedEpoch,
+      ),
+    };
   }
 
   private async restoreThreadsFromCheckpoint(
     section: ObserverCheckpoint,
-  ): Promise<ObservingThread[] | null> {
+    deltaRows: Array<import('./types.js').ObservingSnapshot>,
+    turnById: Map<string, SessionTurn>,
+  ): Promise<{
+    threads: ObservingThread[];
+    observedTurnIds: Set<string>;
+    committedEpoch?: number;
+  } | null> {
+    const rowsById = new Map<string, Array<import('./types.js').ObservingSnapshot>>();
+    for (const row of deltaRows) {
+      const rows = rowsById.get(row.observingId) ?? [];
+      rows.push(row);
+      rowsById.set(row.observingId, rows);
+    }
     const restored: ObservingThread[] = [];
+    const observedTurnIds = new Set<string>();
+    let committedEpoch = section.committedEpoch;
+    const turnCache = new Map(turnById);
     for (const threadRef of section.threads) {
       if (!isActiveThread(threadRef.updatedAt, this.activeWindowDays)) {
         continue;
@@ -468,17 +520,167 @@ export class Observer {
       if (rows.length === 0) {
         return null;
       }
-      const thread = threadFromSnapshots(rows);
-      if (thread.snapshotId !== threadRef.latestSnapshotId) {
+      const baselineRows = rows
+        .filter((row) => row.snapshotSequence <= threadRef.latestSnapshotSequence)
+        .sort((left, right) => left.snapshotSequence - right.snapshotSequence);
+      const latest = baselineRows[baselineRows.length - 1];
+      if (!latest) {
         return null;
       }
-      if (thread.snapshots.length - 1 !== threadRef.latestSnapshotSequence) {
+      if (latest.snapshotId !== threadRef.latestSnapshotId) {
         return null;
       }
-      thread.indexedSnapshotSequence = threadRef.indexedSnapshotSequence ?? null;
+      const thread = threadFromSnapshots(
+        baselineRows,
+        section.committedEpoch ?? 0,
+        threadRef.indexedSnapshotSequence ?? null,
+      );
+      let previousRefs = new Set(latest.references);
+      const appendedRows = (rowsById.get(threadRef.observingId) ?? [])
+        .filter((row) => row.snapshotSequence > threadRef.latestSnapshotSequence)
+        .sort((left, right) => left.snapshotSequence - right.snapshotSequence);
+      for (const row of appendedRows) {
+        const newRefs = row.references.filter((reference) => !previousRefs.has(reference));
+        if (newRefs.length === 0) {
+          return null;
+        }
+        let rowEpoch: number | undefined;
+        for (const reference of newRefs) {
+          let turn = turnCache.get(reference);
+          if (!turn) {
+            turn = await this.client.sessionTable.getTurn?.(reference) ?? undefined;
+            if (turn) {
+              turnCache.set(reference, turn);
+            }
+          }
+          if (turn?.observingEpoch == null) {
+            return null;
+          }
+          observedTurnIds.add(reference);
+          rowEpoch = rowEpoch == null || turn.observingEpoch > rowEpoch
+            ? turn.observingEpoch
+            : rowEpoch;
+        }
+        if (rowEpoch == null) {
+          return null;
+        }
+        if (!thread) {
+          return null;
+        }
+        replaySnapshots(thread, [row], rowEpoch);
+        committedEpoch = committedEpoch == null || rowEpoch > committedEpoch
+          ? rowEpoch
+          : committedEpoch;
+        previousRefs = new Set(row.references);
+      }
+      rowsById.delete(threadRef.observingId);
       restored.push(thread);
     }
-    return restored.sort((left, right) => left.updatedAt.localeCompare(right.updatedAt));
+    for (const rows of rowsById.values()) {
+      const ordered = [...rows].sort((left, right) => left.snapshotSequence - right.snapshotSequence);
+      const first = ordered[0];
+      if (!first) {
+        continue;
+      }
+      const fullRows = (await this.client.observingTable.threadSnapshots(first.observingId))
+        .sort((left, right) => left.snapshotSequence - right.snapshotSequence);
+      const firstIndex = fullRows.findIndex((row) => row.snapshotId === first.snapshotId);
+      if (firstIndex < 0) {
+        return null;
+      }
+      const prefixRows = fullRows.slice(0, firstIndex + 1);
+      if (prefixRows.length === 0 || prefixRows[0]?.snapshotSequence !== 0) {
+        return null;
+      }
+      for (const [index, row] of prefixRows.entries()) {
+        if (row.snapshotSequence !== index) {
+          return null;
+        }
+      }
+      let previousRefs = new Set<string>();
+      let thread: ObservingThread | null = null;
+      for (const row of prefixRows) {
+        const newRefs = row.references.filter((reference) => !previousRefs.has(reference));
+        if (newRefs.length === 0) {
+          return null;
+        }
+        let rowEpoch: number | undefined;
+        for (const reference of newRefs) {
+          let turn = turnCache.get(reference);
+          if (!turn) {
+            turn = await this.client.sessionTable.getTurn?.(reference) ?? undefined;
+            if (turn) {
+              turnCache.set(reference, turn);
+            }
+          }
+          if (turn?.observingEpoch == null) {
+            return null;
+          }
+          observedTurnIds.add(reference);
+          rowEpoch = rowEpoch == null || turn.observingEpoch > rowEpoch
+            ? turn.observingEpoch
+            : rowEpoch;
+        }
+        if (rowEpoch == null) {
+          return null;
+        }
+        if (!thread) {
+          thread = threadFromSnapshots([row], rowEpoch);
+        } else {
+          replaySnapshots(thread, [row], rowEpoch);
+        }
+        committedEpoch = committedEpoch == null || rowEpoch > committedEpoch
+          ? rowEpoch
+          : committedEpoch;
+        previousRefs = new Set(row.references);
+      }
+      for (const row of ordered.slice(1)) {
+        const newRefs = row.references.filter((reference) => !previousRefs.has(reference));
+        if (newRefs.length === 0) {
+          return null;
+        }
+        let rowEpoch: number | undefined;
+        for (const reference of newRefs) {
+          let turn = turnCache.get(reference);
+          if (!turn) {
+            turn = await this.client.sessionTable.getTurn?.(reference) ?? undefined;
+            if (turn) {
+              turnCache.set(reference, turn);
+            }
+          }
+          if (turn?.observingEpoch == null) {
+            return null;
+          }
+          observedTurnIds.add(reference);
+          rowEpoch = rowEpoch == null || turn.observingEpoch > rowEpoch
+            ? turn.observingEpoch
+            : rowEpoch;
+        }
+        if (rowEpoch == null) {
+          return null;
+        }
+        if (!thread) {
+          return null;
+        }
+        replaySnapshots(thread, [row], rowEpoch);
+        committedEpoch = committedEpoch == null || rowEpoch > committedEpoch
+          ? rowEpoch
+          : committedEpoch;
+        previousRefs = new Set(row.references);
+      }
+      if (!thread) {
+        continue;
+      }
+      if (!isActiveThread(thread.updatedAt, this.activeWindowDays)) {
+        continue;
+      }
+      restored.push(thread);
+    }
+    return {
+      threads: restored.sort((left, right) => left.updatedAt.localeCompare(right.updatedAt)),
+      observedTurnIds,
+      committedEpoch,
+    };
   }
 
   private waitForChange(version: number): Promise<void> {
@@ -524,6 +726,26 @@ function keepNewestTurn(byId: Map<string, SessionTurn>, turn: SessionTurn): void
   if (!existing || existing.updatedAt < turn.updatedAt) {
     byId.set(turn.turnId, cloneTurn(turn));
   }
+}
+
+function pendingObservableTurns(
+  turns: SessionTurn[],
+  committedEpoch?: number,
+): SessionTurn[] {
+  const recoveredEpoch = committedEpoch == null ? 0 : committedEpoch + 1;
+  return turns
+    .filter(isObservable)
+    .filter((turn) => (
+      turn.observingEpoch == null
+      || committedEpoch == null
+      || turn.observingEpoch > committedEpoch
+    ))
+    .sort((left, right) => (
+      (left.observingEpoch ?? recoveredEpoch) - (right.observingEpoch ?? recoveredEpoch)
+      || left.createdAt.localeCompare(right.createdAt)
+      || left.updatedAt.localeCompare(right.updatedAt)
+    ))
+    .map(cloneTurn);
 }
 
 function compareTurns(left: SessionTurn, right: SessionTurn): number {

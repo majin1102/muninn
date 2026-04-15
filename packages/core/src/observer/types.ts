@@ -46,10 +46,6 @@ export type ObservingSnapshot = {
   summary: string;
   content: string;
   references: string[];
-  checkpoint: {
-    observingEpoch: number;
-    indexedSnapshotSequence?: number | null;
-  };
 };
 
 export type PendingIndex = {

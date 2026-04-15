@@ -55,6 +55,10 @@ type NativeCoreBinding = {
     observer: string;
     committedEpoch?: number | null;
   }): MaybePromise<SessionTurn[]>;
+  sessionDelta(params: {
+    observer: string;
+    baselineVersion: number;
+  }): MaybePromise<SessionTurn[]>;
   sessionInsert(params: {
     turns: Array<Record<string, unknown>>;
   }): MaybePromise<SessionTurn[]>;
@@ -66,11 +70,18 @@ type NativeCoreBinding = {
   }): MaybePromise<{ deleted: number }>;
   sessionTableStats(): MaybePromise<TableStats | null>;
   sessionCompact(): MaybePromise<CompactResult>;
+  sessionCleanup(params: {
+    floorVersion: number;
+  }): MaybePromise<CompactResult>;
   observingGetSnapshot(snapshotId: string): MaybePromise<ObservingSnapshotPayload | null>;
   observingListSnapshots(params: {
     observer?: string;
   }): MaybePromise<ObservingSnapshotPayload[]>;
   observingThreadSnapshots(observingId: string): MaybePromise<ObservingSnapshotPayload[]>;
+  observingDelta(params: {
+    observer: string;
+    baselineVersion: number;
+  }): MaybePromise<ObservingSnapshotPayload[]>;
   observingInsert(params: {
     snapshots: ObservingSnapshotPayload[];
   }): MaybePromise<ObservingSnapshotPayload[]>;
@@ -79,6 +90,9 @@ type NativeCoreBinding = {
   }): MaybePromise<ObservingSnapshotPayload[]>;
   observingTableStats(): MaybePromise<TableStats | null>;
   observingCompact(): MaybePromise<CompactResult>;
+  observingCleanup(params: {
+    floorVersion: number;
+  }): MaybePromise<CompactResult>;
   semanticNearest(params: {
     vector: number[];
     limit: number;
@@ -100,6 +114,9 @@ type NativeCoreBinding = {
     targetPartitionSize: number;
   }): MaybePromise<EnsureVectorIndexResult>;
   semanticCompact(): MaybePromise<CompactResult>;
+  semanticCleanup(params: {
+    floorVersion: number;
+  }): MaybePromise<CompactResult>;
   semanticOptimize(params: {
     mergeCount: number;
   }): MaybePromise<CompactResult>;
@@ -134,6 +151,10 @@ export interface SessionTableBinding {
     observer: string;
     committedEpoch?: number | null;
   }): Promise<SessionTurn[]>;
+  delta(params: {
+    observer: string;
+    baselineVersion: number;
+  }): Promise<SessionTurn[]>;
   insert(params: {
     turns: Array<Record<string, unknown>>;
   }): Promise<SessionTurn[]>;
@@ -145,6 +166,9 @@ export interface SessionTableBinding {
   }): Promise<{ deleted: number }>;
   stats(): Promise<TableStats | null>;
   compact(): Promise<CompactResult>;
+  cleanup(params: {
+    floorVersion: number;
+  }): Promise<CompactResult>;
   describe(): Promise<TableDescription | null>;
 }
 
@@ -154,6 +178,10 @@ export interface ObservingTableBinding {
     observer?: string;
   }): Promise<ObservingSnapshotPayload[]>;
   threadSnapshots(observingId: string): Promise<ObservingSnapshotPayload[]>;
+  delta(params: {
+    observer: string;
+    baselineVersion: number;
+  }): Promise<ObservingSnapshotPayload[]>;
   insert(params: {
     snapshots: ObservingSnapshotPayload[];
   }): Promise<ObservingSnapshotPayload[]>;
@@ -162,6 +190,9 @@ export interface ObservingTableBinding {
   }): Promise<ObservingSnapshotPayload[]>;
   stats(): Promise<TableStats | null>;
   compact(): Promise<CompactResult>;
+  cleanup(params: {
+    floorVersion: number;
+  }): Promise<CompactResult>;
   describe(): Promise<TableDescription | null>;
 }
 
@@ -187,6 +218,9 @@ export interface SemanticIndexTableBinding {
     targetPartitionSize: number;
   }): Promise<EnsureVectorIndexResult>;
   compact(): Promise<CompactResult>;
+  cleanup(params: {
+    floorVersion: number;
+  }): Promise<CompactResult>;
   optimize(params: {
     mergeCount: number;
   }): Promise<CompactResult>;
@@ -251,11 +285,13 @@ function wrapBinding(native: NativeCoreBinding): NativeTables {
     listTurns: async (params) => resolveNativeResult(native.sessionListTurns(params)),
     timelineTurns: async (params) => resolveNativeResult(native.sessionTimelineTurns(params)),
     loadTurnsAfterEpoch: async (params) => resolveNativeResult(native.sessionLoadTurnsAfterEpoch(params)),
+    delta: async (params) => resolveNativeResult(native.sessionDelta(params)),
     insert: async (params) => resolveNativeResult(native.sessionInsert(params)),
     update: async (params) => resolveNativeResult(native.sessionUpdate(params)),
     deleteTurns: async (params) => resolveNativeResult(native.sessionDeleteTurns(params)),
     stats: async () => resolveNativeResult(native.sessionTableStats()),
     compact: async () => resolveNativeResult(native.sessionCompact()),
+    cleanup: async (params) => resolveNativeResult(native.sessionCleanup(params)),
     describe: async () => resolveNativeResult(native.describeSessionTable()),
   };
   return {
@@ -268,10 +304,12 @@ function wrapBinding(native: NativeCoreBinding): NativeTables {
       ),
       listSnapshots: async (params) => resolveNativeResult(native.observingListSnapshots(params)),
       threadSnapshots: async (observingId) => resolveNativeResult(native.observingThreadSnapshots(observingId)),
+      delta: async (params) => resolveNativeResult(native.observingDelta(params)),
       insert: async (params) => resolveNativeResult(native.observingInsert(params)),
       update: async (params) => resolveNativeResult(native.observingUpdate(params)),
       stats: async () => resolveNativeResult(native.observingTableStats()),
       compact: async () => resolveNativeResult(native.observingCompact()),
+      cleanup: async (params) => resolveNativeResult(native.observingCleanup(params)),
       describe: async () => resolveNativeResult(native.describeObservingTable()),
     },
     semanticIndexTable: {
@@ -283,6 +321,7 @@ function wrapBinding(native: NativeCoreBinding): NativeTables {
       stats: async () => resolveNativeResult(native.semanticTableStats()),
       ensureVectorIndex: async (params) => resolveNativeResult(native.semanticEnsureVectorIndex(params)),
       compact: async () => resolveNativeResult(native.semanticCompact()),
+      cleanup: async (params) => resolveNativeResult(native.semanticCleanup(params)),
       optimize: async (params) => resolveNativeResult(native.semanticOptimize(params)),
       describe: async () => resolveNativeResult(native.describeSemanticIndexTable()),
     },

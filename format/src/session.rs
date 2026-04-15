@@ -23,9 +23,7 @@ use super::codec::{
     turns_to_update_reader,
 };
 use super::memory_id::{MemoryId, MemoryLayer, deserialize_memory_id, serialize_memory_id};
-use crate::maintenance::compact_dataset;
-#[cfg(test)]
-use crate::session::SessionUpdate;
+use crate::maintenance::{cleanup_dataset, compact_dataset};
 
 pub(crate) fn has_text_content(value: Option<&str>) -> bool {
     value.map(|value| !value.trim().is_empty()).unwrap_or(false)
@@ -132,63 +130,6 @@ pub struct SessionTurn {
 }
 
 impl SessionTurn {
-    #[cfg_attr(not(test), allow(dead_code))]
-    #[cfg(test)]
-    pub(crate) fn new(write: &SessionUpdate) -> Self {
-        Self::new_pending(write)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn new_pending(write: &SessionUpdate) -> Self {
-        let now = Utc::now();
-        Self {
-            turn_id: MemoryId::new(MemoryLayer::Session, u64::MAX),
-            created_at: now,
-            updated_at: now,
-            session_id: write.session_id.clone(),
-            agent: write.agent.clone(),
-            observer: write.observer.clone(),
-            title: None,
-            summary: None,
-            tool_calling: None,
-            artifacts: None,
-            prompt: None,
-            response: None,
-            observing_epoch: None,
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn merge(&mut self, update: &SessionUpdate) -> Result<()> {
-        if self.session_id != update.session_id
-            || self.agent != update.agent
-            || self.observer != update.observer
-        {
-            return Err(Error::invalid_input(
-                "message session does not match open turn",
-            ));
-        }
-
-        if let Some(title) = update.title.as_deref().filter(|value| !value.trim().is_empty()) {
-            self.title = Some(title.to_string());
-        }
-        if let Some(summary) = update.summary.as_deref().filter(|value| !value.trim().is_empty()) {
-            self.summary = Some(summary.to_string());
-        }
-        self.prompt = merge_prompt(self.prompt.as_deref(), update.prompt.as_deref());
-        if update
-            .response
-            .as_deref()
-            .is_some_and(|value| !value.trim().is_empty())
-        {
-            self.response = update.response.clone();
-        }
-        merge_tool_calling(&mut self.tool_calling, update.tool_calling.as_ref());
-        merge_artifacts(&mut self.artifacts, update.artifacts.as_ref());
-        self.updated_at = Utc::now();
-        Ok(())
-    }
-
     pub fn observable(&self) -> bool {
         has_text_content(self.response.as_deref()) && has_text_content(self.summary.as_deref())
     }
@@ -251,6 +192,10 @@ impl SessionTable {
         compact_dataset(self.access.try_open().await?).await
     }
 
+    pub async fn cleanup(&self, floor_version: u64) -> Result<bool> {
+        cleanup_dataset(self.access.try_open().await?, floor_version).await
+    }
+
     pub async fn describe(&self) -> Result<Option<TableDescription>> {
         let Some(dataset) = self.access.try_open().await? else {
             return Ok(None);
@@ -285,7 +230,12 @@ impl SessionTable {
         let new_indexes = (0..turns.len()).collect::<Vec<_>>();
         if let Some(mut dataset) = self.access.try_open().await? {
             let before_version = dataset.version().version;
-            dataset.append(turns_to_reader(turns.to_vec()), None).await?;
+            dataset
+                .append(
+                    turns_to_reader(turns.to_vec()),
+                    self.access.options().write_params(),
+                )
+                .await?;
             return self
                 .assign_inserted_ids_from_delta(&dataset, before_version, turns, &new_indexes)
                 .await;
@@ -300,7 +250,12 @@ impl SessionTable {
                     )
                 })?;
                 let before_version = dataset.version().version;
-                dataset.append(turns_to_reader(retry_turns), None).await?;
+                dataset
+                    .append(
+                        turns_to_reader(retry_turns),
+                        self.access.options().write_params(),
+                    )
+                    .await?;
                 self.assign_inserted_ids_from_delta(&dataset, before_version, turns, &new_indexes)
                     .await
             }
@@ -458,6 +413,43 @@ impl SessionTable {
         Ok(turns)
     }
 
+    pub async fn delta(
+        &self,
+        observer: &str,
+        baseline_version: u64,
+    ) -> Result<Vec<SessionTurn>> {
+        let Some(dataset) = self.access.try_open().await? else {
+            return Ok(Vec::new());
+        };
+        let version = dataset.version().version;
+        if version <= baseline_version {
+            return Ok(Vec::new());
+        }
+        let delta = dataset
+            .delta()
+            .compared_against_version(baseline_version)
+            .build()?;
+        let mut inserted = delta.get_inserted_rows().await?;
+        let mut rows = Vec::new();
+        while let Some(batch) = inserted.try_next().await? {
+            if batch.num_rows() == 0 {
+                continue;
+            }
+            rows.extend(
+                record_batch_to_turns(&batch)?
+                    .into_iter()
+                    .filter(|turn| turn.observer == observer),
+            );
+        }
+        rows.sort_by(|left, right| {
+            left.created_at
+                .cmp(&right.created_at)
+                .then(left.updated_at.cmp(&right.updated_at))
+                .then(left.turn_id.cmp(&right.turn_id))
+        });
+        Ok(rows)
+    }
+
     #[cfg(test)]
     #[allow(dead_code)]
     pub(crate) async fn turns_for_observing_epochs(
@@ -569,6 +561,7 @@ impl SessionTable {
         );
 
         CommitBuilder::new(Arc::new(dataset))
+            .with_skip_auto_cleanup(true)
             .execute(transaction)
             .await
     }

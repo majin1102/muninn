@@ -63,6 +63,19 @@ struct SessionLoadTurnsAfterEpochParams {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct TableDeltaParams {
+    observer: String,
+    baseline_version: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CleanupParams {
+    floor_version: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct SessionUpsertParams {
     turns: Vec<SessionTurn>,
 }
@@ -236,6 +249,18 @@ impl CoreBinding {
         )
     }
 
+    #[napi(js_name = "sessionDelta")]
+    pub async fn session_delta(&self, params: Value) -> NapiResult<Value> {
+        let params = parse_params::<TableDeltaParams>(params)?;
+        let resources = self.resources().await?;
+        into_napi_value(
+            resources
+                .session_table
+                .delta(&params.observer, params.baseline_version)
+                .await,
+        )
+    }
+
     #[napi(js_name = "sessionInsert")]
     pub async fn session_insert(&self, params: Value) -> NapiResult<Value> {
         let params = parse_params::<SessionUpsertParams>(params)?;
@@ -296,6 +321,18 @@ impl CoreBinding {
         to_napi_value(ChangedResult { changed })
     }
 
+    #[napi(js_name = "sessionCleanup")]
+    pub async fn session_cleanup(&self, params: Value) -> NapiResult<Value> {
+        let params = parse_params::<CleanupParams>(params)?;
+        let resources = self.resources().await?;
+        let changed = resources
+            .session_table
+            .cleanup(params.floor_version)
+            .await
+            .map_err(to_napi_error)?;
+        to_napi_value(ChangedResult { changed })
+    }
+
     #[napi(js_name = "describeSessionTable")]
     pub async fn describe_session_table(&self) -> NapiResult<Value> {
         let resources = self.resources().await?;
@@ -320,6 +357,18 @@ impl CoreBinding {
     pub async fn observing_thread_snapshots(&self, observing_id: String) -> NapiResult<Value> {
         let resources = self.resources().await?;
         into_napi_value(resources.observing_table.load_thread_snapshots(&observing_id).await)
+    }
+
+    #[napi(js_name = "observingDelta")]
+    pub async fn observing_delta(&self, params: Value) -> NapiResult<Value> {
+        let params = parse_params::<TableDeltaParams>(params)?;
+        let resources = self.resources().await?;
+        into_napi_value(
+            resources
+                .observing_table
+                .delta(&params.observer, params.baseline_version)
+                .await,
+        )
     }
 
     #[napi(js_name = "observingInsert")]
@@ -360,6 +409,18 @@ impl CoreBinding {
         let changed = resources
             .observing_table
             .compact()
+            .await
+            .map_err(to_napi_error)?;
+        to_napi_value(ChangedResult { changed })
+    }
+
+    #[napi(js_name = "observingCleanup")]
+    pub async fn observing_cleanup(&self, params: Value) -> NapiResult<Value> {
+        let params = parse_params::<CleanupParams>(params)?;
+        let resources = self.resources().await?;
+        let changed = resources
+            .observing_table
+            .cleanup(params.floor_version)
             .await
             .map_err(to_napi_error)?;
         to_napi_value(ChangedResult { changed })
@@ -448,6 +509,18 @@ impl CoreBinding {
         let changed = resources
             .semantic_index_table
             .compact()
+            .await
+            .map_err(to_napi_error)?;
+        to_napi_value(ChangedResult { changed })
+    }
+
+    #[napi(js_name = "semanticCleanup")]
+    pub async fn semantic_cleanup(&self, params: Value) -> NapiResult<Value> {
+        let params = parse_params::<CleanupParams>(params)?;
+        let resources = self.resources().await?;
+        let changed = resources
+            .semantic_index_table
+            .cleanup(params.floor_version)
             .await
             .map_err(to_napi_error)?;
         to_napi_value(ChangedResult { changed })

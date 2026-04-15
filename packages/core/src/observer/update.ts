@@ -203,12 +203,6 @@ async function catchUpIndex(
 
   if (latestIndexedSequence !== thread.indexedSnapshotSequence) {
     thread.indexedSnapshotSequence = latestIndexedSequence;
-    if (thread.snapshotId) {
-      const [persisted] = await client.observingTable.update({
-        snapshots: [toObservingSnapshot(thread)],
-      });
-      updateThreadsFromRows([thread], [persisted]);
-    }
   }
 }
 
@@ -272,8 +266,6 @@ function updateThreadsFromRows(
       thread.snapshotIds.push(row.snapshotId);
     }
     thread.references = [...row.references];
-    thread.indexedSnapshotSequence = row.checkpoint.indexedSnapshotSequence ?? null;
-    thread.observingEpoch = row.checkpoint.observingEpoch;
     thread.updatedAt = row.updatedAt;
   }
 }
