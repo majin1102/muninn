@@ -35,11 +35,6 @@ export interface EnsureVectorIndexResult {
 
 type NativeCoreBinding = {
   close(): MaybePromise<void>;
-  sessionLoadOpenTurn(params: {
-    sessionId?: string;
-    agent: string;
-    observer: string;
-  }): MaybePromise<SessionTurn | null>;
   sessionGetTurn(turnId: string): MaybePromise<SessionTurn | null>;
   sessionListTurns(params: {
     mode: ListModeInput;
@@ -62,9 +57,6 @@ type NativeCoreBinding = {
   sessionInsert(params: {
     turns: Array<Record<string, unknown>>;
   }): MaybePromise<SessionTurn[]>;
-  sessionUpdate(params: {
-    turns: Array<Record<string, unknown>>;
-  }): MaybePromise<SessionTurn[]>;
   sessionDeleteTurns(params: {
     turnIds: string[];
   }): MaybePromise<{ deleted: number }>;
@@ -83,9 +75,6 @@ type NativeCoreBinding = {
     baselineVersion: number;
   }): MaybePromise<ObservingSnapshotPayload[]>;
   observingInsert(params: {
-    snapshots: ObservingSnapshotPayload[];
-  }): MaybePromise<ObservingSnapshotPayload[]>;
-  observingUpdate(params: {
     snapshots: ObservingSnapshotPayload[];
   }): MaybePromise<ObservingSnapshotPayload[]>;
   observingTableStats(): MaybePromise<TableStats | null>;
@@ -131,11 +120,6 @@ type NativeModule = {
 };
 
 export interface SessionTableBinding {
-  loadOpenTurn(params: {
-    sessionId?: string;
-    agent: string;
-    observer: string;
-  }): Promise<SessionTurn | null>;
   getTurn(turnId: string): Promise<SessionTurn | null>;
   listTurns(params: {
     mode: ListModeInput;
@@ -156,9 +140,6 @@ export interface SessionTableBinding {
     baselineVersion: number;
   }): Promise<SessionTurn[]>;
   insert(params: {
-    turns: Array<Record<string, unknown>>;
-  }): Promise<SessionTurn[]>;
-  update(params: {
     turns: Array<Record<string, unknown>>;
   }): Promise<SessionTurn[]>;
   deleteTurns(params: {
@@ -183,9 +164,6 @@ export interface ObservingTableBinding {
     baselineVersion: number;
   }): Promise<ObservingSnapshotPayload[]>;
   insert(params: {
-    snapshots: ObservingSnapshotPayload[];
-  }): Promise<ObservingSnapshotPayload[]>;
-  update(params: {
     snapshots: ObservingSnapshotPayload[];
   }): Promise<ObservingSnapshotPayload[]>;
   stats(): Promise<TableStats | null>;
@@ -257,10 +235,6 @@ export async function getNativeTables(): Promise<NativeTables> {
 }
 
 export async function shutdownNativeTablesForTests(): Promise<void> {
-  const binding = singleton ?? (singletonPromise ? await singletonPromise : null);
-  if (binding) {
-    await binding.close();
-  }
   singleton = null;
   singletonPromise = null;
 }
@@ -274,10 +248,6 @@ export async function describeSemanticIndexForStorage(
 
 function wrapBinding(native: NativeCoreBinding): NativeTables {
   const sessionTable: SessionTableBinding = {
-    loadOpenTurn: async (params) => normalizeOptionalRecord(
-      await resolveNativeResult(native.sessionLoadOpenTurn(params)),
-      'turnId',
-    ),
     getTurn: async (turnId) => normalizeOptionalRecord(
       await resolveNativeResult(native.sessionGetTurn(turnId)),
       'turnId',
@@ -287,7 +257,6 @@ function wrapBinding(native: NativeCoreBinding): NativeTables {
     loadTurnsAfterEpoch: async (params) => resolveNativeResult(native.sessionLoadTurnsAfterEpoch(params)),
     delta: async (params) => resolveNativeResult(native.sessionDelta(params)),
     insert: async (params) => resolveNativeResult(native.sessionInsert(params)),
-    update: async (params) => resolveNativeResult(native.sessionUpdate(params)),
     deleteTurns: async (params) => resolveNativeResult(native.sessionDeleteTurns(params)),
     stats: async () => resolveNativeResult(native.sessionTableStats()),
     compact: async () => resolveNativeResult(native.sessionCompact()),
@@ -306,7 +275,6 @@ function wrapBinding(native: NativeCoreBinding): NativeTables {
       threadSnapshots: async (observingId) => resolveNativeResult(native.observingThreadSnapshots(observingId)),
       delta: async (params) => resolveNativeResult(native.observingDelta(params)),
       insert: async (params) => resolveNativeResult(native.observingInsert(params)),
-      update: async (params) => resolveNativeResult(native.observingUpdate(params)),
       stats: async () => resolveNativeResult(native.observingTableStats()),
       compact: async () => resolveNativeResult(native.observingCompact()),
       cleanup: async (params) => resolveNativeResult(native.observingCleanup(params)),

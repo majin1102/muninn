@@ -216,16 +216,23 @@ mod tests {
             observer: "default-observer".to_string(),
             title: None,
             summary: Some("summary".to_string()),
-            tool_calling: None,
+            tool_calls: None,
             artifacts: None,
             prompt: Some("prompt".to_string()),
-            response: None,
+            response: Some("response".to_string()),
             observing_epoch: None,
         };
         table.insert(std::slice::from_mut(&mut turn)).await.unwrap();
-        turn.updated_at = chrono::Utc::now();
-        turn.response = Some("response".to_string());
-        table.update(&[turn.clone()]).await.unwrap();
+        let mut second_turn = turn.clone();
+        second_turn.turn_id = MemoryId::new(MemoryLayer::Session, u64::MAX);
+        second_turn.created_at = chrono::Utc::now();
+        second_turn.updated_at = second_turn.created_at;
+        second_turn.prompt = Some("prompt-2".to_string());
+        second_turn.response = Some("response-2".to_string());
+        table
+            .insert(std::slice::from_mut(&mut second_turn))
+            .await
+            .unwrap();
 
         let dataset = table.try_open_dataset().await.unwrap().unwrap();
         let versions = dataset.versions().await.unwrap();

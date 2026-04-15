@@ -22,11 +22,9 @@ import {
 } from './checkpoint.js';
 import { Memories } from './memories/memories.js';
 import { Observer } from './observer/observer.js';
-import { hasText, sessionKey } from './session/key.js';
 import { SessionRegistry } from './session/registry.js';
-import { readSessionTurn, serializeSessionTurn, toSessionTurn } from './session/types.js';
 import { Watchdog } from './watchdog.js';
-import type { TurnContent } from '@muninn/types';
+import type { Artifact, ToolCall, TurnContent } from '@muninn/types';
 
 export interface SessionTurn {
   turnId: string;
@@ -37,8 +35,8 @@ export interface SessionTurn {
   observer: string;
   title?: string | null;
   summary?: string | null;
-  toolCalling?: string[] | null;
-  artifacts?: Record<string, string> | null;
+  toolCalls?: ToolCall[] | null;
+  artifacts?: Artifact[] | null;
   prompt?: string | null;
   response?: string | null;
   observingEpoch?: number | null;
@@ -169,7 +167,6 @@ class AsyncCheckpointLock implements CheckpointLock {
 let singletonBackend: MuninnBackend | null = null;
 let singletonBackendPromise: Promise<MuninnBackend> | null = null;
 let bootstrapPromise: Promise<void> | null = null;
-const REPAIR_PAGE_SIZE = 1_000;
 
 export class MuninnBackend {
   readonly memories: Memories;
@@ -214,11 +211,11 @@ export class MuninnBackend {
     return backend;
   }
 
-  async accept(turnContent: TurnContent): Promise<SessionTurn> {
+  async accept(turnContent: TurnContent): Promise<void> {
     return this.checkpointLock.shared(async () => {
       const observer = await this.ensureObserver();
       const registry = this.ensureSessionRegistry(observer.name);
-      return toSessionTurn(await observer.accept(turnContent, registry));
+      await observer.accept(turnContent, registry);
     });
   }
 
@@ -250,11 +247,11 @@ export class MuninnBackend {
         },
         committedEpoch: observerCheckpoint.committedEpoch,
         nextEpoch: observerCheckpoint.nextEpoch,
-        openTurns: this.sessionRegistry?.exportOpenTurns() ?? [],
+        recentSessions: this.sessionRegistry?.exportRecentSessions() ?? [],
         threads: observerCheckpoint.threads,
       };
       return {
-        schemaVersion: 1,
+        schemaVersion: 3,
         observer: checkpoint,
       };
     });
@@ -292,22 +289,12 @@ export class MuninnBackend {
     if (!this.sessionRegistry || !this.checkpoint) {
       return;
     }
-    const section = this.checkpoint.observer;
-    const delta = await this.client.sessionTable.delta({
-      observer: this.sessionRegistry.observerName,
-      baselineVersion: section.baseline.turn,
-    });
-    const refs = replayOpenTurns(section.openTurns, delta.map(readSessionTurn));
-    for (const ref of refs) {
-      const turn = ref.turn ?? await loadOpenTurnRef(
-        this.client,
-        ref.turnRef,
-        this.sessionRegistry.observerName,
+    for (const session of this.checkpoint.observer.recentSessions) {
+      this.sessionRegistry.restoreSession(
+        session.sessionId ?? undefined,
+        session.agent,
+        session.turns,
       );
-      if (!turn) {
-        continue;
-      }
-      this.sessionRegistry.restoreSession(ref.turnRef.sessionId ?? undefined, ref.turnRef.agent, turn);
     }
   }
 }
@@ -329,196 +316,6 @@ async function bootstrap(tables: Awaited<ReturnType<typeof getNativeTables>>): P
     const embedding = getEmbeddingConfig();
     await tables.semanticIndexTable.validateDimensions({ expected: embedding.dimensions });
   }
-  await repairOpenTurns(tables);
-}
-
-async function repairOpenTurns(tables: NativeTables): Promise<number> {
-  const openTurns = await listOpenTurns(tables);
-  const turnsByKey = new Map<string, SessionTurn[]>();
-  for (const turn of openTurns) {
-    const key = sessionKey(turn.sessionId ?? undefined, turn.agent, turn.observer);
-    const group = turnsByKey.get(key);
-    if (group) {
-      group.push(turn);
-    } else {
-      turnsByKey.set(key, [turn]);
-    }
-  }
-
-  let repaired = 0;
-  for (const turns of turnsByKey.values()) {
-    if (turns.length < 2) {
-      continue;
-    }
-    const { canonicalTurn, discardedTurnIds } = mergeOpenTurns(turns);
-    await tables.sessionTable.update({
-      turns: [serializeSessionTurn(canonicalTurn)],
-    });
-    if (discardedTurnIds.length > 0) {
-      await tables.sessionTable.deleteTurns({ turnIds: discardedTurnIds });
-    }
-    repaired += 1;
-  }
-  return repaired;
-}
-
-async function listOpenTurns(tables: NativeTables): Promise<SessionTurn[]> {
-  const turns: SessionTurn[] = [];
-  for (let offset = 0; ; offset += REPAIR_PAGE_SIZE) {
-    const page = await tables.sessionTable.listTurns({
-      mode: { type: 'page', offset, limit: REPAIR_PAGE_SIZE },
-    });
-    const normalized = page.map(readSessionTurn).filter((turn) => !hasText(turn.response));
-    turns.push(...normalized);
-    if (page.length < REPAIR_PAGE_SIZE) {
-      return turns;
-    }
-  }
-}
-
-function mergeOpenTurns(turns: SessionTurn[]): {
-  canonicalTurn: SessionTurn;
-  discardedTurnIds: string[];
-} {
-  const sorted = [...turns].sort((left, right) => {
-    const leftId = turnRowId(left.turnId);
-    const rightId = turnRowId(right.turnId);
-    if (leftId < rightId) {
-      return -1;
-    }
-    if (leftId > rightId) {
-      return 1;
-    }
-    return 0;
-  });
-  const canonicalSource = sorted[sorted.length - 1];
-  const discardedTurnIds = sorted.slice(0, -1).map((turn) => turn.turnId);
-
-  let prompt: string | undefined;
-  let toolCalling: string[] | undefined;
-  let artifacts: Record<string, string> | undefined;
-  let latestUpdatedAt = canonicalSource.updatedAt;
-
-  for (const turn of sorted) {
-    prompt = mergePrompt(prompt, turn.prompt ?? undefined);
-    toolCalling = mergeToolCalling(toolCalling, turn.toolCalling ?? undefined);
-    artifacts = mergeArtifacts(artifacts, turn.artifacts ?? undefined);
-    if (Date.parse(turn.updatedAt) > Date.parse(latestUpdatedAt)) {
-      latestUpdatedAt = turn.updatedAt;
-    }
-  }
-
-  return {
-    canonicalTurn: {
-      ...canonicalSource,
-      prompt: prompt ?? null,
-      toolCalling: toolCalling ?? null,
-      artifacts: artifacts ?? null,
-      response: null,
-      observingEpoch: null,
-      updatedAt: latestUpdatedAt,
-    },
-    discardedTurnIds,
-  };
-}
-
-function mergePrompt(current?: string, incoming?: string): string | undefined {
-  const currentText = hasText(current) ? current.trim() : undefined;
-  const incomingText = hasText(incoming) ? incoming.trim() : undefined;
-  if (currentText && incomingText) {
-    return currentText === incomingText ? currentText : `${currentText}\n\n${incomingText}`;
-  }
-  return currentText ?? incomingText;
-}
-
-function mergeToolCalling(current?: string[], incoming?: string[]): string[] | undefined {
-  if (!incoming || incoming.length === 0) {
-    return current;
-  }
-  return [...(current ?? []), ...incoming];
-}
-
-function mergeArtifacts(
-  current?: Record<string, string>,
-  incoming?: Record<string, string> | null,
-): Record<string, string> | undefined {
-  if (!incoming || Object.keys(incoming).length === 0) {
-    return current;
-  }
-  return {
-    ...(current ?? {}),
-    ...incoming,
-  };
-}
-
-function turnRowId(turnId: string): bigint {
-  const [, rawRowId = '0'] = turnId.split(':', 2);
-  return BigInt(rawRowId);
-}
-
-function matchesOpenTurn(
-  turn: SessionTurn | null,
-  sessionId: string | undefined,
-  agent: string,
-  observer: string,
-): boolean {
-  if (!turn) {
-    return false;
-  }
-  return sessionKey(turn.sessionId ?? undefined, turn.agent, turn.observer) === sessionKey(sessionId, agent, observer)
-    && !hasText(turn.response);
-}
-
-function replayOpenTurns(
-  baseline: import('./checkpoint.js').OpenTurnRef[],
-  rows: SessionTurn[],
-): Array<{ turnRef: import('./checkpoint.js').OpenTurnRef; turn?: SessionTurn }> {
-  const turns = new Map<string, { turnRef: import('./checkpoint.js').OpenTurnRef; turn?: SessionTurn }>();
-  for (const turnRef of baseline) {
-    const key = openTurnKey(turnRef.sessionId ?? undefined, turnRef.agent);
-    turns.set(key, { turnRef });
-  }
-  const ordered = [...rows].sort((left, right) => (
-    left.createdAt.localeCompare(right.createdAt)
-    || left.updatedAt.localeCompare(right.updatedAt)
-    || left.turnId.localeCompare(right.turnId)
-  ));
-  for (const turn of ordered) {
-    const key = openTurnKey(turn.sessionId ?? undefined, turn.agent);
-    if (hasText(turn.response)) {
-      turns.delete(key);
-      continue;
-    }
-    turns.set(key, {
-      turnRef: {
-        sessionId: turn.sessionId ?? null,
-        agent: turn.agent,
-        turnId: turn.turnId,
-        updatedAt: turn.updatedAt,
-      },
-      turn,
-    });
-  }
-  return [...turns.values()].sort((left, right) => (
-    left.turnRef.updatedAt.localeCompare(right.turnRef.updatedAt)
-  ));
-}
-
-function openTurnKey(sessionId: string | undefined, agent: string): string {
-  return sessionId ? `${sessionId}\u0000${agent}` : `\u0000${agent}`;
-}
-
-async function loadOpenTurnRef(
-  client: NativeTables,
-  turnRef: import('./checkpoint.js').OpenTurnRef,
-  observer: string,
-): Promise<SessionTurn | null> {
-  const row = await client.sessionTable.getTurn(turnRef.turnId);
-  const turn = row ? readSessionTurn(row) : null;
-  if (!turn || !matchesOpenTurn(turn, turnRef.sessionId ?? undefined, turnRef.agent, observer)) {
-    return null;
-  }
-  return turn;
 }
 
 export async function getBackend(): Promise<MuninnBackend> {
@@ -540,8 +337,8 @@ export async function getBackend(): Promise<MuninnBackend> {
   return singletonBackendPromise;
 }
 
-export async function addMessage(turnContent: TurnContent): Promise<SessionTurn> {
-  return (await getBackend()).accept(turnContent);
+export async function addMessage(turnContent: TurnContent): Promise<void> {
+  await (await getBackend()).accept(turnContent);
 }
 
 export async function validateSettings(content: string): Promise<void> {
@@ -621,7 +418,6 @@ export async function shutdownCoreForTests(): Promise<void> {
 
 export const __testing = {
   ...nativeTesting,
-  repairOpenTurns,
   shutdownCoreForTests,
 };
 

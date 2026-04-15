@@ -110,14 +110,14 @@ export function createMemoryOpenVikingContextEngine(params): ContextEngine {
 
 根据 `../workstreams/progress-openclaw-integration.md`：
 
-1. **before_model_resolve** → 写入 `prompt`
-2. **after_tool_call** → 写入 `artifacts`（toolCalling + artifacts）
-3. **agent_end** → 写入 `response`
+1. **agent_end** → 一次生成完整 turn
+2. `prompt` / `response` 为必填基础事实
+3. `toolCalls` / `artifacts` 为可选补充信息
 
 ### 数据流特点
 
 - **写入为主**：Muninn 当前主要是捕获上下文，不是召回
-- **分段写入**：prompt、artifacts、response 在不同时机产生
+- **完整写入**：在 turn 闭合时一次提交完整 payload
 - **需要 sessionKey 映射**：OpenClaw sessionKey → Muninn sessionId
 - **artifact 采集复杂**：需要根据 tool 类型决定是否回读文件
 
@@ -133,9 +133,9 @@ export function createMemoryOpenVikingContextEngine(params): ContextEngine {
 **理由：**
 
 1. **MVP1 需求匹配度高**
-   - 三个 hook 对应三个写入时机，语义清晰
-   - 不需要复杂的批量处理逻辑
-   - 每个 hook 独立失败，不阻塞主流程
+   - `agent_end` 可以作为完整 turn 的稳定闭合时机
+   - 不再依赖 prompt/tool/response 分段写入
+   - 失败只打日志，不阻塞主流程
 
 2. **实现复杂度低**
    - 不需要实现完整的 ContextEngine 接口
@@ -163,64 +163,17 @@ export default {
 
   register(api) {
     const sidecarUrl = process.env.MUNINN_SIDECAR_URL || "http://localhost:3100";
-    const sessionMap = new Map<string, string>(); // sessionKey → sessionId
-
-    // Hook 1: before_model_resolve → 写入 prompt
-    api.on("before_model_resolve", async (event, ctx) => {
-      try {
-        const sessionId = getOrCreateSessionId(sessionMap, ctx.sessionKey);
-        await fetch(`${sidecarUrl}/api/v1/session/messages`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            session: {
-              sessionId,
-              agent: ctx.agentId || "openclaw",
-              prompt: event.prompt
-            }
-          })
-        });
-      } catch (err) {
-        api.logger.warn(`muninn: failed to write prompt: ${err}`);
-      }
-    });
-
-    // Hook 2: after_tool_call → 写入 artifacts
-    api.on("after_tool_call", async (event, ctx) => {
-      try {
-        const sessionId = getOrCreateSessionId(sessionMap, ctx.sessionKey);
-        const artifacts = await collectArtifacts(event);
-        await fetch(`${sidecarUrl}/api/v1/session/messages`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            session: {
-              sessionId,
-              agent: ctx.agentId || "openclaw",
-              toolCalling: [event.toolName],
-              artifacts
-            }
-          })
-        });
-      } catch (err) {
-        api.logger.warn(`muninn: failed to write artifacts: ${err}`);
-      }
-    });
-
-    // Hook 3: agent_end → 写入 response
     api.on("agent_end", async (event, ctx) => {
       try {
-        const sessionId = getOrCreateSessionId(sessionMap, ctx.sessionKey);
-        const response = extractResponse(event.messages);
-        await fetch(`${sidecarUrl}/api/v1/session/messages`, {
+        const turn = buildTurnFromAgentEnd(event, ctx);
+        if (!turn) {
+          return;
+        }
+        await fetch(`${sidecarUrl}/api/v1/turn/capture`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            session: {
-              sessionId,
-              agent: ctx.agentId || "openclaw",
-              response
-            }
+            turn
           })
         });
       } catch (err) {

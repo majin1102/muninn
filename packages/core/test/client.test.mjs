@@ -7,6 +7,8 @@ import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promise
 import core from '../dist/index.js';
 import { getNativeTables } from '../dist/native.js';
 import { getObserverLlmConfig } from '../dist/config.js';
+import { MuninnBackend } from '../dist/backend.js';
+import { resolveCheckpointPath } from '../dist/checkpoint.js';
 
 const {
   addMessage,
@@ -27,12 +29,24 @@ async function makeDatasetUri() {
   };
 }
 
+function cleanupDataset(dir) {
+  return async () => {
+    await shutdownCoreForTests();
+    await rm(dir, {
+      recursive: true,
+      force: true,
+      maxRetries: 5,
+      retryDelay: 50,
+    });
+  };
+}
+
 function makePendingSessionTurn({
   sessionId,
   agent,
   observer,
   prompt = null,
-  toolCalling = null,
+  toolCalls = null,
 }) {
   const now = new Date().toISOString();
   return {
@@ -44,12 +58,41 @@ function makePendingSessionTurn({
     observer,
     title: null,
     summary: null,
-    toolCalling,
+    toolCalls,
     artifacts: null,
     prompt,
     response: null,
     observingEpoch: null,
   };
+}
+
+function makeTurnContent(overrides = {}) {
+  return {
+    sessionId: 'group-a',
+    agent: 'agent-a',
+    prompt: 'default prompt',
+    response: 'default response',
+    ...overrides,
+  };
+}
+
+function normalizeTestSessionId(sessionId) {
+  return typeof sessionId === 'string' ? sessionId.trim() : sessionId;
+}
+
+async function writeTurnAndGet(turn) {
+  await addMessage(turn);
+  const listed = await sessions.list({
+    mode: { type: 'recency', limit: 20 },
+    agent: turn.agent,
+    sessionId: normalizeTestSessionId(turn.sessionId),
+  });
+  const match = listed.find((candidate) => (
+    candidate.prompt === turn.prompt
+    && candidate.response === turn.response
+  ));
+  assert.ok(match);
+  return match;
 }
 
 function toFileStoreUri(dir) {
@@ -58,7 +101,7 @@ function toFileStoreUri(dir) {
 
 async function writeMuninnConfig(configPath, {
   turnProvider,
-  observerProvider = 'openai',
+  observerProvider = 'mock',
   semanticDimensions = 4,
   storageUri,
   storageOptions,
@@ -105,14 +148,19 @@ async function writeMuninnConfig(configPath, {
   await writeFile(configPath, `${JSON.stringify(root, null, 2)}\n`, 'utf8');
 }
 
-test.afterEach(async () => {
+test.beforeEach(async () => {
+  await shutdownCoreForTests();
+  delete process.env.MUNINN_HOME;
+});
+
+test.after(async () => {
   await shutdownCoreForTests();
   delete process.env.MUNINN_HOME;
 });
 
 test('observer config defaults activeWindowDays to 7 and accepts explicit overrides', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
-  t.after(async () => rm(dir, { recursive: true, force: true }));
+  t.after(cleanupDataset(dir));
 
   process.env.MUNINN_HOME = homeDir;
   await writeMuninnConfig(configPath, { observerProvider: 'mock' });
@@ -129,17 +177,15 @@ test('observer config defaults activeWindowDays to 7 and accepts explicit overri
 
 test('addMessage and sessions.get roundtrip through the native binding', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
-  t.after(async () => rm(dir, { recursive: true, force: true }));
+  t.after(cleanupDataset(dir));
 
   process.env.MUNINN_HOME = homeDir;
   await writeMuninnConfig(configPath);
 
-  const created = await addMessage({
-    sessionId: 'group-a',
-    agent: 'agent-a',
+  const created = await writeTurnAndGet(makeTurnContent({
     prompt: 'alpha prompt',
-    summary: 'alpha summary',
-  });
+    response: 'alpha response',
+  }));
 
   assert.ok(typeof created.turnId === 'string');
   assert.equal(created.sessionId, 'group-a');
@@ -149,30 +195,31 @@ test('addMessage and sessions.get roundtrip through the native binding', async (
   assert.equal(detail.turnId, created.turnId);
   assert.equal(detail.sessionId, 'group-a');
   assert.equal(detail.agent, 'agent-a');
-  assert.equal(detail.summary, 'alpha summary');
+  assert.equal(detail.response, 'alpha response');
 });
 
 test('addMessage normalizes sessionId whitespace through the native binding', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
-  t.after(async () => rm(dir, { recursive: true, force: true }));
+  t.after(cleanupDataset(dir));
 
   process.env.MUNINN_HOME = homeDir;
   await writeMuninnConfig(configPath);
 
-  const first = await addMessage({
+  const first = await writeTurnAndGet(makeTurnContent({
     sessionId: ' group-a ',
-    agent: 'agent-a',
     prompt: 'first prompt',
-  });
-  const second = await addMessage({
+    response: 'first response',
+  }));
+  const second = await writeTurnAndGet(makeTurnContent({
     sessionId: 'group-a',
-    agent: 'agent-a',
-    toolCalling: ['tool-a'],
-  });
+    prompt: 'second prompt',
+    response: 'second response',
+    toolCalls: [{ name: 'tool-a' }],
+  }));
 
   assert.equal(first.sessionId, 'group-a');
   assert.equal(second.sessionId, 'group-a');
-  assert.equal(second.turnId, first.turnId);
+  assert.notEqual(second.turnId, first.turnId);
 
   const detail = await sessions.get(first.turnId);
   assert.ok(detail);
@@ -182,135 +229,87 @@ test('addMessage normalizes sessionId whitespace through the native binding', as
     mode: { type: 'recency', limit: 10 },
     sessionId: ' group-a ',
   });
-  assert.equal(listed.length, 1);
-  assert.equal(listed[0].turnId, first.turnId);
-  assert.equal(listed[0].sessionId, 'group-a');
+  assert.equal(listed.length, 2);
+  assert.ok(listed.every((turn) => turn.sessionId === 'group-a'));
 });
 
-test('blank sessionId falls back to the agent default session', async (t) => {
+test('blank sessionId is rejected', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
-  t.after(async () => rm(dir, { recursive: true, force: true }));
+  t.after(cleanupDataset(dir));
 
   process.env.MUNINN_HOME = homeDir;
   await writeMuninnConfig(configPath);
 
-  const first = await addMessage({
-    sessionId: '   ',
-    agent: 'agent-a',
-    prompt: 'default prompt',
-  });
-  const second = await addMessage({
-    agent: 'agent-a',
-    toolCalling: ['tool-a'],
-  });
+  await assert.rejects(
+    () => addMessage(makeTurnContent({
+      sessionId: '   ',
+      prompt: 'default prompt',
+      response: 'default response',
+    })),
+    /turn must include sessionId/i,
+  );
+});
 
-  assert.equal(first.sessionId, null);
-  assert.equal(second.sessionId, null);
+test('addMessage without sessionId is rejected', async (t) => {
+  const { dir, homeDir, configPath } = await makeDatasetUri();
+  t.after(cleanupDataset(dir));
+
+  process.env.MUNINN_HOME = homeDir;
+  await writeMuninnConfig(configPath);
+
+  await assert.rejects(
+    () => addMessage(makeTurnContent({
+      sessionId: undefined,
+      prompt: 'default-session prompt',
+      response: 'default-session response',
+    })),
+    /turn must include sessionId/i,
+  );
+});
+
+test('addMessage dedupes identical prompt and response within the same session', async (t) => {
+  const { dir, homeDir, configPath } = await makeDatasetUri();
+  t.after(cleanupDataset(dir));
+
+  process.env.MUNINN_HOME = homeDir;
+  await writeMuninnConfig(configPath);
+
+  const first = await writeTurnAndGet(makeTurnContent({
+    prompt: 'same prompt',
+    response: 'same response',
+    toolCalls: [{ name: 'tool-a' }],
+  }));
+  const second = await writeTurnAndGet(makeTurnContent({
+    prompt: 'same prompt',
+    response: 'same response',
+    toolCalls: [{ name: 'tool-b' }],
+    artifacts: [{ key: 'artifact', content: 'value' }],
+  }));
+
   assert.equal(second.turnId, first.turnId);
-});
-
-test('bootstrap repairs duplicate open turns before loading the session', async (t) => {
-  const { dir, homeDir, configPath } = await makeDatasetUri();
-  t.after(async () => rm(dir, { recursive: true, force: true }));
-
-  process.env.MUNINN_HOME = homeDir;
-  await writeMuninnConfig(configPath);
-
-  const tables = await getNativeTables();
-  await tables.sessionTable.insert({
-    turns: [
-      makePendingSessionTurn({
-        sessionId: ' group-a ',
-        agent: 'agent-a',
-        observer: 'test-observer',
-        prompt: 'first prompt',
-      }),
-      makePendingSessionTurn({
-        sessionId: 'group-a',
-        agent: 'agent-a',
-        observer: 'test-observer',
-        toolCalling: ['tool-a'],
-      }),
-    ],
-  });
-
-  const sealed = await addMessage({
-    sessionId: 'group-a',
-    agent: 'agent-a',
-    summary: 'merged summary',
-    response: 'merged response',
-  });
-
-  const detail = await sessions.get(sealed.turnId);
-  assert.ok(detail);
-  assert.equal(detail.sessionId, 'group-a');
-  assert.equal(detail.prompt, 'first prompt');
-  assert.deepEqual(detail.toolCalling, ['tool-a']);
-  assert.equal(detail.summary, 'merged summary');
-  assert.equal(detail.response, 'merged response');
-
-  const listed = await sessions.list({
-    mode: { type: 'recency', limit: 10 },
-    sessionId: 'group-a',
-  });
-  assert.equal(listed.length, 1);
-  assert.equal(listed[0].turnId, sealed.turnId);
-});
-
-test('addMessage without sessionId reuses the agent default session through the native binding', async (t) => {
-  const { dir, homeDir, configPath } = await makeDatasetUri();
-  t.after(async () => rm(dir, { recursive: true, force: true }));
-
-  process.env.MUNINN_HOME = homeDir;
-  await writeMuninnConfig(configPath);
-
-  const first = await addMessage({
-    agent: 'agent-a',
-    prompt: 'default-session prompt',
-  });
-  const merged = await addMessage({
-    agent: 'agent-a',
-    toolCalling: ['tool-a'],
-  });
-  const otherAgent = await addMessage({
-    agent: 'agent-b',
-    toolCalling: ['tool-b'],
-  });
-
-  assert.equal(merged.turnId, first.turnId);
-  assert.notEqual(otherAgent.turnId, first.turnId);
-
-  const detail = await sessions.get(first.turnId);
-  assert.ok(detail);
-  assert.equal(detail.sessionId, null);
-  assert.equal(detail.agent, 'agent-a');
-  assert.deepEqual(detail.toolCalling, ['tool-a']);
 });
 
 test('sessions.list returns the recent window in chronological order, and memories.timeline covers the happy path', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
-  t.after(async () => rm(dir, { recursive: true, force: true }));
+  t.after(cleanupDataset(dir));
 
   process.env.MUNINN_HOME = homeDir;
   await writeMuninnConfig(configPath);
 
-  const first = await addMessage({
-    sessionId: 'group-a',
-    agent: 'agent-a',
+  const first = await writeTurnAndGet(makeTurnContent({
     prompt: 'first prompt',
     response: 'first response',
-  });
-  const second = await addMessage({
-    sessionId: 'group-a',
-    agent: 'agent-a',
+  }));
+  const second = await writeTurnAndGet(makeTurnContent({
     prompt: 'second prompt',
     response: 'second response',
-  });
-  await addMessage({
+  }));
+  await addMessage(makeTurnContent({
     sessionId: 'group-b',
     agent: 'agent-b',
     prompt: 'other prompt',
-  });
+    response: 'other response',
+  }));
 
   const listed = await sessions.list({ mode: { type: 'recency', limit: 2 } });
   assert.equal(listed.length, 2);
@@ -329,18 +328,15 @@ test('sessions.list returns the recent window in chronological order, and memori
 
 test('pure read APIs work without observer bootstrap config', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
-  t.after(async () => rm(dir, { recursive: true, force: true }));
+  t.after(cleanupDataset(dir));
 
   process.env.MUNINN_HOME = homeDir;
   await writeMuninnConfig(configPath, { observerProvider: 'mock' });
 
-  const created = await addMessage({
-    sessionId: 'group-a',
-    agent: 'agent-a',
+  const created = await writeTurnAndGet(makeTurnContent({
     prompt: 'bootstrap-free prompt',
-    summary: 'bootstrap-free summary',
     response: 'bootstrap-free response',
-  });
+  }));
 
   for (let attempt = 0; attempt < 50; attempt += 1) {
     const watermark = await observer.watermark();
@@ -388,7 +384,7 @@ test('pure read APIs work without observer bootstrap config', async (t) => {
 
 test('invalid memory ids reject through the native binding', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
-  t.after(async () => rm(dir, { recursive: true, force: true }));
+  t.after(cleanupDataset(dir));
 
   process.env.MUNINN_HOME = homeDir;
   await writeMuninnConfig(configPath);
@@ -406,36 +402,81 @@ test('invalid memory ids reject through the native binding', async (t) => {
 
 test('shutdownCoreForTests allows the native binding to restart cleanly', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
-  t.after(async () => rm(dir, { recursive: true, force: true }));
+  t.after(cleanupDataset(dir));
 
   process.env.MUNINN_HOME = homeDir;
   await writeMuninnConfig(configPath);
 
-  const first = await addMessage({
-    sessionId: 'group-a',
-    agent: 'agent-a',
+  await addMessage(makeTurnContent({
     prompt: 'first prompt',
-  });
-  assert.ok(first.turnId);
+    response: 'first response',
+  }));
 
   await shutdownCoreForTests();
 
-  const second = await addMessage({
-    sessionId: 'group-a',
-    agent: 'agent-a',
+  await addMessage(makeTurnContent({
     prompt: 'second prompt',
-  });
+    response: 'second response',
+  }));
+  const listed = await sessions.list({ mode: { type: 'recency', limit: 10 } });
+  const first = listed.find((turn) => turn.prompt === 'first prompt' && turn.response === 'first response');
+  const second = listed.find((turn) => turn.prompt === 'second prompt' && turn.response === 'second response');
+  assert.ok(first);
+  assert.ok(second);
   assert.ok(second.turnId);
-  assert.equal(second.turnId, first.turnId);
+  assert.notEqual(second.turnId, first.turnId);
 
   const detail = await sessions.get(first.turnId);
   assert.ok(detail);
-  assert.equal(detail.prompt, 'first prompt\n\nsecond prompt');
+  assert.equal(detail.prompt, 'first prompt');
+});
+
+test('checkpoint restore keeps recent turn dedupe within the same observer', async (t) => {
+  const { dir, homeDir, configPath } = await makeDatasetUri();
+  t.after(cleanupDataset(dir));
+
+  process.env.MUNINN_HOME = homeDir;
+  await writeMuninnConfig(configPath, { observerProvider: 'mock' });
+
+  const firstBackend = await MuninnBackend.create(await getNativeTables());
+  try {
+    await firstBackend.accept(makeTurnContent({
+      prompt: 'same prompt',
+      response: 'same response',
+    }));
+    const first = (await firstBackend.memories.listSessions({ mode: { type: 'recency', limit: 1 } }))[0];
+    assert.ok(first);
+    const exported = await firstBackend.exportCheckpoint();
+    assert.ok(exported);
+    await mkdir(path.dirname(resolveCheckpointPath()), { recursive: true });
+    await writeFile(resolveCheckpointPath(), `${JSON.stringify({
+      ...exported,
+      writtenAt: new Date().toISOString(),
+      writerPid: process.pid,
+    }, null, 2)}\n`, 'utf8');
+    await firstBackend.shutdown();
+    await shutdownCoreForTests();
+
+    const secondBackend = await MuninnBackend.create(await getNativeTables());
+    try {
+      await secondBackend.accept(makeTurnContent({
+        prompt: 'same prompt',
+        response: 'same response',
+      }));
+      const listed = await secondBackend.memories.listSessions({ mode: { type: 'recency', limit: 10 } });
+      assert.equal(listed.filter((turn) => turn.prompt === 'same prompt' && turn.response === 'same response').length, 1);
+      assert.equal(listed[0].turnId, first.turnId);
+    } finally {
+      await secondBackend.shutdown();
+    }
+  } finally {
+    await firstBackend.shutdown().catch(() => undefined);
+  }
 });
 
 test('cold start does not wait for the first watchdog interval before serving writes', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
-  t.after(async () => rm(dir, { recursive: true, force: true }));
+  t.after(cleanupDataset(dir));
 
   process.env.MUNINN_HOME = homeDir;
   await writeMuninnConfig(configPath, {
@@ -451,15 +492,13 @@ test('cold start does not wait for the first watchdog interval before serving wr
     },
   });
 
-  const created = await addMessage({
+  await addMessage({
     sessionId: 'group-a',
     agent: 'agent-a',
     prompt: 'cold-start prompt',
     response: 'cold-start response',
     summary: 'cold-start summary',
   });
-
-  assert.ok(created.turnId);
   await assert.rejects(
     () => readFile(path.join(homeDir, 'watchdog.jsonl'), 'utf8'),
     /ENOENT/,
@@ -472,23 +511,20 @@ test('cold start does not wait for the first watchdog interval before serving wr
 
 test('addMessage rejects empty message payloads through the native binding', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
-  t.after(async () => rm(dir, { recursive: true, force: true }));
+  t.after(cleanupDataset(dir));
 
   process.env.MUNINN_HOME = homeDir;
   await writeMuninnConfig(configPath);
 
   await assert.rejects(
-    () => addMessage({
-      sessionId: 'group-a',
-      agent: 'agent-a',
-    }),
-    /at least one message field/i,
+    () => addMessage({ sessionId: 'group-a', agent: 'agent-a' }),
+    /turn must include prompt/i,
   );
 });
 
 test('validateSettings rejects semantic index dimension changes that mismatch existing data', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
-  t.after(async () => rm(dir, { recursive: true, force: true }));
+  t.after(cleanupDataset(dir));
 
   process.env.MUNINN_HOME = homeDir;
   await writeMuninnConfig(configPath, { observerProvider: 'mock' });
@@ -528,7 +564,7 @@ test('validateSettings rejects semantic index dimension changes that mismatch ex
 
 test('validateSettings reports invalid JSON before native storage initialization', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
-  t.after(async () => rm(dir, { recursive: true, force: true }));
+  t.after(cleanupDataset(dir));
 
   process.env.MUNINN_HOME = homeDir;
   await mkdir(path.dirname(configPath), { recursive: true });
@@ -542,7 +578,7 @@ test('validateSettings reports invalid JSON before native storage initialization
 
 test('validateSettings rejects invalid observer.activeWindowDays', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
-  t.after(async () => rm(dir, { recursive: true, force: true }));
+  t.after(cleanupDataset(dir));
 
   process.env.MUNINN_HOME = homeDir;
   await mkdir(path.dirname(configPath), { recursive: true });
@@ -574,7 +610,7 @@ test('validateSettings rejects invalid observer.activeWindowDays', async (t) => 
 
 test('validateSettings rejects missing observer config', async (t) => {
   const { dir, homeDir } = await makeDatasetUri();
-  t.after(async () => rm(dir, { recursive: true, force: true }));
+  t.after(cleanupDataset(dir));
 
   process.env.MUNINN_HOME = homeDir;
 
@@ -599,7 +635,7 @@ test('validateSettings rejects missing observer config', async (t) => {
 
 test('validateSettings rejects missing llm config', async (t) => {
   const { dir, homeDir } = await makeDatasetUri();
-  t.after(async () => rm(dir, { recursive: true, force: true }));
+  t.after(cleanupDataset(dir));
 
   process.env.MUNINN_HOME = homeDir;
 
@@ -623,7 +659,7 @@ test('validateSettings rejects missing llm config', async (t) => {
 
 test('validateSettings rejects missing semanticIndex config', async (t) => {
   const { dir, homeDir } = await makeDatasetUri();
-  t.after(async () => rm(dir, { recursive: true, force: true }));
+  t.after(cleanupDataset(dir));
 
   process.env.MUNINN_HOME = homeDir;
 
@@ -645,7 +681,7 @@ test('validateSettings rejects missing semanticIndex config', async (t) => {
 
 test('validateSettings rejects missing semanticIndex.embedding config', async (t) => {
   const { dir, homeDir } = await makeDatasetUri();
-  t.after(async () => rm(dir, { recursive: true, force: true }));
+  t.after(cleanupDataset(dir));
 
   process.env.MUNINN_HOME = homeDir;
 
@@ -670,7 +706,7 @@ test('validateSettings rejects missing semanticIndex.embedding config', async (t
 
 test('validateSettings accepts omitted semantic dimensions when the default runtime dimensions apply', async (t) => {
   const { dir, homeDir } = await makeDatasetUri();
-  t.after(async () => rm(dir, { recursive: true, force: true }));
+  t.after(cleanupDataset(dir));
 
   process.env.MUNINN_HOME = homeDir;
 
@@ -697,7 +733,7 @@ test('validateSettings accepts omitted semantic dimensions when the default runt
 
 test('validateSettings rejects omitted semantic dimensions for an existing non-default table', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
-  t.after(async () => rm(dir, { recursive: true, force: true }));
+  t.after(cleanupDataset(dir));
 
   process.env.MUNINN_HOME = homeDir;
   await writeMuninnConfig(configPath, { observerProvider: 'mock', semanticDimensions: 4 });
@@ -736,7 +772,7 @@ test('validateSettings rejects omitted semantic dimensions for an existing non-d
 
 test('validateSettings rejects semanticIndex.embedding.provider when it is empty', async (t) => {
   const { dir, homeDir } = await makeDatasetUri();
-  t.after(async () => rm(dir, { recursive: true, force: true }));
+  t.after(cleanupDataset(dir));
 
   process.env.MUNINN_HOME = homeDir;
 
@@ -754,7 +790,7 @@ test('validateSettings rejects semanticIndex.embedding.provider when it is empty
 
 test('validateSettings rejects observer config without observer.llm', async (t) => {
   const { dir, homeDir } = await makeDatasetUri();
-  t.after(async () => rm(dir, { recursive: true, force: true }));
+  t.after(cleanupDataset(dir));
 
   process.env.MUNINN_HOME = homeDir;
 
@@ -775,7 +811,7 @@ test('validateSettings rejects observer config without observer.llm', async (t) 
 
 test('validateSettings rejects referenced llm entries without provider', async (t) => {
   const { dir, homeDir } = await makeDatasetUri();
-  t.after(async () => rm(dir, { recursive: true, force: true }));
+  t.after(cleanupDataset(dir));
 
   process.env.MUNINN_HOME = homeDir;
 
@@ -799,7 +835,7 @@ test('validateSettings rejects referenced llm entries without provider', async (
 
 test('validateSettings rejects openai turn llm without apiKey', async (t) => {
   const { dir, homeDir } = await makeDatasetUri();
-  t.after(async () => rm(dir, { recursive: true, force: true }));
+  t.after(cleanupDataset(dir));
 
   process.env.MUNINN_HOME = homeDir;
 
@@ -833,7 +869,7 @@ test('validateSettings rejects openai turn llm without apiKey', async (t) => {
 
 test('validateSettings rejects openai observer llm without apiKey', async (t) => {
   const { dir, homeDir } = await makeDatasetUri();
-  t.after(async () => rm(dir, { recursive: true, force: true }));
+  t.after(cleanupDataset(dir));
 
   process.env.MUNINN_HOME = homeDir;
 
@@ -861,7 +897,7 @@ test('validateSettings rejects openai observer llm without apiKey', async (t) =>
 
 test('validateSettings rejects openai semantic embeddings without apiKey', async (t) => {
   const { dir, homeDir } = await makeDatasetUri();
-  t.after(async () => rm(dir, { recursive: true, force: true }));
+  t.after(cleanupDataset(dir));
 
   process.env.MUNINN_HOME = homeDir;
 
@@ -889,7 +925,7 @@ test('validateSettings rejects openai semantic embeddings without apiKey', async
 
 test('validateSettings does not create the default storage root while checking settings', async (t) => {
   const { dir, homeDir } = await makeDatasetUri();
-  t.after(async () => rm(dir, { recursive: true, force: true }));
+  t.after(cleanupDataset(dir));
 
   process.env.MUNINN_HOME = homeDir;
 
@@ -917,7 +953,7 @@ test('validateSettings does not create the default storage root while checking s
 
 test('validateSettings rejects semantic index dimension changes when the table exists but is empty', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
-  t.after(async () => rm(dir, { recursive: true, force: true }));
+  t.after(cleanupDataset(dir));
 
   process.env.MUNINN_HOME = homeDir;
   await writeMuninnConfig(configPath, { observerProvider: 'mock' });
@@ -970,7 +1006,7 @@ test('validateSettings rejects semantic index dimension changes when the table e
 
 test('validateSettings checks the pending storage target instead of the current config storage', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
-  t.after(async () => rm(dir, { recursive: true, force: true }));
+  t.after(cleanupDataset(dir));
 
   const storageA = path.join(dir, 'storage-a');
   const storageB = path.join(dir, 'storage-b');
@@ -1025,7 +1061,7 @@ test('validateSettings checks the pending storage target instead of the current 
 
 test('validateSettings is not blocked by the current config storage when the pending storage target is valid', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
-  t.after(async () => rm(dir, { recursive: true, force: true }));
+  t.after(cleanupDataset(dir));
 
   const storageB = path.join(dir, 'storage-b');
 
@@ -1058,7 +1094,7 @@ test('validateSettings is not blocked by the current config storage when the pen
 
 test('getNativeTables initializes the native tables only once under concurrent access', async (t) => {
   const { dir, homeDir } = await makeDatasetUri();
-  t.after(async () => rm(dir, { recursive: true, force: true }));
+  t.after(cleanupDataset(dir));
 
   process.env.MUNINN_HOME = homeDir;
 
@@ -1068,12 +1104,12 @@ test('getNativeTables initializes the native tables only once under concurrent a
 
 test('observer.watermark reports pending turns until the observer flush completes', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
-  t.after(async () => rm(dir, { recursive: true, force: true }));
+  t.after(cleanupDataset(dir));
 
   process.env.MUNINN_HOME = homeDir;
   await writeMuninnConfig(configPath, { observerProvider: 'mock' });
 
-  const created = await addMessage({
+  const created = await writeTurnAndGet({
     sessionId: 'group-a',
     agent: 'agent-a',
     prompt: 'observer pending prompt',
@@ -1100,12 +1136,12 @@ test('observer.watermark reports pending turns until the observer flush complete
 
 test('addMessage summarizes response turns when a summary provider is configured', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
-  t.after(async () => rm(dir, { recursive: true, force: true }));
+  t.after(cleanupDataset(dir));
 
   process.env.MUNINN_HOME = homeDir;
     await writeMuninnConfig(configPath, { turnProvider: 'mock' });
 
-  const created = await addMessage({
+  const created = await writeTurnAndGet({
     sessionId: 'group-a',
     agent: 'agent-a',
     prompt: 'summarize this',
@@ -1121,31 +1157,30 @@ test('addMessage summarizes response turns when a summary provider is configured
 
 test('addMessage persists response turns when the summarizer is not configured', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
-  t.after(async () => rm(dir, { recursive: true, force: true }));
+  t.after(cleanupDataset(dir));
 
   process.env.MUNINN_HOME = homeDir;
   await writeMuninnConfig(configPath);
 
-  const created = await addMessage({
-    sessionId: 'group-a',
-    agent: 'agent-a',
+  const created = await writeTurnAndGet(makeTurnContent({
+    prompt: 'response prompt',
     response: 'response body',
-  });
+  }));
 
   const detail = await sessions.get(created.turnId);
   assert.ok(detail);
   assert.equal(detail.response, 'response body');
-  assert.equal(detail.summary, null);
+  assert.equal(detail.summary, 'response prompt\n\nresponse body');
 });
 
 test('rendered memory binding returns unified turn and observing reads', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
-  t.after(async () => rm(dir, { recursive: true, force: true }));
+  t.after(cleanupDataset(dir));
 
   process.env.MUNINN_HOME = homeDir;
   await writeMuninnConfig(configPath, { turnProvider: 'mock', observerProvider: 'mock' });
 
-  const turn = await addMessage({
+  const turn = await writeTurnAndGet({
     sessionId: 'group-a',
     agent: 'agent-a',
     prompt: 'rendered prompt',
@@ -1186,7 +1221,7 @@ test('rendered memory binding returns unified turn and observing reads', async (
 
 test('rendered memory page mode paginates after combining session and observing results', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
-  t.after(async () => rm(dir, { recursive: true, force: true }));
+  t.after(cleanupDataset(dir));
 
   process.env.MUNINN_HOME = homeDir;
   await writeMuninnConfig(configPath, { turnProvider: 'mock', observerProvider: 'mock' });

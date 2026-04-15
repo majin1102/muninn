@@ -47,25 +47,29 @@ export interface GetDetailRequest {
   memoryId: string;
 }
 
+export interface ToolCall {
+  id?: string;
+  name: string;
+  input?: string;
+  output?: string;
+}
+
+export interface Artifact {
+  key: string;
+  content: string;
+}
+
 export interface TurnContent {
-  sessionId?: string;
+  sessionId: string;
   agent: string;
-  title?: string;
-  summary?: string;
-  toolCalling?: string[];
-  // Tool outputs produced during this session memory row.
-  artifacts?: Record<string, string>;
-  prompt?: string;
-  response?: string;
+  toolCalls?: ToolCall[];
+  artifacts?: Artifact[];
+  prompt: string;
+  response: string;
 }
 
-export interface AddMessageToSessionRequest {
-  session: TurnContent;
-}
-
-export interface AddMessageToSessionResponse {
-  turnId: string;
-  requestId: string;
+export interface CaptureTurnRequest {
+  turn: TurnContent;
 }
 
 export interface AgentNode {

@@ -4,11 +4,17 @@ import path from 'node:path';
 
 import { loadMuninnConfig, resolveMuninnHome, resolveStorageTarget } from './config.js';
 
-export type OpenTurnRef = {
-  sessionId?: string | null;
-  agent: string;
+export type RecentTurn = {
   turnId: string;
   updatedAt: string;
+  prompt: string;
+  response: string;
+};
+
+export type RecentSessionCheckpoint = {
+  sessionId?: string | null;
+  agent: string;
+  turns: RecentTurn[];
 };
 
 export type ThreadRef = {
@@ -27,12 +33,12 @@ export type ObserverCheckpoint = {
   };
   committedEpoch?: number;
   nextEpoch: number;
-  openTurns: OpenTurnRef[];
+  recentSessions: RecentSessionCheckpoint[];
   threads: ThreadRef[];
 };
 
 export type CheckpointContent = {
-  schemaVersion: 1;
+  schemaVersion: 3;
   observer: ObserverCheckpoint;
 };
 
@@ -46,7 +52,7 @@ export function parseCheckpointFile(raw: string): CheckpointFile {
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
     throw new Error('checkpoint must be a JSON object');
   }
-  if (parsed.schemaVersion !== 1) {
+  if (parsed.schemaVersion !== 3) {
     throw new Error(`unsupported checkpoint schemaVersion: ${String(parsed.schemaVersion)}`);
   }
   const observer = parseObserverSection(parsed.observer);
@@ -54,7 +60,7 @@ export function parseCheckpointFile(raw: string): CheckpointFile {
     throw new Error('checkpoint observer section is invalid');
   }
   return {
-    schemaVersion: 1,
+    schemaVersion: 3,
     writtenAt: typeof parsed.writtenAt === 'string' ? parsed.writtenAt : new Date(0).toISOString(),
     writerPid: typeof parsed.writerPid === 'number' ? parsed.writerPid : 0,
     observer,
@@ -83,9 +89,9 @@ function parseObserverSection(value: unknown): ObserverCheckpoint | null {
   }
   const baseline = parseBaseline(value.baseline);
   const nextEpoch = value.nextEpoch;
-  const openTurns = parseOpenTurns(value.openTurns);
+  const recentSessions = parseRecentSessions(value.recentSessions);
   const threads = parseThreads(value.threads);
-  if (!baseline || typeof nextEpoch !== 'number' || !openTurns || !threads) {
+  if (!baseline || typeof nextEpoch !== 'number' || !recentSessions || !threads) {
     return null;
   }
   const committedEpoch = value.committedEpoch;
@@ -96,7 +102,7 @@ function parseObserverSection(value: unknown): ObserverCheckpoint | null {
     baseline,
     committedEpoch: committedEpoch ?? undefined,
     nextEpoch,
-    openTurns,
+    recentSessions,
     threads,
   };
 }
@@ -119,31 +125,67 @@ function parseBaseline(value: unknown): ObserverCheckpoint['baseline'] | null {
   };
 }
 
-function parseOpenTurns(value: unknown): OpenTurnRef[] | null {
+function parseRecentSessions(value: unknown): RecentSessionCheckpoint[] | null {
   if (!Array.isArray(value)) {
     return null;
   }
-  const turns: OpenTurnRef[] = [];
-  for (const turn of value) {
-    if (!isObjectRecord(turn)) {
+  const sessions: RecentSessionCheckpoint[] = [];
+  for (const session of value) {
+    if (!isObjectRecord(session)) {
       return null;
     }
     if (
-      (turn.sessionId != null && typeof turn.sessionId !== 'string')
-      || typeof turn.agent !== 'string'
-      || typeof turn.turnId !== 'string'
-      || typeof turn.updatedAt !== 'string'
+      (session.sessionId != null && typeof session.sessionId !== 'string')
+      || typeof session.agent !== 'string'
     ) {
       return null;
     }
-    turns.push({
-      sessionId: turn.sessionId ?? null,
-      agent: turn.agent,
-      turnId: turn.turnId,
-      updatedAt: turn.updatedAt,
+    const turns = parseRecentTurns(session.turns);
+    if (!turns) {
+      return null;
+    }
+    sessions.push({
+      sessionId: session.sessionId ?? null,
+      agent: session.agent,
+      turns,
     });
   }
+  return sessions;
+}
+
+function parseRecentTurns(value: unknown): RecentTurn[] | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  const turns: RecentTurn[] = [];
+  for (const turn of value) {
+    const parsed = parseRecentTurn(turn);
+    if (!parsed) {
+      return null;
+    }
+    turns.push(parsed);
+  }
   return turns;
+}
+
+function parseRecentTurn(value: unknown): RecentTurn | null {
+  if (!isObjectRecord(value)) {
+    return null;
+  }
+  if (
+    typeof value.turnId !== 'string'
+    || typeof value.updatedAt !== 'string'
+    || typeof value.prompt !== 'string'
+    || typeof value.response !== 'string'
+  ) {
+    return null;
+  }
+  return {
+    turnId: value.turnId,
+    updatedAt: value.updatedAt,
+    prompt: value.prompt,
+    response: value.response,
+  };
 }
 
 function parseThreads(value: unknown): ThreadRef[] | null {
@@ -194,8 +236,9 @@ export function resolveCheckpointPath(): string {
 function storageScopeKey(): string {
   const config = loadMuninnConfig();
   const storage = config ? resolveStorageTarget(config) : null;
+  const observer = config?.observer?.name ?? '';
   if (!storage) {
-    return `local:${resolveMuninnHome()}`;
+    return `local:${resolveMuninnHome()}#observer=${observer}`;
   }
   const options = storage.storageOptions
     ? Object.entries(storage.storageOptions)
@@ -203,5 +246,5 @@ function storageScopeKey(): string {
       .map(([key, value]) => `${key}=${value}`)
       .join('&')
     : '';
-  return `${storage.uri}#${options}`;
+  return `${storage.uri}#${options}#observer=${observer}`;
 }

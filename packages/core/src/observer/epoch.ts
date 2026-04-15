@@ -1,6 +1,5 @@
 import type { SessionTurn, TurnContent } from '../client.js';
 import type { SessionRegistry } from '../session/registry.js';
-import { cloneTurn } from '../session/types.js';
 
 export type SealedEpoch = {
   epoch: number;
@@ -23,20 +22,20 @@ export class OpenEpoch {
     readonly epoch: number,
     stagedObservableTurns: SessionTurn[] = [],
   ) {
-    this.stagedObservableTurns = stagedObservableTurns.map(cloneTurn);
+    this.stagedObservableTurns = [...stagedObservableTurns];
   }
 
   accept(
     turnContent: TurnContent,
     sessionRegistry: SessionRegistry,
-  ): Promise<SessionTurn> {
+  ): Promise<void> {
     if (this.sealed) {
       throw new EpochSealedError(this.epoch);
     }
 
-    let resolveTurn: (turn: SessionTurn) => void;
+    let resolveTurn: () => void;
     let rejectTurn: (error: unknown) => void;
-    const turnResult = new Promise<SessionTurn>((resolve, reject) => {
+    const turnResult = new Promise<void>((resolve, reject) => {
       resolveTurn = resolve;
       rejectTurn = reject;
     });
@@ -45,11 +44,11 @@ export class OpenEpoch {
     const task = this.acceptChain.then(async () => {
       try {
         const session = await sessionRegistry.load(turnContent.sessionId, turnContent.agent);
-        const turn = await session.accept(turnContent, this.epoch);
-        if (isObservable(turn)) {
-          this.stagedObservableTurns.push(cloneTurn(turn));
+        const accepted = await session.accept(turnContent, this.epoch);
+        if (accepted.turn && !accepted.deduped && isObservable(accepted.turn)) {
+          this.stagedObservableTurns.push(accepted.turn);
         }
-        resolveTurn!(turn);
+        resolveTurn!();
       } catch (error) {
         rejectTurn!(error);
       }
@@ -68,7 +67,7 @@ export class OpenEpoch {
   }
 
   stagedTurns(): SessionTurn[] {
-    return this.stagedObservableTurns.map(cloneTurn);
+    return [...this.stagedObservableTurns];
   }
 
   async seal(): Promise<SealedEpoch> {
@@ -76,7 +75,7 @@ export class OpenEpoch {
     await this.acceptChain;
     return {
       epoch: this.epoch,
-      turns: this.stagedObservableTurns.map(cloneTurn),
+      turns: [...this.stagedObservableTurns],
     };
   }
 }
@@ -92,7 +91,7 @@ export class EpochQueue {
     }
     const normalized = {
       epoch: sealedEpoch.epoch,
-      turns: sealedEpoch.turns.map(cloneTurn),
+      turns: [...sealedEpoch.turns],
     };
     const waiter = this.waiters.shift();
     if (waiter) {
@@ -123,7 +122,7 @@ export class EpochQueue {
   }
 
   pendingTurns(): SessionTurn[] {
-    return this.items.flatMap((sealedEpoch) => sealedEpoch.turns.map(cloneTurn));
+    return this.items.flatMap((sealedEpoch) => sealedEpoch.turns);
   }
 
   close(): void {

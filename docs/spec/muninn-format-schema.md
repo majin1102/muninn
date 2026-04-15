@@ -82,7 +82,7 @@ type SessionTurn = {
   observer: string;
   title?: string | null;
   summary?: string | null;
-  tool_calling?: string[] | null;
+  tool_calls_json?: string | null;
   artifacts_json?: string | null;
   prompt?: string | null;
   response?: string | null;
@@ -183,25 +183,37 @@ type ObservedMemory = {
 
 ## 5. Current Write Type
 
-当前正式写接口仍然是 session message write：
+当前正式写接口是完整 turn capture：
 
 ```ts
+export interface ToolCall {
+  id?: string;
+  name: string;
+  input?: string;
+  output?: string;
+}
+
+export interface Artifact {
+  key: string;
+  content: string;
+}
+
 export interface TurnContent {
-  sessionId?: string;
+  sessionId: string;
   agent: string;
-  title?: string;
-  summary?: string;
-  toolCalling?: string[];
-  artifacts?: Record<string, string>;
-  prompt?: string;
-  response?: string;
+  prompt: string;
+  response: string;
+  toolCalls?: ToolCall[];
+  artifacts?: Artifact[];
 }
 ```
 
 补充说明：
 
-- `summary` 是可选派生字段
-- `response` 可独立持久化
+- `observer` 不属于 `TurnContent`，它在 backend/session 路径内部注入并落到 `SessionTurn`
+- `title` / `summary` 不属于 `TurnContent`，它们是 `SessionTurn` 上的派生/存储字段
+- `toolCalls` 在 row 内部以 `tool_calls_json` 持久化
+- `artifacts` 在 row 内部以 `artifacts_json` 持久化
 
 ## 6. Current Read Contract
 

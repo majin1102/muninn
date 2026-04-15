@@ -21,6 +21,7 @@ import threadModule from '../dist/observer/thread.js';
 const { __testing: updateTesting } = updateModule;
 const { getPendingIndex, getPendingIndexUpTo, loadThreads } = threadModule;
 const { addMessage, observer: observerApi, shutdownCoreForTests } = core;
+const CHECKPOINT_SCHEMA_VERSION = 3;
 
 function createCheckpointBackend(exported = null) {
   return {
@@ -37,11 +38,11 @@ async function makeConfigHome() {
   };
 }
 
-async function writeObserverConfig(configPath, { activeWindowDays = 3650 } = {}) {
+async function writeObserverConfig(configPath, { activeWindowDays = 3650, name = 'default-observer' } = {}) {
   await mkdir(path.dirname(configPath), { recursive: true });
   await writeFile(configPath, `${JSON.stringify({
     observer: {
-      name: 'default-observer',
+      name,
       llm: 'observer_llm',
       maxAttempts: 3,
       activeWindowDays,
@@ -117,6 +118,23 @@ function makeObservableTurn(turnId, observingEpoch, text) {
   };
 }
 
+function makeRecentTurn(turnId, text = turnId) {
+  return {
+    turnId,
+    updatedAt: '2024-01-01T00:00:00Z',
+    prompt: `${text} prompt`,
+    response: `${text} response`,
+  };
+}
+
+function makeRecentSessionCheckpoint(turns, sessionId = 'group-a', agent = 'agent-a') {
+  return {
+    sessionId,
+    agent,
+    turns,
+  };
+}
+
 function makeObserverClient() {
   let snapshotSequence = 0;
   return {
@@ -178,7 +196,12 @@ function createWatchdogConfig(overrides = {}) {
   };
 }
 
-test.afterEach(async () => {
+test.beforeEach(async () => {
+  await __testing.shutdownCoreForTests();
+  delete process.env.MUNINN_HOME;
+});
+
+test.after(async () => {
   await __testing.shutdownCoreForTests();
   delete process.env.MUNINN_HOME;
 });
@@ -580,7 +603,7 @@ test('watchdog writes observer checkpoint files', async (t) => {
       optimize: async () => ({ changed: false }),
     },
   }, createWatchdogConfig({ intervalMs: 25, compactMinFragments: 3 }), createCheckpointBackend({
-    schemaVersion: 1,
+    schemaVersion: CHECKPOINT_SCHEMA_VERSION,
     observer: {
         baseline: {
           turn: 10,
@@ -589,12 +612,7 @@ test('watchdog writes observer checkpoint files', async (t) => {
         },
         committedEpoch: 12,
         nextEpoch: 13,
-        openTurns: [{
-          sessionId: 'group-a',
-          agent: 'agent-a',
-          turnId: 'session:101',
-          updatedAt: '2024-01-01T00:00:00Z',
-        }],
+        recentSessions: [makeRecentSessionCheckpoint([makeRecentTurn('session:101', 'checkpoint-1')])],
         threads: [{
           observingId: 'obs-1',
           latestSnapshotId: 'observing:42',
@@ -617,7 +635,7 @@ test('watchdog writes observer checkpoint files', async (t) => {
   });
 
   const checkpoint = await readCheckpoint();
-  assert.equal(checkpoint.schemaVersion, 1);
+  assert.equal(checkpoint.schemaVersion, CHECKPOINT_SCHEMA_VERSION);
   assert.deepEqual(checkpoint.observer, {
     baseline: {
       turn: 10,
@@ -626,12 +644,7 @@ test('watchdog writes observer checkpoint files', async (t) => {
     },
     committedEpoch: 12,
     nextEpoch: 13,
-    openTurns: [{
-      sessionId: 'group-a',
-      agent: 'agent-a',
-      turnId: 'session:101',
-      updatedAt: '2024-01-01T00:00:00Z',
-    }],
+    recentSessions: [makeRecentSessionCheckpoint([makeRecentTurn('session:101', 'checkpoint-1')])],
     threads: [{
       observingId: 'obs-1',
       latestSnapshotId: 'observing:42',
@@ -650,7 +663,7 @@ test('watchdog skips checkpoint writes when contributors return no observer stat
 
   await mkdir(path.dirname(resolveCheckpointPath()), { recursive: true });
   const existing = {
-    schemaVersion: 1,
+    schemaVersion: CHECKPOINT_SCHEMA_VERSION,
     writtenAt: '2024-01-01T00:00:00Z',
     writerPid: 123,
     observer: {
@@ -661,7 +674,7 @@ test('watchdog skips checkpoint writes when contributors return no observer stat
         },
         committedEpoch: 12,
         nextEpoch: 13,
-        openTurns: [],
+        recentSessions: [],
         threads: [],
       },
   };
@@ -703,7 +716,7 @@ test('watchdog skips checkpoint writes when observer content is unchanged', asyn
   await writeObserverConfig(configPath);
 
   const checkpointContent = {
-    schemaVersion: 1,
+    schemaVersion: CHECKPOINT_SCHEMA_VERSION,
     observer: {
         baseline: {
           turn: 10,
@@ -712,12 +725,7 @@ test('watchdog skips checkpoint writes when observer content is unchanged', asyn
         },
         committedEpoch: 12,
         nextEpoch: 13,
-        openTurns: [{
-          sessionId: 'group-a',
-          agent: 'agent-a',
-          turnId: 'session:101',
-          updatedAt: '2024-01-01T00:00:00Z',
-        }],
+        recentSessions: [makeRecentSessionCheckpoint([makeRecentTurn('session:101', 'checkpoint-2')])],
         threads: [{
           observingId: 'obs-1',
           latestSnapshotId: 'observing:42',
@@ -775,7 +783,7 @@ test('watchdog rewrites checkpoint when the file is deleted after startup', asyn
   await writeObserverConfig(configPath);
 
   const checkpointContent = {
-    schemaVersion: 1,
+    schemaVersion: CHECKPOINT_SCHEMA_VERSION,
     observer: {
         baseline: {
           turn: 10,
@@ -784,12 +792,7 @@ test('watchdog rewrites checkpoint when the file is deleted after startup', asyn
         },
         committedEpoch: 12,
         nextEpoch: 13,
-        openTurns: [{
-          sessionId: 'group-a',
-          agent: 'agent-a',
-          turnId: 'session:101',
-          updatedAt: '2024-01-01T00:00:00Z',
-        }],
+        recentSessions: [makeRecentSessionCheckpoint([makeRecentTurn('session:101', 'checkpoint-3')])],
         threads: [{
           observingId: 'obs-1',
           latestSnapshotId: 'observing:42',
@@ -862,7 +865,7 @@ test('readCheckpointFile rejects the legacy observers checkpoint schema', async 
 
   await mkdir(path.dirname(resolveCheckpointPath()), { recursive: true });
   await writeFile(resolveCheckpointPath(), `${JSON.stringify({
-    schemaVersion: 1,
+    schemaVersion: CHECKPOINT_SCHEMA_VERSION,
     writtenAt: '2024-01-01T00:00:00Z',
     writerPid: 123,
     observers: {
@@ -874,7 +877,7 @@ test('readCheckpointFile rejects the legacy observers checkpoint schema', async 
         },
         committedEpoch: 12,
         nextEpoch: 13,
-        openTurns: [],
+        recentSessions: [],
         threads: [],
       },
     },
@@ -886,6 +889,20 @@ test('readCheckpointFile rejects the legacy observers checkpoint schema', async 
   );
 });
 
+test('resolveCheckpointPath is scoped by observer name', async (t) => {
+  const { dir, homeDir, configPath } = await makeConfigHome();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+  process.env.MUNINN_HOME = homeDir;
+
+  await writeObserverConfig(configPath, { name: 'observer-a' });
+  const firstPath = resolveCheckpointPath();
+
+  await writeObserverConfig(configPath, { name: 'observer-b' });
+  const secondPath = resolveCheckpointPath();
+
+  assert.notEqual(firstPath, secondPath);
+});
+
 test('watchdog rewrites checkpoint when observer content changes', async (t) => {
   const { dir, homeDir, configPath } = await makeConfigHome();
   t.after(async () => rm(dir, { recursive: true, force: true }));
@@ -894,7 +911,7 @@ test('watchdog rewrites checkpoint when observer content changes', async (t) => 
 
   await mkdir(path.dirname(resolveCheckpointPath()), { recursive: true });
   await writeFile(resolveCheckpointPath(), `${JSON.stringify({
-    schemaVersion: 1,
+    schemaVersion: CHECKPOINT_SCHEMA_VERSION,
     writtenAt: '2024-01-01T00:00:00Z',
     writerPid: 123,
     observer: {
@@ -905,7 +922,7 @@ test('watchdog rewrites checkpoint when observer content changes', async (t) => 
         },
         committedEpoch: 11,
         nextEpoch: 12,
-        openTurns: [],
+        recentSessions: [],
         threads: [],
       },
   }, null, 2)}\n`, 'utf8');
@@ -931,7 +948,7 @@ test('watchdog rewrites checkpoint when observer content changes', async (t) => 
       optimize: async () => ({ changed: false }),
     },
   }, createWatchdogConfig({ intervalMs: 25 }), createCheckpointBackend({
-    schemaVersion: 1,
+    schemaVersion: CHECKPOINT_SCHEMA_VERSION,
     observer: {
         baseline: {
           turn: 10,
@@ -940,7 +957,7 @@ test('watchdog rewrites checkpoint when observer content changes', async (t) => 
         },
         committedEpoch: 12,
         nextEpoch: 13,
-        openTurns: [],
+        recentSessions: [],
         threads: [],
       },
   }));
@@ -1118,11 +1135,7 @@ test('epochQueue.shift returns a published epoch without waiting', () => {
 
   assert.deepEqual(queue.shift(), {
     epoch: 1,
-    turns: [{
-      ...turn,
-      toolCalling: undefined,
-      artifacts: undefined,
-    }],
+    turns: [turn],
   });
   assert.equal(queue.shift(), null);
 });
@@ -1340,7 +1353,7 @@ test('observer bootstrap restores committed state from checkpoint when baselines
 
   await mkdir(path.dirname(resolveCheckpointPath()), { recursive: true });
   await writeFile(resolveCheckpointPath(), `${JSON.stringify({
-    schemaVersion: 1,
+    schemaVersion: CHECKPOINT_SCHEMA_VERSION,
     writtenAt: '2024-01-01T00:00:00Z',
     writerPid: 123,
     observer: {
@@ -1351,12 +1364,7 @@ test('observer bootstrap restores committed state from checkpoint when baselines
         },
         committedEpoch: 12,
         nextEpoch: 13,
-        openTurns: [{
-          sessionId: 'group-a',
-          agent: 'agent-a',
-          turnId: 'session:101',
-          updatedAt: '2024-01-01T00:00:00Z',
-        }],
+        recentSessions: [makeRecentSessionCheckpoint([makeRecentTurn('session:101', 'checkpoint-4')])],
         threads: [{
           observingId: 'obs-1',
           latestSnapshotId: 'observing:42',
@@ -1470,7 +1478,7 @@ test('observer checkpoint restore keeps full history for active threads', async 
   const freshUpdatedAt = new Date().toISOString();
   await mkdir(path.dirname(resolveCheckpointPath()), { recursive: true });
   await writeFile(resolveCheckpointPath(), `${JSON.stringify({
-    schemaVersion: 1,
+    schemaVersion: CHECKPOINT_SCHEMA_VERSION,
     writtenAt: new Date().toISOString(),
     writerPid: 123,
     observer: {
@@ -1481,7 +1489,7 @@ test('observer checkpoint restore keeps full history for active threads', async 
         },
         committedEpoch: 12,
         nextEpoch: 13,
-        openTurns: [],
+        recentSessions: [],
         threads: [{
           observingId: 'mixed-thread',
           latestSnapshotId: 'snapshot-1',
@@ -1579,7 +1587,7 @@ test('observer restoreCheckpointState advances committedEpoch and excludes obser
 
   await mkdir(path.dirname(resolveCheckpointPath()), { recursive: true });
   await writeFile(resolveCheckpointPath(), `${JSON.stringify({
-    schemaVersion: 1,
+    schemaVersion: CHECKPOINT_SCHEMA_VERSION,
     writtenAt: '2024-01-01T00:00:00Z',
     writerPid: 123,
     observer: {
@@ -1590,7 +1598,7 @@ test('observer restoreCheckpointState advances committedEpoch and excludes obser
         },
         committedEpoch: 12,
         nextEpoch: 13,
-        openTurns: [],
+        recentSessions: [],
         threads: [{
           observingId: 'obs-1',
           latestSnapshotId: 'snapshot-0',
@@ -1720,7 +1728,7 @@ test('observer restoreCheckpointState falls back when observing delta refs are m
 
   await mkdir(path.dirname(resolveCheckpointPath()), { recursive: true });
   await writeFile(resolveCheckpointPath(), `${JSON.stringify({
-    schemaVersion: 1,
+    schemaVersion: CHECKPOINT_SCHEMA_VERSION,
     writtenAt: '2024-01-01T00:00:00Z',
     writerPid: 123,
     observer: {
@@ -1731,7 +1739,7 @@ test('observer restoreCheckpointState falls back when observing delta refs are m
         },
         committedEpoch: 12,
         nextEpoch: 13,
-        openTurns: [],
+        recentSessions: [],
         threads: [{
           observingId: 'obs-1',
           latestSnapshotId: 'snapshot-0',
@@ -1805,7 +1813,7 @@ test('observer restoreCheckpointState skips stale threads recovered only from ob
 
   await mkdir(path.dirname(resolveCheckpointPath()), { recursive: true });
   await writeFile(resolveCheckpointPath(), `${JSON.stringify({
-    schemaVersion: 1,
+    schemaVersion: CHECKPOINT_SCHEMA_VERSION,
     writtenAt: '2024-01-01T00:00:00Z',
     writerPid: 123,
     observer: {
@@ -1816,7 +1824,7 @@ test('observer restoreCheckpointState skips stale threads recovered only from ob
         },
         committedEpoch: 12,
         nextEpoch: 13,
-        openTurns: [],
+        recentSessions: [],
         threads: [],
       },
   }, null, 2)}\n`, 'utf8');
@@ -1867,7 +1875,7 @@ test('observer restoreCheckpointState rebuilds delta-only threads from full hist
 
   await mkdir(path.dirname(resolveCheckpointPath()), { recursive: true });
   await writeFile(resolveCheckpointPath(), `${JSON.stringify({
-    schemaVersion: 1,
+    schemaVersion: CHECKPOINT_SCHEMA_VERSION,
     writtenAt: '2024-01-01T00:00:00Z',
     writerPid: 123,
     observer: {
@@ -1878,7 +1886,7 @@ test('observer restoreCheckpointState rebuilds delta-only threads from full hist
         },
         committedEpoch: 5,
         nextEpoch: 6,
-        openTurns: [],
+        recentSessions: [],
         threads: [],
       },
   }, null, 2)}\n`, 'utf8');
@@ -1941,7 +1949,7 @@ test('observer bootstrap skips stale checkpoint threads', async (t) => {
   const staleUpdatedAt = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString();
   await mkdir(path.dirname(resolveCheckpointPath()), { recursive: true });
   await writeFile(resolveCheckpointPath(), `${JSON.stringify({
-    schemaVersion: 1,
+    schemaVersion: CHECKPOINT_SCHEMA_VERSION,
     writtenAt: new Date().toISOString(),
     writerPid: 123,
     observer: {
@@ -1952,7 +1960,7 @@ test('observer bootstrap skips stale checkpoint threads', async (t) => {
         },
         committedEpoch: 12,
         nextEpoch: 13,
-        openTurns: [],
+        recentSessions: [],
         threads: [{
           observingId: 'stale-thread',
           latestSnapshotId: 'observing:42',
@@ -2103,7 +2111,7 @@ test('observer bootstrap ignores semanticIndex version mismatches when observing
 
   await mkdir(path.dirname(resolveCheckpointPath()), { recursive: true });
   await writeFile(resolveCheckpointPath(), `${JSON.stringify({
-    schemaVersion: 1,
+    schemaVersion: CHECKPOINT_SCHEMA_VERSION,
     writtenAt: '2024-01-01T00:00:00Z',
     writerPid: 123,
     observer: {
@@ -2114,7 +2122,7 @@ test('observer bootstrap ignores semanticIndex version mismatches when observing
         },
         committedEpoch: 12,
         nextEpoch: 13,
-        openTurns: [],
+        recentSessions: [],
         threads: [{
           observingId: 'obs-1',
           latestSnapshotId: 'observing:42',
@@ -2208,7 +2216,7 @@ test('readCheckpointFile throws when the checkpoint section is structurally inva
 
   await mkdir(path.dirname(resolveCheckpointPath()), { recursive: true });
   await writeFile(resolveCheckpointPath(), `${JSON.stringify({
-    schemaVersion: 1,
+    schemaVersion: CHECKPOINT_SCHEMA_VERSION,
     writtenAt: '2024-01-01T00:00:00Z',
     writerPid: 123,
     observer: {
@@ -2219,7 +2227,7 @@ test('readCheckpointFile throws when the checkpoint section is structurally inva
         },
         committedEpoch: 12,
         nextEpoch: 13,
-        openTurns: [],
+        recentSessions: [],
         threads: [{
           observingId: 'obs-1',
           latestSnapshotId: 'observing:42',
@@ -2265,7 +2273,7 @@ test('muninn.recallMemories does not wait for observer flushes', async () => {
 
 test('backend exportCheckpoint returns null before observer creation', async () => {
   const checkpoint = {
-    schemaVersion: 1,
+    schemaVersion: CHECKPOINT_SCHEMA_VERSION,
     writtenAt: '2024-01-01T00:00:00Z',
     writerPid: 123,
     observer: {
@@ -2276,7 +2284,7 @@ test('backend exportCheckpoint returns null before observer creation', async () 
         },
         committedEpoch: 12,
         nextEpoch: 13,
-        openTurns: [],
+        recentSessions: [],
         threads: [],
       },
   };
@@ -2288,28 +2296,13 @@ test('backend exportCheckpoint returns null before observer creation', async () 
 });
 
 test('session registry reuses one in-flight session load per key', async () => {
-  let loadOpenTurnCalls = 0;
-  let releaseLoad;
-  const loadStarted = new Promise((resolve) => {
-    releaseLoad = resolve;
-  });
-
   const registry = new SessionRegistry({
-    sessionTable: {
-      loadOpenTurn: async () => {
-        loadOpenTurnCalls += 1;
-        await loadStarted;
-        return null;
-      },
-    },
+    sessionTable: {},
   }, 'default-observer');
 
   const first = registry.load('group-a', 'agent-a');
   const second = registry.load('group-a', 'agent-a');
   await Promise.resolve();
-
-  assert.equal(loadOpenTurnCalls, 1);
-  releaseLoad();
 
   const [firstSession, secondSession] = await Promise.all([first, second]);
   assert.strictEqual(firstSession, secondSession);
@@ -2325,35 +2318,23 @@ test('session key normalizes sessionId whitespace', async () => {
 });
 
 test('session registry reuses the same load for trimmed session ids', async () => {
-  let loadOpenTurnCalls = 0;
   const registry = new SessionRegistry({
-    sessionTable: {
-      loadOpenTurn: async ({ sessionId }) => {
-        loadOpenTurnCalls += 1;
-        assert.equal(sessionId, 'group-a');
-        return null;
-      },
-    },
+    sessionTable: {},
   }, 'default-observer');
 
   const first = registry.load('group-a', 'agent-a');
   const second = registry.load(' group-a ', 'agent-a');
   const [firstSession, secondSession] = await Promise.all([first, second]);
 
-  assert.equal(loadOpenTurnCalls, 1);
   assert.strictEqual(firstSession, secondSession);
 });
 
-test('session registry restores live sessions for checkpoint open turns', async () => {
+test('session registry restores live sessions for checkpoint recent turns', async () => {
   const registry = new SessionRegistry({
-    sessionTable: {
-      loadOpenTurn: async () => {
-        return null;
-      },
-    },
+    sessionTable: {},
   }, 'default-observer');
 
-  registry.restoreSession('group-a', 'agent-a', {
+  registry.restoreSession('group-a', 'agent-a', [{
     turnId: 'session:101',
     createdAt: '2024-01-01T00:00:00Z',
     updatedAt: '2024-01-01T00:00:00Z',
@@ -2362,136 +2343,195 @@ test('session registry restores live sessions for checkpoint open turns', async 
     observer: 'default-observer',
     prompt: 'pending prompt',
     response: null,
-  });
+  }]);
 
   const session = await registry.load('group-a', 'agent-a');
-  assert.deepEqual(session.exportOpenTurn(), {
-    sessionId: 'group-a',
-    agent: 'agent-a',
-    turnId: 'session:101',
-    updatedAt: '2024-01-01T00:00:00Z',
-  });
+  const exported = session.exportRecentSession();
+  assert.deepEqual(exported?.turns.map((turn) => turn.turnId), ['session:101']);
 });
 
-test('repairOpenTurns groups duplicates with TS session semantics', async () => {
-  const updated = [];
-  const deleted = [];
-
-  const repaired = await __testing.repairOpenTurns({
-    sessionTable: {
-      listTurns: async () => [
-        {
-          turnId: 'session:1',
-          createdAt: '2024-01-01T00:00:00Z',
-          updatedAt: '2024-01-01T00:00:00Z',
-          session_id: ' group-a ',
-          agent: 'agent-a',
-          observer: 'default-observer',
-          prompt: 'first prompt',
-        },
-        {
-          turnId: 'session:2',
-          createdAt: '2024-01-01T00:00:01Z',
-          updatedAt: '2024-01-01T00:00:01Z',
-          sessionId: 'group-a',
-          agent: 'agent-a',
-          observer: 'default-observer',
-          toolCalling: ['tool-a'],
-        },
-        {
-          turnId: 'session:3',
-          createdAt: '2024-01-01T00:00:02Z',
-          updatedAt: '2024-01-01T00:00:02Z',
-          session_id: '   ',
-          agent: 'agent-a',
-          observer: 'default-observer',
-          prompt: 'default prompt',
-        },
-        {
-          turnId: 'session:4',
-          createdAt: '2024-01-01T00:00:03Z',
-          updatedAt: '2024-01-01T00:00:03Z',
-          sessionId: null,
-          agent: 'agent-a',
-          observer: 'default-observer',
-          artifacts: { key: 'value' },
-        },
-        {
-          turnId: 'session:5',
-          createdAt: '2024-01-01T00:00:04Z',
-          updatedAt: '2024-01-01T00:00:04Z',
-          sessionId: null,
-          agent: 'agent-b',
-          observer: 'default-observer',
-          prompt: 'other agent',
-        },
-      ],
-      update: async ({ turns }) => {
-        updated.push(turns[0]);
-        return turns;
-      },
-      deleteTurns: async ({ turnIds }) => {
-        deleted.push(turnIds);
-        return { deleted: turnIds.length };
-      },
-    },
-  });
-
-  assert.equal(repaired, 2);
-  assert.equal(updated.length, 2);
-  assert.equal(updated[0].session_id, 'group-a');
-  assert.equal(updated[0].prompt, 'first prompt');
-  assert.deepEqual(updated[0].toolCalling, ['tool-a']);
-  assert.equal(updated[1].session_id, null);
-  assert.equal(updated[1].prompt, 'default prompt');
-  assert.deepEqual(updated[1].artifacts, { key: 'value' });
-  assert.deepEqual(deleted, [['session:1'], ['session:3']]);
-});
-
-test('session.accept serializes concurrent updates on the same open turn', async () => {
-  let concurrentUpdates = 0;
-  let maxConcurrentUpdates = 0;
+test('session.accept serializes concurrent inserts for the same session', async () => {
+  let concurrentInserts = 0;
+  let maxConcurrentInserts = 0;
+  let nextTurnId = 1;
 
   const session = new Session({
     sessionTable: {
-      update: async ({ turns }) => {
-        concurrentUpdates += 1;
-        maxConcurrentUpdates = Math.max(maxConcurrentUpdates, concurrentUpdates);
+      insert: async ({ turns }) => {
+        concurrentInserts += 1;
+        maxConcurrentInserts = Math.max(maxConcurrentInserts, concurrentInserts);
         await new Promise((resolve) => setTimeout(resolve, 20));
-        concurrentUpdates -= 1;
-        return turns;
+        concurrentInserts -= 1;
+        return turns.map((turn) => ({
+          ...turn,
+          turnId: `session:${nextTurnId++}`,
+        }));
       },
     },
   }, {
     sessionId: 'group-a',
     agent: 'agent-a',
     observer: 'default-observer',
-    openTurn: {
-      turnId: 'session:1',
-      createdAt: '2024-01-01T00:00:00Z',
-      updatedAt: '2024-01-01T00:00:00Z',
-      sessionId: 'group-a',
-      agent: 'agent-a',
-      observer: 'default-observer',
-      prompt: 'base prompt',
-    },
   });
 
   const first = session.accept({
     sessionId: 'group-a',
     agent: 'agent-a',
-    toolCalling: ['tool-a'],
+    prompt: 'first prompt',
+    response: 'first response',
   }, 1);
   const second = session.accept({
     sessionId: 'group-a',
     agent: 'agent-a',
-    artifacts: { key: 'value' },
+    prompt: 'second prompt',
+    response: 'second response',
   }, 1);
 
-  const [, merged] = await Promise.all([first, second]);
-  assert.equal(maxConcurrentUpdates, 1);
-  assert.deepEqual(merged.toolCalling, ['tool-a']);
-  assert.deepEqual(merged.artifacts, { key: 'value' });
+  const [firstTurn, secondTurn] = await Promise.all([first, second]);
+  assert.equal(maxConcurrentInserts, 1);
+  assert.notEqual(firstTurn.turn.turnId, secondTurn.turn.turnId);
+  assert.equal(firstTurn.turn.prompt, 'first prompt');
+  assert.equal(secondTurn.turn.prompt, 'second prompt');
+  assert.equal(firstTurn.deduped, false);
+  assert.equal(secondTurn.deduped, false);
+});
+
+test('session.accept dedupes against the recent three turns', async () => {
+  let nextTurnId = 1;
+  const insertedTurns = new Map();
+
+  const session = new Session({
+    sessionTable: {
+      insert: async ({ turns }) => turns.map((turn) => {
+        const persisted = {
+          ...turn,
+          turnId: `session:${nextTurnId++}`,
+        };
+        insertedTurns.set(persisted.turnId, persisted);
+        return persisted;
+      }),
+      getTurn: async (turnId) => insertedTurns.get(turnId) ?? null,
+    },
+  }, {
+    sessionId: 'group-a',
+    agent: 'agent-a',
+    observer: 'default-observer',
+  });
+
+  const accepted = [];
+  for (const prompt of ['A', 'B', 'C']) {
+    accepted.push(await session.accept({
+      sessionId: 'group-a',
+      agent: 'agent-a',
+      prompt,
+      response: `${prompt}-response`,
+    }, 1));
+  }
+
+  const duplicate = await session.accept({
+    sessionId: 'group-a',
+    agent: 'agent-a',
+    prompt: 'A',
+    response: 'A-response',
+  }, 1);
+  assert.equal(duplicate.deduped, true);
+  assert.equal(duplicate.turn, null);
+
+  const fourth = await session.accept({
+    sessionId: 'group-a',
+    agent: 'agent-a',
+    prompt: 'D',
+    response: 'D-response',
+  }, 1);
+  assert.equal(fourth.deduped, false);
+
+  const expiredDuplicate = await session.accept({
+    sessionId: 'group-a',
+    agent: 'agent-a',
+    prompt: 'A',
+    response: 'A-response',
+  }, 1);
+  assert.equal(expiredDuplicate.deduped, false);
+  assert.notEqual(expiredDuplicate.turn.turnId, accepted[0].turn.turnId);
+});
+
+test('session.accept drops stale recent turns before inserting a new turn', async () => {
+  let nextTurnId = 1;
+  const insertedTurns = new Map();
+
+  const session = new Session({
+    sessionTable: {
+      insert: async ({ turns }) => turns.map((turn) => {
+        const persisted = {
+          ...turn,
+          turnId: `session:${nextTurnId++}`,
+        };
+        insertedTurns.set(persisted.turnId, persisted);
+        return persisted;
+      }),
+      getTurn: async (turnId) => insertedTurns.get(turnId) ?? null,
+    },
+  }, {
+    sessionId: 'group-a',
+    agent: 'agent-a',
+    observer: 'default-observer',
+    recentTurns: [
+      makeRecentTurn('session:stale-1', 'stale'),
+      makeRecentTurn('session:stale-2', 'stale'),
+    ],
+  });
+
+  const accepted = await session.accept({
+    sessionId: 'group-a',
+    agent: 'agent-a',
+    prompt: 'stale prompt',
+    response: 'stale response',
+  }, 1);
+
+  assert.equal(accepted.deduped, false);
+  assert.equal(accepted.turn.turnId, 'session:1');
+  assert.deepEqual(
+    session.exportRecentSession()?.turns.map((turn) => turn.turnId),
+    ['session:1'],
+  );
+});
+
+test('open epoch skips deduped turns when staging observable turns', async () => {
+  const epoch = new OpenEpoch(7);
+  const dedupedTurn = {
+    turnId: 'session:1',
+    createdAt: '2024-01-01T00:00:00Z',
+    updatedAt: '2024-01-01T00:00:00Z',
+    sessionId: 'group-a',
+    agent: 'agent-a',
+    observer: 'default-observer',
+    title: 'title',
+    summary: 'summary',
+    toolCalls: null,
+    artifacts: null,
+    prompt: 'prompt',
+    response: 'response',
+    observingEpoch: 7,
+  };
+  const sessionRegistry = {
+    load: async () => ({
+      accept: async () => ({
+        turn: dedupedTurn,
+        deduped: true,
+      }),
+    }),
+  };
+
+  const accepted = await epoch.accept({
+    sessionId: 'group-a',
+    agent: 'agent-a',
+    prompt: 'prompt',
+    response: 'response',
+  }, sessionRegistry);
+
+  assert.equal(accepted, undefined);
+  assert.equal(epoch.hasStagedTurns(), false);
+  assert.deepEqual(epoch.stagedTurns(), []);
 });
 
 test('observer.observeCurrentEpoch keeps thread state unchanged when pre-commit work fails', async () => {
@@ -2909,7 +2949,10 @@ test('flushPending waits for an in-flight accept that started before the barrier
       accept: async (_content, epoch) => {
         firstEntered.resolve();
         await releaseFirst.promise;
-        return makeObservableTurn('turn-1', epoch, 'first');
+        return {
+          turn: makeObservableTurn('turn-1', epoch, 'first'),
+          deduped: false,
+        };
       },
     }),
   };
@@ -2958,12 +3001,18 @@ test('flushPending does not wait for accepts that start after the barrier', asyn
       accept: async (_content, epoch) => {
         acceptCount += 1;
         if (acceptCount === 1) {
-          return makeObservableTurn('turn-1', epoch, 'first');
+          return {
+            turn: makeObservableTurn('turn-1', epoch, 'first'),
+            deduped: false,
+          };
         }
         secondEpoch = epoch;
         secondEntered.resolve();
         await releaseSecond.promise;
-        return makeObservableTurn('turn-2', epoch, 'second');
+        return {
+          turn: makeObservableTurn('turn-2', epoch, 'second'),
+          deduped: true,
+        };
       },
     }),
   };
@@ -3131,7 +3180,7 @@ test('observer shutdown relies on restart replay for unpublished observer work',
     globalThis.fetch = originalFetch;
   });
 
-  const turn = await addMessage({
+  await addMessage({
     sessionId: 'group-a',
     agent: 'agent-a',
     prompt: 'replay prompt',
@@ -3141,7 +3190,7 @@ test('observer shutdown relies on restart replay for unpublished observer work',
   await shutdownCoreForTests();
 
   const watermark = await observerApi.watermark();
-  assert.ok(watermark.pendingTurnIds.includes(turn.turnId));
+  assert.ok(watermark.pendingTurnIds.length > 0);
 
   await shutdownCoreForTests();
 });

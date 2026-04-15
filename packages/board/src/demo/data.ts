@@ -65,7 +65,7 @@ export const demoSessionTurns: Record<string, DemoSessionTimelineItem[]> = {
       memoryId: 'session:1001',
       createdAt: '2026-03-20T10:12:00.000Z',
       updatedAt: '2026-03-20T10:12:00.000Z',
-      summary: '完成 sidecar 写入口从历史的 message/add 收敛到 session/messages，并同步校正文档、类型命名和测试描述，让对外语义明确变成向某个 session 添加一条 message',
+      summary: '完成 sidecar 写入口从历史的 message/add 收敛到 turn/capture，并同步校正文档、类型命名和测试描述，让对外语义明确变成一次提交一条完整 turn',
     },
     {
       memoryId: 'session:1002',
@@ -111,7 +111,7 @@ export const demoSessionTurns: Record<string, DemoSessionTimelineItem[]> = {
       memoryId: 'session:1020',
       createdAt: '2026-03-20T11:32:00.000Z',
       updatedAt: '2026-03-20T11:32:00.000Z',
-      summary: '检查 MCP 命名调整对 demo 文档、说明页和演示入口的影响，确认 session/messages、UI API 和 observing read model 的表述在对外展示层面保持一致',
+      summary: '检查 MCP 命名调整对 demo 文档、说明页和演示入口的影响，确认 turn/capture、UI API 和 observing read model 的表述在对外展示层面保持一致',
     },
   ],
   'codex_cli::sdk-cleanup': [
@@ -128,7 +128,7 @@ export const demoDocuments: Record<string, DemoMemoryDocument> = {
   'session:1001': {
     memoryId: 'session:1001',
     kind: 'session',
-    title: '完成 sidecar 写入口从 message/add 收敛到 session/messages',
+    title: '完成 sidecar 写入口从 message/add 收敛到 turn/capture',
     agent: 'openclaw',
     sessionId: 'auth-refactor',
     updatedAt: '2026-03-20T10:12:00.000Z',
@@ -143,11 +143,11 @@ export const demoDocuments: Record<string, DemoMemoryDocument> = {
 
 ## Summary
 
-完成 sidecar 写入口从 \`message/add\` 收敛到 \`session/messages\`
+完成 sidecar 写入口从 \`message/add\` 收敛到 \`turn/capture\`
 
 ## Prompt
 
-将当前主写入口收敛为 POST /api/v1/session/messages
+将当前主写入口收敛为 POST /api/v1/turn/capture
 
 ## Response
 
@@ -338,13 +338,13 @@ export const demoDocuments: Record<string, DemoMemoryDocument> = {
   'observing:2001': {
     memoryId: 'observing:2001',
     kind: 'observing',
-    title: '写接口命名已经稳定到 session/messages',
+    title: '写接口命名已经稳定到 turn/capture',
     updatedAt: '2026-03-20T12:30:00.000Z',
     markdown: `# observing:2001
 
 ## Observing
 
-写接口已经从历史的 message/add 收敛到 session/messages，接口语义转为“向某个 session 添加一条 message”
+写接口已经从历史的 message/add 收敛到 turn/capture，接口语义转为“一次提交一条完整 turn”
 
 ## Reasoning
 
@@ -399,14 +399,14 @@ export const demoObservings: DemoObservingListItem[] = [
   },
   {
     memoryId: 'observing:2001',
-    title: '写接口命名已经稳定到 session/messages',
-    summary: 'sidecar 的主写入口已经稳定到 session/messages，接口语言从“写一个 session memory row”收敛到“向某个 session 添加一条 message”。这一点能帮助后续 observing 蒸馏和 OpenClaw 精炼记忆的建模保持清晰',
+    title: '写接口命名已经稳定到 turn/capture',
+    summary: 'sidecar 的主写入口已经稳定到 turn/capture，接口语言从“写一个 session memory row”收敛到“一次提交一条完整 turn”。这一点能帮助后续 observing 蒸馏和 OpenClaw 精炼记忆的建模保持清晰',
     updatedAt: '2026-03-20T12:30:00.000Z',
     references: [
       {
         memoryId: 'session:1001',
         timestamp: '2026-03-20T10:12:00.000Z',
-        summary: '完成 sidecar 写入口从 message/add 收敛到 session/messages',
+        summary: '完成 sidecar 写入口从 message/add 收敛到 turn/capture',
       },
       {
         memoryId: 'session:1002',

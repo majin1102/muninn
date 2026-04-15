@@ -39,6 +39,7 @@ if (!existsSync(builtLibrary)) {
 
 mkdirSync(nativeDir, { recursive: true });
 copyFileSync(builtLibrary, outputPath);
+codesignIfNeeded(outputPath);
 
 function resolveTargetLibraryName() {
   switch (os.platform()) {
@@ -69,4 +70,14 @@ function buildFailureMessage(error) {
     'If Node was upgraded recently, rebuild the addon so the .node binary matches the current ABI.',
     `cargo error: ${message}`,
   ].join(' ');
+}
+
+function codesignIfNeeded(filePath) {
+  if (os.platform() !== 'darwin') {
+    return;
+  }
+  execFileSync('codesign', ['--force', '--sign', '-', filePath], {
+    cwd: packageDir,
+    stdio: 'inherit',
+  });
 }

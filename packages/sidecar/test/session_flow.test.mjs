@@ -30,6 +30,40 @@ async function json(response) {
   return response.json();
 }
 
+function makeTurnContent(overrides = {}) {
+  return {
+    sessionId: 'group-a',
+    agent: 'agent-a',
+    prompt: 'alpha prompt',
+    response: 'alpha response',
+    ...overrides,
+  };
+}
+
+async function captureTurn(turn) {
+  return app.request('/api/v1/turn/capture', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ turn }),
+  });
+}
+
+async function captureTurnAndGetTurn(turn) {
+  const response = await captureTurn(turn);
+  assert.equal(response.status, 204);
+  const listResponse = await app.request('/api/v1/list?mode=recency&limit=20');
+  assert.equal(listResponse.status, 200);
+  const listed = await json(listResponse);
+  const match = listed.memoryHits.find((candidate) => (
+    typeof candidate.memoryId === 'string'
+    && candidate.memoryId.startsWith('session:')
+    && candidate.content.includes(turn.prompt)
+    && candidate.content.includes(turn.response)
+  ));
+  assert.ok(match);
+  return { turnId: match.memoryId };
+}
+
 async function writeMuninnConfig(configPath, {
   turnProvider,
   observerProvider = 'openai',
@@ -133,38 +167,25 @@ test.afterEach(async () => {
   delete process.env.MUNINN_OBSERVER_POLL_MS;
 });
 
-test('session/messages writes a message into a session and detail reads it back', async (t) => {
+test('turn/capture writes a complete turn and detail reads it back', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(async () => rm(dir, { recursive: true, force: true }));
 
   process.env.MUNINN_HOME = homeDir;
   await writeMuninnConfig(configPath, { turnProvider: 'mock' });
 
-  const addResponse = await app.request('/api/v1/session/messages', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      session: {
-        sessionId: 'group-a',
-        agent: 'agent-a',
-        prompt: 'alpha prompt',
-        response: 'alpha response',
-        toolCalling: ['tool-a'],
-        artifacts: { key: 'value' },
-      },
-    }),
-  });
-  assert.equal(addResponse.status, 200);
-  const added = await json(addResponse);
-  assert.ok(typeof added.turnId === 'string');
+  const addedTurn = await captureTurnAndGetTurn(makeTurnContent({
+    toolCalls: [{ name: 'tool-a' }],
+    artifacts: [{ key: 'key', content: 'value' }],
+  }));
 
   const detailResponse = await app.request(
-    `/api/v1/detail?memoryId=${encodeURIComponent(added.turnId)}`
+    `/api/v1/detail?memoryId=${encodeURIComponent(addedTurn.turnId)}`
   );
   assert.equal(detailResponse.status, 200);
   const detail = await json(detailResponse);
   assert.equal(detail.memoryHits.length, 1);
-  assert.equal(detail.memoryHits[0].memoryId, added.turnId);
+  assert.equal(detail.memoryHits[0].memoryId, addedTurn.turnId);
   assert.match(detail.memoryHits[0].content, /## Title/);
   assert.match(detail.memoryHits[0].content, /alpha prompt/);
   assert.match(detail.memoryHits[0].content, /## Created At/);
@@ -174,25 +195,19 @@ test('session/messages writes a message into a session and detail reads it back'
   assert.match(detail.memoryHits[0].content, /alpha response/);
 });
 
-test('session/messages rejects legacy snake_case session fields', async (t) => {
+test('turn/capture rejects legacy snake_case turn fields', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(async () => rm(dir, { recursive: true, force: true }));
 
   process.env.MUNINN_HOME = homeDir;
   await writeMuninnConfig(configPath, { turnProvider: 'mock' });
 
-  const addResponse = await app.request('/api/v1/session/messages', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      session: {
-        session_id: 'group-a',
-        agent: 'agent-a',
-        prompt: 'legacy prompt',
-        response: 'legacy response',
-        tool_calling: ['tool-a'],
-      },
-    }),
+  const addResponse = await captureTurn({
+    session_id: 'group-a',
+    agent: 'agent-a',
+    prompt: 'legacy prompt',
+    response: 'legacy response',
+    tool_calling: ['tool-a'],
   });
   assert.equal(addResponse.status, 400);
   const body = await json(addResponse);
@@ -200,36 +215,32 @@ test('session/messages rejects legacy snake_case session fields', async (t) => {
   assert.match(body.errorMessage, /unexpected fields: session_id, tool_calling/i);
 });
 
-test('session/messages validates request shape and requires at least one message field', async () => {
+test('turn/capture validates request shape and requires a complete turn', async () => {
   const { dir, homeDir } = await makeDatasetUri();
   process.env.MUNINN_HOME = homeDir;
   
   try {
-    const response = await app.request('/api/v1/session/messages', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        session: {
-          sessionId: 123,
-          agent: 'agent-a',
-        },
-      }),
+    const response = await captureTurn({
+      ...makeTurnContent(),
+      sessionId: 123,
     });
     assert.equal(response.status, 400);
     const body = await json(response);
     assert.equal(body.errorCode, 'invalidRequest');
 
-    for (const badSession of [
-      { agent: 'agent-a' },
-      { agent: 'agent-a', toolCalling: 'tool-a' },
-      { agent: 'agent-a', prompt: 123, toolCalling: ['tool-a'] },
-      { agent: 'agent-a', artifacts: { key: 1 } },
+    for (const badTurn of [
+      { ...makeTurnContent(), sessionId: '' },
+      { ...makeTurnContent(), sessionId: '   ' },
+      { ...makeTurnContent(), agent: '' },
+      { ...makeTurnContent(), prompt: '   ' },
+      { ...makeTurnContent(), response: '' },
+      { ...makeTurnContent(), toolCalls: 'tool-a' },
+      { ...makeTurnContent(), toolCalls: [{ name: 123 }] },
+      { ...makeTurnContent(), artifacts: { key: 'artifact', content: 'value' } },
+      { ...makeTurnContent(), artifacts: [{ key: 'artifact', content: 1 }] },
+      { ...makeTurnContent(), observer: 'unexpected' },
     ]) {
-      const invalidResponse = await app.request('/api/v1/session/messages', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ session: badSession }),
-      });
+      const invalidResponse = await captureTurn(badTurn);
       assert.equal(invalidResponse.status, 400);
     }
   } finally {
@@ -237,104 +248,41 @@ test('session/messages validates request shape and requires at least one message
   }
 });
 
-test('session/messages maps core write validation failures to invalidRequest', async () => {
-  const { dir, homeDir, configPath } = await makeDatasetUri();
-  process.env.MUNINN_HOME = homeDir;
-
-  try {
-    await writeMuninnConfig(configPath);
-
-    const response = await app.request('/api/v1/session/messages', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        session: {
-          sessionId: 'group-a',
-          agent: 'agent-a',
-          summary: 'summary only',
-        },
-      }),
-    });
-    assert.equal(response.status, 400);
-    const body = await json(response);
-    assert.equal(body.errorCode, 'invalidRequest');
-    assert.match(body.errorMessage, /at least one message field/i);
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
-});
-
-test('session/messages accepts prompt-only, response-only, and tool-only payloads', async (t) => {
-  const { dir, homeDir, configPath } = await makeDatasetUri();
-  t.after(async () => rm(dir, { recursive: true, force: true }));
-
-  process.env.MUNINN_HOME = homeDir;
-    await writeMuninnConfig(configPath, { turnProvider: 'mock' });
-
-  for (const payload of [
-    { sessionId: 'group-a', agent: 'agent-a', prompt: 'prompt only' },
-    { sessionId: 'group-a', agent: 'agent-a', response: 'response only' },
-    { sessionId: 'group-a', agent: 'agent-a', toolCalling: ['tool-a'] },
-  ]) {
-    const response = await app.request('/api/v1/session/messages', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ session: payload }),
-    });
-    assert.equal(response.status, 200);
-    const body = await json(response);
-    assert.ok(typeof body.turnId === 'string');
-  }
-});
-
-test('session/messages reuses the agent default session when sessionId is omitted', async (t) => {
+test('turn/capture rejects incomplete turns', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(async () => rm(dir, { recursive: true, force: true }));
 
   process.env.MUNINN_HOME = homeDir;
   await writeMuninnConfig(configPath, { turnProvider: 'mock' });
 
-  const first = await app.request('/api/v1/session/messages', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      session: {
-        agent: 'agent-a',
-        prompt: 'default-session prompt',
-      },
-    }),
-  });
-  assert.equal(first.status, 200);
-  const firstBody = await json(first);
+  for (const turn of [
+    { ...makeTurnContent(), response: undefined },
+    { ...makeTurnContent(), prompt: undefined },
+    { ...makeTurnContent(), sessionId: undefined },
+    { ...makeTurnContent(), agent: undefined },
+  ]) {
+    const response = await captureTurn(turn);
+    assert.equal(response.status, 400);
+  }
+});
 
-  const merged = await app.request('/api/v1/session/messages', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      session: {
-        agent: 'agent-a',
-        toolCalling: ['tool-a'],
-      },
-    }),
-  });
-  assert.equal(merged.status, 200);
-  const mergedBody = await json(merged);
+test('turn/capture requires sessionId and does not accept omitted default sessions', async (t) => {
+  const { dir, homeDir, configPath } = await makeDatasetUri();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
 
-  const otherAgent = await app.request('/api/v1/session/messages', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      session: {
-        agent: 'agent-b',
-        toolCalling: ['tool-b'],
-      },
-    }),
-  });
-  assert.equal(otherAgent.status, 200);
-  const otherAgentBody = await json(otherAgent);
+  process.env.MUNINN_HOME = homeDir;
+  await writeMuninnConfig(configPath, { turnProvider: 'mock' });
 
-  assert.equal(mergedBody.turnId, firstBody.turnId);
-  assert.notEqual(otherAgentBody.turnId, firstBody.turnId);
+  const first = await captureTurn({
+    agent: 'agent-a',
+    prompt: 'default-session prompt',
+    response: 'default-session response',
+  });
+  assert.equal(first.status, 400);
+
+  const body = await json(first);
+  assert.equal(body.errorCode, 'invalidRequest');
+  assert.match(body.errorMessage, /turn\.sessionId is required/i);
 });
 
 test('list and timeline cover the written flow, and recall is empty when observing work does not index memories', async (t) => {
@@ -344,20 +292,19 @@ test('list and timeline cover the written flow, and recall is empty when observi
   process.env.MUNINN_HOME = homeDir;
   await writeMuninnConfig(configPath);
 
-  const created = [];
   for (const payload of [
-    { sessionId: 'group-a', agent: 'agent-a', prompt: 'first alpha prompt', response: 'first alpha response' },
-    { sessionId: 'group-a', agent: 'agent-a', prompt: 'second alpha prompt', response: 'second alpha response' },
-    { sessionId: 'group-a', agent: 'agent-a', prompt: 'third alpha prompt', response: 'third alpha response' },
-    { sessionId: 'group-b', agent: 'agent-b', prompt: 'other beta prompt' },
+    makeTurnContent({ prompt: 'first alpha prompt', response: 'first alpha response' }),
+    makeTurnContent({ prompt: 'second alpha prompt', response: 'second alpha response' }),
+    makeTurnContent({ prompt: 'third alpha prompt', response: 'third alpha response' }),
+    makeTurnContent({
+      sessionId: 'group-b',
+      agent: 'agent-b',
+      prompt: 'other beta prompt',
+      response: 'other beta response',
+    }),
   ]) {
-    const response = await app.request('/api/v1/session/messages', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ session: payload }),
-    });
-    assert.equal(response.status, 200);
-    created.push(await json(response));
+    const response = await captureTurn(payload);
+    assert.equal(response.status, 204);
   }
 
   const listResponse = await app.request('/api/v1/list?mode=recency&limit=3');
@@ -368,14 +315,15 @@ test('list and timeline cover the written flow, and recall is empty when observi
   assert.match(listed.memoryHits[0].content, /second alpha prompt/);
   assert.match(listed.memoryHits[1].content, /third alpha prompt/);
   assert.match(listed.memoryHits[2].content, /other beta prompt/);
+  const secondTurnId = listed.memoryHits[0].memoryId;
 
   const timelineResponse = await app.request(
-    `/api/v1/timeline?memoryId=${encodeURIComponent(created[1].turnId)}&beforeLimit=1&afterLimit=1`
+    `/api/v1/timeline?memoryId=${encodeURIComponent(secondTurnId)}&beforeLimit=1&afterLimit=1`
   );
   assert.equal(timelineResponse.status, 200);
   const timeline = await json(timelineResponse);
   assert.equal(timeline.memoryHits.length, 3);
-  assert.equal(timeline.memoryHits[1].memoryId, created[1].turnId);
+  assert.equal(timeline.memoryHits[1].memoryId, secondTurnId);
 
   const recallResponse = await app.request('/api/v1/recall?query=alpha&limit=2');
   assert.equal(recallResponse.status, 200);
@@ -390,62 +338,47 @@ test('timeline stays scoped to the full session key when agents share a sessionI
   process.env.MUNINN_HOME = homeDir;
   await writeMuninnConfig(configPath);
 
-  const first = await app.request('/api/v1/session/messages', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      session: {
-        sessionId: 'group-a',
-        agent: 'agent-a',
-        prompt: 'agent a prompt 1',
-        response: 'agent a response 1',
-      },
+  for (const turn of [
+    makeTurnContent({
+      prompt: 'agent a prompt 1',
+      response: 'agent a response 1',
     }),
-  });
-  assert.equal(first.status, 200);
-  const firstBody = await json(first);
+    makeTurnContent({
+      agent: 'agent-b',
+      prompt: 'agent b prompt',
+      response: 'agent b response',
+    }),
+    makeTurnContent({
+      prompt: 'agent a prompt 2',
+      response: 'agent a response 2',
+    }),
+  ]) {
+    const response = await captureTurn(turn);
+    assert.equal(response.status, 204);
+  }
 
-  const otherAgent = await app.request('/api/v1/session/messages', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      session: {
-        sessionId: 'group-a',
-        agent: 'agent-b',
-        prompt: 'agent b prompt',
-        response: 'agent b response',
-      },
-    }),
-  });
-  assert.equal(otherAgent.status, 200);
-  const otherAgentBody = await json(otherAgent);
+  const agentTurnsResponse = await app.request('/api/v1/ui/session/agents/agent-a/sessions/group-a/turns?offset=0&limit=10');
+  assert.equal(agentTurnsResponse.status, 200);
+  const agentTurns = await json(agentTurnsResponse);
+  const firstTurnId = agentTurns.turns[1].memoryId;
+  const secondTurnId = agentTurns.turns[0].memoryId;
 
-  const second = await app.request('/api/v1/session/messages', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      session: {
-        sessionId: 'group-a',
-        agent: 'agent-a',
-        prompt: 'agent a prompt 2',
-        response: 'agent a response 2',
-      },
-    }),
-  });
-  assert.equal(second.status, 200);
-  const secondBody = await json(second);
+  const otherTurnsResponse = await app.request('/api/v1/ui/session/agents/agent-b/sessions/group-a/turns?offset=0&limit=10');
+  assert.equal(otherTurnsResponse.status, 200);
+  const otherTurns = await json(otherTurnsResponse);
+  const otherAgentTurnId = otherTurns.turns[0].memoryId;
 
   const timelineResponse = await app.request(
-    `/api/v1/timeline?memoryId=${encodeURIComponent(secondBody.turnId)}&beforeLimit=1&afterLimit=1`
+    `/api/v1/timeline?memoryId=${encodeURIComponent(secondTurnId)}&beforeLimit=1&afterLimit=1`
   );
   assert.equal(timelineResponse.status, 200);
   const timeline = await json(timelineResponse);
   const memoryIds = timeline.memoryHits.map((hit) => hit.memoryId);
   assert.deepEqual(memoryIds, [
-    firstBody.turnId,
-    secondBody.turnId,
+    firstTurnId,
+    secondTurnId,
   ]);
-  assert.ok(!memoryIds.includes(otherAgentBody.turnId));
+  assert.ok(!memoryIds.includes(otherAgentTurnId));
 });
 
 test('recall and timeline surface request and not-found errors', async () => {
@@ -524,20 +457,10 @@ test('observer watermark reports pending turns until the observer flush complete
   process.env.MUNINN_OBSERVER_POLL_MS = '60000';
   await writeMuninnConfig(configPath, { observerProvider: 'mock' });
 
-  const writeResponse = await app.request('/api/v1/session/messages', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      session: {
-        sessionId: 'group-a',
-        agent: 'agent-a',
-        prompt: 'watermark prompt',
-        response: 'watermark response',
-      },
-    }),
-  });
-  assert.equal(writeResponse.status, 200);
-  const written = await json(writeResponse);
+  const written = await captureTurnAndGetTurn(makeTurnContent({
+    prompt: 'watermark prompt',
+    response: 'watermark response',
+  }));
 
   const currentResponse = await app.request('/api/v1/observer/watermark');
   assert.equal(currentResponse.status, 200);
@@ -581,35 +504,26 @@ test('detail returns notFound for missing observing memoryId', async () => {
   }
 });
 
-test('session/messages accepts response payloads when turn summarization is not configured', async (t) => {
+test('turn/capture accepts complete turns when turn summarization is not configured', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(async () => rm(dir, { recursive: true, force: true }));
 
   process.env.MUNINN_HOME = homeDir;
   await writeMuninnConfig(configPath);
 
-  const response = await app.request('/api/v1/session/messages', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      session: {
-        sessionId: 'group-a',
-        agent: 'agent-a',
-        response: 'response only',
-      },
-    }),
-  });
-
-  assert.equal(response.status, 200);
-  const body = await json(response);
+  const created = await captureTurnAndGetTurn(makeTurnContent({
+    prompt: 'response prompt',
+    response: 'response only',
+  }));
   const detailResponse = await app.request(
-    `/api/v1/detail?memoryId=${encodeURIComponent(body.turnId)}`
+    `/api/v1/detail?memoryId=${encodeURIComponent(created.turnId)}`
   );
   assert.equal(detailResponse.status, 200);
   const detail = await json(detailResponse);
   assert.equal(detail.memoryHits.length, 1);
-  assert.doesNotMatch(detail.memoryHits[0].content, /## Summary/);
+  assert.match(detail.memoryHits[0].content, /## Summary/);
   assert.match(detail.memoryHits[0].content, /## Detail/);
+  assert.match(detail.memoryHits[0].content, /response prompt/);
   assert.match(detail.memoryHits[0].content, /response only/);
 });
 
@@ -618,30 +532,43 @@ test('ui session endpoints group by agent/session and return rendered turn docum
   t.after(async () => rm(dir, { recursive: true, force: true }));
 
   process.env.MUNINN_HOME = homeDir;
-    await writeMuninnConfig(configPath, { turnProvider: 'mock' });
+  await writeMuninnConfig(configPath, { turnProvider: 'mock' });
 
   const payloads = [
-    { sessionId: 'group-a', agent: 'openclaw', prompt: 'first alpha prompt', response: 'first alpha response' },
-    { sessionId: 'group-a', agent: 'openclaw', prompt: 'second alpha prompt', response: 'second alpha response' },
-    { sessionId: 'group-b', agent: 'codex_cli', toolCalling: ['grep', 'sed'] },
+    makeTurnContent({
+      sessionId: 'group-a',
+      agent: 'openclaw',
+      prompt: 'first alpha prompt',
+      response: 'first alpha response',
+    }),
+    makeTurnContent({
+      sessionId: 'group-a',
+      agent: 'openclaw',
+      prompt: 'second alpha prompt',
+      response: 'second alpha response',
+    }),
+    makeTurnContent({
+      sessionId: 'group-b',
+      agent: 'codex_cli',
+      prompt: 'codex prompt',
+      response: 'codex response',
+      toolCalls: [{ name: 'grep' }, { name: 'sed' }],
+    }),
   ];
 
-  const created = [];
-  for (const session of payloads) {
-    const response = await app.request('/api/v1/session/messages', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ session }),
-    });
-    assert.equal(response.status, 200);
-    created.push(await json(response));
+  for (const turn of payloads) {
+    const response = await captureTurn(turn);
+    assert.equal(response.status, 204);
   }
 
   const agentsResponse = await app.request('/api/v1/ui/session/agents');
   assert.equal(agentsResponse.status, 200);
   const agentsBody = await json(agentsResponse);
-  assert.equal(agentsBody.agents.length, 1);
-  assert.equal(agentsBody.agents[0].agent, 'openclaw');
+  assert.equal(agentsBody.agents.length, 2);
+  assert.deepEqual(
+    agentsBody.agents.map((agent) => agent.agent).sort(),
+    ['codex_cli', 'openclaw'],
+  );
 
   const sessionsResponse = await app.request('/api/v1/ui/session/agents/openclaw/sessions');
   assert.equal(sessionsResponse.status, 200);
@@ -652,7 +579,8 @@ test('ui session endpoints group by agent/session and return rendered turn docum
   const ungroupedResponse = await app.request('/api/v1/ui/session/agents/codex_cli/sessions');
   assert.equal(ungroupedResponse.status, 200);
   const ungroupedBody = await json(ungroupedResponse);
-  assert.equal(ungroupedBody.sessions.length, 0);
+  assert.equal(ungroupedBody.sessions.length, 1);
+  assert.equal(ungroupedBody.sessions[0].displaySessionId, 'group-b');
 
   const turnsResponse = await app.request('/api/v1/ui/session/agents/openclaw/sessions/group-a/turns?offset=0&limit=10');
   assert.equal(turnsResponse.status, 200);
@@ -662,7 +590,7 @@ test('ui session endpoints group by agent/session and return rendered turn docum
   assert.match(turnsBody.turns[0].summary, /alpha/);
 
   const documentResponse = await app.request(
-    `/api/v1/ui/memories/${encodeURIComponent(created[0].turnId)}/document`
+    `/api/v1/ui/memories/${encodeURIComponent(turnsBody.turns[1].memoryId)}/document`
   );
   assert.equal(documentResponse.status, 200);
   const documentBody = await json(documentResponse);
@@ -691,19 +619,13 @@ test('ui session endpoints reuse the cached session tree until a write invalidat
   assert.equal(groups.status, 200);
   assert.equal(getSessionTreeLoadCountForTests(), 1);
 
-  const addResponse = await app.request('/api/v1/session/messages', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      session: {
-        sessionId: 'group-a',
-        agent: 'openclaw',
-        prompt: 'invalidate cache',
-        response: 'invalidate cache response',
-      },
-    }),
-  });
-  assert.equal(addResponse.status, 200);
+  const addResponse = await captureTurn(makeTurnContent({
+    sessionId: 'group-a',
+    agent: 'openclaw',
+    prompt: 'invalidate cache',
+    response: 'invalidate cache response',
+  }));
+  assert.equal(addResponse.status, 204);
 
   const third = await app.request('/api/v1/ui/session/agents');
   assert.equal(third.status, 200);
@@ -717,19 +639,11 @@ test('observing memories are readable through list/detail/timeline/recall', asyn
   process.env.MUNINN_HOME = homeDir;
   await writeMuninnConfig(configPath, { turnProvider: 'mock', observerProvider: 'mock' });
 
-  const addResponse = await app.request('/api/v1/session/messages', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      session: {
-        sessionId: 'group-a',
-        agent: 'agent-a',
-        prompt: 'observe this prompt',
-        response: 'observe this response',
-      },
-    }),
-  });
-  assert.equal(addResponse.status, 200);
+  const addResponse = await captureTurn(makeTurnContent({
+    prompt: 'observe this prompt',
+    response: 'observe this response',
+  }));
+  assert.equal(addResponse.status, 204);
 
   await new Promise((resolve) => setTimeout(resolve, 50));
 
@@ -771,19 +685,13 @@ test('ui observing endpoints return live observings and documents', async (t) =>
   process.env.MUNINN_HOME = homeDir;
   await writeMuninnConfig(configPath, { turnProvider: 'mock', observerProvider: 'mock' });
 
-  const addResponse = await app.request('/api/v1/session/messages', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      session: {
-        sessionId: 'group-ui',
-        agent: 'agent-ui',
-        prompt: 'ui observing prompt',
-        response: 'ui observing response',
-      },
-    }),
-  });
-  assert.equal(addResponse.status, 200);
+  const addResponse = await captureTurn(makeTurnContent({
+    sessionId: 'group-ui',
+    agent: 'agent-ui',
+    prompt: 'ui observing prompt',
+    response: 'ui observing response',
+  }));
+  assert.equal(addResponse.status, 204);
 
   await new Promise((resolve) => setTimeout(resolve, 50));
 
@@ -1076,20 +984,11 @@ test('ui settings config rejects omitted semantic dimensions for an existing non
     semanticDimensions: 4,
   });
 
-  const addResponse = await app.request('/api/v1/session/messages', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      session: {
-        sessionId: 'group-a',
-        agent: 'agent-a',
-        prompt: 'semantic prompt',
-        response: 'semantic response',
-        summary: 'semantic summary',
-      },
-    }),
-  });
-  assert.equal(addResponse.status, 200);
+  const addResponse = await captureTurn(makeTurnContent({
+    prompt: 'semantic prompt',
+    response: 'semantic response',
+  }));
+  assert.equal(addResponse.status, 204);
   await new Promise((resolve) => setTimeout(resolve, 50));
 
   const writeResponse = await app.request('/api/v1/ui/settings/config', {
@@ -1275,20 +1174,11 @@ test('ui settings config rejects semantic index dimension changes that mismatch 
     'utf8',
   );
 
-  const addResponse = await app.request('/api/v1/session/messages', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      session: {
-        sessionId: 'group-a',
-        agent: 'agent-a',
-        prompt: 'semantic prompt',
-        response: 'semantic response',
-        summary: 'semantic summary',
-      },
-    }),
-  });
-  assert.equal(addResponse.status, 200);
+  const addResponse = await captureTurn(makeTurnContent({
+    prompt: 'semantic prompt',
+    response: 'semantic response',
+  }));
+  assert.equal(addResponse.status, 204);
   await new Promise((resolve) => setTimeout(resolve, 50));
 
   const writeResponse = await app.request('/api/v1/ui/settings/config', {
@@ -1338,19 +1228,13 @@ test('ui settings config validates semantic dimensions against the pending stora
     storageUri: toFileStoreUri(storageB),
   });
 
-  const addResponse = await app.request('/api/v1/session/messages', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      session: {
-        sessionId: 'group-b',
-        agent: 'agent-b',
-        prompt: 'storage b prompt',
-        response: 'storage b response',
-      },
-    }),
-  });
-  assert.equal(addResponse.status, 200);
+  const addResponse = await captureTurn(makeTurnContent({
+    sessionId: 'group-b',
+    agent: 'agent-b',
+    prompt: 'storage b prompt',
+    response: 'storage b response',
+  }));
+  assert.equal(addResponse.status, 204);
   await new Promise((resolve) => setTimeout(resolve, 50));
 
   await shutdownCoreForTests();

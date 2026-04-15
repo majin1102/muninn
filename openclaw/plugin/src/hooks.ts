@@ -1,15 +1,11 @@
 import type {
   OpenClawPluginApi,
-  PluginHookAgentContext,
   PluginHookAgentEndEvent,
-  PluginHookAfterToolCallEvent,
 } from "openclaw/plugin-sdk/core";
 
-import { collectArtifacts } from "./artifacts.js";
-import { buildCommandString } from "./command-string.js";
 import { resolvePluginConfig } from "./config.js";
 import { createMuninnClient } from "./client.js";
-import { buildPromptPayload, buildResponsePayload, buildToolPayload } from "./payloads.js";
+import { buildCapturePayload, type ToolCall } from "./payloads.js";
 
 export function registerMuninnHooks(api: OpenClawPluginApi): void {
   const config = resolvePluginConfig(api.pluginConfig);
@@ -23,60 +19,18 @@ export function registerMuninnHooks(api: OpenClawPluginApi): void {
     logger: api.logger,
   });
 
-  api.on("before_model_resolve", async (event, ctx) => {
-    const payload = buildPromptPayload({
-      sessionKey: ctx.sessionKey,
-      agentId: ctx.agentId,
-      prompt: event.prompt,
-    });
-    if (payload) {
-      await client.sendMessage(payload);
-    }
-  });
-
-  api.on("after_tool_call", async (event, ctx) => {
-    await handleAfterToolCall(event, ctx, api, client.sendMessage);
-  });
-
   api.on("agent_end", async (event, ctx) => {
-    const response = extractFinalAssistantText(event);
-    const payload = buildResponsePayload({
+    const payload = buildCapturePayload({
       sessionKey: ctx.sessionKey,
       agentId: ctx.agentId,
-      response,
+      prompt: extractFinalUserText(event),
+      response: extractFinalAssistantText(event),
+      toolCalls: extractToolCalls(event),
     });
     if (payload) {
-      await client.sendMessage(payload);
+      await client.captureTurn(payload);
     }
   });
-}
-
-async function handleAfterToolCall(
-  event: PluginHookAfterToolCallEvent,
-  ctx: PluginHookAgentContext,
-  api: OpenClawPluginApi,
-  sendMessage: (request: ReturnType<typeof buildToolPayload> extends infer T ? Exclude<T, null> : never) => Promise<void>,
-): Promise<void> {
-  const command = buildCommandString(event.toolName, event.params);
-  const artifacts = await collectArtifacts({
-    toolName: event.toolName,
-    toolParams: {
-      ...event.params,
-      ...(typeof event.result === "string" ? { result: event.result } : {}),
-      ...(typeof event.error === "string" ? { error: event.error } : {}),
-    },
-    workspaceDir: ctx.workspaceDir,
-    logger: api.logger,
-  });
-  const payload = buildToolPayload({
-    sessionKey: ctx.sessionKey,
-    agentId: ctx.agentId,
-    command,
-    artifacts,
-  });
-  if (payload) {
-    await sendMessage(payload);
-  }
 }
 
 export function extractFinalAssistantText(event: PluginHookAgentEndEvent): string {
@@ -89,12 +43,31 @@ export function extractFinalAssistantText(event: PluginHookAgentEndEvent): strin
   return "";
 }
 
+export function extractFinalUserText(event: PluginHookAgentEndEvent): string {
+  for (let index = event.messages.length - 1; index >= 0; index -= 1) {
+    const text = extractRoleText(event.messages[index], "user");
+    if (text) {
+      return text;
+    }
+  }
+  return "";
+}
+
+export function extractToolCalls(event: PluginHookAgentEndEvent): ToolCall[] | undefined {
+  const toolCalls = event.messages.flatMap((message) => extractMessageToolCalls(message));
+  return toolCalls.length > 0 ? toolCalls : undefined;
+}
+
 function extractAssistantText(message: unknown): string {
+  return extractRoleText(message, "assistant");
+}
+
+function extractRoleText(message: unknown, role: string): string {
   if (!message || typeof message !== "object") {
     return "";
   }
   const record = message as Record<string, unknown>;
-  if (record.role !== "assistant") {
+  if (record.role !== role) {
     return "";
   }
   return extractContentText(record.content);
@@ -117,4 +90,44 @@ function extractContentText(content: unknown): string {
     })
     .filter(Boolean);
   return blocks.join("\n\n").trim();
+}
+
+function extractMessageToolCalls(message: unknown): ToolCall[] {
+  if (!message || typeof message !== "object") {
+    return [];
+  }
+  const record = message as Record<string, unknown>;
+  if (record.role !== "assistant" || !Array.isArray(record.content)) {
+    return [];
+  }
+  return record.content.flatMap((block) => {
+    if (!block || typeof block !== "object") {
+      return [];
+    }
+    const entry = block as Record<string, unknown>;
+    if (entry.type !== "toolCall" || typeof entry.name !== "string") {
+      return [];
+    }
+    const input = stringifyBlockValue(entry.arguments);
+    return [{
+      ...(typeof entry.id === "string" ? { id: entry.id } : {}),
+      name: entry.name,
+      ...(input ? { input } : {}),
+    }];
+  });
+}
+
+function stringifyBlockValue(value: unknown): string | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed || undefined;
+  }
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return undefined;
+  }
 }
