@@ -1218,6 +1218,42 @@ test('observer bootstrap without checkpoint derives committedEpoch from observin
 
   const snapshot1At = new Date(Date.now() - 1_000).toISOString();
   const snapshot2At = new Date().toISOString();
+  const rows = [
+    {
+      snapshotId: 'snapshot-1',
+      observingId: 'obs-1',
+      snapshotSequence: 0,
+      createdAt: snapshot1At,
+      updatedAt: snapshot1At,
+      observer: 'default-observer',
+      title: 'Thread',
+      summary: 'Summary',
+      content: JSON.stringify({
+        memories: [],
+        openQuestions: [],
+        nextSteps: [],
+        memoryDelta: { before: [], after: [] },
+      }),
+      references: ['turn-13'],
+    },
+    {
+      snapshotId: 'snapshot-2',
+      observingId: 'obs-1',
+      snapshotSequence: 1,
+      createdAt: snapshot2At,
+      updatedAt: snapshot2At,
+      observer: 'default-observer',
+      title: 'Thread',
+      summary: 'Summary',
+      content: JSON.stringify({
+        memories: [],
+        openQuestions: [],
+        nextSteps: [],
+        memoryDelta: { before: [], after: [] },
+      }),
+      references: ['turn-13', 'turn-14'],
+    },
+  ];
   const observer = new Observer({
     sessionTable: {
       loadTurnsAfterEpoch: async () => [
@@ -1226,42 +1262,8 @@ test('observer bootstrap without checkpoint derives committedEpoch from observin
       ],
     },
     observingTable: {
-      listSnapshots: async () => [
-        {
-          snapshotId: 'snapshot-1',
-          observingId: 'obs-1',
-          snapshotSequence: 0,
-          createdAt: snapshot1At,
-          updatedAt: snapshot1At,
-          observer: 'default-observer',
-          title: 'Thread',
-          summary: 'Summary',
-          content: JSON.stringify({
-            memories: [],
-            openQuestions: [],
-            nextSteps: [],
-            memoryDelta: { before: [], after: [] },
-          }),
-          references: ['turn-13'],
-        },
-        {
-          snapshotId: 'snapshot-2',
-          observingId: 'obs-1',
-          snapshotSequence: 1,
-          createdAt: snapshot2At,
-          updatedAt: snapshot2At,
-          observer: 'default-observer',
-          title: 'Thread',
-          summary: 'Summary',
-          content: JSON.stringify({
-            memories: [],
-            openQuestions: [],
-            nextSteps: [],
-            memoryDelta: { before: [], after: [] },
-          }),
-          references: ['turn-13', 'turn-14'],
-        },
-      ],
+      listSnapshots: async () => rows,
+      threadSnapshots: async () => rows,
     },
     semanticIndexTable: {},
   });
@@ -1811,31 +1813,30 @@ test('observer restoreCheckpointState skips stale threads recovered only from ob
   }, null, 2)}\n`, 'utf8');
 
   const checkpoint = (await readCheckpointFile())?.observers['default-observer'] ?? null;
+  const staleRow = {
+    snapshotId: 'snapshot-1',
+    observingId: 'obs-stale',
+    snapshotSequence: 0,
+    createdAt: staleUpdatedAt,
+    updatedAt: staleUpdatedAt,
+    observer: 'default-observer',
+    title: 'Stale Thread',
+    summary: 'Summary',
+    content: JSON.stringify({
+      memories: [],
+      openQuestions: [],
+      nextSteps: [],
+      memoryDelta: { before: [], after: [] },
+    }),
+    references: ['turn-13'],
+  };
   const observer = new Observer({
     sessionTable: {
       loadTurnsAfterEpoch: async () => [makeObservableTurn('turn-13', 13, 'epoch13')],
     },
     observingTable: {
-      delta: async () => [
-        {
-          snapshotId: 'snapshot-1',
-          observingId: 'obs-stale',
-          snapshotSequence: 0,
-          createdAt: staleUpdatedAt,
-          updatedAt: staleUpdatedAt,
-          observer: 'default-observer',
-          title: 'Stale Thread',
-          summary: 'Summary',
-          content: JSON.stringify({
-            memories: [],
-            openQuestions: [],
-            nextSteps: [],
-            memoryDelta: { before: [], after: [] },
-          }),
-          references: ['turn-13'],
-        },
-      ],
-      threadSnapshots: async () => [],
+      delta: async () => [staleRow],
+      threadSnapshots: async () => [staleRow],
     },
     semanticIndexTable: {},
   }, checkpoint);
@@ -1846,6 +1847,82 @@ test('observer restoreCheckpointState skips stale threads recovered only from ob
   assert.equal(restored.committedEpoch, 13);
   assert.equal(restored.threads.length, 0);
   assert.deepEqual(restored.pendingTurns, []);
+});
+
+test('observer restoreCheckpointState rebuilds delta-only threads from full history', async (t) => {
+  const { dir, homeDir, configPath } = await makeConfigHome();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+  process.env.MUNINN_HOME = homeDir;
+  await writeObserverConfig(configPath, { activeWindowDays: 7 });
+  const rowTimes = Array.from({ length: 8 }, (_, index) => new Date(Date.now() - (8 - index) * 1000).toISOString());
+
+  await mkdir(path.dirname(resolveCheckpointPath()), { recursive: true });
+  await writeFile(resolveCheckpointPath(), `${JSON.stringify({
+    schemaVersion: 1,
+    writtenAt: '2024-01-01T00:00:00Z',
+    writerPid: 123,
+    observers: {
+      'default-observer': {
+        baseline: {
+          turn: 10,
+          observing: 21,
+          semanticIndex: 8,
+        },
+        committedEpoch: 5,
+        nextEpoch: 6,
+        openTurns: [],
+        threads: [],
+      },
+    },
+  }, null, 2)}\n`, 'utf8');
+
+  const checkpoint = (await readCheckpointFile())?.observers['default-observer'] ?? null;
+  const fullRows = Array.from({ length: 8 }, (_, index) => ({
+    snapshotId: `snapshot-${index}`,
+    observingId: 'obs-legacy',
+    snapshotSequence: index,
+    createdAt: rowTimes[index],
+    updatedAt: rowTimes[index],
+    observer: 'default-observer',
+    title: 'Legacy Thread',
+    summary: `Summary ${index}`,
+    content: JSON.stringify({
+      memories: [],
+      openQuestions: [],
+      nextSteps: [],
+      memoryDelta: { before: [], after: [] },
+    }),
+    references: Array.from({ length: index + 1 }, (_, turnIndex) => `turn-${turnIndex + 1}`),
+  }));
+  const turnById = new Map(fullRows.map((row, index) => [
+    `turn-${index + 1}`,
+    makeObservableTurn(`turn-${index + 1}`, index + 1, `epoch${index + 1}`),
+  ]));
+  const observer = new Observer({
+    sessionTable: {
+      loadTurnsAfterEpoch: async () => [
+        turnById.get('turn-6'),
+        turnById.get('turn-7'),
+        turnById.get('turn-8'),
+      ],
+      getTurn: async (turnId) => turnById.get(turnId) ?? null,
+    },
+    observingTable: {
+      delta: async () => [fullRows[6], fullRows[7]],
+      threadSnapshots: async () => fullRows,
+    },
+    semanticIndexTable: {},
+  }, checkpoint);
+  t.after(async () => observer.shutdown());
+
+  const restored = await observer.restoreCheckpointState();
+
+  assert.equal(restored.committedEpoch, 8);
+  assert.deepEqual(restored.pendingTurns, []);
+  assert.deepEqual(
+    restored.threads[0].snapshotIds,
+    fullRows.map((row) => row.snapshotId),
+  );
 });
 
 test('observer bootstrap skips stale checkpoint threads', async (t) => {

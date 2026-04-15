@@ -511,6 +511,7 @@ export class Observer {
     const restored: ObservingThread[] = [];
     const observedTurnIds = new Set<string>();
     let committedEpoch = section.committedEpoch;
+    const turnCache = new Map(turnById);
     for (const threadRef of section.threads) {
       if (!isActiveThread(threadRef.updatedAt, this.activeWindowDays)) {
         continue;
@@ -545,7 +546,13 @@ export class Observer {
         }
         let rowEpoch: number | undefined;
         for (const reference of newRefs) {
-          const turn = turnById.get(reference);
+          let turn = turnCache.get(reference);
+          if (!turn) {
+            turn = await this.client.sessionTable.getTurn?.(reference) ?? undefined;
+            if (turn) {
+              turnCache.set(reference, turn);
+            }
+          }
           if (turn?.observingEpoch == null) {
             return null;
           }
@@ -555,6 +562,9 @@ export class Observer {
             : rowEpoch;
         }
         if (rowEpoch == null) {
+          return null;
+        }
+        if (!thread) {
           return null;
         }
         replaySnapshots(thread, [row], rowEpoch);
@@ -568,16 +578,41 @@ export class Observer {
     }
     for (const rows of rowsById.values()) {
       const ordered = [...rows].sort((left, right) => left.snapshotSequence - right.snapshotSequence);
+      const first = ordered[0];
+      if (!first) {
+        continue;
+      }
+      const fullRows = (await this.client.observingTable.threadSnapshots(first.observingId))
+        .sort((left, right) => left.snapshotSequence - right.snapshotSequence);
+      const firstIndex = fullRows.findIndex((row) => row.snapshotId === first.snapshotId);
+      if (firstIndex < 0) {
+        return null;
+      }
+      const prefixRows = fullRows.slice(0, firstIndex + 1);
+      if (prefixRows.length === 0 || prefixRows[0]?.snapshotSequence !== 0) {
+        return null;
+      }
+      for (const [index, row] of prefixRows.entries()) {
+        if (row.snapshotSequence !== index) {
+          return null;
+        }
+      }
       let previousRefs = new Set<string>();
       let thread: ObservingThread | null = null;
-      for (const row of ordered) {
+      for (const row of prefixRows) {
         const newRefs = row.references.filter((reference) => !previousRefs.has(reference));
         if (newRefs.length === 0) {
           return null;
         }
         let rowEpoch: number | undefined;
         for (const reference of newRefs) {
-          const turn = turnById.get(reference);
+          let turn = turnCache.get(reference);
+          if (!turn) {
+            turn = await this.client.sessionTable.getTurn?.(reference) ?? undefined;
+            if (turn) {
+              turnCache.set(reference, turn);
+            }
+          }
           if (turn?.observingEpoch == null) {
             return null;
           }
@@ -594,6 +629,40 @@ export class Observer {
         } else {
           replaySnapshots(thread, [row], rowEpoch);
         }
+        committedEpoch = committedEpoch == null || rowEpoch > committedEpoch
+          ? rowEpoch
+          : committedEpoch;
+        previousRefs = new Set(row.references);
+      }
+      for (const row of ordered.slice(1)) {
+        const newRefs = row.references.filter((reference) => !previousRefs.has(reference));
+        if (newRefs.length === 0) {
+          return null;
+        }
+        let rowEpoch: number | undefined;
+        for (const reference of newRefs) {
+          let turn = turnCache.get(reference);
+          if (!turn) {
+            turn = await this.client.sessionTable.getTurn?.(reference) ?? undefined;
+            if (turn) {
+              turnCache.set(reference, turn);
+            }
+          }
+          if (turn?.observingEpoch == null) {
+            return null;
+          }
+          observedTurnIds.add(reference);
+          rowEpoch = rowEpoch == null || turn.observingEpoch > rowEpoch
+            ? turn.observingEpoch
+            : rowEpoch;
+        }
+        if (rowEpoch == null) {
+          return null;
+        }
+        if (!thread) {
+          return null;
+        }
+        replaySnapshots(thread, [row], rowEpoch);
         committedEpoch = committedEpoch == null || rowEpoch > committedEpoch
           ? rowEpoch
           : committedEpoch;
