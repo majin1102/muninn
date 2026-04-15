@@ -13,7 +13,7 @@ use super::codec::{
     observings_to_reader, record_batch_to_observings, record_batch_to_observings_with_row_ids,
 };
 use super::memory_id::{MemoryId, MemoryLayer, deserialize_memory_id, serialize_memory_id};
-use crate::maintenance::compact_dataset;
+use crate::maintenance::{cleanup_dataset, compact_dataset};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -107,6 +107,10 @@ impl ObservingTable {
         compact_dataset(self.access.try_open().await?).await
     }
 
+    pub async fn cleanup(&self, floor_version: u64) -> Result<bool> {
+        cleanup_dataset(self.access.try_open().await?, floor_version).await
+    }
+
     pub async fn describe(&self) -> Result<Option<TableDescription>> {
         let Some(dataset) = self.access.try_open().await? else {
             return Ok(None);
@@ -155,7 +159,10 @@ impl ObservingTable {
         if let Some(mut dataset) = self.access.try_open().await? {
             let before_version = dataset.version().version;
             dataset
-                .append(observings_to_reader(observings.to_vec()), None)
+                .append(
+                    observings_to_reader(observings.to_vec()),
+                    self.access.options().write_params(),
+                )
                 .await?;
             assign_inserted_snapshot_ids_from_delta(&dataset, before_version, observings, &new_indexes)
                 .await?;

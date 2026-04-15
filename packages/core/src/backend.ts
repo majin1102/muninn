@@ -199,7 +199,7 @@ export class MuninnBackend {
       const lastCheckpointJson = checkpoint
         ? JSON.stringify({
           schemaVersion: checkpoint.schemaVersion,
-          observers: checkpoint.observers,
+          observer: checkpoint.observer,
         })
         : null;
       backend.watchdog = new Watchdog(
@@ -255,9 +255,7 @@ export class MuninnBackend {
       };
       return {
         schemaVersion: 1,
-        observers: {
-          [observer.name]: checkpoint,
-        },
+        observer: checkpoint,
       };
     });
   }
@@ -276,10 +274,7 @@ export class MuninnBackend {
 
   private async ensureObserver(): Promise<Observer> {
     if (!this.observer) {
-      const observerName = getObserverLlmConfig()?.name;
-      const checkpoint = observerName
-        ? this.checkpoint?.observers[observerName] ?? null
-        : null;
+      const checkpoint = this.checkpoint?.observer ?? null;
       this.observer = new Observer(this.client, checkpoint, this.checkpointLock);
     }
     await this.observer.ensureBootstrapped();
@@ -297,10 +292,7 @@ export class MuninnBackend {
     if (!this.sessionRegistry || !this.checkpoint) {
       return;
     }
-    const section = this.checkpoint.observers[this.sessionRegistry.observerName];
-    if (!section) {
-      return;
-    }
+    const section = this.checkpoint.observer;
     const delta = await this.client.sessionTable.delta({
       observer: this.sessionRegistry.observerName,
       baselineVersion: section.baseline.turn,

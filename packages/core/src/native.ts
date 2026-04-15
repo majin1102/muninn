@@ -70,6 +70,9 @@ type NativeCoreBinding = {
   }): MaybePromise<{ deleted: number }>;
   sessionTableStats(): MaybePromise<TableStats | null>;
   sessionCompact(): MaybePromise<CompactResult>;
+  sessionCleanup(params: {
+    floorVersion: number;
+  }): MaybePromise<CompactResult>;
   observingGetSnapshot(snapshotId: string): MaybePromise<ObservingSnapshotPayload | null>;
   observingListSnapshots(params: {
     observer?: string;
@@ -87,6 +90,9 @@ type NativeCoreBinding = {
   }): MaybePromise<ObservingSnapshotPayload[]>;
   observingTableStats(): MaybePromise<TableStats | null>;
   observingCompact(): MaybePromise<CompactResult>;
+  observingCleanup(params: {
+    floorVersion: number;
+  }): MaybePromise<CompactResult>;
   semanticNearest(params: {
     vector: number[];
     limit: number;
@@ -108,6 +114,9 @@ type NativeCoreBinding = {
     targetPartitionSize: number;
   }): MaybePromise<EnsureVectorIndexResult>;
   semanticCompact(): MaybePromise<CompactResult>;
+  semanticCleanup(params: {
+    floorVersion: number;
+  }): MaybePromise<CompactResult>;
   semanticOptimize(params: {
     mergeCount: number;
   }): MaybePromise<CompactResult>;
@@ -157,6 +166,9 @@ export interface SessionTableBinding {
   }): Promise<{ deleted: number }>;
   stats(): Promise<TableStats | null>;
   compact(): Promise<CompactResult>;
+  cleanup(params: {
+    floorVersion: number;
+  }): Promise<CompactResult>;
   describe(): Promise<TableDescription | null>;
 }
 
@@ -178,6 +190,9 @@ export interface ObservingTableBinding {
   }): Promise<ObservingSnapshotPayload[]>;
   stats(): Promise<TableStats | null>;
   compact(): Promise<CompactResult>;
+  cleanup(params: {
+    floorVersion: number;
+  }): Promise<CompactResult>;
   describe(): Promise<TableDescription | null>;
 }
 
@@ -203,6 +218,9 @@ export interface SemanticIndexTableBinding {
     targetPartitionSize: number;
   }): Promise<EnsureVectorIndexResult>;
   compact(): Promise<CompactResult>;
+  cleanup(params: {
+    floorVersion: number;
+  }): Promise<CompactResult>;
   optimize(params: {
     mergeCount: number;
   }): Promise<CompactResult>;
@@ -273,6 +291,7 @@ function wrapBinding(native: NativeCoreBinding): NativeTables {
     deleteTurns: async (params) => resolveNativeResult(native.sessionDeleteTurns(params)),
     stats: async () => resolveNativeResult(native.sessionTableStats()),
     compact: async () => resolveNativeResult(native.sessionCompact()),
+    cleanup: async (params) => resolveNativeResult(native.sessionCleanup(params)),
     describe: async () => resolveNativeResult(native.describeSessionTable()),
   };
   return {
@@ -290,6 +309,7 @@ function wrapBinding(native: NativeCoreBinding): NativeTables {
       update: async (params) => resolveNativeResult(native.observingUpdate(params)),
       stats: async () => resolveNativeResult(native.observingTableStats()),
       compact: async () => resolveNativeResult(native.observingCompact()),
+      cleanup: async (params) => resolveNativeResult(native.observingCleanup(params)),
       describe: async () => resolveNativeResult(native.describeObservingTable()),
     },
     semanticIndexTable: {
@@ -301,6 +321,7 @@ function wrapBinding(native: NativeCoreBinding): NativeTables {
       stats: async () => resolveNativeResult(native.semanticTableStats()),
       ensureVectorIndex: async (params) => resolveNativeResult(native.semanticEnsureVectorIndex(params)),
       compact: async () => resolveNativeResult(native.semanticCompact()),
+      cleanup: async (params) => resolveNativeResult(native.semanticCleanup(params)),
       optimize: async (params) => resolveNativeResult(native.semanticOptimize(params)),
       describe: async () => resolveNativeResult(native.describeSemanticIndexTable()),
     },

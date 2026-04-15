@@ -113,9 +113,10 @@ impl TableOptions {
         builder
     }
 
-    fn write_params(&self) -> Option<WriteParams> {
+    pub(crate) fn write_params(&self) -> Option<WriteParams> {
         let mut params = WriteParams {
             enable_stable_row_ids: true,
+            skip_auto_cleanup: true,
             ..WriteParams::default()
         };
         if let Some(storage_options) = self.storage_options.clone() {
@@ -127,6 +128,7 @@ impl TableOptions {
                     ..Default::default()
                 }),
                 enable_stable_row_ids: true,
+                skip_auto_cleanup: true,
                 ..WriteParams::default()
             };
         }

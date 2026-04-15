@@ -33,7 +33,7 @@ export type ObserverCheckpoint = {
 
 export type CheckpointContent = {
   schemaVersion: 1;
-  observers: Record<string, ObserverCheckpoint>;
+  observer: ObserverCheckpoint;
 };
 
 export type CheckpointFile = CheckpointContent & {
@@ -49,14 +49,15 @@ export function parseCheckpointFile(raw: string): CheckpointFile {
   if (parsed.schemaVersion !== 1) {
     throw new Error(`unsupported checkpoint schemaVersion: ${String(parsed.schemaVersion)}`);
   }
-  if (!parsed.observers || typeof parsed.observers !== 'object' || Array.isArray(parsed.observers)) {
-    throw new Error('checkpoint observers must be an object');
+  const observer = parseObserverSection(parsed.observer);
+  if (!observer) {
+    throw new Error('checkpoint observer section is invalid');
   }
   return {
     schemaVersion: 1,
     writtenAt: typeof parsed.writtenAt === 'string' ? parsed.writtenAt : new Date(0).toISOString(),
     writerPid: typeof parsed.writerPid === 'number' ? parsed.writerPid : 0,
-    observers: parseObserverSections(parsed.observers),
+    observer,
   };
 }
 
@@ -74,21 +75,6 @@ export async function readCheckpointFile(): Promise<CheckpointFile | null> {
 
 export function serializeCheckpointFile(file: CheckpointFile): string {
   return `${JSON.stringify(file, null, 2)}\n`;
-}
-
-function parseObserverSections(value: unknown): Record<string, ObserverCheckpoint> {
-  if (!isObjectRecord(value)) {
-    return {};
-  }
-  const sections: Record<string, ObserverCheckpoint> = {};
-  for (const [observerName, section] of Object.entries(value)) {
-    const parsed = parseObserverSection(section);
-    if (!parsed) {
-      throw new Error(`invalid checkpoint observer section: ${observerName}`);
-    }
-    sections[observerName] = parsed;
-  }
-  return sections;
 }
 
 function parseObserverSection(value: unknown): ObserverCheckpoint | null {

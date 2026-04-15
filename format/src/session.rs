@@ -23,7 +23,7 @@ use super::codec::{
     turns_to_update_reader,
 };
 use super::memory_id::{MemoryId, MemoryLayer, deserialize_memory_id, serialize_memory_id};
-use crate::maintenance::compact_dataset;
+use crate::maintenance::{cleanup_dataset, compact_dataset};
 
 pub(crate) fn has_text_content(value: Option<&str>) -> bool {
     value.map(|value| !value.trim().is_empty()).unwrap_or(false)
@@ -192,6 +192,10 @@ impl SessionTable {
         compact_dataset(self.access.try_open().await?).await
     }
 
+    pub async fn cleanup(&self, floor_version: u64) -> Result<bool> {
+        cleanup_dataset(self.access.try_open().await?, floor_version).await
+    }
+
     pub async fn describe(&self) -> Result<Option<TableDescription>> {
         let Some(dataset) = self.access.try_open().await? else {
             return Ok(None);
@@ -226,7 +230,12 @@ impl SessionTable {
         let new_indexes = (0..turns.len()).collect::<Vec<_>>();
         if let Some(mut dataset) = self.access.try_open().await? {
             let before_version = dataset.version().version;
-            dataset.append(turns_to_reader(turns.to_vec()), None).await?;
+            dataset
+                .append(
+                    turns_to_reader(turns.to_vec()),
+                    self.access.options().write_params(),
+                )
+                .await?;
             return self
                 .assign_inserted_ids_from_delta(&dataset, before_version, turns, &new_indexes)
                 .await;
@@ -241,7 +250,12 @@ impl SessionTable {
                     )
                 })?;
                 let before_version = dataset.version().version;
-                dataset.append(turns_to_reader(retry_turns), None).await?;
+                dataset
+                    .append(
+                        turns_to_reader(retry_turns),
+                        self.access.options().write_params(),
+                    )
+                    .await?;
                 self.assign_inserted_ids_from_delta(&dataset, before_version, turns, &new_indexes)
                     .await
             }
@@ -547,6 +561,7 @@ impl SessionTable {
         );
 
         CommitBuilder::new(Arc::new(dataset))
+            .with_skip_auto_cleanup(true)
             .execute(transaction)
             .await
     }

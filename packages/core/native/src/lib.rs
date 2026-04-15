@@ -70,6 +70,12 @@ struct TableDeltaParams {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct CleanupParams {
+    floor_version: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct SessionUpsertParams {
     turns: Vec<SessionTurn>,
 }
@@ -315,6 +321,18 @@ impl CoreBinding {
         to_napi_value(ChangedResult { changed })
     }
 
+    #[napi(js_name = "sessionCleanup")]
+    pub async fn session_cleanup(&self, params: Value) -> NapiResult<Value> {
+        let params = parse_params::<CleanupParams>(params)?;
+        let resources = self.resources().await?;
+        let changed = resources
+            .session_table
+            .cleanup(params.floor_version)
+            .await
+            .map_err(to_napi_error)?;
+        to_napi_value(ChangedResult { changed })
+    }
+
     #[napi(js_name = "describeSessionTable")]
     pub async fn describe_session_table(&self) -> NapiResult<Value> {
         let resources = self.resources().await?;
@@ -391,6 +409,18 @@ impl CoreBinding {
         let changed = resources
             .observing_table
             .compact()
+            .await
+            .map_err(to_napi_error)?;
+        to_napi_value(ChangedResult { changed })
+    }
+
+    #[napi(js_name = "observingCleanup")]
+    pub async fn observing_cleanup(&self, params: Value) -> NapiResult<Value> {
+        let params = parse_params::<CleanupParams>(params)?;
+        let resources = self.resources().await?;
+        let changed = resources
+            .observing_table
+            .cleanup(params.floor_version)
             .await
             .map_err(to_napi_error)?;
         to_napi_value(ChangedResult { changed })
@@ -479,6 +509,18 @@ impl CoreBinding {
         let changed = resources
             .semantic_index_table
             .compact()
+            .await
+            .map_err(to_napi_error)?;
+        to_napi_value(ChangedResult { changed })
+    }
+
+    #[napi(js_name = "semanticCleanup")]
+    pub async fn semantic_cleanup(&self, params: Value) -> NapiResult<Value> {
+        let params = parse_params::<CleanupParams>(params)?;
+        let resources = self.resources().await?;
+        let changed = resources
+            .semantic_index_table
+            .cleanup(params.floor_version)
             .await
             .map_err(to_napi_error)?;
         to_napi_value(ChangedResult { changed })

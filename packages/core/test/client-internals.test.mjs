@@ -581,8 +581,7 @@ test('watchdog writes observer checkpoint files', async (t) => {
     },
   }, createWatchdogConfig({ intervalMs: 25, compactMinFragments: 3 }), createCheckpointBackend({
     schemaVersion: 1,
-    observers: {
-      'default-observer': {
+    observer: {
         baseline: {
           turn: 10,
           observing: 21,
@@ -604,7 +603,6 @@ test('watchdog writes observer checkpoint files', async (t) => {
           updatedAt: '2024-01-01T00:00:00Z',
         }],
       },
-    },
   }));
   t.after(async () => runtime.stop());
 
@@ -612,7 +610,7 @@ test('watchdog writes observer checkpoint files', async (t) => {
   await waitFor(async () => {
     try {
       const checkpoint = await readCheckpoint();
-      return checkpoint.observers?.['default-observer']?.threads?.length === 1;
+      return checkpoint.observer?.threads?.length === 1;
     } catch {
       return false;
     }
@@ -620,7 +618,7 @@ test('watchdog writes observer checkpoint files', async (t) => {
 
   const checkpoint = await readCheckpoint();
   assert.equal(checkpoint.schemaVersion, 1);
-  assert.deepEqual(checkpoint.observers['default-observer'], {
+  assert.deepEqual(checkpoint.observer, {
     baseline: {
       turn: 10,
       observing: 21,
@@ -655,8 +653,7 @@ test('watchdog skips checkpoint writes when contributors return no observer stat
     schemaVersion: 1,
     writtenAt: '2024-01-01T00:00:00Z',
     writerPid: 123,
-    observers: {
-      'default-observer': {
+    observer: {
         baseline: {
           turn: 10,
           observing: 21,
@@ -667,7 +664,6 @@ test('watchdog skips checkpoint writes when contributors return no observer stat
         openTurns: [],
         threads: [],
       },
-    },
   };
   await writeFile(resolveCheckpointPath(), `${JSON.stringify(existing, null, 2)}\n`, 'utf8');
   const before = await readFile(resolveCheckpointPath(), 'utf8');
@@ -708,8 +704,7 @@ test('watchdog skips checkpoint writes when observer content is unchanged', asyn
 
   const checkpointContent = {
     schemaVersion: 1,
-    observers: {
-      'default-observer': {
+    observer: {
         baseline: {
           turn: 10,
           observing: 21,
@@ -731,7 +726,6 @@ test('watchdog skips checkpoint writes when observer content is unchanged', asyn
           updatedAt: '2024-01-01T00:00:00Z',
         }],
       },
-    },
   };
   await mkdir(path.dirname(resolveCheckpointPath()), { recursive: true });
   await writeFile(resolveCheckpointPath(), `${JSON.stringify({
@@ -782,8 +776,7 @@ test('watchdog rewrites checkpoint when the file is deleted after startup', asyn
 
   const checkpointContent = {
     schemaVersion: 1,
-    observers: {
-      'default-observer': {
+    observer: {
         baseline: {
           turn: 10,
           observing: 21,
@@ -805,7 +798,6 @@ test('watchdog rewrites checkpoint when the file is deleted after startup', asyn
           updatedAt: '2024-01-01T00:00:00Z',
         }],
       },
-    },
   };
   const lastCheckpointJson = JSON.stringify(checkpointContent);
   await mkdir(path.dirname(resolveCheckpointPath()), { recursive: true });
@@ -849,7 +841,7 @@ test('watchdog rewrites checkpoint when the file is deleted after startup', asyn
   });
 
   const checkpoint = await readCheckpoint();
-  assert.equal(checkpoint.observers['default-observer'].committedEpoch, 12);
+  assert.equal(checkpoint.observer.committedEpoch, 12);
 });
 
 test('readCheckpointFile throws when the checkpoint file is invalid JSON', async (t) => {
@@ -863,11 +855,10 @@ test('readCheckpointFile throws when the checkpoint file is invalid JSON', async
   await assert.rejects(() => readCheckpointFile(), /Unexpected token|JSON/i);
 });
 
-test('watchdog rewrites checkpoint when observer content changes', async (t) => {
-  const { dir, homeDir, configPath } = await makeConfigHome();
+test('readCheckpointFile rejects the legacy observers checkpoint schema', async (t) => {
+  const { dir, homeDir } = await makeConfigHome();
   t.after(async () => rm(dir, { recursive: true, force: true }));
   process.env.MUNINN_HOME = homeDir;
-  await writeObserverConfig(configPath);
 
   await mkdir(path.dirname(resolveCheckpointPath()), { recursive: true });
   await writeFile(resolveCheckpointPath(), `${JSON.stringify({
@@ -881,12 +872,42 @@ test('watchdog rewrites checkpoint when observer content changes', async (t) => 
           observing: 21,
           semanticIndex: 8,
         },
+        committedEpoch: 12,
+        nextEpoch: 13,
+        openTurns: [],
+        threads: [],
+      },
+    },
+  }, null, 2)}\n`, 'utf8');
+
+  await assert.rejects(
+    () => readCheckpointFile(),
+    /checkpoint observer section is invalid/i,
+  );
+});
+
+test('watchdog rewrites checkpoint when observer content changes', async (t) => {
+  const { dir, homeDir, configPath } = await makeConfigHome();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+  process.env.MUNINN_HOME = homeDir;
+  await writeObserverConfig(configPath);
+
+  await mkdir(path.dirname(resolveCheckpointPath()), { recursive: true });
+  await writeFile(resolveCheckpointPath(), `${JSON.stringify({
+    schemaVersion: 1,
+    writtenAt: '2024-01-01T00:00:00Z',
+    writerPid: 123,
+    observer: {
+        baseline: {
+          turn: 10,
+          observing: 21,
+          semanticIndex: 8,
+        },
         committedEpoch: 11,
         nextEpoch: 12,
         openTurns: [],
         threads: [],
       },
-    },
   }, null, 2)}\n`, 'utf8');
   const beforeStat = await stat(resolveCheckpointPath());
 
@@ -911,8 +932,7 @@ test('watchdog rewrites checkpoint when observer content changes', async (t) => 
     },
   }, createWatchdogConfig({ intervalMs: 25 }), createCheckpointBackend({
     schemaVersion: 1,
-    observers: {
-      'default-observer': {
+    observer: {
         baseline: {
           turn: 10,
           observing: 21,
@@ -923,20 +943,19 @@ test('watchdog rewrites checkpoint when observer content changes', async (t) => 
         openTurns: [],
         threads: [],
       },
-    },
   }));
   t.after(async () => runtime.stop());
 
   runtime.start();
   await waitFor(async () => {
     const checkpoint = await readCheckpoint();
-    return checkpoint.observers['default-observer']?.committedEpoch === 12;
+    return checkpoint.observer?.committedEpoch === 12;
   });
 
   const after = await readCheckpoint();
   const afterStat = await stat(resolveCheckpointPath());
-  assert.equal(after.observers['default-observer'].committedEpoch, 12);
-  assert.equal(after.observers['default-observer'].nextEpoch, 13);
+  assert.equal(after.observer.committedEpoch, 12);
+  assert.equal(after.observer.nextEpoch, 13);
   assert.ok(after.writtenAt !== '2024-01-01T00:00:00Z');
   assert.ok(afterStat.mtimeMs >= beforeStat.mtimeMs);
 });
@@ -1324,8 +1343,7 @@ test('observer bootstrap restores committed state from checkpoint when baselines
     schemaVersion: 1,
     writtenAt: '2024-01-01T00:00:00Z',
     writerPid: 123,
-    observers: {
-      'default-observer': {
+    observer: {
         baseline: {
           turn: 10,
           observing: 21,
@@ -1347,12 +1365,11 @@ test('observer bootstrap restores committed state from checkpoint when baselines
           updatedAt: '2024-01-01T00:00:01Z',
         }],
       },
-    },
   }, null, 2)}\n`, 'utf8');
 
   let listSnapshotsCalls = 0;
   let loadTurnsAfterEpochCalls = 0;
-  const checkpoint = (await readCheckpointFile())?.observers['default-observer'] ?? null;
+  const checkpoint = (await readCheckpointFile())?.observer ?? null;
   const observer = new Observer({
     sessionTable: {
       stats: async () => ({
@@ -1456,8 +1473,7 @@ test('observer checkpoint restore keeps full history for active threads', async 
     schemaVersion: 1,
     writtenAt: new Date().toISOString(),
     writerPid: 123,
-    observers: {
-      'default-observer': {
+    observer: {
         baseline: {
           turn: 10,
           observing: 21,
@@ -1474,10 +1490,9 @@ test('observer checkpoint restore keeps full history for active threads', async 
           updatedAt: freshUpdatedAt,
         }],
       },
-    },
   }, null, 2)}\n`, 'utf8');
 
-  const checkpoint = (await readCheckpointFile())?.observers['default-observer'] ?? null;
+  const checkpoint = (await readCheckpointFile())?.observer ?? null;
   const observer = new Observer({
     sessionTable: {
       stats: async () => ({
@@ -1567,8 +1582,7 @@ test('observer restoreCheckpointState advances committedEpoch and excludes obser
     schemaVersion: 1,
     writtenAt: '2024-01-01T00:00:00Z',
     writerPid: 123,
-    observers: {
-      'default-observer': {
+    observer: {
         baseline: {
           turn: 10,
           observing: 21,
@@ -1585,10 +1599,9 @@ test('observer restoreCheckpointState advances committedEpoch and excludes obser
           updatedAt: snapshot0At,
         }],
       },
-    },
   }, null, 2)}\n`, 'utf8');
 
-  const checkpoint = (await readCheckpointFile())?.observers['default-observer'] ?? null;
+  const checkpoint = (await readCheckpointFile())?.observer ?? null;
   const observer = new Observer({
     sessionTable: {
       loadTurnsAfterEpoch: async () => [
@@ -1710,8 +1723,7 @@ test('observer restoreCheckpointState falls back when observing delta refs are m
     schemaVersion: 1,
     writtenAt: '2024-01-01T00:00:00Z',
     writerPid: 123,
-    observers: {
-      'default-observer': {
+    observer: {
         baseline: {
           turn: 10,
           observing: 21,
@@ -1728,10 +1740,9 @@ test('observer restoreCheckpointState falls back when observing delta refs are m
           updatedAt: '2024-01-01T00:00:00Z',
         }],
       },
-    },
   }, null, 2)}\n`, 'utf8');
 
-  const checkpoint = (await readCheckpointFile())?.observers['default-observer'] ?? null;
+  const checkpoint = (await readCheckpointFile())?.observer ?? null;
   const observer = new Observer({
     sessionTable: {
       loadTurnsAfterEpoch: async () => [makeObservableTurn('turn-13', 13, 'epoch13')],
@@ -1797,8 +1808,7 @@ test('observer restoreCheckpointState skips stale threads recovered only from ob
     schemaVersion: 1,
     writtenAt: '2024-01-01T00:00:00Z',
     writerPid: 123,
-    observers: {
-      'default-observer': {
+    observer: {
         baseline: {
           turn: 10,
           observing: 21,
@@ -1809,10 +1819,9 @@ test('observer restoreCheckpointState skips stale threads recovered only from ob
         openTurns: [],
         threads: [],
       },
-    },
   }, null, 2)}\n`, 'utf8');
 
-  const checkpoint = (await readCheckpointFile())?.observers['default-observer'] ?? null;
+  const checkpoint = (await readCheckpointFile())?.observer ?? null;
   const staleRow = {
     snapshotId: 'snapshot-1',
     observingId: 'obs-stale',
@@ -1861,8 +1870,7 @@ test('observer restoreCheckpointState rebuilds delta-only threads from full hist
     schemaVersion: 1,
     writtenAt: '2024-01-01T00:00:00Z',
     writerPid: 123,
-    observers: {
-      'default-observer': {
+    observer: {
         baseline: {
           turn: 10,
           observing: 21,
@@ -1873,10 +1881,9 @@ test('observer restoreCheckpointState rebuilds delta-only threads from full hist
         openTurns: [],
         threads: [],
       },
-    },
   }, null, 2)}\n`, 'utf8');
 
-  const checkpoint = (await readCheckpointFile())?.observers['default-observer'] ?? null;
+  const checkpoint = (await readCheckpointFile())?.observer ?? null;
   const fullRows = Array.from({ length: 8 }, (_, index) => ({
     snapshotId: `snapshot-${index}`,
     observingId: 'obs-legacy',
@@ -1937,8 +1944,7 @@ test('observer bootstrap skips stale checkpoint threads', async (t) => {
     schemaVersion: 1,
     writtenAt: new Date().toISOString(),
     writerPid: 123,
-    observers: {
-      'default-observer': {
+    observer: {
         baseline: {
           turn: 10,
           observing: 21,
@@ -1955,10 +1961,9 @@ test('observer bootstrap skips stale checkpoint threads', async (t) => {
           updatedAt: staleUpdatedAt,
         }],
       },
-    },
   }, null, 2)}\n`, 'utf8');
 
-  const checkpoint = (await readCheckpointFile())?.observers['default-observer'] ?? null;
+  const checkpoint = (await readCheckpointFile())?.observer ?? null;
   const observer = new Observer({
     sessionTable: {
       stats: async () => ({
@@ -2005,7 +2010,7 @@ test('observer exportCheckpoint keeps the last committed snapshot while observeC
 
   const entered = deferred();
   const release = deferred();
-  const checkpoint = (await readCheckpointFile())?.observers['default-observer'] ?? null;
+  const checkpoint = (await readCheckpointFile())?.observer ?? null;
   const observer = new Observer({
     observingTable: {
       insert: async ({ snapshots }) => snapshots.map((snapshot) => ({
@@ -2101,8 +2106,7 @@ test('observer bootstrap ignores semanticIndex version mismatches when observing
     schemaVersion: 1,
     writtenAt: '2024-01-01T00:00:00Z',
     writerPid: 123,
-    observers: {
-      'default-observer': {
+    observer: {
         baseline: {
           turn: 10,
           observing: 21,
@@ -2119,11 +2123,10 @@ test('observer bootstrap ignores semanticIndex version mismatches when observing
           updatedAt: '2024-01-01T00:00:01Z',
         }],
       },
-    },
   }, null, 2)}\n`, 'utf8');
 
   let listSnapshotsCalls = 0;
-  const checkpoint = (await readCheckpointFile())?.observers['default-observer'] ?? null;
+  const checkpoint = (await readCheckpointFile())?.observer ?? null;
   const observer = new Observer({
     sessionTable: {
       stats: async () => ({
@@ -2208,8 +2211,7 @@ test('readCheckpointFile throws when the checkpoint section is structurally inva
     schemaVersion: 1,
     writtenAt: '2024-01-01T00:00:00Z',
     writerPid: 123,
-    observers: {
-      'default-observer': {
+    observer: {
         baseline: {
           turn: 10,
           observing: 21,
@@ -2226,12 +2228,11 @@ test('readCheckpointFile throws when the checkpoint section is structurally inva
           updatedAt: '2024-01-01T00:00:01Z',
         }],
       },
-    },
   }, null, 2)}\n`, 'utf8');
 
   await assert.rejects(
     () => readCheckpointFile(),
-    /invalid checkpoint observer section: default-observer/i,
+    /checkpoint observer section is invalid/i,
   );
 });
 
@@ -2267,8 +2268,7 @@ test('backend exportCheckpoint returns null before observer creation', async () 
     schemaVersion: 1,
     writtenAt: '2024-01-01T00:00:00Z',
     writerPid: 123,
-    observers: {
-      'default-observer': {
+    observer: {
         baseline: {
           turn: 10,
           observing: 21,
@@ -2279,7 +2279,6 @@ test('backend exportCheckpoint returns null before observer creation', async () 
         openTurns: [],
         threads: [],
       },
-    },
   };
   const backend = new MuninnBackend({}, checkpoint);
 

@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use super::access::{LanceDataset, TableAccess, TableDescription, TableOptions, delete_by_ids, describe_dataset};
 use super::codec::{record_batch_to_semantic_rows, semantic_rows_to_reader};
 use super::TableStats;
-use crate::maintenance::{compact_dataset, ensure_semantic_vector_index, optimize_semantic_index};
+use crate::maintenance::{cleanup_dataset, compact_dataset, ensure_semantic_vector_index, optimize_semantic_index};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -97,6 +97,10 @@ impl SemanticIndexTable {
 
     pub async fn compact(&self) -> Result<bool> {
         compact_dataset(self.access.try_open().await?).await
+    }
+
+    pub async fn cleanup(&self, floor_version: u64) -> Result<bool> {
+        cleanup_dataset(self.access.try_open().await?, floor_version).await
     }
 
     pub async fn optimize(&self, merge_count: usize) -> Result<bool> {
@@ -190,7 +194,12 @@ impl SemanticIndexTable {
             return Ok(());
         }
         if let Some(mut dataset) = self.access.try_open().await? {
-            dataset.append(semantic_rows_to_reader(rows)?, None).await?;
+            dataset
+                .append(
+                    semantic_rows_to_reader(rows)?,
+                    self.access.options().write_params(),
+                )
+                .await?;
         } else {
             self.access.write(semantic_rows_to_reader(rows)?).await?;
         }
@@ -205,6 +214,7 @@ impl SemanticIndexTable {
             let dataset = Arc::new(dataset);
             let mut builder = MergeInsertBuilder::try_new(dataset, vec!["id".to_string()])?;
             builder
+                .skip_auto_cleanup(true)
                 .when_matched(WhenMatched::UpdateAll)
                 .when_not_matched(WhenNotMatched::InsertAll);
             let job = builder.try_build()?;
