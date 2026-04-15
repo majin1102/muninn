@@ -1274,6 +1274,43 @@ test('observer bootstrap without checkpoint derives committedEpoch from observin
   assert.deepEqual(observer.threads[0].snapshotIds, ['snapshot-1', 'snapshot-2']);
 });
 
+test('observer bootstrap publishes pending turns by their observingEpoch', async (t) => {
+  const { dir, homeDir, configPath } = await makeConfigHome();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+  process.env.MUNINN_HOME = homeDir;
+  await writeObserverConfig(configPath);
+
+  const published = [];
+  const observer = new Observer({
+    sessionTable: {
+      loadTurnsAfterEpoch: async () => [
+        makeObservableTurn('turn-13', 13, 'epoch13'),
+        makeObservableTurn('turn-14', 14, 'epoch14'),
+      ],
+    },
+    observingTable: {
+      listSnapshots: async () => [],
+    },
+    semanticIndexTable: {},
+  });
+  t.after(async () => observer.shutdown());
+
+  observer.epochQueue.publishEpoch = (sealedEpoch) => {
+    published.push({
+      epoch: sealedEpoch.epoch,
+      turnIds: sealedEpoch.turns.map((turn) => turn.turnId),
+    });
+  };
+
+  await observer.ensureBootstrapped();
+
+  assert.deepEqual(published, [
+    { epoch: 13, turnIds: ['turn-13'] },
+    { epoch: 14, turnIds: ['turn-14'] },
+  ]);
+  assert.equal(observer.openEpoch.epoch, 15);
+});
+
 test('observer bootstrap restores committed state from checkpoint when baselines match', async (t) => {
   const { dir, homeDir, configPath } = await makeConfigHome();
   t.after(async () => rm(dir, { recursive: true, force: true }));

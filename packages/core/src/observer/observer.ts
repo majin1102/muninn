@@ -237,11 +237,23 @@ export class Observer {
 
     let nextEpoch = this.committedEpoch == null ? 0 : this.committedEpoch + 1;
     if (pendingTurns.length > 0) {
-      this.epochQueue.publishEpoch({
-        epoch: nextEpoch,
-        turns: pendingTurns.map(cloneTurn),
-      });
-      nextEpoch += 1;
+      const turnsByEpoch = new Map<number, SessionTurn[]>();
+      for (const turn of pendingTurns) {
+        if (turn.observingEpoch == null) {
+          throw new Error(`pending observable turn ${turn.turnId} is missing observingEpoch`);
+        }
+        const turns = turnsByEpoch.get(turn.observingEpoch) ?? [];
+        turns.push(cloneTurn(turn));
+        turnsByEpoch.set(turn.observingEpoch, turns);
+      }
+      const epochs = [...turnsByEpoch.keys()].sort((left, right) => left - right);
+      for (const epoch of epochs) {
+        this.epochQueue.publishEpoch({
+          epoch,
+          turns: turnsByEpoch.get(epoch) ?? [],
+        });
+      }
+      nextEpoch = (epochs[epochs.length - 1] ?? nextEpoch) + 1;
     }
 
     this.openEpoch = new OpenEpoch(nextEpoch);
