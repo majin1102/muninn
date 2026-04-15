@@ -24,8 +24,6 @@ use super::codec::{
 };
 use super::memory_id::{MemoryId, MemoryLayer, deserialize_memory_id, serialize_memory_id};
 use crate::maintenance::compact_dataset;
-#[cfg(test)]
-use crate::session::SessionUpdate;
 
 pub(crate) fn has_text_content(value: Option<&str>) -> bool {
     value.map(|value| !value.trim().is_empty()).unwrap_or(false)
@@ -132,63 +130,6 @@ pub struct SessionTurn {
 }
 
 impl SessionTurn {
-    #[cfg_attr(not(test), allow(dead_code))]
-    #[cfg(test)]
-    pub(crate) fn new(write: &SessionUpdate) -> Self {
-        Self::new_pending(write)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn new_pending(write: &SessionUpdate) -> Self {
-        let now = Utc::now();
-        Self {
-            turn_id: MemoryId::new(MemoryLayer::Session, u64::MAX),
-            created_at: now,
-            updated_at: now,
-            session_id: write.session_id.clone(),
-            agent: write.agent.clone(),
-            observer: write.observer.clone(),
-            title: None,
-            summary: None,
-            tool_calling: None,
-            artifacts: None,
-            prompt: None,
-            response: None,
-            observing_epoch: None,
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn merge(&mut self, update: &SessionUpdate) -> Result<()> {
-        if self.session_id != update.session_id
-            || self.agent != update.agent
-            || self.observer != update.observer
-        {
-            return Err(Error::invalid_input(
-                "message session does not match open turn",
-            ));
-        }
-
-        if let Some(title) = update.title.as_deref().filter(|value| !value.trim().is_empty()) {
-            self.title = Some(title.to_string());
-        }
-        if let Some(summary) = update.summary.as_deref().filter(|value| !value.trim().is_empty()) {
-            self.summary = Some(summary.to_string());
-        }
-        self.prompt = merge_prompt(self.prompt.as_deref(), update.prompt.as_deref());
-        if update
-            .response
-            .as_deref()
-            .is_some_and(|value| !value.trim().is_empty())
-        {
-            self.response = update.response.clone();
-        }
-        merge_tool_calling(&mut self.tool_calling, update.tool_calling.as_ref());
-        merge_artifacts(&mut self.artifacts, update.artifacts.as_ref());
-        self.updated_at = Utc::now();
-        Ok(())
-    }
-
     pub fn observable(&self) -> bool {
         has_text_content(self.response.as_deref()) && has_text_content(self.summary.as_deref())
     }
