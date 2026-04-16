@@ -4,7 +4,7 @@ import { loadPromptTemplate, renderPromptTemplate } from './prompt-loader.js';
 
 const MAX_SUMMARY_CHARS = 1000;
 
-export type ResolvedTurnMetadata = {
+export type ResolvedTurnSummary = {
   title?: string;
   summary?: string;
 };
@@ -14,12 +14,12 @@ type TurnOutput = {
   summary: string;
 };
 
-export async function resolveTurnMetadata(params: {
+export async function resolveTurnSummary(params: {
   prompt?: string;
   title?: string;
   summary?: string;
   response?: string;
-}): Promise<ResolvedTurnMetadata> {
+}): Promise<ResolvedTurnSummary> {
   let title = sanitizeText(params.title);
   let summary = sanitizeText(params.summary);
   const prompt = hasText(params.prompt) ? params.prompt!.trim() : undefined;

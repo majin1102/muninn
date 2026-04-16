@@ -1,7 +1,7 @@
 import type { RecentSessionCheckpoint, RecentTurn } from '../checkpoint.js';
 import type { NativeTables } from '../native.js';
 import type { SessionTurn, TurnContent } from '../client.js';
-import { resolveTurnMetadata } from '../llm/turn-generator.js';
+import { resolveTurnSummary } from '../llm/turn-generator.js';
 import { readSessionTurn, serializeSessionTurn } from './types.js';
 import { hasText, normalizeSessionId } from './key.js';
 
@@ -34,13 +34,10 @@ export class Session {
   async accept(content: TurnContent, observingEpoch: number): Promise<AcceptedTurn> {
     return this.runAcceptExclusive(async () => {
       this.touch();
-      const turn = await buildTurn(
-        this.config,
-        content,
-        observingEpoch,
-      );
+      const sessionId = normalizeSessionId(content.sessionId);
+      validateTurnContent(this.config, content, sessionId);
       while (true) {
-        const duplicate = this.findRecentDuplicate(turn);
+        const duplicate = this.findRecentDuplicate(content);
         if (!duplicate) {
           break;
         }
@@ -54,6 +51,12 @@ export class Session {
         }
         this.removeRecentTurn(duplicate.turnId);
       }
+      const turn = await buildTurn(
+        this.config,
+        content,
+        sessionId,
+        observingEpoch,
+      );
       const rows = await this.client.sessionTable.insert({
         turns: [serializeSessionTurn(turn)],
       });
@@ -101,7 +104,8 @@ export class Session {
     }
   }
 
-  private rememberTurn(turn: SessionTurn): void {
+  rememberTurn(turn: SessionTurn): void {
+    this.touch();
     this.recentTurns.push({
       turnId: turn.turnId,
       updatedAt: turn.updatedAt,
@@ -113,7 +117,7 @@ export class Session {
     }
   }
 
-  private findRecentDuplicate(turn: SessionTurn): RecentTurn | undefined {
+  private findRecentDuplicate(turn: Pick<TurnContent, 'prompt' | 'response'>): RecentTurn | undefined {
     for (let index = this.recentTurns.length - 1; index >= 0; index -= 1) {
       const recentTurn = this.recentTurns[index];
       if (samePromptResponse(recentTurn, turn)) {
@@ -134,11 +138,10 @@ export class Session {
 async function buildTurn(
   config: { sessionId?: string; agent: string; observer: string },
   content: TurnContent,
+  sessionId: string | undefined,
   observingEpoch: number,
 ): Promise<SessionTurn> {
-  const normalizedSessionId = normalizeSessionId(content.sessionId);
-  validateTurnContent(config, content, normalizedSessionId);
-  const metadata = await resolveTurnMetadata({
+  const summary = await resolveTurnSummary({
     prompt: content.prompt,
     response: content.response,
   });
@@ -147,11 +150,11 @@ async function buildTurn(
     turnId: PENDING_TURN_ID,
     createdAt: now,
     updatedAt: now,
-    sessionId: normalizedSessionId ?? null,
+    sessionId: sessionId ?? null,
     agent: config.agent,
     observer: config.observer,
-    title: metadata.title ?? null,
-    summary: metadata.summary ?? null,
+    title: summary.title ?? null,
+    summary: summary.summary ?? null,
     toolCalls: content.toolCalls?.map((toolCall) => ({ ...toolCall })) ?? null,
     artifacts: content.artifacts?.map((artifact) => ({ ...artifact })) ?? null,
     prompt: content.prompt,
@@ -191,7 +194,7 @@ function validateTurnContent(
 
 function samePromptResponse(
   left: Pick<RecentTurn, 'prompt' | 'response'>,
-  right: Pick<SessionTurn, 'prompt' | 'response'>,
+  right: Pick<TurnContent, 'prompt' | 'response'>,
 ): boolean {
   return left.prompt === right.prompt
     && left.response === right.response;

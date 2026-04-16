@@ -127,6 +127,19 @@ function makeRecentTurn(turnId, text = turnId) {
   };
 }
 
+function makePersistedTurn(turnId, text = turnId) {
+  return {
+    turnId,
+    createdAt: '2024-01-01T00:00:00Z',
+    updatedAt: '2024-01-01T00:00:00Z',
+    sessionId: 'group-a',
+    agent: 'agent-a',
+    observer: 'default-observer',
+    prompt: `${text} prompt`,
+    response: `${text} response`,
+  };
+}
+
 function makeRecentSessionCheckpoint(turns, sessionId = 'group-a', agent = 'agent-a') {
   return {
     sessionId,
@@ -2336,18 +2349,29 @@ test('session registry restores live sessions for checkpoint recent turns', asyn
 
   registry.restoreSession('group-a', 'agent-a', [{
     turnId: 'session:101',
-    createdAt: '2024-01-01T00:00:00Z',
     updatedAt: '2024-01-01T00:00:00Z',
-    sessionId: 'group-a',
-    agent: 'agent-a',
-    observer: 'default-observer',
     prompt: 'pending prompt',
-    response: null,
+    response: '',
   }]);
 
   const session = await registry.load('group-a', 'agent-a');
   const exported = session.exportRecentSession();
   assert.deepEqual(exported?.turns.map((turn) => turn.turnId), ['session:101']);
+});
+
+test('session registry replays persisted turns into recent windows', async () => {
+  const registry = new SessionRegistry({
+    sessionTable: {},
+  }, 'default-observer');
+
+  registry.restoreSession('group-a', 'agent-a', [makeRecentTurn('session:101', 'checkpoint')]);
+  registry.rememberTurn(makePersistedTurn('session:102', 'delta'));
+
+  const exported = (await registry.load('group-a', 'agent-a')).exportRecentSession();
+  assert.deepEqual(
+    exported?.turns.map((turn) => turn.turnId),
+    ['session:101', 'session:102'],
+  );
 });
 
 test('session.accept serializes concurrent inserts for the same session', async () => {

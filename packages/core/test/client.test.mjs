@@ -446,6 +446,10 @@ test('checkpoint restore keeps recent turn dedupe within the same observer', asy
     }));
     const first = (await firstBackend.memories.listSessions({ mode: { type: 'recency', limit: 1 } }))[0];
     assert.ok(first);
+    await firstBackend.accept(makeTurnContent({
+      prompt: 'before checkpoint',
+      response: 'before checkpoint response',
+    }));
     const exported = await firstBackend.exportCheckpoint();
     assert.ok(exported);
     await mkdir(path.dirname(resolveCheckpointPath()), { recursive: true });
@@ -454,17 +458,26 @@ test('checkpoint restore keeps recent turn dedupe within the same observer', asy
       writtenAt: new Date().toISOString(),
       writerPid: process.pid,
     }, null, 2)}\n`, 'utf8');
+    await firstBackend.accept(makeTurnContent({
+      prompt: 'after checkpoint',
+      response: 'after checkpoint response',
+    }));
     await firstBackend.shutdown();
     await shutdownCoreForTests();
 
     const secondBackend = await MuninnBackend.create(await getNativeTables());
     try {
       await secondBackend.accept(makeTurnContent({
+        prompt: 'after checkpoint',
+        response: 'after checkpoint response',
+      }));
+      await secondBackend.accept(makeTurnContent({
         prompt: 'same prompt',
         response: 'same response',
       }));
       const listed = await secondBackend.memories.listSessions({ mode: { type: 'recency', limit: 10 } });
       assert.equal(listed.filter((turn) => turn.prompt === 'same prompt' && turn.response === 'same response').length, 1);
+      assert.equal(listed.filter((turn) => turn.prompt === 'after checkpoint' && turn.response === 'after checkpoint response').length, 1);
       assert.equal(listed[0].turnId, first.turnId);
     } finally {
       await secondBackend.shutdown();

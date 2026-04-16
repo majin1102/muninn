@@ -23,6 +23,7 @@ import {
 import { Memories } from './memories/memories.js';
 import { Observer } from './observer/observer.js';
 import { SessionRegistry } from './session/registry.js';
+import { readSessionTurn } from './session/types.js';
 import { Watchdog } from './watchdog.js';
 import type { Artifact, ToolCall, TurnContent } from '@muninn/types';
 
@@ -295,6 +296,20 @@ export class MuninnBackend {
         session.agent,
         session.turns,
       );
+    }
+    const delta = await this.client.sessionTable.delta({
+      observer: this.sessionRegistry.observerName,
+      baselineVersion: this.checkpoint.observer.baseline.turn,
+    });
+    for (const row of delta) {
+      const turn = readSessionTurn(row);
+      if (!turn.observer || turn.observer !== this.sessionRegistry.observerName) {
+        continue;
+      }
+      if (!turn.prompt?.trim() || !turn.response?.trim()) {
+        continue;
+      }
+      this.sessionRegistry.rememberTurn(turn);
     }
   }
 }
