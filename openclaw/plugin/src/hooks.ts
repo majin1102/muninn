@@ -10,9 +10,12 @@ import { collectArtifacts } from "./artifacts.js";
 import { buildCapturePayload, type Artifact, type ToolCall } from "./payloads.js";
 
 type RunState = {
+  updatedAt: number;
   toolCalls: ToolCall[];
   artifacts: Artifact[];
 };
+
+const RUN_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 
 export function registerMuninnHooks(api: OpenClawPluginApi): void {
   const config = resolvePluginConfig(api.pluginConfig);
@@ -25,31 +28,60 @@ export function registerMuninnHooks(api: OpenClawPluginApi): void {
     config,
     logger: api.logger,
   });
-  const runs = new Map<string, RunState>();
+  const runsById = new Map<string, RunState>();
 
   api.on("after_tool_call", async (event, ctx) => {
-    const key = cacheKey(ctx.sessionKey);
-    if (!key) {
+    const sessionKey = cacheKey(ctx.sessionKey);
+    if (!sessionKey) {
       api.logger.warn?.("[muninn] after_tool_call missing sessionKey; skipping cached tool data");
       return;
     }
-    const state = getRunState(runs, key);
+    const agentId = cacheKey(ctx.agentId);
+    if (!agentId) {
+      api.logger.warn?.("[muninn] after_tool_call missing agentId; skipping cached tool data");
+      return;
+    }
+    const runId = cacheKey(ctx.runId) ?? cacheKey(event.runId);
+    if (!runId) {
+      api.logger.warn?.("[muninn] after_tool_call missing runId; skipping cached tool data");
+      return;
+    }
+    const now = Date.now();
+    const state = getRunState(runsById, runId, now);
     state.toolCalls.push(buildToolCall(event));
     const artifacts = await collectArtifacts({
       toolName: event.toolName,
-      toolParams: event.params,
+      toolParams: {
+        ...event.params,
+        ...(event.result !== undefined ? { result: event.result } : {}),
+        ...(event.error !== undefined ? { error: event.error } : {}),
+      },
       workspaceDir: ctx.workspaceDir,
       logger: api.logger,
     });
     if (artifacts) {
       mergeArtifacts(state.artifacts, toArtifacts(artifacts));
     }
+    state.updatedAt = now;
   });
 
   api.on("agent_end", async (event, ctx) => {
-    const key = cacheKey(ctx.sessionKey);
-    const state = key ? runs.get(key) : undefined;
+    const runId = cacheKey(ctx.runId);
+    const sessionKey = cacheKey(ctx.sessionKey);
+    const agentId = cacheKey(ctx.agentId);
     try {
+      if (!sessionKey) {
+        api.logger.warn?.("[muninn] agent_end missing sessionKey; skipping turn capture");
+        return;
+      }
+      if (!agentId) {
+        api.logger.warn?.(`[muninn] agent_end missing agentId for session ${sessionKey}; skipping turn capture`);
+        return;
+      }
+      if (!runId) {
+        api.logger.warn?.(`[muninn] agent_end missing runId for ${sessionKey}/${agentId}; sending uncached turn`);
+      }
+      const state = runId ? runsById.get(runId) : undefined;
       const payload = buildCapturePayload({
         sessionKey: ctx.sessionKey,
         agentId: ctx.agentId,
@@ -62,9 +94,10 @@ export function registerMuninnHooks(api: OpenClawPluginApi): void {
         await client.captureTurn(payload);
       }
     } finally {
-      if (key) {
-        runs.delete(key);
+      if (runId) {
+        runsById.delete(runId);
       }
+      sweepExpiredRuns(runsById, Date.now());
     }
   });
 }
@@ -98,17 +131,27 @@ function cacheKey(sessionKey: unknown): string | undefined {
   return typeof sessionKey === "string" && sessionKey.trim() ? sessionKey.trim() : undefined;
 }
 
-function getRunState(runs: Map<string, RunState>, key: string): RunState {
-  const existing = runs.get(key);
+function getRunState(runs: Map<string, RunState>, runId: string, now: number): RunState {
+  const existing = runs.get(runId);
   if (existing) {
+    existing.updatedAt = now;
     return existing;
   }
   const state: RunState = {
+    updatedAt: now,
     toolCalls: [],
     artifacts: [],
   };
-  runs.set(key, state);
+  runs.set(runId, state);
   return state;
+}
+
+function sweepExpiredRuns(runs: Map<string, RunState>, now: number): void {
+  for (const [runId, state] of runs) {
+    if (now - state.updatedAt > RUN_CACHE_TTL_MS) {
+      runs.delete(runId);
+    }
+  }
 }
 
 function buildToolCall(event: PluginHookAfterToolCallEvent): ToolCall {

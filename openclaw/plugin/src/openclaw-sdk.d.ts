@@ -7,6 +7,7 @@ declare module "openclaw/plugin-sdk/core" {
   };
 
   export type PluginHookAgentContext = {
+    runId?: string;
     agentId?: string;
     sessionKey?: string;
     sessionId?: string;
