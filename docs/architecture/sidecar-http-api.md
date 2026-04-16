@@ -12,7 +12,7 @@
 
 ### Write Side
 
-- 当前正式写接口只有 `POST /api/v1/session/messages`
+- 当前正式写接口只有 `POST /api/v1/turn/capture`
 - 观察/summary/semantic index 都属于后续派生流程，不作为独立 HTTP 写接口暴露
 
 ## 1. Shared Response Types
@@ -117,32 +117,44 @@ Query 参数：
 
 ## 3. Write Endpoint
 
-### 3.1 `POST /api/v1/session/messages`
+### 3.1 `POST /api/v1/turn/capture`
 
 用途：
 
-- 向某个逻辑 session 添加一条 message
+- 写入一条完整 turn
 
 请求体语义：
 
 ```ts
+export interface ToolCall {
+  id?: string;
+  name: string;
+  input?: string;
+  output?: string;
+}
+
+export interface Artifact {
+  key: string;
+  content: string;
+}
+
 export interface TurnContent {
-  sessionId?: string;
+  sessionId: string;
   agent: string;
-  title?: string;
-  summary?: string;
-  toolCalling?: string[];
-  artifacts?: Record<string, string>;
-  prompt?: string;
-  response?: string;
+  prompt: string;
+  response: string;
+  toolCalls?: ToolCall[];
+  artifacts?: Artifact[];
 }
 ```
 
 说明：
 
 - `sessionId` 是逻辑分组键
-- 至少要有一项 message 内容
-- `response` 可独立持久化，不依赖 `summary` 是否生成
+- `agent` 是当前 turn 的基础归属信息
+- `observer` 在 backend 内部注入，不由 capture 请求提供
+- `prompt` / `response` 必须一次性完整提交
+- `toolCalls` / `artifacts` 是可选结构化附加信息
 
 ## 4. Rendering Boundary
 

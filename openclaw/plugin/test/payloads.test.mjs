@@ -1,51 +1,37 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import {
-  buildPromptPayload,
-  buildResponsePayload,
-  buildToolPayload,
-} from "../dist/src/payloads.js";
+import { buildCapturePayload } from "../dist/src/payloads.js";
 
-test("buildPromptPayload maps prompt into session message", () => {
+test("buildCapturePayload maps a complete turn into turn/capture shape", () => {
   assert.deepEqual(
-    buildPromptPayload({
+    buildCapturePayload({
       sessionKey: "agent:main:main",
       agentId: "main",
       prompt: "hello",
+      response: "done",
+      toolCalls: [{ name: "read", input: "{\"path\":\"a.ts\"}" }],
+      artifacts: [{ key: "a.ts", content: "export {};" }],
     }),
     {
-      session: {
-        session_id: "agent:main:main",
+      turn: {
+        sessionId: "agent:main:main",
         agent: "main",
         prompt: "hello",
+        response: "done",
+        toolCalls: [{ name: "read", input: "{\"path\":\"a.ts\"}" }],
+        artifacts: [{ key: "a.ts", content: "export {};" }],
       },
     },
   );
 });
 
-test("buildToolPayload omits empty artifacts", () => {
-  assert.deepEqual(
-    buildToolPayload({
-      sessionKey: "group-a",
-      agentId: "coder",
-      command: "write path=docs/a.md",
-    }),
-    {
-      session: {
-        session_id: "group-a",
-        agent: "coder",
-        tool_calling: ["write path=docs/a.md"],
-      },
-    },
-  );
-});
-
-test("buildResponsePayload rejects blank response", () => {
+test("buildCapturePayload rejects incomplete turns", () => {
   assert.equal(
-    buildResponsePayload({
+    buildCapturePayload({
       sessionKey: "group-a",
       agentId: "coder",
+      prompt: "hello",
       response: "   ",
     }),
     null,

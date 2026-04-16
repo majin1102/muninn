@@ -2,8 +2,10 @@ import { addMessage } from '@muninn/core';
 import { invalidateSessionTreeCache } from '@muninn/board/server';
 import { Hono } from 'hono';
 import type {
-  AddMessageToSessionRequest,
+  Artifact,
+  CaptureTurnRequest,
   ErrorResponse,
+  ToolCall,
   TurnContent,
 } from '@muninn/types';
 import { generateRequestId } from './utils.js';
@@ -13,9 +15,7 @@ export const memoryWriter = new Hono();
 const TURN_CONTENT_FIELDS = new Set([
   'sessionId',
   'agent',
-  'title',
-  'summary',
-  'toolCalling',
+  'toolCalls',
   'artifacts',
   'prompt',
   'response',
@@ -29,25 +29,28 @@ function errorResponse(errorCode: string, errorMessage: string): ErrorResponse {
   };
 }
 
-function isStringRecord(value: unknown): value is Record<string, string> {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    return false;
-  }
-
-  return Object.values(value).every((entry) => typeof entry === 'string');
-}
-
 function hasTextContent(value: string | undefined): boolean {
   return typeof value === 'string' && value.trim().length > 0;
 }
 
-function hasMessageContent(session: TurnContent): boolean {
-  return hasTextContent(session.title)
-    || hasTextContent(session.summary)
-    || hasTextContent(session.prompt)
-    || hasTextContent(session.response)
-    || (session.toolCalling !== undefined && session.toolCalling.length > 0)
-    || (session.artifacts !== undefined && Object.keys(session.artifacts).length > 0);
+function isToolCall(value: unknown): value is ToolCall {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return false;
+  }
+  const candidate = value as Record<string, unknown>;
+  return typeof candidate.name === 'string'
+    && (candidate.id === undefined || typeof candidate.id === 'string')
+    && (candidate.input === undefined || typeof candidate.input === 'string')
+    && (candidate.output === undefined || typeof candidate.output === 'string');
+}
+
+function isArtifact(value: unknown): value is Artifact {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return false;
+  }
+  const candidate = value as Record<string, unknown>;
+  return typeof candidate.key === 'string'
+    && typeof candidate.content === 'string';
 }
 
 function mapCoreWriteError(error: unknown): { status: number; body: ErrorResponse } {
@@ -56,8 +59,8 @@ function mapCoreWriteError(error: unknown): { status: number; body: ErrorRespons
 
   if (
     lowered.includes('invalid')
-    || lowered.includes('turn must include at least one message field')
-    || lowered.includes('message session does not match')
+    || lowered.includes('turn must include')
+    || lowered.includes('turn session does not match')
   ) {
     return {
       status: 400,
@@ -71,89 +74,74 @@ function mapCoreWriteError(error: unknown): { status: number; body: ErrorRespons
   };
 }
 
-function validateSession(session: TurnContent | undefined): string | null {
-  if (!session) {
-    return 'session is required';
+function validateTurn(turn: TurnContent | undefined): string | null {
+  if (!turn) {
+    return 'turn is required';
   }
 
-  const unknownFields = Object.keys(session).filter((key) => !TURN_CONTENT_FIELDS.has(key));
+  const unknownFields = Object.keys(turn).filter((key) => !TURN_CONTENT_FIELDS.has(key));
   if (unknownFields.length > 0) {
-    return `session contains unexpected fields: ${unknownFields.join(', ')}`;
+    return `turn contains unexpected fields: ${unknownFields.join(', ')}`;
   }
 
-  if (!session.agent || typeof session.agent !== 'string') {
-    return 'session.agent is required';
+  if (typeof turn.sessionId !== 'string' || !hasTextContent(turn.sessionId)) {
+    return 'turn.sessionId is required';
   }
 
-  if (session.sessionId !== undefined && typeof session.sessionId !== 'string') {
-    return 'session.sessionId must be a string';
+  if (typeof turn.agent !== 'string' || !hasTextContent(turn.agent)) {
+    return 'turn.agent is required';
   }
 
-  if (session.title !== undefined && typeof session.title !== 'string') {
-    return 'session.title must be a string';
+  if (!hasTextContent(turn.prompt)) {
+    return 'turn.prompt is required';
   }
 
-  if (session.summary !== undefined && typeof session.summary !== 'string') {
-    return 'session.summary must be a string';
+  if (!hasTextContent(turn.response)) {
+    return 'turn.response is required';
   }
 
-  if (session.prompt !== undefined && typeof session.prompt !== 'string') {
-    return 'session.prompt must be a string';
+  if (turn.toolCalls !== undefined && !Array.isArray(turn.toolCalls)) {
+    return 'turn.toolCalls must be an array';
   }
 
-  if (session.response !== undefined && typeof session.response !== 'string') {
-    return 'session.response must be a string';
+  if (turn.toolCalls && !turn.toolCalls.every(isToolCall)) {
+    return 'turn.toolCalls must be an array of tool call objects';
   }
 
-  if (session.toolCalling !== undefined && !Array.isArray(session.toolCalling)) {
-    return 'session.toolCalling must be an array of strings';
+  if (turn.artifacts !== undefined && !Array.isArray(turn.artifacts)) {
+    return 'turn.artifacts must be an array';
   }
 
-  if (session.toolCalling && !session.toolCalling.every((entry: string) => typeof entry === 'string')) {
-    return 'session.toolCalling must be an array of strings';
-  }
-
-  if (session.artifacts !== undefined && !isStringRecord(session.artifacts)) {
-    return 'session.artifacts must be a record of string values';
-  }
-
-  if (!hasMessageContent(session)) {
-    return 'session must include at least one message field';
+  if (turn.artifacts && !turn.artifacts.every(isArtifact)) {
+    return 'turn.artifacts must be an array of artifact objects';
   }
 
   return null;
 }
 
-memoryWriter.post('/api/v1/session/messages', async (c) => {
-  let body: AddMessageToSessionRequest;
+memoryWriter.post('/api/v1/turn/capture', async (c) => {
+  let body: CaptureTurnRequest;
   try {
-    body = await c.req.json<AddMessageToSessionRequest>();
+    body = await c.req.json<CaptureTurnRequest>();
   } catch {
     return c.json(errorResponse('invalidRequest', 'Invalid JSON body'), 400);
   }
 
-  console.log('[SESSION_MESSAGES]', JSON.stringify(body, null, 2));
-
-  const validationError = validateSession(body.session);
+  const validationError = validateTurn(body.turn);
   if (validationError) {
     return c.json(errorResponse('invalidRequest', validationError), 400);
   }
-  if (!body.session) {
-    return c.json(errorResponse('invalidRequest', 'session is required'), 400);
+  if (!body.turn) {
+    return c.json(errorResponse('invalidRequest', 'turn is required'), 400);
   }
 
-  let storedTurn;
   try {
-    storedTurn = await addMessage(body.session);
+    await addMessage(body.turn);
   } catch (error) {
     const mapped = mapCoreWriteError(error);
     return c.json(mapped.body, mapped.status as 400 | 500);
   }
 
   invalidateSessionTreeCache();
-
-  return c.json({
-    turnId: storedTurn.turnId,
-    requestId: generateRequestId(),
-  });
+  return c.body(null, 204);
 });

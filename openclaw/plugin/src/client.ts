@@ -1,7 +1,7 @@
 import type { MuninnPluginConfig } from "./config.js";
 import type { LoggerLike } from "./logger.js";
 import { logWarn } from "./logger.js";
-import type { AddMessageToSessionRequest } from "./payloads.js";
+import type { CaptureTurnRequest } from "./payloads.js";
 
 export type FetchResponseLike = {
   ok: boolean;
@@ -20,7 +20,7 @@ export type FetchLike = (
 ) => Promise<FetchResponseLike>;
 
 export type MuninnClient = {
-  sendMessage(request: AddMessageToSessionRequest): Promise<void>;
+  captureTurn(request: CaptureTurnRequest): Promise<void>;
 };
 
 export function createMuninnClient(params: {
@@ -31,10 +31,10 @@ export function createMuninnClient(params: {
   const fetchImpl = params.fetchImpl ?? fetch;
 
   return {
-    async sendMessage(request) {
+    async captureTurn(request) {
       const signal = AbortSignal.timeout(params.config.timeoutMs);
       try {
-        const response = await fetchImpl(`${params.config.baseUrl}/api/v1/session/messages`, {
+        const response = await fetchImpl(`${params.config.baseUrl}/api/v1/turn/capture`, {
           method: "POST",
           headers: {
             "content-type": "application/json",

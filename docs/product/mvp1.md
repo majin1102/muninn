@@ -44,18 +44,19 @@ MVP 1 必须对接 `../openclaw-cn`。
 
 在这个阶段，OpenClaw 是 Muninn 的第一接入方。
 
-### 2. 面向增量过程的写入入口
+### 2. 面向完整 turn 的写入入口
 
 MVP 1 的写入接口方向应当是：
 
-- `POST /api/v1/session/messages`
+- `POST /api/v1/turn/capture`
 
 这个接口的产品语义是：
 
-- OpenClaw 在执行过程中持续向某个逻辑 session 添加 message
-- `sessionId` 只是逻辑归属参考，不是严格生命周期边界
-- `agent` 必填，其它 message 字段可按需要单独提供
-- Muninn 自己负责把这些增量整理成可用记忆
+- OpenClaw 在一轮结束时向某个逻辑 session 提交一条完整 turn
+- `sessionId` 是逻辑归属参考，不是严格生命周期边界
+- `agent` / `observer` / `prompt` / `response` 必填
+- `toolCalls` / `artifacts` 可按需要附带
+- Muninn 自己负责在 turn 之上继续派生可用记忆
 
 MVP 1 不需要引入 `session/start` 或 `session/end` 这样的显式生命周期接口。
 

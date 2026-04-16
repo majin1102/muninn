@@ -116,7 +116,7 @@
 
 ### 5.2 API 示例（低优先级）
 **需要做的：**
-- [ ] 为 `POST /api/v1/session/messages` 添加完整示例
+- [ ] 为 `POST /api/v1/turn/capture` 添加完整示例
 - [ ] 为 MCP tools 添加使用示例
 
 ## 6. MVP1 验收标准检查清单

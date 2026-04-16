@@ -1,14 +1,20 @@
-import type { OpenTurnRef } from '../checkpoint.js';
+import type { RecentSessionCheckpoint, RecentTurn } from '../checkpoint.js';
 import type { NativeTables } from '../native.js';
 import type { SessionTurn, TurnContent } from '../client.js';
-import { buildSessionUpdate } from './update.js';
-import { cloneTurn, readSessionTurn, serializeSessionTurn, type SessionUpdate } from './types.js';
-import { hasText, normalizeSessionId, sessionKey } from './key.js';
+import { resolveTurnSummary } from '../llm/turn-generator.js';
+import { readSessionTurn, serializeSessionTurn } from './types.js';
+import { hasText, normalizeSessionId } from './key.js';
 
 const PENDING_TURN_ID = 'session:18446744073709551615';
+const RECENT_TURN_WINDOW = 3;
+
+export type AcceptedTurn = {
+  turn: SessionTurn | null;
+  deduped: boolean;
+};
 
 export class Session {
-  private openTurn?: SessionTurn;
+  private recentTurns: RecentTurn[];
   private lastUsedAt = Date.now();
   private acceptQueue: Promise<void> = Promise.resolve();
 
@@ -18,34 +24,49 @@ export class Session {
       sessionId?: string;
       agent: string;
       observer: string;
-      openTurn?: SessionTurn;
+      recentTurns?: RecentTurn[];
     },
   ) {
-    this.openTurn = config.openTurn ? cloneTurn(config.openTurn) : undefined;
+    this.recentTurns = (config.recentTurns ?? []).slice(-RECENT_TURN_WINDOW);
     this.config.sessionId = normalizeSessionId(this.config.sessionId);
   }
 
-  previewPrompt(incoming?: string): string | undefined {
-    return mergePrompt(this.openTurn?.prompt, incoming);
-  }
-
-  async accept(content: TurnContent, observingEpoch: number): Promise<SessionTurn> {
+  async accept(content: TurnContent, observingEpoch: number): Promise<AcceptedTurn> {
     return this.runAcceptExclusive(async () => {
       this.touch();
-      const update = await buildSessionUpdate(this, content, this.config.observer, observingEpoch);
-      let turn = this.openTurn ? cloneTurn(this.openTurn) : newPendingTurn(this.config);
-      turn = applyUpdate(turn, update);
-      const rows = this.openTurn
-        ? await this.client.sessionTable.update({
-          turns: [serializeSessionTurn(turn)],
-        })
-        : await this.client.sessionTable.insert({
+      const sessionId = normalizeSessionId(content.sessionId);
+      validateTurnContent(this.config, content, sessionId);
+      while (true) {
+        const duplicate = this.findRecentDuplicate(content);
+        if (!duplicate) {
+          break;
+        }
+        const persisted = await this.client.sessionTable.getTurn(duplicate.turnId);
+        if (persisted) {
+          this.touch();
+          return {
+            turn: null,
+            deduped: true,
+          };
+        }
+        this.removeRecentTurn(duplicate.turnId);
+      }
+      const turn = await buildTurn(
+        this.config,
+        content,
+        sessionId,
+        observingEpoch,
+      );
+      const rows = await this.client.sessionTable.insert({
         turns: [serializeSessionTurn(turn)],
       });
       const persisted = readSessionTurn(rows[0]);
-      this.openTurn = isOpen(persisted) ? cloneTurn(persisted) : undefined;
+      this.rememberTurn(persisted);
       this.touch();
-      return persisted;
+      return {
+        turn: persisted,
+        deduped: false,
+      };
     });
   }
 
@@ -57,15 +78,14 @@ export class Session {
     return Date.now() - this.lastUsedAt > ttlMs;
   }
 
-  exportOpenTurn(): OpenTurnRef | null {
-    if (!this.openTurn) {
+  exportRecentSession(): RecentSessionCheckpoint | null {
+    if (this.recentTurns.length === 0) {
       return null;
     }
     return {
-      sessionId: this.openTurn.sessionId ?? null,
-      agent: this.openTurn.agent,
-      turnId: this.openTurn.turnId,
-      updatedAt: this.openTurn.updatedAt,
+      sessionId: this.config.sessionId ?? null,
+      agent: this.config.agent,
+      turns: [...this.recentTurns],
     };
   }
 
@@ -83,82 +103,103 @@ export class Session {
       releaseCurrent?.();
     }
   }
+
+  rememberTurn(turn: SessionTurn): void {
+    this.touch();
+    this.recentTurns.push({
+      turnId: turn.turnId,
+      updatedAt: turn.updatedAt,
+      prompt: turn.prompt ?? '',
+      response: turn.response ?? '',
+    });
+    if (this.recentTurns.length > RECENT_TURN_WINDOW) {
+      this.recentTurns.splice(0, this.recentTurns.length - RECENT_TURN_WINDOW);
+    }
+  }
+
+  private findRecentDuplicate(turn: Pick<TurnContent, 'prompt' | 'response'>): RecentTurn | undefined {
+    for (let index = this.recentTurns.length - 1; index >= 0; index -= 1) {
+      const recentTurn = this.recentTurns[index];
+      if (samePromptResponse(recentTurn, turn)) {
+        return recentTurn;
+      }
+    }
+    return undefined;
+  }
+
+  private removeRecentTurn(turnId: string): void {
+    const index = this.recentTurns.findIndex((turn) => turn.turnId === turnId);
+    if (index >= 0) {
+      this.recentTurns.splice(index, 1);
+    }
+  }
 }
 
-function newPendingTurn(config: { sessionId?: string; agent: string; observer: string }): SessionTurn {
+async function buildTurn(
+  config: { sessionId?: string; agent: string; observer: string },
+  content: TurnContent,
+  sessionId: string | undefined,
+  observingEpoch: number,
+): Promise<SessionTurn> {
+  const summary = await resolveTurnSummary({
+    prompt: content.prompt,
+    response: content.response,
+  });
   const now = new Date().toISOString();
-  return {
+  const turn: SessionTurn = {
     turnId: PENDING_TURN_ID,
     createdAt: now,
     updatedAt: now,
-    sessionId: normalizeSessionId(config.sessionId) ?? null,
+    sessionId: sessionId ?? null,
     agent: config.agent,
     observer: config.observer,
+    title: summary.title ?? null,
+    summary: summary.summary ?? null,
+    toolCalls: content.toolCalls?.map((toolCall) => ({ ...toolCall })) ?? null,
+    artifacts: content.artifacts?.map((artifact) => ({ ...artifact })) ?? null,
+    prompt: content.prompt,
+    response: content.response,
   };
+  if (isObservable(turn)) {
+    turn.observingEpoch = observingEpoch;
+  }
+  return turn;
 }
 
-function applyUpdate(turn: SessionTurn, update: SessionUpdate): SessionTurn {
-  const next = cloneTurn(turn);
-  const currentKey = sessionKey(next.sessionId ?? undefined, next.agent, next.observer);
-  const incomingKey = sessionKey(update.sessionId, update.agent, update.observer);
-  if (currentKey !== incomingKey) {
-    throw new Error('message session does not match open turn');
+function validateTurnContent(
+  config: { sessionId?: string; agent: string; observer: string },
+  content: TurnContent,
+  sessionId: string | undefined,
+): void {
+  if (!hasText(content.sessionId)) {
+    throw new Error('turn must include sessionId');
+  }
+  if (!hasText(content.agent)) {
+    throw new Error('turn must include agent');
+  }
+  if (!hasText(content.prompt)) {
+    throw new Error('turn must include prompt');
+  }
+  if (!hasText(content.response)) {
+    throw new Error('turn must include response');
   }
 
-  if (hasText(update.title)) {
-    next.title = update.title;
+  if (content.agent !== config.agent) {
+    throw new Error('turn session does not match loaded session');
   }
-
-  if (hasText(update.summary)) {
-    next.summary = update.summary;
+  if (sessionId !== config.sessionId) {
+    throw new Error('turn session does not match loaded session');
   }
-
-  next.prompt = mergePrompt(next.prompt, update.prompt);
-  if (hasText(update.response)) {
-    next.response = update.response;
-  }
-  next.toolCalling = mergeToolCalling(next.toolCalling, update.toolCalling);
-  next.artifacts = mergeArtifacts(next.artifacts, update.artifacts);
-  next.updatedAt = new Date().toISOString();
-  if (isObservable(next)) {
-    next.observingEpoch = update.observingEpoch;
-  }
-  return next;
 }
 
-function mergePrompt(current?: string | null, incoming?: string): string | undefined {
-  const currentText = hasText(current) ? current.trim() : undefined;
-  const incomingText = hasText(incoming) ? incoming.trim() : undefined;
-  if (currentText && incomingText) {
-    return currentText === incomingText ? currentText : `${currentText}\n\n${incomingText}`;
-  }
-  return currentText ?? incomingText;
-}
-
-function mergeToolCalling(current?: string[] | null, incoming?: string[]): string[] | undefined {
-  if (!incoming || incoming.length === 0) {
-    return current ?? undefined;
-  }
-  return [...(current ?? []), ...incoming];
-}
-
-function mergeArtifacts(
-  current?: Record<string, string> | null,
-  incoming?: Record<string, string>,
-): Record<string, string> | undefined {
-  if (!incoming || Object.keys(incoming).length === 0) {
-    return current ?? undefined;
-  }
-  return {
-    ...(current ?? {}),
-    ...incoming,
-  };
+function samePromptResponse(
+  left: Pick<RecentTurn, 'prompt' | 'response'>,
+  right: Pick<TurnContent, 'prompt' | 'response'>,
+): boolean {
+  return left.prompt === right.prompt
+    && left.response === right.response;
 }
 
 export function isObservable(turn: SessionTurn): boolean {
   return hasText(turn.response) && hasText(turn.summary);
-}
-
-function isOpen(turn: SessionTurn): boolean {
-  return !hasText(turn.response);
 }

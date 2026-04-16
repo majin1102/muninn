@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow_array::builder::{ListBuilder, StringBuilder};
@@ -6,18 +5,17 @@ use arrow_array::{
     Array, FixedSizeListArray, Float32Array, Int64Array, ListArray, RecordBatch,
     RecordBatchIterator, StringArray, TimestampMicrosecondArray, UInt64Array,
 };
-use arrow_schema::{ArrowError, DataType, Field, Schema as ArrowSchema};
+use arrow_schema::{ArrowError, DataType, Field};
 use chrono::{TimeZone, Utc};
 use lance::dataset::ROW_ID;
 use lance::{Error, Result};
-use serde_json::Value;
 
 use super::schema::{observing_schema, semantic_index_schema, turn_schema};
 use crate::config::semantic_index_config;
 use crate::memory_id::{MemoryId, MemoryLayer};
 use crate::observing::ObservingSnapshot;
 use crate::semantic_index::SemanticIndexRow;
-use crate::session::SessionTurn;
+use crate::session::{Artifact, SessionTurn, ToolCall};
 
 pub(crate) fn turns_to_record_batch(
     turns: &[SessionTurn],
@@ -50,11 +48,16 @@ pub(crate) fn turns_to_record_batch(
             .map(|turn| turn.summary.as_deref())
             .collect::<Vec<_>>(),
     );
-    let tool_calling = build_string_list_array(turns.iter().map(|turn| turn.tool_calling.as_ref()));
+    let tool_calls_json = StringArray::from(
+        turns
+            .iter()
+            .map(|turn| turn.tool_calls.as_ref().map(|tool_calls| tool_calls_to_json(tool_calls)))
+            .collect::<Vec<_>>(),
+    );
     let artifacts_json = StringArray::from(
         turns
             .iter()
-            .map(|turn| turn.artifacts.as_ref().map(artifacts_to_json))
+            .map(|turn| turn.artifacts.as_ref().map(|artifacts| artifacts_to_json(artifacts)))
             .collect::<Vec<_>>(),
     );
     let prompt = StringArray::from(
@@ -86,7 +89,7 @@ pub(crate) fn turns_to_record_batch(
             Arc::new(observer),
             Arc::new(title),
             Arc::new(summary),
-            Arc::new(tool_calling),
+            Arc::new(tool_calls_json),
             Arc::new(artifacts_json),
             Arc::new(prompt),
             Arc::new(response),
@@ -100,44 +103,6 @@ pub(crate) fn turns_to_reader(
 ) -> RecordBatchIterator<impl Iterator<Item = std::result::Result<RecordBatch, ArrowError>>> {
     let schema = Arc::new(turn_schema());
     let batch = turns_to_record_batch(&turns);
-    RecordBatchIterator::new(vec![batch].into_iter(), schema)
-}
-
-pub(crate) fn turns_to_update_record_batch(
-    turns: &[SessionTurn],
-) -> std::result::Result<RecordBatch, ArrowError> {
-    let batch = turns_to_record_batch(turns)?;
-    let mut fields = vec![Field::new(ROW_ID, DataType::UInt64, false)];
-    fields.extend(
-        batch
-            .schema()
-            .fields()
-            .iter()
-            .map(|field| field.as_ref().clone()),
-    );
-
-    let mut columns = vec![Arc::new(UInt64Array::from_iter_values(
-        turns.iter().map(|turn| turn.turn_id.memory_point()),
-    )) as Arc<dyn Array>];
-    columns.extend(batch.columns().iter().cloned());
-
-    RecordBatch::try_new(Arc::new(ArrowSchema::new(fields)), columns)
-}
-
-pub(crate) fn turns_to_update_reader(
-    turns: Vec<SessionTurn>,
-) -> RecordBatchIterator<impl Iterator<Item = std::result::Result<RecordBatch, ArrowError>>> {
-    let schema = Arc::new(ArrowSchema::new(
-        std::iter::once(Field::new(ROW_ID, DataType::UInt64, false))
-            .chain(
-                turn_schema()
-                    .fields
-                    .iter()
-                    .map(|field| field.as_ref().clone()),
-            )
-            .collect::<Vec<_>>(),
-    ));
-    let batch = turns_to_update_record_batch(&turns);
     RecordBatchIterator::new(vec![batch].into_iter(), schema)
 }
 
@@ -185,10 +150,10 @@ pub(crate) fn record_batch_to_turns_with_row_ids(
         .as_any()
         .downcast_ref::<StringArray>()
         .unwrap();
-    let tool_calling = batch
+    let tool_calls_json = batch
         .column(7)
         .as_any()
-        .downcast_ref::<ListArray>()
+        .downcast_ref::<StringArray>()
         .unwrap();
     let artifacts_json = batch
         .column(8)
@@ -227,7 +192,7 @@ pub(crate) fn record_batch_to_turns_with_row_ids(
             observer: observer.value(index).to_string(),
             title: optional_string(title, index),
             summary: optional_string(summary, index),
-            tool_calling: optional_string_list(tool_calling, index),
+            tool_calls: optional_json(tool_calls_json, index),
             artifacts: optional_artifacts(artifacts_json, index),
             prompt: optional_string(prompt, index),
             response: optional_string(response, index),
@@ -275,25 +240,26 @@ pub(crate) fn optional_string_list(array: &ListArray, index: usize) -> Option<Ve
     )
 }
 
-pub(crate) fn artifacts_to_json(artifacts: &HashMap<String, String>) -> String {
+pub(crate) fn tool_calls_to_json(tool_calls: &[ToolCall]) -> String {
+    serde_json::to_string(tool_calls).expect("tool calls should serialize")
+}
+
+pub(crate) fn artifacts_to_json(artifacts: &[Artifact]) -> String {
     serde_json::to_string(artifacts).expect("artifacts should serialize")
 }
 
-pub(crate) fn optional_artifacts(
-    array: &StringArray,
-    index: usize,
-) -> Option<HashMap<String, String>> {
+pub(crate) fn optional_json<T>(array: &StringArray, index: usize) -> Option<T>
+where
+    T: serde::de::DeserializeOwned,
+{
     if array.is_null(index) {
         return None;
     }
-    let parsed = serde_json::from_str::<Value>(array.value(index)).ok()?;
-    let object = parsed.as_object()?;
-    Some(
-        object
-            .iter()
-            .filter_map(|(key, value)| value.as_str().map(|value| (key.clone(), value.to_string())))
-            .collect(),
-    )
+    serde_json::from_str(array.value(index)).ok()
+}
+
+pub(crate) fn optional_artifacts(array: &StringArray, index: usize) -> Option<Vec<Artifact>> {
+    optional_json(array, index)
 }
 
 pub(crate) fn observings_to_record_batch(

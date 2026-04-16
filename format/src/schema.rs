@@ -20,11 +20,7 @@ pub fn turn_schema() -> Schema {
         Field::new("observer", DataType::Utf8, false),
         Field::new("title", DataType::Utf8, true),
         Field::new("summary", DataType::Utf8, true),
-        Field::new(
-            "tool_calling",
-            DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
-            true,
-        ),
+        Field::new("tool_calls_json", DataType::Utf8, true),
         Field::new("artifacts_json", DataType::Utf8, true),
         Field::new("prompt", DataType::Utf8, true),
         Field::new("response", DataType::Utf8, true),

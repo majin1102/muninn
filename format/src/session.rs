@@ -1,74 +1,24 @@
-use std::collections::HashMap;
 #[cfg(test)]
 use std::collections::HashSet;
-use std::sync::Arc;
 
-use arrow_array::UInt64Array;
 use chrono::{DateTime, Utc};
 use futures_util::TryStreamExt;
-use lance::dataset::transaction::{Operation, Transaction, UpdateMode};
-use lance::dataset::write::CommitBuilder;
-use lance::dataset::{ProjectionRequest, ROW_ID};
 use lance::{Error, Result};
 use object_store::path::Path;
 use serde::{Deserialize, Serialize};
 
 use super::access::{
     LanceDataset, TableAccess, TableDescription, TableOptions, TableStats, delete_by_row_ids,
-    describe_dataset,
-    escape_predicate_string,
+    describe_dataset, escape_predicate_string,
 };
 use super::codec::{
     record_batch_to_turns, record_batch_to_turns_with_row_ids, turns_to_reader,
-    turns_to_update_reader,
 };
 use super::memory_id::{MemoryId, MemoryLayer, deserialize_memory_id, serialize_memory_id};
 use crate::maintenance::{cleanup_dataset, compact_dataset};
 
 pub(crate) fn has_text_content(value: Option<&str>) -> bool {
     value.map(|value| !value.trim().is_empty()).unwrap_or(false)
-}
-
-pub(crate) fn merge_prompt(current: Option<&str>, incoming: Option<&str>) -> Option<String> {
-    let current = current.filter(|value| !value.trim().is_empty());
-    let incoming = incoming.filter(|value| !value.trim().is_empty());
-    match (current, incoming) {
-        (Some(current), Some(incoming)) if current == incoming => Some(current.to_string()),
-        (Some(current), Some(incoming)) => Some(format!("{current}\n\n{incoming}")),
-        (Some(current), None) => Some(current.to_string()),
-        (None, Some(incoming)) => Some(incoming.to_string()),
-        (None, None) => None,
-    }
-}
-
-pub(crate) fn merge_tool_calling(
-    current: &mut Option<Vec<String>>,
-    incoming: Option<&Vec<String>>,
-) {
-    let Some(incoming) = incoming else {
-        return;
-    };
-    if incoming.is_empty() {
-        return;
-    }
-    let current_values = current.get_or_insert_with(Vec::new);
-    current_values.extend(incoming.iter().cloned());
-}
-
-pub(crate) fn merge_artifacts(
-    current: &mut Option<HashMap<String, String>>,
-    incoming: Option<&HashMap<String, String>>,
-) {
-    let Some(incoming) = incoming else {
-        return;
-    };
-    if incoming.is_empty() {
-        return;
-    }
-    let current_values = current.get_or_insert_with(HashMap::new);
-    for (key, value) in incoming {
-        current_values.insert(key.clone(), value.clone());
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -108,6 +58,22 @@ impl SessionQuery {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct ToolCall {
+    pub id: Option<String>,
+    pub name: String,
+    pub input: Option<String>,
+    pub output: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Artifact {
+    pub key: String,
+    pub content: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct SessionTurn {
     #[serde(
         serialize_with = "serialize_memory_id",
@@ -122,8 +88,8 @@ pub struct SessionTurn {
     pub observer: String,
     pub title: Option<String>,
     pub summary: Option<String>,
-    pub tool_calling: Option<Vec<String>>,
-    pub artifacts: Option<HashMap<String, String>>,
+    pub tool_calls: Option<Vec<ToolCall>>,
+    pub artifacts: Option<Vec<Artifact>>,
     pub prompt: Option<String>,
     pub response: Option<String>,
     pub observing_epoch: Option<u64>,
@@ -132,10 +98,6 @@ pub struct SessionTurn {
 impl SessionTurn {
     pub fn observable(&self) -> bool {
         has_text_content(self.response.as_deref()) && has_text_content(self.summary.as_deref())
-    }
-
-    pub(crate) fn is_open(&self) -> bool {
-        !has_text_content(self.response.as_deref())
     }
 
     pub fn memory_id(&self) -> Result<MemoryId> {
@@ -263,24 +225,6 @@ impl SessionTable {
         }
     }
 
-    pub async fn update(&self, turns: &[SessionTurn]) -> Result<()> {
-        if turns.is_empty() {
-            return Ok(());
-        }
-        if turns.iter().any(|turn| turn.turn_id.memory_point() == u64::MAX) {
-            return Err(Error::invalid_input(
-                "session update requires persisted turn ids",
-            ));
-        }
-        let Some(dataset) = self.access.try_open().await? else {
-            return Err(Error::invalid_input(
-                "cannot update session rows before dataset exists",
-            ));
-        };
-        self.update_existing(dataset, turns.to_vec()).await?;
-        Ok(())
-    }
-
     pub async fn delete(&self, turn_ids: Vec<MemoryId>) -> Result<usize> {
         delete_by_row_ids(
             self.access.try_open().await?,
@@ -317,32 +261,6 @@ impl SessionTable {
             .take_rows(turn_ids, dataset.schema().clone())
             .await?;
         record_batch_to_turns_with_row_ids(&batch, turn_ids)
-    }
-
-    async fn load_open_turn(&self, query: &SessionQuery) -> Result<Option<SessionTurn>> {
-        let mut turns = self
-            .load_session_turns(query)
-            .await?
-            .into_iter()
-            .filter(|turn| turn.is_open())
-            .collect::<Vec<_>>();
-        turns.sort_by(|left, right| {
-            right
-                .updated_at
-                .cmp(&left.updated_at)
-                .then(right.created_at.cmp(&left.created_at))
-        });
-        Ok(turns.into_iter().next())
-    }
-
-    pub async fn load_open_turn_for(
-        &self,
-        session_id: Option<&str>,
-        agent: &str,
-        observer: &str,
-    ) -> Result<Option<SessionTurn>> {
-        self.load_open_turn(&SessionQuery::by_identity(session_id, agent, observer))
-            .await
     }
 
     #[cfg(test)]
@@ -491,79 +409,6 @@ impl SessionTable {
             return Ok(Vec::new());
         }
         record_batch_to_turns(&batch)
-    }
-
-    async fn update_existing(
-        &self,
-        dataset: LanceDataset,
-        turns: Vec<SessionTurn>,
-    ) -> Result<LanceDataset> {
-        let row_ids = turns
-            .iter()
-            .map(|turn| turn.turn_id.memory_point())
-            .collect::<Vec<_>>();
-        let row_addresses = dataset
-            .take_rows(
-                &row_ids,
-                ProjectionRequest::from_sql([("rowaddr", "_rowaddr")]),
-            )
-            .await?;
-        let rowaddr = row_addresses
-            .column_by_name("rowaddr")
-            .ok_or_else(|| Error::invalid_input("record batch missing projected rowaddr column"))?
-            .as_any()
-            .downcast_ref::<UInt64Array>()
-            .ok_or_else(|| Error::invalid_input("projected rowaddr column must be UInt64"))?;
-        if rowaddr.len() != turns.len() {
-            return Err(Error::invalid_input(format!(
-                "expected {} row addresses, got {}",
-                turns.len(),
-                rowaddr.len()
-            )));
-        }
-
-        let mut turns_by_fragment = HashMap::<u64, Vec<SessionTurn>>::new();
-        for (turn, rowaddr) in turns.into_iter().zip(rowaddr.values().iter().copied()) {
-            turns_by_fragment
-                .entry(rowaddr >> 32)
-                .or_default()
-                .push(turn);
-        }
-
-        let mut updated_fragments = Vec::with_capacity(turns_by_fragment.len());
-        let mut fields_modified = Vec::new();
-        for (fragment_id, fragment_turns) in turns_by_fragment {
-            let mut fragment = dataset.get_fragment(fragment_id as usize).ok_or_else(|| {
-                Error::invalid_input(format!("fragment {fragment_id} not found for turn update"))
-            })?;
-            let (updated_fragment, fragment_fields_modified) = fragment
-                .update_columns(turns_to_update_reader(fragment_turns), ROW_ID, ROW_ID)
-                .await?;
-            updated_fragments.push(updated_fragment);
-            fields_modified.extend(fragment_fields_modified);
-        }
-        fields_modified.sort_unstable();
-        fields_modified.dedup();
-
-        let transaction = Transaction::new(
-            dataset.manifest().version,
-            Operation::Update {
-                removed_fragment_ids: vec![],
-                updated_fragments,
-                new_fragments: vec![],
-                fields_modified,
-                merged_generations: Vec::new(),
-                fields_for_preserving_frag_bitmap: vec![],
-                update_mode: Some(UpdateMode::RewriteColumns),
-                inserted_rows_filter: None,
-            },
-            None,
-        );
-
-        CommitBuilder::new(Arc::new(dataset))
-            .with_skip_auto_cleanup(true)
-            .execute(transaction)
-            .await
     }
 
     async fn assign_inserted_ids_from_delta(

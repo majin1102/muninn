@@ -1,7 +1,7 @@
 import type { NativeTables } from '../native.js';
 import type { ListModeInput, SessionTurn } from '../client.js';
 import { normalizeSessionId } from '../session/key.js';
-import { readSessionTurn, toSessionTurn } from '../session/types.js';
+import { readSessionTurn } from '../session/types.js';
 import { assertMemoryIdLayer } from './types.js';
 
 export async function getSessionTurn(
@@ -10,7 +10,7 @@ export async function getSessionTurn(
 ): Promise<SessionTurn | null> {
   assertMemoryIdLayer(memoryId, 'session');
   const turn = await client.sessionTable.getTurn(memoryId);
-  return turn ? toSessionTurn(readSessionTurn(turn)) : null;
+  return turn ? readSessionTurn(turn) : null;
 }
 
 export async function listSessionTurns(
@@ -22,7 +22,7 @@ export async function listSessionTurns(
     agent: params.agent,
     sessionId: normalizeSessionId(params.sessionId),
   });
-  return turns.map((turn) => toSessionTurn(readSessionTurn(turn)));
+  return turns.map(readSessionTurn);
 }
 
 export async function timelineSessionTurns(

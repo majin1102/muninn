@@ -66,13 +66,13 @@ export function renderSessionTurnDetail(turn: SessionTurn): string | undefined {
   if (trimText(turn.response)) {
     lines.push(`Response: ${turn.response!.trim()}`);
   }
-  if (turn.toolCalling && turn.toolCalling.length > 0) {
-    lines.push(`Tools: ${turn.toolCalling.join(', ')}`);
+  if (turn.toolCalls && turn.toolCalls.length > 0) {
+    lines.push(`Tools: ${turn.toolCalls.map((toolCall) => toolCall.name).join(', ')}`);
   }
-  if (turn.artifacts && Object.keys(turn.artifacts).length > 0) {
-    const rendered = Object.entries(turn.artifacts)
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([key, value]) => `${key}: ${value}`)
+  if (turn.artifacts && turn.artifacts.length > 0) {
+    const rendered = [...turn.artifacts]
+      .sort((left, right) => left.key.localeCompare(right.key))
+      .map((artifact) => `${artifact.key}: ${artifact.content}`)
       .join(', ');
     lines.push(`Artifacts: ${rendered}`);
   }

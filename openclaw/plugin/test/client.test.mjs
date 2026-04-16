@@ -10,6 +10,7 @@ test("createMuninnClient swallows fetch failures", async () => {
       baseUrl: "http://127.0.0.1:8787",
       enabled: true,
       timeoutMs: 100,
+      recencyLimit: 5,
     },
     logger: {
       warn: (message) => warnings.push(message),
@@ -19,10 +20,12 @@ test("createMuninnClient swallows fetch failures", async () => {
     },
   });
 
-  await client.sendMessage({
-    session: {
+  await client.captureTurn({
+    turn: {
+      sessionId: "group-a",
       agent: "main",
       prompt: "hello",
+      response: "done",
     },
   });
 
@@ -37,6 +40,7 @@ test("createMuninnClient logs non-ok responses", async () => {
       baseUrl: "http://127.0.0.1:8787",
       enabled: true,
       timeoutMs: 100,
+      recencyLimit: 5,
     },
     logger: {
       warn: (message) => warnings.push(message),
@@ -44,10 +48,12 @@ test("createMuninnClient logs non-ok responses", async () => {
     fetchImpl: async () => new Response("bad request", { status: 400 }),
   });
 
-  await client.sendMessage({
-    session: {
+  await client.captureTurn({
+    turn: {
+      sessionId: "group-a",
       agent: "main",
       prompt: "hello",
+      response: "done",
     },
   });
 

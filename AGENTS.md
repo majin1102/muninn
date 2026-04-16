@@ -70,8 +70,8 @@ Current persisted record terminology:
 
 Current write path:
 
-- HTTP path: `POST /api/v1/session/messages`
-- Request type: `AddMessageToSessionRequest`
+- HTTP path: `POST /api/v1/turn/capture`
+- Request type: `CaptureTurnRequest`
 
 Important modeling note:
 

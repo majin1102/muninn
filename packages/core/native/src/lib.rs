@@ -24,14 +24,6 @@ struct CoreState {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct SessionLoadOpenTurnParams {
-    session_id: Option<String>,
-    agent: String,
-    observer: String,
-}
-
-#[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 enum ListModeInput {
     Recency { limit: usize },
@@ -180,18 +172,6 @@ impl CoreBinding {
         Ok(())
     }
 
-    #[napi(js_name = "sessionLoadOpenTurn")]
-    pub async fn session_load_open_turn(&self, params: Value) -> NapiResult<Value> {
-        let params = parse_params::<SessionLoadOpenTurnParams>(params)?;
-        let resources = self.resources().await?;
-        into_napi_value(
-            resources
-            .session_table
-            .load_open_turn_for(params.session_id.as_deref(), &params.agent, &params.observer)
-            .await,
-        )
-    }
-
     #[napi(js_name = "sessionGetTurn")]
     pub async fn session_get_turn(&self, turn_id: String) -> NapiResult<Value> {
         let resources = self.resources().await?;
@@ -269,19 +249,6 @@ impl CoreBinding {
         resources
             .session_table
             .insert(&mut turns)
-            .await
-            .map_err(to_napi_error)?;
-        to_napi_value(turns)
-    }
-
-    #[napi(js_name = "sessionUpdate")]
-    pub async fn session_update(&self, params: Value) -> NapiResult<Value> {
-        let params = parse_params::<SessionUpsertParams>(params)?;
-        let resources = self.resources().await?;
-        let turns = params.turns;
-        resources
-            .session_table
-            .update(&turns)
             .await
             .map_err(to_napi_error)?;
         to_napi_value(turns)
@@ -379,19 +346,6 @@ impl CoreBinding {
         resources
             .observing_table
             .insert(&mut snapshots)
-            .await
-            .map_err(to_napi_error)?;
-        to_napi_value(snapshots)
-    }
-
-    #[napi(js_name = "observingUpdate")]
-    pub async fn observing_update(&self, params: Value) -> NapiResult<Value> {
-        let params = parse_params::<ObservingUpsertParams>(params)?;
-        let resources = self.resources().await?;
-        let snapshots = params.snapshots;
-        resources
-            .observing_table
-            .update(&snapshots)
             .await
             .map_err(to_napi_error)?;
         to_napi_value(snapshots)
@@ -546,14 +500,17 @@ impl CoreBinding {
 }
 
 #[napi(js_name = "createCoreBinding")]
-pub async fn create_core_binding() -> NapiResult<CoreBinding> {
+pub fn create_core_binding() -> NapiResult<CoreBinding> {
     let table_options = TableOptions::load().map_err(to_napi_error)?;
+    let session_table = SessionTable::new(table_options.clone());
+    let observing_table = ObservingTable::new(table_options.clone());
+    let semantic_index_table = SemanticIndexTable::new(table_options);
     Ok(CoreBinding {
         inner: Arc::new(CoreState {
             resources: Mutex::new(Some(CoreResources {
-                session_table: SessionTable::new(table_options.clone()),
-                observing_table: ObservingTable::new(table_options.clone()),
-                semantic_index_table: SemanticIndexTable::new(table_options),
+                session_table,
+                observing_table,
+                semantic_index_table,
             })),
         }),
     })

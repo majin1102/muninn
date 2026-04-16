@@ -1,89 +1,86 @@
-export type SessionMessageInput = {
-  session_id?: string;
+export type ToolCall = {
+  id?: string;
+  name: string;
+  input?: string;
+  output?: string;
+};
+
+export type Artifact = {
+  key: string;
+  content: string;
+};
+
+export type TurnContent = {
+  sessionId: string;
   agent: string;
-  title?: string;
-  summary?: string;
-  tool_calling?: string[];
-  artifacts?: Record<string, string>;
-  prompt?: string;
-  response?: string;
-  extra?: Record<string, string>;
+  prompt: string;
+  response: string;
+  toolCalls?: ToolCall[];
+  artifacts?: Artifact[];
 };
 
-export type AddMessageToSessionRequest = {
-  session: SessionMessageInput;
+export type CaptureTurnRequest = {
+  turn: TurnContent;
 };
 
-export function buildPromptPayload(params: {
+export function buildCapturePayload(params: {
   sessionKey?: string;
   agentId?: string;
   prompt: string;
-}): AddMessageToSessionRequest | null {
+  response: string;
+  toolCalls?: ToolCall[];
+  artifacts?: Artifact[];
+}): CaptureTurnRequest | null {
+  const sessionId = normalizeText(params.sessionKey);
+  const agent = normalizeText(params.agentId);
   const prompt = normalizeText(params.prompt);
-  if (!params.agentId || !prompt) {
-    return null;
-  }
-  return {
-    session: {
-      session_id: normalizeOptionalText(params.sessionKey),
-      agent: params.agentId,
-      prompt,
-    },
-  };
-}
+  const response = normalizeText(params.response);
 
-export function buildToolPayload(params: {
-  sessionKey?: string;
-  agentId?: string;
-  command: string;
-  artifacts?: Record<string, string>;
-}): AddMessageToSessionRequest | null {
-  const command = normalizeText(params.command);
-  if (!params.agentId || !command) {
+  if (!sessionId || !agent || !prompt || !response) {
     return null;
   }
+
+  const toolCalls = normalizeToolCalls(params.toolCalls);
   const artifacts = normalizeArtifacts(params.artifacts);
+
   return {
-    session: {
-      session_id: normalizeOptionalText(params.sessionKey),
-      agent: params.agentId,
-      tool_calling: [command],
+    turn: {
+      sessionId,
+      agent,
+      prompt,
+      response,
+      ...(toolCalls ? { toolCalls } : {}),
       ...(artifacts ? { artifacts } : {}),
     },
   };
 }
 
-export function buildResponsePayload(params: {
-  sessionKey?: string;
-  agentId?: string;
-  response: string;
-}): AddMessageToSessionRequest | null {
-  const response = normalizeText(params.response);
-  if (!params.agentId || !response) {
-    return null;
+function normalizeToolCalls(toolCalls: ToolCall[] | undefined): ToolCall[] | undefined {
+  if (!toolCalls) {
+    return undefined;
   }
-  return {
-    session: {
-      session_id: normalizeOptionalText(params.sessionKey),
-      agent: params.agentId,
-      response,
-    },
-  };
+  const normalized = toolCalls
+    .map((toolCall) => ({
+      ...(normalizeOptionalText(toolCall.id) ? { id: normalizeOptionalText(toolCall.id) } : {}),
+      name: normalizeText(toolCall.name),
+      ...(normalizeOptionalText(toolCall.input) ? { input: normalizeOptionalText(toolCall.input) } : {}),
+      ...(normalizeOptionalText(toolCall.output) ? { output: normalizeOptionalText(toolCall.output) } : {}),
+    }))
+    .filter((toolCall) => toolCall.name);
+  return normalized.length > 0 ? normalized : undefined;
 }
 
-function normalizeArtifacts(
-  artifacts: Record<string, string> | undefined,
-): Record<string, string> | undefined {
+function normalizeArtifacts(artifacts: Artifact[] | undefined): Artifact[] | undefined {
   if (!artifacts) {
     return undefined;
   }
-  const entries = Object.entries(artifacts)
-    .map(([key, value]) => [normalizeText(key), normalizeText(value)] as const)
-    .filter(([key, value]) => key && value);
-  if (entries.length === 0) {
-    return undefined;
-  }
-  return Object.fromEntries(entries);
+  const normalized = artifacts
+    .map((artifact) => ({
+      key: normalizeText(artifact.key),
+      content: normalizeText(artifact.content),
+    }))
+    .filter((artifact) => artifact.key && artifact.content);
+  return normalized.length > 0 ? normalized : undefined;
 }
 
 function normalizeOptionalText(value: string | undefined): string | undefined {

@@ -7,7 +7,7 @@ import type { NativeTables } from '../native.js';
 import type { ObserverWatermark, SessionTurn, TurnContent } from '../client.js';
 import { getObserverLlmConfig } from '../config.js';
 import type { SessionRegistry } from '../session/registry.js';
-import { cloneTurn, readSessionTurn } from '../session/types.js';
+import { readSessionTurn } from '../session/types.js';
 import { EpochQueue, EpochSealedError, OpenEpoch, type SealedEpoch } from './epoch.js';
 import {
   cloneObservingThreads,
@@ -87,7 +87,7 @@ export class Observer {
   async accept(
     turnContent: TurnContent,
     sessionRegistry: SessionRegistry,
-  ): Promise<SessionTurn> {
+  ): Promise<void> {
     if (this.shuttingDown) {
       throw new Error('observer is shutting down');
     }
@@ -98,11 +98,11 @@ export class Observer {
     while (true) {
       const openEpoch = this.openEpoch;
       try {
-        const turn = await openEpoch.accept(turnContent, sessionRegistry);
-        if (isObservable(turn)) {
+        await openEpoch.accept(turnContent, sessionRegistry);
+        if (openEpoch.hasStagedTurns()) {
           this.sealOpenEpoch(openEpoch);
         }
-        return turn;
+        return;
       } catch (error) {
         if (error instanceof EpochSealedError && openEpoch !== this.openEpoch) {
           continue;
@@ -213,7 +213,7 @@ export class Observer {
           semanticIndex: 0,
         },
         nextEpoch: 0,
-        openTurns: [],
+        recentSessions: [],
         threads: [],
       }, snapshots, new Map(turns.map((turn) => [turn.turnId, turn])));
       if (fallback) {
@@ -243,7 +243,7 @@ export class Observer {
           throw new Error(`pending observable turn ${turn.turnId} is missing observingEpoch`);
         }
         const turns = turnsByEpoch.get(turn.observingEpoch) ?? [];
-        turns.push(cloneTurn(turn));
+        turns.push(turn);
         turnsByEpoch.set(turn.observingEpoch, turns);
       }
       const epochs = [...turnsByEpoch.keys()].sort((left, right) => left - right);
@@ -724,7 +724,7 @@ function isObservable(turn: SessionTurn): boolean {
 function keepNewestTurn(byId: Map<string, SessionTurn>, turn: SessionTurn): void {
   const existing = byId.get(turn.turnId);
   if (!existing || existing.updatedAt < turn.updatedAt) {
-    byId.set(turn.turnId, cloneTurn(turn));
+    byId.set(turn.turnId, turn);
   }
 }
 
@@ -744,8 +744,7 @@ function pendingObservableTurns(
       (left.observingEpoch ?? recoveredEpoch) - (right.observingEpoch ?? recoveredEpoch)
       || left.createdAt.localeCompare(right.createdAt)
       || left.updatedAt.localeCompare(right.updatedAt)
-    ))
-    .map(cloneTurn);
+    ));
 }
 
 function compareTurns(left: SessionTurn, right: SessionTurn): number {
