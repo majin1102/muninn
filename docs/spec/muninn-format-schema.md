@@ -241,7 +241,55 @@ sidecar/MCP 返回的最终载体是 `MemoryHit[]`，但底层结构化读取在
 - `detail` 返回单个 snapshot row
 - `timeline` 返回同一 `observing_id` 下按 `snapshot_sequence` 排序的邻近 snapshot rows
 
-## 7. Thinking
+## 7. Checkpoint Contract
+
+当前 checkpoint schema 为：
+
+```ts
+type RecentTurn = {
+  turnId: string;
+  updatedAt: string;
+  prompt: string;
+  response: string;
+};
+
+type RecentSessionCheckpoint = {
+  sessionId?: string | null;
+  agent: string;
+  turns: RecentTurn[];
+};
+
+type CheckpointContent = {
+  schemaVersion: 3;
+  observer: {
+    baseline: {
+      turn: number;
+      observing: number;
+      semanticIndex: number;
+    };
+    committedEpoch?: number;
+    nextEpoch: number;
+    recentSessions: RecentSessionCheckpoint[];
+    threads: ThreadRef[];
+  };
+};
+```
+
+语义说明：
+
+- `RecentTurn` 只用于 recent dedupe window
+- `RecentTurn` 不是完整 `SessionTurn` 缓存
+- 当前 dedupe 仍然只比较 `prompt + response`
+- checkpoint 文件路径当前按 `storage + observer.name` 分桶
+
+恢复语义：
+
+- 先恢复 checkpoint 内的 `recentSessions`
+- 再按 `baseline.turn` replay turn delta
+- 用 delta 中新增的 persisted turns 补齐 checkpoint 之后的 recent dedupe 窗口
+- 同一 session 的 dedupe window 仍然只保留最近若干条 `RecentTurn`
+
+## 8. Thinking
 
 `thinking` 仍属于保留中的 memory layer。
 

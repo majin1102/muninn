@@ -47,13 +47,13 @@ export async function routeObservingThreads(
   const template = loadPromptTemplate('observing_gateway');
   const inputJson = JSON.stringify(
     {
-      observing_threads: observingThreads.map((thread) => ({
-        observing_id: thread.observingId,
+      observingThreads: observingThreads.map((thread) => ({
+        observingId: thread.observingId,
         title: thread.title,
         summary: thread.summary,
       })),
-      pending_turns: gatewayTurns.map((turn) => ({
-        turn_id: turn.turnId,
+      pendingTurns: gatewayTurns.map((turn) => ({
+        turnId: turn.turnId,
         summary: turn.summary,
       })),
     },
@@ -71,7 +71,7 @@ export async function routeObservingThreads(
         basePrompt,
         attempt,
         lastError,
-        'Make sure every pending turn_id appears in at least one update.',
+        'Make sure every pending turnId appears in at least one update.',
       ),
       signal,
     });
@@ -105,17 +105,17 @@ export async function observeThread(input: ObserveRequest, signal?: AbortSignal)
   const template = loadPromptTemplate('observing');
   const inputJson = JSON.stringify(
     {
-      observing_content: {
+      observingContent: {
         title: input.observingContent.title,
         summary: input.observingContent.summary,
         memories: input.observingContent.memories,
-        open_questions: input.observingContent.openQuestions,
-        next_steps: input.observingContent.nextSteps,
+        openQuestions: input.observingContent.openQuestions,
+        nextSteps: input.observingContent.nextSteps,
       },
-      pending_turns: input.pendingTurns.map((turn) => ({
-        turn_id: turn.turnId,
+      pendingTurns: input.pendingTurns.map((turn) => ({
+        turnId: turn.turnId,
         summary: turn.summary,
-        why_related: turn.whyRelated,
+        whyRelated: turn.whyRelated,
       })),
     },
     null,

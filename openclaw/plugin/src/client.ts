@@ -21,6 +21,7 @@ export type FetchLike = (
 
 export type MuninnClient = {
   captureTurn(request: CaptureTurnRequest): Promise<void>;
+  recall(query: string): Promise<string[]>;
 };
 
 export function createMuninnClient(params: {
@@ -53,7 +54,45 @@ export function createMuninnClient(params: {
         logWarn(params.logger, "muninn write request failed", error);
       }
     },
+
+    async recall(query) {
+      const signal = AbortSignal.timeout(params.config.timeoutMs);
+      const search = new URLSearchParams({
+        query,
+        limit: String(params.config.recallLimit),
+      });
+      try {
+        const response = await fetchImpl(`${params.config.baseUrl}/api/v1/recall?${search}`, {
+          signal,
+        });
+        if (!response.ok) {
+          const body = await safeReadBody(response);
+          logWarn(
+            params.logger,
+            `muninn recall failed with status ${response.status}${body ? ` body=${body}` : ""}`,
+          );
+          return [];
+        }
+        return parseRecallHits(await safeReadBody(response));
+      } catch (error) {
+        logWarn(params.logger, "muninn recall request failed", error);
+        return [];
+      }
+    },
   };
+}
+
+function parseRecallHits(body: string): string[] {
+  if (!body) {
+    return [];
+  }
+  const parsed = JSON.parse(body) as { memoryHits?: Array<{ content?: unknown }> };
+  if (!Array.isArray(parsed.memoryHits)) {
+    return [];
+  }
+  return parsed.memoryHits
+    .map((hit) => (typeof hit?.content === "string" ? hit.content.trim() : ""))
+    .filter((content) => content.length > 0);
 }
 
 async function safeReadBody(response: FetchResponseLike): Promise<string> {

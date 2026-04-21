@@ -1,6 +1,5 @@
 {
   "id": "muninn",
-  "kind": "memory",
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
@@ -15,7 +14,7 @@
         "type": "number",
         "minimum": 1
       },
-      "recencyLimit": {
+      "recallLimit": {
         "type": "integer",
         "minimum": 1
       }

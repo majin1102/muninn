@@ -151,37 +151,20 @@ export function createMemoryOpenVikingContextEngine(params): ContextEngine {
    - 如果需要批量处理，可以在 `agent_end` 中触发
    - 不排除未来同时提供 Context Engine 接口
 
-### 实现方案
+### 当前实现形态
 
 ```typescript
-// packages/openclaw-integration/index.ts
+// openclaw/plugin/src/hooks.ts
 
-export default {
-  id: "muninn",
-  name: "Muninn Memory",
-  description: "Muninn observing memory layer for OpenClaw",
+api.on("after_tool_call", async (event, ctx) => {
+  const runId = ctx.runId ?? event.runId;
+  // 聚合 toolCalls / artifacts
+});
 
-  register(api) {
-    const sidecarUrl = process.env.MUNINN_SIDECAR_URL || "http://localhost:3100";
-    api.on("agent_end", async (event, ctx) => {
-      try {
-        const turn = buildTurnFromAgentEnd(event, ctx);
-        if (!turn) {
-          return;
-        }
-        await fetch(`${sidecarUrl}/api/v1/turn/capture`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            turn
-          })
-        });
-      } catch (err) {
-        api.logger.warn(`muninn: failed to write response: ${err}`);
-      }
-    });
-  }
-};
+api.on("agent_end", async (event, ctx) => {
+  const runId = ctx.runId;
+  // 读取缓存，组装 turn/capture，随后删除 runId 缓存
+});
 ```
 
 ### 关键实现细节
@@ -196,7 +179,12 @@ export default {
    }
    ```
 
-2. **artifact 采集**
+2. **runId 聚合**
+   - `agent_end(ctx)` 可以拿到 `ctx.runId`
+   - 当前插件直接按 `runId` 聚合 `toolCalls` / `artifacts`
+   - 不再维护按 session/scope 切分的状态机
+
+3. **artifact 采集**
    ```typescript
    async function collectArtifacts(event): Promise<Record<string, string>> {
      const artifacts: Record<string, string> = {};
@@ -228,7 +216,7 @@ export default {
    }
    ```
 
-3. **失败降级**
+4. **失败降级**
    - 所有 HTTP 请求都包在 try-catch 中
    - 失败只打 warn 日志，不抛异常
    - 不阻塞 OpenClaw 主流程
@@ -255,7 +243,6 @@ export default {
 
 **下一步行动：**
 
-1. 在 `openclaw-cn/extensions/muninn/` 创建插件
-2. 实现三个 hook 的写入逻辑
-3. 实现 artifact 采集策略
-4. 端到端测试验证
+1. 保持当前 `openclaw/plugin` hook-based 接入形态
+2. 继续细化 artifact 采集策略
+3. 补齐端到端验证与文档
