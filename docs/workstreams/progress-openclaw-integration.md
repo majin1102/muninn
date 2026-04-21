@@ -2,8 +2,8 @@
 
 ## 当前状态
 
-- 状态：调研收敛中，MVP hook 面已初步定稿
-- 最近更新时间：2026-03-19
+- 状态：基础写入链路已实现，当前进入文档与质量收口阶段
+- 最近更新时间：2026-04-16
 - 当前负责人：Codex
 
 ## 已确认结论
@@ -27,10 +27,6 @@
   - `toolCallId`
 - `after_tool_call` 的 `event.result` 是 `sanitizedResult`，不是更早期的 provider 原始包，但已经是 OpenClaw 认可过的统一执行结果。
 - 如果目标是把完整信息交给 Muninn，再由 format 层去处理噪音，那么 OpenClaw hook 这一层应以“高保真采集”为主，不应过早做裁剪或价值判断。
-- 对于启动输入采集，当前应优先使用 `before_model_resolve.prompt`：
-  - 它是本轮的 user prompt
-  - 这个阶段还没有 session messages 混入
-  - 比 legacy `before_agent_start` 更符合长期稳定接入面
 - artifact 采集策略已确认：
   - `write`：直接从 `after_tool_call.params.content` 获取正文
   - `edit`：从 `after_tool_call.params.path` 识别目标文件，再主动回读完整文件正文
@@ -41,11 +37,15 @@
   - 仅在目标路径能被明确解析时才写入 `artifacts`
   - `exec` 默认不产出 artifact，除非输出中能明确识别文件路径
 - hook 到当前 Muninn 写入契约的映射原则已确认：
-  - 写入粒度采用“每个 hook 各写一条 `session/messages`”
-  - OpenClaw MVP 不写 `extra`
-  - OpenClaw MVP 不使用 `details`
+  - 正式写入口是 `POST /api/v1/turn/capture`
+  - OpenClaw plugin 当前不做分段写入
   - `summary` 属于 Muninn 的派生字段，不是 OpenClaw hook 的输入责任
-  - 缺少 `summary` 不应阻止 `prompt` / `toolCalling` / `artifacts` / `response` 的原始写入
+- OpenClaw plugin 当前实现：
+  - 只注册 `after_tool_call` 和 `agent_end`
+  - `after_tool_call` 以 `runId` 为键缓存 `toolCalls` / `artifacts`
+  - `agent_end(ctx)` 读取 `ctx.runId`，从 `messages` 中提取最终 `prompt` / `response`
+  - `agent_end` 一次提交完整 turn
+  - 24h 的 stale run 清理只在 `agent_end` 结束时触发
 - 因此，对 Muninn 来说：
   - `after_tool_call` 是 artifact 识别入口
   - 文件正文不应只依赖 `after_tool_call.result`
@@ -66,45 +66,39 @@
 - 已确认 `write` / `edit` / `apply_patch` 这类工具不能统一假设 `after_tool_call.result` 一定包含完整 artifact 正文。
 - 已确认 artifact 正文采集的 MVP 策略，优先保证保真，再把噪音控制下沉到 Muninn format 层。
 - 已确认 `summary` 的所有权属于 Muninn core；OpenClaw hook 只提交原始执行上下文。
-- 已确认 OpenClaw MVP 只采集 user prompt，不采集经 prompt-build 后的混合 prompt。
+- 已确认当前实现以 `agent_end.messages` 中最后一条 user 文本作为 `prompt`。
+- 已确认 `agent_end(ctx)` 可以拿到 `runId`，当前插件缓存按 `runId` 聚合。
 
 ## Hook 到写入映射
 
-- `before_model_resolve`
-  - 写一条 `session/messages`
-  - `session.sessionId = sessionKey`
-  - `session.agent = agentId`
-  - `before_model_resolve.prompt` 进入 `prompt`
 - `after_tool_call`
-  - 每次工具调用写一条 `session/messages`
-  - `session.sessionId = sessionKey`
-  - `session.agent = agentId`
-  - 完整工具指令字符串进入 `toolCalling`
+  - 不直接发写请求
+  - 以 `runId` 为键缓存本次工具调用
+  - 规范化后的工具信息进入 `toolCalls`
   - 如能明确识别目标路径，则回读完整文件正文并写入 `artifacts[path]`
   - `write` / `edit` 的目标路径可直接确定
   - `apply_patch` 在能提取受影响路径时写对应 artifact
   - `exec` 仅在输出中能明确识别文件路径时写对应 artifact
-  - OpenClaw MVP 不向 `details` 写入非 artifact 文本
-  - OpenClaw MVP 不写 `extra`
 - `agent_end`
-  - 写一条 `session/messages`
-  - `session.sessionId = sessionKey`
-  - `session.agent = agentId`
-  - 最终 agent 输出进入 `response`
-  - OpenClaw MVP 不写 `extra`
+  - 读取当前 `runId` 对应的缓存 `toolCalls` / `artifacts`
+  - 从最终 `messages` 中提取：
+    - 最后一条 user 文本作为 `prompt`
+    - 最后一条 assistant 文本作为 `response`
+  - 组装一条完整 `turn/capture` payload
+  - 写入成功或失败后都消费当前 `runId` 的缓存
 
 ## 当前正在推进
 
-- 将已确认的 artifact 采集策略细化成具体实现规则。
-- 收敛 `apply_patch` 和 `exec` 的路径抽取细节。
-- 将失败处理收敛到“写失败只打日志，不阻塞主流程”。
+- 收口 OpenClaw 文档表述，使其与当前 plugin 实现一致。
+- 继续细化 `apply_patch` 和 `exec` 的路径抽取细节。
+- 保持失败处理为“写失败只打日志，不阻塞主流程”。
 
 ## 当前阻塞点
 
-- 当前不再阻塞于总体方案，但仍有两类实现问题需要收口：
+- 当前不再阻塞于总体方案，但仍有三类实现问题需要收口：
   - `apply_patch` 的受影响路径抽取规则如何落地
   - `exec` 的 artifact 路径识别规则如何落地
-  - 文件回读失败时 payload 如何降级
+  - `agent_end.messages` 缺少可用 user 文本时，是否应显式放弃 turn capture
 
 ## 与其他工作线的依赖
 
@@ -118,7 +112,7 @@
 - 下一步优先补齐两个问题：
   - 在 `after_tool_call` 中，分别针对 `apply_patch` / `exec` 细化 artifact 路径抽取规则
   - 在 OpenClaw 侧把失败处理固定为“记录日志并继续主流程”
-- MVP 实现阶段不考虑幂等与去重。
+- 补一份面向实现者的说明，明确当前 plugin 写入链路是“缓存 tool data + agent_end 提交完整 turn”。
 
 ## 需要记录的风险
 

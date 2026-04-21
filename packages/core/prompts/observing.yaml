@@ -9,31 +9,31 @@ system: |
 
   You will receive one JSON object with:
 
-  1. `observing_content`
+  1. `observingContent`
      - the current aggregated content of this observing thread before the update
      - `memories`
-     - `open_questions`
-     - `next_steps`
+     - `openQuestions`
+     - `nextSteps`
 
-  2. `pending_turns`
+  2. `pendingTurns`
      - the new turns that have already been routed to this observing thread
 
   Each pending turn contains:
-  - `turn_id`
+  - `turnId`
   - `summary`
-  - `why_related`
+  - `whyRelated`
 
-  Meaning of `why_related`:
-  - `why_related` explains why this turn is relevant to the current observing thread
+  Meaning of `whyRelated`:
+  - `whyRelated` explains why this turn is relevant to the current observing thread
   - use it as a scope hint to focus only on the part of the turn that matters to this session
-  - do not treat `why_related` itself as a new fact unless it is clearly grounded by the turn summary
+  - do not treat `whyRelated` itself as a new fact unless it is clearly grounded by the turn summary
 
   Your job is to return the updated observing thread content after incorporating the relevant information from the pending turns.
 
   Important:
   - Focus only on information relevant to this observing thread
   - Do not introduce content from other themes or narrative threads
-  - Use `why_related` to decide which part of each turn matters for this session
+  - Use `whyRelated` to decide which part of each turn matters for this session
   - Update the observing thread as a durable, recall-friendly aggregated state
   - Be conservative: prefer fewer, higher-quality items over noisy or weakly grounded items
   - Do not invent facts beyond the provided input
@@ -49,19 +49,19 @@ system: |
   - Use category `Other` only if none of the above fit
 
   Open question rules:
-  - `open_questions` are unresolved questions that remain live for this observing thread
+  - `openQuestions` are unresolved questions that remain live for this observing thread
   - do not include already-settled decisions as open questions
   - remove an open question if the new turns clearly resolve it
 
   Field rules:
   - `title` should be a compact label for the observing thread after this update
   - `summary` should be a concise aggregated narrative of the observing thread after this update
-  - `open_questions` should be the current unresolved questions after this update
-  - `next_steps` should be the current concrete next actions after this update
-  - `memory_delta.before` and `memory_delta.after` should contain only the memories touched by the pending turns
+  - `openQuestions` should be the current unresolved questions after this update
+  - `nextSteps` should be the current concrete next actions after this update
+  - `memoryDelta.before` and `memoryDelta.after` should contain only the memories touched by the pending turns
 
   Memory delta rules:
-  - `memory_delta.before` and `memory_delta.after` are per-item patches, not full field images
+  - `memoryDelta.before` and `memoryDelta.after` are per-item patches, not full field images
   - include only memories that changed because of the pending turns
   - a newly added memory should appear only in `after`
   - a removed memory should appear only in `before`
@@ -73,13 +73,13 @@ system: |
   Return exactly one JSON object with this schema:
 
   {
-    "observing_content_update": {
+    "observingContentUpdate": {
       "title": "string",
       "summary": "string",
-      "open_questions": ["string"],
-      "next_steps": ["string"]
+      "openQuestions": ["string"],
+      "nextSteps": ["string"]
     },
-    "memory_delta": {
+    "memoryDelta": {
       "before": [
         {
           "id": "string",
@@ -102,9 +102,9 @@ system: |
   - Do not output markdown
   - Do not output explanations outside the JSON
   - `title` and `summary` must be non-empty strings
-  - `open_questions` must always be present; use an empty array if needed
-  - `next_steps` must always be present; use an empty array if needed
-  - `memory_delta` must always be present
+  - `openQuestions` must always be present; use an empty array if needed
+  - `nextSteps` must always be present; use an empty array if needed
+  - `memoryDelta` must always be present
   - Every returned item must be grounded in the previous observing thread or the provided pending turns
   - Do not include null values
 

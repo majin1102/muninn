@@ -34,6 +34,110 @@ test("extractFinalAssistantText ignores non-assistant messages", () => {
   assert.equal(text, "");
 });
 
+test("registerMuninnHooks adds recall context during before_prompt_build", async (t) => {
+  const handlers = new Map();
+  const calls = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input) => {
+    calls.push(String(input));
+    return new Response(JSON.stringify({
+      memoryHits: [
+        { content: "first memory" },
+        { content: "second memory" },
+      ],
+    }), { status: 200 });
+  };
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  registerMuninnHooks({
+    pluginConfig: {
+      enabled: true,
+      baseUrl: "http://muninn.test",
+      timeoutMs: 1_000,
+      recallLimit: 3,
+    },
+    logger: {},
+    on(name, handler) {
+      handlers.set(name, handler);
+    },
+  });
+
+  const result = await handlers.get("before_prompt_build")({
+    prompt: "what did we decide?",
+    messages: [],
+  }, {});
+
+  assert.match(calls[0], /\/api\/v1\/recall\?query=what\+did\+we\+decide%3F&limit=3$/);
+  assert.deepEqual(result, {
+    appendSystemContext: "<relevant-memories>\nfirst memory\n\nsecond memory\n</relevant-memories>",
+  });
+});
+
+test("registerMuninnHooks skips recall injection when no hits are returned", async (t) => {
+  const handlers = new Map();
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () =>
+    new Response(JSON.stringify({ memoryHits: [] }), { status: 200 });
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  registerMuninnHooks({
+    pluginConfig: {
+      enabled: true,
+      baseUrl: "http://muninn.test",
+      timeoutMs: 1_000,
+      recallLimit: 3,
+    },
+    logger: {},
+    on(name, handler) {
+      handlers.set(name, handler);
+    },
+  });
+
+  const result = await handlers.get("before_prompt_build")({
+    prompt: "what happened before",
+    messages: [],
+  }, {});
+
+  assert.equal(result, undefined);
+});
+
+test("registerMuninnHooks swallows recall failures during before_prompt_build", async (t) => {
+  const handlers = new Map();
+  const warnings = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response("bad request", { status: 400 });
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  registerMuninnHooks({
+    pluginConfig: {
+      enabled: true,
+      baseUrl: "http://muninn.test",
+      timeoutMs: 1_000,
+      recallLimit: 3,
+    },
+    logger: {
+      warn: (message) => warnings.push(message),
+    },
+    on(name, handler) {
+      handlers.set(name, handler);
+    },
+  });
+
+  const result = await handlers.get("before_prompt_build")({
+    prompt: "remember this",
+    messages: [],
+  }, {});
+
+  assert.equal(result, undefined);
+  assert.match(warnings[0], /muninn recall failed with status 400/i);
+});
+
 test("registerMuninnHooks captures after_tool_call artifacts and clears cache after agent_end", async (t) => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "muninn-openclaw-hooks-"));
   t.after(async () => rm(dir, { recursive: true, force: true }));
@@ -62,7 +166,7 @@ test("registerMuninnHooks captures after_tool_call artifacts and clears cache af
       enabled: true,
       baseUrl: "http://muninn.test",
       timeoutMs: 1_000,
-      recencyLimit: 5,
+      recallLimit: 5,
     },
     logger: {},
     on(name, handler) {
@@ -167,7 +271,7 @@ test("registerMuninnHooks keeps the latest artifact content for the same path", 
       enabled: true,
       baseUrl: "http://muninn.test",
       timeoutMs: 1_000,
-      recencyLimit: 5,
+      recallLimit: 5,
     },
     logger: {},
     on(name, handler) {
@@ -227,7 +331,7 @@ test("registerMuninnHooks warns and skips cache when after_tool_call has no sess
       enabled: true,
       baseUrl: "http://muninn.test",
       timeoutMs: 1_000,
-      recencyLimit: 5,
+      recallLimit: 5,
     },
     logger: {
       warn: (message) => warnings.push(message),
@@ -258,7 +362,7 @@ test("registerMuninnHooks warns and skips cache when after_tool_call has no runI
       enabled: true,
       baseUrl: "http://muninn.test",
       timeoutMs: 1_000,
-      recencyLimit: 5,
+      recallLimit: 5,
     },
     logger: {
       warn: (message) => warnings.push(message),
@@ -289,7 +393,7 @@ test("registerMuninnHooks warns and skips cache when after_tool_call has no agen
       enabled: true,
       baseUrl: "http://muninn.test",
       timeoutMs: 1_000,
-      recencyLimit: 5,
+      recallLimit: 5,
     },
     logger: {
       warn: (message) => warnings.push(message),
@@ -339,7 +443,7 @@ test("registerMuninnHooks collects artifacts from tool result paths", async (t) 
       enabled: true,
       baseUrl: "http://muninn.test",
       timeoutMs: 1_000,
-      recencyLimit: 5,
+      recallLimit: 5,
     },
     logger: {},
     on(name, handler) {
@@ -406,7 +510,7 @@ test("registerMuninnHooks prefers ctx.runId and isolates cached data per run", a
       enabled: true,
       baseUrl: "http://muninn.test",
       timeoutMs: 1_000,
-      recencyLimit: 5,
+      recallLimit: 5,
     },
     logger: {},
     on(name, handler) {
@@ -532,7 +636,7 @@ test("registerMuninnHooks falls back to agent_end tool calls when ctx.runId is m
         enabled: true,
         baseUrl: "http://muninn.test",
         timeoutMs: 1_000,
-        recencyLimit: 5,
+        recallLimit: 5,
       },
       logger: {
         warn: (message) => warnings.push(message),
@@ -608,7 +712,7 @@ test("registerMuninnHooks consumes cached state when agent_end has runId but mis
       enabled: true,
       baseUrl: "http://muninn.test",
       timeoutMs: 1_000,
-      recencyLimit: 5,
+      recallLimit: 5,
     },
     logger: {
       warn: (message) => warnings.push(message),
@@ -696,7 +800,7 @@ test("registerMuninnHooks isolates cache by runId within the same session and ag
       enabled: true,
       baseUrl: "http://muninn.test",
       timeoutMs: 1_000,
-      recencyLimit: 5,
+      recallLimit: 5,
     },
     logger: {},
     on(name, handler) {
@@ -828,7 +932,7 @@ test("registerMuninnHooks evicts stale runs on agent_end after twenty four hours
       enabled: true,
       baseUrl: "http://muninn.test",
       timeoutMs: 1_000,
-      recencyLimit: 5,
+      recallLimit: 5,
     },
     logger: {},
     on(name, handler) {
@@ -929,7 +1033,7 @@ test("registerMuninnHooks keeps current run cache when agent_end arrives after t
       enabled: true,
       baseUrl: "http://muninn.test",
       timeoutMs: 1_000,
-      recencyLimit: 5,
+      recallLimit: 5,
     },
     logger: {},
     on(name, handler) {

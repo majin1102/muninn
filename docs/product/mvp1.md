@@ -34,7 +34,7 @@ MVP 1 需要验证以下能力：
 
 ### 1. OpenClaw 对接
 
-MVP 1 必须对接 `../openclaw-cn`。
+MVP 1 必须对接 `../openclaw`。
 
 这个对接的目的不是做一个孤立 demo，而是验证：
 
@@ -54,8 +54,9 @@ MVP 1 的写入接口方向应当是：
 
 - OpenClaw 在一轮结束时向某个逻辑 session 提交一条完整 turn
 - `sessionId` 是逻辑归属参考，不是严格生命周期边界
-- `agent` / `observer` / `prompt` / `response` 必填
+- `sessionId` / `agent` / `prompt` / `response` 必填
 - `toolCalls` / `artifacts` 可按需要附带
+- `observer` 在 backend 内部注入，不属于 capture 请求体
 - Muninn 自己负责在 turn 之上继续派生可用记忆
 
 MVP 1 不需要引入 `session/start` 或 `session/end` 这样的显式生命周期接口。

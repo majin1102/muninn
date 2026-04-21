@@ -18,15 +18,15 @@
 - Rust observer/LLM runtime 已删除；相关运行时逻辑现在只保留在 TS `packages/core` 中
 
 ### 1.2 OpenClaw 对接（高优先级）
-**状态：** 调研收敛中，MVP hook 面已初步定稿，等待实现
+**状态：** 基础 hook 写入链路已完成，当前进入文档与质量收口阶段
 
 **已确认方案：**（见 `../workstreams/progress-openclaw-integration.md`）
-- ✅ Hook 映射已定：`before_model_resolve` → prompt，`after_tool_call` → artifacts，`agent_end` → response
+- ✅ 当前写入链路已定：`after_tool_call` 聚合 `toolCalls/artifacts`，`agent_end` 提交完整 `turn/capture`
 - ✅ Session ID 映射：`muninn.session.sessionId = openclaw.sessionKey`
 - ✅ Artifact 采集策略已确认：write/edit 直接读，apply_patch/exec 按需回读
 
 **需要做的：**
-- [ ] 在 OpenClaw 中实现 3 个 hook 的 Muninn 写入逻辑
+- [ ] 补齐 OpenClaw 对接文档，去掉旧的 `session/messages` / `before_model_resolve -> prompt` 表述
 - [ ] 实现 artifact 路径抽取和文件回读（apply_patch/exec）
 - [ ] 实现失败降级：写失败只打日志，不阻塞主流程
 - [ ] 端到端验证：OpenClaw 真实执行 → Muninn 写入 → Observer 生成 observation
@@ -136,7 +136,7 @@
 
 **立即开始（本周）：**
 1. ✅ ~~Observer 实现~~ 已完成
-2. **OpenClaw hook 实现**（3 个 hook 的写入逻辑 + artifact 采集）
+2. **OpenClaw hook 质量收口**（artifact 采集细化 + 文档校正 + 端到端验证）
 3. **Muninn 到 OpenClaw LanceDB 的记忆输出**
 
 **下周：**
@@ -151,7 +151,7 @@
 **MVP1 的关键路径现在是：**
 
 1. **OpenClaw 写入对接**（`../workstreams/progress-openclaw-integration.md`）
-   - 在 OpenClaw 中实现 3 个 hook 的 Muninn 写入
+   - 收口当前 `after_tool_call` + `agent_end` 写入链路
    - 解决 artifact 路径抽取问题
 
 2. **记忆输出到 OpenClaw**

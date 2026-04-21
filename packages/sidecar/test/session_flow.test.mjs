@@ -5,11 +5,13 @@ import path from 'node:path';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 
 import core from '@muninn/core';
+import { getNativeTables } from '../../core/dist/native.js';
 import {
   getSessionTreeLoadCountForTests,
   resetSessionTreeCacheForTests,
 } from '@muninn/board/server';
 import { app } from '../dist/app.js';
+import { registerMuninnHooks } from '../../../openclaw/plugin/dist/src/hooks.js';
 
 const { shutdownCoreForTests } = core;
 
@@ -193,6 +195,101 @@ test('turn/capture writes a complete turn and detail reads it back', async (t) =
   assert.match(detail.memoryHits[0].content, /## Detail/);
   assert.match(detail.memoryHits[0].content, /alpha prompt/);
   assert.match(detail.memoryHits[0].content, /alpha response/);
+});
+
+test('openclaw hook capture persists artifacts through sidecar and native readback', async (t) => {
+  const { dir, homeDir, configPath } = await makeDatasetUri();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+
+  process.env.MUNINN_HOME = homeDir;
+  await writeMuninnConfig(configPath, { turnProvider: 'mock' });
+  await writeFile(path.join(dir, 'note.txt'), 'artifact body', 'utf8');
+
+  const handlers = new Map();
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    const target = typeof url === 'string' ? new URL(url) : new URL(String(url));
+    return app.request(target.pathname, {
+      method: init?.method ?? 'GET',
+      headers: init?.headers,
+      body: init?.body,
+    });
+  };
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  registerMuninnHooks({
+    pluginConfig: {
+      enabled: true,
+      baseUrl: 'http://muninn.test',
+      timeoutMs: 1_000,
+      recencyLimit: 5,
+    },
+    logger: {},
+    on(name, handler) {
+      handlers.set(name, handler);
+    },
+  });
+
+  await handlers.get('after_tool_call')({
+    toolName: 'read',
+    params: { path: 'note.txt' },
+    runId: 'run-1',
+    toolCallId: 'tool-1',
+    result: 'ok',
+  }, {
+    runId: 'run-1',
+    sessionKey: 'group-a',
+    agentId: 'agent-a',
+    workspaceDir: dir,
+  });
+
+  await handlers.get('agent_end')({
+    success: true,
+    messages: [
+      { role: 'user', content: 'hook prompt' },
+      { role: 'assistant', content: [{ type: 'text', text: 'hook response' }] },
+    ],
+  }, {
+    runId: 'run-1',
+    sessionKey: 'group-a',
+    agentId: 'agent-a',
+    workspaceDir: dir,
+  });
+
+  const listResponse = await app.request('/api/v1/list?mode=recency&limit=20');
+  assert.equal(listResponse.status, 200);
+  const listed = await json(listResponse);
+  const match = listed.memoryHits.find((candidate) => (
+    typeof candidate.memoryId === 'string'
+    && candidate.memoryId.startsWith('session:')
+    && candidate.content.includes('hook prompt')
+    && candidate.content.includes('hook response')
+  ));
+  assert.ok(match);
+
+  const tables = await getNativeTables();
+  const persisted = await tables.sessionTable.getTurn(match.memoryId);
+  assert.ok(persisted);
+  assert.deepEqual(persisted.toolCalls, [{
+    id: 'tool-1',
+    name: 'read',
+    input: '{"path":"note.txt"}',
+    output: 'ok',
+  }]);
+  assert.deepEqual(persisted.artifacts, [{
+    key: 'note.txt',
+    content: 'artifact body',
+  }]);
+
+  const detailResponse = await app.request(
+    `/api/v1/detail?memoryId=${encodeURIComponent(match.memoryId)}`
+  );
+  assert.equal(detailResponse.status, 200);
+  const detail = await json(detailResponse);
+  assert.equal(detail.memoryHits.length, 1);
+  assert.match(detail.memoryHits[0].content, /Artifacts: note\.txt: artifact body/);
 });
 
 test('turn/capture rejects legacy snake_case turn fields', async (t) => {

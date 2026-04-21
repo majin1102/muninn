@@ -2,6 +2,7 @@ import type {
   OpenClawPluginApi,
   PluginHookAfterToolCallEvent,
   PluginHookAgentEndEvent,
+  PluginHookBeforePromptBuildEvent,
 } from "openclaw/plugin-sdk/core";
 
 import { resolvePluginConfig } from "./config.js";
@@ -29,6 +30,20 @@ export function registerMuninnHooks(api: OpenClawPluginApi): void {
     logger: api.logger,
   });
   const runsById = new Map<string, RunState>();
+
+  api.on("before_prompt_build", async (event: PluginHookBeforePromptBuildEvent) => {
+    const prompt = normalizePrompt(event.prompt);
+    if (!prompt) {
+      return;
+    }
+    const memories = await client.recall(prompt);
+    if (memories.length === 0) {
+      return;
+    }
+    return {
+      appendSystemContext: formatRecallContext(memories),
+    };
+  });
 
   api.on("after_tool_call", async (event, ctx) => {
     const sessionKey = cacheKey(ctx.sessionKey);
@@ -127,8 +142,18 @@ export function extractToolCalls(event: PluginHookAgentEndEvent): ToolCall[] | u
   return toolCalls.length > 0 ? toolCalls : undefined;
 }
 
+export function formatRecallContext(memories: string[]): string {
+  return `<relevant-memories>
+${memories.join("\n\n")}
+</relevant-memories>`;
+}
+
 function cacheKey(sessionKey: unknown): string | undefined {
   return typeof sessionKey === "string" && sessionKey.trim() ? sessionKey.trim() : undefined;
+}
+
+function normalizePrompt(prompt: unknown): string | undefined {
+  return typeof prompt === "string" && prompt.trim() ? prompt.trim() : undefined;
 }
 
 function getRunState(runs: Map<string, RunState>, runId: string, now: number): RunState {

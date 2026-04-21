@@ -18,6 +18,18 @@ declare module "openclaw/plugin-sdk/core" {
     prompt: string;
   };
 
+  export type PluginHookBeforePromptBuildEvent = {
+    prompt: string;
+    messages: unknown[];
+  };
+
+  export type PluginHookBeforePromptBuildResult = {
+    systemPrompt?: string;
+    prependContext?: string;
+    prependSystemContext?: string;
+    appendSystemContext?: string;
+  };
+
   export type PluginHookAfterToolCallEvent = {
     toolName: string;
     params: Record<string, unknown>;
@@ -97,6 +109,16 @@ declare module "openclaw/plugin-sdk/core" {
           event: PluginHookBeforeModelResolveEvent,
           ctx: PluginHookAgentContext,
         ) => Promise<void> | void,
+      ): void;
+      (
+        hookName: "before_prompt_build",
+        handler: (
+          event: PluginHookBeforePromptBuildEvent,
+          ctx: PluginHookAgentContext,
+        ) =>
+          | Promise<PluginHookBeforePromptBuildResult | void>
+          | PluginHookBeforePromptBuildResult
+          | void,
       ): void;
       (
         hookName: "after_tool_call",
