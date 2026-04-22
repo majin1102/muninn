@@ -7,6 +7,7 @@ from tempfile import TemporaryDirectory
 from benchmark.common.muninn_bridge import RecallHit
 from benchmark.locomo.heuristics import build_prediction, build_query_candidates, extract_date
 from benchmark.locomo.report import build_error_report, write_report
+from benchmark.locomo.run import apply_predictions
 from benchmark.locomo.scoring import build_stats, evaluate_question_answering, f1_score, write_results
 
 
@@ -116,6 +117,42 @@ class ScoringTests(unittest.TestCase):
         self.assertIn(
             "support group",
             build_query_candidates("What support group did Caroline join?"),
+        )
+
+    def test_apply_predictions_records_top_hit_diagnostics(self) -> None:
+        qas = [
+            {
+                "question": "When did Caroline go to the support group?",
+                "category": 2,
+                "answer": "8 May 2023",
+                "evidence": ["D1:3"],
+            }
+        ]
+        hits = [
+            RecallHit(
+                memory_id="observing:1",
+                evidence_ids=["D1:3", "D1:4"],
+                date_time="1:56 pm on 8 May, 2023",
+                title="Support group memory",
+                summary="Caroline went to the support group.",
+                detail="Caroline went to the support group on 8 May 2023.",
+            )
+        ]
+
+        apply_predictions(qas, {0: hits}, "muninn_top_5_prediction")
+
+        self.assertEqual(qas[0]["muninn_top_5_prediction"], "8 May 2023")
+        self.assertEqual(qas[0]["muninn_top_5_prediction_context"], ["D1:3", "D1:4"])
+        self.assertEqual(
+            qas[0]["muninn_top_5_hits"],
+            [
+                {
+                    "memory_id": "observing:1",
+                    "title": "Support group memory",
+                    "evidence_ids": ["D1:3", "D1:4"],
+                    "date_time": "1:56 pm on 8 May, 2023",
+                }
+            ],
         )
 
     def test_summary_contexts_are_scored_more_strictly_than_session_hits(self) -> None:

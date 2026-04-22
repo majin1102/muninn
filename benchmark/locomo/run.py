@@ -354,6 +354,16 @@ def apply_predictions(
                 seen.add(evidence_id)
                 context_ids.append(evidence_id)
         qa[f"{prediction_key}_context"] = context_ids
+        hit_key_prefix = prediction_key.removesuffix("_prediction")
+        qa[f"{hit_key_prefix}_hits"] = [
+            {
+                "memory_id": hit.memory_id,
+                "title": hit.title,
+                "evidence_ids": hit.evidence_ids,
+                "date_time": hit.date_time,
+            }
+            for hit in hits
+        ]
 
 
 def collect_batch_hits(
