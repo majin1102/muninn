@@ -18,6 +18,10 @@ This design covers one benchmark slice workflow only. It does not change Muninn'
 
 The slice must be generated from the downloaded LoCoMo dataset rather than hand-written. The generated slice should be treated as an experiment artifact, not a checked-in source fixture.
 
+The resulting numbers are small-sample pipeline numbers. They should not be described as a full LoCoMo benchmark result. They measure real Muninn ingestion, observer, embedding, recall, heuristic QA extraction, and scoring on a closed-evidence slice.
+
+The QA layer remains the existing Python heuristic answer builder. This means F1 reflects both recall quality and heuristic extraction quality. Evidence recall is the cleaner signal for whether Muninn found the relevant memory.
+
 ## Data Selection
 
 Input dataset:
@@ -107,6 +111,8 @@ Expected files:
 - `benchmark/locomo/out/conv-26-session-1.real_stats.json`
 - `benchmark/locomo/out/conv-26-session-1.real_report.json`
 - `benchmark/locomo/out/conv-26-session-1.real.progress.jsonl`
+- `benchmark/locomo/out/conv-26-session-1.slice_summary.json`
+- `benchmark/locomo/out/conv-26-session-1.real_metadata.json`
 
 The main result file should include, for each QA:
 
@@ -116,6 +122,7 @@ The main result file should include, for each QA:
 - category
 - `muninn_top_5_prediction`
 - `muninn_top_5_prediction_context`
+- `muninn_top_5_hits`
 
 The stats file should include:
 
@@ -124,6 +131,36 @@ The stats file should include:
 - `average_recall`
 - `category_f1`
 - `category_recall`
+
+The slice summary should include:
+
+- source file path
+- source SHA256
+- sample id
+- retained session numbers
+- retained dialog ids
+- retained QA count
+- category counts
+- output path
+
+The run metadata should include:
+
+- run name
+- source slice path
+- top-k
+- Muninn observer provider and model
+- embedding provider, model, and dimensions
+- redacted provider configuration with no keys or secrets
+- start and end timestamps
+
+The per-QA `muninn_top_5_hits` field should expose enough detail to diagnose whether recall is precise or broad:
+
+- `memory_id`
+- `title`
+- `evidence_ids`
+- `date_time`
+
+This is required because observing memories can reference many turns. Aggregate recall can look high when a broad observing memory contains the gold evidence alongside many unrelated evidence ids.
 
 ## Error Handling
 
@@ -136,6 +173,13 @@ The runner should preserve existing behavior:
 - include phase name, elapsed time, sample id, and error text in progress output
 
 Watermark waiting should warn when pending turns remain after the warning delay, even if observer epoch state has changed.
+
+The real run should have explicit timeout and warning settings. The default target for the first slice is:
+
+- warning after 60 seconds of unresolved pending turns
+- timeout after 30 minutes
+
+If the timeout fires, the run should fail and preserve progress logs. The first slice is expected to be small enough to finish within that window under normal provider behavior.
 
 ## Testing
 
@@ -156,6 +200,8 @@ Manual validation for the first real run:
 - run the benchmark with the real local `muninn.json`
 - inspect stats and report
 - confirm progress logs include import, watermark, recall, prediction, and output phases
+- inspect `muninn_top_5_hits` for each QA to distinguish precise hits from broad observing hits
+- confirm run metadata contains no API keys or secrets
 
 ## Non-Goals
 
