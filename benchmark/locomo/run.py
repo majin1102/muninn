@@ -17,6 +17,7 @@ if __package__ is None or __package__ == "":
 from benchmark.common.muninn_bridge import MuninnBridge, RecallHit
 from benchmark.locomo.dataset import iter_target_samples, load_samples
 from benchmark.locomo.heuristics import build_prediction, build_query_candidates
+from benchmark.locomo.metadata import build_run_metadata, write_run_metadata
 from benchmark.locomo.report import build_error_report, write_report
 from benchmark.locomo.scoring import build_stats, write_results
 
@@ -50,6 +51,7 @@ def main() -> None:
     reporter.start()
 
     run_started_at = monotonic()
+    run_started_timestamp = utc_now()
     reporter.emit(
         "run_start",
         data_file=args.data_file,
@@ -132,6 +134,22 @@ def main() -> None:
             lambda: write_report(args.out_file, report),
             out_file=args.out_file.with_name(f"{args.out_file.stem}_report.json"),
         )
+        run_phase(
+            reporter,
+            "write_metadata",
+            lambda: write_run_metadata(
+                args.out_file,
+                build_run_metadata(
+                    run_name=args.out_file.stem,
+                    data_file=args.data_file,
+                    out_file=args.out_file,
+                    top_k=args.top_k,
+                    started_at=run_started_timestamp,
+                    completed_at=utc_now(),
+                ),
+            ),
+            out_file=args.out_file.with_name(f"{args.out_file.stem}_metadata.json"),
+        )
         reporter.emit(
             "run_complete",
             out_file=args.out_file,
@@ -168,6 +186,10 @@ def ensure_selected_samples(
 
 def build_model_key(top_k: int) -> str:
     return f"muninn_top_{top_k}"
+
+
+def utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 @dataclass
