@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { access, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
-import type { RenderedMemory } from '@muninn/core';
+import type { RenderedMemory, SessionTurn, TurnContent } from '@muninn/core';
 import * as coreClient from '@muninn/core';
 
 const CONFIG_FILE_NAME = 'muninn.json';
@@ -13,6 +13,15 @@ const WATERMARK_TIMEOUT_MS = 10 * 60 * 1_000;
 const WATERMARK_WARNING_DELAY_MS = 60_000;
 const REPO_ROOT = path.resolve(__dirname, '../../..');
 const SIDECAR_APP_PATH = path.join(REPO_ROOT, 'packages/sidecar/dist/app.js');
+
+function envPositiveInt(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) {
+    return fallback;
+  }
+  const value = Number(raw);
+  return Number.isSafeInteger(value) && value > 0 ? value : fallback;
+}
 
 type LocomoDialog = {
   speaker: string;
@@ -115,10 +124,9 @@ async function importSampleCommand(options: Map<string, string>) {
     const sessionId = sessionKey(sample.sample_id, sessionNo);
     for (const dialog of dialogs) {
       const text = dialogLine(dialog);
-      const turn = await coreClient.addMessage({
+      const turn = await addTurnAndFind({
         sessionId,
         agent: dialog.speaker,
-        summary: text,
         prompt: text,
         response: 'Recorded.',
       });
@@ -191,8 +199,10 @@ export async function waitForImportWatermark(
   }
 
   const pollMs = options?.pollMs ?? WATERMARK_POLL_MS;
-  const timeoutMs = options?.timeoutMs ?? WATERMARK_TIMEOUT_MS;
-  const warningDelayMs = options?.warningDelayMs ?? WATERMARK_WARNING_DELAY_MS;
+  const timeoutMs = options?.timeoutMs
+    ?? envPositiveInt('MUNINN_LOCOMO_WATERMARK_TIMEOUT_MS', WATERMARK_TIMEOUT_MS);
+  const warningDelayMs = options?.warningDelayMs
+    ?? envPositiveInt('MUNINN_LOCOMO_WATERMARK_WARNING_DELAY_MS', WATERMARK_WARNING_DELAY_MS);
   const startedAt = Date.now();
   let pendingTurnIds: string[] = [];
   let stalledWarningEmitted = false;
@@ -211,8 +221,6 @@ export async function waitForImportWatermark(
       !stalledWarningEmitted
       && Date.now() - startedAt >= warningDelayMs
       && pendingTurnIds.length > 0
-      && watermark.observingEpoch === manifest.baseline_observing_epoch
-      && watermark.committedEpoch === manifest.baseline_committed_epoch
     ) {
       stalledWarningEmitted = true;
       console.error(
@@ -295,6 +303,25 @@ async function toBridgeHit(
     summary: rendered.summary ?? undefined,
     detail: rendered.detail ?? undefined,
   };
+}
+
+async function addTurnAndFind(content: TurnContent): Promise<SessionTurn> {
+  await coreClient.addMessage(content);
+  const turns = await coreClient.sessions.list({
+    mode: { type: 'recency', limit: 20 },
+    agent: content.agent,
+    sessionId: content.sessionId,
+  });
+  const match = turns.find((turn) => (
+    turn.prompt === content.prompt
+    && turn.response === content.response
+  ));
+  if (!match) {
+    throw new Error(
+      `failed to resolve imported LoCoMo turn for ${content.agent} in ${content.sessionId}`
+    );
+  }
+  return match;
 }
 
 async function resolveEvidenceIds(

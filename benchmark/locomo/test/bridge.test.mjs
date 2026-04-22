@@ -96,6 +96,9 @@ test('import writes an external manifest aligned to locomo sessions', async (t) 
   const manifest = JSON.parse(await readFile(imported.manifest_path, 'utf8'));
   assert.equal(imported.imported_count, 3);
   assert.equal(manifest.turns.length, 3);
+  assert.match(manifest.turns[0].turn_id, /^session:/);
+  assert.match(manifest.turns[1].turn_id, /^session:/);
+  assert.notEqual(manifest.turns[0].turn_id, manifest.turns[1].turn_id);
   assert.equal(manifest.turns[0].source_id, 'D1:1');
   assert.equal(manifest.turns[0].session_id, 'locomo:sample-a:session_1');
   assert.equal(manifest.turns[2].session_id, 'locomo:sample-a:session_2');
@@ -173,7 +176,7 @@ test('waitForImportWatermark times out with pending turn ids when observer does 
   });
 
   await prepareSourceConfig(t, {
-    observerProvider: 'mock',
+    observerProvider: 'openai',
     semanticIndexProvider: 'mock',
   });
   await runBridge('reset-home', { 'muninn-home': home });
@@ -223,6 +226,7 @@ test('waitForImportWatermark emits a delayed unresolved-watermark warning', asyn
   });
 
   await prepareSourceConfig(t, {
+    observerProvider: 'openai',
     semanticIndexProvider: 'mock',
   });
   await runBridge('reset-home', { 'muninn-home': home });
@@ -258,6 +262,40 @@ test('waitForImportWatermark emits a delayed unresolved-watermark warning', asyn
   assert.ok(messages.some((message) => /no observing progress detected/i.test(message)));
 });
 
+test('waitForImportWatermark reads timeout and warning defaults from env', async (t) => {
+  const home = await mkdtemp(path.join(os.tmpdir(), 'muninn-locomo-env-timeout-'));
+  t.after(async () => rm(home, { recursive: true, force: true }));
+  t.after(async () => core.shutdownCoreForTests());
+  t.after(() => {
+    delete process.env.MUNINN_LOCOMO_WATERMARK_TIMEOUT_MS;
+    delete process.env.MUNINN_LOCOMO_WATERMARK_WARNING_DELAY_MS;
+    delete process.env.MUNINN_OBSERVER_POLL_MS;
+  });
+
+  await prepareSourceConfig(t, {
+    observerProvider: 'openai',
+    semanticIndexProvider: 'mock',
+  });
+  await runBridge('reset-home', { 'muninn-home': home });
+  await runBridge('import-sample', {
+    'data-file': fixturePath,
+    'sample-id': 'sample-a',
+    'muninn-home': home,
+  });
+
+  process.env.MUNINN_HOME = home;
+  process.env.MUNINN_OBSERVER_POLL_MS = '60000';
+  process.env.MUNINN_LOCOMO_WATERMARK_TIMEOUT_MS = '50';
+  process.env.MUNINN_LOCOMO_WATERMARK_WARNING_DELAY_MS = '0';
+  const bridgeModule = await import(`${bridgePath}?env-timeout=${Date.now()}`);
+  const manifest = JSON.parse(await readFile(path.join(home, 'locomo-manifest.json'), 'utf8'));
+
+  await assert.rejects(
+    () => bridgeModule.waitForImportWatermark(manifest, { pollMs: 10 }),
+    /observer watermark timeout.*pending turn ids/i,
+  );
+});
+
 test('waitForImportWatermark does not depend on repo-root cwd to load sidecar app', async (t) => {
   const home = await mkdtemp(path.join(os.tmpdir(), 'muninn-locomo-cwd-'));
   const originalCwd = process.cwd();
@@ -269,6 +307,7 @@ test('waitForImportWatermark does not depend on repo-root cwd to load sidecar ap
   });
 
   await prepareSourceConfig(t, {
+    observerProvider: 'openai',
     semanticIndexProvider: 'mock',
   });
   await runBridge('reset-home', { 'muninn-home': home });
