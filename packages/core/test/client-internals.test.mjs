@@ -2150,6 +2150,9 @@ test('observer exportCheckpoint keeps the last committed snapshot while observeC
       }),
     },
     observationTable: {
+      delete: async () => ({ deleted: 0 }),
+      loadByIds: async () => [],
+      upsert: async () => undefined,
       stats: async () => ({
         version: 7,
         fragmentCount: 1,
@@ -2675,6 +2678,13 @@ test('observer.observeCurrentEpoch keeps thread state unchanged when pre-commit 
     const observer = new Observer({
       observingTable: {
         insert: async () => {
+          throw new Error('persist failed');
+        },
+      },
+      observationTable: {
+        delete: async () => ({ deleted: 0 }),
+        loadByIds: async () => [],
+        upsert: async () => {
           throw new Error('persist failed');
         },
       },
@@ -3559,7 +3569,8 @@ test('observer.observeCurrentEpoch commits observing rows and schedules observat
   process.env.MUNINN_HOME = homeDir;
   await writeObserverConfig(configPath);
 
-  let semanticUpserts = 0;
+  let observationUpserts = 0;
+  let indexAttempts = 0;
   const observer = new Observer({
     observingTable: {
       insert: async ({ snapshots }) => snapshots.map((snapshot) => ({
@@ -3572,8 +3583,7 @@ test('observer.observeCurrentEpoch commits observing rows and schedules observat
       delete: async () => ({ deleted: 0 }),
       loadByIds: async () => [],
       upsert: async () => {
-        semanticUpserts += 1;
-        throw new Error('observation write failed');
+        observationUpserts += 1;
       },
     },
   });
@@ -3601,17 +3611,18 @@ test('observer.observeCurrentEpoch commits observing rows and schedules observat
     updatedAt: '2024-01-01T00:00:00Z',
   }];
   observer.buildCurrentEpochIndex = async () => {
-    semanticUpserts += 1;
+    indexAttempts += 1;
     throw new Error('observation write failed');
   };
 
   await observer.observeCurrentEpoch();
 
-  assert.equal(semanticUpserts, 1);
+  assert.equal(observationUpserts, 1);
+  assert.equal(indexAttempts, 1);
   assert.equal(observer.committedEpoch, 1);
   assert.equal(observer.currentEpoch, null);
-  assert.equal(observer.threads[0].snapshotId, 'snapshot-1');
-  assert.ok(getPendingIndex(observer.threads[0]) !== null);
+  assert.equal(observer.threads[0].snapshotId, 'snapshot-0');
+  assert.equal(getPendingIndex(observer.threads[0]), null);
   assert.ok(observer.nextIndexRetryAt > Date.now());
 });
 

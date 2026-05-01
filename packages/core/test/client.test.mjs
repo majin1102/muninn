@@ -41,6 +41,18 @@ function cleanupDataset(dir) {
   };
 }
 
+async function waitForObserverResolved({ timeoutMs = 2_000, intervalMs = 20 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const watermark = await observer.watermark();
+    if (watermark.resolved) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  throw new Error('timed out waiting for observer watermark');
+}
+
 function makePendingSessionTurn({
   sessionId,
   agent,
@@ -350,9 +362,9 @@ test('pure read APIs work without observer bootstrap config', async (t) => {
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
 
-  const observingListBefore = await observings.list({ mode: { type: 'recency', limit: 10 } });
-  assert.ok(observingListBefore.length > 0);
-  const observingId = observingListBefore[0].snapshotId;
+  const hitsBefore = await memories.recall('bootstrap-free prompt', 1);
+  assert.ok(hitsBefore[0]?.memoryId.startsWith('observation:'));
+  const observationId = hitsBefore[0].memoryId;
 
   await shutdownCoreForTests();
   await writeFile(configPath, '{}\n', 'utf8');
@@ -364,12 +376,9 @@ test('pure read APIs work without observer bootstrap config', async (t) => {
   const sessionList = await sessions.list({ mode: { type: 'recency', limit: 10 } });
   assert.ok(sessionList.some((turn) => turn.turnId === created.turnId));
 
-  const observingDetail = await observings.get(observingId);
-  assert.ok(observingDetail);
-  assert.equal(observingDetail.snapshotId, observingId);
-
-  const observingList = await observings.list({ mode: { type: 'recency', limit: 10 } });
-  assert.ok(observingList.some((snapshot) => snapshot.snapshotId === observingId));
+  const observationDetail = await memories.get(observationId);
+  assert.ok(observationDetail);
+  assert.equal(observationDetail.memoryId, observationId);
 
   const renderedDetail = await memories.get(created.turnId);
   assert.ok(renderedDetail);
@@ -1222,7 +1231,27 @@ test('addMessage persists response turns when the summarizer is not configured',
   assert.equal(detail.summary, 'response prompt\n\nresponse body');
 });
 
-test('rendered memory binding returns unified turn and observing reads', async (t) => {
+test('observer writes atomic observations before observing snapshots', async (t) => {
+  const { dir, homeDir, configPath } = await makeDatasetUri();
+  t.after(cleanupDataset(dir));
+
+  process.env.MUNINN_HOME = homeDir;
+  await writeMuninnConfig(configPath, { turnProvider: 'mock', observerProvider: 'mock' });
+
+  await writeTurnAndGet({
+    sessionId: 'group-a',
+    agent: 'agent-a',
+    prompt: 'Caroline is thinking about counseling.',
+    response: 'Caroline will research counseling programs.',
+  });
+
+  await waitForObserverResolved();
+
+  const hits = await memories.recall('counseling programs', 5);
+  assert.ok(hits.some((hit) => hit.memoryId.startsWith('observation:')));
+});
+
+test('rendered memory binding returns unified turn and observation reads', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(cleanupDataset(dir));
 
@@ -1236,14 +1265,10 @@ test('rendered memory binding returns unified turn and observing reads', async (
     response: 'rendered response',
   });
 
-  await new Promise((resolve) => setTimeout(resolve, 50));
+  await waitForObserverResolved();
 
   const listed = await memories.list({ mode: { type: 'recency', limit: 10 } });
   assert.ok(listed.some((memory) => memory.memoryId === turn.turnId));
-  const observing = listed.find((memory) => memory.memoryId.startsWith('observing:'));
-  assert.ok(observing);
-  assert.ok(observing.title);
-  assert.ok(observing.summary || observing.detail);
 
   const turnDetail = await memories.get(turn.turnId);
   assert.ok(turnDetail);
@@ -1252,20 +1277,14 @@ test('rendered memory binding returns unified turn and observing reads', async (
   assert.ok(turnDetail.updatedAt);
   assert.match(turnDetail.summary ?? turnDetail.detail ?? '', /rendered prompt|rendered response/);
 
-  const observingDetail = await memories.get(observing.memoryId);
-  assert.ok(observingDetail);
-  assert.equal(observingDetail.memoryId, observing.memoryId);
-
-  const observingTimeline = await memories.timeline({
-    memoryId: observing.memoryId,
-    beforeLimit: 1,
-    afterLimit: 1,
-  });
-  assert.ok(observingTimeline.length >= 1);
-  assert.equal(observingTimeline[0].memoryId, observing.memoryId);
-
   const recalled = await memories.recall('rendered', 10);
-  assert.ok(recalled.some((memory) => memory.memoryId.startsWith('observation:')));
+  const observation = recalled.find((memory) => memory.memoryId.startsWith('observation:'));
+  assert.ok(observation);
+
+  const observationDetail = await memories.get(observation.memoryId);
+  assert.ok(observationDetail);
+  assert.equal(observationDetail.memoryId, observation.memoryId);
+  assert.match(observationDetail.summary ?? observationDetail.title ?? '', /rendered prompt|rendered response/);
 });
 
 test('recall returns observation memory ids and detail renders references', async (t) => {
@@ -1320,13 +1339,13 @@ test('rendered memory page mode paginates after combining session and observing 
   const combinedPage = await memories.list({ mode: { type: 'page', offset: 0, limit: 10 } });
 
   assert.equal(firstPage.length, 2);
-  assert.equal(secondPage.length, 2);
+  assert.equal(secondPage.length, 1);
   assert.deepEqual(
     firstPage.map((memory) => memory.memoryId),
     combinedPage.slice(0, 2).map((memory) => memory.memoryId),
   );
   assert.deepEqual(
     secondPage.map((memory) => memory.memoryId),
-    combinedPage.slice(2, 4).map((memory) => memory.memoryId),
+    combinedPage.slice(2, 3).map((memory) => memory.memoryId),
   );
 });

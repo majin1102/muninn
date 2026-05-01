@@ -1,10 +1,11 @@
 import type { SessionTurn } from '../client.js';
-import { getObserverLlmConfig } from '../config.js';
-import type { NativeTables } from '../native.js';
-import { observeThread, routeObservingThreads } from '../llm/observing-gateway.js';
+import type { NativeTables, Observation as StoredObservation } from '../native.js';
+import { observePreparedThread, observeThread } from '../llm/observing-gateway.js';
 import { applyObservationDelta, applyObservationTableDelta } from './memory-delta.js';
 import type { SealedEpoch } from './epoch.js';
-import { writeGatewayTrace } from './gateway-trace.js';
+import { commitObservations, extractObservations } from './observation-extraction.js';
+import { reviewObservations } from './observation-review.js';
+import { prepareThreads } from './thread-preparation.js';
 import {
   isActiveThread,
   applyObserveResult,
@@ -15,7 +16,7 @@ import {
   snapshotRef,
   toObservingSnapshot,
 } from './thread.js';
-import type { GatewayRoute, ObservingThread, ObservingTurnInput } from './types.js';
+import type { GatewayRoute, ObservingThread, ObservingTurnInput, ThreadWorkItem } from './types.js';
 
 type ObserveThreadImpl = typeof observeThread;
 
@@ -42,28 +43,30 @@ export async function observeEpoch(params: {
     params.threads,
     params.activeWindowDays,
   );
-  const observerConfig = getObserverLlmConfig();
-
-  const gatewayResult = await routeObservingThreads(
-    activeGatewayInputs(
+  const extracted = await extractObservations(params.sealedEpoch.turns, params.signal);
+  const committed = await commitObservations(params.client, extracted.observations, params.signal);
+  const review = await reviewObservations({
+    newObservations: committed,
+    candidateObservations: [],
+  }, params.signal);
+  await applyObservationReview(params.client, review.removeObservationIds, params.signal);
+  const reviewedIdSet = new Set(review.reviewedObservationIds);
+  const reviewed = committed.filter((observation) => reviewedIdSet.has(observation.id));
+  const preparation = await prepareThreads({
+    reviewedObservations: reviewed,
+    activeThreads: activeThreadInputs(
       params.threads,
       params.observerName,
       params.activeWindowDays,
-      observerConfig?.continuityHints ?? 1,
     ),
-    params.sealedEpoch.turns,
-    params.signal,
-  );
-  await writeGatewayTrace({
-    observingEpoch: params.sealedEpoch.epoch,
-    routes: gatewayResult.routes,
-  });
-  const touchedIds = await applyGatewayUpdates({
+    candidateMemories: [],
+  }, params.signal);
+  const touchedIds = await observePreparedWorkItems({
     threads: params.threads,
     observerName: params.observerName,
-    pendingTurns: params.sealedEpoch.turns,
     observingEpoch: params.sealedEpoch.epoch,
-    updates: gatewayResult.routes,
+    workItems: preparation.workItems,
+    observations: reviewed,
     signal: params.signal,
   });
   await flushThreads(params.client, params.threads, touchedIds);
@@ -71,6 +74,21 @@ export async function observeEpoch(params: {
     threads: params.threads,
     touchedIds,
   };
+}
+
+function activeThreadInputs(
+  threads: ObservingThread[],
+  observerName: string,
+  activeWindowDays: number,
+) {
+  return threads
+    .filter((thread) => thread.observer === observerName)
+    .filter((thread) => isActiveThread(thread.updatedAt, activeWindowDays))
+    .map((thread) => ({
+      threadId: thread.observingId,
+      title: thread.title,
+      summary: thread.summary,
+    }));
 }
 
 function ensureActiveThreads(
@@ -177,6 +195,83 @@ async function applyGatewayUpdates(params: ApplyGatewayUpdatesParams): Promise<S
   }
 
   return touchedIds;
+}
+
+async function observePreparedWorkItems(params: {
+  threads: ObservingThread[];
+  observerName: string;
+  observingEpoch: number;
+  workItems: ThreadWorkItem[];
+  observations: StoredObservation[];
+  signal?: AbortSignal;
+}): Promise<Set<string>> {
+  const {
+    threads,
+    observerName,
+    observingEpoch,
+    workItems,
+    observations,
+    signal,
+  } = params;
+  throwIfAborted(signal);
+  const observationsById = new Map(observations.map((observation) => [observation.id, observation]));
+  const touchedIds = new Set<string>();
+  const now = new Date().toISOString();
+
+  for (const item of workItems) {
+    throwIfAborted(signal);
+    const linked = item.observationIds
+      .map((id) => observationsById.get(id))
+      .filter((observation): observation is StoredObservation => Boolean(observation));
+    if (linked.length === 0) {
+      continue;
+    }
+
+    let thread: ObservingThread | undefined;
+    const targetId = item.targetThreadId?.trim() || null;
+    if (targetId) {
+      thread = threads.find((candidate) => candidate.observingId === targetId);
+      if (!thread) {
+        continue;
+      }
+    } else {
+      const newThreadTitle = item.newThreadTitle?.trim();
+      if (!newThreadTitle) {
+        continue;
+      }
+      thread = createObservingThread(
+        observerName,
+        newThreadTitle,
+        newThreadTitle,
+        [],
+        observingEpoch,
+        now,
+      );
+      threads.push(thread);
+    }
+
+    thread.updatedAt = now;
+    thread.observingEpoch = observingEpoch;
+    const result = await observePreparedThread({
+      observingContent: currentObservingContent(thread),
+      observations: linked,
+    }, signal);
+    applyObserveResult(thread, result, observingEpoch, applyObservationDelta, now);
+    touchedIds.add(thread.observingId);
+  }
+
+  return touchedIds;
+}
+
+async function applyObservationReview(
+  client: NativeTables,
+  removeObservationIds: string[],
+  signal?: AbortSignal,
+): Promise<void> {
+  throwIfAborted(signal);
+  if (removeObservationIds.length > 0) {
+    await client.observationTable.delete({ ids: removeObservationIds });
+  }
 }
 
 async function flushThreads(
@@ -313,6 +408,8 @@ export const __testing = {
   buildTouchedIndex,
   buildObservation,
   observeEpoch,
+  observePreparedWorkItemsForTests: observePreparedWorkItems,
+  activeThreadInputsForTests: activeThreadInputs,
   activeGatewayInputsForTests: activeGatewayInputs,
   applyGatewayUpdatesForTests: applyGatewayUpdates,
 };
