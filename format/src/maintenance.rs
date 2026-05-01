@@ -1,6 +1,6 @@
 use lance::Dataset;
-use lance::dataset::cleanup::CleanupPolicy;
 use lance::Result;
+use lance::dataset::cleanup::CleanupPolicy;
 use lance::dataset::optimize::{CompactionOptions, compact_files};
 use lance::index::vector::VectorIndexParams;
 use lance_index::optimize::OptimizeOptions;
@@ -89,7 +89,10 @@ mod tests {
         optimize_semantic_index,
     };
     use crate::config::{CONFIG_FILE_NAME, llm_test_env_guard};
-    use crate::{MemoryId, MemoryLayer, SemanticIndexRow, SemanticIndexTable, SessionTable, SessionTurn, TableOptions};
+    use crate::{
+        MemoryId, MemoryLayer, Observation, ObservationTable, SessionTable, SessionTurn,
+        TableOptions,
+    };
 
     fn test_table_options() -> TableOptions {
         TableOptions::local(crate::config::data_root().unwrap()).unwrap()
@@ -124,15 +127,15 @@ mod tests {
         }
         write_watchdog_config(&dir);
 
-        let table = SemanticIndexTable::new(test_table_options());
+        let table = ObservationTable::new(test_table_options());
         table
-            .upsert(vec![SemanticIndexRow {
+            .upsert(vec![Observation {
                 id: "row-1".to_string(),
-                memory_id: "observing:1".to_string(),
                 text: "alpha".to_string(),
                 vector: vec![0.1, 0.2, 0.3, 0.4],
                 importance: 0.7,
                 category: "fact".to_string(),
+                references: vec!["observing:1".to_string()],
                 created_at: chrono::Utc::now(),
             }])
             .await
@@ -143,7 +146,11 @@ mod tests {
         assert!(created);
 
         let indices = dataset.describe_indices(None).await.unwrap();
-        assert!(indices.iter().any(|index| index.name() == SEMANTIC_VECTOR_INDEX_NAME));
+        assert!(
+            indices
+                .iter()
+                .any(|index| index.name() == SEMANTIC_VECTOR_INDEX_NAME)
+        );
     }
 
     #[tokio::test]
@@ -177,15 +184,15 @@ mod tests {
             .unwrap();
         assert!(!compacted);
 
-        let table = SemanticIndexTable::new(test_table_options());
+        let table = ObservationTable::new(test_table_options());
         table
-            .upsert(vec![SemanticIndexRow {
+            .upsert(vec![Observation {
                 id: "row-1".to_string(),
-                memory_id: "observing:1".to_string(),
                 text: "alpha".to_string(),
                 vector: vec![0.1, 0.2, 0.3, 0.4],
                 importance: 0.7,
                 category: "fact".to_string(),
+                references: vec!["observing:1".to_string()],
                 created_at: chrono::Utc::now(),
             }])
             .await

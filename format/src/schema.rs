@@ -54,7 +54,7 @@ pub fn observing_schema() -> Schema {
     ])
 }
 
-pub fn semantic_index_schema(dimensions: usize) -> Schema {
+pub fn observation_schema(dimensions: usize) -> Schema {
     let mut id_metadata = HashMap::new();
     id_metadata.insert(
         "lance-schema:unenforced-primary-key".to_string(),
@@ -67,7 +67,6 @@ pub fn semantic_index_schema(dimensions: usize) -> Schema {
 
     Schema::new(vec![
         Field::new("id", DataType::Utf8, false).with_metadata(id_metadata),
-        Field::new("memory_id", DataType::Utf8, false),
         Field::new("text", DataType::Utf8, false),
         Field::new(
             "vector",
@@ -80,9 +79,32 @@ pub fn semantic_index_schema(dimensions: usize) -> Schema {
         Field::new("importance", DataType::Float32, false),
         Field::new("category", DataType::Utf8, false),
         Field::new(
+            "references",
+            DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+            false,
+        ),
+        Field::new(
             "created_at",
             DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
             false,
         ),
     ])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn observation_schema_has_references_and_no_memory_id() {
+        let schema = observation_schema(3);
+        assert!(schema.field_with_name("id").is_ok());
+        assert!(schema.field_with_name("text").is_ok());
+        assert!(schema.field_with_name("vector").is_ok());
+        assert!(schema.field_with_name("importance").is_ok());
+        assert!(schema.field_with_name("category").is_ok());
+        assert!(schema.field_with_name("references").is_ok());
+        assert!(schema.field_with_name("created_at").is_ok());
+        assert!(schema.field_with_name("memory_id").is_err());
+    }
 }

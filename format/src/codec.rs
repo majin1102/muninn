@@ -10,11 +10,11 @@ use chrono::{TimeZone, Utc};
 use lance::dataset::ROW_ID;
 use lance::{Error, Result};
 
-use super::schema::{observing_schema, semantic_index_schema, turn_schema};
+use super::schema::{observation_schema, observing_schema, turn_schema};
 use crate::config::semantic_index_config;
 use crate::memory_id::{MemoryId, MemoryLayer};
+use crate::observation::Observation;
 use crate::observing::ObservingSnapshot;
-use crate::semantic_index::SemanticIndexRow;
 use crate::session::{Artifact, SessionTurn, ToolCall};
 
 pub(crate) fn turns_to_record_batch(
@@ -51,13 +51,21 @@ pub(crate) fn turns_to_record_batch(
     let tool_calls_json = StringArray::from(
         turns
             .iter()
-            .map(|turn| turn.tool_calls.as_ref().map(|tool_calls| tool_calls_to_json(tool_calls)))
+            .map(|turn| {
+                turn.tool_calls
+                    .as_ref()
+                    .map(|tool_calls| tool_calls_to_json(tool_calls))
+            })
             .collect::<Vec<_>>(),
     );
     let artifacts_json = StringArray::from(
         turns
             .iter()
-            .map(|turn| turn.artifacts.as_ref().map(|artifacts| artifacts_to_json(artifacts)))
+            .map(|turn| {
+                turn.artifacts
+                    .as_ref()
+                    .map(|artifacts| artifacts_to_json(artifacts))
+            })
             .collect::<Vec<_>>(),
     );
     let prompt = StringArray::from(
@@ -426,77 +434,77 @@ pub(crate) fn batch_row_ids(batch: &RecordBatch) -> Result<Vec<u64>> {
         .collect())
 }
 
-pub(crate) fn semantic_rows_to_record_batch(rows: &[SemanticIndexRow]) -> Result<RecordBatch> {
+pub(crate) fn observations_to_record_batch(rows: &[Observation]) -> Result<RecordBatch> {
     let dimensions = semantic_index_dimensions()?;
     let ids = StringArray::from_iter_values(rows.iter().map(|row| row.id.as_str()));
-    let memory_ids = StringArray::from_iter_values(rows.iter().map(|row| row.memory_id.as_str()));
     let text = StringArray::from_iter_values(rows.iter().map(|row| row.text.as_str()));
     let vector = build_float32_fixed_size_list_array(
         rows.iter().map(|row| row.vector.as_slice()),
         dimensions,
     )
-    .map_err(|error| Error::invalid_input(format!("invalid semantic index vector: {error}")))?;
+    .map_err(|error| Error::invalid_input(format!("invalid observation vector: {error}")))?;
     let importance = Float32Array::from_iter_values(rows.iter().map(|row| row.importance));
     let category = StringArray::from_iter_values(rows.iter().map(|row| row.category.as_str()));
+    let references = build_string_list_array(rows.iter().map(|row| Some(&row.references)));
     let created_at = TimestampMicrosecondArray::from_iter_values(
         rows.iter().map(|row| row.created_at.timestamp_micros()),
     )
     .with_timezone("UTC");
 
     RecordBatch::try_new(
-        Arc::new(semantic_index_schema(dimensions)),
+        Arc::new(observation_schema(dimensions)),
         vec![
             Arc::new(ids),
-            Arc::new(memory_ids),
             Arc::new(text),
             Arc::new(vector),
             Arc::new(importance),
             Arc::new(category),
+            Arc::new(references),
             Arc::new(created_at),
         ],
     )
-    .map_err(|error| Error::invalid_input(format!("build semantic_index batch: {error}")))
+    .map_err(|error| Error::invalid_input(format!("build observation batch: {error}")))
 }
 
-pub(crate) fn semantic_rows_to_reader(
-    rows: Vec<SemanticIndexRow>,
+pub(crate) fn observations_to_reader(
+    rows: Vec<Observation>,
 ) -> Result<RecordBatchIterator<impl Iterator<Item = std::result::Result<RecordBatch, ArrowError>>>>
 {
     let dimensions = semantic_index_dimensions()?;
-    let schema = Arc::new(semantic_index_schema(dimensions));
-    let batch = semantic_rows_to_record_batch(&rows).map_err(arrow_error_from_lance)?;
+    let schema = Arc::new(observation_schema(dimensions));
+    let batch = observations_to_record_batch(&rows).map_err(arrow_error_from_lance)?;
     Ok(RecordBatchIterator::new(
         vec![Ok(batch)].into_iter(),
         schema,
     ))
 }
 
-pub(crate) fn record_batch_to_semantic_rows(batch: &RecordBatch) -> Result<Vec<SemanticIndexRow>> {
+pub(crate) fn record_batch_to_observations(batch: &RecordBatch) -> Result<Vec<Observation>> {
     let ids = batch
         .column(0)
         .as_any()
         .downcast_ref::<StringArray>()
         .unwrap();
-    let memory_ids = batch
+    let text = batch
         .column(1)
         .as_any()
         .downcast_ref::<StringArray>()
         .unwrap();
-    let text = batch
-        .column(2)
-        .as_any()
-        .downcast_ref::<StringArray>()
-        .unwrap();
-    let vector = batch.column(3);
+    let vector = batch.column(2);
     let importance = batch
-        .column(4)
+        .column(3)
         .as_any()
         .downcast_ref::<Float32Array>()
         .unwrap();
     let category = batch
-        .column(5)
+        .column(4)
         .as_any()
         .downcast_ref::<StringArray>()
+        .unwrap();
+    let references = batch
+        .column(5)
+        .as_any()
+        .downcast_ref::<ListArray>()
         .unwrap();
     let created_at = batch
         .column(6)
@@ -511,18 +519,18 @@ pub(crate) fn record_batch_to_semantic_rows(batch: &RecordBatch) -> Result<Vec<S
                 optional_float32_fixed_size_list(vector, index).unwrap_or_default()
             } else {
                 return Err(Error::invalid_input(format!(
-                    "semantic_index.vector must be FixedSizeList<Float32, N>, got {:?}",
+                    "observation.vector must be FixedSizeList<Float32, N>, got {:?}",
                     vector.data_type()
                 )));
             };
 
-            Ok(SemanticIndexRow {
+            Ok(Observation {
                 id: ids.value(index).to_string(),
-                memory_id: memory_ids.value(index).to_string(),
                 text: text.value(index).to_string(),
                 vector,
                 importance: importance.value(index),
                 category: category.value(index).to_string(),
+                references: optional_string_list(references, index).unwrap_or_default(),
                 created_at: Utc
                     .timestamp_micros(created_at.value(index))
                     .single()
@@ -557,7 +565,7 @@ pub(crate) fn build_float32_fixed_size_list_array<'a>(
     )
     .map_err(|error| {
         ArrowError::InvalidArgumentError(format!(
-            "build FixedSizeListArray for {row_count} semantic rows: {error}"
+            "build FixedSizeListArray for {row_count} observation rows: {error}"
         ))
     })
 }
