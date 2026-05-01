@@ -251,9 +251,10 @@ export class MuninnBackend {
         nextEpoch: observerCheckpoint.nextEpoch,
         recentSessions: this.sessionRegistry?.exportRecentSessions() ?? [],
         threads: observerCheckpoint.threads,
+        runs: observerCheckpoint.runs,
       };
       return {
-        schemaVersion: 3,
+        schemaVersion: 4,
         observer: checkpoint,
       };
     });

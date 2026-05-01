@@ -1,4 +1,5 @@
 import {
+  type ObservingRun,
   type ObserverCheckpoint,
   type ThreadRef,
 } from '../checkpoint.js';
@@ -29,6 +30,7 @@ export type ObserverCheckpointState = {
   committedEpoch?: number;
   nextEpoch: number;
   threads: ThreadRef[];
+  runs: ObservingRun[];
 };
 
 const noopCheckpointLock: CheckpointLock = {
@@ -51,6 +53,7 @@ export class Observer {
   private checkpointCommittedEpoch?: number;
   private checkpointNextEpoch = 0;
   private checkpointThreads: ThreadRef[] = [];
+  private checkpointRuns: ObservingRun[] = [];
   // Serializes sealed epoch publish order so epoch N never lands after epoch N+1.
   private publishChain: Promise<void> = Promise.resolve();
   private loopPromise: Promise<void> | null = null;
@@ -70,6 +73,7 @@ export class Observer {
     }
     this.name = config.name;
     this.activeWindowDays = config.activeWindowDays;
+    this.checkpointRuns = checkpoint?.runs.filter((run) => run.status === 'running').map(cloneObservingRun) ?? [];
   }
 
   async ensureBootstrapped(): Promise<void> {
@@ -159,6 +163,7 @@ export class Observer {
       committedEpoch: this.checkpointCommittedEpoch,
       nextEpoch: this.checkpointNextEpoch,
       threads: this.checkpointThreads.map((thread) => ({ ...thread })),
+      runs: this.checkpointRuns.map(cloneObservingRun),
     };
   }
 
@@ -215,6 +220,7 @@ export class Observer {
         nextEpoch: 0,
         recentSessions: [],
         threads: [],
+        runs: [],
       }, snapshots, new Map(turns.map((turn) => [turn.turnId, turn])));
       if (fallback) {
         this.threads = fallback.threads;
@@ -455,6 +461,7 @@ export class Observer {
     this.checkpointCommittedEpoch = this.committedEpoch;
     this.checkpointNextEpoch = this.openEpoch?.epoch ?? (this.committedEpoch ?? -1) + 1;
     this.checkpointThreads = this.exportCheckpointThreads();
+    this.checkpointRuns = this.checkpointRuns.filter((run) => run.status === 'running');
   }
 
   private async restoreCheckpointState(): Promise<{
@@ -715,6 +722,20 @@ export class Observer {
     }
     this.changeWaiters.clear();
   }
+}
+
+function cloneObservingRun(run: ObservingRun): ObservingRun {
+  return {
+    ...run,
+    inputTurnIds: [...run.inputTurnIds],
+    pending: run.pending ? { ...run.pending } : undefined,
+    committed: {
+      observationIds: [...run.committed.observationIds],
+      snapshotIds: [...run.committed.snapshotIds],
+    },
+    traceRefs: [...run.traceRefs],
+    errors: run.errors.map((error) => ({ ...error })),
+  };
 }
 
 function isObservable(turn: SessionTurn): boolean {

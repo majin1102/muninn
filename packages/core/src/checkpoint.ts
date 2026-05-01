@@ -3,6 +3,12 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import { loadMuninnConfig, resolveMuninnHome, resolveStorageTarget } from './config.js';
+import type { ObservationReviewResult } from './observer/observation-review.js';
+import type {
+  ObservationInput,
+  ObservingSnapshot,
+  ThreadPreparationResult,
+} from './observer/types.js';
 
 export type RecentTurn = {
   turnId: string;
@@ -35,10 +41,11 @@ export type ObserverCheckpoint = {
   nextEpoch: number;
   recentSessions: RecentSessionCheckpoint[];
   threads: ThreadRef[];
+  runs: ObservingRun[];
 };
 
 export type CheckpointContent = {
-  schemaVersion: 3;
+  schemaVersion: 4;
   observer: ObserverCheckpoint;
 };
 
@@ -47,12 +54,50 @@ export type CheckpointFile = CheckpointContent & {
   writerPid: number;
 };
 
+export type ObservingRunStatus = 'running' | 'completed' | 'failed';
+
+export type ObservingRunStage =
+  | 'extracting'
+  | 'committingObservations'
+  | 'reviewingObservations'
+  | 'preparingThreads'
+  | 'observingThreads'
+  | 'committingSnapshots'
+  | 'indexingSnapshots'
+  | 'completed';
+
+export type ObservingRunError = {
+  stage: string;
+  message: string;
+  at: string;
+};
+
+export type ObservingRun = {
+  observer: string;
+  epoch: number;
+  status: ObservingRunStatus;
+  stage: ObservingRunStage;
+  inputTurnIds: string[];
+  pending?: {
+    observationInputs?: ObservationInput[];
+    reviewResult?: ObservationReviewResult;
+    threadPreparationResult?: ThreadPreparationResult;
+    snapshotResults?: ObservingSnapshot[];
+  };
+  committed: {
+    observationIds: string[];
+    snapshotIds: string[];
+  };
+  traceRefs: string[];
+  errors: ObservingRunError[];
+};
+
 export function parseCheckpointFile(raw: string): CheckpointFile {
   const parsed = JSON.parse(raw) as Partial<CheckpointFile>;
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
     throw new Error('checkpoint must be a JSON object');
   }
-  if (parsed.schemaVersion !== 3) {
+  if (parsed.schemaVersion !== 4) {
     throw new Error(`unsupported checkpoint schemaVersion: ${String(parsed.schemaVersion)}`);
   }
   const observer = parseObserverSection(parsed.observer);
@@ -60,7 +105,7 @@ export function parseCheckpointFile(raw: string): CheckpointFile {
     throw new Error('checkpoint observer section is invalid');
   }
   return {
-    schemaVersion: 3,
+    schemaVersion: 4,
     writtenAt: typeof parsed.writtenAt === 'string' ? parsed.writtenAt : new Date(0).toISOString(),
     writerPid: typeof parsed.writerPid === 'number' ? parsed.writerPid : 0,
     observer,
@@ -91,7 +136,8 @@ function parseObserverSection(value: unknown): ObserverCheckpoint | null {
   const nextEpoch = value.nextEpoch;
   const recentSessions = parseRecentSessions(value.recentSessions);
   const threads = parseThreads(value.threads);
-  if (!baseline || typeof nextEpoch !== 'number' || !recentSessions || !threads) {
+  const runs = parseObservingRuns(value.runs ?? []);
+  if (!baseline || typeof nextEpoch !== 'number' || !recentSessions || !threads || !runs) {
     return null;
   }
   const committedEpoch = value.committedEpoch;
@@ -104,6 +150,7 @@ function parseObserverSection(value: unknown): ObserverCheckpoint | null {
     nextEpoch,
     recentSessions,
     threads,
+    runs,
   };
 }
 
@@ -218,6 +265,146 @@ function parseThreads(value: unknown): ThreadRef[] | null {
     });
   }
   return threads;
+}
+
+function parseObservingRuns(value: unknown): ObservingRun[] | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  const runs: ObservingRun[] = [];
+  for (const run of value) {
+    const parsed = parseObservingRun(run);
+    if (!parsed) {
+      return null;
+    }
+    runs.push(parsed);
+  }
+  return runs;
+}
+
+function parseObservingRun(value: unknown): ObservingRun | null {
+  if (!isObjectRecord(value)) {
+    return null;
+  }
+  if (
+    typeof value.observer !== 'string'
+    || typeof value.epoch !== 'number'
+    || !isRunStatus(value.status)
+    || !isRunStage(value.stage)
+  ) {
+    return null;
+  }
+  const inputTurnIds = parseStringArray(value.inputTurnIds);
+  const committed = parseRunCommitted(value.committed);
+  const traceRefs = parseStringArray(value.traceRefs);
+  const errors = parseRunErrors(value.errors);
+  if (!inputTurnIds || !committed || !traceRefs || !errors) {
+    return null;
+  }
+  const pending = value.pending == null ? undefined : parseRunPending(value.pending);
+  if (value.pending != null && !pending) {
+    return null;
+  }
+  return {
+    observer: value.observer,
+    epoch: value.epoch,
+    status: value.status,
+    stage: value.stage,
+    inputTurnIds,
+    ...(pending ? { pending } : {}),
+    committed,
+    traceRefs,
+    errors,
+  };
+}
+
+function parseRunCommitted(value: unknown): ObservingRun['committed'] | null {
+  if (!isObjectRecord(value)) {
+    return null;
+  }
+  const observationIds = parseStringArray(value.observationIds);
+  const snapshotIds = parseStringArray(value.snapshotIds);
+  if (!observationIds || !snapshotIds) {
+    return null;
+  }
+  return { observationIds, snapshotIds };
+}
+
+function parseRunPending(value: unknown): NonNullable<ObservingRun['pending']> | null {
+  if (!isObjectRecord(value)) {
+    return null;
+  }
+  const pending: NonNullable<ObservingRun['pending']> = {};
+  if (value.observationInputs != null) {
+    if (!Array.isArray(value.observationInputs)) {
+      return null;
+    }
+    pending.observationInputs = value.observationInputs as ObservationInput[];
+  }
+  if (value.reviewResult != null) {
+    if (!isObjectRecord(value.reviewResult)) {
+      return null;
+    }
+    pending.reviewResult = value.reviewResult as ObservationReviewResult;
+  }
+  if (value.threadPreparationResult != null) {
+    if (!isObjectRecord(value.threadPreparationResult)) {
+      return null;
+    }
+    pending.threadPreparationResult = value.threadPreparationResult as ThreadPreparationResult;
+  }
+  if (value.snapshotResults != null) {
+    if (!Array.isArray(value.snapshotResults)) {
+      return null;
+    }
+    pending.snapshotResults = value.snapshotResults as ObservingSnapshot[];
+  }
+  return pending;
+}
+
+function parseRunErrors(value: unknown): ObservingRunError[] | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  const errors: ObservingRunError[] = [];
+  for (const error of value) {
+    if (
+      !isObjectRecord(error)
+      || typeof error.stage !== 'string'
+      || typeof error.message !== 'string'
+      || typeof error.at !== 'string'
+    ) {
+      return null;
+    }
+    errors.push({
+      stage: error.stage,
+      message: error.message,
+      at: error.at,
+    });
+  }
+  return errors;
+}
+
+function parseStringArray(value: unknown): string[] | null {
+  if (!Array.isArray(value) || value.some((item) => typeof item !== 'string')) {
+    return null;
+  }
+  return [...value];
+}
+
+function isRunStatus(value: unknown): value is ObservingRunStatus {
+  return value === 'running' || value === 'completed' || value === 'failed';
+}
+
+function isRunStage(value: unknown): value is ObservingRunStage {
+  return value === 'extracting'
+    || value === 'committingObservations'
+    || value === 'reviewingObservations'
+    || value === 'preparingThreads'
+    || value === 'observingThreads'
+    || value === 'committingSnapshots'
+    || value === 'indexingSnapshots'
+    || value === 'completed';
 }
 
 function isObjectRecord(value: unknown): value is Record<string, unknown> {

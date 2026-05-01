@@ -24,7 +24,7 @@ const { __testing: threadTesting } = threadModule;
 const { __testing: observingGatewayTesting } = observingGatewayModule;
 const { createObservingThread, getPendingIndex, getPendingIndexUpTo, loadThreads, toObservingSnapshot } = threadModule;
 const { addMessage, observer: observerApi, shutdownCoreForTests } = core;
-const CHECKPOINT_SCHEMA_VERSION = 3;
+const CHECKPOINT_SCHEMA_VERSION = 4;
 
 function createCheckpointBackend(exported = null) {
   return {
@@ -971,6 +971,36 @@ test('resolveCheckpointPath is scoped by observer name', async (t) => {
   assert.notEqual(firstPath, secondPath);
 });
 
+test('checkpoint preserves observing runs', async () => {
+  const { parseCheckpointFile, serializeCheckpointFile } = await import('../dist/checkpoint.js');
+  const file = {
+    schemaVersion: CHECKPOINT_SCHEMA_VERSION,
+    writtenAt: new Date().toISOString(),
+    writerPid: 1,
+    observer: {
+      baseline: { turn: 1, observing: 1, observation: 1 },
+      nextEpoch: 2,
+      recentSessions: [],
+      threads: [],
+      runs: [{
+        observer: 'default',
+        epoch: 1,
+        status: 'running',
+        stage: 'preparingThreads',
+        inputTurnIds: ['session:1'],
+        pending: {},
+        committed: { observationIds: ['obs-1'], snapshotIds: [] },
+        traceRefs: [],
+        errors: [],
+      }],
+    },
+  };
+
+  const parsed = parseCheckpointFile(serializeCheckpointFile(file));
+  assert.equal(parsed.observer.runs[0].stage, 'preparingThreads');
+  assert.deepEqual(parsed.observer.runs[0].committed.observationIds, ['obs-1']);
+});
+
 test('watchdog rewrites checkpoint when observer content changes', async (t) => {
   const { dir, homeDir, configPath } = await makeConfigHome();
   t.after(async () => rm(dir, { recursive: true, force: true }));
@@ -1534,6 +1564,7 @@ test('observer bootstrap restores committed state from checkpoint when baselines
   assert.deepEqual(observer.exportCheckpoint(), {
     committedEpoch: 12,
     nextEpoch: 13,
+    runs: [],
     threads: [{
       observingId: 'obs-1',
       latestSnapshotId: 'observing:42',
@@ -2166,6 +2197,7 @@ test('observer exportCheckpoint keeps the last committed snapshot while observeC
   assert.deepEqual(midFlight, {
     committedEpoch: 0,
     nextEpoch: 2,
+    runs: [],
     threads: [{
       observingId: 'observing-a',
       latestSnapshotId: 'snapshot-0',
@@ -3509,6 +3541,7 @@ test('observer.retryObservation refreshes the committed checkpoint snapshot afte
   assert.deepEqual(observer.exportCheckpoint(), {
     committedEpoch: 1,
     nextEpoch: 2,
+    runs: [],
     threads: [{
       observingId: 'observing-a',
       latestSnapshotId: 'snapshot-1',
