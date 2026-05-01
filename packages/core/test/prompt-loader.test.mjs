@@ -131,6 +131,10 @@ test('observing prompt consumes raw source and emits context refs', () => {
   const template = loadPromptTemplate('observing');
   const system = template.system;
 
+  assert.match(system, /linked observations/);
+  assert.match(system, /use the observations as the source facts for this thread/);
+  assert.match(system, /Use observation `references` only for provenance and `contextRefs`/);
+  assert.match(system, /pending turns, or linked observations/);
   assert.match(system, /raw `prompt` and `response`/);
   assert.match(system, /sourceSlice/);
   assert.match(system, /routing scope/);

@@ -6,7 +6,8 @@ system: |
 
   You receive:
   - `observingContent`: the current thread state before this update.
-  - `pendingTurns`: raw source turns selected for this observing thread.
+  - `pendingTurns`: raw source turns selected for this observing thread, or
+  - `observations`: linked observations prepared for this observing thread.
 
   Each pending turn has:
   - `turnId`: source turn id.
@@ -14,11 +15,19 @@ system: |
   - `prompt`: raw prompt/source content, when available.
   - `response`: raw response/source content, when available.
 
+  Each linked observation has:
+  - `id`: observation id.
+  - `text`: grounded source fact for this thread.
+  - `category`: observation category.
+  - `references`: source memory ids used only for provenance and contextRefs.
+
   Your job:
   Produce the updated thread state, context refs, and observation delta after incorporating only the grounded content relevant to this observing thread.
 
   Source relevance:
   - Routing has already selected this current observing thread; do not decide whether content belongs to another thread.
+  - When `observations` are provided, use the observations as the source facts for this thread.
+  - Use observation `references` only for provenance and `contextRefs`; do not create or delete point observations.
   - Use `sourceSlice` as the routing scope for this thread.
   - Treat `sourceSlice` as a pointer to the relevant source portion, not as a final memory fact.
   - Use raw `prompt` and `response` as source.
@@ -155,7 +164,7 @@ system: |
   - Do not include null values.
   - `title` and `summary` must be non-empty.
   - `openQuestions`, `nextSteps`, `contextRefs`, and `observationDelta` must always be present.
-  - Every returned observation must be grounded in the previous thread state or pending turns.
+  - Every returned observation must be grounded in the previous thread state, pending turns, or linked observations.
 
 user_template: |
   Input JSON:

@@ -3005,6 +3005,35 @@ test('observer validation keeps valid context refs', () => {
   }]);
 });
 
+test('thread observing consumes prepared observation work items', async (t) => {
+  const { dir, homeDir, configPath } = await makeConfigHome();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+
+  process.env.MUNINN_HOME = homeDir;
+  await writeObserverConfig(configPath);
+
+  const result = await observingGatewayModule.observePreparedThread({
+    observingContent: {
+      title: 'Caroline support group',
+      summary: 'Caroline support group',
+      observations: [],
+      openQuestions: [],
+      nextSteps: [],
+    },
+    observations: [{
+      id: 'obs-1',
+      text: 'Caroline joined an LGBTQ support group in May 2023.',
+      category: 'fact',
+      references: ['session:1'],
+    }],
+  });
+
+  assert.deepEqual(result.contextRefs, [{
+    turnId: 'session:1',
+    summary: 'Caroline joined an LGBTQ support group in May 2023.',
+  }]);
+});
+
 test('observing snapshots keep complete cumulative context refs', () => {
   const thread = createObservingThread(
     'default-observer',

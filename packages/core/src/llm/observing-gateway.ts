@@ -1,5 +1,6 @@
 import type { SessionTurn } from '../client.js';
 import { getObserverLlmConfig } from '../config.js';
+import type { Observation as StoredObservation } from '../native.js';
 import type {
   GatewayRoute,
   GatewayResult,
@@ -17,6 +18,11 @@ const MAX_TITLE_CHARS = 120;
 const MAX_SUMMARY_CHARS = 220;
 const MAX_LIST_ITEM_CHARS = 120;
 const MAX_MEMORY_CHARS = 220;
+
+export type ObservePreparedRequest = {
+  observingContent: ObserveRequest['observingContent'];
+  observations: Pick<StoredObservation, 'id' | 'text' | 'category' | 'references'>[];
+};
 
 export async function routeObservingThreads(
   observingThreads: ObservingThreadGatewayInput[],
@@ -156,6 +162,70 @@ export async function observeThread(input: ObserveRequest, signal?: AbortSignal)
   throw new Error(`observing update returned invalid output: ${lastError}`);
 }
 
+export async function observePreparedThread(
+  input: ObservePreparedRequest,
+  signal?: AbortSignal,
+): Promise<ObserveResult> {
+  throwIfAborted(signal);
+  const config = getObserverLlmConfig();
+  if (!config) {
+    throw new Error('observing update is not configured');
+  }
+
+  if (config.provider === 'mock') {
+    return validateObserveResult(buildMockPreparedObserveResult(input));
+  }
+
+  const template = loadPromptTemplate('observing');
+  const inputJson = JSON.stringify(
+    {
+      observingContent: {
+        title: input.observingContent.title,
+        summary: input.observingContent.summary,
+        observations: input.observingContent.observations,
+        openQuestions: input.observingContent.openQuestions,
+        nextSteps: input.observingContent.nextSteps,
+      },
+      observations: input.observations.map((observation) => ({
+        id: observation.id,
+        text: observation.text,
+        category: observation.category,
+        references: observation.references,
+      })),
+    },
+    null,
+    2,
+  );
+  const basePrompt = renderPromptTemplate(template.userTemplate, { input_json: inputJson });
+
+  let lastError = 'observing update returned no output';
+  for (let attempt = 1; attempt <= config.maxAttempts; attempt += 1) {
+    throwIfAborted(signal);
+    const raw = await generateText('observer', {
+      system: template.system,
+      prompt: buildRetryPrompt(
+        basePrompt,
+        attempt,
+        lastError,
+        'Keep all required content fields, contextRefs, and observationDelta arrays present.',
+      ),
+      signal,
+    });
+    if (!raw) {
+      throw new Error('observing update is not configured');
+    }
+    throwIfAborted(signal);
+
+    try {
+      return validateObserveResult(parseJson<ObserveResult>(raw));
+    } catch (error) {
+      lastError = String(error);
+    }
+  }
+
+  throw new Error(`observing update returned invalid output: ${lastError}`);
+}
+
 function buildMockGatewayResult(
   observingThreads: ObservingThreadGatewayInput[],
   pendingTurns: Array<{ turnId: string; text: string }>,
@@ -204,6 +274,43 @@ function buildMockObserveResult(input: ObserveRequest): ObserveResult {
         summary: normalizeText(turn.sourceSlice ?? turn.prompt ?? turn.response ?? '', MAX_SUMMARY_CHARS),
       }))
       .filter((reference) => reference.summary),
+    observationDelta: {
+      before: [],
+      after: joined ? [{
+        text: joined,
+        category: 'Fact',
+        updatedMemory: null,
+      }] : [],
+    },
+  };
+}
+
+function buildMockPreparedObserveResult(input: ObservePreparedRequest): ObserveResult {
+  const joined = input.observations
+    .map((observation) => normalizeText(observation.text, MAX_SUMMARY_CHARS))
+    .filter(Boolean)
+    .join(' ');
+  const titleSeed = input.observingContent.title || joined || 'Mock observing thread';
+  const summarySeed = [input.observingContent.summary, joined]
+    .filter((value) => value && value.trim())
+    .join(' ');
+  const contextRefs = new Map<string, string>();
+  for (const observation of input.observations) {
+    const summary = normalizeText(observation.text, MAX_SUMMARY_CHARS);
+    for (const reference of observation.references) {
+      if (reference.startsWith('session:') && summary) {
+        contextRefs.set(reference, summary);
+      }
+    }
+  }
+  return {
+    observingContentUpdate: {
+      title: normalizeText(titleSeed),
+      summary: normalizeText(summarySeed || titleSeed),
+      openQuestions: input.observingContent.openQuestions,
+      nextSteps: input.observingContent.nextSteps,
+    },
+    contextRefs: [...contextRefs.entries()].map(([turnId, summary]) => ({ turnId, summary })),
     observationDelta: {
       before: [],
       after: joined ? [{
