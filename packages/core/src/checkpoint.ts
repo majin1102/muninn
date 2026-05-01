@@ -29,7 +29,7 @@ export type ObserverCheckpoint = {
   baseline: {
     turn: number;
     observing: number;
-    semanticIndex: number;
+    observation: number;
   };
   committedEpoch?: number;
   nextEpoch: number;
@@ -114,14 +114,14 @@ function parseBaseline(value: unknown): ObserverCheckpoint['baseline'] | null {
   if (
     typeof value.turn !== 'number'
     || typeof value.observing !== 'number'
-    || typeof value.semanticIndex !== 'number'
+    || typeof value.observation !== 'number'
   ) {
     return null;
   }
   return {
     turn: value.turn,
     observing: value.observing,
-    semanticIndex: value.semanticIndex,
+    observation: value.observation,
   };
 }
 

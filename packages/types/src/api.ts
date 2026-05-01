@@ -109,7 +109,7 @@ export interface SessionTurnsResponse {
 
 export interface MemoryDocument {
   memoryId: string;
-  kind: 'session' | 'observing';
+  kind: 'session' | 'observing' | 'observation';
   title: string;
   markdown: string;
   agent?: string;

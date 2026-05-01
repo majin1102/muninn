@@ -12,7 +12,7 @@ import { resolveMuninnHome, type WatchdogConfig } from './config.js';
 import type { CheckpointLock, MuninnBackend } from './backend.js';
 import type { NativeTables, TableStats } from './native.js';
 
-type DatasetName = 'turn' | 'observing' | 'semanticIndex';
+type DatasetName = 'turn' | 'observing' | 'observation';
 type WatchdogLevel = 'info' | 'error';
 type WatchdogEvent =
   | 'failed'
@@ -39,7 +39,7 @@ type DatasetState = {
 };
 
 const WATCHDOG_LOG_FILE_NAME = 'watchdog.jsonl';
-const DATASETS: DatasetName[] = ['turn', 'observing', 'semanticIndex'];
+const DATASETS: DatasetName[] = ['turn', 'observing', 'observation'];
 const noopCheckpointLock: CheckpointLock = {
   shared: async (operation) => operation(),
   exclusive: async (operation) => operation(),
@@ -121,7 +121,7 @@ export class Watchdog {
     this.inFlight = (async () => {
       await this.maintainTurns();
       await this.maintainObservings();
-      await this.maintainSemanticIndex();
+      await this.maintainObservation();
       await this.flushCheckpoint();
     })()
       .finally(() => {
@@ -240,20 +240,20 @@ export class Watchdog {
     }));
   }
 
-  private async maintainSemanticIndex(): Promise<void> {
-    await this.checkpointLock.shared(() => this.runDatasetMaintenance('semanticIndex', async (setVersion) => {
-      const ensured = await this.binding.semanticIndexTable.ensureVectorIndex({
-        targetPartitionSize: this.config.semanticIndex.targetPartitionSize,
+  private async maintainObservation(): Promise<void> {
+    await this.checkpointLock.shared(() => this.runDatasetMaintenance('observation', async (setVersion) => {
+      const ensured = await this.binding.observationTable.ensureVectorIndex({
+        targetPartitionSize: this.config.observation.targetPartitionSize,
       });
-      const stats = await this.binding.semanticIndexTable.stats();
+      const stats = await this.binding.observationTable.stats();
       if (!stats) {
-        this.resetState('semanticIndex');
+        this.resetState('observation');
         return;
       }
 
       setVersion(stats.version);
-      const unchanged = this.versionUnchanged('semanticIndex', stats);
-      this.updateSeenState('semanticIndex', stats);
+      const unchanged = this.versionUnchanged('observation', stats);
+      this.updateSeenState('observation', stats);
 
       if (!ensured.created && unchanged) {
         return;
@@ -261,31 +261,31 @@ export class Watchdog {
 
       let compactResult: { changed: boolean } | null = null;
       if (stats.fragmentCount >= this.config.compactMinFragments) {
-        compactResult = await this.binding.semanticIndexTable.compact();
+        compactResult = await this.binding.observationTable.compact();
       }
-      const optimizeResult = await this.binding.semanticIndexTable.optimize({
-        mergeCount: this.config.semanticIndex.optimizeMergeCount,
+      const optimizeResult = await this.binding.observationTable.optimize({
+        mergeCount: this.config.observation.optimizeMergeCount,
       });
-      const finalStats = await this.binding.semanticIndexTable.stats() ?? stats;
-      this.updateMaintainedState('semanticIndex', finalStats);
+      const finalStats = await this.binding.observationTable.stats() ?? stats;
+      this.updateMaintainedState('observation', finalStats);
 
       if (ensured.created) {
-        await this.logInfo('semanticIndex', 'index_created', finalStats.version, {
-          targetPartitionSize: this.config.semanticIndex.targetPartitionSize,
+        await this.logInfo('observation', 'index_created', finalStats.version, {
+          targetPartitionSize: this.config.observation.targetPartitionSize,
           fragmentCount: finalStats.fragmentCount,
           rowCount: finalStats.rowCount,
         });
       }
       if (compactResult) {
-        await this.logInfo('semanticIndex', 'compacted', finalStats.version, {
+        await this.logInfo('observation', 'compacted', finalStats.version, {
           changed: compactResult.changed,
           fragmentCount: finalStats.fragmentCount,
           rowCount: finalStats.rowCount,
         });
       }
-      await this.logInfo('semanticIndex', 'optimized', finalStats.version, {
+      await this.logInfo('observation', 'optimized', finalStats.version, {
         changed: optimizeResult.changed,
-        mergeCount: this.config.semanticIndex.optimizeMergeCount,
+        mergeCount: this.config.observation.optimizeMergeCount,
         fragmentCount: finalStats.fragmentCount,
         rowCount: finalStats.rowCount,
         indexCreated: ensured.created,
@@ -416,8 +416,8 @@ export class Watchdog {
         return this.binding.sessionTable.cleanup?.({ floorVersion }) ?? Promise.resolve({ changed: false });
       case 'observing':
         return this.binding.observingTable.cleanup?.({ floorVersion }) ?? Promise.resolve({ changed: false });
-      case 'semanticIndex':
-        return this.binding.semanticIndexTable.cleanup?.({ floorVersion }) ?? Promise.resolve({ changed: false });
+      case 'observation':
+        return this.binding.observationTable.cleanup?.({ floorVersion }) ?? Promise.resolve({ changed: false });
     }
   }
 
@@ -469,6 +469,6 @@ function checkpointFloors(checkpoint: CheckpointContent | CheckpointFile): Recor
   return {
     turn: checkpoint.observer.baseline.turn,
     observing: checkpoint.observer.baseline.observing,
-    semanticIndex: checkpoint.observer.baseline.semanticIndex,
+    observation: checkpoint.observer.baseline.observation,
   };
 }

@@ -8,12 +8,13 @@ const DEFAULT_SUMMARY_THRESHOLD = 500;
 const DEFAULT_TITLE_MAX_CHARS = 100;
 const DEFAULT_OBSERVER_MAX_ATTEMPTS = 3;
 const DEFAULT_OBSERVER_ACTIVE_WINDOW_DAYS = 7;
+const DEFAULT_OBSERVER_CONTINUITY_HINTS = 1;
 const DEFAULT_IMPORTANCE = 0.7;
 const DEFAULT_WATCHDOG_INTERVAL_MS = 60_000;
 const DEFAULT_WATCHDOG_COMPACT_MIN_FRAGMENTS = 8;
 const DEFAULT_WATCHDOG_TARGET_PARTITION_SIZE = 1_024;
 const DEFAULT_WATCHDOG_OPTIMIZE_MERGE_COUNT = 4;
-const DEFAULT_SEMANTIC_INDEX_DIMENSIONS = 8;
+const DEFAULT_OBSERVATION_DIMENSIONS = 8;
 
 type LlmConfigRecord = {
   provider: string;
@@ -34,6 +35,7 @@ type ObserverConfigRecord = {
   llm: string;
   maxAttempts?: number;
   activeWindowDays?: number;
+  continuityHints?: number;
 };
 
 type EmbeddingConfigRecord = {
@@ -44,7 +46,7 @@ type EmbeddingConfigRecord = {
   dimensions?: number;
 };
 
-type SemanticIndexConfigRecord = {
+type ObservationConfigRecord = {
   embedding?: EmbeddingConfigRecord;
   defaultImportance?: number;
 };
@@ -54,7 +56,7 @@ type MuninnConfigRecord = {
   turn?: TurnConfigRecord;
   observer?: ObserverConfigRecord;
   llm?: Record<string, LlmConfigRecord>;
-  semanticIndex?: SemanticIndexConfigRecord;
+  observation?: ObservationConfigRecord;
   watchdog?: Record<string, unknown>;
 };
 
@@ -75,6 +77,7 @@ export type ObserverLlmConfig = TextProviderConfig & {
   name: string;
   maxAttempts: number;
   activeWindowDays: number;
+  continuityHints: number;
 };
 
 export type EmbeddingConfig = {
@@ -90,7 +93,7 @@ export type WatchdogConfig = {
   enabled: boolean;
   intervalMs: number;
   compactMinFragments: number;
-  semanticIndex: {
+  observation: {
     targetPartitionSize: number;
     optimizeMergeCount: number;
   };
@@ -99,7 +102,7 @@ export type WatchdogConfig = {
 type CoreRuntimeConfig = {
   observer: ObserverConfigRecord;
   observerLlm: LlmConfigRecord;
-  semanticIndex: SemanticIndexConfigRecord;
+  observation: ObservationConfigRecord;
   embedding: EmbeddingConfigRecord & { dimensions: number };
 };
 
@@ -143,6 +146,7 @@ export function getObserverLlmConfig(): ObserverLlmConfig | null {
     name: observer.name,
     maxAttempts: observer.maxAttempts ?? DEFAULT_OBSERVER_MAX_ATTEMPTS,
     activeWindowDays: observer.activeWindowDays ?? DEFAULT_OBSERVER_ACTIVE_WINDOW_DAYS,
+    continuityHints: observer.continuityHints ?? DEFAULT_OBSERVER_CONTINUITY_HINTS,
     provider: parseLlmProvider(llm.provider),
     model: llm.model,
     api: llm.api,
@@ -156,20 +160,20 @@ export function getEffectiveObserverName(): string {
 }
 
 export function getEmbeddingConfig(): EmbeddingConfig {
-  const { semanticIndex, embedding } = requireCoreRuntimeConfig(loadMuninnConfig());
+  const { observation, embedding } = requireCoreRuntimeConfig(loadMuninnConfig());
   return {
     provider: parseEmbeddingProvider(embedding.provider),
     model: embedding.model,
     apiKey: embedding.apiKey,
     baseUrl: embedding.baseUrl,
     dimensions: embedding.dimensions,
-    defaultImportance: semanticIndex.defaultImportance ?? DEFAULT_IMPORTANCE,
+    defaultImportance: observation.defaultImportance ?? DEFAULT_IMPORTANCE,
   };
 }
 
 export function getWatchdogConfig(): WatchdogConfig {
   const watchdog = loadMuninnConfig()?.watchdog as Record<string, unknown> | undefined;
-  const semanticIndex = watchdog?.semanticIndex as Record<string, unknown> | undefined;
+  const observation = watchdog?.observation as Record<string, unknown> | undefined;
   return {
     enabled: typeof watchdog?.enabled === 'boolean' ? watchdog.enabled : true,
     intervalMs: typeof watchdog?.intervalMs === 'number'
@@ -178,12 +182,12 @@ export function getWatchdogConfig(): WatchdogConfig {
     compactMinFragments: typeof watchdog?.compactMinFragments === 'number'
       ? watchdog.compactMinFragments
       : DEFAULT_WATCHDOG_COMPACT_MIN_FRAGMENTS,
-    semanticIndex: {
-      targetPartitionSize: typeof semanticIndex?.targetPartitionSize === 'number'
-        ? semanticIndex.targetPartitionSize
+    observation: {
+      targetPartitionSize: typeof observation?.targetPartitionSize === 'number'
+        ? observation.targetPartitionSize
         : DEFAULT_WATCHDOG_TARGET_PARTITION_SIZE,
-      optimizeMergeCount: typeof semanticIndex?.optimizeMergeCount === 'number'
-        ? semanticIndex.optimizeMergeCount
+      optimizeMergeCount: typeof observation?.optimizeMergeCount === 'number'
+        ? observation.optimizeMergeCount
         : DEFAULT_WATCHDOG_OPTIMIZE_MERGE_COUNT,
     },
   };
@@ -239,7 +243,7 @@ export async function validateMuninnConfigStorage(
   }
   if (actualDimensions !== expectedDimensions) {
     throw new Error(
-      `semantic_index dimension mismatch: muninn.json expects ${expectedDimensions}, but the existing semantic_index table stores ${actualDimensions}; update semanticIndex.embedding.dimensions or rebuild the semantic_index table`,
+      `observation dimension mismatch: muninn.json expects ${expectedDimensions}, but the existing observation table stores ${actualDimensions}; update observation.embedding.dimensions or rebuild the observation table`,
     );
   }
 }
@@ -251,21 +255,21 @@ function requireCoreRuntimeConfig(config: MuninnConfigRecord | null): CoreRuntim
   if (!config.llm) {
     throw new Error('llm is required.');
   }
-  if (!config.semanticIndex) {
-    throw new Error('semanticIndex is required.');
+  if (!config.observation) {
+    throw new Error('observation is required.');
   }
-  if (!config.semanticIndex.embedding) {
-    throw new Error('semanticIndex.embedding is required.');
+  if (!config.observation.embedding) {
+    throw new Error('observation.embedding is required.');
   }
 
   const observer = config.observer;
   const llm = config.llm;
-  const semanticIndex = config.semanticIndex;
-  const embedding = config.semanticIndex.embedding;
+  const observation = config.observation;
+  const embedding = config.observation.embedding;
 
   requireNonEmptyString(observer.name, 'observer.name');
   requireNonEmptyString(observer.llm, 'observer.llm');
-  requireNonEmptyString(embedding.provider, 'semanticIndex.embedding.provider');
+  requireNonEmptyString(embedding.provider, 'observation.embedding.provider');
   const dimensions = effectiveEmbeddingDimensions(config);
   parseEmbeddingProvider(embedding.provider);
 
@@ -279,7 +283,7 @@ function requireCoreRuntimeConfig(config: MuninnConfigRecord | null): CoreRuntim
   return {
     observer,
     observerLlm,
-    semanticIndex,
+    observation,
     embedding: {
       ...embedding,
       dimensions,
@@ -302,18 +306,22 @@ function parseEmbeddingProvider(provider: string): 'mock' | 'openai' {
 }
 
 function validateTopLevelConfig(config: MuninnConfigRecord): void {
+  const raw = config as Record<string, unknown>;
+  if (raw.semanticIndex !== undefined) {
+    throw new Error('semanticIndex is no longer supported; use observation instead.');
+  }
   validateStorageConfig(config.storage);
   validateTurnConfig(config.turn);
   validateObserverConfig(config.observer);
   validateLlmConfig(config.llm);
-  validateSemanticIndexConfig(config.semanticIndex);
+  validateObservationConfig(config.observation);
   validateWatchdogConfig(config.watchdog);
 }
 
 function validateConfiguredProviders(config: MuninnConfigRecord): void {
   validateReferencedProvider(config.llm, config.turn?.llm, 'turn.llm');
   validateReferencedProvider(config.llm, config.observer?.llm, 'observer.llm');
-  const embeddingProvider = config.semanticIndex?.embedding?.provider;
+  const embeddingProvider = config.observation?.embedding?.provider;
   if (embeddingProvider) {
     parseEmbeddingProvider(embeddingProvider);
   }
@@ -347,6 +355,7 @@ function validateObserverConfig(observer: unknown): void {
   requireNonEmptyString(config.llm, 'observer.llm');
   validateOptionalPositiveInteger(config.maxAttempts, 'observer.maxAttempts');
   validateOptionalPositiveInteger(config.activeWindowDays, 'observer.activeWindowDays');
+  validateOptionalPositiveInteger(config.continuityHints, 'observer.continuityHints');
 }
 
 function validateLlmConfig(llm: unknown): void {
@@ -364,33 +373,33 @@ function validateLlmConfig(llm: unknown): void {
   }
 }
 
-function validateSemanticIndexConfig(semanticIndex: unknown): void {
-  if (semanticIndex === undefined) {
+function validateObservationConfig(observation: unknown): void {
+  if (observation === undefined) {
     return;
   }
-  const config = expectRecord(semanticIndex, 'semanticIndex');
+  const config = expectRecord(observation, 'observation');
   if (config.embedding === undefined) {
-    throw new Error('semanticIndex.embedding is required.');
+    throw new Error('observation.embedding is required.');
   }
-  const embedding = expectRecord(config.embedding, 'semanticIndex.embedding');
-  requireNonEmptyString(embedding.provider, 'semanticIndex.embedding.provider');
+  const embedding = expectRecord(config.embedding, 'observation.embedding');
+  requireNonEmptyString(embedding.provider, 'observation.embedding.provider');
   const provider = parseEmbeddingProvider(embedding.provider as string);
-  validateOptionalString(embedding.model, 'semanticIndex.embedding.model');
-  validateOptionalString(embedding.apiKey, 'semanticIndex.embedding.apiKey');
-  validateOptionalString(embedding.baseUrl, 'semanticIndex.embedding.baseUrl');
-  validateOptionalPositiveInteger(embedding.dimensions, 'semanticIndex.embedding.dimensions');
-  validateOptionalNumber(config.defaultImportance, 'semanticIndex.defaultImportance');
+  validateOptionalString(embedding.model, 'observation.embedding.model');
+  validateOptionalString(embedding.apiKey, 'observation.embedding.apiKey');
+  validateOptionalString(embedding.baseUrl, 'observation.embedding.baseUrl');
+  validateOptionalPositiveInteger(embedding.dimensions, 'observation.embedding.dimensions');
+  validateOptionalNumber(config.defaultImportance, 'observation.defaultImportance');
   if (provider === 'openai') {
-    requireNonEmptyString(embedding.apiKey, 'semanticIndex.embedding.apiKey');
+    requireNonEmptyString(embedding.apiKey, 'observation.embedding.apiKey');
   }
 }
 
 function effectiveEmbeddingDimensions(config: MuninnConfigRecord | null): number {
-  const dimensions = config?.semanticIndex?.embedding?.dimensions;
+  const dimensions = config?.observation?.embedding?.dimensions;
   if (dimensions === undefined) {
-    return DEFAULT_SEMANTIC_INDEX_DIMENSIONS;
+    return DEFAULT_OBSERVATION_DIMENSIONS;
   }
-  return requirePositiveInteger(dimensions, 'semanticIndex.embedding.dimensions');
+  return requirePositiveInteger(dimensions, 'observation.embedding.dimensions');
 }
 
 function validateWatchdogConfig(watchdog: unknown): void {
@@ -401,15 +410,15 @@ function validateWatchdogConfig(watchdog: unknown): void {
   validateOptionalBoolean(config.enabled, 'watchdog.enabled');
   validateOptionalPositiveInteger(config.intervalMs, 'watchdog.intervalMs');
   validateOptionalPositiveInteger(config.compactMinFragments, 'watchdog.compactMinFragments');
-  if (config.semanticIndex !== undefined) {
-    const semanticIndex = expectRecord(config.semanticIndex, 'watchdog.semanticIndex');
+  if (config.observation !== undefined) {
+    const observation = expectRecord(config.observation, 'watchdog.observation');
     validateOptionalPositiveInteger(
-      semanticIndex.targetPartitionSize,
-      'watchdog.semanticIndex.targetPartitionSize',
+      observation.targetPartitionSize,
+      'watchdog.observation.targetPartitionSize',
     );
     validateOptionalPositiveInteger(
-      semanticIndex.optimizeMergeCount,
-      'watchdog.semanticIndex.optimizeMergeCount',
+      observation.optimizeMergeCount,
+      'watchdog.observation.optimizeMergeCount',
     );
   }
 }

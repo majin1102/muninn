@@ -1,7 +1,14 @@
 import type { ObservingSnapshot, RenderedMemory, SessionTurn } from '../client.js';
+import type { Observation } from '../native.js';
 
-export function inferRenderedMemoryKind(memoryId: string): 'session' | 'observing' {
-  return memoryId.startsWith('observing:') ? 'observing' : 'session';
+export function inferRenderedMemoryKind(memoryId: string): 'session' | 'observing' | 'observation' {
+  if (memoryId.startsWith('observing:')) {
+    return 'observing';
+  }
+  if (memoryId.startsWith('observation:')) {
+    return 'observation';
+  }
+  return 'session';
 }
 
 export function fallbackRenderedMemoryTitle(memory: RenderedMemory): string {
@@ -55,6 +62,20 @@ export function renderObservingSnapshot(memory: ObservingSnapshot): RenderedMemo
     detail,
     createdAt: memory.createdAt,
     updatedAt: memory.updatedAt,
+  };
+}
+
+export function renderObservation(memory: Observation): RenderedMemory {
+  const references = memory.references.length > 0
+    ? `References:\n${memory.references.map((ref) => `- ${ref}`).join('\n')}`
+    : undefined;
+  return {
+    memoryId: `observation:${memory.id}`,
+    title: memory.text,
+    summary: memory.text,
+    detail: references,
+    createdAt: memory.createdAt,
+    updatedAt: memory.createdAt,
   };
 }
 

@@ -1,10 +1,21 @@
-export type MemoryCategory = 'Preference' | 'Fact' | 'Decision' | 'Entity' | 'Concept' | 'Other';
+export type ObservationCategory = 'Preference' | 'Fact' | 'Decision' | 'Entity' | 'Concept' | 'Other';
 
-export type ObservedMemory = {
+export type Observation = {
   id?: string | null;
   text: string;
-  category: MemoryCategory;
+  category: ObservationCategory;
   updatedMemory?: string | null;
+};
+
+export type ObservationInput = {
+  text: string;
+  category: ObservationCategory;
+  references: string[];
+};
+
+export type ContextRef = {
+  turnId: string;
+  summary: string;
 };
 
 export type LlmFieldUpdate<T> = {
@@ -13,10 +24,11 @@ export type LlmFieldUpdate<T> = {
 };
 
 export type SnapshotContent = {
-  memories: ObservedMemory[];
+  observations: Observation[];
+  contextRefs: ContextRef[];
   openQuestions?: string[];
   nextSteps?: string[];
-  memoryDelta: LlmFieldUpdate<ObservedMemory>;
+  observationDelta: LlmFieldUpdate<Observation>;
 };
 
 export type ObservingThread = {
@@ -53,32 +65,23 @@ export type PendingIndex = {
   end: number;
 };
 
-export type SemanticIndexRow = {
-  id: string;
-  memoryId: string;
-  text: string;
-  vector: number[];
-  importance: number;
-  category: string;
-  createdAt: string;
-};
-
 export type ObservingThreadGatewayInput = {
-  observingId: string;
+  threadId: string;
   title: string;
-  summary: string;
+  continuityHints?: string[];
 };
 
 export type ObservingTurnInput = {
   turnId: string;
-  summary: string;
-  whyRelated: string;
+  sourceSlice?: string | null;
+  prompt?: string | null;
+  response?: string | null;
 };
 
 export type ObservingContent = {
   title: string;
   summary: string;
-  memories: ObservedMemory[];
+  observations: Observation[];
   openQuestions: string[];
   nextSteps: string[];
 };
@@ -97,25 +100,18 @@ export type ObservingContentUpdate = {
 
 export type ObserveResult = {
   observingContentUpdate: ObservingContentUpdate;
-  memoryDelta: LlmFieldUpdate<ObservedMemory>;
+  contextRefs: ContextRef[];
+  observationDelta: LlmFieldUpdate<Observation>;
 };
 
-export type GatewayAction = 'append' | 'new';
-
-export type NewThreadHint = {
-  title: string;
-  summary: string;
-};
-
-export type GatewayUpdate = {
+export type GatewayRoute = {
   turnId: string;
-  action: GatewayAction;
-  observingId?: string | null;
-  summary: string;
-  newThread?: NewThreadHint | null;
-  why: string;
+  targetThreadId?: string | null;
+  newThreadTitle?: string | null;
+  sourceSlice: string;
+  rationale: string;
 };
 
 export type GatewayResult = {
-  updates: GatewayUpdate[];
+  routes: GatewayRoute[];
 };

@@ -2,11 +2,12 @@ import { randomUUID } from 'node:crypto';
 
 import type {
   ObserveResult,
-  ObservedMemory,
+  Observation,
   ObservingContent,
   ObservingSnapshot,
   ObservingThread,
   PendingIndex,
+  ContextRef,
   SnapshotContent,
 } from './types.js';
 
@@ -55,26 +56,27 @@ export function cloneObservingThread(thread: ObservingThread): ObservingThread {
     snapshotEpochs: [...(thread.snapshotEpochs ?? [])],
     references: [...thread.references],
     snapshots: thread.snapshots.map((snapshot) => ({
-      memories: snapshot.memories.map((memory) => ({
-        id: memory.id ?? null,
-        text: memory.text,
-        category: memory.category,
-        updatedMemory: memory.updatedMemory ?? null,
+      observations: snapshot.observations.map((observation) => ({
+        id: observation.id ?? null,
+        text: observation.text,
+        category: observation.category,
+        updatedMemory: observation.updatedMemory ?? null,
       })),
+      contextRefs: snapshot.contextRefs.map((reference) => ({ ...reference })),
       openQuestions: [...(snapshot.openQuestions ?? [])],
       nextSteps: [...(snapshot.nextSteps ?? [])],
-      memoryDelta: {
-        before: snapshot.memoryDelta.before.map((memory) => ({
-          id: memory.id ?? null,
-          text: memory.text,
-          category: memory.category,
-          updatedMemory: memory.updatedMemory ?? null,
+      observationDelta: {
+        before: snapshot.observationDelta.before.map((observation) => ({
+          id: observation.id ?? null,
+          text: observation.text,
+          category: observation.category,
+          updatedMemory: observation.updatedMemory ?? null,
         })),
-        after: snapshot.memoryDelta.after.map((memory) => ({
-          id: memory.id ?? null,
-          text: memory.text,
-          category: memory.category,
-          updatedMemory: memory.updatedMemory ?? null,
+        after: snapshot.observationDelta.after.map((observation) => ({
+          id: observation.id ?? null,
+          text: observation.text,
+          category: observation.category,
+          updatedMemory: observation.updatedMemory ?? null,
         })),
       },
     })),
@@ -170,7 +172,7 @@ export function currentObservingContent(thread: ObservingThread): ObservingConte
   return {
     title: thread.title,
     summary: thread.summary,
-    memories: snapshot.memories,
+    observations: snapshot.observations,
     openQuestions: snapshot.openQuestions ?? [],
     nextSteps: snapshot.nextSteps ?? [],
   };
@@ -180,23 +182,28 @@ export function applyObserveResult(
   thread: ObservingThread,
   result: ObserveResult,
   observingEpoch: number,
-  applyMemoriesDelta: (
-    memories: ObservedMemory[],
+  applyObservationDelta: (
+    observations: Observation[],
     result: ObserveResult,
-  ) => { memoryDelta: SnapshotContent['memoryDelta']; memories: ObservedMemory[] },
+  ) => { observationDelta: SnapshotContent['observationDelta']; observations: Observation[] },
   now = new Date().toISOString(),
 ): void {
   const current = latestSnapshot(thread) ?? emptySnapshot();
-  const patched = applyMemoriesDelta(current.memories, result);
+  const patched = applyObservationDelta(current.observations, result);
   thread.title = result.observingContentUpdate.title;
   thread.summary = result.observingContentUpdate.summary;
   thread.observingEpoch = observingEpoch;
   thread.snapshots.push({
-    memories: patched.memories,
+    observations: patched.observations,
+    contextRefs: mergeContextRefs(
+      current.contextRefs,
+      result.contextRefs,
+    ),
     openQuestions: result.observingContentUpdate.openQuestions,
     nextSteps: result.observingContentUpdate.nextSteps,
-    memoryDelta: patched.memoryDelta,
+    observationDelta: patched.observationDelta,
   });
+  thread.references = latestSnapshot(thread)?.contextRefs.map((reference) => reference.turnId) ?? [];
   thread.snapshotEpochs = [...(thread.snapshotEpochs ?? []), observingEpoch];
   thread.snapshotId = undefined;
   thread.updatedAt = now;
@@ -224,7 +231,7 @@ export function toObservingSnapshot(thread: ObservingThread): ObservingSnapshot 
     title: thread.title,
     summary: thread.summary,
     content: JSON.stringify(snapshot, null, 2),
-    references: [...thread.references],
+    references: snapshot.contextRefs.map((reference) => reference.turnId),
   };
 }
 
@@ -284,39 +291,75 @@ export function getPendingIndexUpTo(
 function deserializeSnapshot(row: ObservingSnapshot): SnapshotContent {
   const parsed = JSON.parse(row.content) as Partial<SnapshotContent>;
   return {
-    memories: Array.isArray(parsed.memories) ? parsed.memories as ObservedMemory[] : [],
+    observations: Array.isArray(parsed.observations) ? parsed.observations as Observation[] : [],
+    contextRefs: normalizeContextRefs(parsed.contextRefs),
     openQuestions: Array.isArray(parsed.openQuestions) ? parsed.openQuestions : [],
     nextSteps: Array.isArray(parsed.nextSteps) ? parsed.nextSteps : [],
-    memoryDelta: {
-      before: Array.isArray(parsed.memoryDelta?.before) ? parsed.memoryDelta!.before : [],
-      after: Array.isArray(parsed.memoryDelta?.after) ? parsed.memoryDelta!.after : [],
+    observationDelta: {
+      before: Array.isArray(parsed.observationDelta?.before) ? parsed.observationDelta!.before : [],
+      after: Array.isArray(parsed.observationDelta?.after) ? parsed.observationDelta!.after : [],
     },
   };
 }
 
 function emptySnapshot(): SnapshotContent {
   return {
-    memories: [],
+    observations: [],
+    contextRefs: [],
     openQuestions: [],
     nextSteps: [],
-    memoryDelta: { before: [], after: [] },
+    observationDelta: { before: [], after: [] },
   };
 }
 
+function mergeContextRefs(
+  current: ContextRef[],
+  next: ContextRef[],
+): ContextRef[] {
+  const merged = [...current];
+  for (const reference of next) {
+    const summary = normalizeText(reference.summary);
+    if (!summary) {
+      continue;
+    }
+    const existingIndex = merged.findIndex((item) => item.turnId === reference.turnId);
+    if (existingIndex >= 0) {
+      merged.splice(existingIndex, 1);
+    }
+    merged.push({ turnId: reference.turnId, summary });
+  }
+  return merged;
+}
+
+function normalizeContextRefs(value: unknown): ContextRef[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.flatMap((item) => {
+    if (!item || typeof item !== 'object') {
+      return [];
+    }
+    const record = item as Record<string, unknown>;
+    const turnId = typeof record.turnId === 'string' ? record.turnId.trim() : '';
+    const summary = typeof record.summary === 'string' ? normalizeText(record.summary) : '';
+    if (!turnId || !summary) {
+      return [];
+    }
+    return [{ turnId, summary }];
+  });
+}
+
 function normalizeTitle(value: string): string {
-  return normalizeText(value, 48);
+  return normalizeText(value);
 }
 
 function normalizeSummary(value: string): string {
-  return normalizeText(value, 220);
+  return normalizeText(value);
 }
 
-function normalizeText(value: string, maxChars: number): string {
+function normalizeText(value: string): string {
   const collapsed = value.split(/\s+/).join(' ').trim();
-  if (collapsed.length <= maxChars) {
-    return collapsed;
-  }
-  return `${collapsed.slice(0, Math.max(maxChars - 3, 0))}...`;
+  return collapsed;
 }
 
 function trimReferences(references: string[]): void {
@@ -325,3 +368,7 @@ function trimReferences(references: string[]): void {
     references.splice(removableIndex >= 0 ? removableIndex : 0, 1);
   }
 }
+
+export const __testing = {
+  applyObserveResultForTests: applyObserveResult,
+};

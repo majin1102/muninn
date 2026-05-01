@@ -17,7 +17,7 @@ async function runBridge(command, options) {
   for (const [key, value] of Object.entries(options)) {
     args.push(`--${key}`, String(value));
   }
-  const { stdout } = await execFileAsync('node', args, {
+  const { stdout } = await execFileAsync(process.execPath, args, {
     cwd: repoRoot,
     env: process.env,
   });
@@ -79,6 +79,7 @@ async function prepareSourceConfig(
 test('import writes an external manifest aligned to locomo sessions', async (t) => {
   const home = await mkdtemp(path.join(os.tmpdir(), 'muninn-locomo-import-'));
   t.after(async () => rm(home, { recursive: true, force: true }));
+  t.after(async () => core.shutdownCoreForTests());
 
   await prepareSourceConfig(t, {
     observerProvider: 'mock',
@@ -104,6 +105,19 @@ test('import writes an external manifest aligned to locomo sessions', async (t) 
   assert.equal(manifest.turns[2].session_id, 'locomo:sample-a:session_2');
   assert.equal(copiedConfig.observer.llm, 'test_observer_llm');
   assert.equal(copiedConfig.storage, undefined);
+
+  process.env.MUNINN_HOME = home;
+  const importedTurns = await core.sessions.list({
+    mode: { type: 'recency', limit: 10 },
+    sessionId: 'locomo:sample-a:session_1',
+    agent: 'Caroline',
+  });
+  const firstTurn = importedTurns.find((turn) => turn.turnId === manifest.turns[0].turn_id);
+  assert.ok(firstTurn);
+  assert.match(firstTurn.prompt, /DATE: 1:56 pm on 8 May, 2023/);
+  assert.match(firstTurn.prompt, /Caroline said:/);
+  assert.doesNotMatch(firstTurn.prompt, /Recorded/);
+  assert.equal(firstTurn.response, '[imported dialogue event; no assistant response]');
 });
 
 test('recall returns evidence ids without leaking benchmark artifacts into muninn rows', async (t) => {
@@ -133,7 +147,21 @@ test('recall returns evidence ids without leaking benchmark artifacts into munin
 
   assert.ok(recalled.hits[0].evidence_ids.includes('D1:1'));
   assert.match(recalled.hits[0].date_time ?? '', /1:56 pm on 8 May, 2023/);
+  assert.equal(typeof recalled.hits[0].matched_text, 'string');
+  assert.ok(recalled.hits[0].matched_text.trim());
+  assert.doesNotMatch(recalled.hits[0].matched_text, /Recorded/);
+  assert.equal(recalled.hits[0].observationRatio, 1);
+  assert.ok(recalled.hits[0].references.some((reference) => /Caroline said:/.test(reference.text)));
   assert.ok(!('source_id' in recalled.hits[0]));
+
+  const traceLines = (await readFile(path.join(home, 'locomo-gateway-trace.jsonl'), 'utf8'))
+    .trim()
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
+  assert.ok(traceLines.some((event) => Array.isArray(event.routes) && event.routes.length > 0));
+  assert.ok(traceLines.some((event) => event.routes.some((route) => route.sourceSlice)));
+  assert.ok(traceLines.some((event) => event.routes.some((route) => route.rationale)));
 });
 
 test('recursive evidence resolution can walk observing lineage back to turn ids', async () => {
@@ -167,6 +195,41 @@ test('recursive evidence resolution can walk observing lineage back to turn ids'
   assert.deepEqual(evidenceIds, ['D1:1', 'D2:1']);
 });
 
+test('withTransientRetry retries transient provider failures', async () => {
+  const bridgeModule = await import(bridgePath);
+  let attempts = 0;
+  const result = await bridgeModule.withTransientRetry(
+    async () => {
+      attempts += 1;
+      if (attempts < 2) {
+        throw new Error('semanticIndex embedding request failed with status 503');
+      }
+      return 'ok';
+    },
+    { attempts: 3, delayMs: 0, label: 'test' },
+  );
+
+  assert.equal(result, 'ok');
+  assert.equal(attempts, 2);
+});
+
+test('withTransientRetry does not retry non-transient failures', async () => {
+  const bridgeModule = await import(bridgePath);
+  let attempts = 0;
+  await assert.rejects(
+    () => bridgeModule.withTransientRetry(
+      async () => {
+        attempts += 1;
+        throw new Error('invalid query payload');
+      },
+      { attempts: 3, delayMs: 0, label: 'test' },
+    ),
+    /invalid query payload/,
+  );
+
+  assert.equal(attempts, 1);
+});
+
 test('waitForImportWatermark times out with pending turn ids when observer does not flush in time', async (t) => {
   const home = await mkdtemp(path.join(os.tmpdir(), 'muninn-locomo-watermark-timeout-'));
   t.after(async () => rm(home, { recursive: true, force: true }));
@@ -180,6 +243,7 @@ test('waitForImportWatermark times out with pending turn ids when observer does 
     semanticIndexProvider: 'mock',
   });
   await runBridge('reset-home', { 'muninn-home': home });
+  process.env.MUNINN_OBSERVER_POLL_MS = '60000';
   await runBridge('import-sample', {
     'data-file': fixturePath,
     'sample-id': 'sample-a',
@@ -187,7 +251,6 @@ test('waitForImportWatermark times out with pending turn ids when observer does 
   });
 
   process.env.MUNINN_HOME = home;
-  process.env.MUNINN_OBSERVER_POLL_MS = '60000';
   const bridgeModule = await import(bridgePath);
   const manifest = JSON.parse(await readFile(path.join(home, 'locomo-manifest.json'), 'utf8'));
 

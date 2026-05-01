@@ -6,7 +6,7 @@ import { access, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/p
 
 import core from '../dist/index.js';
 import { __testing } from '../dist/client.js';
-import { getObserverLlmConfig } from '../dist/config.js';
+import { getObserverLlmConfig, validateMuninnConfigInput } from '../dist/config.js';
 import { MuninnBackend } from '../dist/backend.js';
 import { Observer } from '../dist/observer/observer.js';
 import { EpochQueue, OpenEpoch } from '../dist/observer/epoch.js';
@@ -17,9 +17,12 @@ import { Session } from '../dist/session/session.js';
 import { Watchdog } from '../dist/watchdog.js';
 import updateModule from '../dist/observer/update.js';
 import threadModule from '../dist/observer/thread.js';
+import observingGatewayModule from '../dist/llm/observing-gateway.js';
 
 const { __testing: updateTesting } = updateModule;
-const { getPendingIndex, getPendingIndexUpTo, loadThreads } = threadModule;
+const { __testing: threadTesting } = threadModule;
+const { __testing: observingGatewayTesting } = observingGatewayModule;
+const { createObservingThread, getPendingIndex, getPendingIndexUpTo, loadThreads, toObservingSnapshot } = threadModule;
 const { addMessage, observer: observerApi, shutdownCoreForTests } = core;
 const CHECKPOINT_SCHEMA_VERSION = 3;
 
@@ -52,7 +55,7 @@ async function writeObserverConfig(configPath, { activeWindowDays = 3650, name =
         provider: 'mock',
       },
     },
-    semanticIndex: {
+    observation: {
       embedding: {
         provider: 'mock',
         dimensions: 8,
@@ -83,7 +86,7 @@ async function writeOpenAiObserverConfig(configPath) {
         apiKey: 'test-key',
       },
     },
-    semanticIndex: {
+    observation: {
       embedding: {
         provider: 'mock',
         dimensions: 8,
@@ -92,6 +95,21 @@ async function writeOpenAiObserverConfig(configPath) {
     },
   }, null, 2)}\n`, 'utf8');
 }
+
+test('config reads observation embedding config and rejects semanticIndex', async () => {
+  assert.doesNotThrow(() => validateMuninnConfigInput(JSON.stringify({
+    storage: { uri: 'file:///tmp/muninn-test' },
+    observer: { name: 'default-observer', llm: 'observer_llm' },
+    llm: { observer_llm: { provider: 'mock' } },
+    observation: { embedding: { provider: 'mock' } },
+  })));
+  assert.throws(() => validateMuninnConfigInput(JSON.stringify({
+    storage: { uri: 'file:///tmp/muninn-test' },
+    observer: { name: 'default-observer', llm: 'observer_llm' },
+    llm: { observer_llm: { provider: 'mock' } },
+    semanticIndex: { embedding: { provider: 'mock' } },
+  })), /semanticIndex/);
+});
 
 function deferred() {
   let resolve;
@@ -127,6 +145,18 @@ function makeRecentTurn(turnId, text = turnId) {
   };
 }
 
+function storedObservation(id) {
+  return {
+    id,
+    text: `${id} text`,
+    vector: [1, 0, 0, 0],
+    importance: 1,
+    category: 'fact',
+    references: ['session:1'],
+    createdAt: '2024-01-01T00:00:00Z',
+  };
+}
+
 function makePersistedTurn(turnId, text = turnId) {
   return {
     turnId,
@@ -139,6 +169,30 @@ function makePersistedTurn(turnId, text = turnId) {
     response: `${text} response`,
   };
 }
+
+test('createObservingThread preserves complete readable title and summary text', () => {
+  const title = 'Caroline LGBTQ support group impact and counseling career direction';
+  const summary = [
+    'Caroline attended an LGBTQ support group on 7 May 2023.',
+    'The group made Caroline feel accepted and gave her courage to embrace herself.',
+    'Caroline plans to continue education and explore counseling or mental health work.',
+    'Melanie believes Caroline would be a strong counselor because of Caroline\'s empathy and understanding.',
+  ].join(' ');
+
+  const thread = createObservingThread(
+    'default-observer',
+    title,
+    summary,
+    [],
+    1,
+    '2024-01-01T00:00:00Z',
+  );
+
+  assert.equal(thread.title, title);
+  assert.equal(thread.summary, summary);
+  assert.doesNotMatch(thread.title, /\.\.\.$/);
+  assert.doesNotMatch(thread.summary, /\.\.\.$/);
+});
 
 function makeRecentSessionCheckpoint(turns, sessionId = 'group-a', agent = 'agent-a') {
   return {
@@ -158,7 +212,7 @@ function makeObserverClient() {
       })),
       update: async ({ snapshots }) => snapshots,
     },
-    semanticIndexTable: {
+    observationTable: {
       delete: async () => ({ deleted: 0 }),
       loadByIds: async () => [],
       upsert: async () => undefined,
@@ -201,7 +255,7 @@ function createWatchdogConfig(overrides = {}) {
     enabled: true,
     intervalMs: 30,
     compactMinFragments: 2,
-    semanticIndex: {
+    observation: {
       targetPartitionSize: 16,
       optimizeMergeCount: 4,
     },
@@ -219,7 +273,7 @@ test.after(async () => {
   delete process.env.MUNINN_HOME;
 });
 
-test('getObserverLlmConfig defaults activeWindowDays to 7', async (t) => {
+test('getObserverLlmConfig defaults activeWindowDays to 7 and continuityHints to 1', async (t) => {
   const { dir, homeDir, configPath } = await makeConfigHome();
   t.after(async () => rm(dir, { recursive: true, force: true }));
   process.env.MUNINN_HOME = homeDir;
@@ -236,7 +290,7 @@ test('getObserverLlmConfig defaults activeWindowDays to 7', async (t) => {
         provider: 'mock',
       },
     },
-    semanticIndex: {
+    observation: {
       embedding: {
         provider: 'mock',
         dimensions: 8,
@@ -248,6 +302,7 @@ test('getObserverLlmConfig defaults activeWindowDays to 7', async (t) => {
   const config = getObserverLlmConfig();
   assert.ok(config);
   assert.equal(config.activeWindowDays, 7);
+  assert.equal(config.continuityHints, 1);
 });
 
 test('resolveNativeBindingPath points at the packaged addon', async () => {
@@ -274,7 +329,7 @@ test('watchdog.start waits for the first interval before maintenance', async (t)
       stats: async () => null,
       compact: async () => ({ changed: false }),
     },
-    semanticIndexTable: {
+    observationTable: {
       ensureVectorIndex: async () => ({ created: false }),
       stats: async () => null,
       compact: async () => ({ changed: false }),
@@ -319,7 +374,7 @@ test('watchdog compacts turn data once per observed version without logging skip
       stats: async () => null,
       compact: async () => ({ changed: false }),
     },
-    semanticIndexTable: {
+    observationTable: {
       ensureVectorIndex: async () => ({ created: false }),
       stats: async () => null,
       compact: async () => ({ changed: false }),
@@ -349,7 +404,7 @@ test('watchdog compacts turn data once per observed version without logging skip
   }]);
 });
 
-test('watchdog creates and optimizes semantic index only once for an unchanged version', async (t) => {
+test('watchdog creates and optimizes observation index only once for an unchanged version', async (t) => {
   const { dir, homeDir } = await makeConfigHome();
   t.after(async () => rm(dir, { recursive: true, force: true }));
   process.env.MUNINN_HOME = homeDir;
@@ -365,7 +420,7 @@ test('watchdog creates and optimizes semantic index only once for an unchanged v
       stats: async () => null,
       compact: async () => ({ changed: false }),
     },
-    semanticIndexTable: {
+    observationTable: {
       ensureVectorIndex: async () => {
         ensureCalls += 1;
         return { created: ensureCalls === 1 };
@@ -391,12 +446,12 @@ test('watchdog creates and optimizes semantic index only once for an unchanged v
   assert.equal(optimizeCalls, 1);
   const records = await readWatchdogLog(homeDir);
   assert.ok(records.some((record) => (
-    record.dataset === 'semanticIndex'
+    record.dataset === 'observation'
     && record.event === 'index_created'
     && record.version === 11
   )));
   assert.ok(records.some((record) => (
-    record.dataset === 'semanticIndex'
+    record.dataset === 'observation'
     && record.event === 'optimized'
     && record.details?.indexCreated === true
   )));
@@ -429,7 +484,7 @@ test('watchdog below-threshold cycles do not compact or write logs', async (t) =
       stats: async () => null,
       compact: async () => ({ changed: false }),
     },
-    semanticIndexTable: {
+    observationTable: {
       ensureVectorIndex: async () => ({ created: false }),
       stats: async () => null,
       compact: async () => ({ changed: false }),
@@ -476,7 +531,7 @@ test('watchdog logs dataset failures to file and stderr', async (t) => {
         throw new Error('observing compact failed');
       },
     },
-    semanticIndexTable: {
+    observationTable: {
       ensureVectorIndex: async () => ({ created: false }),
       stats: async () => null,
       compact: async () => ({ changed: false }),
@@ -499,7 +554,7 @@ test('watchdog logs dataset failures to file and stderr', async (t) => {
   assert.ok(errors.some((entry) => /observing maintenance failed: observing compact failed/i.test(entry)));
 });
 
-test('watchdog logs semantic optimize failures with the current stats version', async (t) => {
+test('watchdog logs observation optimize failures with the current stats version', async (t) => {
   const { dir, homeDir } = await makeConfigHome();
   t.after(async () => rm(dir, { recursive: true, force: true }));
   process.env.MUNINN_HOME = homeDir;
@@ -513,7 +568,7 @@ test('watchdog logs semantic optimize failures with the current stats version', 
       stats: async () => null,
       compact: async () => ({ changed: false }),
     },
-    semanticIndexTable: {
+    observationTable: {
       ensureVectorIndex: async () => ({ created: false }),
       stats: async () => ({
         version: 13,
@@ -522,7 +577,7 @@ test('watchdog logs semantic optimize failures with the current stats version', 
       }),
       compact: async () => ({ changed: false }),
       optimize: async () => {
-        throw new Error('semantic optimize failed');
+        throw new Error('observation optimize failed');
       },
     },
   }, createWatchdogConfig({ compactMinFragments: 3 }));
@@ -534,10 +589,10 @@ test('watchdog logs semantic optimize failures with the current stats version', 
   const records = await readWatchdogLog(homeDir);
   assert.ok(records.some((record) => (
     record.level === 'error'
-    && record.dataset === 'semanticIndex'
+    && record.dataset === 'observation'
     && record.event === 'failed'
     && record.version === 13
-    && /semantic optimize failed/i.test(String(record.details?.errorMessage))
+    && /observation optimize failed/i.test(String(record.details?.errorMessage))
   )));
 });
 
@@ -566,7 +621,7 @@ test('watchdog logs null version when stats fails before reading the current dat
       stats: async () => null,
       compact: async () => ({ changed: false }),
     },
-    semanticIndexTable: {
+    observationTable: {
       ensureVectorIndex: async () => ({ created: false }),
       stats: async () => null,
       compact: async () => ({ changed: false }),
@@ -609,7 +664,7 @@ test('watchdog writes observer checkpoint files', async (t) => {
       stats: async () => null,
       compact: async () => ({ changed: false }),
     },
-    semanticIndexTable: {
+    observationTable: {
       ensureVectorIndex: async () => ({ created: false }),
       stats: async () => null,
       compact: async () => ({ changed: false }),
@@ -621,7 +676,7 @@ test('watchdog writes observer checkpoint files', async (t) => {
         baseline: {
           turn: 10,
           observing: 21,
-          semanticIndex: 8,
+          observation: 8,
         },
         committedEpoch: 12,
         nextEpoch: 13,
@@ -653,7 +708,7 @@ test('watchdog writes observer checkpoint files', async (t) => {
     baseline: {
       turn: 10,
       observing: 21,
-      semanticIndex: 8,
+      observation: 8,
     },
     committedEpoch: 12,
     nextEpoch: 13,
@@ -683,7 +738,7 @@ test('watchdog skips checkpoint writes when contributors return no observer stat
         baseline: {
           turn: 10,
           observing: 21,
-          semanticIndex: 8,
+          observation: 8,
         },
         committedEpoch: 12,
         nextEpoch: 13,
@@ -704,7 +759,7 @@ test('watchdog skips checkpoint writes when contributors return no observer stat
       stats: async () => null,
       compact: async () => ({ changed: false }),
     },
-    semanticIndexTable: {
+    observationTable: {
       ensureVectorIndex: async () => ({ created: false }),
       stats: async () => null,
       compact: async () => ({ changed: false }),
@@ -734,7 +789,7 @@ test('watchdog skips checkpoint writes when observer content is unchanged', asyn
         baseline: {
           turn: 10,
           observing: 21,
-          semanticIndex: 8,
+          observation: 8,
         },
         committedEpoch: 12,
         nextEpoch: 13,
@@ -771,7 +826,7 @@ test('watchdog skips checkpoint writes when observer content is unchanged', asyn
       stats: async () => null,
       compact: async () => ({ changed: false }),
     },
-    semanticIndexTable: {
+    observationTable: {
       ensureVectorIndex: async () => ({ created: false }),
       stats: async () => null,
       compact: async () => ({ changed: false }),
@@ -801,7 +856,7 @@ test('watchdog rewrites checkpoint when the file is deleted after startup', asyn
         baseline: {
           turn: 10,
           observing: 21,
-          semanticIndex: 8,
+          observation: 8,
         },
         committedEpoch: 12,
         nextEpoch: 13,
@@ -837,7 +892,7 @@ test('watchdog rewrites checkpoint when the file is deleted after startup', asyn
       stats: async () => null,
       compact: async () => ({ changed: false }),
     },
-    semanticIndexTable: {
+    observationTable: {
       ensureVectorIndex: async () => ({ created: false }),
       stats: async () => null,
       compact: async () => ({ changed: false }),
@@ -886,7 +941,7 @@ test('readCheckpointFile rejects the legacy observers checkpoint schema', async 
         baseline: {
           turn: 10,
           observing: 21,
-          semanticIndex: 8,
+          observation: 8,
         },
         committedEpoch: 12,
         nextEpoch: 13,
@@ -931,7 +986,7 @@ test('watchdog rewrites checkpoint when observer content changes', async (t) => 
         baseline: {
           turn: 10,
           observing: 21,
-          semanticIndex: 8,
+          observation: 8,
         },
         committedEpoch: 11,
         nextEpoch: 12,
@@ -954,7 +1009,7 @@ test('watchdog rewrites checkpoint when observer content changes', async (t) => 
       stats: async () => null,
       compact: async () => ({ changed: false }),
     },
-    semanticIndexTable: {
+    observationTable: {
       ensureVectorIndex: async () => ({ created: false }),
       stats: async () => null,
       compact: async () => ({ changed: false }),
@@ -966,7 +1021,7 @@ test('watchdog rewrites checkpoint when observer content changes', async (t) => 
         baseline: {
           turn: 10,
           observing: 21,
-          semanticIndex: 8,
+          observation: 8,
         },
         committedEpoch: 12,
         nextEpoch: 13,
@@ -997,8 +1052,8 @@ test('getPendingIndex returns the unindexed snapshot range', () => {
     title: 'Title',
     summary: 'Summary',
     snapshots: [
-      { memories: [], openQuestions: [], nextSteps: [], memoryDelta: { before: [], after: [] } },
-      { memories: [], openQuestions: [], nextSteps: [], memoryDelta: { before: [], after: [] } },
+      { observations: [], contextRefs: [], openQuestions: [], nextSteps: [], observationDelta: { before: [], after: [] } },
+      { observations: [], contextRefs: [], openQuestions: [], nextSteps: [], observationDelta: { before: [], after: [] } },
     ],
     snapshotIds: ['snapshot-0', 'snapshot-1'],
     indexedSnapshotSequence: 0,
@@ -1020,9 +1075,9 @@ test('getPendingIndexUpTo only reports snapshots at or before the barrier epoch'
     title: 'Title',
     summary: 'Summary',
     snapshots: [
-      { memories: [], openQuestions: [], nextSteps: [], memoryDelta: { before: [], after: [] } },
-      { memories: [], openQuestions: [], nextSteps: [], memoryDelta: { before: [], after: [] } },
-      { memories: [], openQuestions: [], nextSteps: [], memoryDelta: { before: [], after: [] } },
+      { observations: [], contextRefs: [], openQuestions: [], nextSteps: [], observationDelta: { before: [], after: [] } },
+      { observations: [], contextRefs: [], openQuestions: [], nextSteps: [], observationDelta: { before: [], after: [] } },
+      { observations: [], contextRefs: [], openQuestions: [], nextSteps: [], observationDelta: { before: [], after: [] } },
     ],
     snapshotIds: ['snapshot-0', 'snapshot-1', 'snapshot-2'],
     snapshotEpochs: [6, 7, 8],
@@ -1052,10 +1107,11 @@ test('loadThreads filters snapshots by the configured active window', () => {
       title: 'Fresh thread',
       summary: 'Fresh summary',
       content: JSON.stringify({
-        memories: [],
+        observations: [],
+        contextRefs: [],
         openQuestions: [],
         nextSteps: [],
-        memoryDelta: { before: [], after: [] },
+        observationDelta: { before: [], after: [] },
       }),
       references: [],
     },
@@ -1069,10 +1125,11 @@ test('loadThreads filters snapshots by the configured active window', () => {
       title: 'Stale thread',
       summary: 'Stale summary',
       content: JSON.stringify({
-        memories: [],
+        observations: [],
+        contextRefs: [],
         openQuestions: [],
         nextSteps: [],
-        memoryDelta: { before: [], after: [] },
+        observationDelta: { before: [], after: [] },
       }),
       references: [],
     },
@@ -1097,10 +1154,11 @@ test('loadThreads keeps full history for active threads', () => {
       title: 'Thread',
       summary: 'Summary',
       content: JSON.stringify({
-        memories: [],
+        observations: [],
+        contextRefs: [],
         openQuestions: [],
         nextSteps: [],
-        memoryDelta: { before: [], after: [] },
+        observationDelta: { before: [], after: [] },
       }),
       references: [],
     },
@@ -1114,10 +1172,11 @@ test('loadThreads keeps full history for active threads', () => {
       title: 'Thread',
       summary: 'Summary',
       content: JSON.stringify({
-        memories: [],
+        observations: [],
+        contextRefs: [],
         openQuestions: [],
         nextSteps: [],
-        memoryDelta: { before: [], after: [] },
+        observationDelta: { before: [], after: [] },
       }),
       references: [],
     },
@@ -1153,7 +1212,7 @@ test('epochQueue.shift returns a published epoch without waiting', () => {
   assert.equal(queue.shift(), null);
 });
 
-test('observer.watermark stays unresolved when only semantic index work is pending', async () => {
+test('observer.watermark stays unresolved when only observation index work is pending', async () => {
   const { dir, homeDir, configPath } = await makeConfigHome();
   process.env.MUNINN_HOME = homeDir;
   await writeObserverConfig(configPath);
@@ -1170,8 +1229,8 @@ test('observer.watermark stays unresolved when only semantic index work is pendi
       title: 'Title',
       summary: 'Summary',
       snapshots: [
-        { memories: [], openQuestions: [], nextSteps: [], memoryDelta: { before: [], after: [] } },
-        { memories: [], openQuestions: [], nextSteps: [], memoryDelta: { before: [], after: [] } },
+        { observations: [], contextRefs: [], openQuestions: [], nextSteps: [], observationDelta: { before: [], after: [] } },
+        { observations: [], contextRefs: [], openQuestions: [], nextSteps: [], observationDelta: { before: [], after: [] } },
       ],
       references: [],
       indexedSnapshotSequence: 0,
@@ -1210,7 +1269,7 @@ test('observer checkpoint export omits threads outside the active window', async
       observingEpoch: 1,
       title: 'Fresh',
       summary: 'Fresh',
-      snapshots: [{ memories: [], openQuestions: [], nextSteps: [], memoryDelta: { before: [], after: [] } }],
+      snapshots: [{ observations: [], contextRefs: [], openQuestions: [], nextSteps: [], observationDelta: { before: [], after: [] } }],
       references: [],
       indexedSnapshotSequence: 0,
       observer: 'default-observer',
@@ -1224,7 +1283,7 @@ test('observer checkpoint export omits threads outside the active window', async
       observingEpoch: 1,
       title: 'Stale',
       summary: 'Stale',
-      snapshots: [{ memories: [], openQuestions: [], nextSteps: [], memoryDelta: { before: [], after: [] } }],
+      snapshots: [{ observations: [], contextRefs: [], openQuestions: [], nextSteps: [], observationDelta: { before: [], after: [] } }],
       references: [],
       indexedSnapshotSequence: 0,
       observer: 'default-observer',
@@ -1274,10 +1333,11 @@ test('observer bootstrap without checkpoint derives committedEpoch from observin
       title: 'Thread',
       summary: 'Summary',
       content: JSON.stringify({
-        memories: [],
+        observations: [],
+        contextRefs: [],
         openQuestions: [],
         nextSteps: [],
-        memoryDelta: { before: [], after: [] },
+        observationDelta: { before: [], after: [] },
       }),
       references: ['turn-13'],
     },
@@ -1291,10 +1351,11 @@ test('observer bootstrap without checkpoint derives committedEpoch from observin
       title: 'Thread',
       summary: 'Summary',
       content: JSON.stringify({
-        memories: [],
+        observations: [],
+        contextRefs: [],
         openQuestions: [],
         nextSteps: [],
-        memoryDelta: { before: [], after: [] },
+        observationDelta: { before: [], after: [] },
       }),
       references: ['turn-13', 'turn-14'],
     },
@@ -1310,7 +1371,7 @@ test('observer bootstrap without checkpoint derives committedEpoch from observin
       listSnapshots: async () => rows,
       threadSnapshots: async () => rows,
     },
-    semanticIndexTable: {},
+    observationTable: {},
   });
   t.after(async () => observer.shutdown());
 
@@ -1338,7 +1399,7 @@ test('observer bootstrap publishes pending turns by their observingEpoch', async
     observingTable: {
       listSnapshots: async () => [],
     },
-    semanticIndexTable: {},
+    observationTable: {},
   });
   t.after(async () => observer.shutdown());
 
@@ -1373,7 +1434,7 @@ test('observer bootstrap restores committed state from checkpoint when baselines
         baseline: {
           turn: 10,
           observing: 21,
-          semanticIndex: 8,
+          observation: 8,
         },
         committedEpoch: 12,
         nextEpoch: 13,
@@ -1427,10 +1488,11 @@ test('observer bootstrap restores committed state from checkpoint when baselines
             title: 'Thread',
             summary: 'Summary',
             content: JSON.stringify({
-              memories: [],
+              observations: [],
+              contextRefs: [],
               openQuestions: [],
               nextSteps: [],
-              memoryDelta: { before: [], after: [] },
+              observationDelta: { before: [], after: [] },
             }),
             references: [],
           },
@@ -1444,17 +1506,18 @@ test('observer bootstrap restores committed state from checkpoint when baselines
             title: 'Thread',
             summary: 'Summary',
             content: JSON.stringify({
-              memories: [],
+              observations: [],
+              contextRefs: [],
               openQuestions: [],
               nextSteps: [],
-              memoryDelta: { before: [], after: [] },
+              observationDelta: { before: [], after: [] },
             }),
             references: [],
           },
         ];
       },
     },
-    semanticIndexTable: {
+    observationTable: {
       stats: async () => ({
         version: 8,
         fragmentCount: 1,
@@ -1498,7 +1561,7 @@ test('observer checkpoint restore keeps full history for active threads', async 
         baseline: {
           turn: 10,
           observing: 21,
-          semanticIndex: 8,
+          observation: 8,
         },
         committedEpoch: 12,
         nextEpoch: 13,
@@ -1544,10 +1607,11 @@ test('observer checkpoint restore keeps full history for active threads', async 
             title: 'Thread',
             summary: 'Summary',
             content: JSON.stringify({
-              memories: [],
+              observations: [],
+              contextRefs: [],
               openQuestions: [],
               nextSteps: [],
-              memoryDelta: { before: [], after: [] },
+              observationDelta: { before: [], after: [] },
             }),
             references: [],
           },
@@ -1561,17 +1625,18 @@ test('observer checkpoint restore keeps full history for active threads', async 
             title: 'Thread',
             summary: 'Summary',
             content: JSON.stringify({
-              memories: [],
+              observations: [],
+              contextRefs: [],
               openQuestions: [],
               nextSteps: [],
-              memoryDelta: { before: [], after: [] },
+              observationDelta: { before: [], after: [] },
             }),
             references: [],
           },
         ];
       },
     },
-    semanticIndexTable: {
+    observationTable: {
       stats: async () => ({
         version: 8,
         fragmentCount: 1,
@@ -1607,7 +1672,7 @@ test('observer restoreCheckpointState advances committedEpoch and excludes obser
         baseline: {
           turn: 10,
           observing: 21,
-          semanticIndex: 8,
+          observation: 8,
         },
         committedEpoch: 12,
         nextEpoch: 13,
@@ -1642,10 +1707,11 @@ test('observer restoreCheckpointState advances committedEpoch and excludes obser
           title: 'Thread',
           summary: 'Summary',
           content: JSON.stringify({
-            memories: [],
+            observations: [],
+            contextRefs: [],
             openQuestions: [],
             nextSteps: [],
-            memoryDelta: { before: [], after: [] },
+            observationDelta: { before: [], after: [] },
           }),
           references: ['turn-13'],
         },
@@ -1659,10 +1725,11 @@ test('observer restoreCheckpointState advances committedEpoch and excludes obser
           title: 'Thread',
           summary: 'Summary',
           content: JSON.stringify({
-            memories: [],
+            observations: [],
+            contextRefs: [],
             openQuestions: [],
             nextSteps: [],
-            memoryDelta: { before: [], after: [] },
+            observationDelta: { before: [], after: [] },
           }),
           references: ['turn-13', 'turn-14'],
         },
@@ -1678,10 +1745,11 @@ test('observer restoreCheckpointState advances committedEpoch and excludes obser
           title: 'Thread',
           summary: 'Summary',
           content: JSON.stringify({
-            memories: [],
+            observations: [],
+            contextRefs: [],
             openQuestions: [],
             nextSteps: [],
-            memoryDelta: { before: [], after: [] },
+            observationDelta: { before: [], after: [] },
           }),
           references: [],
         },
@@ -1695,10 +1763,11 @@ test('observer restoreCheckpointState advances committedEpoch and excludes obser
           title: 'Thread',
           summary: 'Summary',
           content: JSON.stringify({
-            memories: [],
+            observations: [],
+            contextRefs: [],
             openQuestions: [],
             nextSteps: [],
-            memoryDelta: { before: [], after: [] },
+            observationDelta: { before: [], after: [] },
           }),
           references: ['turn-13'],
         },
@@ -1712,16 +1781,17 @@ test('observer restoreCheckpointState advances committedEpoch and excludes obser
           title: 'Thread',
           summary: 'Summary',
           content: JSON.stringify({
-            memories: [],
+            observations: [],
+            contextRefs: [],
             openQuestions: [],
             nextSteps: [],
-            memoryDelta: { before: [], after: [] },
+            observationDelta: { before: [], after: [] },
           }),
           references: ['turn-13', 'turn-14'],
         },
       ],
     },
-    semanticIndexTable: {},
+    observationTable: {},
   }, checkpoint);
   t.after(async () => observer.shutdown());
 
@@ -1748,7 +1818,7 @@ test('observer restoreCheckpointState falls back when observing delta refs are m
         baseline: {
           turn: 10,
           observing: 21,
-          semanticIndex: 8,
+          observation: 8,
         },
         committedEpoch: 12,
         nextEpoch: 13,
@@ -1780,10 +1850,11 @@ test('observer restoreCheckpointState falls back when observing delta refs are m
           title: 'Thread',
           summary: 'Summary',
           content: JSON.stringify({
-            memories: [],
+            observations: [],
+            contextRefs: [],
             openQuestions: [],
             nextSteps: [],
-            memoryDelta: { before: [], after: [] },
+            observationDelta: { before: [], after: [] },
           }),
           references: ['missing-turn'],
         },
@@ -1799,16 +1870,17 @@ test('observer restoreCheckpointState falls back when observing delta refs are m
           title: 'Thread',
           summary: 'Summary',
           content: JSON.stringify({
-            memories: [],
+            observations: [],
+            contextRefs: [],
             openQuestions: [],
             nextSteps: [],
-            memoryDelta: { before: [], after: [] },
+            observationDelta: { before: [], after: [] },
           }),
           references: [],
         },
       ],
     },
-    semanticIndexTable: {},
+    observationTable: {},
   }, checkpoint);
   t.after(async () => observer.shutdown());
 
@@ -1833,7 +1905,7 @@ test('observer restoreCheckpointState skips stale threads recovered only from ob
         baseline: {
           turn: 10,
           observing: 21,
-          semanticIndex: 8,
+          observation: 8,
         },
         committedEpoch: 12,
         nextEpoch: 13,
@@ -1853,10 +1925,11 @@ test('observer restoreCheckpointState skips stale threads recovered only from ob
     title: 'Stale Thread',
     summary: 'Summary',
     content: JSON.stringify({
-      memories: [],
+      observations: [],
+      contextRefs: [],
       openQuestions: [],
       nextSteps: [],
-      memoryDelta: { before: [], after: [] },
+      observationDelta: { before: [], after: [] },
     }),
     references: ['turn-13'],
   };
@@ -1868,7 +1941,7 @@ test('observer restoreCheckpointState skips stale threads recovered only from ob
       delta: async () => [staleRow],
       threadSnapshots: async () => [staleRow],
     },
-    semanticIndexTable: {},
+    observationTable: {},
   }, checkpoint);
   t.after(async () => observer.shutdown());
 
@@ -1895,7 +1968,7 @@ test('observer restoreCheckpointState rebuilds delta-only threads from full hist
         baseline: {
           turn: 10,
           observing: 21,
-          semanticIndex: 8,
+          observation: 8,
         },
         committedEpoch: 5,
         nextEpoch: 6,
@@ -1915,10 +1988,11 @@ test('observer restoreCheckpointState rebuilds delta-only threads from full hist
     title: 'Legacy Thread',
     summary: `Summary ${index}`,
     content: JSON.stringify({
-      memories: [],
+      observations: [],
+      contextRefs: [],
       openQuestions: [],
       nextSteps: [],
-      memoryDelta: { before: [], after: [] },
+      observationDelta: { before: [], after: [] },
     }),
     references: Array.from({ length: index + 1 }, (_, turnIndex) => `turn-${turnIndex + 1}`),
   }));
@@ -1939,7 +2013,7 @@ test('observer restoreCheckpointState rebuilds delta-only threads from full hist
       delta: async () => [fullRows[6], fullRows[7]],
       threadSnapshots: async () => fullRows,
     },
-    semanticIndexTable: {},
+    observationTable: {},
   }, checkpoint);
   t.after(async () => observer.shutdown());
 
@@ -1969,7 +2043,7 @@ test('observer bootstrap skips stale checkpoint threads', async (t) => {
         baseline: {
           turn: 10,
           observing: 21,
-          semanticIndex: 8,
+          observation: 8,
         },
         committedEpoch: 12,
         nextEpoch: 13,
@@ -2006,7 +2080,7 @@ test('observer bootstrap skips stale checkpoint threads', async (t) => {
         throw new Error('stale checkpoint thread should not be loaded');
       },
     },
-    semanticIndexTable: {
+    observationTable: {
       stats: async () => ({
         version: 8,
         fragmentCount: 1,
@@ -2044,7 +2118,7 @@ test('observer exportCheckpoint keeps the last committed snapshot while observeC
         rowCount: 2,
       }),
     },
-    semanticIndexTable: {
+    observationTable: {
       stats: async () => ({
         version: 7,
         fragmentCount: 1,
@@ -2065,7 +2139,7 @@ test('observer exportCheckpoint keeps the last committed snapshot while observeC
     title: 'Existing title',
     summary: 'Existing summary',
     snapshots: [
-      { memories: [], openQuestions: [], nextSteps: [], memoryDelta: { before: [], after: [] } },
+      { observations: [], contextRefs: [], openQuestions: [], nextSteps: [], observationDelta: { before: [], after: [] } },
     ],
     references: ['session:existing'],
     indexedSnapshotSequence: 0,
@@ -2116,7 +2190,7 @@ test('observer exportCheckpoint keeps the last committed snapshot while observeC
   })));
 });
 
-test('observer bootstrap ignores semanticIndex version mismatches when observing baseline matches', async (t) => {
+test('observer bootstrap ignores observation version mismatches when observing baseline matches', async (t) => {
   const { dir, homeDir, configPath } = await makeConfigHome();
   t.after(async () => rm(dir, { recursive: true, force: true }));
   process.env.MUNINN_HOME = homeDir;
@@ -2131,7 +2205,7 @@ test('observer bootstrap ignores semanticIndex version mismatches when observing
         baseline: {
           turn: 10,
           observing: 21,
-          semanticIndex: 8,
+          observation: 8,
         },
         committedEpoch: 12,
         nextEpoch: 13,
@@ -2179,10 +2253,11 @@ test('observer bootstrap ignores semanticIndex version mismatches when observing
           title: 'Thread',
           summary: 'Summary',
           content: JSON.stringify({
-            memories: [],
+            observations: [],
+            contextRefs: [],
             openQuestions: [],
             nextSteps: [],
-            memoryDelta: { before: [], after: [] },
+            observationDelta: { before: [], after: [] },
           }),
           references: [],
         },
@@ -2196,16 +2271,17 @@ test('observer bootstrap ignores semanticIndex version mismatches when observing
           title: 'Thread',
           summary: 'Summary',
           content: JSON.stringify({
-            memories: [],
+            observations: [],
+            contextRefs: [],
             openQuestions: [],
             nextSteps: [],
-            memoryDelta: { before: [], after: [] },
+            observationDelta: { before: [], after: [] },
           }),
           references: [],
         },
       ],
     },
-    semanticIndexTable: {
+    observationTable: {
       stats: async () => ({
         version: 99,
         fragmentCount: 1,
@@ -2236,7 +2312,7 @@ test('readCheckpointFile throws when the checkpoint section is structurally inva
         baseline: {
           turn: 10,
           observing: 21,
-          semanticIndex: 8,
+          observation: 8,
         },
         committedEpoch: 12,
         nextEpoch: 13,
@@ -2293,7 +2369,7 @@ test('backend exportCheckpoint returns null before observer creation', async () 
         baseline: {
           turn: 10,
           observing: 21,
-          semanticIndex: 8,
+          observation: 8,
         },
         committedEpoch: 12,
         nextEpoch: 13,
@@ -2589,7 +2665,7 @@ test('observer.observeCurrentEpoch keeps thread state unchanged when pre-commit 
       title: 'Existing title',
       summary: 'Existing summary',
       snapshots: [
-        { memories: [], openQuestions: [], nextSteps: [], memoryDelta: { before: [], after: [] } },
+        { observations: [], contextRefs: [], openQuestions: [], nextSteps: [], observationDelta: { before: [], after: [] } },
       ],
       references: ['session:existing'],
       indexedSnapshotSequence: 0,
@@ -2612,7 +2688,93 @@ test('observer.observeCurrentEpoch keeps thread state unchanged when pre-commit 
   }
 });
 
-test('buildSemanticIndex surfaces semantic write failures and leaves work pending', async (t) => {
+test('snapshot observation delta writes observation rows with snapshot references', async (t) => {
+  const { dir, homeDir, configPath } = await makeConfigHome();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+
+  process.env.MUNINN_HOME = homeDir;
+  await writeObserverConfig(configPath);
+
+  const { applyObservationTableDelta } = await import('../dist/observer/memory-delta.js');
+  const rows = [];
+  const client = {
+    observationTable: {
+      loadByIds: async () => [],
+      delete: async () => ({ deleted: 0 }),
+      upsert: async ({ rows: next }) => rows.push(...next),
+    },
+  };
+  await applyObservationTableDelta(client, {
+    observations: [],
+    contextRefs: [],
+    observationDelta: {
+      before: [],
+      after: [{ id: 'thread-obs-1', text: 'Caroline has an ongoing support group thread.', category: 'Fact' }],
+    },
+  }, 'observing:12');
+  assert.equal(rows[0].id, 'thread-obs-1');
+  assert.deepEqual(rows[0].references, ['observing:12']);
+});
+
+test('observation extraction validation rejects invalid category', async () => {
+  const { __testing: extractionTesting } = await import('../dist/observer/observation-extraction.js');
+  assert.throws(
+    () => extractionTesting.validateExtraction({
+      observations: [{ text: 'Caroline joined a support group.', category: 'Goal', references: ['session:1'] }],
+    }),
+    /invalid observation category/i,
+  );
+});
+
+test('observation extraction validation rejects empty text', async () => {
+  const { __testing: extractionTesting } = await import('../dist/observer/observation-extraction.js');
+  assert.throws(
+    () => extractionTesting.validateExtraction({
+      observations: [{ text: ' ', category: 'Fact', references: ['session:1'] }],
+    }),
+    /text must be a non-empty string/i,
+  );
+});
+
+test('observation extraction validation rejects missing references', async () => {
+  const { __testing: extractionTesting } = await import('../dist/observer/observation-extraction.js');
+  assert.throws(
+    () => extractionTesting.validateExtraction({
+      observations: [{ text: 'Caroline joined a support group.', category: 'Fact', references: [] }],
+    }),
+    /references must include at least one reference/i,
+  );
+});
+
+test('observation review validation requires every new observation to be reviewed', async () => {
+  const { __testing: reviewTesting } = await import('../dist/observer/observation-review.js');
+  assert.throws(
+    () => reviewTesting.validateReview({
+      newObservations: [storedObservation('obs-1')],
+      candidateObservations: [],
+    }, {
+      removeObservationIds: [],
+      reviewedObservationIds: [],
+    }),
+    /not reviewed/i,
+  );
+});
+
+test('observation review validation rejects unknown removals', async () => {
+  const { __testing: reviewTesting } = await import('../dist/observer/observation-review.js');
+  assert.throws(
+    () => reviewTesting.validateReview({
+      newObservations: [storedObservation('obs-1')],
+      candidateObservations: [],
+    }, {
+      removeObservationIds: ['obs-missing'],
+      reviewedObservationIds: ['obs-1'],
+    }),
+    /unknown observation id/i,
+  );
+});
+
+test('buildObservation surfaces observation write failures and leaves work pending', async (t) => {
   const { dir, homeDir, configPath } = await makeConfigHome();
   t.after(async () => rm(dir, { recursive: true, force: true }));
 
@@ -2629,16 +2791,18 @@ test('buildSemanticIndex surfaces semantic write failures and leaves work pendin
       summary: 'Summary',
       snapshots: [
         {
-          memories: [],
+          observations: [],
+          contextRefs: [],
           openQuestions: [],
           nextSteps: [],
-          memoryDelta: { before: [], after: [] },
+          observationDelta: { before: [], after: [] },
         },
         {
-          memories: [],
+          observations: [],
+          contextRefs: [],
           openQuestions: [],
           nextSteps: [],
-          memoryDelta: {
+          observationDelta: {
             before: [],
             after: [{ id: 'memory-1', text: 'remember this', category: 'Fact', updatedMemory: null }],
           },
@@ -2654,27 +2818,494 @@ test('buildSemanticIndex surfaces semantic write failures and leaves work pendin
   let semanticUpserts = 0;
 
   await assert.rejects(
-    () => updateTesting.buildSemanticIndex({
+    () => updateTesting.buildObservation({
       observingTable: {
         update: async ({ snapshots }) => snapshots,
       },
-      semanticIndexTable: {
+      observationTable: {
         delete: async () => ({ deleted: 0 }),
         loadByIds: async () => [],
         upsert: async () => {
           semanticUpserts += 1;
-          throw new Error('semantic write failed');
+          throw new Error('observation write failed');
         },
       },
     }, threads),
-    /semantic write failed/,
+    /observation write failed/,
   );
 
   assert.equal(semanticUpserts, 1);
   assert.deepEqual(getPendingIndex(threads[0]), { start: 1, end: 1 });
 });
 
-test('buildTouchedIndex immediately advances semantic index for touched threads', async (t) => {
+test('gateway validation accepts source slice routes', () => {
+  const result = observingGatewayTesting.validateGatewayResultForTests(
+    [{ threadId: 'thread-1', title: 'Caroline counseling and mental-health career plans' }],
+    [{ turnId: 'session:1', text: 'Caroline mentions career plans.' }],
+    {
+      routes: [{
+        turnId: 'session:1',
+        targetThreadId: 'thread-1',
+        sourceSlice: 'Caroline mentions career plans.',
+        rationale: 'The slice continues the existing career planning thread.',
+      }],
+    },
+  );
+
+  assert.deepEqual(result.routes, [{
+    turnId: 'session:1',
+    targetThreadId: 'thread-1',
+    sourceSlice: 'Caroline mentions career plans.',
+    rationale: 'The slice continues the existing career planning thread.',
+  }]);
+});
+
+test('gateway validation accepts new source slice routes with concrete titles', () => {
+  const result = observingGatewayTesting.validateGatewayResultForTests(
+    [],
+    [{ turnId: 'session:12', text: 'Melanie shares a lake painting.' }],
+    {
+      routes: [{
+        turnId: 'session:12',
+        targetThreadId: null,
+        newThreadTitle: 'Melanie lake sunrise painting and creative outlet',
+        sourceSlice: 'Melanie shares a lake painting.',
+        rationale: 'The slice introduces a separate painting topic.',
+      }],
+    },
+  );
+
+  assert.deepEqual(result.routes, [{
+    turnId: 'session:12',
+    targetThreadId: null,
+    newThreadTitle: 'Melanie lake sunrise painting and creative outlet',
+    sourceSlice: 'Melanie shares a lake painting.',
+    rationale: 'The slice introduces a separate painting topic.',
+  }]);
+});
+
+test('gateway validation rejects routes without rationale', () => {
+  assert.throws(
+    () => observingGatewayTesting.validateGatewayResultForTests(
+      [{ threadId: 'thread-1', title: 'Caroline counseling and mental-health career plans' }],
+      [{ turnId: 'session:1', text: 'Caroline mentions career plans.' }],
+      {
+        routes: [{
+          turnId: 'session:1',
+          targetThreadId: 'thread-1',
+          sourceSlice: 'Caroline mentions career plans.',
+        }],
+      },
+    ),
+    /empty rationale/i,
+  );
+});
+
+test('gateway validation rejects existing-thread routes that also set newThreadTitle', () => {
+  assert.throws(
+    () => observingGatewayTesting.validateGatewayResultForTests(
+      [{ threadId: 'thread-1', title: 'Caroline counseling and mental-health career plans' }],
+      [{ turnId: 'session:1', text: 'Caroline mentions career plans.' }],
+      {
+        routes: [{
+          turnId: 'session:1',
+          targetThreadId: 'thread-1',
+          newThreadTitle: 'Unexpected replacement title',
+          sourceSlice: 'Caroline mentions career plans.',
+          rationale: 'The slice continues the existing career planning thread.',
+        }],
+      },
+    ),
+    /invalid targetThreadId/i,
+  );
+});
+
+test('observer validation keeps valid context refs', () => {
+  const result = observingGatewayTesting.validateObserveResultForTests({
+    observingContentUpdate: {
+      title: 'Painting',
+      summary: 'Melanie painted a lake sunrise.',
+      openQuestions: [],
+      nextSteps: [],
+    },
+    contextRefs: [{
+      turnId: 'session:13',
+      summary: 'Melanie says she painted the lake sunrise in 2022, described as last year relative to 8 May 2023.',
+    }],
+    observationDelta: {
+      before: [],
+      after: [{
+        text: 'Melanie painted the lake sunrise painting in 2022.',
+        category: 'Fact',
+        updatedMemory: null,
+      }],
+    },
+  });
+
+  assert.deepEqual(result.contextRefs, [{
+    turnId: 'session:13',
+    summary: 'Melanie says she painted the lake sunrise in 2022, described as last year relative to 8 May 2023.',
+  }]);
+});
+
+test('observing snapshots keep complete cumulative context refs', () => {
+  const thread = createObservingThread(
+    'default-observer',
+    'Career',
+    'Career thread',
+    [],
+    1,
+    '2026-01-01T00:00:00.000Z',
+  );
+  const result = (summary, turnId) => ({
+    observingContentUpdate: {
+      title: 'Career',
+      summary,
+      openQuestions: [],
+      nextSteps: [],
+    },
+    contextRefs: [{ turnId, summary }],
+    observationDelta: {
+      before: [],
+      after: [{ text: summary, category: 'Fact', updatedMemory: null }],
+    },
+  });
+
+  for (let index = 1; index <= 10; index += 1) {
+    threadTesting.applyObserveResultForTests(
+      thread,
+      result(`slice ${index}`, `session:${index}`),
+      index,
+      (current, observeResult) => ({
+        observations: [
+          ...current,
+          ...observeResult.observationDelta.after.map((observation) => ({
+            ...observation,
+            id: observation.id ?? `observation-${index}`,
+          })),
+        ],
+        observationDelta: observeResult.observationDelta,
+      }),
+      '2026-01-01T00:00:00.000Z',
+    );
+  }
+
+  const latest = thread.snapshots[thread.snapshots.length - 1];
+  assert.deepEqual(latest.contextRefs.map((reference) => reference.turnId), [
+    'session:1',
+    'session:2',
+    'session:3',
+    'session:4',
+    'session:5',
+    'session:6',
+    'session:7',
+    'session:8',
+    'session:9',
+    'session:10',
+  ]);
+  assert.deepEqual(thread.references, [
+    'session:1',
+    'session:2',
+    'session:3',
+    'session:4',
+    'session:5',
+    'session:6',
+    'session:7',
+    'session:8',
+    'session:9',
+    'session:10',
+  ]);
+  assert.deepEqual(toObservingSnapshot(thread).references, thread.references);
+});
+
+test('observing context refs update duplicate turn summaries without duplicates', () => {
+  const thread = createObservingThread(
+    'default-observer',
+    'Career',
+    'Career thread',
+    [],
+    1,
+    '2026-01-01T00:00:00.000Z',
+  );
+  const observeResult = (summary) => ({
+    observingContentUpdate: {
+      title: 'Career',
+      summary,
+      openQuestions: [],
+      nextSteps: [],
+    },
+    contextRefs: [{ turnId: 'session:1', summary }],
+    observationDelta: { before: [], after: [] },
+  });
+
+  threadTesting.applyObserveResultForTests(
+    thread,
+    observeResult('initial summary'),
+    1,
+    (observations, result) => ({
+      observations,
+      observationDelta: result.observationDelta,
+    }),
+    '2026-01-01T00:00:00.000Z',
+  );
+  threadTesting.applyObserveResultForTests(
+    thread,
+    observeResult('updated summary'),
+    2,
+    (observations, result) => ({
+      observations,
+      observationDelta: result.observationDelta,
+    }),
+    '2026-01-01T00:00:01.000Z',
+  );
+
+  assert.deepEqual(thread.snapshots.at(-1).contextRefs, [{
+    turnId: 'session:1',
+    summary: 'updated summary',
+  }]);
+  assert.deepEqual(thread.references, ['session:1']);
+});
+
+test('applyGatewayUpdates passes raw prompt response and source slice to observer', async () => {
+  const now = '2026-01-01T00:00:00.000Z';
+  const thread = createObservingThread('default-observer', 'Painting', 'Painting thread', [], 1, now);
+  const observedInputs = [];
+  const observeThreadImpl = async (input) => {
+    observedInputs.push(input);
+    return {
+      observingContentUpdate: {
+        title: 'Painting',
+        summary: 'Melanie painted a lake sunrise in 2022.',
+        openQuestions: [],
+        nextSteps: [],
+      },
+      contextRefs: [{
+        turnId: 'session:13',
+        summary: 'Melanie says she painted the lake sunrise in 2022, described as last year relative to 8 May 2023.',
+      }],
+      observationDelta: {
+        before: [],
+        after: [{
+          text: 'Melanie painted the lake sunrise painting in 2022.',
+          category: 'Fact',
+          updatedMemory: null,
+        }],
+      },
+    };
+  };
+
+  await updateTesting.applyGatewayUpdatesForTests({
+    threads: [thread],
+    observerName: 'default-observer',
+    pendingTurns: [{
+      turnId: 'session:13',
+      createdAt: now,
+      updatedAt: now,
+      sessionId: 'locomo',
+      agent: 'Melanie',
+      observer: 'default-observer',
+      title: null,
+      summary: 'DATE: 1:56 pm on 8 May, 2023\nDIALOGUE:\nMelanie said: "Yeah, I painted that lake sunrise last year!"',
+      prompt: 'DATE: 1:56 pm on 8 May, 2023\nDIALOGUE:\nMelanie said: "Yeah, I painted that lake sunrise last year!"',
+      response: '[imported dialogue event; no assistant response]',
+      observingEpoch: 2,
+    }],
+    observingEpoch: 2,
+    updates: [{
+      turnId: 'session:13',
+      targetThreadId: thread.observingId,
+      sourceSlice: 'Melanie said: "Yeah, I painted that lake sunrise last year!"',
+      rationale: 'The slice continues the painting thread.',
+    }],
+    observeThreadImpl,
+  });
+
+  assert.deepEqual(observedInputs[0].pendingTurns, [{
+    turnId: 'session:13',
+    sourceSlice: 'Melanie said: "Yeah, I painted that lake sunrise last year!"',
+    prompt: 'DATE: 1:56 pm on 8 May, 2023\nDIALOGUE:\nMelanie said: "Yeah, I painted that lake sunrise last year!"',
+    response: '[imported dialogue event; no assistant response]',
+  }]);
+  assert.equal('rationale' in observedInputs[0].pendingTurns[0], false);
+  assert.deepEqual(thread.snapshots.at(-1).contextRefs, [{
+    turnId: 'session:13',
+    summary: 'Melanie says she painted the lake sunrise in 2022, described as last year relative to 8 May 2023.',
+  }]);
+});
+
+test('gateway input includes latest continuity hints and transient previous turn context', () => {
+  const thread = createObservingThread(
+    'default-observer',
+    'Career',
+    'Career thread',
+    [],
+    1,
+    '2026-01-01T00:00:00.000Z',
+  );
+  thread.snapshots.push({
+    observations: [],
+    contextRefs: [
+      { turnId: 'session:10', summary: 'Caroline attended a LGBTQ support group.' },
+      { turnId: 'session:11', summary: 'Caroline is considering counseling work.' },
+      { turnId: 'session:12', summary: 'Melanie encouraged Caroline to pursue counseling.' },
+    ],
+    openQuestions: [],
+    nextSteps: [],
+    observationDelta: { before: [], after: [] },
+  });
+
+  const input = updateTesting.activeGatewayInputsForTests([thread], 'default-observer', 365, 2);
+  assert.deepEqual(input[0].continuityHints, [
+    'Caroline is considering counseling work.',
+    'Melanie encouraged Caroline to pursue counseling.',
+  ]);
+
+  const turns = observingGatewayTesting.gatewayTurnsForTests([{
+    turnId: 'session:12',
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+    sessionId: 'locomo',
+    agent: 'Melanie',
+    observer: 'default-observer',
+    summary: 'Melanie encouraged Caroline.',
+    prompt: 'Melanie encouraged Caroline.',
+    response: 'placeholder',
+    observingEpoch: 2,
+    previousTurnSummary: 'Caroline said she is keen on counseling or mental health.',
+  }]);
+  assert.deepEqual(turns[0], {
+    turnId: 'session:12',
+    text: 'Melanie encouraged Caroline.',
+    previousTurn: 'Caroline said she is keen on counseling or mental health.',
+  });
+});
+
+test('gateway input omits empty continuity hints', () => {
+  const thread = createObservingThread(
+    'default-observer',
+    'Career',
+    'Career thread',
+    [],
+    1,
+    '2026-01-01T00:00:00.000Z',
+  );
+  thread.snapshots.push({
+    observations: [],
+    contextRefs: [],
+    openQuestions: [],
+    nextSteps: [],
+    observationDelta: { before: [], after: [] },
+  });
+
+  const input = updateTesting.activeGatewayInputsForTests([thread], 'default-observer', 365, 3);
+  assert.equal('continuityHints' in input[0], false);
+});
+
+test('routed turns without observer context refs are not persisted as references', async () => {
+  const now = '2026-01-01T00:00:00.000Z';
+  const thread = createObservingThread('default-observer', 'Career', 'Career thread', [], 1, now);
+  const observeThreadImpl = async () => ({
+    observingContentUpdate: {
+      title: 'Career',
+      summary: 'Career thread',
+      openQuestions: [],
+      nextSteps: [],
+    },
+    contextRefs: [],
+    observationDelta: { before: [], after: [] },
+  });
+
+  await updateTesting.applyGatewayUpdatesForTests({
+    threads: [thread],
+    observerName: 'default-observer',
+    pendingTurns: [{
+      turnId: 'session:99',
+      createdAt: now,
+      updatedAt: now,
+      sessionId: 'locomo',
+      agent: 'Melanie',
+      observer: 'default-observer',
+      title: null,
+      summary: 'A routed but ultimately irrelevant turn.',
+      prompt: 'A routed but ultimately irrelevant turn.',
+      response: null,
+      observingEpoch: 2,
+    }],
+    observingEpoch: 2,
+    updates: [{
+      turnId: 'session:99',
+      targetThreadId: thread.observingId,
+      sourceSlice: 'A routed but ultimately irrelevant turn.',
+      rationale: 'The route lets the observer inspect the existing career thread.',
+    }],
+    observeThreadImpl,
+  });
+
+  assert.deepEqual(thread.snapshots.at(-1).contextRefs, []);
+  assert.deepEqual(thread.references, []);
+});
+
+test('new source slice route creates an independent observing thread', async () => {
+  const now = '2026-01-01T00:00:00.000Z';
+  const threads = [];
+  const observedInputs = [];
+  const observeThreadImpl = async (input) => {
+    observedInputs.push(input);
+    return {
+      observingContentUpdate: {
+        title: 'Melanie lake sunrise painting and creative outlet',
+        summary: 'Melanie discusses her lake sunrise painting and painting as a creative outlet.',
+        openQuestions: [],
+        nextSteps: [],
+      },
+      contextRefs: [{
+        turnId: 'session:12',
+        summary: 'Melanie shared a photo of a lake painting.',
+      }],
+      observationDelta: {
+        before: [],
+        after: [{
+          text: 'Melanie shared a lake painting during the check-in.',
+          category: 'Fact',
+          updatedMemory: null,
+        }],
+      },
+    };
+  };
+
+  await updateTesting.applyGatewayUpdatesForTests({
+    threads,
+    observerName: 'default-observer',
+    pendingTurns: [{
+      turnId: 'session:12',
+      createdAt: now,
+      updatedAt: now,
+      sessionId: 'locomo',
+      agent: 'Melanie',
+      observer: 'default-observer',
+      title: null,
+      summary: 'Melanie encouraged Caroline and shared a lake painting.',
+      prompt: 'Melanie said: "You would be a great counselor. By the way, take a look at this painting."',
+      response: null,
+      observingEpoch: 2,
+    }],
+    observingEpoch: 2,
+    updates: [{
+      turnId: 'session:12',
+      targetThreadId: null,
+      newThreadTitle: 'Melanie lake sunrise painting and creative outlet',
+      sourceSlice: 'By the way, take a look at this painting.',
+      rationale: 'The slice introduces a separate painting topic.',
+    }],
+    observeThreadImpl,
+  });
+
+  assert.equal(threads.length, 1);
+  assert.equal(threads[0].title, 'Melanie lake sunrise painting and creative outlet');
+  assert.equal(observedInputs[0].pendingTurns[0].sourceSlice, 'By the way, take a look at this painting.');
+});
+
+test('buildTouchedIndex immediately advances observation index for touched threads', async (t) => {
   const { dir, homeDir, configPath } = await makeConfigHome();
   t.after(async () => rm(dir, { recursive: true, force: true }));
 
@@ -2690,12 +3321,13 @@ test('buildTouchedIndex immediately advances semantic index for touched threads'
     title: 'Existing title',
     summary: 'Existing summary',
     snapshots: [
-      { memories: [], openQuestions: [], nextSteps: [], memoryDelta: { before: [], after: [] } },
+      { observations: [], contextRefs: [], openQuestions: [], nextSteps: [], observationDelta: { before: [], after: [] } },
       {
-        memories: [],
+        observations: [],
+        contextRefs: [],
         openQuestions: [],
         nextSteps: [],
-        memoryDelta: {
+        observationDelta: {
           before: [],
           after: [{ id: 'memory-1', text: 'remember this', category: 'Fact', updatedMemory: null }],
         },
@@ -2712,7 +3344,7 @@ test('buildTouchedIndex immediately advances semantic index for touched threads'
     observingTable: {
       update: async ({ snapshots }) => snapshots,
     },
-    semanticIndexTable: {
+    observationTable: {
       delete: async () => ({ deleted: 0 }),
       loadByIds: async () => [],
       upsert: async () => {
@@ -2726,7 +3358,7 @@ test('buildTouchedIndex immediately advances semantic index for touched threads'
   assert.equal(getPendingIndex(threads[0]), null);
 });
 
-test('observer.retrySemanticIndex refreshes the committed checkpoint snapshot after observing rows are updated', async (t) => {
+test('observer.retryObservation refreshes the committed checkpoint snapshot after observing rows are updated', async (t) => {
   const { dir, homeDir, configPath } = await makeConfigHome();
   t.after(async () => rm(dir, { recursive: true, force: true }));
 
@@ -2742,7 +3374,7 @@ test('observer.retrySemanticIndex refreshes the committed checkpoint snapshot af
         rowCount: 1,
       }),
     },
-    semanticIndexTable: {
+    observationTable: {
       delete: async () => ({ deleted: 0 }),
       loadByIds: async () => [],
       upsert: async () => undefined,
@@ -2766,12 +3398,13 @@ test('observer.retrySemanticIndex refreshes the committed checkpoint snapshot af
     title: 'Existing title',
     summary: 'Existing summary',
     snapshots: [
-      { memories: [], openQuestions: [], nextSteps: [], memoryDelta: { before: [], after: [] } },
+      { observations: [], contextRefs: [], openQuestions: [], nextSteps: [], observationDelta: { before: [], after: [] } },
       {
-        memories: [],
+        observations: [],
+        contextRefs: [],
         openQuestions: [],
         nextSteps: [],
-        memoryDelta: {
+        observationDelta: {
           before: [],
           after: [{ id: 'memory-1', text: 'remember this', category: 'Fact', updatedMemory: null }],
         },
@@ -2785,7 +3418,7 @@ test('observer.retrySemanticIndex refreshes the committed checkpoint snapshot af
   }];
   observer.refreshCheckpointSnapshot();
 
-  await observer.retrySemanticIndex();
+  await observer.retryObservation();
 
   assert.deepEqual(observer.exportCheckpoint(), {
     committedEpoch: 1,
@@ -2800,7 +3433,7 @@ test('observer.retrySemanticIndex refreshes the committed checkpoint snapshot af
   });
 });
 
-test('observer.observeCurrentEpoch commits observing rows and schedules semantic index retry', async (t) => {
+test('observer.observeCurrentEpoch commits observing rows and schedules observation index retry', async (t) => {
   const { dir, homeDir, configPath } = await makeConfigHome();
   t.after(async () => rm(dir, { recursive: true, force: true }));
 
@@ -2816,12 +3449,12 @@ test('observer.observeCurrentEpoch commits observing rows and schedules semantic
       })),
       update: async ({ snapshots }) => snapshots,
     },
-    semanticIndexTable: {
+    observationTable: {
       delete: async () => ({ deleted: 0 }),
       loadByIds: async () => [],
       upsert: async () => {
         semanticUpserts += 1;
-        throw new Error('semantic write failed');
+        throw new Error('observation write failed');
       },
     },
   });
@@ -2840,7 +3473,7 @@ test('observer.observeCurrentEpoch commits observing rows and schedules semantic
     title: 'Existing title',
     summary: 'Existing summary',
     snapshots: [
-      { memories: [], openQuestions: [], nextSteps: [], memoryDelta: { before: [], after: [] } },
+      { observations: [], contextRefs: [], openQuestions: [], nextSteps: [], observationDelta: { before: [], after: [] } },
     ],
     references: ['session:existing'],
     indexedSnapshotSequence: 0,
@@ -2850,7 +3483,7 @@ test('observer.observeCurrentEpoch commits observing rows and schedules semantic
   }];
   observer.buildCurrentEpochIndex = async () => {
     semanticUpserts += 1;
-    throw new Error('semantic write failed');
+    throw new Error('observation write failed');
   };
 
   await observer.observeCurrentEpoch();
@@ -2863,7 +3496,7 @@ test('observer.observeCurrentEpoch commits observing rows and schedules semantic
   assert.ok(observer.nextIndexRetryAt > Date.now());
 });
 
-test('observer.run retries pending semantic index before queued epochs when due', async (t) => {
+test('observer.run retries pending observation index before queued epochs when due', async (t) => {
   const { dir, homeDir, configPath } = await makeConfigHome();
   t.after(async () => rm(dir, { recursive: true, force: true }));
 
@@ -2875,7 +3508,7 @@ test('observer.run retries pending semantic index before queued epochs when due'
     observingTable: {
       update: async ({ snapshots }) => snapshots,
     },
-    semanticIndexTable: {
+    observationTable: {
       delete: async () => ({ deleted: 0 }),
       loadByIds: async () => [],
       upsert: async () => {
@@ -2896,16 +3529,18 @@ test('observer.run retries pending semantic index before queued epochs when due'
       summary: 'Summary',
       snapshots: [
         {
-          memories: [],
+          observations: [],
+          contextRefs: [],
           openQuestions: [],
           nextSteps: [],
-          memoryDelta: { before: [], after: [] },
+          observationDelta: { before: [], after: [] },
         },
         {
-          memories: [],
+          observations: [],
+          contextRefs: [],
           openQuestions: [],
           nextSteps: [],
-          memoryDelta: {
+          observationDelta: {
             before: [],
             after: [{ id: 'memory-1', text: 'remember this', category: 'Fact', updatedMemory: null }],
           },
@@ -2935,7 +3570,7 @@ test('observer.run retries pending semantic index before queued epochs when due'
     ],
   });
 
-  observer.retrySemanticIndex = async () => {
+  observer.retryObservation = async () => {
     calls.push('index');
     observer.nextIndexRetryAt = undefined;
     observer.threads = [];
@@ -3236,10 +3871,11 @@ test('flushThreads persists observing state without inline ref or index builders
       summary: 'Child summary',
       snapshots: [
         {
-          memories: [],
+          observations: [],
+          contextRefs: [],
           openQuestions: [],
           nextSteps: [],
-          memoryDelta: {
+          observationDelta: {
             before: [],
             after: [{ id: null, text: 'remember this', category: 'Fact', updatedMemory: null }],
           },

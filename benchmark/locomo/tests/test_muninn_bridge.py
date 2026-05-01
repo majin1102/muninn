@@ -107,6 +107,7 @@ class MuninnBridgeTests(unittest.TestCase):
                             "title": "title",
                             "summary": "summary",
                             "detail": "detail",
+                            "observationRatio": 0.5,
                         }
                     ]
                 }
@@ -120,6 +121,25 @@ class MuninnBridgeTests(unittest.TestCase):
 
         self.assertEqual(results["0:0"][0].memory_id, "observing:1")
         self.assertEqual(results["0:0"][0].evidence_ids, ["D1:1", "D1:2"])
+        self.assertEqual(results["0:0"][0].observation_ratio, 0.5)
+
+    def test_run_json_uses_configured_node_binary(self) -> None:
+        bridge = MuninnBridge()
+        bridge.ensure_built = MagicMock()
+        bridge._run_process = MagicMock(return_value=unittest.mock.Mock(stdout='{"ok": true}'))
+
+        previous = os.environ.get("MUNINN_NODE_BINARY")
+        os.environ["MUNINN_NODE_BINARY"] = "/custom/node"
+        try:
+            bridge._run_json("reset-home", muninn_home="/tmp/muninn-home")
+        finally:
+            if previous is None:
+                os.environ.pop("MUNINN_NODE_BINARY", None)
+            else:
+                os.environ["MUNINN_NODE_BINARY"] = previous
+
+        args = bridge._run_process.call_args.args[0]
+        self.assertEqual(args[0], "/custom/node")
 
 
 if __name__ == "__main__":

@@ -1,128 +1,128 @@
 import { randomUUID } from 'node:crypto';
 
 import { getEmbeddingConfig } from '../config.js';
-import type { NativeTables } from '../native.js';
+import type { NativeTables, Observation as StoredObservation } from '../native.js';
 import { embedText } from '../llm/embedding-provider.js';
-import type { LlmFieldUpdate, ObserveResult, ObservedMemory, SemanticIndexRow, SnapshotContent } from './types.js';
+import type { LlmFieldUpdate, Observation, ObserveResult, SnapshotContent } from './types.js';
 
-export function applyMemoriesDelta(
-  currentMemories: ObservedMemory[],
+export function applyObservationDelta(
+  currentObservations: Observation[],
   result: ObserveResult,
 ): {
-  memoryDelta: LlmFieldUpdate<ObservedMemory>;
-  memories: ObservedMemory[];
+  observationDelta: LlmFieldUpdate<Observation>;
+  observations: Observation[];
 } {
-  const before = result.memoryDelta.before;
-  const after = materializeMemoryIds(result.memoryDelta.after);
+  const before = result.observationDelta.before;
+  const after = materializeObservationIds(result.observationDelta.after);
 
-  const currentIds = new Set(currentMemories.map((memory) => memory.id).filter(Boolean));
-  const beforeIds = new Set(before.map((memory) => memory.id).filter(Boolean));
-  const afterIds = new Set(after.map((memory) => memory.id).filter(Boolean));
+  const currentIds = new Set(currentObservations.map((observation) => observation.id).filter(Boolean));
+  const beforeIds = new Set(before.map((observation) => observation.id).filter(Boolean));
+  const afterIds = new Set(after.map((observation) => observation.id).filter(Boolean));
 
   for (const beforeId of beforeIds) {
     if (!currentIds.has(beforeId)) {
-      throw new Error('observing delta referenced unknown memory id');
+      throw new Error('observing delta referenced unknown observation id');
     }
   }
 
   const deletedIds = new Set([...beforeIds].filter((id) => !afterIds.has(id)));
-  const merged = currentMemories
-    .filter((memory) => !memory.id || !deletedIds.has(memory.id))
-    .map(cloneMemory);
+  const merged = currentObservations
+    .filter((observation) => !observation.id || !deletedIds.has(observation.id))
+    .map(cloneObservation);
 
-  for (const memory of after) {
-    const id = memory.id;
+  for (const observation of after) {
+    const id = observation.id;
     if (!id) {
-      throw new Error('materialized memory missing id');
+      throw new Error('materialized observation missing id');
     }
     const existing = merged.find((candidate) => candidate.id === id);
     if (existing) {
-      Object.assign(existing, cloneMemory(memory));
+      Object.assign(existing, cloneObservation(observation));
     } else {
-      merged.push(cloneMemory(memory));
+      merged.push(cloneObservation(observation));
     }
   }
 
   return {
-    memoryDelta: { before, after },
-    memories: merged,
+    observationDelta: { before, after },
+    observations: merged,
   };
 }
 
-export async function applySemanticMemoryDelta(
+export async function applyObservationTableDelta(
   client: NativeTables,
   snapshot: SnapshotContent,
   memoryId: string,
   signal?: AbortSignal,
 ): Promise<void> {
   throwIfAborted(signal);
-  const delta = snapshot.memoryDelta;
-  const afterIds = new Set(delta.after.map((memory) => memory.id).filter(Boolean));
+  const delta = snapshot.observationDelta;
+  const afterIds = new Set(delta.after.map((observation) => observation.id).filter(Boolean));
   const deletedIds = delta.before
-    .map((memory) => memory.id)
+    .map((observation) => observation.id)
     .filter((id): id is string => Boolean(id) && !afterIds.has(id));
   if (deletedIds.length > 0) {
-    await client.semanticIndexTable.delete({ ids: deletedIds });
+    await client.observationTable.delete({ ids: deletedIds });
   }
 
   const upsertIds = delta.after
-    .map((memory) => memory.id)
+    .map((observation) => observation.id)
     .filter((id): id is string => Boolean(id));
   const existingRows = upsertIds.length > 0
-    ? await client.semanticIndexTable.loadByIds({ ids: upsertIds })
+    ? await client.observationTable.loadByIds({ ids: upsertIds })
     : [];
   const existingById = new Map(existingRows.map((row) => [row.id, row]));
   const embeddingConfig = getEmbeddingConfig();
-  const rows: SemanticIndexRow[] = [];
+  const rows: StoredObservation[] = [];
 
-  for (const memory of delta.after) {
-    const id = memory.id;
-    const text = memory.text.trim();
+  for (const observation of delta.after) {
+    const id = observation.id;
+    const text = observation.text.trim();
     if (!id || !text) {
       continue;
     }
     const existing = existingById.get(id);
     rows.push({
       id,
-      memoryId,
       text,
       vector: await embedText(text, signal),
       importance: existing?.importance ?? embeddingConfig.defaultImportance,
-      category: semanticCategory(memory.category),
+      category: semanticCategory(observation.category),
+      references: [memoryId],
       createdAt: existing?.createdAt ?? new Date().toISOString(),
     });
   }
 
   if (rows.length > 0) {
-    await client.semanticIndexTable.upsert({ rows });
+    await client.observationTable.upsert({ rows });
   }
 }
 
-function materializeMemoryIds(memories: ObservedMemory[]): ObservedMemory[] {
+function materializeObservationIds(observations: Observation[]): Observation[] {
   const seen = new Set<string>();
-  return memories.map((memory) => {
-    const id = memory.id?.trim() || randomUUID();
+  return observations.map((observation) => {
+    const id = observation.id?.trim() || randomUUID();
     if (seen.has(id)) {
-      throw new Error('observing update materialized duplicate memory id');
+      throw new Error('observing update materialized duplicate observation id');
     }
     seen.add(id);
     return {
-      ...cloneMemory(memory),
+      ...cloneObservation(observation),
       id,
     };
   });
 }
 
-function cloneMemory(memory: ObservedMemory): ObservedMemory {
+function cloneObservation(observation: Observation): Observation {
   return {
-    id: memory.id ?? null,
-    text: memory.text,
-    category: memory.category,
-    updatedMemory: memory.updatedMemory ?? null,
+    id: observation.id ?? null,
+    text: observation.text,
+    category: observation.category,
+    updatedMemory: observation.updatedMemory ?? null,
   };
 }
 
-function semanticCategory(category: ObservedMemory['category']): string {
+function semanticCategory(category: Observation['category']): string {
   switch (category) {
     case 'Preference':
       return 'preference';

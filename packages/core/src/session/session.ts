@@ -51,6 +51,7 @@ export class Session {
         }
         this.removeRecentTurn(duplicate.turnId);
       }
+      const previousTurnSummary = summarizeRecentTurn(this.recentTurns.at(-1));
       const turn = await buildTurn(
         this.config,
         content,
@@ -64,7 +65,7 @@ export class Session {
       this.rememberTurn(persisted);
       this.touch();
       return {
-        turn: persisted,
+        turn: previousTurnSummary ? { ...persisted, previousTurnSummary } : persisted,
         deduped: false,
       };
     });
@@ -198,6 +199,19 @@ function samePromptResponse(
 ): boolean {
   return left.prompt === right.prompt
     && left.response === right.response;
+}
+
+function summarizeRecentTurn(turn: RecentTurn | undefined): string | null {
+  if (!turn) {
+    return null;
+  }
+  const text = [turn.prompt, turn.response]
+    .filter((value) => value && value.trim())
+    .join('\nResponse: ')
+    .split(/\s+/)
+    .join(' ')
+    .trim();
+  return text || null;
 }
 
 export function isObservable(turn: SessionTurn): boolean {

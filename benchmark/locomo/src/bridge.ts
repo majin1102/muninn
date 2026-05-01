@@ -11,8 +11,11 @@ const CONFIG_FILE_NAME = 'muninn.json';
 const WATERMARK_POLL_MS = 2_000;
 const WATERMARK_TIMEOUT_MS = 10 * 60 * 1_000;
 const WATERMARK_WARNING_DELAY_MS = 60_000;
+const RECALL_ATTEMPTS = 3;
+const RECALL_RETRY_DELAY_MS = 1_000;
 const REPO_ROOT = path.resolve(__dirname, '../../..');
 const SIDECAR_APP_PATH = path.join(REPO_ROOT, 'packages/sidecar/dist/app.js');
+const IMPORT_PLACEHOLDER_RESPONSE = '[imported dialogue event; no assistant response]';
 
 function envPositiveInt(name: string, fallback: number): number {
   const raw = process.env[name];
@@ -55,11 +58,21 @@ export type ImportManifest = {
 
 type BridgeHit = {
   memory_id: string;
+  matched_text: string;
   evidence_ids: string[];
   date_time?: string;
   title?: string;
   summary?: string;
   detail?: string;
+  observationRatio?: number | null;
+  references: BridgeReference[];
+};
+
+type BridgeReference = {
+  memory_id: string;
+  source_id: string;
+  date_time: string;
+  text: string;
 };
 
 type RecallBatchQuery = {
@@ -112,6 +125,7 @@ async function importSampleCommand(options: Map<string, string>) {
   await mkdir(home, { recursive: true });
   await bootstrapHome(home, templateConfigPath, sourceConfigPath);
   process.env.MUNINN_HOME = home;
+  const gatewayTracePath = setGatewayTraceFile(home);
   const baselineWatermark = await fetchObserverWatermark();
 
   const sample = await loadSample(dataFile, sampleId);
@@ -123,12 +137,12 @@ async function importSampleCommand(options: Map<string, string>) {
     const dialogs = sample.conversation[`session_${sessionNo}`] as LocomoDialog[];
     const sessionId = sessionKey(sample.sample_id, sessionNo);
     for (const dialog of dialogs) {
-      const text = dialogLine(dialog);
+      const text = dialogLine(dialog, dateTime);
       const turn = await addTurnAndFind({
         sessionId,
         agent: dialog.speaker,
         prompt: text,
-        response: 'Recorded.',
+        response: IMPORT_PLACEHOLDER_RESPONSE,
       });
       manifestTurns.push({
         turn_id: turn.turnId,
@@ -154,12 +168,14 @@ async function importSampleCommand(options: Map<string, string>) {
     sample_id: sample.sample_id,
     imported_count: manifestTurns.length,
     manifest_path: manifestPath(home),
+    gateway_trace_path: gatewayTracePath,
   };
 }
 
 async function recallCommand(options: Map<string, string>) {
   const home = requireOption(options, 'muninn-home');
   process.env.MUNINN_HOME = home;
+  setGatewayTraceFile(home);
   const query = requireOption(options, 'query');
   const limit = parsePositiveInt(requireOption(options, 'limit'), 'limit');
   const manifest = await readManifest(home);
@@ -171,6 +187,7 @@ async function recallCommand(options: Map<string, string>) {
 async function recallBatchCommand(options: Map<string, string>) {
   const home = requireOption(options, 'muninn-home');
   process.env.MUNINN_HOME = home;
+  setGatewayTraceFile(home);
   const queriesFile = requireOption(options, 'queries-file');
   const raw = await readFile(queriesFile, 'utf8');
   const queries = JSON.parse(raw) as RecallBatchQuery[];
@@ -183,6 +200,12 @@ async function recallBatchCommand(options: Map<string, string>) {
   }
 
   return { results };
+}
+
+function setGatewayTraceFile(home: string): string {
+  const gatewayTracePath = path.join(home, 'locomo-gateway-trace.jsonl');
+  process.env.MUNINN_OBSERVER_GATEWAY_TRACE_FILE = gatewayTracePath;
+  return gatewayTracePath;
 }
 
 export async function waitForImportWatermark(
@@ -269,7 +292,14 @@ async function recallHits(
   limit: number,
   manifest: ImportManifest,
 ): Promise<BridgeHit[]> {
-  const rows = await coreClient.memories.recall(query, limit);
+  const rows = await withTransientRetry(
+    () => coreClient.memories.recall(query, limit),
+    {
+      attempts: envPositiveInt('MUNINN_LOCOMO_RECALL_ATTEMPTS', RECALL_ATTEMPTS),
+      delayMs: envPositiveInt('MUNINN_LOCOMO_RECALL_RETRY_DELAY_MS', RECALL_RETRY_DELAY_MS),
+      label: 'recall',
+    },
+  );
   const turnMap = manifestTurnMap(manifest);
   const hits: BridgeHit[] = [];
 
@@ -278,15 +308,48 @@ async function recallHits(
     if (!rendered) {
       continue;
     }
-    hits.push(await toBridgeHit(rendered, turnMap));
+    hits.push(await toBridgeHit(rendered, turnMap, row.text));
   }
 
   return hits;
 }
 
+export async function withTransientRetry<T>(
+  operation: () => Promise<T>,
+  options: { attempts: number; delayMs: number; label: string },
+): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= options.attempts; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error;
+      if (attempt >= options.attempts || !isTransientError(error)) {
+        throw error;
+      }
+      console.error(
+        `[locomo] ${options.label} transient failure; retry ${attempt + 1}/${options.attempts}: ${errorMessage(error)}`
+      );
+      await sleep(options.delayMs);
+    }
+  }
+  throw lastError;
+}
+
+function isTransientError(error: unknown): boolean {
+  const message = errorMessage(error);
+  return /\b(?:408|429|500|502|503|504)\b/.test(message)
+    || /upstream connect error|connection termination|ECONNRESET|ETIMEDOUT|fetch failed/i.test(message);
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 async function toBridgeHit(
   rendered: RenderedMemory,
   turnMap: Map<string, ManifestTurn>,
+  matchedText: string,
 ): Promise<BridgeHit> {
   const evidenceIds = await resolveEvidenceIds(rendered.memoryId, turnMap);
   const dateTimes = uniquePreservingOrder(
@@ -297,12 +360,78 @@ async function toBridgeHit(
 
   return {
     memory_id: rendered.memoryId,
+    matched_text: matchedText,
     evidence_ids: evidenceIds,
     date_time: dateTimes.join(' | ') || undefined,
     title: rendered.title ?? undefined,
     summary: rendered.summary ?? undefined,
     detail: rendered.detail ?? undefined,
+    observationRatio: observingRatio(rendered.detail),
+    references: await directSessionReferences(rendered.memoryId, turnMap),
   };
+}
+
+function observingRatio(detail?: string | null): number | null | undefined {
+  if (!detail) {
+    return undefined;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(detail);
+  } catch {
+    return undefined;
+  }
+  if (!parsed || typeof parsed !== 'object') {
+    return undefined;
+  }
+  const record = parsed as Record<string, unknown>;
+  const observations = Array.isArray(record.observations) ? record.observations : [];
+  const contextRefs = Array.isArray(record.contextRefs) ? record.contextRefs : [];
+  if (contextRefs.length === 0) {
+    return null;
+  }
+  return observations.length / contextRefs.length;
+}
+
+async function directSessionReferences(
+  memoryId: string,
+  turnMap: Map<string, ManifestTurn>,
+): Promise<BridgeReference[]> {
+  if (!memoryId.startsWith('observing:')) {
+    return [];
+  }
+  const observing = await coreClient.observings.get(memoryId);
+  if (!observing) {
+    return [];
+  }
+
+  const references: BridgeReference[] = [];
+  for (const reference of observing.references) {
+    const manifestTurn = turnMap.get(reference);
+    if (!manifestTurn) {
+      continue;
+    }
+    const turn = await coreClient.sessions.get(reference);
+    references.push({
+      memory_id: reference,
+      source_id: manifestTurn.source_id,
+      date_time: manifestTurn.date_time,
+      text: renderReferenceText(turn),
+    });
+  }
+  return references;
+}
+
+function renderReferenceText(turn: SessionTurn | null): string {
+  if (!turn) {
+    return '';
+  }
+  const prompt = turn.prompt?.trim();
+  const response = turn.response?.trim();
+  if (prompt && response) {
+    return `${prompt}\nResponse: ${response}`;
+  }
+  return prompt || response || '';
 }
 
 async function addTurnAndFind(content: TurnContent): Promise<SessionTurn> {
@@ -601,8 +730,14 @@ function dialogText(dialog: LocomoDialog): string {
   return base;
 }
 
-function dialogLine(dialog: LocomoDialog): string {
-  return `${dialog.speaker}: ${dialogText(dialog)}`.trim();
+function dialogLine(dialog: LocomoDialog, dateTime: string): string {
+  return [
+    `DATE: ${dateTime}`,
+    'DIALOGUE:',
+    `${dialog.speaker} said: "${dialogText(dialog)}"`,
+    '',
+    'Only the DIALOGUE line is source content. The response field is an import placeholder, not dialogue.',
+  ].join('\n').trim();
 }
 
 export function sessionKey(sampleId: string, sessionNo: number): string {

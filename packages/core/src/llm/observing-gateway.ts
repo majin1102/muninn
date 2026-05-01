@@ -1,22 +1,20 @@
 import type { SessionTurn } from '../client.js';
 import { getObserverLlmConfig } from '../config.js';
 import type {
-  GatewayAction,
+  GatewayRoute,
   GatewayResult,
-  GatewayUpdate,
-  NewThreadHint,
   ObserveRequest,
   ObserveResult,
-  ObservedMemory,
+  Observation,
   ObservingContentUpdate,
   ObservingThreadGatewayInput,
+  ContextRef,
 } from '../observer/types.js';
 import { generateText } from './provider.js';
 import { loadPromptTemplate, renderPromptTemplate } from './prompt-loader.js';
 
 const MAX_TITLE_CHARS = 120;
 const MAX_SUMMARY_CHARS = 220;
-const MAX_WHY_CHARS = 100;
 const MAX_LIST_ITEM_CHARS = 120;
 const MAX_MEMORY_CHARS = 220;
 
@@ -31,10 +29,7 @@ export async function routeObservingThreads(
     throw new Error('observer gateway is not configured');
   }
 
-  const gatewayTurns = pendingTurns.map((turn) => ({
-    turnId: turn.turnId,
-    summary: turn.summary ?? turn.prompt ?? turn.response ?? '',
-  }));
+  const gatewayTurns = toGatewayTurns(pendingTurns);
 
   if (config.provider === 'mock') {
     return validateGatewayResult(
@@ -48,13 +43,14 @@ export async function routeObservingThreads(
   const inputJson = JSON.stringify(
     {
       observingThreads: observingThreads.map((thread) => ({
-        observingId: thread.observingId,
+        threadId: thread.threadId,
         title: thread.title,
-        summary: thread.summary,
+        ...(thread.continuityHints?.length ? { continuityHints: thread.continuityHints } : {}),
       })),
       pendingTurns: gatewayTurns.map((turn) => ({
         turnId: turn.turnId,
-        summary: turn.summary,
+        text: turn.text,
+        ...(turn.previousTurn ? { previousTurn: turn.previousTurn } : {}),
       })),
     },
     null,
@@ -71,7 +67,7 @@ export async function routeObservingThreads(
         basePrompt,
         attempt,
         lastError,
-        'Make sure every pending turnId appears in at least one update.',
+        'Make sure every route has turnId, targetThreadId, sourceSlice, and rationale.',
       ),
       signal,
     });
@@ -91,6 +87,14 @@ export async function routeObservingThreads(
   throw new Error(`observer gateway returned invalid output: ${lastError}`);
 }
 
+function toGatewayTurns(pendingTurns: SessionTurn[]): Array<{ turnId: string; text: string; previousTurn?: string }> {
+  return pendingTurns.map((turn) => ({
+    turnId: turn.turnId,
+    text: turn.prompt ?? turn.summary ?? turn.response ?? '',
+    previousTurn: turn.previousTurnSummary ?? undefined,
+  }));
+}
+
 export async function observeThread(input: ObserveRequest, signal?: AbortSignal): Promise<ObserveResult> {
   throwIfAborted(signal);
   const config = getObserverLlmConfig();
@@ -108,14 +112,15 @@ export async function observeThread(input: ObserveRequest, signal?: AbortSignal)
       observingContent: {
         title: input.observingContent.title,
         summary: input.observingContent.summary,
-        memories: input.observingContent.memories,
+        observations: input.observingContent.observations,
         openQuestions: input.observingContent.openQuestions,
         nextSteps: input.observingContent.nextSteps,
       },
       pendingTurns: input.pendingTurns.map((turn) => ({
         turnId: turn.turnId,
-        summary: turn.summary,
-        whyRelated: turn.whyRelated,
+        ...(turn.sourceSlice ? { sourceSlice: turn.sourceSlice } : {}),
+        ...(turn.prompt ? { prompt: turn.prompt } : {}),
+        ...(turn.response ? { response: turn.response } : {}),
       })),
     },
     null,
@@ -132,7 +137,7 @@ export async function observeThread(input: ObserveRequest, signal?: AbortSignal)
         basePrompt,
         attempt,
         lastError,
-        'Keep all required content fields and memoryDelta arrays present.',
+        'Keep all required content fields, contextRefs, and observationDelta arrays present.',
       ),
       signal,
     });
@@ -153,55 +158,53 @@ export async function observeThread(input: ObserveRequest, signal?: AbortSignal)
 
 function buildMockGatewayResult(
   observingThreads: ObservingThreadGatewayInput[],
-  pendingTurns: Array<{ turnId: string; summary: string }>,
+  pendingTurns: Array<{ turnId: string; text: string }>,
 ): GatewayResult {
   return {
-    updates: pendingTurns.map((turn) => {
+    routes: pendingTurns.map((turn) => {
+      const sourceSlice = normalizeText(turn.text, MAX_SUMMARY_CHARS);
       if (observingThreads.length > 0) {
         return {
           turnId: turn.turnId,
-          action: 'append',
-          observingId: observingThreads[0].observingId,
-          summary: normalizeText(turn.summary, MAX_SUMMARY_CHARS),
-          newThread: null,
-          why: 'Matches the current observing thread.',
-        } satisfies GatewayUpdate;
+          targetThreadId: observingThreads[0].threadId,
+          sourceSlice,
+          rationale: 'The turn is routed to the existing observing thread for inspection.',
+        } satisfies GatewayRoute;
       }
-      const summary = normalizeText(turn.summary, MAX_SUMMARY_CHARS);
       return {
         turnId: turn.turnId,
-        action: 'new',
-        observingId: null,
-        summary,
-        newThread: {
-          title: normalizeText(summary, MAX_TITLE_CHARS),
-          summary,
-        } satisfies NewThreadHint,
-        why: 'Starts a new observing thread.',
-      } satisfies GatewayUpdate;
+        targetThreadId: null,
+        newThreadTitle: normalizeText(sourceSlice, MAX_TITLE_CHARS),
+        sourceSlice,
+        rationale: 'The turn starts a new observing thread for inspection.',
+      } satisfies GatewayRoute;
     }),
   };
 }
 
 function buildMockObserveResult(input: ObserveRequest): ObserveResult {
   const joined = input.pendingTurns
-    .map((turn) => normalizeText(turn.summary, MAX_SUMMARY_CHARS))
+    .map((turn) => normalizeText(turn.sourceSlice ?? turn.prompt ?? turn.response ?? '', MAX_SUMMARY_CHARS))
     .filter(Boolean)
     .join(' ');
-  const firstTurn = input.pendingTurns[0];
   const titleSeed = input.observingContent.title || joined || 'Mock observing thread';
   const summarySeed = [input.observingContent.summary, joined]
     .filter((value) => value && value.trim())
     .join(' ');
-  const whySeed = normalizeText(firstTurn?.whyRelated ?? '', MAX_WHY_CHARS);
   return {
     observingContentUpdate: {
-      title: normalizeText(titleSeed, MAX_TITLE_CHARS),
-      summary: normalizeText(summarySeed || titleSeed, MAX_SUMMARY_CHARS),
+      title: normalizeText(titleSeed),
+      summary: normalizeText(summarySeed || titleSeed),
       openQuestions: input.observingContent.openQuestions,
-      nextSteps: whySeed ? [`Follow up: ${whySeed}`] : input.observingContent.nextSteps,
+      nextSteps: input.observingContent.nextSteps,
     },
-    memoryDelta: {
+    contextRefs: input.pendingTurns
+      .map((turn) => ({
+        turnId: turn.turnId,
+        summary: normalizeText(turn.sourceSlice ?? turn.prompt ?? turn.response ?? '', MAX_SUMMARY_CHARS),
+      }))
+      .filter((reference) => reference.summary),
+    observationDelta: {
       before: [],
       after: joined ? [{
         text: joined,
@@ -214,86 +217,70 @@ function buildMockObserveResult(input: ObserveRequest): ObserveResult {
 
 function validateGatewayResult(
   observingThreads: ObservingThreadGatewayInput[],
-  pendingTurns: Array<{ turnId: string; summary: string }>,
+  pendingTurns: Array<{ turnId: string; text: string }>,
   result: GatewayResult,
 ): GatewayResult {
   const validTurnIds = new Set(pendingTurns.map((turn) => turn.turnId));
-  const validThreadIds = new Set(observingThreads.map((thread) => thread.observingId));
+  const validThreadIds = new Set(observingThreads.map((thread) => thread.threadId));
   const coveredTurnIds = new Set<string>();
-  const updates = result.updates.map((update) => {
-    const turnId = update.turnId.trim();
+  if (!Array.isArray(result.routes)) {
+    throw new Error('observer gateway returned routes that are not an array');
+  }
+  const routes = result.routes.map((route) => {
+    const turnId = route.turnId.trim();
     if (!validTurnIds.has(turnId)) {
-      throw new Error(`observer gateway referenced unknown turnId: ${update.turnId}`);
-    }
-    const summary = normalizeText(update.summary, MAX_SUMMARY_CHARS);
-    if (!summary) {
-      throw new Error(`observer gateway returned empty summary for turnId: ${turnId}`);
-    }
-    const why = normalizeText(update.why, MAX_WHY_CHARS);
-    if (!why) {
-      throw new Error(`observer gateway returned empty why for turnId: ${turnId}`);
+      throw new Error(`observer gateway referenced unknown turnId: ${route.turnId}`);
     }
 
-    let normalized: GatewayUpdate;
-    if (update.action === 'append') {
-      const observingId = update.observingId?.trim();
-      if (!observingId || !validThreadIds.has(observingId) || update.newThread) {
-        throw new Error(`observer gateway returned invalid append target for turnId: ${turnId}`);
+    const sourceSlice = normalizeText(route.sourceSlice, MAX_SUMMARY_CHARS);
+    if (!sourceSlice) {
+      throw new Error(`observer gateway returned empty sourceSlice for turnId: ${turnId}`);
+    }
+    const rationale = normalizeText(route.rationale ?? '', MAX_SUMMARY_CHARS);
+    if (!rationale) {
+      throw new Error(`observer gateway returned empty rationale for turnId: ${turnId}`);
+    }
+
+    let normalized: GatewayRoute;
+    const targetThreadId = route.targetThreadId?.trim() || null;
+    if (targetThreadId) {
+      if (!validThreadIds.has(targetThreadId) || route.newThreadTitle) {
+        throw new Error(`observer gateway returned invalid targetThreadId for turnId: ${turnId}`);
       }
       normalized = {
         turnId,
-        action: 'append',
-        observingId,
-        summary,
-        newThread: null,
-        why,
-      };
-    } else if (update.action === 'new') {
-      if (update.observingId?.trim()) {
-        throw new Error(`observer gateway returned new update with observingId for turnId: ${turnId}`);
-      }
-      const title = normalizeText(update.newThread?.title ?? '', MAX_TITLE_CHARS);
-      const newSummary = normalizeText(update.newThread?.summary ?? '', MAX_SUMMARY_CHARS);
-      if (!title || !newSummary) {
-        throw new Error(`observer gateway returned incomplete new thread payload for turnId: ${turnId}`);
-      }
-      normalized = {
-        turnId,
-        action: 'new',
-        observingId: null,
-        summary,
-        newThread: { title, summary: newSummary },
-        why,
+        targetThreadId,
+        sourceSlice,
+        rationale,
       };
     } else {
-      throw new Error(`observer gateway returned invalid action for turnId: ${turnId}`);
+      const newThreadTitle = normalizeText(route.newThreadTitle ?? '', MAX_TITLE_CHARS);
+      if (!newThreadTitle) {
+        throw new Error(`observer gateway returned missing newThreadTitle for turnId: ${turnId}`);
+      }
+      normalized = {
+        turnId,
+        targetThreadId: null,
+        newThreadTitle,
+        sourceSlice,
+        rationale,
+      };
     }
 
     coveredTurnIds.add(turnId);
     return normalized;
   });
 
-  if (updates.length === 0 && pendingTurns.length > 0) {
-    throw new Error('observer gateway returned no valid updates');
-  }
-
-  const missing = pendingTurns
-    .map((turn) => turn.turnId)
-    .filter((turnId) => !coveredTurnIds.has(turnId));
-  if (missing.length > 0) {
-    throw new Error(`observer gateway omitted pending turns: ${missing.join(', ')}`);
-  }
-
-  return { updates };
+  return { routes };
 }
 
 function validateObserveResult(result: ObserveResult): ObserveResult {
-  const title = normalizeText(result.observingContentUpdate.title, MAX_TITLE_CHARS);
+  const title = normalizeText(result.observingContentUpdate.title);
   if (!title) {
     throw new Error('observing update returned empty observingContentUpdate.title');
   }
 
-  const summary = normalizeText(result.observingContentUpdate.summary, MAX_SUMMARY_CHARS);
+  const summary = normalizeText(result.observingContentUpdate.summary);
   if (!summary) {
     throw new Error('observing update returned empty observingContentUpdate.summary');
   }
@@ -305,24 +292,43 @@ function validateObserveResult(result: ObserveResult): ObserveResult {
       openQuestions: normalizeStringList(result.observingContentUpdate.openQuestions),
       nextSteps: normalizeStringList(result.observingContentUpdate.nextSteps),
     } satisfies ObservingContentUpdate,
-    memoryDelta: {
-      before: normalizeMemoryList(result.memoryDelta.before),
-      after: normalizeMemoryList(result.memoryDelta.after),
+    contextRefs: normalizeContextRefs(result.contextRefs),
+    observationDelta: {
+      before: normalizeObservationList(result.observationDelta.before),
+      after: normalizeObservationList(result.observationDelta.after),
     },
   };
 }
 
-function normalizeMemoryList(memories: ObservedMemory[]): ObservedMemory[] {
-  return memories.map((memory) => {
-    const text = normalizeText(memory.text, MAX_MEMORY_CHARS);
+function normalizeContextRefs(value: unknown): ContextRef[] {
+  if (!Array.isArray(value)) {
+    throw new Error('observe result contextRefs must be an array');
+  }
+  return value.flatMap((item) => {
+    if (!item || typeof item !== 'object') {
+      return [];
+    }
+    const record = item as Record<string, unknown>;
+    const turnId = typeof record.turnId === 'string' ? record.turnId.trim() : '';
+    const summary = typeof record.summary === 'string' ? normalizeText(record.summary, MAX_SUMMARY_CHARS) : '';
+    if (!turnId || !summary) {
+      return [];
+    }
+    return [{ turnId, summary }];
+  });
+}
+
+function normalizeObservationList(observations: Observation[]): Observation[] {
+  return observations.map((observation) => {
+    const text = normalizeText(observation.text, MAX_MEMORY_CHARS);
     if (!text) {
-      throw new Error('observing update returned an empty memory text');
+      throw new Error('observing update returned an empty observation text');
     }
     return {
-      id: memory.id?.trim() || null,
+      id: observation.id?.trim() || null,
       text,
-      category: memory.category,
-      updatedMemory: memory.updatedMemory?.trim() || null,
+      category: observation.category,
+      updatedMemory: observation.updatedMemory?.trim() || null,
     };
   });
 }
@@ -358,10 +364,13 @@ function buildRetryPrompt(
   return `${basePrompt}\n\nPrevious output was invalid.\nValidation error: ${lastError}\nReturn one JSON object only. ${rule}`;
 }
 
-function normalizeText(value: string, maxChars: number): string {
+function normalizeText(value: string, maxChars?: number): string {
   const collapsed = value.split(/\s+/).join(' ').trim();
   if (!collapsed) {
     return '';
+  }
+  if (maxChars === undefined) {
+    return collapsed;
   }
   if (collapsed.length <= maxChars) {
     return collapsed;
@@ -384,3 +393,9 @@ function throwIfAborted(signal?: AbortSignal): void {
   error.name = 'AbortError';
   throw error;
 }
+
+export const __testing = {
+  gatewayTurnsForTests: toGatewayTurns,
+  validateGatewayResultForTests: validateGatewayResult,
+  validateObserveResultForTests: validateObserveResult,
+};

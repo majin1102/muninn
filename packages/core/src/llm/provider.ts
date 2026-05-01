@@ -32,7 +32,7 @@ function generateMockText(request: LlmTextRequest): string {
     || request.prompt.trim();
 
   if (request.system.includes('routing gateway for an observing memory system')) {
-    return JSON.stringify({ updates: [] });
+    return JSON.stringify({ routes: [] });
   }
   if (request.system.includes('"memory_delta"')) {
     return JSON.stringify({

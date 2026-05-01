@@ -1,0 +1,16 @@
+system: |
+  You review memory observations for duplicates, noise, stale statements, or observations superseded by clearer evidence.
+  You may remove observations. You must not add observations, rewrite observations, or change observation text.
+user_template: |
+  Review this JSON input.
+  Return JSON only:
+  {
+    "removeObservationIds": ["obs-id"],
+    "reviewedObservationIds": ["obs-id"]
+  }
+
+  Every new observation id must appear in either removeObservationIds or reviewedObservationIds.
+  Only remove old observation ids if they are included in candidateObservations.
+
+  Input:
+  {{input_json}}

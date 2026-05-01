@@ -2,7 +2,7 @@ import { accessSync, constants as fsConstants } from 'node:fs';
 import path from 'node:path';
 
 import type { ListModeInput, ObservingSnapshot, SessionTurn } from './client.js';
-import type { SemanticIndexRow, ObservingSnapshot as ObservingSnapshotPayload } from './observer/types.js';
+import type { ObservingSnapshot as ObservingSnapshotPayload } from './observer/types.js';
 
 type MaybePromise<T> = Promise<T> | T;
 
@@ -32,6 +32,16 @@ export interface CompactResult {
 export interface EnsureVectorIndexResult {
   created: boolean;
 }
+
+export type Observation = {
+  id: string;
+  text: string;
+  vector: number[];
+  importance: number;
+  category: string;
+  references: string[];
+  createdAt: string;
+};
 
 type NativeCoreBinding = {
   close(): MaybePromise<void>;
@@ -82,41 +92,41 @@ type NativeCoreBinding = {
   observingCleanup(params: {
     floorVersion: number;
   }): MaybePromise<CompactResult>;
-  semanticNearest(params: {
+  observationNearest(params: {
     vector: number[];
     limit: number;
-  }): MaybePromise<SemanticIndexRow[]>;
-  semanticLoadByIds(params: {
+  }): MaybePromise<Observation[]>;
+  observationLoadByIds(params: {
     ids: string[];
-  }): MaybePromise<SemanticIndexRow[]>;
-  semanticUpsert(params: {
-    rows: SemanticIndexRow[];
+  }): MaybePromise<Observation[]>;
+  observationUpsert(params: {
+    rows: Observation[];
   }): MaybePromise<void>;
-  semanticDelete(params: {
+  observationDelete(params: {
     ids: string[];
   }): MaybePromise<{ deleted: number }>;
-  semanticValidateDimensions(params: {
+  observationValidateDimensions(params: {
     expected: number;
   }): MaybePromise<void>;
-  semanticTableStats(): MaybePromise<TableStats | null>;
-  semanticEnsureVectorIndex(params: {
+  observationTableStats(): MaybePromise<TableStats | null>;
+  observationEnsureVectorIndex(params: {
     targetPartitionSize: number;
   }): MaybePromise<EnsureVectorIndexResult>;
-  semanticCompact(): MaybePromise<CompactResult>;
-  semanticCleanup(params: {
+  observationCompact(): MaybePromise<CompactResult>;
+  observationCleanup(params: {
     floorVersion: number;
   }): MaybePromise<CompactResult>;
-  semanticOptimize(params: {
+  observationOptimize(params: {
     mergeCount: number;
   }): MaybePromise<CompactResult>;
   describeSessionTable(): MaybePromise<TableDescription | null>;
   describeObservingTable(): MaybePromise<TableDescription | null>;
-  describeSemanticIndexTable(): MaybePromise<TableDescription | null>;
+  describeObservationTable(): MaybePromise<TableDescription | null>;
 };
 
 type NativeModule = {
   createCoreBinding(): MaybePromise<NativeCoreBinding>;
-  describeSemanticIndexForStorage(storageTarget: StorageTarget | null): MaybePromise<TableDescription | null>;
+  describeObservationForStorage(storageTarget: StorageTarget | null): MaybePromise<TableDescription | null>;
 };
 
 export interface SessionTableBinding {
@@ -174,16 +184,16 @@ export interface ObservingTableBinding {
   describe(): Promise<TableDescription | null>;
 }
 
-export interface SemanticIndexTableBinding {
+export interface ObservationTableBinding {
   nearest(params: {
     vector: number[];
     limit: number;
-  }): Promise<SemanticIndexRow[]>;
+  }): Promise<Observation[]>;
   loadByIds(params: {
     ids: string[];
-  }): Promise<SemanticIndexRow[]>;
+  }): Promise<Observation[]>;
   upsert(params: {
-    rows: SemanticIndexRow[];
+    rows: Observation[];
   }): Promise<void>;
   delete(params: {
     ids: string[];
@@ -209,7 +219,7 @@ export interface NativeTables {
   close(): Promise<void>;
   sessionTable: SessionTableBinding;
   observingTable: ObservingTableBinding;
-  semanticIndexTable: SemanticIndexTableBinding;
+  observationTable: ObservationTableBinding;
 }
 
 let singleton: NativeTables | null = null;
@@ -239,11 +249,11 @@ export async function shutdownNativeTablesForTests(): Promise<void> {
   singletonPromise = null;
 }
 
-export async function describeSemanticIndexForStorage(
+export async function describeObservationForStorage(
   storageTarget: StorageTarget | null,
 ): Promise<TableDescription | null> {
   const native = loadNativeModule();
-  return resolveNativeResult(native.describeSemanticIndexForStorage(storageTarget));
+  return resolveNativeResult(native.describeObservationForStorage(storageTarget));
 }
 
 function wrapBinding(native: NativeCoreBinding): NativeTables {
@@ -280,18 +290,18 @@ function wrapBinding(native: NativeCoreBinding): NativeTables {
       cleanup: async (params) => resolveNativeResult(native.observingCleanup(params)),
       describe: async () => resolveNativeResult(native.describeObservingTable()),
     },
-    semanticIndexTable: {
-      nearest: async (params) => resolveNativeResult(native.semanticNearest(params)),
-      loadByIds: async (params) => resolveNativeResult(native.semanticLoadByIds(params)),
-      upsert: async (params) => resolveNativeResult(native.semanticUpsert(params)),
-      delete: async (params) => resolveNativeResult(native.semanticDelete(params)),
-      validateDimensions: async (params) => resolveNativeResult(native.semanticValidateDimensions(params)),
-      stats: async () => resolveNativeResult(native.semanticTableStats()),
-      ensureVectorIndex: async (params) => resolveNativeResult(native.semanticEnsureVectorIndex(params)),
-      compact: async () => resolveNativeResult(native.semanticCompact()),
-      cleanup: async (params) => resolveNativeResult(native.semanticCleanup(params)),
-      optimize: async (params) => resolveNativeResult(native.semanticOptimize(params)),
-      describe: async () => resolveNativeResult(native.describeSemanticIndexTable()),
+    observationTable: {
+      nearest: async (params) => resolveNativeResult(native.observationNearest(params)),
+      loadByIds: async (params) => resolveNativeResult(native.observationLoadByIds(params)),
+      upsert: async (params) => resolveNativeResult(native.observationUpsert(params)),
+      delete: async (params) => resolveNativeResult(native.observationDelete(params)),
+      validateDimensions: async (params) => resolveNativeResult(native.observationValidateDimensions(params)),
+      stats: async () => resolveNativeResult(native.observationTableStats()),
+      ensureVectorIndex: async (params) => resolveNativeResult(native.observationEnsureVectorIndex(params)),
+      compact: async () => resolveNativeResult(native.observationCompact()),
+      cleanup: async (params) => resolveNativeResult(native.observationCleanup(params)),
+      optimize: async (params) => resolveNativeResult(native.observationOptimize(params)),
+      describe: async () => resolveNativeResult(native.describeObservationTable()),
     },
   };
 }

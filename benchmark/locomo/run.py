@@ -15,6 +15,7 @@ if __package__ is None or __package__ == "":
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from benchmark.common.muninn_bridge import MuninnBridge, RecallHit
+from benchmark.locomo.answering import build_answer_context, build_qa_trace, load_answerer_config, run_llm_answerer
 from benchmark.locomo.dataset import iter_target_samples, load_samples
 from benchmark.locomo.heuristics import build_prediction, build_query_candidates
 from benchmark.locomo.metadata import build_run_metadata, write_run_metadata
@@ -22,7 +23,7 @@ from benchmark.locomo.report import build_error_report, write_report
 from benchmark.locomo.scoring import build_stats, write_results
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-file", required=True, type=Path)
     parser.add_argument("--out-file", required=True, type=Path)
@@ -31,7 +32,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sample-id", default=None)
     parser.add_argument("--limit-questions", default=None, type=int)
     parser.add_argument("--keep-home", action="store_true")
-    return parser.parse_args()
+    parser.add_argument("--mode", choices=["diagnostic", "benchmark"], default="diagnostic")
+    parser.add_argument("--answerer", choices=["llm", "heuristic"], default="llm")
+    parser.add_argument("--expand-references", action="store_true")
+    return parser.parse_args(argv)
 
 
 def main() -> None:
@@ -62,11 +66,15 @@ def main() -> None:
         keep_home=args.keep_home,
         limit_questions=args.limit_questions,
         sample_filter=args.sample_id,
+        mode=args.mode,
+        answerer=args.answerer,
+        expand_references=args.expand_references,
     )
 
     model_key = build_model_key(args.top_k)
     try:
         results = []
+        gateway_routes_by_sample: dict[str, dict[str, list[dict[str, Any]]]] = {}
         for sample in selected:
             sample_started_at = monotonic()
             sample_result = {
@@ -85,7 +93,7 @@ def main() -> None:
             )
 
             try:
-                run_unit(
+                gateway_routes_by_sample[sample["sample_id"]] = run_unit(
                     bridge,
                     args,
                     reporter,
@@ -146,9 +154,21 @@ def main() -> None:
                     top_k=args.top_k,
                     started_at=run_started_timestamp,
                     completed_at=utc_now(),
+                    mode=args.mode,
+                    answerer=args.answerer,
+                    expand_references=args.expand_references,
                 ),
             ),
             out_file=args.out_file.with_name(f"{args.out_file.stem}_metadata.json"),
+        )
+        run_phase(
+            reporter,
+            "write_trace",
+            lambda: write_trace(
+                args.out_file,
+                build_trace(results, model_key, gateway_routes_by_sample),
+            ),
+            out_file=args.out_file.with_name(f"{args.out_file.stem}_trace.json"),
         )
         reporter.emit(
             "run_complete",
@@ -254,10 +274,11 @@ def run_unit(
     sample: dict[str, object],
     qas: list[dict[str, object]],
     model_key: str,
-) -> None:
+) -> dict[str, list[dict[str, Any]]]:
     stage_started_at = monotonic()
     sample_id = str(sample["sample_id"])
     prediction_key = f"{model_key}_prediction"
+    heuristic_key = f"{model_key}_heuristic_prediction"
     query_count = count_query_candidates(qas)
     home_dir = prepare_home(bridge, sample_id, args.keep_home)
 
@@ -270,7 +291,7 @@ def run_unit(
     )
 
     try:
-        run_phase(
+        import_result = run_phase(
             reporter,
             "import_sample",
             lambda: bridge.import_sample(
@@ -283,6 +304,7 @@ def run_unit(
             query_candidate_count=query_count,
             home_dir=home_dir.path,
         )
+        gateway_trace_path = import_result.get("gateway_trace_path") if isinstance(import_result, dict) else None
         batch_hits = run_phase(
             reporter,
             "recall_batch",
@@ -301,10 +323,20 @@ def run_unit(
         run_phase(
             reporter,
             "build_predictions",
-            lambda: apply_predictions(qas, batch_hits, prediction_key),
+            lambda: apply_predictions(
+                qas,
+                batch_hits,
+                prediction_key,
+                heuristic_key=heuristic_key,
+                answerer=args.answerer,
+                answerer_config=load_answerer_config(home_dir.path) if args.answerer == "llm" else None,
+                expand_references=args.expand_references,
+            ),
             sample_id=sample_id,
             qa_count=len(qas),
             top_k=args.top_k,
+            answerer=args.answerer,
+            expand_references=args.expand_references,
         )
         reporter.emit(
             "unit_complete",
@@ -313,6 +345,7 @@ def run_unit(
             query_candidate_count=query_count,
             elapsed_s=round(monotonic() - stage_started_at, 4),
         )
+        return load_gateway_routes(Path(gateway_trace_path)) if isinstance(gateway_trace_path, str) else {}
     except Exception as exc:
         reporter.emit(
             "unit_failed",
@@ -363,10 +396,45 @@ def apply_predictions(
     qas: list[dict[str, object]],
     batch_hits: dict[int, list[RecallHit]],
     prediction_key: str,
+    *,
+    heuristic_key: str | None = None,
+    answerer: str = "heuristic",
+    answerer_config: dict[str, Any] | None = None,
+    expand_references: bool = False,
 ) -> None:
+    hit_key_prefix = prediction_key.removesuffix("_prediction")
+    heuristic_key = heuristic_key or f"{hit_key_prefix}_heuristic_prediction"
     for qa_index, qa in enumerate(qas):
         hits = batch_hits[qa_index]
-        qa[prediction_key] = build_prediction(str(qa["question"]), int(qa["category"]), hits)
+        question = str(qa["question"])
+        category = int(qa["category"])
+        heuristic_prediction = build_prediction(question, category, hits)
+        answer_context = build_answer_context(
+            question=question,
+            category=category,
+            hits=hits,
+            expand_references=expand_references,
+        )
+        qa[heuristic_key] = heuristic_prediction
+        qa[f"{hit_key_prefix}_answer_context"] = answer_context
+        if answerer == "llm":
+            if answerer_config is None:
+                raise ValueError("LLM answerer requires answerer_config")
+            answer_result = run_llm_answerer(
+                question=question,
+                category=category,
+                answer_context=answer_context,
+                config=answerer_config,
+            )
+            qa[prediction_key] = answer_result["answer"]
+            qa[f"{hit_key_prefix}_memory_clarity_score"] = answer_result.get("memory_clarity_score")
+            qa[f"{hit_key_prefix}_memory_clarity_reason"] = answer_result.get("memory_clarity_reason")
+        elif answerer == "heuristic":
+            qa[prediction_key] = heuristic_prediction
+            qa[f"{hit_key_prefix}_memory_clarity_score"] = None
+            qa[f"{hit_key_prefix}_memory_clarity_reason"] = ""
+        else:
+            raise ValueError(f"unsupported answerer: {answerer}")
         context_ids: list[str] = []
         seen: set[str] = set()
         for hit in hits:
@@ -376,16 +444,79 @@ def apply_predictions(
                 seen.add(evidence_id)
                 context_ids.append(evidence_id)
         qa[f"{prediction_key}_context"] = context_ids
-        hit_key_prefix = prediction_key.removesuffix("_prediction")
         qa[f"{hit_key_prefix}_hits"] = [
             {
                 "memory_id": hit.memory_id,
+                "matched_text": hit.matched_text,
                 "title": hit.title,
+                "summary": hit.summary,
+                "detail": hit.detail,
+                "observationRatio": hit.observation_ratio,
                 "evidence_ids": hit.evidence_ids,
                 "date_time": hit.date_time,
+                "references": hit.references,
             }
             for hit in hits
         ]
+
+
+def build_trace(
+    samples: list[dict[str, Any]],
+    model_key: str,
+    gateway_routes_by_sample: dict[str, dict[str, list[dict[str, Any]]]] | None = None,
+) -> dict[str, Any]:
+    prediction_key = f"{model_key}_prediction"
+    heuristic_key = f"{model_key}_heuristic_prediction"
+    trace_samples = []
+    for sample in samples:
+        sample_id = str(sample.get("sample_id", ""))
+        rows = []
+        for qa_index, qa in enumerate(sample.get("qa", [])):
+            if prediction_key not in qa:
+                continue
+            rows.append(
+                build_qa_trace(
+                    sample_id=sample_id,
+                    qa_index=qa_index,
+                    qa=qa,
+                    query_candidates=build_query_candidates(str(qa.get("question", ""))),
+                    prediction_key=prediction_key,
+                    heuristic_key=heuristic_key,
+                    gateway_routes=(gateway_routes_by_sample or {}).get(sample_id),
+                )
+            )
+        trace_samples.append({"sample_id": sample_id, "qa": rows})
+    return {"model_key": model_key, "samples": trace_samples}
+
+
+def load_gateway_routes(path: Path | None) -> dict[str, list[dict[str, Any]]]:
+    if path is None or not path.exists():
+        return {}
+    routes: dict[str, list[dict[str, Any]]] = {}
+    for line in path.read_text(encoding="utf8").splitlines():
+        if not line.strip():
+            continue
+        event = json.loads(line)
+        for route in event.get("routes", []):
+            route_key = route.get("targetThreadId") or route.get("newThreadTitle")
+            if not route_key:
+                continue
+            routes.setdefault(str(route_key), []).append(
+                {
+                    "turnId": route.get("turnId"),
+                    "targetThreadId": route.get("targetThreadId"),
+                    "newThreadTitle": route.get("newThreadTitle"),
+                    "sourceSlice": route.get("sourceSlice"),
+                }
+            )
+    return routes
+
+
+def write_trace(out_file: Path, trace: dict[str, Any]) -> Path:
+    trace_file = out_file.with_name(f"{out_file.stem}_trace.json")
+    trace_file.parent.mkdir(parents=True, exist_ok=True)
+    trace_file.write_text(f"{json.dumps(trace, indent=2)}\n", encoding="utf8")
+    return trace_file
 
 
 def collect_batch_hits(

@@ -53,7 +53,7 @@ pub(crate) async fn ensure_semantic_vector_index(
     Ok(true)
 }
 
-pub(crate) async fn optimize_semantic_index(
+pub(crate) async fn optimize_observation(
     dataset: &mut Dataset,
     merge_count: usize,
 ) -> Result<bool> {
@@ -86,7 +86,7 @@ mod tests {
 
     use super::{
         SEMANTIC_VECTOR_INDEX_NAME, cleanup_dataset, compact_dataset, ensure_semantic_vector_index,
-        optimize_semantic_index,
+        optimize_observation,
     };
     use crate::config::{CONFIG_FILE_NAME, llm_test_env_guard};
     use crate::{
@@ -104,7 +104,7 @@ mod tests {
         fs::write(
             home.join(CONFIG_FILE_NAME),
             serde_json::to_string_pretty(&json!({
-                "semanticIndex": {
+                "observation": {
                     "embedding": {
                         "provider": "mock",
                         "dimensions": 4
@@ -168,7 +168,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn optimize_semantic_index_noops_without_index() {
+    async fn optimize_observation_noops_without_index() {
         let _guard = llm_test_env_guard();
         let dir = tempfile::tempdir().unwrap();
         let home = dir.path().join("muninn");
@@ -198,7 +198,7 @@ mod tests {
             .await
             .unwrap();
         let mut dataset = table.try_open_dataset().await.unwrap().unwrap();
-        let optimized = optimize_semantic_index(&mut dataset, 2).await.unwrap();
+        let optimized = optimize_observation(&mut dataset, 2).await.unwrap();
         assert!(!optimized);
     }
 

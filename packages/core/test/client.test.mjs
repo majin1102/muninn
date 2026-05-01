@@ -107,6 +107,7 @@ async function writeMuninnConfig(configPath, {
   storageOptions,
   watchdog,
   activeWindowDays,
+  continuityHints,
 } = {}) {
   const root = {};
   const llm = {};
@@ -126,6 +127,7 @@ async function writeMuninnConfig(configPath, {
       llm: 'test_observer_llm',
       maxAttempts: 3,
       ...(activeWindowDays === undefined ? {} : { activeWindowDays }),
+      ...(continuityHints === undefined ? {} : { continuityHints }),
     };
     llm.test_observer_llm = { provider: observerProvider };
   }
@@ -133,7 +135,7 @@ async function writeMuninnConfig(configPath, {
     root.llm = llm;
   }
   if (observerProvider) {
-    root.semanticIndex = {
+    root.observation = {
       embedding: {
         provider: 'mock',
         dimensions: semanticDimensions,
@@ -158,7 +160,7 @@ test.after(async () => {
   delete process.env.MUNINN_HOME;
 });
 
-test('observer config defaults activeWindowDays to 7 and accepts explicit overrides', async (t) => {
+test('observer config defaults activeWindowDays and continuityHints and accepts explicit overrides', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(cleanupDataset(dir));
 
@@ -168,11 +170,13 @@ test('observer config defaults activeWindowDays to 7 and accepts explicit overri
   let observerConfig = getObserverLlmConfig();
   assert.ok(observerConfig);
   assert.equal(observerConfig.activeWindowDays, 7);
+  assert.equal(observerConfig.continuityHints, 1);
 
-  await writeMuninnConfig(configPath, { observerProvider: 'mock', activeWindowDays: 14 });
+  await writeMuninnConfig(configPath, { observerProvider: 'mock', activeWindowDays: 14, continuityHints: 3 });
   observerConfig = getObserverLlmConfig();
   assert.ok(observerConfig);
   assert.equal(observerConfig.activeWindowDays, 14);
+  assert.equal(observerConfig.continuityHints, 3);
 });
 
 test('addMessage and sessions.get roundtrip through the native binding', async (t) => {
@@ -498,7 +502,7 @@ test('cold start does not wait for the first watchdog interval before serving wr
       enabled: true,
       intervalMs: 250,
       compactMinFragments: 1,
-      semanticIndex: {
+      observation: {
         targetPartitionSize: 16,
         optimizeMergeCount: 2,
       },
@@ -519,7 +523,7 @@ test('cold start does not wait for the first watchdog interval before serving wr
 
   await new Promise((resolve) => setTimeout(resolve, 350));
   const logContent = await readFile(path.join(homeDir, 'watchdog.jsonl'), 'utf8');
-  assert.match(logContent, /"dataset":"semanticIndex"/);
+  assert.match(logContent, /"dataset":"observation"/);
 });
 
 test('addMessage rejects empty message payloads through the native binding', async (t) => {
@@ -535,7 +539,7 @@ test('addMessage rejects empty message payloads through the native binding', asy
   );
 });
 
-test('validateSettings rejects semantic index dimension changes that mismatch existing data', async (t) => {
+test('validateSettings rejects observation index dimension changes that mismatch existing data', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(cleanupDataset(dir));
 
@@ -545,9 +549,9 @@ test('validateSettings rejects semantic index dimension changes that mismatch ex
   await addMessage({
     sessionId: 'group-a',
     agent: 'agent-a',
-    prompt: 'semantic prompt',
-    response: 'semantic response',
-    summary: 'semantic summary',
+    prompt: 'observation prompt',
+    response: 'observation response',
+    summary: 'observation summary',
   });
   await new Promise((resolve) => setTimeout(resolve, 50));
 
@@ -563,7 +567,7 @@ test('validateSettings rejects semantic index dimension changes that mismatch ex
           provider: 'mock',
         },
       },
-      semanticIndex: {
+      observation: {
         embedding: {
           provider: 'mock',
           dimensions: 8,
@@ -571,7 +575,7 @@ test('validateSettings rejects semantic index dimension changes that mismatch ex
         defaultImportance: 0.7,
       },
     }, null, 2)),
-    /semantic_index dimension mismatch/i,
+    /observation dimension mismatch/i,
   );
 });
 
@@ -609,7 +613,7 @@ test('validateSettings rejects invalid observer.activeWindowDays', async (t) => 
           provider: 'mock',
         },
       },
-      semanticIndex: {
+      observation: {
         embedding: {
           provider: 'mock',
           dimensions: 8,
@@ -618,6 +622,38 @@ test('validateSettings rejects invalid observer.activeWindowDays', async (t) => 
       },
     }, null, 2)),
     /observer\.activeWindowDays must be a positive integer/i,
+  );
+});
+
+test('validateSettings rejects invalid observer.continuityHints', async (t) => {
+  const { dir, homeDir, configPath } = await makeDatasetUri();
+  t.after(cleanupDataset(dir));
+
+  process.env.MUNINN_HOME = homeDir;
+  await mkdir(path.dirname(configPath), { recursive: true });
+  await writeFile(configPath, '{\n  "storage": {\n    "uri": ""\n  }\n}\n', 'utf8');
+
+  await assert.rejects(
+    () => validateSettings(JSON.stringify({
+      observer: {
+        name: 'test-observer',
+        llm: 'test_observer_llm',
+        continuityHints: 0,
+      },
+      llm: {
+        test_observer_llm: {
+          provider: 'mock',
+        },
+      },
+      observation: {
+        embedding: {
+          provider: 'mock',
+          dimensions: 8,
+        },
+        defaultImportance: 0.7,
+      },
+    }, null, 2)),
+    /observer\.continuityHints must be a positive integer/i,
   );
 });
 
@@ -634,7 +670,7 @@ test('validateSettings rejects missing observer config', async (t) => {
           provider: 'mock',
         },
       },
-      semanticIndex: {
+      observation: {
         embedding: {
           provider: 'mock',
           dimensions: 8,
@@ -658,7 +694,7 @@ test('validateSettings rejects missing llm config', async (t) => {
         name: 'test-observer',
         llm: 'test_observer_llm',
       },
-      semanticIndex: {
+      observation: {
         embedding: {
           provider: 'mock',
           dimensions: 8,
@@ -670,7 +706,7 @@ test('validateSettings rejects missing llm config', async (t) => {
   );
 });
 
-test('validateSettings rejects missing semanticIndex config', async (t) => {
+test('validateSettings rejects missing observation config', async (t) => {
   const { dir, homeDir } = await makeDatasetUri();
   t.after(cleanupDataset(dir));
 
@@ -688,11 +724,11 @@ test('validateSettings rejects missing semanticIndex config', async (t) => {
         },
       },
     }, null, 2)),
-    /semanticIndex is required/i,
+    /observation is required/i,
   );
 });
 
-test('validateSettings rejects missing semanticIndex.embedding config', async (t) => {
+test('validateSettings rejects missing observation.embedding config', async (t) => {
   const { dir, homeDir } = await makeDatasetUri();
   t.after(cleanupDataset(dir));
 
@@ -709,15 +745,15 @@ test('validateSettings rejects missing semanticIndex.embedding config', async (t
           provider: 'mock',
         },
       },
-      semanticIndex: {
+      observation: {
         defaultImportance: 0.5,
       },
     }, null, 2)),
-    /semanticIndex\.embedding is required/i,
+    /observation\.embedding is required/i,
   );
 });
 
-test('validateSettings accepts omitted semantic dimensions when the default runtime dimensions apply', async (t) => {
+test('validateSettings accepts omitted observation dimensions when the default runtime dimensions apply', async (t) => {
   const { dir, homeDir } = await makeDatasetUri();
   t.after(cleanupDataset(dir));
 
@@ -734,7 +770,7 @@ test('validateSettings accepts omitted semantic dimensions when the default runt
           provider: 'mock',
         },
       },
-      semanticIndex: {
+      observation: {
         embedding: {
           provider: 'mock',
         },
@@ -744,7 +780,7 @@ test('validateSettings accepts omitted semantic dimensions when the default runt
   );
 });
 
-test('validateSettings rejects omitted semantic dimensions for an existing non-default table', async (t) => {
+test('validateSettings rejects omitted observation dimensions for an existing non-default table', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(cleanupDataset(dir));
 
@@ -754,9 +790,9 @@ test('validateSettings rejects omitted semantic dimensions for an existing non-d
   await addMessage({
     sessionId: 'group-a',
     agent: 'agent-a',
-    prompt: 'semantic prompt',
-    response: 'semantic response',
-    summary: 'semantic summary',
+    prompt: 'observation prompt',
+    response: 'observation response',
+    summary: 'observation summary',
   });
   await new Promise((resolve) => setTimeout(resolve, 50));
 
@@ -772,18 +808,18 @@ test('validateSettings rejects omitted semantic dimensions for an existing non-d
           provider: 'mock',
         },
       },
-      semanticIndex: {
+      observation: {
         embedding: {
           provider: 'mock',
         },
         defaultImportance: 0.5,
       },
     }, null, 2)),
-    /semantic_index dimension mismatch/i,
+    /observation dimension mismatch/i,
   );
 });
 
-test('validateSettings rejects semanticIndex.embedding.provider when it is empty', async (t) => {
+test('validateSettings rejects observation.embedding.provider when it is empty', async (t) => {
   const { dir, homeDir } = await makeDatasetUri();
   t.after(cleanupDataset(dir));
 
@@ -791,13 +827,13 @@ test('validateSettings rejects semanticIndex.embedding.provider when it is empty
 
   await assert.rejects(
     () => validateSettings(JSON.stringify({
-      semanticIndex: {
+      observation: {
         embedding: {
           provider: '',
         },
       },
     }, null, 2)),
-    /semanticIndex\.embedding\.provider must be a non-empty string/i,
+    /observation\.embedding\.provider must be a non-empty string/i,
   );
 });
 
@@ -869,7 +905,7 @@ test('validateSettings rejects openai turn llm without apiKey', async (t) => {
           provider: 'mock',
         },
       },
-      semanticIndex: {
+      observation: {
         embedding: {
           provider: 'mock',
           dimensions: 8,
@@ -897,7 +933,7 @@ test('validateSettings rejects openai observer llm without apiKey', async (t) =>
           provider: 'openai',
         },
       },
-      semanticIndex: {
+      observation: {
         embedding: {
           provider: 'mock',
           dimensions: 8,
@@ -908,7 +944,7 @@ test('validateSettings rejects openai observer llm without apiKey', async (t) =>
   );
 });
 
-test('validateSettings rejects openai semantic embeddings without apiKey', async (t) => {
+test('validateSettings rejects openai observation embeddings without apiKey', async (t) => {
   const { dir, homeDir } = await makeDatasetUri();
   t.after(cleanupDataset(dir));
 
@@ -925,14 +961,14 @@ test('validateSettings rejects openai semantic embeddings without apiKey', async
           provider: 'mock',
         },
       },
-      semanticIndex: {
+      observation: {
         embedding: {
           provider: 'openai',
           dimensions: 8,
         },
       },
     }, null, 2)),
-    /semanticIndex\.embedding\.apiKey must be a non-empty string/i,
+    /observation\.embedding\.apiKey must be a non-empty string/i,
   );
 });
 
@@ -952,7 +988,7 @@ test('validateSettings does not create the default storage root while checking s
         provider: 'mock',
       },
     },
-    semanticIndex: {
+    observation: {
       embedding: {
         provider: 'mock',
         dimensions: 8,
@@ -964,7 +1000,7 @@ test('validateSettings does not create the default storage root while checking s
   await assert.rejects(() => access(homeDir));
 });
 
-test('validateSettings rejects semantic index dimension changes when the table exists but is empty', async (t) => {
+test('validateSettings rejects observation dimension changes when the table exists but is empty', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(cleanupDataset(dir));
 
@@ -974,22 +1010,22 @@ test('validateSettings rejects semantic index dimension changes when the table e
   const binding = await getNativeTables();
   assert.ok(typeof binding.sessionTable.describe === 'function');
   assert.ok(typeof binding.observingTable.describe === 'function');
-  assert.ok(typeof binding.semanticIndexTable.describe === 'function');
+  assert.ok(typeof binding.observationTable.describe === 'function');
 
-  await binding.semanticIndexTable.upsert({
+  await binding.observationTable.upsert({
     rows: [{
       id: 'mem-1',
-      memoryId: 'observing:1',
-      text: 'semantic text',
+      text: 'observation text',
       vector: [0.1, 0.2, 0.3, 0.4],
       importance: 0.7,
       category: 'fact',
+      references: ['observing:1'],
       createdAt: '2024-01-01T00:00:00Z',
     }],
   });
-  await binding.semanticIndexTable.delete({ ids: ['mem-1'] });
+  await binding.observationTable.delete({ ids: ['mem-1'] });
 
-  const description = await binding.semanticIndexTable.describe();
+  const description = await binding.observationTable.describe();
   assert.ok(description);
   assert.equal(description.dimensions?.vector, 4);
 
@@ -1005,7 +1041,7 @@ test('validateSettings rejects semantic index dimension changes when the table e
           provider: 'mock',
         },
       },
-      semanticIndex: {
+      observation: {
         embedding: {
           provider: 'mock',
           dimensions: 8,
@@ -1013,7 +1049,7 @@ test('validateSettings rejects semantic index dimension changes when the table e
         defaultImportance: 0.7,
       },
     }, null, 2)),
-    /semantic_index dimension mismatch/i,
+    /observation dimension mismatch/i,
   );
 });
 
@@ -1060,7 +1096,7 @@ test('validateSettings checks the pending storage target instead of the current 
           provider: 'mock',
         },
       },
-      semanticIndex: {
+      observation: {
         embedding: {
           provider: 'mock',
           dimensions: 8,
@@ -1068,7 +1104,7 @@ test('validateSettings checks the pending storage target instead of the current 
         defaultImportance: 0.7,
       },
     }, null, 2)),
-    /semantic_index dimension mismatch/i,
+    /observation dimension mismatch/i,
   );
 });
 
@@ -1095,7 +1131,7 @@ test('validateSettings is not blocked by the current config storage when the pen
         provider: 'mock',
       },
     },
-    semanticIndex: {
+    observation: {
       embedding: {
         provider: 'mock',
         dimensions: 8,
@@ -1229,7 +1265,35 @@ test('rendered memory binding returns unified turn and observing reads', async (
   assert.equal(observingTimeline[0].memoryId, observing.memoryId);
 
   const recalled = await memories.recall('rendered', 10);
-  assert.ok(recalled.some((memory) => memory.memoryId.startsWith('observing:')));
+  assert.ok(recalled.some((memory) => memory.memoryId.startsWith('observation:')));
+});
+
+test('recall returns observation memory ids and detail renders references', async (t) => {
+  const { dir, homeDir, configPath } = await makeDatasetUri();
+  t.after(cleanupDataset(dir));
+
+  process.env.MUNINN_HOME = homeDir;
+  await writeMuninnConfig(configPath, { observerProvider: 'mock' });
+
+  const binding = await getNativeTables();
+  await binding.observationTable.upsert({
+    rows: [{
+      id: 'obs-1',
+      text: 'Caroline joined an LGBTQ support group in May 2023.',
+      vector: [1, 0, 0, 0],
+      importance: 1,
+      category: 'fact',
+      references: ['session:1'],
+      createdAt: new Date().toISOString(),
+    }],
+  });
+
+  const hits = await memories.recall('support group', 1);
+  assert.equal(hits[0].memoryId, 'observation:obs-1');
+  const detail = await memories.get('observation:obs-1');
+  assert.ok(detail);
+  assert.equal(detail.memoryId, 'observation:obs-1');
+  assert.match(detail.detail ?? '', /session:1/);
 });
 
 test('rendered memory page mode paginates after combining session and observing results', async (t) => {

@@ -79,22 +79,7 @@ def build_prediction(question: str, category: int, hits: list[RecallHit]) -> str
 
 
 def build_query_candidates(question: str) -> list[str]:
-    raw_tokens = re.findall(r"[A-Za-z0-9']+", question)
-    significant = [token.lower() for token in raw_tokens if token.lower() not in STOPWORDS]
-    candidates: list[str] = []
-
-    max_window = min(3, len(significant))
-    for window in range(max_window, 0, -1):
-        for index in range(0, len(significant) - window + 1):
-            phrase = " ".join(significant[index:index + window]).strip()
-            if len(phrase) >= 4:
-                candidates.append(phrase)
-
-    full_question = question.strip().rstrip("?")
-    if full_question:
-        candidates.append(full_question)
-
-    return dedupe_preserving_order(candidates)
+    return [question]
 
 
 def best_date_answer(question: str, hits: list[RecallHit]) -> str | None:

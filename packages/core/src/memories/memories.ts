@@ -1,8 +1,9 @@
 import type { NativeTables } from '../native.js';
 import type { ListModeInput, ObservingSnapshot, RecallHit, RenderedMemory, SessionTurn } from '../client.js';
 import { getObservingSnapshot, listObservingSnapshots, timelineObservingSnapshots } from './observings.js';
+import { getObservation } from './observations.js';
 import { recallMemories } from './recall.js';
-import { renderObservingSnapshot, renderSessionTurn } from './rendered.js';
+import { renderObservation, renderObservingSnapshot, renderSessionTurn } from './rendered.js';
 import { getSessionTurn, listSessionTurns, timelineSessionTurns } from './sessions.js';
 
 export class Memories {
@@ -32,6 +33,10 @@ export class Memories {
   }
 
   async get(memoryId: string): Promise<RenderedMemory | null> {
+    if (memoryId.startsWith('observation:')) {
+      const observation = await getObservation(this.client, memoryId);
+      return observation ? renderObservation(observation) : null;
+    }
     if (memoryId.startsWith('observing:')) {
       const observing = await getObservingSnapshot(this.client, memoryId);
       return observing ? renderObservingSnapshot(observing) : null;

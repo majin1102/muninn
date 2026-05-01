@@ -1,6 +1,6 @@
 import {
   __testing as nativeTesting,
-  describeSemanticIndexForStorage,
+  describeObservationForStorage,
   getNativeTables,
   shutdownNativeTablesForTests,
   type NativeTables,
@@ -41,6 +41,7 @@ export interface SessionTurn {
   prompt?: string | null;
   response?: string | null;
   observingEpoch?: number | null;
+  previousTurnSummary?: string | null;
 }
 
 export interface ObservingSnapshot {
@@ -235,16 +236,16 @@ export class MuninnBackend {
       if (!observer || !observerCheckpoint) {
         return null;
       }
-      const [turnStats, observingStats, semanticIndexStats] = await Promise.all([
+      const [turnStats, observingStats, observationStats] = await Promise.all([
         this.client.sessionTable.stats(),
         this.client.observingTable.stats(),
-        this.client.semanticIndexTable.stats(),
+        this.client.observationTable.stats(),
       ]);
       const checkpoint: ObserverCheckpoint = {
         baseline: {
           turn: turnStats?.version ?? 0,
           observing: observingStats?.version ?? 0,
-          semanticIndex: semanticIndexStats?.version ?? 0,
+          observation: observationStats?.version ?? 0,
         },
         committedEpoch: observerCheckpoint.committedEpoch,
         nextEpoch: observerCheckpoint.nextEpoch,
@@ -329,7 +330,7 @@ async function ensureBootstrapped() {
 async function bootstrap(tables: Awaited<ReturnType<typeof getNativeTables>>): Promise<void> {
   if (loadMuninnConfig()?.observer) {
     const embedding = getEmbeddingConfig();
-    await tables.semanticIndexTable.validateDimensions({ expected: embedding.dimensions });
+    await tables.observationTable.validateDimensions({ expected: embedding.dimensions });
   }
 }
 
@@ -359,7 +360,7 @@ export async function addMessage(turnContent: TurnContent): Promise<void> {
 export async function validateSettings(content: string): Promise<void> {
   const config = validateMuninnConfigInput(content);
   const storage = resolveStorageTarget(config);
-  const description = await describeSemanticIndexForStorage(storage);
+  const description = await describeObservationForStorage(storage);
   await validateMuninnConfigStorage(config, description);
 }
 

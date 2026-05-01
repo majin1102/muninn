@@ -113,11 +113,10 @@ class ScoringTests(unittest.TestCase):
         self.assertEqual(scores, [1.0])
         self.assertEqual(recall, [2 / 3])
 
-    def test_query_builder_emits_searchable_phrases(self) -> None:
-        self.assertIn(
-            "support group",
-            build_query_candidates("What support group did Caroline join?"),
-        )
+    def test_query_builder_passes_the_original_question_through(self) -> None:
+        question = "What support group did Caroline join?"
+
+        self.assertEqual(build_query_candidates(question), [question])
 
     def test_apply_predictions_records_top_hit_diagnostics(self) -> None:
         qas = [
@@ -143,17 +142,12 @@ class ScoringTests(unittest.TestCase):
 
         self.assertEqual(qas[0]["muninn_top_5_prediction"], "8 May 2023")
         self.assertEqual(qas[0]["muninn_top_5_prediction_context"], ["D1:3", "D1:4"])
-        self.assertEqual(
-            qas[0]["muninn_top_5_hits"],
-            [
-                {
-                    "memory_id": "observing:1",
-                    "title": "Support group memory",
-                    "evidence_ids": ["D1:3", "D1:4"],
-                    "date_time": "1:56 pm on 8 May, 2023",
-                }
-            ],
-        )
+        self.assertEqual(qas[0]["muninn_top_5_hits"][0]["memory_id"], "observing:1")
+        self.assertEqual(qas[0]["muninn_top_5_hits"][0]["title"], "Support group memory")
+        self.assertEqual(qas[0]["muninn_top_5_hits"][0]["evidence_ids"], ["D1:3", "D1:4"])
+        self.assertEqual(qas[0]["muninn_top_5_hits"][0]["date_time"], "1:56 pm on 8 May, 2023")
+        self.assertIn("matched_text", qas[0]["muninn_top_5_hits"][0])
+        self.assertIn("references", qas[0]["muninn_top_5_hits"][0])
 
     def test_summary_contexts_are_scored_more_strictly_than_session_hits(self) -> None:
         scores, recall = evaluate_question_answering(

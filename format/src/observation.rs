@@ -15,7 +15,7 @@ use super::access::{
 };
 use super::codec::{observations_to_reader, record_batch_to_observations};
 use crate::maintenance::{
-    cleanup_dataset, compact_dataset, ensure_semantic_vector_index, optimize_semantic_index,
+    cleanup_dataset, compact_dataset, ensure_semantic_vector_index, optimize_observation,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -104,7 +104,7 @@ impl ObservationTable {
         let Some(mut dataset) = self.access.try_open().await? else {
             return Ok(false);
         };
-        optimize_semantic_index(&mut dataset, merge_count).await
+        optimize_observation(&mut dataset, merge_count).await
     }
 
     #[cfg(test)]

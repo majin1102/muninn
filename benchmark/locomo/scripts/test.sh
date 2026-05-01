@@ -8,4 +8,12 @@ sh "$SCRIPT_DIR/bootstrap.sh"
 
 cd "$ROOT_DIR"
 python3 -m unittest discover -s benchmark/locomo/tests -p 'test_*.py'
-node --test benchmark/locomo/test/bridge.test.mjs
+NODE_BIN=${NODE_BIN:-}
+if [ -z "$NODE_BIN" ]; then
+  if [ -x /opt/homebrew/bin/node ]; then
+    NODE_BIN=/opt/homebrew/bin/node
+  else
+    NODE_BIN=node
+  fi
+fi
+"$NODE_BIN" --test benchmark/locomo/test/bridge.test.mjs benchmark/locomo/test/gateway-lab.test.mjs

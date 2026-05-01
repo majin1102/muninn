@@ -39,7 +39,7 @@ function makeConfig(embedding) {
         provider: 'mock',
       },
     },
-    semanticIndex: {
+    observation: {
       embedding,
       defaultImportance: 0.7,
     },

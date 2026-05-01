@@ -19,7 +19,7 @@ import {
   threadFromSnapshots,
 } from './thread.js';
 import type { ObservingThread } from './types.js';
-import { buildSemanticIndex, buildTouchedIndex, observeEpoch } from './update.js';
+import { buildObservation, buildTouchedIndex, observeEpoch } from './update.js';
 
 const BASE_RETRY_DELAY_MS = 100;
 const MAX_RETRY_DELAY_MS = 2_000;
@@ -133,7 +133,7 @@ export class Observer {
       .sort(compareTurns)
       .map((turn) => turn.turnId);
     return {
-      resolved: pendingTurnIds.length === 0 && !this.hasPendingSemanticIndex() && !this.currentEpoch,
+      resolved: pendingTurnIds.length === 0 && !this.hasPendingObservation() && !this.currentEpoch,
       pendingTurnIds,
       observingEpoch: this.currentEpoch?.epoch,
       committedEpoch: this.committedEpoch,
@@ -173,7 +173,7 @@ export class Observer {
     const barrierRequiresObserve = sealedEpoch.turns.length > 0;
     const barrierComplete = () => {
       const observed = !barrierRequiresObserve || (this.committedEpoch ?? -1) >= barrier.epoch;
-      return observed && !this.hasPendingSemanticIndexUpTo(barrier.epoch);
+      return observed && !this.hasPendingObservationUpTo(barrier.epoch);
     };
 
     while (true) {
@@ -210,7 +210,7 @@ export class Observer {
         baseline: {
           turn: 0,
           observing: 0,
-          semanticIndex: 0,
+          observation: 0,
         },
         nextEpoch: 0,
         recentSessions: [],
@@ -279,8 +279,8 @@ export class Observer {
           continue;
         }
 
-        if (this.shouldRetrySemanticIndex()) {
-          await this.retrySemanticIndex();
+        if (this.shouldRetryObservation()) {
+          await this.retryObservation();
           retryDelayMs = BASE_RETRY_DELAY_MS;
           continue;
         }
@@ -292,7 +292,7 @@ export class Observer {
           continue;
         }
 
-        if (this.hasPendingSemanticIndex()) {
+        if (this.hasPendingObservation()) {
           await this.waitForIndexRetryOrChange();
           retryDelayMs = BASE_RETRY_DELAY_MS;
           continue;
@@ -332,14 +332,14 @@ export class Observer {
       this.threads = result.threads;
       try {
         await this.buildCurrentEpochIndex(result.touchedIds);
-        if (!this.hasPendingSemanticIndex()) {
+        if (!this.hasPendingObservation()) {
           this.nextIndexRetryAt = undefined;
         }
       } catch (error) {
         if (this.shuttingDown || isAbortError(error)) {
           throw error;
         }
-        console.error(`[muninn:observer] semantic index build failed: ${String(error)}`);
+        console.error(`[muninn:observer] observation index build failed: ${String(error)}`);
         this.nextIndexRetryAt = Date.now() + INDEX_RETRY_DELAY_MS;
       }
       this.committedEpoch = this.currentEpoch?.epoch;
@@ -404,23 +404,23 @@ export class Observer {
     };
   }
 
-  private hasPendingSemanticIndex(): boolean {
+  private hasPendingObservation(): boolean {
     return this.threads.some((thread) => getPendingIndex(thread) !== null);
   }
 
-  private hasPendingSemanticIndexUpTo(maxEpoch: number): boolean {
+  private hasPendingObservationUpTo(maxEpoch: number): boolean {
     return this.threads.some((thread) => getPendingIndexUpTo(thread, maxEpoch) !== null);
   }
 
-  private shouldRetrySemanticIndex(): boolean {
-    return this.hasPendingSemanticIndex()
+  private shouldRetryObservation(): boolean {
+    return this.hasPendingObservation()
       && (this.nextIndexRetryAt == null || Date.now() >= this.nextIndexRetryAt);
   }
 
-  private async retrySemanticIndex(): Promise<void> {
+  private async retryObservation(): Promise<void> {
     try {
       await this.checkpointLock.shared(async () => {
-        await buildSemanticIndex(this.client, this.threads, this.shutdownController.signal);
+        await buildObservation(this.client, this.threads, this.shutdownController.signal);
         this.refreshCheckpointSnapshot();
         this.nextIndexRetryAt = undefined;
       });
@@ -428,10 +428,10 @@ export class Observer {
       if (this.shuttingDown || isAbortError(error)) {
         throw error;
       }
-      console.error(`[muninn:observer] semantic index retry failed: ${String(error)}`);
+      console.error(`[muninn:observer] observation index retry failed: ${String(error)}`);
       this.nextIndexRetryAt = Date.now() + INDEX_RETRY_DELAY_MS;
     } finally {
-      if (!this.hasPendingSemanticIndex()) {
+      if (!this.hasPendingObservation()) {
         this.nextIndexRetryAt = undefined;
       }
       this.notifyChange();

@@ -11,7 +11,7 @@ use lance::dataset::ROW_ID;
 use lance::{Error, Result};
 
 use super::schema::{observation_schema, observing_schema, turn_schema};
-use crate::config::semantic_index_config;
+use crate::config::observation_config;
 use crate::memory_id::{MemoryId, MemoryLayer};
 use crate::observation::Observation;
 use crate::observing::ObservingSnapshot;
@@ -435,7 +435,7 @@ pub(crate) fn batch_row_ids(batch: &RecordBatch) -> Result<Vec<u64>> {
 }
 
 pub(crate) fn observations_to_record_batch(rows: &[Observation]) -> Result<RecordBatch> {
-    let dimensions = semantic_index_dimensions()?;
+    let dimensions = observation_dimensions()?;
     let ids = StringArray::from_iter_values(rows.iter().map(|row| row.id.as_str()));
     let text = StringArray::from_iter_values(rows.iter().map(|row| row.text.as_str()));
     let vector = build_float32_fixed_size_list_array(
@@ -470,7 +470,7 @@ pub(crate) fn observations_to_reader(
     rows: Vec<Observation>,
 ) -> Result<RecordBatchIterator<impl Iterator<Item = std::result::Result<RecordBatch, ArrowError>>>>
 {
-    let dimensions = semantic_index_dimensions()?;
+    let dimensions = observation_dimensions()?;
     let schema = Arc::new(observation_schema(dimensions));
     let batch = observations_to_record_batch(&rows).map_err(arrow_error_from_lance)?;
     Ok(RecordBatchIterator::new(
@@ -582,8 +582,8 @@ pub(crate) fn optional_float32_fixed_size_list(
     Some((0..values.len()).map(|idx| values.value(idx)).collect())
 }
 
-pub(crate) fn semantic_index_dimensions() -> Result<usize> {
-    Ok(semantic_index_config()?.dimensions)
+pub(crate) fn observation_dimensions() -> Result<usize> {
+    Ok(observation_config()?.dimensions)
 }
 
 pub(crate) fn arrow_error_from_lance(error: Error) -> ArrowError {

@@ -15,6 +15,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 BRIDGE_PACKAGE_NAME = "@muninn/benchmark-locomo"
 BRIDGE_DIST = REPO_ROOT / "benchmark" / "locomo" / "dist" / "bridge.js"
 BOOTSTRAP_SCRIPT = REPO_ROOT / "benchmark" / "locomo" / "scripts" / "bootstrap.sh"
+NODE_BINARY_ENV = "MUNINN_NODE_BINARY"
 
 
 class BridgeError(RuntimeError):
@@ -29,6 +30,13 @@ class RecallHit:
     title: str | None
     summary: str | None
     detail: str | None
+    matched_text: str = ""
+    references: list[dict[str, Any]] | None = None
+    observation_ratio: float | None = None
+
+    def __post_init__(self) -> None:
+        if self.references is None:
+            self.references = []
 
 
 class MuninnBridge:
@@ -80,6 +88,9 @@ class MuninnBridge:
                     title=item.get("title"),
                     summary=item.get("summary"),
                     detail=item.get("detail"),
+                    matched_text=item.get("matched_text") or "",
+                    references=item.get("references") or [],
+                    observation_ratio=item.get("observationRatio"),
                 )
             )
         return hits
@@ -116,15 +127,18 @@ class MuninnBridge:
                     date_time=item.get("date_time") or "",
                     title=item.get("title"),
                     summary=item.get("summary"),
-                    detail=item.get("detail"),
-                )
+                        detail=item.get("detail"),
+                        matched_text=item.get("matched_text") or "",
+                        references=item.get("references") or [],
+                        observation_ratio=item.get("observationRatio"),
+                    )
                 for item in items
             ]
         return results
 
     def _run_json(self, command: str, **kwargs: str) -> dict[str, Any]:
         self.ensure_built()
-        args = ["node", str(BRIDGE_DIST), command]
+        args = [node_binary(), str(BRIDGE_DIST), command]
         for key, value in kwargs.items():
             args.extend([f"--{key.replace('_', '-')}", value])
         completed = self._run_process(args)
@@ -192,3 +206,8 @@ class MuninnBridge:
         if "PATH" not in env or not env["PATH"].strip():
             env["PATH"] = "/usr/bin:/bin:/usr/sbin:/sbin"
         return env
+
+
+def node_binary() -> str:
+    value = os.environ.get(NODE_BINARY_ENV, "").strip()
+    return value or "node"
