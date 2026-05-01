@@ -115,3 +115,27 @@ export type GatewayRoute = {
 export type GatewayResult = {
   routes: GatewayRoute[];
 };
+
+export type ThreadCandidateMemory = {
+  memoryId: string;
+  title?: string | null;
+  summary?: string | null;
+};
+
+export type ThreadPreparationThread = {
+  threadId: string;
+  title: string;
+  summary?: string | null;
+};
+
+export type ThreadWorkItem = {
+  observationIds: string[];
+  targetThreadId?: string | null;
+  newThreadTitle?: string | null;
+  rationale: string;
+};
+
+export type ThreadPreparationResult = {
+  workItems: ThreadWorkItem[];
+  unthreadedObservationIds: string[];
+};

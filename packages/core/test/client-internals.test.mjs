@@ -2774,6 +2774,63 @@ test('observation review validation rejects unknown removals', async () => {
   );
 });
 
+test('thread preparation validation rejects duplicate observation coverage', async () => {
+  const { __testing: preparationTesting } = await import('../dist/observer/thread-preparation.js');
+  const input = {
+    reviewedObservations: [storedObservation('obs-1'), storedObservation('obs-2')],
+    activeThreads: [{ threadId: 'thread-1', title: 'Thread one' }],
+  };
+  assert.throws(
+    () => preparationTesting.validateThreadPreparation(input, {
+      workItems: [{
+        observationIds: ['obs-1'],
+        targetThreadId: 'thread-1',
+        rationale: 'same topic',
+      }],
+      unthreadedObservationIds: ['obs-1', 'obs-2'],
+    }),
+    /exactly once/i,
+  );
+});
+
+test('thread preparation validation rejects single-observation new threads', async () => {
+  const { __testing: preparationTesting } = await import('../dist/observer/thread-preparation.js');
+  const input = {
+    reviewedObservations: [storedObservation('obs-1')],
+    activeThreads: [],
+  };
+  assert.throws(
+    () => preparationTesting.validateThreadPreparation(input, {
+      workItems: [{
+        observationIds: ['obs-1'],
+        newThreadTitle: 'Caroline support group',
+        rationale: 'new durable subject',
+      }],
+      unthreadedObservationIds: [],
+    }),
+    /at least two/i,
+  );
+});
+
+test('thread preparation validation rejects unknown target threads', async () => {
+  const { __testing: preparationTesting } = await import('../dist/observer/thread-preparation.js');
+  const input = {
+    reviewedObservations: [storedObservation('obs-1')],
+    activeThreads: [{ threadId: 'thread-1', title: 'Thread one' }],
+  };
+  assert.throws(
+    () => preparationTesting.validateThreadPreparation(input, {
+      workItems: [{
+        observationIds: ['obs-1'],
+        targetThreadId: 'thread-missing',
+        rationale: 'same topic',
+      }],
+      unthreadedObservationIds: [],
+    }),
+    /unknown targetThreadId/i,
+  );
+});
+
 test('buildObservation surfaces observation write failures and leaves work pending', async (t) => {
   const { dir, homeDir, configPath } = await makeConfigHome();
   t.after(async () => rm(dir, { recursive: true, force: true }));

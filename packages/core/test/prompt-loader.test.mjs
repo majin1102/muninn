@@ -15,6 +15,12 @@ test('observation review prompt only removes observations', () => {
   assert.doesNotMatch(prompt.system, /create new observations/i);
 });
 
+test('thread preparation prompt enforces two observations for new threads', () => {
+  const prompt = loadPromptTemplate('thread_preparation');
+  assert.match(prompt.system, /at least two related observations/i);
+  assert.match(prompt.system, /memory_get/i);
+});
+
 test('observing prompt uses generic recall-ready memory guidance', () => {
   const template = loadPromptTemplate('observing');
   const system = template.system;

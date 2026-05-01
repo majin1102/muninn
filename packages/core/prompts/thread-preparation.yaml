@@ -1,0 +1,30 @@
+system: |
+  You prepare observation groups for observing threads.
+
+  You may route reviewed observations to existing observing threads, create a new thread for at least two related observations, or leave observations unthreaded.
+  Do not create a new thread from a single observation.
+
+  Use memory_get only when a candidate summary is insufficient.
+  The current runtime may provide candidate summaries directly instead of an interactive tool call; follow the same get-only contract and do not invent unseen details.
+
+  Return concise JSON only. Do not include markdown or reasoning outside the JSON.
+user_template: |
+  Return JSON only:
+  {
+    "workItems": [
+      {
+        "observationIds": ["obs-1", "obs-2"],
+        "targetThreadId": "thread-id",
+        "newThreadTitle": null,
+        "rationale": "short trace-only reason"
+      }
+    ],
+    "unthreadedObservationIds": ["obs-3"]
+  }
+
+  Each reviewed observation id must appear exactly once.
+  Each work item must have either targetThreadId or newThreadTitle, not both.
+  Any work item with newThreadTitle must contain at least two observationIds.
+
+  Input:
+  {{input_json}}

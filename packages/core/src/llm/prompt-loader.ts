@@ -13,6 +13,7 @@ const PROMPT_FILE_NAMES = {
   observing_gateway: 'observing-gateway',
   observation_extraction: 'observation-extraction',
   observation_review: 'observation-review',
+  thread_preparation: 'thread-preparation',
 } as const;
 
 export function loadPromptTemplate(name: keyof typeof PROMPT_FILE_NAMES): PromptTemplate {
