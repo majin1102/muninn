@@ -1,4 +1,5 @@
 import { getObserverLlmConfig, getTurnLlmConfig, type TextProviderConfig } from './config.js';
+import { loadCodexCliAuth } from './codex-auth.js';
 
 export type LlmTask = 'turn' | 'observer';
 
@@ -18,6 +19,9 @@ export async function generateText(
   }
   if (config.provider === 'mock') {
     return generateMockText(request);
+  }
+  if (config.provider === 'openai-codex') {
+    return generateOpenAiCodexText(config, request);
   }
   return generateOpenAiText(config, request);
 }
@@ -111,6 +115,76 @@ async function generateOpenAiText(
     return content;
   }
 
+  const text = extractResponsesText(payload);
+  if (!text) {
+    throw new Error('openai response did not contain text output');
+  }
+  return text;
+}
+
+async function generateOpenAiCodexText(
+  config: TextProviderConfig,
+  request: LlmTextRequest,
+): Promise<string> {
+  throwIfAborted(request.signal);
+  const auth = loadCodexCliAuth();
+  const response = await fetch(normalizeCodexResponsesUrl(config.baseUrl), {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${auth.accessToken}`,
+      'content-type': 'application/json',
+    },
+    signal: request.signal,
+    body: JSON.stringify({
+      model: config.model ?? 'gpt-5.4',
+      input: [
+        {
+          role: 'system',
+          content: [{ type: 'input_text', text: request.system }],
+        },
+        {
+          role: 'user',
+          content: [{ type: 'input_text', text: request.prompt }],
+        },
+      ],
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`openai-codex request failed with status ${response.status}: ${await response.text()}`);
+  }
+
+  const text = extractResponsesText(await response.json() as Record<string, unknown>);
+  if (!text) {
+    throw new Error('openai-codex response did not contain text output');
+  }
+  return text;
+}
+
+function normalizeApiStyle(api?: string): 'responses' | 'chatCompletions' {
+  if (api === 'openai-completions' || api === 'chat_completions' || api === 'chat-completions') {
+    return 'chatCompletions';
+  }
+  return 'responses';
+}
+
+function normalizeChatCompletionsUrl(baseUrl: string): string {
+  return baseUrl.endsWith('/chat/completions')
+    ? baseUrl
+    : `${baseUrl.replace(/\/+$/, '')}/chat/completions`;
+}
+
+function normalizeCodexResponsesUrl(baseUrl?: string): string {
+  const resolved = (baseUrl ?? 'https://chatgpt.com/backend-api').replace(/\/+$/, '');
+  if (resolved === 'https://chatgpt.com/backend-api' || resolved === 'https://chatgpt.com/backend-api/responses') {
+    return 'https://chatgpt.com/backend-api/codex/responses';
+  }
+  return resolved.endsWith('/responses')
+    ? resolved
+    : `${resolved}/responses`;
+}
+
+function extractResponsesText(payload: Record<string, unknown>): string | null {
   const outputText = typeof payload.output_text === 'string' ? payload.output_text.trim() : '';
   if (outputText) {
     return outputText;
@@ -125,23 +199,7 @@ async function generateOpenAiText(
       }
     }
   }
-  if (fragments.length === 0) {
-    throw new Error('openai response did not contain text output');
-  }
-  return fragments.join('\n\n');
-}
-
-function normalizeApiStyle(api?: string): 'responses' | 'chatCompletions' {
-  if (api === 'openai-completions' || api === 'chat_completions' || api === 'chat-completions') {
-    return 'chatCompletions';
-  }
-  return 'responses';
-}
-
-function normalizeChatCompletionsUrl(baseUrl: string): string {
-  return baseUrl.endsWith('/chat/completions')
-    ? baseUrl
-    : `${baseUrl.replace(/\/+$/, '')}/chat/completions`;
+  return fragments.length > 0 ? fragments.join('\n\n') : null;
 }
 
 function extractLabeledValue(input: string, label: string): string | null {

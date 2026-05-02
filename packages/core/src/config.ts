@@ -59,7 +59,7 @@ type MuninnConfigRecord = {
 };
 
 export type TextProviderConfig = {
-  provider: 'mock' | 'openai';
+  provider: 'mock' | 'openai' | 'openai-codex';
   model?: string;
   api?: string;
   apiKey?: string;
@@ -127,7 +127,7 @@ export function getTurnLlmConfig(): TurnLlmConfig | null {
     return null;
   }
   return {
-    provider: parseProvider(llm.provider),
+    provider: parseLlmProvider(llm.provider),
     model: llm.model,
     api: llm.api,
     apiKey: llm.apiKey,
@@ -143,7 +143,7 @@ export function getObserverLlmConfig(): ObserverLlmConfig | null {
     name: observer.name,
     maxAttempts: observer.maxAttempts ?? DEFAULT_OBSERVER_MAX_ATTEMPTS,
     activeWindowDays: observer.activeWindowDays ?? DEFAULT_OBSERVER_ACTIVE_WINDOW_DAYS,
-    provider: parseProvider(llm.provider),
+    provider: parseLlmProvider(llm.provider),
     model: llm.model,
     api: llm.api,
     apiKey: llm.apiKey,
@@ -158,7 +158,7 @@ export function getEffectiveObserverName(): string {
 export function getEmbeddingConfig(): EmbeddingConfig {
   const { semanticIndex, embedding } = requireCoreRuntimeConfig(loadMuninnConfig());
   return {
-    provider: parseProvider(embedding.provider),
+    provider: parseEmbeddingProvider(embedding.provider),
     model: embedding.model,
     apiKey: embedding.apiKey,
     baseUrl: embedding.baseUrl,
@@ -267,14 +267,14 @@ function requireCoreRuntimeConfig(config: MuninnConfigRecord | null): CoreRuntim
   requireNonEmptyString(observer.llm, 'observer.llm');
   requireNonEmptyString(embedding.provider, 'semanticIndex.embedding.provider');
   const dimensions = effectiveEmbeddingDimensions(config);
-  parseProvider(embedding.provider);
+  parseEmbeddingProvider(embedding.provider);
 
   const observerLlm = llm[observer.llm];
   if (!observerLlm) {
     throw new Error(`observer.llm references missing llm.${observer.llm}.`);
   }
   requireNonEmptyString(observerLlm.provider, `llm.${observer.llm}.provider`);
-  parseProvider(observerLlm.provider);
+  parseLlmProvider(observerLlm.provider);
 
   return {
     observer,
@@ -287,11 +287,18 @@ function requireCoreRuntimeConfig(config: MuninnConfigRecord | null): CoreRuntim
   };
 }
 
-function parseProvider(provider: string): 'mock' | 'openai' {
-  if (provider === 'mock' || provider === 'openai') {
+function parseLlmProvider(provider: string): 'mock' | 'openai' | 'openai-codex' {
+  if (provider === 'mock' || provider === 'openai' || provider === 'openai-codex') {
     return provider;
   }
   throw new Error(`unsupported llm provider: ${provider}`);
+}
+
+function parseEmbeddingProvider(provider: string): 'mock' | 'openai' {
+  if (provider === 'mock' || provider === 'openai') {
+    return provider;
+  }
+  throw new Error(`unsupported embedding provider: ${provider}`);
 }
 
 function validateTopLevelConfig(config: MuninnConfigRecord): void {
@@ -308,7 +315,7 @@ function validateConfiguredProviders(config: MuninnConfigRecord): void {
   validateReferencedProvider(config.llm, config.observer?.llm, 'observer.llm');
   const embeddingProvider = config.semanticIndex?.embedding?.provider;
   if (embeddingProvider) {
-    parseProvider(embeddingProvider);
+    parseEmbeddingProvider(embeddingProvider);
   }
 }
 
@@ -367,7 +374,7 @@ function validateSemanticIndexConfig(semanticIndex: unknown): void {
   }
   const embedding = expectRecord(config.embedding, 'semanticIndex.embedding');
   requireNonEmptyString(embedding.provider, 'semanticIndex.embedding.provider');
-  const provider = parseProvider(embedding.provider as string);
+  const provider = parseEmbeddingProvider(embedding.provider as string);
   validateOptionalString(embedding.model, 'semanticIndex.embedding.model');
   validateOptionalString(embedding.apiKey, 'semanticIndex.embedding.apiKey');
   validateOptionalString(embedding.baseUrl, 'semanticIndex.embedding.baseUrl');
@@ -420,7 +427,7 @@ function validateReferencedProvider(
     throw new Error(`${sourceLabel} references missing llm.${llmName}.`);
   }
   requireNonEmptyString(config.provider, `llm.${llmName}.provider`);
-  const provider = parseProvider(config.provider);
+  const provider = parseLlmProvider(config.provider);
   if (provider === 'openai') {
     requireNonEmptyString(config.apiKey, `llm.${llmName}.apiKey`);
   }
