@@ -5,7 +5,15 @@
   "packageManager": "pnpm@9.0.0",
   "scripts": {
     "build": "pnpm -r build",
-    "dev": "pnpm -r dev"
+    "dev": "pnpm -r dev",
+    "test": "pnpm run test:node && pnpm run test:rust",
+    "test:node": "pnpm -r --if-present --filter \"!@muninn/benchmark-locomo\" test",
+    "test:core": "pnpm --filter @muninn/core test",
+    "test:sidecar": "pnpm --filter @muninn/sidecar test",
+    "test:plugin": "pnpm --filter @muninn/openclaw-plugin-muninn test",
+    "test:locomo": "pnpm --filter @muninn/benchmark-locomo test",
+    "test:rust": "cargo test --manifest-path format/Cargo.toml",
+    "check:native": "cargo check --manifest-path packages/core/native/Cargo.toml"
   },
   "devDependencies": {
     "typescript": "^5.0.0"
