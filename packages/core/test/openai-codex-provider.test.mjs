@@ -30,7 +30,7 @@ function makeConfig({ provider = 'openai-codex', model, baseUrl } = {}) {
         ...(baseUrl ? { baseUrl } : {}),
       },
     },
-    semanticIndex: {
+    observation: {
       embedding: {
         provider: 'mock',
         dimensions: 4,
@@ -86,7 +86,7 @@ test('validateMuninnConfigInput accepts openai-codex llm without apiKey', () => 
 
 test('validateMuninnConfigInput keeps openai-codex out of embedding providers', () => {
   const config = makeConfig();
-  config.semanticIndex.embedding.provider = 'openai-codex';
+  config.observation.embedding.provider = 'openai-codex';
 
   assert.throws(
     () => validateMuninnConfigInput(JSON.stringify(config)),
