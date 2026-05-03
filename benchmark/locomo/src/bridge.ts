@@ -9,7 +9,7 @@ import * as coreClient from '@muninn/core';
 
 const CONFIG_FILE_NAME = 'muninn.json';
 const WATERMARK_POLL_MS = 2_000;
-const WATERMARK_TIMEOUT_MS = 10 * 60 * 1_000;
+const WATERMARK_TIMEOUT_MS = 30 * 60 * 1_000;
 const WATERMARK_WARNING_DELAY_MS = 60_000;
 const RECALL_ATTEMPTS = 3;
 const RECALL_RETRY_DELAY_MS = 1_000;
@@ -79,6 +79,10 @@ type RecallBatchQuery = {
   key: string;
   query: string;
   limit: number;
+};
+
+export const __testing = {
+  WATERMARK_TIMEOUT_MS,
 };
 
 async function main() {
@@ -204,7 +208,9 @@ async function recallBatchCommand(options: Map<string, string>) {
 
 function setGatewayTraceFile(home: string): string {
   const gatewayTracePath = path.join(home, 'locomo-gateway-trace.jsonl');
+  const observingTracePath = path.join(home, 'locomo-thread-observing-trace.jsonl');
   process.env.MUNINN_OBSERVER_GATEWAY_TRACE_FILE = gatewayTracePath;
+  process.env.MUNINN_THREAD_OBSERVING_TRACE_FILE = observingTracePath;
   return gatewayTracePath;
 }
 
@@ -397,6 +403,11 @@ async function directSessionReferences(
   memoryId: string,
   turnMap: Map<string, ManifestTurn>,
 ): Promise<BridgeReference[]> {
+  if (memoryId.startsWith('observation:')) {
+    const rendered = await coreClient.memories.get(memoryId);
+    const references = renderedReferences(rendered);
+    return directSessionReferencesFromIds(references, turnMap);
+  }
   if (!memoryId.startsWith('observing:')) {
     return [];
   }
@@ -405,21 +416,28 @@ async function directSessionReferences(
     return [];
   }
 
-  const references: BridgeReference[] = [];
-  for (const reference of observing.references) {
+  return directSessionReferencesFromIds(observing.references, turnMap);
+}
+
+async function directSessionReferencesFromIds(
+  references: string[],
+  turnMap: Map<string, ManifestTurn>,
+): Promise<BridgeReference[]> {
+  const rows: BridgeReference[] = [];
+  for (const reference of references) {
     const manifestTurn = turnMap.get(reference);
     if (!manifestTurn) {
       continue;
     }
     const turn = await coreClient.sessions.get(reference);
-    references.push({
+    rows.push({
       memory_id: reference,
       source_id: manifestTurn.source_id,
       date_time: manifestTurn.date_time,
       text: renderReferenceText(turn),
     });
   }
-  return references;
+  return rows;
 }
 
 function renderReferenceText(turn: SessionTurn | null): string {
@@ -468,6 +486,19 @@ async function resolveEvidenceIds(
     return [direct.source_id];
   }
 
+  if (memoryId.startsWith('observation:')) {
+    const rendered = await coreClient.memories.get(memoryId);
+    const sourceIds: string[] = [];
+    for (const reference of renderedReferences(rendered)) {
+      for (const sourceId of await resolveEvidenceReference(reference, turnMap, seen)) {
+        if (!sourceIds.includes(sourceId)) {
+          sourceIds.push(sourceId);
+        }
+      }
+    }
+    return sourceIds;
+  }
+
   if (!memoryId.startsWith('observing:')) {
     return [];
   }
@@ -497,6 +528,19 @@ async function resolveEvidenceReference(
     return [];
   }
   return resolveEvidenceIds(reference, turnMap, seen);
+}
+
+function renderedReferences(rendered: RenderedMemory | null): string[] {
+  const detail = rendered?.detail;
+  if (!detail) {
+    return [];
+  }
+  return detail
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith('- '))
+    .map((line) => line.slice(2).trim())
+    .filter(Boolean);
 }
 
 export function resolveEvidenceIdsFromGraph(
@@ -624,13 +668,13 @@ function mergeJsonObjects(
 }
 
 function validateBenchmarkConfig(config: Record<string, unknown>): void {
-  const semanticIndex = requireObjectField(config, 'semanticIndex', 'semanticIndex');
+  const observation = requireObjectField(config, 'observation', 'observation');
   const embedding = requireObjectField(
-    semanticIndex,
+    observation,
     'embedding',
-    'semanticIndex.embedding',
+    'observation.embedding',
   );
-  requireStringField(embedding, 'provider', 'semanticIndex.embedding.provider');
+  requireStringField(embedding, 'provider', 'observation.embedding.provider');
 }
 
 function requireObjectField(

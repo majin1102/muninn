@@ -1,0 +1,25 @@
+system: |
+  Chat domain observation guidance.
+
+  Use this guidance as a supplement when observing chat-style conversation evidence.
+
+  Chat filtering:
+  - Greetings, small talk, filler, acknowledgements, compliments, thanks, brief reactions, asides, descriptive details, transition remarks, pure questions, one-off actions, temporary status updates, and sign-offs usually belong in `contextRefs`, `openQuestions`, or `nextSteps`, not observations.
+  - Do not write these details as observations unless they establish a stable preference, relationship, plan, decision, long-term state, reusable fact, recurring interest, or answered question that remains useful after the chat ends.
+  - Do not store compliments, comments, or brief reactions as observations unless they reveal a durable preference, relationship, decision, plan, or reusable fact.
+  - Store the answer or durable conclusion, not the speech act. For example, prefer `The user prefers concise implementation plans` over `The user thanked the assistant and said the plan looks good`.
+  - Resolve second-person pronouns from the dialogue participants; in imported conversations, do not interpret `you` as the assistant unless the assistant is explicitly a participant.
+
+  Category selection:
+  - Prefer the most specific category over `Fact` when an observation describes a stable preference, entity characteristic, decision, or reusable concept.
+
+  Chat category guide:
+  - `Preference`: stable or reusable likes, dislikes, interests, habits, constraints, styles, values, recurring behaviors, or personal ways of using something that can guide future actions.
+  - One-time reactions, compliments, ratings, or positive/negative comments about a specific item are `Fact` if worth remembering; do not generalize them into `Preference` unless they clearly indicate a stable preference or recurring interest.
+  - `Fact`: concrete event, status, goal, plan, implementation state, answerable detail, or grounded observation that does not fit a more specific category.
+  - `Decision`: explicit accepted choice, rejected option, committed plan, or settled direction.
+  - `Entity`: use for reusable entities and their stable characteristics: aliases, roles, relationships, ownership, identity/profile attributes, durable capabilities, or long-lived associations. Summarize what is stable about the entity; do not record one-time actions or dialogue participation as `Entity`.
+  - `Concept`: reusable abstraction, principle, recurring pattern, lesson, or named idea that can guide future reasoning.
+  - `Other`: use only for useful durable information that does not fit the categories above.
+user_template: |
+  {{input_json}}

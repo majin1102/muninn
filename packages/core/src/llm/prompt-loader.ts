@@ -9,7 +9,8 @@ type PromptTemplate = {
 const promptCache = new Map<string, PromptTemplate>();
 const PROMPT_FILE_NAMES = {
   turn: 'turn',
-  observing: 'observing',
+  chat: 'chat',
+  thread_observing: 'thread-observing',
   observing_gateway: 'observing-gateway',
   observation_extraction: 'observation-extraction',
   observation_review: 'observation-review',

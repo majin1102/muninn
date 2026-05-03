@@ -281,6 +281,8 @@ def run_unit(
     heuristic_key = f"{model_key}_heuristic_prediction"
     query_count = count_query_candidates(qas)
     home_dir = prepare_home(bridge, sample_id, args.keep_home)
+    import_sample = build_import_sample(sample, qas)
+    import_data_file = write_import_sample(home_dir.path, import_sample)
 
     reporter.emit(
         "unit_start",
@@ -288,6 +290,7 @@ def run_unit(
         qa_count=len(qas),
         query_candidate_count=query_count,
         home_dir=home_dir.path,
+        import_turn_count=count_dialogs(import_sample),
     )
 
     try:
@@ -295,7 +298,7 @@ def run_unit(
             reporter,
             "import_sample",
             lambda: bridge.import_sample(
-                args.data_file,
+                import_data_file,
                 sample_id,
                 home_dir.path,
             ),
@@ -303,6 +306,8 @@ def run_unit(
             qa_count=len(qas),
             query_candidate_count=query_count,
             home_dir=home_dir.path,
+            import_data_file=import_data_file,
+            import_turn_count=count_dialogs(import_sample),
         )
         gateway_trace_path = import_result.get("gateway_trace_path") if isinstance(import_result, dict) else None
         batch_hits = run_phase(
@@ -361,6 +366,128 @@ def run_unit(
     finally:
         if home_dir.tmpdir is not None:
             home_dir.tmpdir.cleanup()
+
+
+def build_import_sample(
+    sample: dict[str, object],
+    qas: list[dict[str, object]],
+) -> dict[str, object]:
+    conversation = sample.get("conversation")
+    if not isinstance(conversation, dict):
+        raise ValueError("LoCoMo sample is missing conversation")
+
+    max_session = max_evidence_session(qas)
+    if max_session is None:
+        return {
+            **sample,
+            "qa": qas,
+        }
+
+    retained_conversation: dict[str, object] = {}
+    for key in ("speaker_a", "speaker_b"):
+        if key in conversation:
+            retained_conversation[key] = conversation[key]
+
+    retained_sessions: list[int] = []
+    retained_dialog_ids: set[str] = set()
+    for session_no in range(1, max_session + 1):
+        session_key = f"session_{session_no}"
+        date_key = f"session_{session_no}_date_time"
+        dialogs = conversation.get(session_key)
+        if not isinstance(dialogs, list):
+            continue
+        retained_sessions.append(session_no)
+        retained_conversation[session_key] = dialogs
+        if date_key in conversation:
+            retained_conversation[date_key] = conversation[date_key]
+        for dialog in dialogs:
+            if isinstance(dialog, dict) and dialog.get("dia_id"):
+                retained_dialog_ids.add(str(dialog["dia_id"]))
+
+    return {
+        "sample_id": sample["sample_id"],
+        "conversation": retained_conversation,
+        "qa": [
+            qa
+            for qa in qas
+            if qa_evidence_contained(qa, retained_dialog_ids)
+        ],
+        **optional_session_maps(sample, retained_sessions),
+    }
+
+
+def write_import_sample(home_dir: Path, sample: dict[str, object]) -> Path:
+    path = home_dir / "locomo-import-slice.json"
+    path.write_text(f"{json.dumps([sample], indent=2)}\n", encoding="utf8")
+    return path
+
+
+def max_evidence_session(qas: list[dict[str, object]]) -> int | None:
+    max_session: int | None = None
+    for qa in qas:
+        evidence = qa.get("evidence")
+        if not isinstance(evidence, list):
+            continue
+        for item in evidence:
+            session_no = parse_dialog_session(str(item))
+            if session_no is None:
+                continue
+            max_session = session_no if max_session is None else max(max_session, session_no)
+    return max_session
+
+
+def parse_dialog_session(dialog_id: str) -> int | None:
+    if not dialog_id.startswith("D"):
+        return None
+    prefix = dialog_id.split(":", 1)[0]
+    try:
+        return int(prefix[1:])
+    except ValueError:
+        return None
+
+
+def qa_evidence_contained(qa: dict[str, object], retained_ids: set[str]) -> bool:
+    evidence = qa.get("evidence")
+    return (
+        isinstance(evidence, list)
+        and bool(evidence)
+        and all(str(item) in retained_ids for item in evidence)
+    )
+
+
+def optional_session_maps(
+    sample: dict[str, object],
+    retained_sessions: list[int],
+) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key in ("observation", "session_summary"):
+        value = sample.get(key)
+        session_map = slice_session_map(value, retained_sessions)
+        if session_map:
+            result[key] = session_map
+    return result
+
+
+def slice_session_map(value: object, retained_sessions: list[int]) -> dict[str, object]:
+    if not isinstance(value, dict):
+        return {}
+    prefixes = tuple(f"session_{session_no}_" for session_no in retained_sessions)
+    return {
+        str(key): item
+        for key, item in value.items()
+        if str(key).startswith(prefixes)
+    }
+
+
+def count_dialogs(sample: dict[str, object]) -> int:
+    conversation = sample.get("conversation")
+    if not isinstance(conversation, dict):
+        return 0
+    return sum(
+        len(value)
+        for key, value in conversation.items()
+        if key.startswith("session_") and isinstance(value, list)
+    )
 
 
 def run_phase(
@@ -497,16 +624,16 @@ def load_gateway_routes(path: Path | None) -> dict[str, list[dict[str, Any]]]:
         if not line.strip():
             continue
         event = json.loads(line)
-        for route in event.get("routes", []):
+        for route in event.get("workItems", []):
             route_key = route.get("targetThreadId") or route.get("newThreadTitle")
             if not route_key:
                 continue
             routes.setdefault(str(route_key), []).append(
                 {
-                    "turnId": route.get("turnId"),
                     "targetThreadId": route.get("targetThreadId"),
                     "newThreadTitle": route.get("newThreadTitle"),
-                    "sourceSlice": route.get("sourceSlice"),
+                    "sourceRefs": route.get("sourceRefs") or [],
+                    "routingReason": route.get("routingReason"),
                 }
             )
     return routes

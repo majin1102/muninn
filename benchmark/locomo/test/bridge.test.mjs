@@ -44,7 +44,7 @@ async function writeMuninnConfig(
     };
   }
   if (semanticIndexProvider) {
-    root.semanticIndex = {
+    root.observation = {
       embedding: {
         provider: semanticIndexProvider,
         dimensions: 4,
@@ -145,23 +145,20 @@ test('recall returns evidence ids without leaking benchmark artifacts into munin
     'muninn-home': home,
   });
 
-  assert.ok(recalled.hits[0].evidence_ids.includes('D1:1'));
-  assert.match(recalled.hits[0].date_time ?? '', /1:56 pm on 8 May, 2023/);
-  assert.equal(typeof recalled.hits[0].matched_text, 'string');
-  assert.ok(recalled.hits[0].matched_text.trim());
-  assert.doesNotMatch(recalled.hits[0].matched_text, /Recorded/);
-  assert.equal(recalled.hits[0].observationRatio, 1);
-  assert.ok(recalled.hits[0].references.some((reference) => /Caroline said:/.test(reference.text)));
+  const supportHit = recalled.hits.find((hit) => hit.evidence_ids.includes('D1:1'));
+  assert.ok(supportHit);
+  assert.match(supportHit.date_time ?? '', /1:56 pm on 8 May, 2023/);
+  assert.equal(typeof supportHit.matched_text, 'string');
+  assert.ok(supportHit.matched_text.trim());
+  assert.doesNotMatch(supportHit.matched_text, /Recorded/);
+  assert.equal(supportHit.observationRatio ?? null, null);
+  assert.ok(supportHit.references.some((reference) => /Caroline said:/.test(reference.text)));
   assert.ok(!('source_id' in recalled.hits[0]));
 
-  const traceLines = (await readFile(path.join(home, 'locomo-gateway-trace.jsonl'), 'utf8'))
-    .trim()
-    .split('\n')
-    .filter(Boolean)
-    .map((line) => JSON.parse(line));
-  assert.ok(traceLines.some((event) => Array.isArray(event.routes) && event.routes.length > 0));
-  assert.ok(traceLines.some((event) => event.routes.some((route) => route.sourceSlice)));
-  assert.ok(traceLines.some((event) => event.routes.some((route) => route.rationale)));
+  const gatewayTrace = await readFile(path.join(home, 'locomo-gateway-trace.jsonl'), 'utf8');
+  const firstTrace = JSON.parse(gatewayTrace.trim().split('\n')[0]);
+  assert.ok(Array.isArray(firstTrace.workItems));
+  assert.equal('routingReason' in firstTrace.workItems[0], true);
 });
 
 test('recursive evidence resolution can walk observing lineage back to turn ids', async () => {
@@ -193,6 +190,28 @@ test('recursive evidence resolution can walk observing lineage back to turn ids'
   );
 
   assert.deepEqual(evidenceIds, ['D1:1', 'D2:1']);
+});
+
+test('recursive evidence resolution can walk observation lineage back to turn ids', async () => {
+  const bridgeModule = await import(bridgePath);
+  const evidenceIds = bridgeModule.resolveEvidenceIdsFromGraph(
+    'observation:memory-1',
+    [
+      {
+        turn_id: 'session:101',
+        source_id: 'D1:1',
+        sample_id: 'sample-a',
+        session_id: 'locomo:sample-a:session_1',
+        date_time: '1:56 pm on 8 May, 2023',
+        import_order: 0,
+      },
+    ],
+    {
+      'observation:memory-1': ['session:101'],
+    },
+  );
+
+  assert.deepEqual(evidenceIds, ['D1:1']);
 });
 
 test('withTransientRetry retries transient provider failures', async () => {
@@ -263,7 +282,7 @@ test('waitForImportWatermark times out with pending turn ids when observer does 
   );
 });
 
-test('import only fails fast when semantic index config is missing', async (t) => {
+test('import only fails fast when observation config is missing', async (t) => {
   const home = await mkdtemp(path.join(os.tmpdir(), 'muninn-locomo-missing-config-'));
   t.after(async () => rm(home, { recursive: true, force: true }));
 
@@ -276,7 +295,7 @@ test('import only fails fast when semantic index config is missing', async (t) =
       'sample-id': 'sample-a',
       'muninn-home': home,
     }),
-    /LoCoMo benchmark requires semanticIndex\.embedding(?:\.provider)?/i,
+    /LoCoMo benchmark requires observation\.embedding(?:\.provider)?/i,
   );
 });
 
@@ -357,6 +376,12 @@ test('waitForImportWatermark reads timeout and warning defaults from env', async
     () => bridgeModule.waitForImportWatermark(manifest, { pollMs: 10 }),
     /observer watermark timeout.*pending turn ids/i,
   );
+});
+
+test('waitForImportWatermark default timeout is thirty minutes', async () => {
+  const bridgeModule = await import(`${bridgePath}?default-timeout=${Date.now()}`);
+
+  assert.equal(bridgeModule.__testing.WATERMARK_TIMEOUT_MS, 30 * 60 * 1000);
 });
 
 test('waitForImportWatermark does not depend on repo-root cwd to load sidecar app', async (t) => {

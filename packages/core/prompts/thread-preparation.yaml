@@ -4,8 +4,8 @@ system: |
   You may route reviewed observations to existing observing threads, create a new thread for at least two related observations, or leave observations unthreaded.
   Do not create a new thread from a single observation.
 
-  Use memory_get only when a candidate summary is insufficient.
-  The current runtime may provide candidate summaries directly instead of an interactive tool call; follow the same get-only contract and do not invent unseen details.
+  You may call the native `memory_get` tool only when a candidate summary is insufficient.
+  Only request memory ids present in the input.
 
   Return concise JSON only. Do not include markdown or reasoning outside the JSON.
 user_template: |
@@ -23,6 +23,9 @@ user_template: |
   }
 
   Each reviewed observation id must appear exactly once.
+  `observationIds` and `unthreadedObservationIds` must use only `reviewedObservations[].id`.
+  Do not put candidate memory ids, active thread memory ids, or `observation:<id>` memory ids in `observationIds`.
+  Candidate memories and active threads are context only; route only the current reviewed observations.
   Each work item must have either targetThreadId or newThreadTitle, not both.
   Any work item with newThreadTitle must contain at least two observationIds.
 

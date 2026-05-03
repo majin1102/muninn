@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 
 import type { SessionTurn } from '../client.js';
 import { getEmbeddingConfig, getObserverLlmConfig } from '../config.js';
+import { loadDomainPrompt } from '../llm/domain-prompt.js';
 import { embedText } from '../llm/embedding-provider.js';
 import { generateText } from '../llm/provider.js';
 import { loadPromptTemplate, renderPromptTemplate } from '../llm/prompt-loader.js';
@@ -34,11 +35,14 @@ export async function extractObservations(
     return buildMockExtraction(turns);
   }
 
-  const template = loadPromptTemplate('observation_extraction');
   const inputJson = JSON.stringify({ turns: turns.map(toExtractionTurn) }, null, 2);
+  const rendered = renderExtractionPrompt({
+    inputJson,
+    domainPrompt: loadDomainPrompt(config.domainPrompt),
+  });
   const raw = await generateText('observer', {
-    system: template.system,
-    prompt: renderPromptTemplate(template.userTemplate, { input_json: inputJson }),
+    system: rendered.system,
+    prompt: rendered.prompt,
     signal,
   });
   if (!raw) {
@@ -94,6 +98,19 @@ function buildMockExtraction(turns: SessionTurn[]): ObservationExtractionResult 
   });
 }
 
+function renderExtractionPrompt(input: {
+  inputJson: string;
+  domainPrompt?: string;
+}): { system: string; prompt: string } {
+  const template = loadPromptTemplate('observation_extraction');
+  return {
+    system: renderPromptTemplate(template.system, {
+      domain_prompt: input.domainPrompt?.trim() || 'No additional domain guidance.',
+    }),
+    prompt: renderPromptTemplate(template.userTemplate, { input_json: input.inputJson }),
+  };
+}
+
 function validateExtraction(result: ObservationExtractionResult): ObservationExtractionResult {
   if (!result || typeof result !== 'object' || !Array.isArray(result.observations)) {
     throw new Error('observation extraction must include observations');
@@ -134,9 +151,21 @@ function toExtractionTurn(turn: SessionTurn): Record<string, unknown> {
   return {
     turnId: turn.turnId,
     ...(turn.createdAt ? { createdAt: turn.createdAt } : {}),
+    ...(turn.recentContext && turn.recentContext.length > 0
+      ? { recentContext: turn.recentContext.map(toExtractionContextTurn) }
+      : {}),
     ...(turn.prompt ? { prompt: turn.prompt } : {}),
     ...(turn.response ? { response: turn.response } : {}),
     ...(turn.summary ? { summary: turn.summary } : {}),
+  };
+}
+
+function toExtractionContextTurn(turn: NonNullable<SessionTurn['recentContext']>[number]): Record<string, unknown> {
+  return {
+    turnId: turn.turnId,
+    ...(turn.updatedAt ? { updatedAt: turn.updatedAt } : {}),
+    ...(turn.prompt ? { prompt: turn.prompt } : {}),
+    ...(turn.response ? { response: turn.response } : {}),
   };
 }
 
@@ -185,5 +214,7 @@ function throwIfAborted(signal?: AbortSignal): void {
 }
 
 export const __testing = {
+  renderExtractionPrompt,
+  toExtractionTurn,
   validateExtraction,
 };

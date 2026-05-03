@@ -1,12 +1,24 @@
+import { appendFile } from 'node:fs/promises';
+
 import { getObserverLlmConfig } from '../config.js';
-import { generateText } from '../llm/provider.js';
 import { loadPromptTemplate, renderPromptTemplate } from '../llm/prompt-loader.js';
+import {
+  generateWithTools,
+  type LlmTask,
+  type LlmTool,
+  type LlmToolCall,
+  type LlmToolMessage,
+  type LlmToolRequest,
+  type LlmToolResult,
+} from '../llm/provider.js';
+import type { Memories } from '../memories/memories.js';
+import { renderRenderedMemoryMarkdown } from '../memories/rendered.js';
 import type { Observation } from '../native.js';
 import type {
   ThreadCandidateMemory,
   ThreadPreparationResult,
   ThreadPreparationThread,
-  ThreadWorkItem,
+  ThreadPreparationWorkItem,
 } from './types.js';
 
 export type ThreadPreparationInput = {
@@ -15,9 +27,20 @@ export type ThreadPreparationInput = {
   candidateMemories?: ThreadCandidateMemory[];
 };
 
+type ThreadPreparationDeps = {
+  memories?: Pick<Memories, 'get' | 'recall'>;
+  model?: ToolModel;
+};
+
+type ToolModel = (
+  task: LlmTask,
+  request: LlmToolRequest,
+) => Promise<LlmToolResult | null>;
+
 export async function prepareThreads(
   input: ThreadPreparationInput,
   signal?: AbortSignal,
+  deps: ThreadPreparationDeps = {},
 ): Promise<ThreadPreparationResult> {
   throwIfAborted(signal);
   const config = getObserverLlmConfig();
@@ -33,17 +56,243 @@ export async function prepareThreads(
 
   const template = loadPromptTemplate('thread_preparation');
   const inputJson = JSON.stringify(toPromptInput(input), null, 2);
-  // The prompt contract is get-only. The current text provider path runs it as a structured call;
-  // the loop runner can replace this call without changing ThreadPreparationResult.
-  const raw = await generateText('observer', {
-    system: template.system,
-    prompt: renderPromptTemplate(template.userTemplate, { input_json: inputJson }),
+  const trace = createThreadPreparationTrace(input);
+  const raw = await runNativeToolLoop({
+    messages: [
+      { role: 'system', content: template.system },
+      {
+        role: 'user',
+        content: renderPromptTemplate(template.userTemplate, { input_json: inputJson }),
+      },
+    ],
+    tools: [memoryGetSpec()],
+    toolHandlers: {
+      memory_get: createMemoryGetTool(input, deps.memories),
+    },
+    model: deps.model ?? generateWithTools,
     signal,
+    onToolResults: (event) => {
+      trace.toolCalls.push(...event.toolCalls);
+      trace.toolResults.push(...event.toolResults);
+    },
   });
-  if (!raw) {
-    throw new Error('observer is not configured');
+  const result = validateOrFallback(input, raw);
+  await writeThreadPreparationTrace({
+    ...trace,
+    result,
+  });
+  return result;
+}
+
+function validateOrFallback(input: ThreadPreparationInput, raw: string): ThreadPreparationResult {
+  try {
+    return validateThreadPreparation(input, parseJson<ThreadPreparationResult>(raw));
+  } catch {
+    return {
+      workItems: [],
+      unthreadedObservationIds: input.reviewedObservations.map((observation) => observation.id),
+    };
   }
-  return validateThreadPreparation(input, parseJson<ThreadPreparationResult>(raw));
+}
+
+async function runNativeToolLoop(params: {
+  messages: LlmToolMessage[];
+  tools: LlmTool[];
+  toolHandlers: Record<string, ToolHandler>;
+  model: ToolModel;
+  signal?: AbortSignal;
+  maxSteps?: number;
+  onToolResults?: (event: {
+    toolCalls: LlmToolCall[];
+    toolResults: Array<{
+      id: string;
+      name: string;
+      arguments: Record<string, unknown>;
+      result: unknown;
+    }>;
+  }) => Promise<void> | void;
+}): Promise<string> {
+  const maxSteps = params.maxSteps ?? 3;
+  const messages = [...params.messages];
+  for (let step = 0; step < maxSteps; step += 1) {
+    throwIfAborted(params.signal);
+    const result = await params.model('observer', {
+      messages,
+      tools: params.tools,
+      signal: params.signal,
+    });
+    if (!result) {
+      throw new Error('llm did not return a tool result');
+    }
+    if (result.type === 'final') {
+      return result.text;
+    }
+    messages.push({
+      role: 'assistant',
+      toolCalls: result.toolCalls,
+    });
+    const toolResults = [];
+    for (const call of result.toolCalls) {
+      const handler = params.toolHandlers[call.name];
+      if (!handler) {
+        throw new Error(`unknown tool: ${call.name}`);
+      }
+      throwIfAborted(params.signal);
+      const toolResult = await handler(call.arguments, call);
+      toolResults.push({
+        id: call.id,
+        name: call.name,
+        arguments: call.arguments,
+        result: toolResult,
+      });
+      messages.push({
+        role: 'tool',
+        toolCallId: call.id,
+        name: call.name,
+        content: JSON.stringify(toolResult),
+      });
+    }
+    await params.onToolResults?.({
+      toolCalls: result.toolCalls,
+      toolResults,
+    });
+  }
+  throw new Error(`tool loop exceeded maxSteps=${maxSteps}`);
+}
+
+type ToolHandler = (args: Record<string, unknown>, call: LlmToolCall) => Promise<unknown> | unknown;
+
+export async function collectCandidateMemories(params: {
+  reviewedObservations: Observation[];
+  memories: Pick<Memories, 'recall'>;
+  limitPerObservation?: number;
+}): Promise<ThreadCandidateMemory[]> {
+  const limit = params.limitPerObservation ?? 5;
+  const reviewedMemoryIds = new Set(params.reviewedObservations.map((observation) => `observation:${observation.id}`));
+  const seen = new Set<string>();
+  const candidates: ThreadCandidateMemory[] = [];
+  for (const observation of params.reviewedObservations) {
+    const hits = await params.memories.recall(observation.text, limit).catch(() => []);
+    for (const hit of hits) {
+      if (reviewedMemoryIds.has(hit.memoryId) || seen.has(hit.memoryId)) {
+        continue;
+      }
+      seen.add(hit.memoryId);
+      candidates.push({
+        memoryId: hit.memoryId,
+        title: hit.text,
+        summary: hit.text,
+      });
+    }
+  }
+  return candidates;
+}
+
+function createMemoryGetTool(
+  input: ThreadPreparationInput,
+  memories?: Pick<Memories, 'get'>,
+) {
+  const allowlist = buildMemoryGetAllowlist(input);
+  return async (args: Record<string, unknown>) => {
+    const memoryIds = normalizeMemoryIds(args.memoryIds);
+    const results = [];
+    for (const memoryId of memoryIds) {
+      if (!allowlist.has(memoryId)) {
+        results.push({
+          memoryId,
+          error: 'memory id is not allowlisted',
+        });
+        continue;
+      }
+      if (!memories) {
+        results.push({
+          memoryId,
+          error: 'memory_get is unavailable',
+        });
+        continue;
+      }
+      const memory = await memories.get(memoryId);
+      results.push(memory
+        ? {
+            memoryId,
+            content: renderRenderedMemoryMarkdown(memory),
+          }
+        : {
+            memoryId,
+            error: 'memory not found',
+          });
+    }
+    return { memories: results };
+  };
+}
+
+function memoryGetSpec(): LlmTool {
+  return {
+    name: 'memory_get',
+    description: 'Get full rendered details for allowlisted memory ids when summaries are insufficient.',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        memoryIds: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Allowlisted memory ids from reviewedObservations, activeThreads, or candidateMemories.',
+        },
+      },
+      required: ['memoryIds'],
+    },
+  };
+}
+
+function createThreadPreparationTrace(input: ThreadPreparationInput) {
+  return {
+    reviewedObservations: toPromptInput(input).reviewedObservations,
+    activeThreads: input.activeThreads,
+    candidateMemories: input.candidateMemories ?? [],
+    toolCalls: [] as LlmToolCall[],
+    toolResults: [] as Array<{
+      id: string;
+      name: string;
+      arguments: Record<string, unknown>;
+      result: unknown;
+    }>,
+  };
+}
+
+async function writeThreadPreparationTrace(event: {
+  reviewedObservations: unknown;
+  activeThreads: ThreadPreparationThread[];
+  candidateMemories: ThreadCandidateMemory[];
+  toolCalls: LlmToolCall[];
+  toolResults: unknown[];
+  result: ThreadPreparationResult;
+}): Promise<void> {
+  const file = process.env.MUNINN_THREAD_PREPARATION_TRACE_FILE;
+  if (!file) {
+    return;
+  }
+  await appendFile(file, `${JSON.stringify(event)}\n`, 'utf8');
+}
+
+function buildMemoryGetAllowlist(input: ThreadPreparationInput): Set<string> {
+  return new Set([
+    ...input.reviewedObservations.map((observation) => `observation:${observation.id}`),
+    ...input.activeThreads
+      .map((thread) => thread.memoryId)
+      .filter((memoryId): memoryId is string => Boolean(memoryId?.trim())),
+    ...(input.candidateMemories ?? []).map((memory) => memory.memoryId),
+  ]);
+}
+
+function normalizeMemoryIds(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((memoryId) => (typeof memoryId === 'string' ? memoryId.trim() : ''))
+    .filter(Boolean)
+    .filter((memoryId, index, values) => values.indexOf(memoryId) === index);
 }
 
 function validateThreadPreparation(
@@ -87,11 +336,11 @@ function validateThreadPreparation(
 }
 
 function validateWorkItem(
-  item: ThreadWorkItem,
+  item: ThreadPreparationWorkItem,
   reviewedIds: Set<string>,
   activeThreadIds: Set<string>,
   seen: Set<string>,
-): ThreadWorkItem {
+): ThreadPreparationWorkItem {
   if (!item || typeof item !== 'object') {
     throw new Error('thread preparation work item must be an object');
   }
@@ -153,6 +402,7 @@ function toPromptInput(input: ThreadPreparationInput): Record<string, unknown> {
   return {
     reviewedObservations: input.reviewedObservations.map((observation) => ({
       id: observation.id,
+      memoryId: `observation:${observation.id}`,
       text: observation.text,
       category: observation.category,
       references: observation.references,
@@ -189,5 +439,11 @@ function throwIfAborted(signal?: AbortSignal): void {
 }
 
 export const __testing = {
+  collectCandidateMemories,
+  prepareThreadsWithModel: (
+    input: ThreadPreparationInput,
+    deps: ThreadPreparationDeps,
+    signal?: AbortSignal,
+  ) => prepareThreads(input, signal, deps),
   validateThreadPreparation,
 };

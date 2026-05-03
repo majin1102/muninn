@@ -65,20 +65,7 @@ export function cloneObservingThread(thread: ObservingThread): ObservingThread {
       contextRefs: snapshot.contextRefs.map((reference) => ({ ...reference })),
       openQuestions: [...(snapshot.openQuestions ?? [])],
       nextSteps: [...(snapshot.nextSteps ?? [])],
-      observationDelta: {
-        before: snapshot.observationDelta.before.map((observation) => ({
-          id: observation.id ?? null,
-          text: observation.text,
-          category: observation.category,
-          updatedMemory: observation.updatedMemory ?? null,
-        })),
-        after: snapshot.observationDelta.after.map((observation) => ({
-          id: observation.id ?? null,
-          text: observation.text,
-          category: observation.category,
-          updatedMemory: observation.updatedMemory ?? null,
-        })),
-      },
+      observationChanges: (snapshot.observationChanges ?? []).map((change) => ({ ...change })),
     })),
     indexedSnapshotSequence: thread.indexedSnapshotSequence ?? null,
   };
@@ -182,16 +169,16 @@ export function applyObserveResult(
   thread: ObservingThread,
   result: ObserveResult,
   observingEpoch: number,
-  applyObservationDelta: (
+  applyObservationChanges: (
     observations: Observation[],
     result: ObserveResult,
-  ) => { observationDelta: SnapshotContent['observationDelta']; observations: Observation[] },
+  ) => { observationChanges: SnapshotContent['observationChanges']; observations: Observation[] },
   now = new Date().toISOString(),
 ): void {
   const current = latestSnapshot(thread) ?? emptySnapshot();
-  const patched = applyObservationDelta(current.observations, result);
-  thread.title = result.observingContentUpdate.title;
-  thread.summary = result.observingContentUpdate.summary;
+  const patched = applyObservationChanges(current.observations, result);
+  thread.title = result.observingContent.title;
+  thread.summary = result.observingContent.summary;
   thread.observingEpoch = observingEpoch;
   thread.snapshots.push({
     observations: patched.observations,
@@ -199,9 +186,9 @@ export function applyObserveResult(
       current.contextRefs,
       result.contextRefs,
     ),
-    openQuestions: result.observingContentUpdate.openQuestions,
-    nextSteps: result.observingContentUpdate.nextSteps,
-    observationDelta: patched.observationDelta,
+    openQuestions: result.observingContent.openQuestions,
+    nextSteps: result.observingContent.nextSteps,
+    observationChanges: patched.observationChanges,
   });
   thread.references = latestSnapshot(thread)?.contextRefs.map((reference) => reference.turnId) ?? [];
   thread.snapshotEpochs = [...(thread.snapshotEpochs ?? []), observingEpoch];
@@ -295,10 +282,7 @@ function deserializeSnapshot(row: ObservingSnapshot): SnapshotContent {
     contextRefs: normalizeContextRefs(parsed.contextRefs),
     openQuestions: Array.isArray(parsed.openQuestions) ? parsed.openQuestions : [],
     nextSteps: Array.isArray(parsed.nextSteps) ? parsed.nextSteps : [],
-    observationDelta: {
-      before: Array.isArray(parsed.observationDelta?.before) ? parsed.observationDelta!.before : [],
-      after: Array.isArray(parsed.observationDelta?.after) ? parsed.observationDelta!.after : [],
-    },
+    observationChanges: Array.isArray(parsed.observationChanges) ? parsed.observationChanges : [],
   };
 }
 
@@ -308,7 +292,7 @@ function emptySnapshot(): SnapshotContent {
     contextRefs: [],
     openQuestions: [],
     nextSteps: [],
-    observationDelta: { before: [], after: [] },
+    observationChanges: [],
   };
 }
 

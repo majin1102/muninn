@@ -18,17 +18,41 @@ export type ContextRef = {
   summary: string;
 };
 
-export type LlmFieldUpdate<T> = {
-  before: T[];
-  after: T[];
-};
+export type ObservationChange =
+  | {
+    type: 'add';
+    text: string;
+    category: ObservationCategory;
+    references: string[];
+    reason: string;
+  }
+  | {
+    type: 'merge';
+    observationIds: string[];
+    text: string;
+    category: ObservationCategory;
+    reason: string;
+  }
+  | {
+    type: 'update';
+    observationId: string;
+    text: string;
+    category?: ObservationCategory;
+    references?: string[];
+    reason: string;
+  }
+  | {
+    type: 'delete';
+    observationId: string;
+    reason: string;
+  };
 
 export type SnapshotContent = {
   observations: Observation[];
   contextRefs: ContextRef[];
   openQuestions?: string[];
   nextSteps?: string[];
-  observationDelta: LlmFieldUpdate<Observation>;
+  observationChanges: ObservationChange[];
 };
 
 export type ObservingThread = {
@@ -73,7 +97,7 @@ export type ObservingThreadGatewayInput = {
 
 export type ObservingTurnInput = {
   turnId: string;
-  sourceSlice?: string | null;
+  excerpt?: string | null;
   prompt?: string | null;
   response?: string | null;
 };
@@ -88,32 +112,29 @@ export type ObservingContent = {
 
 export type ObserveRequest = {
   observingContent: ObservingContent;
-  pendingTurns: ObservingTurnInput[];
-};
-
-export type ObservingContentUpdate = {
-  title: string;
-  summary: string;
-  openQuestions: string[];
-  nextSteps: string[];
+  sourceRefs: ObservingTurnInput[];
+  threadMemoryId?: string | null;
 };
 
 export type ObserveResult = {
-  observingContentUpdate: ObservingContentUpdate;
+  observingContent: ObservingContent;
   contextRefs: ContextRef[];
-  observationDelta: LlmFieldUpdate<Observation>;
+  observationChanges: ObservationChange[];
 };
 
-export type GatewayRoute = {
-  turnId: string;
+export type ThreadWorkItem = {
   targetThreadId?: string | null;
   newThreadTitle?: string | null;
-  sourceSlice: string;
-  rationale: string;
+  sourceRefs: Array<{
+    turnId: string;
+    excerpt: string;
+  }>;
+  routingReason: string;
 };
 
 export type GatewayResult = {
-  routes: GatewayRoute[];
+  workItems: ThreadWorkItem[];
+  ignoredTurnIds?: string[];
 };
 
 export type ThreadCandidateMemory = {
@@ -124,11 +145,12 @@ export type ThreadCandidateMemory = {
 
 export type ThreadPreparationThread = {
   threadId: string;
+  memoryId?: string | null;
   title: string;
   summary?: string | null;
 };
 
-export type ThreadWorkItem = {
+export type ThreadPreparationWorkItem = {
   observationIds: string[];
   targetThreadId?: string | null;
   newThreadTitle?: string | null;
@@ -136,6 +158,6 @@ export type ThreadWorkItem = {
 };
 
 export type ThreadPreparationResult = {
-  workItems: ThreadWorkItem[];
+  workItems: ThreadPreparationWorkItem[];
   unthreadedObservationIds: string[];
 };

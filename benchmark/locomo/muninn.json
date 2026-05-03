@@ -1,10 +1,11 @@
 {
   "observer": {
     "name": "locomo-observer",
+    "domainPrompt": "chat",
     "maxAttempts": 3
   },
   "llm": {},
-  "semanticIndex": {
+  "observation": {
     "defaultImportance": 0.7
   }
 }

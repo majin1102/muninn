@@ -51,7 +51,8 @@ export class Session {
         }
         this.removeRecentTurn(duplicate.turnId);
       }
-      const previousTurnSummary = summarizeRecentTurn(this.recentTurns.at(-1));
+      const recentContext = this.recentTurns.map((turn) => ({ ...turn }));
+      const previousTurnSummary = summarizeRecentTurn(recentContext.at(-1));
       const turn = await buildTurn(
         this.config,
         content,
@@ -65,7 +66,7 @@ export class Session {
       this.rememberTurn(persisted);
       this.touch();
       return {
-        turn: previousTurnSummary ? { ...persisted, previousTurnSummary } : persisted,
+        turn: decorateAcceptedTurn(persisted, recentContext, previousTurnSummary),
         deduped: false,
       };
     });
@@ -212,6 +213,18 @@ function summarizeRecentTurn(turn: RecentTurn | undefined): string | null {
     .join(' ')
     .trim();
   return text || null;
+}
+
+function decorateAcceptedTurn(
+  turn: SessionTurn,
+  recentContext: RecentTurn[],
+  previousTurnSummary: string | null,
+): SessionTurn {
+  return {
+    ...turn,
+    ...(previousTurnSummary ? { previousTurnSummary } : {}),
+    ...(recentContext.length > 0 ? { recentContext } : {}),
+  };
 }
 
 export function isObservable(turn: SessionTurn): boolean {

@@ -36,6 +36,7 @@ type ObserverConfigRecord = {
   maxAttempts?: number;
   activeWindowDays?: number;
   continuityHints?: number;
+  domainPrompt?: string;
 };
 
 type EmbeddingConfigRecord = {
@@ -78,6 +79,7 @@ export type ObserverLlmConfig = TextProviderConfig & {
   maxAttempts: number;
   activeWindowDays: number;
   continuityHints: number;
+  domainPrompt?: string;
 };
 
 export type EmbeddingConfig = {
@@ -147,6 +149,7 @@ export function getObserverLlmConfig(): ObserverLlmConfig | null {
     maxAttempts: observer.maxAttempts ?? DEFAULT_OBSERVER_MAX_ATTEMPTS,
     activeWindowDays: observer.activeWindowDays ?? DEFAULT_OBSERVER_ACTIVE_WINDOW_DAYS,
     continuityHints: observer.continuityHints ?? DEFAULT_OBSERVER_CONTINUITY_HINTS,
+    domainPrompt: observer.domainPrompt,
     provider: parseLlmProvider(llm.provider),
     model: llm.model,
     api: llm.api,
@@ -356,6 +359,7 @@ function validateObserverConfig(observer: unknown): void {
   validateOptionalPositiveInteger(config.maxAttempts, 'observer.maxAttempts');
   validateOptionalPositiveInteger(config.activeWindowDays, 'observer.activeWindowDays');
   validateOptionalPositiveInteger(config.continuityHints, 'observer.continuityHints');
+  validateOptionalDomainPrompt(config.domainPrompt);
 }
 
 function validateLlmConfig(llm: unknown): void {
@@ -465,6 +469,15 @@ function requirePositiveInteger(value: unknown, label: string): number {
 function validateOptionalString(value: unknown, label: string): void {
   if (value !== undefined && typeof value !== 'string') {
     throw new Error(`${label} must be a string.`);
+  }
+}
+
+function validateOptionalDomainPrompt(value: unknown): void {
+  if (value === undefined) {
+    return;
+  }
+  if (value !== 'chat') {
+    throw new Error('observer.domainPrompt must be one of: chat');
   }
 }
 

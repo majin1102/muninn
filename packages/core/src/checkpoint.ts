@@ -3,11 +3,9 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import { loadMuninnConfig, resolveMuninnHome, resolveStorageTarget } from './config.js';
-import type { ObservationReviewResult } from './observer/observation-review.js';
 import type {
-  ObservationInput,
   ObservingSnapshot,
-  ThreadPreparationResult,
+  ThreadWorkItem,
 } from './observer/types.js';
 
 export type RecentTurn = {
@@ -57,10 +55,8 @@ export type CheckpointFile = CheckpointContent & {
 export type ObservingRunStatus = 'running' | 'completed' | 'failed';
 
 export type ObservingRunStage =
-  | 'extracting'
+  | 'fittingThreads'
   | 'committingObservations'
-  | 'reviewingObservations'
-  | 'preparingThreads'
   | 'observingThreads'
   | 'committingSnapshots'
   | 'indexingSnapshots'
@@ -79,9 +75,7 @@ export type ObservingRun = {
   stage: ObservingRunStage;
   inputTurnIds: string[];
   pending?: {
-    observationInputs?: ObservationInput[];
-    reviewResult?: ObservationReviewResult;
-    threadPreparationResult?: ThreadPreparationResult;
+    threadWorkItems?: ThreadWorkItem[];
     snapshotResults?: ObservingSnapshot[];
   };
   committed: {
@@ -335,23 +329,11 @@ function parseRunPending(value: unknown): NonNullable<ObservingRun['pending']> |
     return null;
   }
   const pending: NonNullable<ObservingRun['pending']> = {};
-  if (value.observationInputs != null) {
-    if (!Array.isArray(value.observationInputs)) {
+  if (value.threadWorkItems != null) {
+    if (!Array.isArray(value.threadWorkItems)) {
       return null;
     }
-    pending.observationInputs = value.observationInputs as ObservationInput[];
-  }
-  if (value.reviewResult != null) {
-    if (!isObjectRecord(value.reviewResult)) {
-      return null;
-    }
-    pending.reviewResult = value.reviewResult as ObservationReviewResult;
-  }
-  if (value.threadPreparationResult != null) {
-    if (!isObjectRecord(value.threadPreparationResult)) {
-      return null;
-    }
-    pending.threadPreparationResult = value.threadPreparationResult as ThreadPreparationResult;
+    pending.threadWorkItems = value.threadWorkItems as ThreadWorkItem[];
   }
   if (value.snapshotResults != null) {
     if (!Array.isArray(value.snapshotResults)) {
@@ -397,10 +379,8 @@ function isRunStatus(value: unknown): value is ObservingRunStatus {
 }
 
 function isRunStage(value: unknown): value is ObservingRunStage {
-  return value === 'extracting'
+  return value === 'fittingThreads'
     || value === 'committingObservations'
-    || value === 'reviewingObservations'
-    || value === 'preparingThreads'
     || value === 'observingThreads'
     || value === 'committingSnapshots'
     || value === 'indexingSnapshots'

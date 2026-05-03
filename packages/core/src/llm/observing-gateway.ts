@@ -1,27 +1,44 @@
+import { appendFile } from 'node:fs/promises';
+
 import type { SessionTurn } from '../client.js';
 import { getObserverLlmConfig } from '../config.js';
-import type { Observation as StoredObservation } from '../native.js';
+import type { Memories } from '../memories/memories.js';
+import { renderRenderedMemoryMarkdown } from '../memories/rendered.js';
 import type {
-  GatewayRoute,
   GatewayResult,
   ObserveRequest,
   ObserveResult,
   Observation,
-  ObservingContentUpdate,
+  ObservationCategory,
+  ObservationChange,
   ObservingThreadGatewayInput,
   ContextRef,
 } from '../observer/types.js';
-import { generateText } from './provider.js';
+import {
+  generateText,
+  generateWithTools,
+  type LlmTask,
+  type LlmTool,
+  type LlmToolCall,
+  type LlmToolMessage,
+  type LlmToolRequest,
+  type LlmToolResult,
+} from './provider.js';
+import { loadDomainPrompt } from './domain-prompt.js';
 import { loadPromptTemplate, renderPromptTemplate } from './prompt-loader.js';
 
 const MAX_TITLE_CHARS = 120;
 const MAX_SUMMARY_CHARS = 220;
 const MAX_LIST_ITEM_CHARS = 120;
-const MAX_MEMORY_CHARS = 220;
 
-export type ObservePreparedRequest = {
-  observingContent: ObserveRequest['observingContent'];
-  observations: Pick<StoredObservation, 'id' | 'text' | 'category' | 'references'>[];
+type ToolModel = (
+  task: LlmTask,
+  request: LlmToolRequest,
+) => Promise<LlmToolResult | null>;
+
+type ObserveThreadDeps = {
+  memories?: Pick<Memories, 'get'>;
+  model?: ToolModel;
 };
 
 export async function routeObservingThreads(
@@ -73,7 +90,7 @@ export async function routeObservingThreads(
         basePrompt,
         attempt,
         lastError,
-        'Make sure every route has turnId, targetThreadId, sourceSlice, and rationale.',
+        'Make sure every work item has sourceRefs, targetThreadId or newThreadTitle, and routingReason.',
       ),
       signal,
     });
@@ -101,70 +118,10 @@ function toGatewayTurns(pendingTurns: SessionTurn[]): Array<{ turnId: string; te
   }));
 }
 
-export async function observeThread(input: ObserveRequest, signal?: AbortSignal): Promise<ObserveResult> {
-  throwIfAborted(signal);
-  const config = getObserverLlmConfig();
-  if (!config) {
-    throw new Error('observing update is not configured');
-  }
-
-  if (config.provider === 'mock') {
-    return validateObserveResult(buildMockObserveResult(input));
-  }
-
-  const template = loadPromptTemplate('observing');
-  const inputJson = JSON.stringify(
-    {
-      observingContent: {
-        title: input.observingContent.title,
-        summary: input.observingContent.summary,
-        observations: input.observingContent.observations,
-        openQuestions: input.observingContent.openQuestions,
-        nextSteps: input.observingContent.nextSteps,
-      },
-      pendingTurns: input.pendingTurns.map((turn) => ({
-        turnId: turn.turnId,
-        ...(turn.sourceSlice ? { sourceSlice: turn.sourceSlice } : {}),
-        ...(turn.prompt ? { prompt: turn.prompt } : {}),
-        ...(turn.response ? { response: turn.response } : {}),
-      })),
-    },
-    null,
-    2,
-  );
-  const basePrompt = renderPromptTemplate(template.userTemplate, { input_json: inputJson });
-
-  let lastError = 'observing update returned no output';
-  for (let attempt = 1; attempt <= config.maxAttempts; attempt += 1) {
-    throwIfAborted(signal);
-    const raw = await generateText('observer', {
-      system: template.system,
-      prompt: buildRetryPrompt(
-        basePrompt,
-        attempt,
-        lastError,
-        'Keep all required content fields, contextRefs, and observationDelta arrays present.',
-      ),
-      signal,
-    });
-    if (!raw) {
-      throw new Error('observing update is not configured');
-    }
-    throwIfAborted(signal);
-
-    try {
-      return validateObserveResult(parseJson<ObserveResult>(raw));
-    } catch (error) {
-      lastError = String(error);
-    }
-  }
-
-  throw new Error(`observing update returned invalid output: ${lastError}`);
-}
-
-export async function observePreparedThread(
-  input: ObservePreparedRequest,
+export async function observeThread(
+  input: ObserveRequest,
   signal?: AbortSignal,
+  deps: ObserveThreadDeps = {},
 ): Promise<ObserveResult> {
   throwIfAborted(signal);
   const config = getObserverLlmConfig();
@@ -173,10 +130,13 @@ export async function observePreparedThread(
   }
 
   if (config.provider === 'mock') {
-    return validateObserveResult(buildMockPreparedObserveResult(input));
+    return validateObserveResult(buildMockObserveResult(input), input);
   }
 
-  const template = loadPromptTemplate('observing');
+  const template = loadPromptTemplate('thread_observing');
+  const systemPrompt = renderPromptTemplate(template.system, {
+    domain_prompt: loadDomainPrompt(config.domainPrompt)?.trim() || 'No additional domain guidance.',
+  });
   const inputJson = JSON.stringify(
     {
       observingContent: {
@@ -186,30 +146,46 @@ export async function observePreparedThread(
         openQuestions: input.observingContent.openQuestions,
         nextSteps: input.observingContent.nextSteps,
       },
-      observations: input.observations.map((observation) => ({
-        id: observation.id,
-        text: observation.text,
-        category: observation.category,
-        references: observation.references,
+      sourceRefs: input.sourceRefs.map((turn) => ({
+        turnId: turn.turnId,
+        ...(turn.excerpt ? { excerpt: turn.excerpt } : {}),
+        ...(turn.prompt ? { prompt: turn.prompt } : {}),
+        ...(turn.response ? { response: turn.response } : {}),
       })),
+      allowedMemoryIds: buildObserveMemoryAllowlist(input),
     },
     null,
     2,
   );
   const basePrompt = renderPromptTemplate(template.userTemplate, { input_json: inputJson });
+  const trace = createObserveTrace(input);
 
   let lastError = 'observing update returned no output';
   for (let attempt = 1; attempt <= config.maxAttempts; attempt += 1) {
     throwIfAborted(signal);
-    const raw = await generateText('observer', {
-      system: template.system,
-      prompt: buildRetryPrompt(
-        basePrompt,
-        attempt,
-        lastError,
-        'Keep all required content fields, contextRefs, and observationDelta arrays present.',
-      ),
+    const raw = await runToolLoop({
+      messages: [
+        { role: 'system', content: systemPrompt },
+        {
+          role: 'user',
+          content: buildRetryPrompt(
+            basePrompt,
+            attempt,
+            lastError,
+            'Keep observingContent, contextRefs, and observationChanges present.',
+          ),
+        },
+      ],
+      tools: [memoryGetSpec()],
+      toolHandlers: {
+        memory_get: createMemoryGetTool(input, deps.memories),
+      },
+      model: deps.model ?? generateWithTools,
       signal,
+      onToolResults: (event) => {
+        trace.toolCalls.push(...event.toolCalls);
+        trace.toolResults.push(...event.toolResults);
+      },
     });
     if (!raw) {
       throw new Error('observing update is not configured');
@@ -217,7 +193,13 @@ export async function observePreparedThread(
     throwIfAborted(signal);
 
     try {
-      return validateObserveResult(parseJson<ObserveResult>(raw));
+      const result = validateObserveResult(parseJson<ObserveResult>(raw), input);
+      await writeObserveTrace({
+        ...trace,
+        finalJson: raw,
+        observationChanges: result.observationChanges,
+      });
+      return result;
     } catch (error) {
       lastError = String(error);
     }
@@ -231,30 +213,29 @@ function buildMockGatewayResult(
   pendingTurns: Array<{ turnId: string; text: string }>,
 ): GatewayResult {
   return {
-    routes: pendingTurns.map((turn) => {
-      const sourceSlice = normalizeText(turn.text, MAX_SUMMARY_CHARS);
+    workItems: pendingTurns.map((turn) => {
+      const excerpt = normalizeText(turn.text, MAX_SUMMARY_CHARS);
       if (observingThreads.length > 0) {
         return {
-          turnId: turn.turnId,
           targetThreadId: observingThreads[0].threadId,
-          sourceSlice,
-          rationale: 'The turn is routed to the existing observing thread for inspection.',
-        } satisfies GatewayRoute;
+          sourceRefs: [{ turnId: turn.turnId, excerpt }],
+          routingReason: 'The turn is routed to the existing observing thread for inspection.',
+        };
       }
       return {
-        turnId: turn.turnId,
         targetThreadId: null,
-        newThreadTitle: normalizeText(sourceSlice, MAX_TITLE_CHARS),
-        sourceSlice,
-        rationale: 'The turn starts a new observing thread for inspection.',
-      } satisfies GatewayRoute;
+        newThreadTitle: normalizeText(excerpt, MAX_TITLE_CHARS),
+        sourceRefs: [{ turnId: turn.turnId, excerpt }],
+        routingReason: 'The turn starts a new observing thread for inspection.',
+      };
     }),
+    ignoredTurnIds: [],
   };
 }
 
 function buildMockObserveResult(input: ObserveRequest): ObserveResult {
-  const joined = input.pendingTurns
-    .map((turn) => normalizeText(turn.sourceSlice ?? turn.prompt ?? turn.response ?? '', MAX_SUMMARY_CHARS))
+  const joined = input.sourceRefs
+    .map((turn) => normalizeText(turn.excerpt ?? turn.prompt ?? turn.response ?? '', MAX_SUMMARY_CHARS))
     .filter(Boolean)
     .join(' ');
   const titleSeed = input.observingContent.title || joined || 'Mock observing thread';
@@ -262,63 +243,28 @@ function buildMockObserveResult(input: ObserveRequest): ObserveResult {
     .filter((value) => value && value.trim())
     .join(' ');
   return {
-    observingContentUpdate: {
+    observingContent: {
       title: normalizeText(titleSeed),
       summary: normalizeText(summarySeed || titleSeed),
+      observations: input.observingContent.observations,
       openQuestions: input.observingContent.openQuestions,
       nextSteps: input.observingContent.nextSteps,
     },
-    contextRefs: input.pendingTurns
+    contextRefs: input.sourceRefs
       .map((turn) => ({
         turnId: turn.turnId,
-        summary: normalizeText(turn.sourceSlice ?? turn.prompt ?? turn.response ?? '', MAX_SUMMARY_CHARS),
+        summary: normalizeText(turn.excerpt ?? turn.prompt ?? turn.response ?? '', MAX_SUMMARY_CHARS),
       }))
       .filter((reference) => reference.summary),
-    observationDelta: {
-      before: [],
-      after: joined ? [{
-        text: joined,
-        category: 'Fact',
-        updatedMemory: null,
-      }] : [],
-    },
-  };
-}
-
-function buildMockPreparedObserveResult(input: ObservePreparedRequest): ObserveResult {
-  const joined = input.observations
-    .map((observation) => normalizeText(observation.text, MAX_SUMMARY_CHARS))
-    .filter(Boolean)
-    .join(' ');
-  const titleSeed = input.observingContent.title || joined || 'Mock observing thread';
-  const summarySeed = [input.observingContent.summary, joined]
-    .filter((value) => value && value.trim())
-    .join(' ');
-  const contextRefs = new Map<string, string>();
-  for (const observation of input.observations) {
-    const summary = normalizeText(observation.text, MAX_SUMMARY_CHARS);
-    for (const reference of observation.references) {
-      if (reference.startsWith('session:') && summary) {
-        contextRefs.set(reference, summary);
-      }
-    }
-  }
-  return {
-    observingContentUpdate: {
-      title: normalizeText(titleSeed),
-      summary: normalizeText(summarySeed || titleSeed),
-      openQuestions: input.observingContent.openQuestions,
-      nextSteps: input.observingContent.nextSteps,
-    },
-    contextRefs: [...contextRefs.entries()].map(([turnId, summary]) => ({ turnId, summary })),
-    observationDelta: {
-      before: [],
-      after: joined ? [{
-        text: joined,
-        category: 'Fact',
-        updatedMemory: null,
-      }] : [],
-    },
+    observationChanges: joined
+      ? [{
+          type: 'add',
+          text: joined,
+          category: 'Fact',
+          references: input.sourceRefs.map((reference) => reference.turnId),
+          reason: 'Mock observer records the routed source context.',
+        }]
+      : [],
   };
 }
 
@@ -329,82 +275,190 @@ function validateGatewayResult(
 ): GatewayResult {
   const validTurnIds = new Set(pendingTurns.map((turn) => turn.turnId));
   const validThreadIds = new Set(observingThreads.map((thread) => thread.threadId));
-  const coveredTurnIds = new Set<string>();
-  if (!Array.isArray(result.routes)) {
-    throw new Error('observer gateway returned routes that are not an array');
+  if (!Array.isArray(result.workItems)) {
+    throw new Error('observer gateway returned workItems that are not an array');
   }
-  const routes = result.routes.map((route) => {
-    const turnId = route.turnId.trim();
-    if (!validTurnIds.has(turnId)) {
-      throw new Error(`observer gateway referenced unknown turnId: ${route.turnId}`);
+  const workItems = result.workItems.map((item) => {
+    const routingReason = normalizeText(item.routingReason ?? '', MAX_SUMMARY_CHARS);
+    if (!routingReason) {
+      throw new Error('observer gateway returned empty routingReason');
     }
 
-    const sourceSlice = normalizeText(route.sourceSlice, MAX_SUMMARY_CHARS);
-    if (!sourceSlice) {
-      throw new Error(`observer gateway returned empty sourceSlice for turnId: ${turnId}`);
-    }
-    const rationale = normalizeText(route.rationale ?? '', MAX_SUMMARY_CHARS);
-    if (!rationale) {
-      throw new Error(`observer gateway returned empty rationale for turnId: ${turnId}`);
+    const sourceRefs = Array.isArray(item.sourceRefs) ? item.sourceRefs.map((reference) => {
+      const turnId = typeof reference.turnId === 'string' ? reference.turnId.trim() : '';
+      if (!validTurnIds.has(turnId)) {
+        throw new Error(`observer gateway referenced unknown turnId: ${turnId}`);
+      }
+      const excerpt = normalizeText(typeof reference.excerpt === 'string' ? reference.excerpt : '', MAX_SUMMARY_CHARS);
+      if (!excerpt) {
+        throw new Error(`observer gateway returned empty excerpt for turnId: ${turnId}`);
+      }
+      return { turnId, excerpt };
+    }) : [];
+    if (sourceRefs.length === 0) {
+      throw new Error('observer gateway work item must include sourceRefs');
     }
 
-    let normalized: GatewayRoute;
-    const targetThreadId = route.targetThreadId?.trim() || null;
+    const targetThreadId = item.targetThreadId?.trim() || null;
     if (targetThreadId) {
-      if (!validThreadIds.has(targetThreadId) || route.newThreadTitle) {
-        throw new Error(`observer gateway returned invalid targetThreadId for turnId: ${turnId}`);
+      if (!validThreadIds.has(targetThreadId) || item.newThreadTitle) {
+        throw new Error('observer gateway returned invalid targetThreadId');
       }
-      normalized = {
-        turnId,
+      return {
         targetThreadId,
-        sourceSlice,
-        rationale,
-      };
-    } else {
-      const newThreadTitle = normalizeText(route.newThreadTitle ?? '', MAX_TITLE_CHARS);
-      if (!newThreadTitle) {
-        throw new Error(`observer gateway returned missing newThreadTitle for turnId: ${turnId}`);
-      }
-      normalized = {
-        turnId,
-        targetThreadId: null,
-        newThreadTitle,
-        sourceSlice,
-        rationale,
+        sourceRefs,
+        routingReason,
       };
     }
 
-    coveredTurnIds.add(turnId);
-    return normalized;
+    const newThreadTitle = normalizeText(item.newThreadTitle ?? '', MAX_TITLE_CHARS);
+    if (!newThreadTitle) {
+      throw new Error('observer gateway returned missing newThreadTitle');
+    }
+    return {
+      targetThreadId: null,
+      newThreadTitle,
+      sourceRefs,
+      routingReason,
+    };
   });
+  const ignoredTurnIds = Array.isArray(result.ignoredTurnIds)
+    ? [...new Set(result.ignoredTurnIds.map((turnId) => typeof turnId === 'string' ? turnId.trim() : '').filter(Boolean))]
+    : [];
+  for (const turnId of ignoredTurnIds) {
+    if (!validTurnIds.has(turnId)) {
+      throw new Error(`observer gateway ignored unknown turnId: ${turnId}`);
+    }
+  }
 
-  return { routes };
+  return { workItems, ignoredTurnIds };
 }
 
-function validateObserveResult(result: ObserveResult): ObserveResult {
-  const title = normalizeText(result.observingContentUpdate.title);
+function validateObserveResult(result: ObserveResult, input?: ObserveRequest): ObserveResult {
+  const title = normalizeText(result.observingContent.title);
   if (!title) {
-    throw new Error('observing update returned empty observingContentUpdate.title');
+    throw new Error('observing update returned empty observingContent.title');
   }
 
-  const summary = normalizeText(result.observingContentUpdate.summary);
+  const summary = normalizeText(result.observingContent.summary);
   if (!summary) {
-    throw new Error('observing update returned empty observingContentUpdate.summary');
+    throw new Error('observing update returned empty observingContent.summary');
   }
 
-  return {
-    observingContentUpdate: {
+  const normalized = {
+    observingContent: {
       title,
       summary,
-      openQuestions: normalizeStringList(result.observingContentUpdate.openQuestions),
-      nextSteps: normalizeStringList(result.observingContentUpdate.nextSteps),
-    } satisfies ObservingContentUpdate,
-    contextRefs: normalizeContextRefs(result.contextRefs),
-    observationDelta: {
-      before: normalizeObservationList(result.observationDelta.before),
-      after: normalizeObservationList(result.observationDelta.after),
+      observations: normalizeObservationList(result.observingContent.observations),
+      openQuestions: normalizeStringList(result.observingContent.openQuestions),
+      nextSteps: normalizeStringList(result.observingContent.nextSteps),
     },
+    contextRefs: normalizeContextRefs(result.contextRefs),
+    observationChanges: normalizeObservationChanges(result.observationChanges),
   };
+  rejectRelativeTime(normalized, input);
+  return normalized;
+}
+
+function normalizeObservationChanges(actions: unknown): ObservationChange[] {
+  if (!Array.isArray(actions)) {
+    throw new Error('observationChanges must be an array');
+  }
+  const modifiedObservationIds = new Set<string>();
+  return actions.map((item) => {
+    if (!item || typeof item !== 'object') {
+      throw new Error('observationChanges entries must be objects');
+    }
+    const action = item as Record<string, unknown>;
+    const type = typeof action.type === 'string' ? action.type : '';
+    const reason = typeof action.reason === 'string' ? normalizeText(action.reason, MAX_SUMMARY_CHARS) : '';
+    if (!reason) {
+      throw new Error('observation change missing reason');
+    }
+    if (type === 'add') {
+      const text = typeof action.text === 'string' ? normalizeText(action.text) : '';
+      if (!text) {
+        throw new Error('add change missing text');
+      }
+      const references = normalizeIdList(action.references, 'add.references');
+      if (references.length === 0) {
+        throw new Error('add change must include references');
+      }
+      return {
+        type: 'add',
+        text,
+        category: normalizeCategory(action.category),
+        references,
+        reason,
+      };
+    }
+    if (type === 'merge') {
+      const observationIds = normalizeIdList(action.observationIds, 'merge.observationIds');
+      if (observationIds.length < 2) {
+        throw new Error('merge change must include at least two observationIds');
+      }
+      for (const observationId of observationIds) {
+        claimModifiedObservationId(observationId, modifiedObservationIds);
+      }
+      const text = typeof action.text === 'string' ? normalizeText(action.text) : '';
+      if (!text) {
+        throw new Error('merge change missing text');
+      }
+      return {
+        type: 'merge',
+        observationIds,
+        text,
+        category: normalizeCategory(action.category),
+        reason,
+      };
+    }
+    if (type === 'update') {
+      const observationId = typeof action.observationId === 'string' ? action.observationId.trim() : '';
+      claimModifiedObservationId(observationId, modifiedObservationIds);
+      const text = typeof action.text === 'string' ? normalizeText(action.text) : '';
+      if (!text) {
+        throw new Error('update change missing text');
+      }
+      return {
+        type: 'update',
+        observationId,
+        text,
+        ...(action.category ? { category: normalizeCategory(action.category) } : {}),
+        ...(Array.isArray(action.references) ? { references: normalizeIdList(action.references, 'update.references') } : {}),
+        reason,
+      };
+    }
+    if (type === 'delete') {
+      const observationId = typeof action.observationId === 'string' ? action.observationId.trim() : '';
+      claimModifiedObservationId(observationId, modifiedObservationIds);
+      return {
+        type: 'delete',
+        observationId,
+        reason,
+      };
+    }
+    throw new Error('unknown observation change type');
+  });
+}
+
+function normalizeIdList(value: unknown, label: string): string[] {
+  if (!Array.isArray(value)) {
+    throw new Error(`${label} must be an array`);
+  }
+  return [...new Set(value.map((id) => typeof id === 'string' ? id.trim() : '').filter(Boolean))];
+}
+
+function claimModifiedObservationId(observationId: string, modifiedObservationIds: Set<string>): void {
+  if (!observationId) {
+    throw new Error('observation change missing observationId');
+  }
+  if (observationId.startsWith('session:')) {
+    throw new Error(`observation change cannot modify source turn id: ${observationId}`);
+  }
+  if (modifiedObservationIds.has(observationId)) {
+    throw new Error(`observation change modifies observationId more than once: ${observationId}`);
+  }
+  modifiedObservationIds.add(observationId);
 }
 
 function normalizeContextRefs(value: unknown): ContextRef[] {
@@ -426,24 +480,224 @@ function normalizeContextRefs(value: unknown): ContextRef[] {
 }
 
 function normalizeObservationList(observations: Observation[]): Observation[] {
+  if (!Array.isArray(observations)) {
+    throw new Error('observingContent.observations must be an array');
+  }
   return observations.map((observation) => {
-    const text = normalizeText(observation.text, MAX_MEMORY_CHARS);
+    const text = normalizeText(observation.text);
     if (!text) {
       throw new Error('observing update returned an empty observation text');
     }
     return {
       id: observation.id?.trim() || null,
       text,
-      category: observation.category,
+      category: normalizeCategory(observation.category),
       updatedMemory: observation.updatedMemory?.trim() || null,
     };
   });
+}
+
+function rejectRelativeTime(result: ObserveResult, input?: ObserveRequest): void {
+  if (!inputHasDateAnchor(input)) {
+    return;
+  }
+  const texts = [
+    ...result.observingContent.observations.map((observation) => observation.text),
+    ...result.observationChanges.flatMap((change) => (
+      change.type === 'add' || change.type === 'merge' || change.type === 'update'
+        ? [change.text]
+        : []
+    )),
+  ];
+  const relativePattern = /\b(?:yesterday|tomorrow|last|next)\s+(?:day|week|month|year)\b/i;
+  for (const text of texts) {
+    if (relativePattern.test(text)) {
+      throw new Error('observation text must normalize clear relative dates or periods using DATE anchors');
+    }
+  }
+}
+
+function inputHasDateAnchor(input?: ObserveRequest): boolean {
+  return Boolean(input?.sourceRefs.some((reference) => /\bDATE:/i.test(reference.prompt ?? '')));
+}
+
+function normalizeCategory(value: unknown): ObservationCategory {
+  if (
+    value === 'Preference'
+    || value === 'Fact'
+    || value === 'Decision'
+    || value === 'Entity'
+    || value === 'Concept'
+    || value === 'Other'
+  ) {
+    return value;
+  }
+  throw new Error(`invalid observation category: ${String(value)}`);
 }
 
 function normalizeStringList(values: string[]): string[] {
   return values
     .map((value) => normalizeText(value, MAX_LIST_ITEM_CHARS))
     .filter((value): value is string => Boolean(value));
+}
+
+type ToolHandler = (args: Record<string, unknown>, call: LlmToolCall) => Promise<unknown> | unknown;
+
+async function runToolLoop(params: {
+  messages: LlmToolMessage[];
+  tools: LlmTool[];
+  toolHandlers: Record<string, ToolHandler>;
+  model: ToolModel;
+  signal?: AbortSignal;
+  maxSteps?: number;
+  onToolResults?: (event: {
+    toolCalls: LlmToolCall[];
+    toolResults: Array<{
+      id: string;
+      name: string;
+      arguments: Record<string, unknown>;
+      result: unknown;
+    }>;
+  }) => Promise<void> | void;
+}): Promise<string> {
+  const maxSteps = params.maxSteps ?? 3;
+  const messages = [...params.messages];
+  for (let step = 0; step < maxSteps; step += 1) {
+    throwIfAborted(params.signal);
+    const result = await params.model('observer', {
+      messages,
+      tools: params.tools,
+      signal: params.signal,
+    });
+    if (!result) {
+      throw new Error('llm did not return a tool result');
+    }
+    if (result.type === 'final') {
+      return result.text;
+    }
+    messages.push({
+      role: 'assistant',
+      toolCalls: result.toolCalls,
+    });
+    const toolResults = [];
+    for (const call of result.toolCalls) {
+      const handler = params.toolHandlers[call.name];
+      if (!handler) {
+        throw new Error(`unknown tool: ${call.name}`);
+      }
+      throwIfAborted(params.signal);
+      const toolResult = await handler(call.arguments, call);
+      toolResults.push({
+        id: call.id,
+        name: call.name,
+        arguments: call.arguments,
+        result: toolResult,
+      });
+      messages.push({
+        role: 'tool',
+        toolCallId: call.id,
+        name: call.name,
+        content: JSON.stringify(toolResult),
+      });
+    }
+    await params.onToolResults?.({ toolCalls: result.toolCalls, toolResults });
+  }
+  throw new Error(`tool loop exceeded maxSteps=${maxSteps}`);
+}
+
+function memoryGetSpec(): LlmTool {
+  return {
+    name: 'memory_get',
+    description: 'Get full rendered details for allowlisted memory ids when source refs or summaries are insufficient.',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        memoryIds: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Allowlisted memory ids from the current thread, existing observations, or source refs.',
+        },
+      },
+      required: ['memoryIds'],
+    },
+  };
+}
+
+function createMemoryGetTool(input: ObserveRequest, memories?: Pick<Memories, 'get'>) {
+  const allowlist = new Set(buildObserveMemoryAllowlist(input));
+  return async (args: Record<string, unknown>) => {
+    const memoryIds = normalizeMemoryIds(args.memoryIds);
+    const results = [];
+    for (const memoryId of memoryIds) {
+      if (!allowlist.has(memoryId)) {
+        results.push({ memoryId, error: 'memory id is not allowlisted' });
+        continue;
+      }
+      if (!memories) {
+        results.push({ memoryId, error: 'memory_get is unavailable' });
+        continue;
+      }
+      const memory = await memories.get(memoryId);
+      results.push(memory
+        ? { memoryId, content: renderRenderedMemoryMarkdown(memory) }
+        : { memoryId, error: 'memory not found' });
+    }
+    return { memories: results };
+  };
+}
+
+function buildObserveMemoryAllowlist(input: ObserveRequest): string[] {
+  return [
+    ...(input.threadMemoryId ? [input.threadMemoryId] : []),
+    ...input.observingContent.observations
+      .map((observation) => observation.id)
+      .filter((id): id is string => Boolean(id?.trim()))
+      .map((id) => `observation:${id}`),
+    ...input.sourceRefs.map((reference) => reference.turnId),
+  ];
+}
+
+function normalizeMemoryIds(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((memoryId) => (typeof memoryId === 'string' ? memoryId.trim() : ''))
+    .filter(Boolean)
+    .filter((memoryId, index, values) => values.indexOf(memoryId) === index);
+}
+
+function createObserveTrace(input: ObserveRequest) {
+  return {
+    input: {
+      observingContent: input.observingContent,
+      sourceRefs: input.sourceRefs,
+      threadMemoryId: input.threadMemoryId ?? null,
+      allowedMemoryIds: buildObserveMemoryAllowlist(input),
+    },
+    toolCalls: [] as LlmToolCall[],
+    toolResults: [] as Array<{
+      id: string;
+      name: string;
+      arguments: Record<string, unknown>;
+      result: unknown;
+    }>,
+  };
+}
+
+async function writeObserveTrace(event: {
+  input: unknown;
+  toolCalls: LlmToolCall[];
+  toolResults: unknown[];
+  finalJson: string;
+  observationChanges: ObservationChange[];
+}): Promise<void> {
+  const file = process.env.MUNINN_THREAD_OBSERVING_TRACE_FILE;
+  if (!file) {
+    return;
+  }
+  await appendFile(file, `${JSON.stringify(event)}\n`, 'utf8');
 }
 
 function parseJson<T>(raw: string): T {

@@ -120,6 +120,7 @@ async function writeMuninnConfig(configPath, {
   watchdog,
   activeWindowDays,
   continuityHints,
+  domainPrompt,
 } = {}) {
   const root = {};
   const llm = {};
@@ -140,6 +141,7 @@ async function writeMuninnConfig(configPath, {
       maxAttempts: 3,
       ...(activeWindowDays === undefined ? {} : { activeWindowDays }),
       ...(continuityHints === undefined ? {} : { continuityHints }),
+      ...(domainPrompt === undefined ? {} : { domainPrompt }),
     };
     llm.test_observer_llm = { provider: observerProvider };
   }
@@ -189,6 +191,18 @@ test('observer config defaults activeWindowDays and continuityHints and accepts 
   assert.ok(observerConfig);
   assert.equal(observerConfig.activeWindowDays, 14);
   assert.equal(observerConfig.continuityHints, 3);
+});
+
+test('observer config accepts an optional domain prompt name', async (t) => {
+  const { dir, homeDir, configPath } = await makeDatasetUri();
+  t.after(cleanupDataset(dir));
+
+  process.env.MUNINN_HOME = homeDir;
+  await writeMuninnConfig(configPath, { observerProvider: 'mock', domainPrompt: 'chat' });
+
+  const observerConfig = getObserverLlmConfig();
+  assert.ok(observerConfig);
+  assert.equal(observerConfig.domainPrompt, 'chat');
 });
 
 test('addMessage and sessions.get roundtrip through the native binding', async (t) => {
@@ -663,6 +677,38 @@ test('validateSettings rejects invalid observer.continuityHints', async (t) => {
       },
     }, null, 2)),
     /observer\.continuityHints must be a positive integer/i,
+  );
+});
+
+test('validateSettings rejects unknown observer.domainPrompt', async (t) => {
+  const { dir, homeDir, configPath } = await makeDatasetUri();
+  t.after(cleanupDataset(dir));
+
+  process.env.MUNINN_HOME = homeDir;
+  await mkdir(path.dirname(configPath), { recursive: true });
+  await writeFile(configPath, '{\n  "storage": {\n    "uri": ""\n  }\n}\n', 'utf8');
+
+  await assert.rejects(
+    () => validateSettings(JSON.stringify({
+      observer: {
+        name: 'test-observer',
+        llm: 'test_observer_llm',
+        domainPrompt: 'unknown',
+      },
+      llm: {
+        test_observer_llm: {
+          provider: 'mock',
+        },
+      },
+      observation: {
+        embedding: {
+          provider: 'mock',
+          dimensions: 8,
+        },
+        defaultImportance: 0.7,
+      },
+    }, null, 2)),
+    /observer\.domainPrompt must be one of: chat/i,
   );
 });
 
@@ -1339,13 +1385,13 @@ test('rendered memory page mode paginates after combining session and observing 
   const combinedPage = await memories.list({ mode: { type: 'page', offset: 0, limit: 10 } });
 
   assert.equal(firstPage.length, 2);
-  assert.equal(secondPage.length, 1);
+  assert.equal(secondPage.length, 2);
   assert.deepEqual(
     firstPage.map((memory) => memory.memoryId),
     combinedPage.slice(0, 2).map((memory) => memory.memoryId),
   );
   assert.deepEqual(
     secondPage.map((memory) => memory.memoryId),
-    combinedPage.slice(2, 3).map((memory) => memory.memoryId),
+    combinedPage.slice(2, 4).map((memory) => memory.memoryId),
   );
 });

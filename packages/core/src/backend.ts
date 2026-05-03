@@ -19,6 +19,7 @@ import {
   type CheckpointContent,
   type CheckpointFile,
   type ObserverCheckpoint,
+  type RecentTurn,
 } from './checkpoint.js';
 import { Memories } from './memories/memories.js';
 import { Observer } from './observer/observer.js';
@@ -42,6 +43,7 @@ export interface SessionTurn {
   response?: string | null;
   observingEpoch?: number | null;
   previousTurnSummary?: string | null;
+  recentContext?: RecentTurn[];
 }
 
 export interface ObservingSnapshot {
