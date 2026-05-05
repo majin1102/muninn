@@ -15,7 +15,7 @@ const RECALL_ATTEMPTS = 3;
 const RECALL_RETRY_DELAY_MS = 1_000;
 const REPO_ROOT = path.resolve(__dirname, '../../..');
 const SIDECAR_APP_PATH = path.join(REPO_ROOT, 'packages/sidecar/dist/app.js');
-const IMPORT_PLACEHOLDER_RESPONSE = '[imported dialogue event; no assistant response]';
+const NO_PAIRED_RESPONSE = '[no paired response dialogue]';
 
 function envPositiveInt(name: string, fallback: number): number {
   const raw = process.env[name];
@@ -135,30 +135,46 @@ async function importSampleCommand(options: Map<string, string>) {
   const sample = await loadSample(dataFile, sampleId);
   const manifestTurns: ManifestTurn[] = [];
   let importOrder = 0;
+  const totalDialogs = countSampleDialogs(sample);
 
   for (const sessionNo of getSessionNumbers(sample.conversation)) {
     const dateTime = getDateTime(sample.conversation, sessionNo);
     const dialogs = sample.conversation[`session_${sessionNo}`] as LocomoDialog[];
     const sessionId = sessionKey(sample.sample_id, sessionNo);
-    for (const dialog of dialogs) {
-      const text = dialogLine(dialog, dateTime);
+    for (let index = 0; index < dialogs.length; index += 2) {
+      const promptDialog = dialogs[index];
+      const responseDialog = dialogs[index + 1];
+      if (!promptDialog) {
+        continue;
+      }
+      console.error(
+        `[locomo] import_turn_start sample_id=${sample.sample_id} imported=${importOrder}/${totalDialogs} session=${sessionNo} prompt_source_id=${promptDialog.dia_id} response_source_id=${responseDialog?.dia_id ?? '(none)'}`
+      );
       const turn = await addTurnAndFind({
         sessionId,
-        agent: dialog.speaker,
-        prompt: text,
-        response: IMPORT_PLACEHOLDER_RESPONSE,
+        agent: promptDialog.speaker,
+        prompt: dialogLine(promptDialog, dateTime),
+        response: responseDialog ? dialogLine(responseDialog, dateTime) : noPairedResponseLine(dateTime),
       });
-      manifestTurns.push({
-        turn_id: turn.turnId,
-        source_id: dialog.dia_id,
-        sample_id: sample.sample_id,
-        session_id: sessionId,
-        date_time: dateTime,
-        import_order: importOrder,
-      });
-      importOrder += 1;
+      for (const dialog of [promptDialog, responseDialog].filter(Boolean) as LocomoDialog[]) {
+        manifestTurns.push({
+          turn_id: turn.turnId,
+          source_id: dialog.dia_id,
+          sample_id: sample.sample_id,
+          session_id: sessionId,
+          date_time: dateTime,
+          import_order: importOrder,
+        });
+        importOrder += 1;
+      }
+      console.error(
+        `[locomo] import_progress sample_id=${sample.sample_id} imported=${importOrder}/${totalDialogs} last_turn_id=${turn.turnId}`
+      );
     }
   }
+  console.error(
+    `[locomo] import_capture_complete sample_id=${sample.sample_id} imported=${importOrder}/${totalDialogs}`
+  );
 
   const manifest = {
     sample_id: sample.sample_id,
@@ -174,6 +190,13 @@ async function importSampleCommand(options: Map<string, string>) {
     manifest_path: manifestPath(home),
     gateway_trace_path: gatewayTracePath,
   };
+}
+
+function countSampleDialogs(sample: LocomoSample): number {
+  return getSessionNumbers(sample.conversation).reduce((total, sessionNo) => {
+    const dialogs = sample.conversation[`session_${sessionNo}`];
+    return total + (Array.isArray(dialogs) ? dialogs.length : 0);
+  }, 0);
 }
 
 async function recallCommand(options: Map<string, string>) {
@@ -354,7 +377,7 @@ function errorMessage(error: unknown): string {
 
 async function toBridgeHit(
   rendered: RenderedMemory,
-  turnMap: Map<string, ManifestTurn>,
+  turnMap: Map<string, ManifestTurn[]>,
   matchedText: string,
 ): Promise<BridgeHit> {
   const evidenceIds = await resolveEvidenceIds(rendered.memoryId, turnMap);
@@ -401,7 +424,7 @@ function observingRatio(detail?: string | null): number | null | undefined {
 
 async function directSessionReferences(
   memoryId: string,
-  turnMap: Map<string, ManifestTurn>,
+  turnMap: Map<string, ManifestTurn[]>,
 ): Promise<BridgeReference[]> {
   if (memoryId.startsWith('observation:')) {
     const rendered = await coreClient.memories.get(memoryId);
@@ -421,21 +444,23 @@ async function directSessionReferences(
 
 async function directSessionReferencesFromIds(
   references: string[],
-  turnMap: Map<string, ManifestTurn>,
+  turnMap: Map<string, ManifestTurn[]>,
 ): Promise<BridgeReference[]> {
   const rows: BridgeReference[] = [];
   for (const reference of references) {
-    const manifestTurn = turnMap.get(reference);
-    if (!manifestTurn) {
+    const manifestTurns = turnMap.get(reference) ?? [];
+    if (manifestTurns.length === 0) {
       continue;
     }
     const turn = await coreClient.sessions.get(reference);
-    rows.push({
-      memory_id: reference,
-      source_id: manifestTurn.source_id,
-      date_time: manifestTurn.date_time,
-      text: renderReferenceText(turn),
-    });
+    for (const manifestTurn of manifestTurns) {
+      rows.push({
+        memory_id: reference,
+        source_id: manifestTurn.source_id,
+        date_time: manifestTurn.date_time,
+        text: renderReferenceText(turn),
+      });
+    }
   }
   return rows;
 }
@@ -473,7 +498,7 @@ async function addTurnAndFind(content: TurnContent): Promise<SessionTurn> {
 
 async function resolveEvidenceIds(
   memoryId: string,
-  turnMap: Map<string, ManifestTurn>,
+  turnMap: Map<string, ManifestTurn[]>,
   seen = new Set<string>(),
 ): Promise<string[]> {
   if (seen.has(memoryId)) {
@@ -481,9 +506,9 @@ async function resolveEvidenceIds(
   }
   seen.add(memoryId);
 
-  const direct = turnMap.get(memoryId);
-  if (direct) {
-    return [direct.source_id];
+  const direct = turnMap.get(memoryId) ?? [];
+  if (direct.length > 0) {
+    return direct.map((turn) => turn.source_id);
   }
 
   if (memoryId.startsWith('observation:')) {
@@ -521,7 +546,7 @@ async function resolveEvidenceIds(
 
 async function resolveEvidenceReference(
   reference: string,
-  turnMap: Map<string, ManifestTurn>,
+  turnMap: Map<string, ManifestTurn[]>,
   seen: Set<string>,
 ): Promise<string[]> {
   if (!reference) {
@@ -548,13 +573,13 @@ export function resolveEvidenceIdsFromGraph(
   turns: ManifestTurn[],
   referenceGraph: Record<string, string[]>,
 ): string[] {
-  const turnMap = new Map(turns.map((turn) => [turn.turn_id, turn]));
+  const turnMap = manifestTurnEntries(turns);
   return resolveEvidenceIdsFromGraphInner(memoryId, turnMap, referenceGraph, new Set<string>());
 }
 
 function resolveEvidenceIdsFromGraphInner(
   memoryId: string,
-  turnMap: Map<string, ManifestTurn>,
+  turnMap: Map<string, ManifestTurn[]>,
   referenceGraph: Record<string, string[]>,
   seen: Set<string>,
 ): string[] {
@@ -563,9 +588,9 @@ function resolveEvidenceIdsFromGraphInner(
   }
   seen.add(memoryId);
 
-  const direct = turnMap.get(memoryId);
-  if (direct) {
-    return [direct.source_id];
+  const direct = turnMap.get(memoryId) ?? [];
+  if (direct.length > 0) {
+    return direct.map((turn) => turn.source_id);
   }
 
   const references = referenceGraph[memoryId] ?? [];
@@ -750,17 +775,29 @@ async function readManifest(home: string): Promise<ImportManifest> {
   return JSON.parse(raw) as ImportManifest;
 }
 
-function manifestTurnMap(manifest: ImportManifest): Map<string, ManifestTurn> {
-  return new Map(manifest.turns.map((turn) => [turn.turn_id, turn]));
+function manifestTurnMap(manifest: ImportManifest): Map<string, ManifestTurn[]> {
+  return manifestTurnEntries(manifest.turns);
+}
+
+function manifestTurnEntries(turns: ManifestTurn[]): Map<string, ManifestTurn[]> {
+  const byTurnId = new Map<string, ManifestTurn[]>();
+  for (const turn of turns) {
+    const entries = byTurnId.get(turn.turn_id) ?? [];
+    entries.push(turn);
+    byTurnId.set(turn.turn_id, entries);
+  }
+  return byTurnId;
 }
 
 function findTurnBySourceId(
-  turnMap: Map<string, ManifestTurn>,
+  turnMap: Map<string, ManifestTurn[]>,
   sourceId: string,
 ): ManifestTurn | undefined {
-  for (const turn of turnMap.values()) {
-    if (turn.source_id === sourceId) {
-      return turn;
+  for (const turns of turnMap.values()) {
+    for (const turn of turns) {
+      if (turn.source_id === sourceId) {
+        return turn;
+      }
     }
   }
   return undefined;
@@ -779,8 +816,14 @@ function dialogLine(dialog: LocomoDialog, dateTime: string): string {
     `DATE: ${dateTime}`,
     'DIALOGUE:',
     `${dialog.speaker} said: "${dialogText(dialog)}"`,
-    '',
-    'Only the DIALOGUE line is source content. The response field is an import placeholder, not dialogue.',
+  ].join('\n').trim();
+}
+
+function noPairedResponseLine(dateTime: string): string {
+  return [
+    `DATE: ${dateTime}`,
+    'DIALOGUE:',
+    NO_PAIRED_RESPONSE,
   ].join('\n').trim();
 }
 

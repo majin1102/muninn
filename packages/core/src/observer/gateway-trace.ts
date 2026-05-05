@@ -1,11 +1,11 @@
 import { appendFile } from 'node:fs/promises';
 
-import type { ThreadWorkItem } from './types.js';
+import type { SessionFragment } from './types.js';
 
 export async function writeGatewayTrace(event: {
   observingEpoch: number;
-  workItems: ThreadWorkItem[];
-  ignoredTurnIds?: string[];
+  durationMs?: number;
+  sessionFragments: SessionFragment[];
 }): Promise<void> {
   const file = process.env.MUNINN_OBSERVER_GATEWAY_TRACE_FILE;
   if (!file) {
@@ -13,13 +13,13 @@ export async function writeGatewayTrace(event: {
   }
   const line = `${JSON.stringify({
     observingEpoch: event.observingEpoch,
-    workItems: event.workItems.map((item) => ({
-      targetThreadId: item.targetThreadId ?? null,
-      newThreadTitle: item.newThreadTitle ?? null,
-      sourceRefs: item.sourceRefs,
-      routingReason: item.routingReason,
+    ...(event.durationMs === undefined ? {} : { durationMs: event.durationMs }),
+    sessionFragments: event.sessionFragments.map((fragment) => ({
+      threadId: fragment.threadId,
+      turnIds: fragment.turnIds,
+      content: fragment.content,
+      reason: fragment.reason,
     })),
-    ignoredTurnIds: event.ignoredTurnIds ?? [],
   })}\n`;
   await appendFile(file, line, 'utf8');
 }

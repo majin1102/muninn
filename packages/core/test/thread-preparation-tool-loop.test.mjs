@@ -8,7 +8,7 @@ import * as threadPreparationModule from '../dist/observer/thread-preparation.js
 
 const { __testing } = threadPreparationModule;
 
-test('thread preparation memory_get expands allowlisted memories only', async (t) => {
+test('thread preparation memory-get expands allowlisted memories only', async (t) => {
   const { dir, homeDir, configPath } = await makeConfigHome();
   process.env.MUNINN_HOME = homeDir;
   await writeObserverConfig(configPath);
@@ -51,7 +51,7 @@ test('thread preparation memory_get expands allowlisted memories only', async (t
   }, {
     memories,
     model: async (_task, request) => {
-      assert.equal(request.tools[0].name, 'memory_get');
+      assert.equal(request.tools[0].name, 'memory-get');
       const hasToolResult = request.messages.some((message) => message.role === 'tool');
       if (!hasToolResult) {
         return {
@@ -59,7 +59,7 @@ test('thread preparation memory_get expands allowlisted memories only', async (t
           toolCalls: [
             {
               id: 'call-1',
-              name: 'memory_get',
+              name: 'memory-get',
               arguments: {
                 memoryIds: [
                   'session:1',
@@ -205,7 +205,7 @@ test('thread preparation writes trace with input, tool calls, and final result',
           toolCalls: [
             {
               id: 'call-1',
-              name: 'memory_get',
+              name: 'memory-get',
               arguments: { memoryIds: ['observation:old-support'] },
             },
           ],
@@ -230,7 +230,7 @@ test('thread preparation writes trace with input, tool calls, and final result',
     { memoryId: 'observation:old-support', title: 'Older support', summary: 'Older support summary' },
   ]);
   assert.deepEqual(events[0].toolCalls, [
-    { id: 'call-1', name: 'memory_get', arguments: { memoryIds: ['observation:old-support'] } },
+    { id: 'call-1', name: 'memory-get', arguments: { memoryIds: ['observation:old-support'] } },
   ]);
   assert.equal(events[0].toolResults[0].id, 'call-1');
   assert.deepEqual(events[0].result, {

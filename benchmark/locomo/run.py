@@ -336,6 +336,8 @@ def run_unit(
                 answerer=args.answerer,
                 answerer_config=load_answerer_config(home_dir.path) if args.answerer == "llm" else None,
                 expand_references=args.expand_references,
+                reporter=reporter,
+                sample_id=sample_id,
             ),
             sample_id=sample_id,
             qa_count=len(qas),
@@ -528,10 +530,20 @@ def apply_predictions(
     answerer: str = "heuristic",
     answerer_config: dict[str, Any] | None = None,
     expand_references: bool = False,
+    reporter: ProgressReporter | None = None,
+    sample_id: str | None = None,
 ) -> None:
     hit_key_prefix = prediction_key.removesuffix("_prediction")
     heuristic_key = heuristic_key or f"{hit_key_prefix}_heuristic_prediction"
     for qa_index, qa in enumerate(qas):
+        if reporter is not None and (qa_index == 0 or (qa_index + 1) % 10 == 0 or qa_index + 1 == len(qas)):
+            reporter.emit(
+                "answer_progress",
+                sample_id=sample_id,
+                qa_index=qa_index + 1,
+                qa_count=len(qas),
+                answerer=answerer,
+            )
         hits = batch_hits[qa_index]
         question = str(qa["question"])
         category = int(qa["category"])
@@ -547,17 +559,20 @@ def apply_predictions(
         if answerer == "llm":
             if answerer_config is None:
                 raise ValueError("LLM answerer requires answerer_config")
+            answer_started_at = monotonic()
             answer_result = run_llm_answerer(
                 question=question,
                 category=category,
                 answer_context=answer_context,
                 config=answerer_config,
             )
+            qa[f"{hit_key_prefix}_answer_elapsed_s"] = round(monotonic() - answer_started_at, 4)
             qa[prediction_key] = answer_result["answer"]
             qa[f"{hit_key_prefix}_memory_clarity_score"] = answer_result.get("memory_clarity_score")
             qa[f"{hit_key_prefix}_memory_clarity_reason"] = answer_result.get("memory_clarity_reason")
         elif answerer == "heuristic":
             qa[prediction_key] = heuristic_prediction
+            qa[f"{hit_key_prefix}_answer_elapsed_s"] = 0
             qa[f"{hit_key_prefix}_memory_clarity_score"] = None
             qa[f"{hit_key_prefix}_memory_clarity_reason"] = ""
         else:
@@ -624,16 +639,16 @@ def load_gateway_routes(path: Path | None) -> dict[str, list[dict[str, Any]]]:
         if not line.strip():
             continue
         event = json.loads(line)
-        for route in event.get("workItems", []):
-            route_key = route.get("targetThreadId") or route.get("newThreadTitle")
+        for route in event.get("sessionFragments", []):
+            route_key = route.get("threadId")
             if not route_key:
                 continue
             routes.setdefault(str(route_key), []).append(
                 {
-                    "targetThreadId": route.get("targetThreadId"),
-                    "newThreadTitle": route.get("newThreadTitle"),
-                    "sourceRefs": route.get("sourceRefs") or [],
-                    "routingReason": route.get("routingReason"),
+                    "threadId": route.get("threadId"),
+                    "turnIds": route.get("turnIds") or [],
+                    "content": route.get("content"),
+                    "reason": route.get("reason"),
                 }
             )
     return routes

@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import json
+import os
+import time
 import urllib.error
 import urllib.request
+from base64 import urlsafe_b64decode
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +18,7 @@ SYSTEM_PROMPT = (
     "memory context. Return JSON only with answer, memory_clarity_score, "
     "and memory_clarity_reason."
 )
+MIN_CODEX_TOKEN_TTL_SECONDS = 24 * 60 * 60
 
 
 def build_answer_context(
@@ -31,8 +35,6 @@ def build_answer_context(
     ]
     if not hits:
         lines.append("- No related memories were retrieved.")
-        lines.append("Related Sessions:")
-        lines.append("- No related sessions were retrieved.")
         return "\n".join(lines)
 
     for index, hit in enumerate(hits, start=1):
@@ -46,26 +48,6 @@ def build_answer_context(
             ]
         )
 
-    lines.append("Related Sessions:")
-    seen_references: set[str] = set()
-    for hit in hits:
-        for reference in hit.references:
-            key = str(reference.get("memory_id") or reference.get("source_id") or reference.get("text") or "")
-            if key in seen_references:
-                continue
-            seen_references.add(key)
-            lines.extend(
-                [
-                    f"- SESSION {reference.get('source_id') or reference.get('memory_id') or '(unknown)'}",
-                    f"  DATE: {reference.get('date_time') or hit.date_time or '(unknown)'}",
-                    f"  TEXT: {reference.get('text') or ''}",
-                ]
-            )
-            if not expand_references and len(seen_references) >= 12:
-                lines.append("- Additional related sessions omitted.")
-                return "\n".join(lines)
-    if not seen_references:
-        lines.append("- No direct related sessions were available.")
     return "\n".join(lines)
 
 
@@ -101,6 +83,7 @@ def build_qa_trace(
         "heuristic_prediction": qa.get(heuristic_key, ""),
         "memory_clarity_score": qa.get(f"{prediction_key.removesuffix('_prediction')}_memory_clarity_score"),
         "memory_clarity_reason": qa.get(f"{prediction_key.removesuffix('_prediction')}_memory_clarity_reason"),
+        "answer_elapsed_s": qa.get(f"{prediction_key.removesuffix('_prediction')}_answer_elapsed_s"),
         "f1": round(scored.f1, 4),
         "recall": round(scored.recall, 4),
         "adversarial_answer": scored.adversarial_answer,
@@ -138,6 +121,13 @@ def run_llm_answerer(
             "memory_clarity_score": 1,
             "memory_clarity_reason": "Mock answerer did not evaluate memory clarity.",
         }
+    if provider == "openai-codex":
+        return run_openai_codex_answerer(
+            question=question,
+            category=category,
+            answer_context=answer_context,
+            config=config,
+        )
     if provider != "openai":
         raise ValueError(f"unsupported LoCoMo answerer provider: {provider}")
 
@@ -178,6 +168,102 @@ def run_llm_answerer(
     return extract_answer(json.loads(raw), api_style)
 
 
+def run_openai_codex_answerer(
+    *,
+    question: str,
+    category: int,
+    answer_context: str,
+    config: dict[str, Any],
+) -> dict[str, Any]:
+    token = load_codex_access_token()
+    base_url = str(config.get("baseUrl") or "https://chatgpt.com/backend-api")
+    payload = build_openai_payload(
+        api_style="responses",
+        model=str(config.get("model") or "gpt-5.4"),
+        question=question,
+        category=category,
+        answer_context=answer_context,
+    )
+    payload["instructions"] = SYSTEM_PROMPT
+    payload["store"] = False
+    payload["stream"] = True
+    payload["input"] = [
+        item
+        for item in payload["input"]
+        if isinstance(item, dict) and item.get("role") != "system"
+    ]
+    request = urllib.request.Request(
+        normalize_codex_responses_url(base_url),
+        data=json.dumps(payload).encode("utf8"),
+        headers={
+            "authorization": f"Bearer {token}",
+            "content-type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=120) as response:
+            raw = response.read().decode("utf8")
+    except urllib.error.HTTPError as error:
+        detail = error.read().decode("utf8", errors="replace")
+        raise RuntimeError(f"LoCoMo openai-codex answerer request failed with status {error.code}: {detail}") from error
+    text = extract_codex_stream_text(raw)
+    if not text:
+        raise RuntimeError("LoCoMo openai-codex answerer response did not contain text")
+    return parse_answer_text(text)
+
+
+def load_codex_access_token(now: float | None = None) -> str:
+    auth_path = resolve_codex_home() / "auth.json"
+    try:
+        auth = json.loads(auth_path.read_text(encoding="utf8"))
+    except OSError as error:
+        raise RuntimeError(f"Could not read Codex CLI auth at {auth_path}. Run `codex login`. {error}") from error
+    except json.JSONDecodeError as error:
+        raise RuntimeError(f"Codex CLI auth at {auth_path} is invalid JSON: {error}") from error
+    if not isinstance(auth, dict):
+        raise RuntimeError(f"Codex CLI auth at {auth_path} must be a JSON object.")
+    if auth.get("auth_mode") != "chatgpt":
+        raise RuntimeError("Codex CLI auth must use ChatGPT login. Run `codex login` and sign in with ChatGPT.")
+    tokens = auth.get("tokens")
+    access_token = tokens.get("access_token") if isinstance(tokens, dict) else None
+    if not isinstance(access_token, str) or not access_token.strip():
+        raise RuntimeError("Codex CLI auth is missing tokens.access_token. Run `codex login` again.")
+    expires_at = jwt_expiry_seconds(access_token.strip())
+    if expires_at is None:
+        raise RuntimeError("Codex CLI auth token is not a JWT with an exp claim. Run `codex login` again.")
+    current = now if now is not None else time.time()
+    if expires_at - current < MIN_CODEX_TOKEN_TTL_SECONDS:
+        raise RuntimeError("Codex CLI auth token expires within 24 hours. Run `codex login` again before starting the benchmark.")
+    return access_token.strip()
+
+
+def resolve_codex_home() -> Path:
+    configured = os.environ.get("CODEX_HOME", "").strip()
+    if not configured:
+        return Path.home() / ".codex"
+    if configured == "~":
+        return Path.home()
+    if configured.startswith("~/"):
+        return Path.home() / configured[2:]
+    return Path(configured).resolve()
+
+
+def jwt_expiry_seconds(token: str) -> float | None:
+    parts = token.split(".")
+    if len(parts) != 3 or not parts[1]:
+        return None
+    padded = parts[1] + "=" * (-len(parts[1]) % 4)
+    try:
+        payload = json.loads(urlsafe_b64decode(padded.encode("utf8")).decode("utf8"))
+    except (ValueError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    exp = payload.get("exp")
+    return float(exp) if isinstance(exp, (int, float)) else None
+
+
 def build_openai_payload(
     *,
     api_style: str,
@@ -190,8 +276,9 @@ def build_openai_payload(
         f"{answer_context}\n\n"
         f"Question: {question}\n"
         f"Category: {category}\n"
-        "Answer based on Related Memories and Related Sessions. "
+        "Answer based on Related Memories. "
         "Use the shortest direct answer that answers the question; put evidence and reasoning in memory_clarity_reason. "
+        "For dates, years, names, places, or short phrases, output only the factual span itself with no prepositions or full sentence. "
         "If the question is subjective or interpretive, a reasonable inference is allowed when supported by the memory context. "
         "If the memory context is insufficient, answer \"Not mentioned in the conversation\". "
         "Rate memory_clarity_score from 1 to 10 based on the clarity of the memory evidence. "
@@ -281,3 +368,49 @@ def normalize_api_style(api: Any) -> str:
 
 def normalize_chat_completions_url(base_url: str) -> str:
     return base_url if base_url.endswith("/chat/completions") else f"{base_url.rstrip('/')}/chat/completions"
+
+
+def normalize_codex_responses_url(base_url: str) -> str:
+    resolved = base_url.rstrip("/")
+    if resolved in {
+        "https://chatgpt.com/backend-api",
+        "https://chatgpt.com/backend-api/responses",
+    }:
+        return "https://chatgpt.com/backend-api/codex/responses"
+    return resolved if resolved.endswith("/responses") else f"{resolved}/responses"
+
+
+def extract_codex_stream_text(raw: str) -> str:
+    fragments: list[str] = []
+    completed: dict[str, Any] | None = None
+    for event in parse_sse_events(raw):
+        event_type = event.get("type")
+        if isinstance(event_type, str) and event_type.endswith("output_text.delta"):
+            delta = event.get("delta")
+            if isinstance(delta, str):
+                fragments.append(delta)
+        if event_type == "response.completed":
+            response = event.get("response")
+            if isinstance(response, dict):
+                completed = response
+    if completed is not None:
+        text = extract_responses_text(completed)
+        if text:
+            return text
+    return "".join(fragments).strip()
+
+
+def parse_sse_events(raw: str) -> list[dict[str, Any]]:
+    events: list[dict[str, Any]] = []
+    for chunk in raw.split("\n\n"):
+        data = "\n".join(
+            line[len("data:") :].strip()
+            for line in chunk.splitlines()
+            if line.startswith("data:")
+        ).strip()
+        if not data or data == "[DONE]":
+            continue
+        parsed = json.loads(data)
+        if isinstance(parsed, dict):
+            events.append(parsed)
+    return events

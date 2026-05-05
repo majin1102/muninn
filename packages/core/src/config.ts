@@ -9,6 +9,8 @@ const DEFAULT_TITLE_MAX_CHARS = 100;
 const DEFAULT_OBSERVER_MAX_ATTEMPTS = 3;
 const DEFAULT_OBSERVER_ACTIVE_WINDOW_DAYS = 7;
 const DEFAULT_OBSERVER_CONTINUITY_HINTS = 1;
+const DEFAULT_OBSERVER_EPOCH_TURNS = 3;
+const DEFAULT_OBSERVER_EPOCH_WINDOW_MS = 10_000;
 const DEFAULT_IMPORTANCE = 0.7;
 const DEFAULT_WATCHDOG_INTERVAL_MS = 60_000;
 const DEFAULT_WATCHDOG_COMPACT_MIN_FRAGMENTS = 8;
@@ -36,6 +38,8 @@ type ObserverConfigRecord = {
   maxAttempts?: number;
   activeWindowDays?: number;
   continuityHints?: number;
+  epochTurns?: number;
+  epochWindowMs?: number;
   domainPrompt?: string;
 };
 
@@ -79,6 +83,8 @@ export type ObserverLlmConfig = TextProviderConfig & {
   maxAttempts: number;
   activeWindowDays: number;
   continuityHints: number;
+  epochTurns: number;
+  epochWindowMs: number;
   domainPrompt?: string;
 };
 
@@ -149,6 +155,8 @@ export function getObserverLlmConfig(): ObserverLlmConfig | null {
     maxAttempts: observer.maxAttempts ?? DEFAULT_OBSERVER_MAX_ATTEMPTS,
     activeWindowDays: observer.activeWindowDays ?? DEFAULT_OBSERVER_ACTIVE_WINDOW_DAYS,
     continuityHints: observer.continuityHints ?? DEFAULT_OBSERVER_CONTINUITY_HINTS,
+    epochTurns: observer.epochTurns ?? DEFAULT_OBSERVER_EPOCH_TURNS,
+    epochWindowMs: observer.epochWindowMs ?? DEFAULT_OBSERVER_EPOCH_WINDOW_MS,
     domainPrompt: observer.domainPrompt,
     provider: parseLlmProvider(llm.provider),
     model: llm.model,
@@ -359,6 +367,8 @@ function validateObserverConfig(observer: unknown): void {
   validateOptionalPositiveInteger(config.maxAttempts, 'observer.maxAttempts');
   validateOptionalPositiveInteger(config.activeWindowDays, 'observer.activeWindowDays');
   validateOptionalPositiveInteger(config.continuityHints, 'observer.continuityHints');
+  validateOptionalPositiveInteger(config.epochTurns, 'observer.epochTurns');
+  validateOptionalPositiveInteger(config.epochWindowMs, 'observer.epochWindowMs');
   validateOptionalDomainPrompt(config.domainPrompt);
 }
 

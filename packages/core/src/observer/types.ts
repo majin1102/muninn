@@ -48,6 +48,8 @@ export type ObservationChange =
   };
 
 export type SnapshotContent = {
+  threadKind?: ObservingThreadKind;
+  sessionId?: string | null;
   observations: Observation[];
   contextRefs: ContextRef[];
   openQuestions?: string[];
@@ -55,8 +57,12 @@ export type SnapshotContent = {
   observationChanges: ObservationChange[];
 };
 
+export type ObservingThreadKind = 'session' | 'subject';
+
 export type ObservingThread = {
   observingId: string;
+  kind: ObservingThreadKind;
+  sessionId?: string | null;
   snapshotId?: string;
   snapshotIds: string[];
   snapshotEpochs?: number[];
@@ -91,15 +97,20 @@ export type PendingIndex = {
 
 export type ObservingThreadGatewayInput = {
   threadId: string;
+  kind: ObservingThreadKind;
   title: string;
-  continuityHints?: string[];
+  summary: string;
 };
 
-export type ObservingTurnInput = {
+export type FragmentTurnInput = {
   turnId: string;
-  excerpt?: string | null;
   prompt?: string | null;
   response?: string | null;
+};
+
+export type ObserveFragmentInput = {
+  content: string;
+  turns: FragmentTurnInput[];
 };
 
 export type ObservingContent = {
@@ -110,31 +121,28 @@ export type ObservingContent = {
   nextSteps: string[];
 };
 
+export type ObservingContentUpdate = Omit<ObservingContent, 'observations'>;
+
 export type ObserveRequest = {
   observingContent: ObservingContent;
-  sourceRefs: ObservingTurnInput[];
-  threadMemoryId?: string | null;
+  fragments: ObserveFragmentInput[];
 };
 
 export type ObserveResult = {
-  observingContent: ObservingContent;
+  observingContent: ObservingContentUpdate;
   contextRefs: ContextRef[];
   observationChanges: ObservationChange[];
 };
 
-export type ThreadWorkItem = {
-  targetThreadId?: string | null;
-  newThreadTitle?: string | null;
-  sourceRefs: Array<{
-    turnId: string;
-    excerpt: string;
-  }>;
-  routingReason: string;
+export type SessionFragment = {
+  threadId: string;
+  turnIds: string[];
+  content: string;
+  reason: string;
 };
 
 export type GatewayResult = {
-  workItems: ThreadWorkItem[];
-  ignoredTurnIds?: string[];
+  sessionFragments: SessionFragment[];
 };
 
 export type ThreadCandidateMemory = {

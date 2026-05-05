@@ -67,7 +67,7 @@ export async function prepareThreads(
     ],
     tools: [memoryGetSpec()],
     toolHandlers: {
-      memory_get: createMemoryGetTool(input, deps.memories),
+      'memory-get': createMemoryGetTool(input, deps.memories),
     },
     model: deps.model ?? generateWithTools,
     signal,
@@ -207,7 +207,7 @@ function createMemoryGetTool(
       if (!memories) {
         results.push({
           memoryId,
-          error: 'memory_get is unavailable',
+          error: 'memory-get is unavailable',
         });
         continue;
       }
@@ -228,7 +228,7 @@ function createMemoryGetTool(
 
 function memoryGetSpec(): LlmTool {
   return {
-    name: 'memory_get',
+    name: 'memory-get',
     description: 'Get full rendered details for allowlisted memory ids when summaries are insufficient.',
     parameters: {
       type: 'object',

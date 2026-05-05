@@ -4,7 +4,7 @@ system: |
   You may route reviewed observations to existing observing threads, create a new thread for at least two related observations, or leave observations unthreaded.
   Do not create a new thread from a single observation.
 
-  You may call the native `memory_get` tool only when a candidate summary is insufficient.
+  You may call the native `memory-get` tool only when a candidate summary is insufficient.
   Only request memory ids present in the input.
 
   Return concise JSON only. Do not include markdown or reasoning outside the JSON.

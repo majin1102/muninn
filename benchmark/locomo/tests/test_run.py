@@ -152,19 +152,16 @@ class RunTests(unittest.TestCase):
         trace = build_trace([sample], "muninn_top_5", gateway_routes_by_sample={
             "conv-a": {
                 "observing:1": [{
-                    "targetThreadId": "observing:1",
-                    "newThreadTitle": None,
-                    "sourceRefs": [{
-                        "turnId": "session:11",
-                        "excerpt": "Caroline is interested in counseling.",
-                    }],
-                    "routingReason": "This continues the career thread.",
+                    "threadId": "observing:1",
+                    "turnIds": ["session:11"],
+                    "content": "Caroline is interested in counseling.",
+                    "reason": "This continues the career thread.",
                 }],
             },
         })
 
         self.assertEqual(
-            trace["samples"][0]["qa"][0]["hits"][0]["gateway_routes"][0]["sourceRefs"][0]["excerpt"],
+            trace["samples"][0]["qa"][0]["hits"][0]["gateway_routes"][0]["content"],
             "Caroline is interested in counseling.",
         )
 
@@ -172,13 +169,13 @@ class RunTests(unittest.TestCase):
         path = Path("/tmp/muninn-gateway-routes-test.jsonl")
         self.addCleanup(lambda: path.unlink(missing_ok=True))
         path.write_text(
-            '{"observingEpoch":2,"workItems":[{"targetThreadId":"observing:1","sourceRefs":[{"turnId":"session:11","excerpt":"Caroline is interested in counseling."}],"routingReason":"This continues the career thread."}]}\n',
+            '{"observingEpoch":2,"sessionFragments":[{"threadId":"observing:1","turnIds":["session:11"],"content":"Caroline is interested in counseling.","reason":"This continues the career thread."}]}\n',
             encoding="utf8",
         )
 
         routes = load_gateway_routes(path)
 
-        self.assertEqual(routes["observing:1"][0]["sourceRefs"][0]["excerpt"], "Caroline is interested in counseling.")
+        self.assertEqual(routes["observing:1"][0]["content"], "Caroline is interested in counseling.")
 
 
 if __name__ == "__main__":

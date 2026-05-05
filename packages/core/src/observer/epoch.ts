@@ -66,6 +66,10 @@ export class OpenEpoch {
     return this.stagedObservableTurns.length > 0;
   }
 
+  stagedTurnCount(): number {
+    return this.stagedObservableTurns.length;
+  }
+
   stagedTurns(): SessionTurn[] {
     return [...this.stagedObservableTurns];
   }

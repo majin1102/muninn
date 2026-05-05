@@ -5,7 +5,7 @@ import path from 'node:path';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 
 import { validateMuninnConfigInput } from '../dist/config.js';
-import { generateText } from '../dist/llm/provider.js';
+import { generateText, generateWithTools } from '../dist/llm/provider.js';
 
 function base64UrlJson(value) {
   return Buffer.from(JSON.stringify(value), 'utf8')
@@ -102,7 +102,7 @@ test('generateText sends openai-codex requests through Codex CLI auth', async (t
   globalThis.fetch = async (input, init) => {
     capturedInput = input;
     capturedInit = init;
-    return Response.json({ output_text: 'Codex answer' });
+    return new Response(codexSse({ type: 'response.output_text.delta', delta: 'Codex answer' }));
   };
   t.after(() => {
     globalThis.fetch = originalFetch;
@@ -120,16 +120,145 @@ test('generateText sends openai-codex requests through Codex CLI auth', async (t
   assert.equal(capturedInit.headers['content-type'], 'application/json');
   const body = JSON.parse(capturedInit.body);
   assert.equal(body.model, 'gpt-5.4');
+  assert.equal(body.instructions, 'system prompt');
+  assert.equal(body.store, false);
+  assert.equal(body.stream, true);
   assert.deepEqual(body.input, [
-    {
-      role: 'system',
-      content: [{ type: 'input_text', text: 'system prompt' }],
-    },
     {
       role: 'user',
       content: [{ type: 'input_text', text: 'user prompt' }],
     },
   ]);
+});
+
+test('generateWithTools sends openai-codex Responses tools and parses calls', async (t) => {
+  await setupCodexRun(t);
+  const originalFetch = globalThis.fetch;
+  let capturedInput;
+  let capturedInit;
+  globalThis.fetch = async (input, init) => {
+    capturedInput = input;
+    capturedInit = init;
+    return new Response(codexSse({
+      type: 'response.completed',
+      response: {
+        output: [{
+        type: 'function_call',
+        call_id: 'call-1',
+        name: 'memory-get',
+        arguments: '{"memoryIds":["observation:1"]}',
+        }],
+      },
+    }));
+  };
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  const result = await generateWithTools('observer', {
+    messages: [
+      { role: 'system', content: 'system prompt' },
+      { role: 'user', content: 'user prompt' },
+    ],
+    tools: [{
+      name: 'memory-get',
+      description: 'Get memory details.',
+      parameters: {
+        type: 'object',
+        properties: {
+          memoryIds: { type: 'array', items: { type: 'string' } },
+        },
+        required: ['memoryIds'],
+      },
+    }],
+  });
+
+  assert.equal(capturedInput, 'https://chatgpt.com/backend-api/codex/responses');
+  const body = JSON.parse(capturedInit.body);
+  assert.equal(body.instructions, 'system prompt');
+  assert.equal(body.store, false);
+  assert.equal(body.stream, true);
+  assert.deepEqual(body.input, [
+    {
+      role: 'user',
+      content: [{ type: 'input_text', text: 'user prompt' }],
+    },
+  ]);
+  assert.deepEqual(body.tools, [{
+    type: 'function',
+    name: 'memory-get',
+    description: 'Get memory details.',
+    parameters: {
+      type: 'object',
+      properties: {
+        memoryIds: { type: 'array', items: { type: 'string' } },
+      },
+      required: ['memoryIds'],
+    },
+  }]);
+  assert.deepEqual(result, {
+    type: 'tool_calls',
+    toolCalls: [{
+      id: 'call-1',
+      name: 'memory-get',
+      arguments: { memoryIds: ['observation:1'] },
+    }],
+  });
+});
+
+test('generateWithTools dedupes openai-codex streaming function call skeletons', async (t) => {
+  await setupCodexRun(t);
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(codexSse(
+    {
+      type: 'response.output_item.added',
+      item: {
+        type: 'function_call',
+        call_id: 'call-1',
+        name: 'memory-get',
+        arguments: '',
+      },
+    },
+    {
+      type: 'response.output_item.done',
+      item: {
+        type: 'function_call',
+        call_id: 'call-1',
+        name: 'memory-get',
+        arguments: '{"memoryIds":["session:1"]}',
+      },
+    },
+  ));
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  const result = await generateWithTools('observer', {
+    messages: [
+      { role: 'system', content: 'system prompt' },
+      { role: 'user', content: 'user prompt' },
+    ],
+    tools: [{
+      name: 'memory-get',
+      description: 'Get memory details.',
+      parameters: {
+        type: 'object',
+        properties: {
+          memoryIds: { type: 'array', items: { type: 'string' } },
+        },
+        required: ['memoryIds'],
+      },
+    }],
+  });
+
+  assert.deepEqual(result, {
+    type: 'tool_calls',
+    toolCalls: [{
+      id: 'call-1',
+      name: 'memory-get',
+      arguments: { memoryIds: ['session:1'] },
+    }],
+  });
 });
 
 test('generateText normalizes Codex backend baseUrl and parses output fragments', async (t) => {
@@ -143,12 +272,15 @@ test('generateText normalizes Codex backend baseUrl and parses output fragments'
   let capturedInput;
   globalThis.fetch = async (input) => {
     capturedInput = input;
-    return Response.json({
-      output: [
-        { content: [{ type: 'output_text', text: 'first' }] },
-        { content: [{ type: 'output_text', text: 'second' }] },
-      ],
-    });
+    return new Response(codexSse({
+      type: 'response.completed',
+      response: {
+        output: [
+          { content: [{ type: 'output_text', text: 'first' }] },
+          { content: [{ type: 'output_text', text: 'second' }] },
+        ],
+      },
+    }));
   };
   t.after(() => {
     globalThis.fetch = originalFetch;
@@ -173,7 +305,7 @@ test('generateText normalizes generic ChatGPT responses endpoint to Codex respon
   let capturedInput;
   globalThis.fetch = async (input) => {
     capturedInput = input;
-    return Response.json({ output_text: 'Codex answer' });
+    return new Response(codexSse({ type: 'response.output_text.delta', delta: 'Codex answer' }));
   };
   t.after(() => {
     globalThis.fetch = originalFetch;
@@ -278,3 +410,7 @@ test('generateText reports openai-codex HTTP errors with status and body', async
     /openai-codex request failed with status 401: not authorized/i,
   );
 });
+
+function codexSse(...events) {
+  return `${events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join('')}data: [DONE]\n\n`;
+}

@@ -42,7 +42,12 @@ async function makeConfigHome() {
   };
 }
 
-async function writeObserverConfig(configPath, { activeWindowDays = 3650, name = 'default-observer' } = {}) {
+async function writeObserverConfig(configPath, {
+  activeWindowDays = 3650,
+  epochTurns,
+  epochWindowMs,
+  name = 'default-observer',
+} = {}) {
   await mkdir(path.dirname(configPath), { recursive: true });
   await writeFile(configPath, `${JSON.stringify({
     observer: {
@@ -50,6 +55,8 @@ async function writeObserverConfig(configPath, { activeWindowDays = 3650, name =
       llm: 'observer_llm',
       maxAttempts: 3,
       activeWindowDays,
+      ...(epochTurns === undefined ? {} : { epochTurns }),
+      ...(epochWindowMs === undefined ? {} : { epochWindowMs }),
     },
     llm: {
       observer_llm: {
@@ -990,10 +997,11 @@ test('checkpoint preserves observing runs', async () => {
         stage: 'fittingThreads',
         inputTurnIds: ['session:1'],
         pending: {
-          threadWorkItems: [{
-            targetThreadId: 'thread-1',
-            sourceRefs: [{ turnId: 'session:1', excerpt: 'source excerpt' }],
-            routingReason: 'The source continues the thread.',
+          sessionFragments: [{
+            threadId: 'thread-1',
+            turnIds: ['session:1'],
+            content: 'source content',
+            reason: 'The source continues the thread.',
           }],
         },
         committed: { observationIds: ['obs-1'], snapshotIds: [] },
@@ -1005,7 +1013,7 @@ test('checkpoint preserves observing runs', async () => {
 
   const parsed = parseCheckpointFile(serializeCheckpointFile(file));
   assert.equal(parsed.observer.runs[0].stage, 'fittingThreads');
-  assert.equal(parsed.observer.runs[0].pending.threadWorkItems[0].sourceRefs[0].excerpt, 'source excerpt');
+  assert.equal(parsed.observer.runs[0].pending.sessionFragments[0].content, 'source content');
   assert.deepEqual(parsed.observer.runs[0].committed.observationIds, ['obs-1']);
 });
 
@@ -2848,7 +2856,7 @@ test('observation changes reject invalid observation coverage', () => {
 
   assert.throws(
     () => applyObservationChanges(current, {
-      observingContent: { title: 'T', summary: 'S', observations: [], openQuestions: [], nextSteps: [] },
+      observingContent: { title: 'T', summary: 'S', openQuestions: [], nextSteps: [] },
       contextRefs: [],
       observationChanges: [{ type: 'update', observationId: 'missing', text: 'updated', reason: 'fix wording' }],
     }),
@@ -2857,7 +2865,7 @@ test('observation changes reject invalid observation coverage', () => {
 
   assert.throws(
     () => applyObservationChanges(current, {
-      observingContent: { title: 'T', summary: 'S', observations: [], openQuestions: [], nextSteps: [] },
+      observingContent: { title: 'T', summary: 'S', openQuestions: [], nextSteps: [] },
       contextRefs: [],
       observationChanges: [
         { type: 'update', observationId: 'obs-a', text: 'updated', reason: 'fix wording' },
@@ -3120,95 +3128,94 @@ test('buildObservation surfaces observation write failures and leaves work pendi
   assert.deepEqual(getPendingIndex(threads[0]), { start: 1, end: 1 });
 });
 
-test('gateway validation accepts source ref work items', () => {
+test('gateway validation accepts session fragments', () => {
+  const longContent = [
+    'Caroline described attending the LGBTQ support group yesterday and finding it powerful.',
+    'She said the transgender stories were inspiring and that she felt happy and thankful for the support.',
+    'Melanie asked what the group had done for Caroline, which was answered in a later turn.',
+    'This content needs to remain complete because the observer uses it as selected observing material.',
+  ].join(' ');
   const result = observingGatewayTesting.validateGatewayResultForTests(
-    [{ threadId: 'thread-1', title: 'Caroline counseling and mental-health career plans' }],
+    [{
+      threadId: 'thread-1',
+      kind: 'subject',
+      title: 'Caroline counseling and mental-health career plans',
+      summary: 'Caroline is exploring counseling and mental-health work.',
+    }],
     [{ turnId: 'session:1', text: 'Caroline mentions career plans.' }],
     {
-      workItems: [{
-        targetThreadId: 'thread-1',
-        sourceRefs: [{
-          turnId: 'session:1',
-          excerpt: 'Caroline mentions career plans.',
-        }],
-        routingReason: 'The slice continues the existing career planning thread.',
+      sessionFragments: [{
+        threadId: 'thread-1',
+        turnIds: ['session:1'],
+        content: longContent,
+        reason: 'This content fits the existing career planning thread.',
       }],
-      ignoredTurnIds: [],
     },
   );
 
-  assert.deepEqual(result.workItems, [{
-    targetThreadId: 'thread-1',
-    sourceRefs: [{
-      turnId: 'session:1',
-      excerpt: 'Caroline mentions career plans.',
-    }],
-    routingReason: 'The slice continues the existing career planning thread.',
+  assert.deepEqual(result.sessionFragments, [{
+    threadId: 'thread-1',
+    turnIds: ['session:1'],
+    content: longContent,
+    reason: 'This content fits the existing career planning thread.',
   }]);
+  assert.ok(result.sessionFragments[0].content.length > 220);
 });
 
-test('gateway validation accepts new source ref work items with concrete titles', () => {
-  const result = observingGatewayTesting.validateGatewayResultForTests(
-    [],
-    [{ turnId: 'session:12', text: 'Melanie shares a lake painting.' }],
-    {
-      workItems: [{
-        targetThreadId: null,
-        newThreadTitle: 'Melanie lake sunrise painting and creative outlet',
-        sourceRefs: [{
-          turnId: 'session:12',
-          excerpt: 'Melanie shares a lake painting.',
-        }],
-        routingReason: 'The slice introduces a separate painting topic.',
+test('gateway system prompt injects chat observing thread definition only', () => {
+  const system = observingGatewayTesting.buildGatewaySystemPromptForTests('chat');
+
+  assert.match(system, /Observing thread definition/);
+  assert.match(system, /tracks one coherent subject that can develop over time/);
+  assert.match(system, /narrower than the whole conversation and more stable than a single message/);
+  assert.match(system, /updates, answers, clarifies, corrects, supports, or directly continues/);
+  assert.doesNotMatch(system, /Chat category guide/);
+  assert.doesNotMatch(system, /Category selection/);
+  assert.doesNotMatch(system, /Chat filtering/);
+});
+
+test('gateway validation rejects session fragments without reason', () => {
+  assert.throws(
+    () => observingGatewayTesting.validateGatewayResultForTests(
+      [{
+        threadId: 'thread-1',
+        kind: 'subject',
+        title: 'Caroline counseling and mental-health career plans',
+        summary: 'Caroline is exploring counseling and mental-health work.',
       }],
-      ignoredTurnIds: [],
-    },
-  );
-
-  assert.deepEqual(result.workItems, [{
-    targetThreadId: null,
-    newThreadTitle: 'Melanie lake sunrise painting and creative outlet',
-    sourceRefs: [{
-      turnId: 'session:12',
-      excerpt: 'Melanie shares a lake painting.',
-    }],
-    routingReason: 'The slice introduces a separate painting topic.',
-  }]);
-});
-
-test('gateway validation rejects work items without routing reason', () => {
-  assert.throws(
-    () => observingGatewayTesting.validateGatewayResultForTests(
-      [{ threadId: 'thread-1', title: 'Caroline counseling and mental-health career plans' }],
       [{ turnId: 'session:1', text: 'Caroline mentions career plans.' }],
       {
-        workItems: [{
-          targetThreadId: 'thread-1',
-          sourceRefs: [{ turnId: 'session:1', excerpt: 'Caroline mentions career plans.' }],
+        sessionFragments: [{
+          threadId: 'thread-1',
+          turnIds: ['session:1'],
+          content: 'Caroline mentions career plans.',
         }],
-        ignoredTurnIds: [],
       },
     ),
-    /empty routingReason/i,
+    /empty reason/i,
   );
 });
 
-test('gateway validation rejects existing-thread work items that also set newThreadTitle', () => {
+test('gateway validation rejects session fragments with unknown threads', () => {
   assert.throws(
     () => observingGatewayTesting.validateGatewayResultForTests(
-      [{ threadId: 'thread-1', title: 'Caroline counseling and mental-health career plans' }],
+      [{
+        threadId: 'thread-1',
+        kind: 'subject',
+        title: 'Caroline counseling and mental-health career plans',
+        summary: 'Caroline is exploring counseling and mental-health work.',
+      }],
       [{ turnId: 'session:1', text: 'Caroline mentions career plans.' }],
       {
-        workItems: [{
-          targetThreadId: 'thread-1',
-          newThreadTitle: 'Unexpected replacement title',
-          sourceRefs: [{ turnId: 'session:1', excerpt: 'Caroline mentions career plans.' }],
-          routingReason: 'The slice continues the existing career planning thread.',
+        sessionFragments: [{
+          threadId: 'missing-thread',
+          turnIds: ['session:1'],
+          content: 'Caroline mentions career plans.',
+          reason: 'This content fits a missing thread.',
         }],
-        ignoredTurnIds: [],
       },
     ),
-    /invalid targetThreadId/i,
+    /unknown threadId/i,
   );
 });
 
@@ -3217,7 +3224,6 @@ test('observer validation keeps valid context refs', () => {
     observingContent: {
       title: 'Painting',
       summary: 'Melanie painted a lake sunrise.',
-      observations: [],
       openQuestions: [],
       nextSteps: [],
     },
@@ -3235,13 +3241,33 @@ test('observer validation keeps valid context refs', () => {
   assert.deepEqual(result.observationChanges, []);
 });
 
+test('observer validation rejects returned final observations', () => {
+  assert.throws(
+    () => observingGatewayTesting.validateObserveResultForTests({
+      observingContent: {
+        title: 'Painting',
+        summary: 'Melanie painted a lake sunrise.',
+        observations: [{
+          id: 'observing:14',
+          text: 'Melanie painted a lake sunrise.',
+          category: 'Fact',
+        }],
+        openQuestions: [],
+        nextSteps: [],
+      },
+      contextRefs: [],
+      observationChanges: [],
+    }),
+    /must not return observingContent\.observations/i,
+  );
+});
+
 test('observer validation rejects invalid observation changes', () => {
   assert.throws(
     () => observingGatewayTesting.validateObserveResultForTests({
       observingContent: {
         title: 'Painting',
         summary: 'Melanie painted a lake sunrise.',
-        observations: [],
         openQuestions: [],
         nextSteps: [],
       },
@@ -3258,48 +3284,7 @@ test('observer validation rejects invalid observation changes', () => {
   );
 });
 
-test('observer validation rejects relative observation dates when DATE anchor is available', () => {
-  assert.throws(
-    () => observingGatewayTesting.validateObserveResultForTests({
-      observingContent: {
-        title: 'Painting',
-        summary: 'Melanie painted a lake sunrise.',
-        observations: [{
-          id: 'obs-1',
-          text: 'Melanie painted the lake sunrise last year.',
-          category: 'Fact',
-        }],
-        openQuestions: [],
-        nextSteps: [],
-      },
-      contextRefs: [],
-      observationChanges: [{
-        type: 'add',
-        text: 'Melanie painted the lake sunrise last year.',
-        category: 'Fact',
-        references: ['session:13'],
-        reason: 'The source mentions when Melanie painted it.',
-      }],
-    }, {
-      observingContent: {
-        title: 'Painting',
-        summary: 'Painting thread',
-        observations: [],
-        openQuestions: [],
-        nextSteps: [],
-      },
-      sourceRefs: [{
-        turnId: 'session:13',
-        excerpt: 'Melanie painted it last year.',
-        prompt: 'DATE: 1:56 pm on 8 May, 2023\nDIALOGUE:\nMelanie said: "I painted it last year."',
-        response: '[imported dialogue event; no assistant response]',
-      }],
-    }),
-    /normalize clear relative dates/i,
-  );
-});
-
-test('thread observing memory_get expands allowlisted memories only', async (t) => {
+test('thread observing memory-get expands fragment turns only', async (t) => {
   const { dir, homeDir, configPath } = await makeConfigHome();
   t.after(async () => rm(dir, { recursive: true, force: true }));
 
@@ -3320,13 +3305,14 @@ test('thread observing memory_get expands allowlisted memories only', async (t) 
       openQuestions: [],
       nextSteps: [],
     },
-    sourceRefs: [{
-      turnId: 'session:1',
-      excerpt: 'Caroline went to an LGBTQ support group yesterday.',
-      prompt: 'DATE: 1:56 pm on 8 May, 2023\nCaroline went to an LGBTQ support group yesterday.',
-      response: null,
+    fragments: [{
+      content: 'Caroline went to an LGBTQ support group yesterday.',
+      turns: [{
+        turnId: 'session:1',
+        prompt: 'DATE: 8 May 2023\nDIALOGUE:\nCaroline said she went to an LGBTQ support group yesterday.',
+        response: '[imported dialogue event; no assistant response]',
+      }],
     }],
-    threadMemoryId: 'observing:1',
   }, undefined, {
     memories: {
       get: async (memoryId) => ({
@@ -3346,7 +3332,7 @@ test('thread observing memory_get expands allowlisted memories only', async (t) 
           type: 'tool_calls',
           toolCalls: [{
             id: 'call-1',
-            name: 'memory_get',
+            name: 'memory-get',
             arguments: {
               memoryIds: ['session:1', 'observation:obs-1', 'observing:1', 'session:missing'],
             },
@@ -3359,7 +3345,6 @@ test('thread observing memory_get expands allowlisted memories only', async (t) 
           observingContent: {
             title: 'Caroline support group',
             summary: 'Caroline discussed a support group.',
-            observations: [{ id: 'obs-1', text: 'Existing support observation.', category: 'Fact' }],
             openQuestions: [],
             nextSteps: [],
           },
@@ -3376,18 +3361,34 @@ test('thread observing memory_get expands allowlisted memories only', async (t) 
     },
   });
 
-  assert.equal(requests[0].tools[0].name, 'memory_get');
+  assert.equal(requests[0].tools[0].name, 'memory-get');
+  assert.match(requests[0].tools[0].description, /Get visible source turn details/);
+  assert.match(requests[0].tools[0].description, /verify context/);
+  assert.match(requests[0].tools[0].description, /update memories/);
+  assert.match(requests[0].tools[0].parameters.properties.memoryIds.description, /Visible fragments\[\]\.turns\[\]\.turnId values/);
+  const firstUserMessage = requests[0].messages.find((message) => message.role === 'user');
+  assert.ok(firstUserMessage);
+  assert.match(firstUserMessage.content, /"fragments"/);
+  assert.match(firstUserMessage.content, /"turns"/);
+  assert.match(firstUserMessage.content, /"content"/);
+  assert.match(firstUserMessage.content, /"prompt"/);
+  assert.match(firstUserMessage.content, /"response"/);
+  assert.doesNotMatch(firstUserMessage.content, /"sourceRefs"/);
+  assert.doesNotMatch(firstUserMessage.content, /"excerpt"/);
+  assert.doesNotMatch(firstUserMessage.content, /allowedMemoryIds/);
   const toolMessage = requests[1].messages.find((message) => message.role === 'tool');
   assert.ok(toolMessage);
   const toolPayload = JSON.parse(toolMessage.content);
   assert.match(toolPayload.memories[0].content, /detail for session:1/);
-  assert.match(toolPayload.memories[1].content, /detail for observation:obs-1/);
-  assert.match(toolPayload.memories[2].content, /detail for observing:1/);
+  assert.equal(toolPayload.memories[1].error, 'memory id is not allowlisted');
+  assert.equal(toolPayload.memories[2].error, 'memory id is not allowlisted');
   assert.equal(toolPayload.memories[3].error, 'memory id is not allowlisted');
   assert.equal(result.observationChanges[0].type, 'add');
   const trace = JSON.parse(await readFile(tracePath, 'utf8'));
-  assert.equal(trace.toolCalls[0].name, 'memory_get');
+  assert.equal(trace.toolCalls[0].name, 'memory-get');
   assert.equal(trace.observationChanges[0].type, 'add');
+  assert.equal(trace.input.allowedMemoryIds, undefined);
+  assert.equal(trace.input.threadMemoryId, undefined);
 });
 
 test('thread observing injects configured chat domain prompt', async (t) => {
@@ -3409,11 +3410,11 @@ test('thread observing injects configured chat domain prompt', async (t) => {
       openQuestions: [],
       nextSteps: [],
     },
-    sourceRefs: [{
-      turnId: 'session:1',
-      excerpt: 'Melanie said that was cool.',
-      prompt: 'DATE: 1:56 pm on 8 May, 2023\nMelanie said that was cool.',
-      response: null,
+    fragments: [{
+      content: 'Melanie said that was cool.',
+      turns: [{
+        turnId: 'session:1',
+      }],
     }],
   }, undefined, {
     model: async (_task, request) => {
@@ -3424,7 +3425,6 @@ test('thread observing injects configured chat domain prompt', async (t) => {
           observingContent: {
             title: 'Caroline support group',
             summary: 'Caroline discussed a support group.',
-            observations: [],
             openQuestions: [],
             nextSteps: [],
           },
@@ -3439,7 +3439,12 @@ test('thread observing injects configured chat domain prompt', async (t) => {
   });
 
   assert.match(requests[0].messages[0].content, /Chat category guide/);
-  assert.match(requests[0].messages[0].content, /pure questions, one-off actions, temporary status updates/);
+  assert.match(requests[0].messages[0].content, /Observation category guidance/);
+  assert.match(requests[0].messages[0].content, /Use `Fact` for concrete, self-contained, answerable details/);
+  assert.match(requests[0].messages[0].content, /stable or reusable likes/);
+  assert.doesNotMatch(requests[0].messages[0].content, /Observation granularity/);
+  assert.doesNotMatch(requests[0].messages[0].content, /Chat filtering/);
+  assert.doesNotMatch(requests[0].messages[0].content, /Use `update` plus `add`/);
 });
 
 test('observing snapshots keep complete cumulative context refs', () => {
@@ -3455,7 +3460,6 @@ test('observing snapshots keep complete cumulative context refs', () => {
     observingContent: {
       title: 'Career',
       summary,
-      observations: [],
       openQuestions: [],
       nextSteps: [],
     },
@@ -3517,7 +3521,6 @@ test('observing context refs update duplicate turn summaries without duplicates'
     observingContent: {
       title: 'Career',
       summary,
-      observations: [],
       openQuestions: [],
       nextSteps: [],
     },
@@ -3553,7 +3556,7 @@ test('observing context refs update duplicate turn summaries without duplicates'
   assert.deepEqual(thread.references, ['session:1']);
 });
 
-test('applyGatewayUpdates passes raw prompt response and source slice to observer', async () => {
+test('applyGatewayUpdates passes session fragments to observer', async () => {
   const now = '2026-01-01T00:00:00.000Z';
   const thread = createObservingThread('default-observer', 'Painting', 'Painting thread', [], 1, now);
   const observedInputs = [];
@@ -3563,7 +3566,6 @@ test('applyGatewayUpdates passes raw prompt response and source slice to observe
       observingContent: {
         title: 'Painting',
         summary: 'Melanie painted a lake sunrise in 2022.',
-        observations: [],
         openQuestions: [],
         nextSteps: [],
       },
@@ -3592,31 +3594,31 @@ test('applyGatewayUpdates passes raw prompt response and source slice to observe
       observingEpoch: 2,
     }],
     observingEpoch: 2,
-    updates: [{
-      targetThreadId: thread.observingId,
-      sourceRefs: [{
-        turnId: 'session:13',
-        excerpt: 'Melanie said: "Yeah, I painted that lake sunrise last year!"',
-      }],
-      routingReason: 'The slice continues the painting thread.',
+    sessionFragments: [{
+      threadId: thread.observingId,
+      turnIds: ['session:13'],
+      content: 'Melanie said she painted the lake sunrise last year.',
+      reason: 'This content continues the painting thread.',
     }],
     observeThreadImpl,
   });
 
-  assert.deepEqual(observedInputs[0].sourceRefs, [{
-    turnId: 'session:13',
-    excerpt: 'Melanie said: "Yeah, I painted that lake sunrise last year!"',
-    prompt: 'DATE: 1:56 pm on 8 May, 2023\nDIALOGUE:\nMelanie said: "Yeah, I painted that lake sunrise last year!"',
-    response: '[imported dialogue event; no assistant response]',
+  assert.deepEqual(observedInputs[0].fragments, [{
+    content: 'Melanie said she painted the lake sunrise last year.',
+    turns: [{
+      turnId: 'session:13',
+      prompt: 'DATE: 1:56 pm on 8 May, 2023\nDIALOGUE:\nMelanie said: "Yeah, I painted that lake sunrise last year!"',
+      response: '[imported dialogue event; no assistant response]',
+    }],
   }]);
-  assert.equal('routingReason' in observedInputs[0].sourceRefs[0], false);
+  assert.equal('reason' in observedInputs[0].fragments[0], false);
   assert.deepEqual(thread.snapshots.at(-1).contextRefs, [{
     turnId: 'session:13',
     summary: 'Melanie says she painted the lake sunrise in 2022, described as last year relative to 8 May 2023.',
   }]);
 });
 
-test('gateway input includes latest continuity hints and transient previous turn context', () => {
+test('gateway input includes thread kind and prompt plus response turn text', () => {
   const thread = createObservingThread(
     'default-observer',
     'Career',
@@ -3637,11 +3639,9 @@ test('gateway input includes latest continuity hints and transient previous turn
     observationDelta: { before: [], after: [] },
   });
 
-  const input = updateTesting.activeGatewayInputsForTests([thread], 'default-observer', 365, 2);
-  assert.deepEqual(input[0].continuityHints, [
-    'Caroline is considering counseling work.',
-    'Melanie encouraged Caroline to pursue counseling.',
-  ]);
+  const input = updateTesting.activeGatewayInputsForTests([thread], 'default-observer', 365);
+  assert.equal(input[0].kind, 'subject');
+  assert.equal(input[0].summary, 'Career thread');
 
   const turns = observingGatewayTesting.gatewayTurnsForTests([{
     turnId: 'session:12',
@@ -3658,30 +3658,25 @@ test('gateway input includes latest continuity hints and transient previous turn
   }]);
   assert.deepEqual(turns[0], {
     turnId: 'session:12',
-    text: 'Melanie encouraged Caroline.',
-    previousTurn: 'Caroline said she is keen on counseling or mental health.',
+    text: 'Prompt:\nMelanie encouraged Caroline.\n\nResponse:\nplaceholder',
   });
-});
 
-test('gateway input omits empty continuity hints', () => {
-  const thread = createObservingThread(
-    'default-observer',
-    'Career',
-    'Career thread',
-    [],
-    1,
-    '2026-01-01T00:00:00.000Z',
+  const responseOnlyTurns = observingGatewayTesting.gatewayTurnsForTests([{
+    turnId: 'session:13',
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+    sessionId: 'locomo',
+    agent: 'Melanie',
+    observer: 'default-observer',
+    summary: 'Melanie talked about camping.',
+    prompt: 'Melanie talked about camping.',
+    response: 'Caroline researched adoption agencies.',
+    observingEpoch: 2,
+  }]);
+  assert.equal(
+    responseOnlyTurns[0].text,
+    'Prompt:\nMelanie talked about camping.\n\nResponse:\nCaroline researched adoption agencies.',
   );
-  thread.snapshots.push({
-    observations: [],
-    contextRefs: [],
-    openQuestions: [],
-    nextSteps: [],
-    observationDelta: { before: [], after: [] },
-  });
-
-  const input = updateTesting.activeGatewayInputsForTests([thread], 'default-observer', 365, 3);
-  assert.equal('continuityHints' in input[0], false);
 });
 
 test('routed turns without observer context refs are not persisted as references', async () => {
@@ -3691,7 +3686,6 @@ test('routed turns without observer context refs are not persisted as references
     observingContent: {
       title: 'Career',
       summary: 'Career thread',
-      observations: [],
       openQuestions: [],
       nextSteps: [],
     },
@@ -3716,13 +3710,11 @@ test('routed turns without observer context refs are not persisted as references
       observingEpoch: 2,
     }],
     observingEpoch: 2,
-    updates: [{
-      targetThreadId: thread.observingId,
-      sourceRefs: [{
-        turnId: 'session:99',
-        excerpt: 'A routed but ultimately irrelevant turn.',
-      }],
-      routingReason: 'The route lets the observer inspect the existing career thread.',
+    sessionFragments: [{
+      threadId: thread.observingId,
+      turnIds: ['session:99'],
+      content: 'A routed but ultimately irrelevant turn.',
+      reason: 'The fragment lets the observer inspect the existing career thread.',
     }],
     observeThreadImpl,
   });
@@ -3731,9 +3723,19 @@ test('routed turns without observer context refs are not persisted as references
   assert.deepEqual(thread.references, []);
 });
 
-test('new source slice route creates an independent observing thread', async () => {
+test('session fragments only route to existing threads', async () => {
   const now = '2026-01-01T00:00:00.000Z';
-  const threads = [];
+  const thread = createObservingThread(
+    'default-observer',
+    'Session locomo',
+    'Default observing thread for session locomo.',
+    [],
+    1,
+    now,
+    'session',
+    'locomo',
+  );
+  const threads = [thread];
   const observedInputs = [];
   const observeThreadImpl = async (input) => {
     observedInputs.push(input);
@@ -3741,7 +3743,6 @@ test('new source slice route creates an independent observing thread', async () 
       observingContent: {
         title: 'Melanie lake sunrise painting and creative outlet',
         summary: 'Melanie discusses her lake sunrise painting and painting as a creative outlet.',
-        observations: [],
         openQuestions: [],
         nextSteps: [],
       },
@@ -3770,21 +3771,18 @@ test('new source slice route creates an independent observing thread', async () 
       observingEpoch: 2,
     }],
     observingEpoch: 2,
-    updates: [{
-      targetThreadId: null,
-      newThreadTitle: 'Melanie lake sunrise painting and creative outlet',
-      sourceRefs: [{
-        turnId: 'session:12',
-        excerpt: 'By the way, take a look at this painting.',
-      }],
-      routingReason: 'The slice introduces a separate painting topic.',
+    sessionFragments: [{
+      threadId: thread.observingId,
+      turnIds: ['session:12'],
+      content: 'Melanie shared a lake painting.',
+      reason: 'This content goes to the default session thread because gateway no longer creates threads.',
     }],
     observeThreadImpl,
   });
 
   assert.equal(threads.length, 1);
-  assert.equal(threads[0].title, 'Melanie lake sunrise painting and creative outlet');
-  assert.equal(observedInputs[0].sourceRefs[0].excerpt, 'By the way, take a look at this painting.');
+  assert.equal(threads[0].kind, 'session');
+  assert.equal(observedInputs[0].fragments[0].content, 'Melanie shared a lake painting.');
 });
 
 test('buildTouchedIndex immediately advances observation index for touched threads', async (t) => {
@@ -3978,8 +3976,9 @@ test('observer.observeCurrentEpoch commits observing rows before retrying observ
   assert.equal(indexAttempts, 1);
   assert.equal(observer.committedEpoch, 1);
   assert.equal(observer.currentEpoch, null);
-  assert.equal(observer.threads[0].snapshotId, 'snapshot-1');
-  assert.deepEqual(getPendingIndex(observer.threads[0]), { start: 1, end: 1 });
+  const touchedThread = observer.threads.find((thread) => thread.snapshotId === 'snapshot-1');
+  assert.ok(touchedThread);
+  assert.ok(getPendingIndex(touchedThread));
   assert.ok(observer.nextIndexRetryAt > Date.now());
 });
 
@@ -4073,6 +4072,110 @@ test('observer.run retries pending observation index before queued epochs when d
   await observer.run();
 
   assert.deepEqual(calls, ['index', 'observe']);
+});
+
+test('observer.accept keeps a partial epoch open until epochTurns is reached', async (t) => {
+  const { dir, homeDir, configPath } = await makeConfigHome();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+
+  process.env.MUNINN_HOME = homeDir;
+  await writeObserverConfig(configPath, { epochTurns: 3, epochWindowMs: 10_000 });
+
+  const observer = new Observer(makeObserverClient());
+  observer.bootstrapped = true;
+  observer.openEpoch = new OpenEpoch(1);
+  t.after(async () => observer.shutdown());
+
+  let acceptCount = 0;
+  const registry = {
+    load: async () => ({
+      accept: async (_content, epoch) => {
+        acceptCount += 1;
+        return {
+          turn: makeObservableTurn(`turn-${acceptCount}`, epoch, `turn ${acceptCount}`),
+          deduped: false,
+        };
+      },
+    }),
+  };
+
+  await observer.accept({ sessionId: 'group-a', agent: 'agent-a', prompt: 'one', response: 'one' }, registry);
+  assert.equal(observer.openEpoch.epoch, 1);
+  assert.deepEqual(observer.openEpoch.stagedTurns().map((turn) => turn.turnId), ['turn-1']);
+  assert.deepEqual(observer.epochQueue.pendingTurns(), []);
+
+  await observer.accept({ sessionId: 'group-a', agent: 'agent-a', prompt: 'two', response: 'two' }, registry);
+  assert.equal(observer.openEpoch.epoch, 1);
+  assert.deepEqual(observer.openEpoch.stagedTurns().map((turn) => turn.turnId), ['turn-1', 'turn-2']);
+  assert.deepEqual(observer.epochQueue.pendingTurns(), []);
+
+  await observer.accept({ sessionId: 'group-a', agent: 'agent-a', prompt: 'three', response: 'three' }, registry);
+  await observer.publishChain;
+
+  assert.equal(observer.openEpoch.epoch, 2);
+  assert.deepEqual(observer.epochQueue.pendingTurns().map((turn) => turn.turnId), ['turn-1', 'turn-2', 'turn-3']);
+});
+
+test('observer.accept seals a partial epoch when the epoch window expires', async (t) => {
+  const { dir, homeDir, configPath } = await makeConfigHome();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+
+  process.env.MUNINN_HOME = homeDir;
+  await writeObserverConfig(configPath, { epochTurns: 3, epochWindowMs: 20 });
+
+  const observer = new Observer(makeObserverClient());
+  observer.bootstrapped = true;
+  observer.openEpoch = new OpenEpoch(1);
+  t.after(async () => observer.shutdown());
+
+  const registry = {
+    load: async () => ({
+      accept: async (_content, epoch) => ({
+        turn: makeObservableTurn('turn-1', epoch, 'first'),
+        deduped: false,
+      }),
+    }),
+  };
+
+  await observer.accept({ sessionId: 'group-a', agent: 'agent-a', prompt: 'one', response: 'one' }, registry);
+  assert.equal(observer.openEpoch.epoch, 1);
+
+  await waitFor(() => observer.openEpoch.epoch === 2);
+  await observer.publishChain;
+
+  assert.deepEqual(observer.epochQueue.pendingTurns().map((turn) => turn.turnId), ['turn-1']);
+});
+
+test('observer.accept does not start the epoch window for non-observable turns', async (t) => {
+  const { dir, homeDir, configPath } = await makeConfigHome();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+
+  process.env.MUNINN_HOME = homeDir;
+  await writeObserverConfig(configPath, { epochTurns: 3, epochWindowMs: 20 });
+
+  const observer = new Observer(makeObserverClient());
+  observer.bootstrapped = true;
+  observer.openEpoch = new OpenEpoch(1);
+  t.after(async () => observer.shutdown());
+
+  const registry = {
+    load: async () => ({
+      accept: async () => ({
+        turn: {
+          ...makeObservableTurn('turn-1', 1, 'first'),
+          response: null,
+        },
+        deduped: false,
+      }),
+    }),
+  };
+
+  await observer.accept({ sessionId: 'group-a', agent: 'agent-a', prompt: 'one' }, registry);
+  await new Promise((resolve) => setTimeout(resolve, 40));
+
+  assert.equal(observer.openEpoch.epoch, 1);
+  assert.deepEqual(observer.openEpoch.stagedTurns(), []);
+  assert.deepEqual(observer.epochQueue.pendingTurns(), []);
 });
 
 test('flushPending waits for an in-flight accept that started before the barrier', async (t) => {
@@ -4171,7 +4274,7 @@ test('flushPending does not wait for accepts that start after the barrier', asyn
   }, registry);
 
   const flushPromise = observer.flushPending();
-  while (observer.openEpoch.epoch !== 3) {
+  while (observer.openEpoch.epoch !== 2) {
     await Promise.resolve();
   }
 
@@ -4188,7 +4291,7 @@ test('flushPending does not wait for accepts that start after the barrier', asyn
     new Promise((_, reject) => setTimeout(() => reject(new Error('flushPending waited on post-barrier accept')), 100)),
   ]);
 
-  assert.equal(secondEpoch, 3);
+  assert.equal(secondEpoch, 2);
 
   releaseSecond.resolve();
   await secondAccept;

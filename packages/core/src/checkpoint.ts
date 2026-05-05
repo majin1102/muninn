@@ -5,7 +5,7 @@ import path from 'node:path';
 import { loadMuninnConfig, resolveMuninnHome, resolveStorageTarget } from './config.js';
 import type {
   ObservingSnapshot,
-  ThreadWorkItem,
+  SessionFragment,
 } from './observer/types.js';
 
 export type RecentTurn = {
@@ -75,7 +75,7 @@ export type ObservingRun = {
   stage: ObservingRunStage;
   inputTurnIds: string[];
   pending?: {
-    threadWorkItems?: ThreadWorkItem[];
+    sessionFragments?: SessionFragment[];
     snapshotResults?: ObservingSnapshot[];
   };
   committed: {
@@ -329,11 +329,11 @@ function parseRunPending(value: unknown): NonNullable<ObservingRun['pending']> |
     return null;
   }
   const pending: NonNullable<ObservingRun['pending']> = {};
-  if (value.threadWorkItems != null) {
-    if (!Array.isArray(value.threadWorkItems)) {
+  if (value.sessionFragments != null) {
+    if (!Array.isArray(value.sessionFragments)) {
       return null;
     }
-    pending.threadWorkItems = value.threadWorkItems as ThreadWorkItem[];
+    pending.sessionFragments = value.sessionFragments as SessionFragment[];
   }
   if (value.snapshotResults != null) {
     if (!Array.isArray(value.snapshotResults)) {

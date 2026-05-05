@@ -1,25 +1,51 @@
 system: |
-  Chat domain observation guidance.
+  Chat domain guidance.
 
   Use this guidance as a supplement when observing chat-style conversation evidence.
 
-  Chat filtering:
-  - Greetings, small talk, filler, acknowledgements, compliments, thanks, brief reactions, asides, descriptive details, transition remarks, pure questions, one-off actions, temporary status updates, and sign-offs usually belong in `contextRefs`, `openQuestions`, or `nextSteps`, not observations.
-  - Do not write these details as observations unless they establish a stable preference, relationship, plan, decision, long-term state, reusable fact, recurring interest, or answered question that remains useful after the chat ends.
-  - Do not store compliments, comments, or brief reactions as observations unless they reveal a durable preference, relationship, decision, plan, or reusable fact.
-  - Store the answer or durable conclusion, not the speech act. For example, prefer `The user prefers concise implementation plans` over `The user thanked the assistant and said the plan looks good`.
-  - Resolve second-person pronouns from the dialogue participants; in imported conversations, do not interpret `you` as the assistant unless the assistant is explicitly a participant.
+  Observing thread definition
+  - In chat, a subject observing thread tracks one coherent subject that can develop over time.
+  - A subject may be a person's plan, preference, decision, state, relationship, project, artifact, recurring activity, concept, or workflow.
+  - It is narrower than the whole conversation and more stable than a single message.
+  - Route a new span to a subject thread only when it updates, answers, clarifies, corrects, supports, or directly continues that subject.
+  - Otherwise route it to the session thread.
 
-  Category selection:
-  - Prefer the most specific category over `Fact` when an observation describes a stable preference, entity characteristic, decision, or reusable concept.
+  Same vs separate routing
+  - Keep spans with a subject thread when they complete or refine that subject.
+  - Route spans to the session thread when they introduce a different subject, do not clearly fit an existing subject thread, or need later derivation.
+  - Do not route to a subject thread only because spans are adjacent, in the same batch, or mention the same people.
 
-  Chat category guide:
+  Chat observation categories and granularity
+  - Choose the observation before choosing the category.
+  - Each category below defines both what to store and the useful granularity for chat observations.
+  - Store the useful conclusion, answer, state, plan, preference, or reusable fact, not the conversation act.
+  - Questions, compliments, reactions, acknowledgements, and prompts usually belong in `openQuestions` or `contextRefs`, not observations.
+  - Keep them as observations only when their content establishes a grounded, self-contained fact, preference, decision, entity characteristic, or reusable concept.
+  - When chat evidence answers, explains, or completes an existing point, fold it into the relevant observation instead of storing the speech act separately.
+  - Before finalizing chat observations, combine new candidates that describe the same plan, direction, artifact, event, answer, or developing subject.
+  - Combine details when one detail explains, specifies, answers, motivates, evaluates, or provides evidence for another detail in the same memory.
+  - Keep separate observations only when they can be recalled, updated, or contradicted independently without losing the context that makes them self-contained.
+
+  - `Fact`: concrete event, status, goal, plan, implementation state, source-described detail, answerable detail, or grounded observation that does not fit a more specific category.
+  - Preserve enough subject, object, time, place, status, and cause/effect or purpose to answer a likely future question directly. Merge details from the same event, context, or answer when they need each other to be self-contained.
+  - For time-bearing `Fact` observations, resolve clear relative time from grounded chat context into an absolute date or period when possible. For example, `yesterday` with an `8 May 2023` context becomes `7 May 2023`; `last month` with a `May 2023` context becomes `April 2023`; `last year` with a `2023` context becomes `2022`. Keep relative wording only when the absolute time cannot be determined.
+  - Prefer `Fact` for one-time details when they may support future recall but do not establish a stable preference, decision, entity characteristic, or reusable concept.
+
   - `Preference`: stable or reusable likes, dislikes, interests, habits, constraints, styles, values, recurring behaviors, or personal ways of using something that can guide future actions.
+  - Preserve who holds the preference, what it applies to, and the scope or recurring context when grounded. Merge related signals when they describe the same stable preference.
   - One-time reactions, compliments, ratings, or positive/negative comments about a specific item are `Fact` if worth remembering; do not generalize them into `Preference` unless they clearly indicate a stable preference or recurring interest.
-  - `Fact`: concrete event, status, goal, plan, implementation state, answerable detail, or grounded observation that does not fit a more specific category.
+
   - `Decision`: explicit accepted choice, rejected option, committed plan, or settled direction.
-  - `Entity`: use for reusable entities and their stable characteristics: aliases, roles, relationships, ownership, identity/profile attributes, durable capabilities, or long-lived associations. Summarize what is stable about the entity; do not record one-time actions or dialogue participation as `Entity`.
+  - Use `Decision` for explicit future plans, committed next directions, or settled choices, even when they also contain concrete facts.
+  - Preserve the decision maker, chosen direction, target object, relevant constraint, status, and time when grounded. Update an existing decision when new evidence changes its status or scope.
+  - For time-bearing `Decision` observations, resolve clear relative time from grounded chat context into an absolute date or period when possible. Use the same relative-time handling as `Fact`.
+
+  - `Entity`: use for reusable entities and their stable characteristics: aliases, roles, relationships, ownership, identity/profile attributes, durable capabilities, or long-lived associations.
+  - Summarize stable characteristics of the entity. Do not record one-time actions or dialogue participation as `Entity`; use `Fact` if the one-time detail is worth recalling.
+
   - `Concept`: reusable abstraction, principle, recurring pattern, lesson, or named idea that can guide future reasoning.
+  - Preserve the reusable idea and the context that makes it useful; do not turn a single concrete event into a concept unless it expresses a reusable pattern.
+
   - `Other`: use only for useful durable information that does not fit the categories above.
 user_template: |
   {{input_json}}

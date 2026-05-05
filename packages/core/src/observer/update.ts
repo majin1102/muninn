@@ -11,11 +11,10 @@ import {
   createObservingThread,
   currentObservingContent,
   getPendingIndex,
-  latestSnapshot,
   snapshotRef,
   toObservingSnapshot,
 } from './thread.js';
-import type { ObservingThread, ObservingTurnInput, ThreadWorkItem } from './types.js';
+import type { ObserveFragmentInput, ObservingThread, SessionFragment } from './types.js';
 
 type ObserveThreadImpl = typeof observeThread;
 
@@ -24,7 +23,7 @@ type ApplyGatewayUpdatesParams = {
   observerName: string;
   pendingTurns: SessionTurn[];
   observingEpoch: number;
-  updates: ThreadWorkItem[];
+  sessionFragments: SessionFragment[];
   signal?: AbortSignal;
   memories?: Pick<Memories, 'get'>;
   observeThreadImpl?: ObserveThreadImpl;
@@ -43,7 +42,14 @@ export async function observeEpoch(params: {
     params.threads,
     params.activeWindowDays,
   );
+  ensureSessionThread(
+    params.threads,
+    params.observerName,
+    params.sealedEpoch.turns,
+    params.sealedEpoch.epoch,
+  );
   const memories = new Memories(params.client);
+  const gatewayStartedAt = Date.now();
   const fitting = await routeObservingThreads(
     activeGatewayInputs(
       params.threads,
@@ -53,17 +59,18 @@ export async function observeEpoch(params: {
     params.sealedEpoch.turns,
     params.signal,
   );
+  const gatewayDurationMs = Date.now() - gatewayStartedAt;
   await writeGatewayTrace({
     observingEpoch: params.sealedEpoch.epoch,
-    workItems: fitting.workItems,
-    ignoredTurnIds: fitting.ignoredTurnIds,
+    durationMs: gatewayDurationMs,
+    sessionFragments: fitting.sessionFragments,
   });
   const touchedIds = await applyGatewayUpdates({
     threads: params.threads,
     observerName: params.observerName,
     pendingTurns: params.sealedEpoch.turns,
     observingEpoch: params.sealedEpoch.epoch,
-    updates: fitting.workItems,
+    sessionFragments: fitting.sessionFragments,
     signal: params.signal,
     memories,
   });
@@ -102,22 +109,49 @@ function activeGatewayInputs(
   threads: ObservingThread[],
   observerName: string,
   activeWindowDays: number,
-  continuityHintCount = 1,
 ) {
   return threads
     .filter((thread) => thread.observer === observerName)
     .filter((thread) => isActiveThread(thread.updatedAt, activeWindowDays))
-    .map((thread) => {
-      const continuityHints = latestSnapshot(thread)?.contextRefs
-        .slice(-continuityHintCount)
-        .map((reference) => reference.summary)
-        .filter((summary) => summary.trim()) ?? [];
-      return {
-        threadId: thread.observingId,
-        title: thread.title,
-        ...(continuityHints.length > 0 ? { continuityHints } : {}),
-      };
-    });
+    .map((thread) => ({
+      threadId: thread.observingId,
+      kind: thread.kind,
+      title: thread.title,
+      summary: thread.summary,
+    }));
+}
+
+function ensureSessionThread(
+  threads: ObservingThread[],
+  observerName: string,
+  pendingTurns: SessionTurn[],
+  observingEpoch: number,
+): ObservingThread | null {
+  const sessionId = pendingTurns.find((turn) => turn.sessionId?.trim())?.sessionId?.trim() ?? null;
+  const existing = threads.find((thread) => (
+    thread.observer === observerName
+    && thread.kind === 'session'
+    && (thread.sessionId ?? null) === sessionId
+  ));
+  if (existing) {
+    return existing;
+  }
+  const title = sessionId ? `Session ${sessionId}` : 'Session observing thread';
+  const summary = sessionId
+    ? `Default observing thread for session ${sessionId}.`
+    : 'Default observing thread for this session.';
+  const thread = createObservingThread(
+    observerName,
+    title,
+    summary,
+    [],
+    observingEpoch,
+    new Date().toISOString(),
+    'session',
+    sessionId,
+  );
+  threads.push(thread);
+  return thread;
 }
 
 async function applyGatewayUpdates(params: ApplyGatewayUpdatesParams): Promise<Set<string>> {
@@ -126,65 +160,48 @@ async function applyGatewayUpdates(params: ApplyGatewayUpdatesParams): Promise<S
     observerName,
     pendingTurns,
     observingEpoch,
-    updates,
+    sessionFragments,
     signal,
     memories,
     observeThreadImpl = observeThread,
   } = params;
   throwIfAborted(signal);
   const turnMap = new Map(pendingTurns.map((turn) => [turn.turnId, turn]));
-  const observeTurnsByThread = new Map<string, ObservingTurnInput[]>();
+  const observeFragmentsByThread = new Map<string, ObserveFragmentInput[]>();
   const touchedIds = new Set<string>();
   const now = new Date().toISOString();
 
-  for (const item of updates) {
-    const observeTurns = item.sourceRefs.flatMap((reference): ObservingTurnInput[] => {
-      const turn = turnMap.get(reference.turnId);
+  for (const fragment of sessionFragments) {
+    const turns = fragment.turnIds.flatMap((turnId): ObserveFragmentInput['turns'] => {
+      const turn = turnMap.get(turnId);
       if (!turn) {
         return [];
       }
       return [{
         turnId: turn.turnId,
-        excerpt: reference.excerpt,
         prompt: turn.prompt,
         response: turn.response,
       }];
     });
-    if (observeTurns.length === 0) {
+    if (turns.length === 0) {
       continue;
     }
 
-    const targetId = item.targetThreadId?.trim() || null;
-    if (targetId) {
-      const thread = threads.find((candidate) => candidate.observingId === targetId);
-      if (!thread) {
-        continue;
-      }
-      touchedIds.add(targetId);
-      mergeObservingTurnInputs(observeTurnsByThread, targetId, observeTurns);
-      thread.updatedAt = now;
-      thread.observingEpoch = observingEpoch;
+    const threadId = fragment.threadId.trim();
+    const thread = threads.find((candidate) => candidate.observingId === threadId);
+    if (!thread) {
       continue;
     }
-
-    const newThreadTitle = item.newThreadTitle?.trim();
-    if (!newThreadTitle) {
-      continue;
-    }
-    const thread = createObservingThread(
-      observerName,
-      newThreadTitle,
-      newThreadTitle,
-      [],
-      observingEpoch,
-      now,
-    );
-    threads.push(thread);
-    touchedIds.add(thread.observingId);
-    mergeObservingTurnInputs(observeTurnsByThread, thread.observingId, observeTurns);
+    touchedIds.add(threadId);
+    mergeObservingFragments(observeFragmentsByThread, threadId, [{
+      content: fragment.content,
+      turns,
+    }]);
+    thread.updatedAt = now;
+    thread.observingEpoch = observingEpoch;
   }
 
-  for (const [observingId, sourceRefs] of observeTurnsByThread.entries()) {
+  for (const [observingId, fragments] of observeFragmentsByThread.entries()) {
     throwIfAborted(signal);
     const thread = threads.find((candidate) => candidate.observingId === observingId);
     if (!thread) {
@@ -192,8 +209,7 @@ async function applyGatewayUpdates(params: ApplyGatewayUpdatesParams): Promise<S
     }
     const result = await observeThreadImpl({
       observingContent: currentObservingContent(thread),
-      sourceRefs,
-      threadMemoryId: thread.snapshotId ?? null,
+      fragments,
     }, signal, {
       memories,
     });
@@ -313,14 +329,14 @@ function updateThreadsFromRows(
   }
 }
 
-function mergeObservingTurnInputs(
-  byThread: Map<string, ObservingTurnInput[]>,
+function mergeObservingFragments(
+  byThread: Map<string, ObserveFragmentInput[]>,
   observingId: string,
-  inputs: ObservingTurnInput[],
+  inputs: ObserveFragmentInput[],
 ): void {
-  const turns = byThread.get(observingId) ?? [];
-  turns.push(...inputs);
-  byThread.set(observingId, turns);
+  const fragments = byThread.get(observingId) ?? [];
+  fragments.push(...inputs);
+  byThread.set(observingId, fragments);
 }
 
 export const __testing = {

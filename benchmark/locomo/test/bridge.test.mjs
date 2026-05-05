@@ -99,8 +99,10 @@ test('import writes an external manifest aligned to locomo sessions', async (t) 
   assert.equal(manifest.turns.length, 3);
   assert.match(manifest.turns[0].turn_id, /^session:/);
   assert.match(manifest.turns[1].turn_id, /^session:/);
-  assert.notEqual(manifest.turns[0].turn_id, manifest.turns[1].turn_id);
+  assert.equal(manifest.turns[0].turn_id, manifest.turns[1].turn_id);
+  assert.notEqual(manifest.turns[1].turn_id, manifest.turns[2].turn_id);
   assert.equal(manifest.turns[0].source_id, 'D1:1');
+  assert.equal(manifest.turns[1].source_id, 'D1:2');
   assert.equal(manifest.turns[0].session_id, 'locomo:sample-a:session_1');
   assert.equal(manifest.turns[2].session_id, 'locomo:sample-a:session_2');
   assert.equal(copiedConfig.observer.llm, 'test_observer_llm');
@@ -116,8 +118,10 @@ test('import writes an external manifest aligned to locomo sessions', async (t) 
   assert.ok(firstTurn);
   assert.match(firstTurn.prompt, /DATE: 1:56 pm on 8 May, 2023/);
   assert.match(firstTurn.prompt, /Caroline said:/);
+  assert.match(firstTurn.response, /DATE: 1:56 pm on 8 May, 2023/);
+  assert.match(firstTurn.response, /Melanie said:/);
   assert.doesNotMatch(firstTurn.prompt, /Recorded/);
-  assert.equal(firstTurn.response, '[imported dialogue event; no assistant response]');
+  assert.doesNotMatch(firstTurn.response, /import placeholder/);
 });
 
 test('recall returns evidence ids without leaking benchmark artifacts into muninn rows', async (t) => {

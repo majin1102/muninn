@@ -42,17 +42,12 @@ test('observing lab runs gateway fitting and thread observing', async () => {
       fit: async ({ pendingTurns, observingThreads }) => {
         calls.push(`fit:${pendingTurns[0].turnId}`);
         return {
-          workItems: [{
-            ...(observingThreads[0]
-              ? { targetThreadId: observingThreads[0].threadId }
-              : { targetThreadId: null, newThreadTitle: "Caroline's LGBTQ support group and self-acceptance" }),
-            sourceRefs: [{
-              turnId: pendingTurns[0].turnId,
-              excerpt: pendingTurns[0].text,
-            }],
-            routingReason: 'The source belongs to the support group thread.',
+          sessionFragments: [{
+            threadId: observingThreads[0].threadId,
+            turnIds: [pendingTurns[0].turnId],
+            content: pendingTurns[0].text,
+            reason: 'The source belongs to the support group thread.',
           }],
-          ignoredTurnIds: [],
         };
       },
       observe: async ({ observingContent, sourceRefs }) => {
@@ -61,7 +56,6 @@ test('observing lab runs gateway fitting and thread observing', async () => {
           observingContent: {
             title: "Caroline's LGBTQ support group and self-acceptance",
             summary: sourceRefs.map((reference) => reference.excerpt).join(' '),
-            observations: observingContent.observations,
             openQuestions: observingContent.openQuestions,
             nextSteps: observingContent.nextSteps,
           },
@@ -82,38 +76,29 @@ test('observing lab runs gateway fitting and thread observing', async () => {
     'observe:D1:7',
   ]);
   assert.equal(result.threads.length, 1);
-  assert.deepEqual(result.epochs[0].workItems[0].sourceRefs[0].turnId, 'D1:3');
+  assert.deepEqual(result.epochs[0].sessionFragments[0].turnIds, ['D1:3']);
   assert.deepEqual(result.threads[0].contextRefs.map((reference) => reference.turnId), ['D1:3', 'D1:7']);
   assert.equal(result.coverage.support, true);
 });
 
-test('observing lab applies new thread work items into thread snapshots', async () => {
+test('observing lab applies session fragments into the session thread', async () => {
   const result = await labModule.runGatewayLab({
     turns: [
       { turnId: 'D1:12', text: 'Melanie shared a lake painting.' },
     ],
     pipeline: {
       fit: async ({ pendingTurns }) => ({
-        workItems: [{
-          targetThreadId: null,
-          newThreadTitle: "Melanie's lake sunrise painting and creative outlet",
-          sourceRefs: [{
-            turnId: pendingTurns[0].turnId,
-            excerpt: pendingTurns[0].text,
-          }],
-          routingReason: 'The source introduces a painting topic.',
+        sessionFragments: [{
+          threadId: 'thread-session',
+          turnIds: [pendingTurns[0].turnId],
+          content: pendingTurns[0].text,
+          reason: 'The source introduces a painting topic.',
         }],
-        ignoredTurnIds: [],
       }),
       observe: async ({ observingContent, sourceRefs }) => ({
         observingContent: {
           title: observingContent.title,
           summary: sourceRefs.map((reference) => reference.excerpt).join(' '),
-          observations: [{
-            id: 'obs-painting',
-            text: 'Melanie shared a lake painting.',
-            category: 'Fact',
-          }],
           openQuestions: [],
           nextSteps: [],
         },
@@ -121,13 +106,19 @@ test('observing lab applies new thread work items into thread snapshots', async 
           turnId: reference.turnId,
           summary: reference.excerpt,
         })),
-        observationChanges: [],
+        observationChanges: [{
+          type: 'add',
+          text: 'Melanie shared a lake painting.',
+          category: 'Fact',
+          references: ['D1:12'],
+          reason: 'The source introduces a painting topic.',
+        }],
       }),
     },
   });
 
   assert.equal(result.threads.length, 1);
-  assert.equal(result.threads[0].title, "Melanie's lake sunrise painting and creative outlet");
+  assert.equal(result.threads[0].title, 'Session observing thread');
   assert.deepEqual(result.threads[0].contextRefs.map((reference) => reference.turnId), ['D1:12']);
   assert.equal(result.coverage.painting, true);
 });

@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 
 type LabThread = {
   threadId: string;
+  kind: 'session' | 'subject';
   title: string;
   summary: string;
   observations: Array<{ id?: string | null; text: string; category: string }>;
@@ -13,21 +14,27 @@ type LabThread = {
 type LabTurn = {
   turnId: string;
   text: string;
-  previousTurn?: string;
 };
 
-type LabWorkItem = {
-  targetThreadId?: string | null;
-  newThreadTitle?: string | null;
-  sourceRefs: Array<{ turnId: string; excerpt: string }>;
-  routingReason: string;
+type LabObservingContent = {
+  title: string;
+  summary: string;
+  observations: Array<{ id?: string | null; text: string; category: string }>;
+  openQuestions: string[];
+  nextSteps: string[];
+};
+
+type LabSessionFragment = {
+  threadId: string;
+  turnIds: string[];
+  content: string;
+  reason: string;
 };
 
 type LabObserveResult = {
   observingContent: {
     title: string;
     summary: string;
-    observations: Array<{ id?: string | null; text: string; category: string }>;
     openQuestions: string[];
     nextSteps: string[];
   };
@@ -42,13 +49,12 @@ type LabObserveResult = {
 
 type LabPipeline = {
   fit(input: {
-    observingThreads: Array<{ threadId: string; title: string; continuityHints?: string[] }>;
+    observingThreads: Array<{ threadId: string; kind: 'session' | 'subject'; title: string; summary: string }>;
     pendingTurns: LabTurn[];
-  }): Promise<{ workItems: LabWorkItem[]; ignoredTurnIds?: string[] }>;
+  }): Promise<{ sessionFragments: LabSessionFragment[] }>;
   observe(input: {
-    observingContent: LabObserveResult['observingContent'];
-    sourceRefs: Array<{ turnId: string; excerpt: string; prompt?: string | null; response?: string | null }>;
-    threadMemoryId?: string | null;
+    observingContent: LabObservingContent;
+    sourceRefs: Array<{ turnId: string; excerpt: string }>;
   }): Promise<LabObserveResult>;
 };
 
@@ -68,8 +74,7 @@ export type GatewayLabResult = {
   epochs: Array<{
     turnId: string;
     text: string;
-    workItems: LabWorkItem[];
-    ignoredTurnIds: string[];
+    sessionFragments: LabSessionFragment[];
   }>;
   coverage: {
     support: boolean;
@@ -83,36 +88,24 @@ export async function runGatewayLab(params: {
   pipeline?: LabPipeline;
 }): Promise<GatewayLabResult> {
   const pipeline = params.pipeline ?? await defaultPipeline();
-  const threads: LabThread[] = [];
+  const threads: LabThread[] = [createSessionThread()];
   const epochs: GatewayLabResult['epochs'] = [];
-  let nextThreadIndex = 1;
-  let previousTurn: string | undefined;
 
   for (const turn of params.turns) {
-    const currentTurn = {
-      ...turn,
-      ...(previousTurn ? { previousTurn } : {}),
-    };
     const fitting = await pipeline.fit({
       observingThreads: threads.map((thread) => ({
         threadId: thread.threadId,
+        kind: thread.kind,
         title: thread.title,
-        ...(thread.contextRefs.length > 0
-          ? { continuityHints: [thread.contextRefs[thread.contextRefs.length - 1].summary] }
-          : {}),
+        summary: thread.summary,
       })),
-      pendingTurns: [currentTurn],
+      pendingTurns: [turn],
     });
 
-    for (const item of fitting.workItems) {
-      const thread = item.targetThreadId
-        ? threads.find((candidate) => candidate.threadId === item.targetThreadId)
-        : createThread(item.newThreadTitle, nextThreadIndex++);
+    for (const fragment of fitting.sessionFragments) {
+      const thread = threads.find((candidate) => candidate.threadId === fragment.threadId);
       if (!thread) {
         continue;
-      }
-      if (!item.targetThreadId) {
-        threads.push(thread);
       }
       const result = await pipeline.observe({
         observingContent: {
@@ -122,13 +115,10 @@ export async function runGatewayLab(params: {
           openQuestions: thread.openQuestions,
           nextSteps: thread.nextSteps,
         },
-        sourceRefs: item.sourceRefs.map((reference) => ({
-          turnId: reference.turnId,
-          excerpt: reference.excerpt,
-          prompt: params.turns.find((candidate) => candidate.turnId === reference.turnId)?.text ?? null,
-          response: null,
+        sourceRefs: fragment.turnIds.map((turnId) => ({
+          turnId,
+          excerpt: fragment.content,
         })),
-        threadMemoryId: null,
       });
       applyObserveResult(thread, result);
     }
@@ -136,10 +126,8 @@ export async function runGatewayLab(params: {
     epochs.push({
       turnId: turn.turnId,
       text: turn.text,
-      workItems: fitting.workItems,
-      ignoredTurnIds: fitting.ignoredTurnIds ?? [],
+      sessionFragments: fitting.sessionFragments,
     });
-    previousTurn = turn.text;
   }
 
   return {
@@ -207,15 +195,12 @@ async function defaultPipeline(): Promise<LabPipeline> {
   };
 }
 
-function createThread(title: string | undefined | null, index: number): LabThread | null {
-  const normalizedTitle = title?.trim();
-  if (!normalizedTitle) {
-    return null;
-  }
+function createSessionThread(): LabThread {
   return {
-    threadId: `thread-${index}`,
-    title: normalizedTitle,
-    summary: normalizedTitle,
+    threadId: 'thread-session',
+    kind: 'session',
+    title: 'Session observing thread',
+    summary: 'Default observing thread for this session.',
     observations: [],
     contextRefs: [],
     openQuestions: [],
@@ -226,10 +211,48 @@ function createThread(title: string | undefined | null, index: number): LabThrea
 function applyObserveResult(thread: LabThread, result: LabObserveResult): void {
   thread.title = result.observingContent.title;
   thread.summary = result.observingContent.summary;
-  thread.observations = result.observingContent.observations;
+  thread.observations = applyObservationChanges(thread.observations, result.observationChanges);
   thread.contextRefs = mergeContextRefs(thread.contextRefs, result.contextRefs);
   thread.openQuestions = result.observingContent.openQuestions;
   thread.nextSteps = result.observingContent.nextSteps;
+}
+
+function applyObservationChanges(
+  current: LabThread['observations'],
+  changes: LabObserveResult['observationChanges'],
+): LabThread['observations'] {
+  const observations = new Map(current.flatMap((observation) => (
+    observation.id ? [[observation.id, observation]] : []
+  )));
+  let nextId = observations.size + 1;
+  for (const change of changes) {
+    if (change.type === 'add') {
+      const id = `lab-observation-${nextId++}`;
+      observations.set(id, { id, text: change.text, category: change.category });
+      continue;
+    }
+    if (change.type === 'update') {
+      const existing = observations.get(change.observationId);
+      if (existing) {
+        observations.set(change.observationId, {
+          ...existing,
+          text: change.text,
+          category: change.category ?? existing.category,
+        });
+      }
+      continue;
+    }
+    if (change.type === 'merge') {
+      for (const observationId of change.observationIds) {
+        observations.delete(observationId);
+      }
+      const id = `lab-observation-${nextId++}`;
+      observations.set(id, { id, text: change.text, category: change.category });
+      continue;
+    }
+    observations.delete(change.observationId);
+  }
+  return [...observations.values()];
 }
 
 function mergeContextRefs(
@@ -253,7 +276,6 @@ function toSessionTurns(turns: LabTurn[]) {
     prompt: turn.text,
     summary: turn.text,
     response: null,
-    previousTurnSummary: turn.previousTurn,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     sessionId: 'locomo-observing-lab',

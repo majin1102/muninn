@@ -24,7 +24,7 @@ test('generateWithTools sends OpenAI-compatible tools and parses tool calls', as
               id: 'call-1',
               type: 'function',
               function: {
-                name: 'memory_get',
+                name: 'memory-get',
                 arguments: '{"memoryIds":["observation:1"]}',
               },
             }],
@@ -45,7 +45,7 @@ test('generateWithTools sends OpenAI-compatible tools and parses tool calls', as
       { role: 'user', content: 'prompt' },
     ],
     tools: [{
-      name: 'memory_get',
+      name: 'memory-get',
       description: 'Get memory details.',
       parameters: {
         type: 'object',
@@ -58,12 +58,12 @@ test('generateWithTools sends OpenAI-compatible tools and parses tool calls', as
   });
 
   assert.equal(capturedBody.tools[0].type, 'function');
-  assert.equal(capturedBody.tools[0].function.name, 'memory_get');
+  assert.equal(capturedBody.tools[0].function.name, 'memory-get');
   assert.deepEqual(result, {
     type: 'tool_calls',
     toolCalls: [{
       id: 'call-1',
-      name: 'memory_get',
+      name: 'memory-get',
       arguments: { memoryIds: ['observation:1'] },
     }],
   });
@@ -83,7 +83,7 @@ test('generateWithTools sends tool result messages and parses final text', async
       json: async () => ({
         choices: [{
           message: {
-            content: '{"workItems":[],"unthreadedObservationIds":["obs-1"]}',
+              content: '{"sessionFragments":[]}',
           },
         }],
       }),
@@ -101,17 +101,17 @@ test('generateWithTools sends tool result messages and parses final text', async
       { role: 'user', content: 'prompt' },
       {
         role: 'assistant',
-        toolCalls: [{ id: 'call-1', name: 'memory_get', arguments: { memoryIds: ['observation:1'] } }],
+        toolCalls: [{ id: 'call-1', name: 'memory-get', arguments: { memoryIds: ['observation:1'] } }],
       },
       {
         role: 'tool',
         toolCallId: 'call-1',
-        name: 'memory_get',
+        name: 'memory-get',
         content: '{"memories":[]}',
       },
     ],
     tools: [{
-      name: 'memory_get',
+      name: 'memory-get',
       description: 'Get memory details.',
       parameters: { type: 'object', properties: {} },
     }],
@@ -123,7 +123,7 @@ test('generateWithTools sends tool result messages and parses final text', async
   assert.equal(capturedBody.messages[3].tool_call_id, 'call-1');
   assert.deepEqual(result, {
     type: 'final',
-    text: '{"workItems":[],"unthreadedObservationIds":["obs-1"]}',
+    text: '{"sessionFragments":[]}',
   });
 });
 

@@ -120,6 +120,9 @@ async function writeMuninnConfig(configPath, {
   watchdog,
   activeWindowDays,
   continuityHints,
+  epochTurns = 1,
+  epochWindowMs,
+  omitEpochSealSettings = false,
   domainPrompt,
 } = {}) {
   const root = {};
@@ -141,6 +144,8 @@ async function writeMuninnConfig(configPath, {
       maxAttempts: 3,
       ...(activeWindowDays === undefined ? {} : { activeWindowDays }),
       ...(continuityHints === undefined ? {} : { continuityHints }),
+      ...(omitEpochSealSettings || epochTurns === undefined ? {} : { epochTurns }),
+      ...(omitEpochSealSettings || epochWindowMs === undefined ? {} : { epochWindowMs }),
       ...(domainPrompt === undefined ? {} : { domainPrompt }),
     };
     llm.test_observer_llm = { provider: observerProvider };
@@ -174,23 +179,33 @@ test.after(async () => {
   delete process.env.MUNINN_HOME;
 });
 
-test('observer config defaults activeWindowDays and continuityHints and accepts explicit overrides', async (t) => {
+test('observer config defaults activeWindowDays, continuityHints, and epoch seal settings', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(cleanupDataset(dir));
 
   process.env.MUNINN_HOME = homeDir;
-  await writeMuninnConfig(configPath, { observerProvider: 'mock' });
+  await writeMuninnConfig(configPath, { observerProvider: 'mock', omitEpochSealSettings: true });
 
   let observerConfig = getObserverLlmConfig();
   assert.ok(observerConfig);
   assert.equal(observerConfig.activeWindowDays, 7);
   assert.equal(observerConfig.continuityHints, 1);
+  assert.equal(observerConfig.epochTurns, 3);
+  assert.equal(observerConfig.epochWindowMs, 10_000);
 
-  await writeMuninnConfig(configPath, { observerProvider: 'mock', activeWindowDays: 14, continuityHints: 3 });
+  await writeMuninnConfig(configPath, {
+    observerProvider: 'mock',
+    activeWindowDays: 14,
+    continuityHints: 3,
+    epochTurns: 5,
+    epochWindowMs: 2_500,
+  });
   observerConfig = getObserverLlmConfig();
   assert.ok(observerConfig);
   assert.equal(observerConfig.activeWindowDays, 14);
   assert.equal(observerConfig.continuityHints, 3);
+  assert.equal(observerConfig.epochTurns, 5);
+  assert.equal(observerConfig.epochWindowMs, 2_500);
 });
 
 test('observer config accepts an optional domain prompt name', async (t) => {
@@ -678,6 +693,45 @@ test('validateSettings rejects invalid observer.continuityHints', async (t) => {
     }, null, 2)),
     /observer\.continuityHints must be a positive integer/i,
   );
+});
+
+test('validateSettings rejects invalid observer epoch seal settings', async (t) => {
+  const { dir, homeDir, configPath } = await makeDatasetUri();
+  t.after(cleanupDataset(dir));
+
+  process.env.MUNINN_HOME = homeDir;
+  await mkdir(path.dirname(configPath), { recursive: true });
+  await writeFile(configPath, '{\n  "storage": {\n    "uri": ""\n  }\n}\n', 'utf8');
+
+  for (const [key, value] of [
+    ['epochTurns', 0],
+    ['epochWindowMs', 0],
+    ['epochTurns', 1.5],
+    ['epochWindowMs', 1.5],
+  ]) {
+    await assert.rejects(
+      () => validateSettings(JSON.stringify({
+        observer: {
+          name: 'test-observer',
+          llm: 'test_observer_llm',
+          [key]: value,
+        },
+        llm: {
+          test_observer_llm: {
+            provider: 'mock',
+          },
+        },
+        observation: {
+          embedding: {
+            provider: 'mock',
+            dimensions: 8,
+          },
+          defaultImportance: 0.7,
+        },
+      }, null, 2)),
+      new RegExp(`observer\\.${key} must be a positive integer`, 'i'),
+    );
+  }
 });
 
 test('validateSettings rejects unknown observer.domainPrompt', async (t) => {

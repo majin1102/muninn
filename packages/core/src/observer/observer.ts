@@ -41,6 +41,8 @@ const noopCheckpointLock: CheckpointLock = {
 export class Observer {
   name: string;
   private readonly activeWindowDays: number;
+  private readonly epochTurns: number;
+  private readonly epochWindowMs: number;
   private committedEpoch?: number;
   private openEpoch!: OpenEpoch;
   private currentEpoch: SealedEpoch | null = null;
@@ -61,6 +63,7 @@ export class Observer {
   private readonly changeWaiters = new Set<() => void>();
   private readonly shutdownController = new AbortController();
   private readonly epochQueue = new EpochQueue();
+  private sealTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
     private readonly client: NativeTables,
@@ -73,6 +76,8 @@ export class Observer {
     }
     this.name = config.name;
     this.activeWindowDays = config.activeWindowDays;
+    this.epochTurns = config.epochTurns;
+    this.epochWindowMs = config.epochWindowMs;
     this.checkpointRuns = checkpoint?.runs.filter((run) => run.status === 'running').map(cloneObservingRun) ?? [];
   }
 
@@ -103,9 +108,7 @@ export class Observer {
       const openEpoch = this.openEpoch;
       try {
         await openEpoch.accept(turnContent, sessionRegistry);
-        if (openEpoch.hasStagedTurns()) {
-          this.sealOpenEpoch(openEpoch);
-        }
+        this.scheduleOpenEpochSeal(openEpoch);
         return;
       } catch (error) {
         if (error instanceof EpochSealedError && openEpoch !== this.openEpoch) {
@@ -147,6 +150,7 @@ export class Observer {
   async shutdown(): Promise<void> {
     // Fast stop: abort in-flight network work and exit without draining observer backlog.
     this.shuttingDown = true;
+    this.clearSealTimer();
     this.shutdownController.abort(abortError('observer shutdown'));
     this.epochQueue.close();
     this.notifyChange();
@@ -263,6 +267,10 @@ export class Observer {
     }
 
     this.openEpoch = new OpenEpoch(nextEpoch);
+    this.clearSealTimer();
+    if (this.openEpoch.hasStagedTurns()) {
+      this.scheduleOpenEpochSeal(this.openEpoch);
+    }
     this.refreshCheckpointSnapshot();
     this.bootstrapped = true;
     this.start();
@@ -364,6 +372,32 @@ export class Observer {
     );
   }
 
+  private scheduleOpenEpochSeal(openEpoch: OpenEpoch): void {
+    if (this.shuttingDown || this.openEpoch !== openEpoch || !openEpoch.hasStagedTurns()) {
+      return;
+    }
+    if (openEpoch.stagedTurnCount() >= this.epochTurns) {
+      this.sealOpenEpoch(openEpoch);
+      return;
+    }
+    if (openEpoch.stagedTurnCount() !== 1 || this.sealTimer) {
+      return;
+    }
+    this.sealTimer = setTimeout(() => {
+      this.sealTimer = null;
+      this.sealOpenEpoch(openEpoch);
+    }, this.epochWindowMs);
+    (this.sealTimer as { unref?: () => void }).unref?.();
+  }
+
+  private clearSealTimer(): void {
+    if (!this.sealTimer) {
+      return;
+    }
+    clearTimeout(this.sealTimer);
+    this.sealTimer = null;
+  }
+
   private sealOpenEpoch(
     openEpoch: OpenEpoch,
     force = false,
@@ -371,6 +405,7 @@ export class Observer {
     if (this.shuttingDown || this.openEpoch !== openEpoch || (!force && !openEpoch.hasStagedTurns())) {
       return null;
     }
+    this.clearSealTimer();
     // Swap to the next epoch synchronously so any later accept() starts in the next generation.
     this.openEpoch = new OpenEpoch(openEpoch.epoch + 1);
     this.publishingEpochs.push(openEpoch);

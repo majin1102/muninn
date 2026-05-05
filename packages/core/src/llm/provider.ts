@@ -65,6 +65,9 @@ export async function generateWithTools(
   if (config.provider === 'mock') {
     return { type: 'final', text: generateMockText({ system: '', prompt: lastUserMessage(request.messages) }) };
   }
+  if (config.provider === 'openai-codex') {
+    return generateOpenAiCodexWithTools(config, request);
+  }
   return generateOpenAiWithTools(config, request);
 }
 
@@ -74,7 +77,7 @@ function generateMockText(request: LlmTextRequest): string {
     || request.prompt.trim();
 
   if (request.system.includes('routing gateway for an observing memory system')) {
-    return JSON.stringify({ workItems: [], ignoredTurnIds: [] });
+    return JSON.stringify({ sessionFragments: [] });
   }
   if (request.system.includes('"memory_delta"')) {
     return JSON.stringify({
@@ -311,11 +314,10 @@ async function generateOpenAiCodexText(
     signal: request.signal,
     body: JSON.stringify({
       model: config.model ?? 'gpt-5.4',
+      instructions: request.system,
+      store: false,
+      stream: true,
       input: [
-        {
-          role: 'system',
-          content: [{ type: 'input_text', text: request.system }],
-        },
         {
           role: 'user',
           content: [{ type: 'input_text', text: request.prompt }],
@@ -328,11 +330,211 @@ async function generateOpenAiCodexText(
     throw new Error(`openai-codex request failed with status ${response.status}: ${await response.text()}`);
   }
 
-  const text = extractResponsesText(await response.json() as Record<string, unknown>);
+  const text = extractCodexStreamText(await response.text());
   if (!text) {
     throw new Error('openai-codex response did not contain text output');
   }
   return text;
+}
+
+async function generateOpenAiCodexWithTools(
+  config: TextProviderConfig,
+  request: LlmToolRequest,
+): Promise<LlmToolResult> {
+  throwIfAborted(request.signal);
+  const auth = loadCodexCliAuth();
+  const response = await fetch(normalizeCodexResponsesUrl(config.baseUrl), {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${auth.accessToken}`,
+      'content-type': 'application/json',
+    },
+    signal: request.signal,
+    body: JSON.stringify({
+      model: config.model ?? 'gpt-5.4',
+      instructions: codexInstructions(request.messages),
+      store: false,
+      stream: true,
+      input: request.messages.flatMap(toCodexInputItems),
+      tools: request.tools.map((tool) => ({
+        type: 'function',
+        name: tool.name,
+        description: tool.description,
+        parameters: tool.parameters,
+      })),
+      tool_choice: 'auto',
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`openai-codex request failed with status ${response.status}: ${await response.text()}`);
+  }
+
+  const stream = parseCodexStream(await response.text());
+  const toolCalls = stream.toolCalls;
+  if (toolCalls.length > 0) {
+    return { type: 'tool_calls', toolCalls };
+  }
+
+  const text = stream.text;
+  if (!text) {
+    throw new Error('openai-codex response did not contain text output or tool calls');
+  }
+  return { type: 'final', text };
+}
+
+function extractCodexStreamText(raw: string): string | null {
+  return parseCodexStream(raw).text;
+}
+
+function parseCodexStream(raw: string): { text: string | null; toolCalls: LlmToolCall[] } {
+  const events = parseSseEvents(raw);
+  const deltas: string[] = [];
+  let completed: Record<string, unknown> | null = null;
+  const directCalls: LlmToolCall[] = [];
+
+  for (const event of events) {
+    const type = typeof event.type === 'string' ? event.type : '';
+    if (type.endsWith('output_text.delta') && typeof event.delta === 'string') {
+      deltas.push(event.delta);
+    }
+    if (type === 'response.completed' && event.response && typeof event.response === 'object') {
+      completed = event.response as Record<string, unknown>;
+    }
+    const item = event.item;
+    if (item && typeof item === 'object') {
+      directCalls.push(...parseCodexToolCalls([item]));
+    }
+  }
+
+  const completedToolCalls = completed ? dedupeToolCalls(parseCodexToolCalls(completed.output)) : [];
+  if (completedToolCalls.length > 0) {
+    return { text: null, toolCalls: completedToolCalls };
+  }
+  const dedupedDirectCalls = dedupeToolCalls(directCalls);
+  if (dedupedDirectCalls.length > 0) {
+    return { text: null, toolCalls: dedupedDirectCalls };
+  }
+
+  const completedText = completed ? extractResponsesText(completed) : null;
+  const text = completedText || deltas.join('').trim();
+  return { text: text || null, toolCalls: [] };
+}
+
+function parseSseEvents(raw: string): Array<Record<string, unknown>> {
+  const events: Array<Record<string, unknown>> = [];
+  const chunks = raw.split(/\n\n+/);
+  for (const chunk of chunks) {
+    const data = chunk
+      .split(/\n/)
+      .filter((line) => line.startsWith('data:'))
+      .map((line) => line.slice('data:'.length).trim())
+      .join('\n')
+      .trim();
+    if (!data || data === '[DONE]') {
+      continue;
+    }
+    const parsed = JSON.parse(data) as unknown;
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      events.push(parsed as Record<string, unknown>);
+    }
+  }
+  return events;
+}
+
+function codexInstructions(messages: LlmToolMessage[]): string {
+  return messages
+    .filter((message): message is Extract<LlmToolMessage, { role: 'system' }> => message.role === 'system')
+    .map((message) => message.content.trim())
+    .filter(Boolean)
+    .join('\n\n');
+}
+
+function toCodexInputItems(message: LlmToolMessage): Array<Record<string, unknown>> {
+  if (message.role === 'system') {
+    return [];
+  }
+  if (message.role === 'assistant') {
+    const items: Array<Record<string, unknown>> = [];
+    if (message.content?.trim()) {
+      items.push({
+        role: 'assistant',
+        content: [{ type: 'output_text', text: message.content }],
+      });
+    }
+    for (const call of message.toolCalls ?? []) {
+      items.push({
+        type: 'function_call',
+        call_id: call.id,
+        name: call.name,
+        arguments: JSON.stringify(call.arguments),
+      });
+    }
+    return items;
+  }
+  if (message.role === 'tool') {
+    return [{
+      type: 'function_call_output',
+      call_id: message.toolCallId,
+      output: message.content,
+    }];
+  }
+  return [{
+    role: 'user',
+    content: [{ type: 'input_text', text: message.content }],
+  }];
+}
+
+function parseCodexToolCalls(value: unknown): LlmToolCall[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const calls: LlmToolCall[] = [];
+  for (const [index, item] of value.entries()) {
+    if (!item || typeof item !== 'object') {
+      continue;
+    }
+    const record = item as Record<string, unknown>;
+    if (record.type !== 'function_call') {
+      continue;
+    }
+    const name = typeof record.name === 'string' ? record.name.trim() : '';
+    if (!name) {
+      throw new Error('openai-codex function_call name is required');
+    }
+    const id = typeof record.call_id === 'string' && record.call_id.trim()
+      ? record.call_id.trim()
+      : typeof record.id === 'string' && record.id.trim()
+        ? record.id.trim()
+        : `call-${index + 1}`;
+    calls.push({
+      id,
+      name,
+      arguments: parseToolArguments(typeof record.arguments === 'string' ? record.arguments : '{}'),
+    });
+  }
+  return calls;
+}
+
+function dedupeToolCalls(calls: LlmToolCall[]): LlmToolCall[] {
+  const byId = new Map<string, LlmToolCall>();
+  for (const call of calls) {
+    const existing = byId.get(call.id);
+    byId.set(call.id, preferToolCall(existing, call));
+  }
+  return [...byId.values()];
+}
+
+function preferToolCall(existing: LlmToolCall | undefined, candidate: LlmToolCall): LlmToolCall {
+  if (!existing) {
+    return candidate;
+  }
+  const existingEmpty = Object.keys(existing.arguments).length === 0;
+  const candidateEmpty = Object.keys(candidate.arguments).length === 0;
+  if (!candidateEmpty || existingEmpty) {
+    return candidate;
+  }
+  return existing;
 }
 
 function normalizeApiStyle(api?: string): 'responses' | 'chatCompletions' {
