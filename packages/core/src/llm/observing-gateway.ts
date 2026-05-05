@@ -10,7 +10,6 @@ import type {
   ObserveResult,
   Observation,
   ObservationCategory,
-  ObservationChange,
   ObservingThreadGatewayInput,
   ContextRef,
 } from '../observer/types.js';
@@ -197,7 +196,7 @@ export async function observeThread(
             basePrompt,
             attempt,
             lastError,
-            'Keep observingContent with title, summary, openQuestions, and nextSteps only; keep contextRefs and observationChanges present.',
+            'Return observingContent with title, summary, observations, openQuestions, and nextSteps; keep contextRefs present.',
           ),
         },
       ],
@@ -220,13 +219,13 @@ export async function observeThread(
     throwIfAborted(signal);
 
     try {
-      const result = validateObserveResult(parseJson<ObserveResult>(raw));
+      const result = validateObserveResult(parseJson<ObserveResult>(raw), input);
       await writeObserveTrace({
         ...trace,
         attempt,
         durationMs,
         finalJson: raw,
-        observationChanges: result.observationChanges,
+        observations: result.observingContent.observations,
       });
       return result;
     } catch (error) {
@@ -268,6 +267,13 @@ function buildMockObserveResult(input: ObserveRequest): ObserveResult {
     observingContent: {
       title: normalizeText(titleSeed),
       summary: normalizeText(summarySeed || titleSeed),
+      observations: joined
+        ? [{
+            text: joined,
+            category: 'Fact',
+            references: turnIds,
+          }]
+        : input.observingContent.observations,
       openQuestions: input.observingContent.openQuestions,
       nextSteps: input.observingContent.nextSteps,
     },
@@ -277,15 +283,6 @@ function buildMockObserveResult(input: ObserveRequest): ObserveResult {
         summary: normalizeText(fragment.content, MAX_SUMMARY_CHARS),
       })))
       .filter((reference) => reference.summary),
-    observationChanges: joined
-      ? [{
-          type: 'add',
-          text: joined,
-          category: 'Fact',
-          references: turnIds,
-          reason: 'Mock observer records the routed source context.',
-        }]
-      : [],
   };
 }
 
@@ -333,13 +330,9 @@ function validateGatewayResult(
   return { sessionFragments };
 }
 
-function validateObserveResult(result: ObserveResult): ObserveResult {
-  if (
-    result.observingContent
-    && typeof result.observingContent === 'object'
-    && 'observations' in result.observingContent
-  ) {
-    throw new Error('observe result must not return observingContent.observations; use observationChanges');
+function validateObserveResult(result: ObserveResult, input?: ObserveRequest): ObserveResult {
+  if (result && typeof result === 'object' && 'observationChanges' in result) {
+    throw new Error('observe result must not return observationChanges; return observingContent.observations');
   }
   const title = normalizeText(result.observingContent.title);
   if (!title) {
@@ -351,97 +344,78 @@ function validateObserveResult(result: ObserveResult): ObserveResult {
     throw new Error('observing update returned empty observingContent.summary');
   }
 
+  const existingObservationIds = new Set(
+    input?.observingContent.observations
+      .map((observation) => observation.id?.trim())
+      .filter((id): id is string => Boolean(id)) ?? [],
+  );
+  const allowedReferenceIds = new Set([
+    ...(input ? fragmentTurnIds(input) : []),
+    ...(input?.observingContent.observations.flatMap((observation) => observation.references ?? []) ?? []),
+  ]);
+
   const normalized = {
     observingContent: {
       title,
       summary,
+      observations: normalizeObservations(
+        result.observingContent.observations,
+        existingObservationIds,
+        allowedReferenceIds,
+      ),
       openQuestions: normalizeStringList(result.observingContent.openQuestions),
       nextSteps: normalizeStringList(result.observingContent.nextSteps),
     },
     contextRefs: normalizeContextRefs(result.contextRefs),
-    observationChanges: normalizeObservationChanges(result.observationChanges),
   };
   return normalized;
 }
 
-function normalizeObservationChanges(actions: unknown): ObservationChange[] {
-  if (!Array.isArray(actions)) {
-    throw new Error('observationChanges must be an array');
+function normalizeObservations(
+  observations: unknown,
+  existingObservationIds: Set<string>,
+  allowedReferenceIds: Set<string>,
+): Observation[] {
+  if (!Array.isArray(observations)) {
+    throw new Error('observingContent.observations must be an array');
   }
-  const modifiedObservationIds = new Set<string>();
-  return actions.map((item) => {
+  const seenIds = new Set<string>();
+  return observations.map((item) => {
     if (!item || typeof item !== 'object') {
-      throw new Error('observationChanges entries must be objects');
+      throw new Error('observations entries must be objects');
     }
-    const action = item as Record<string, unknown>;
-    const type = typeof action.type === 'string' ? action.type : '';
-    const reason = typeof action.reason === 'string' ? normalizeText(action.reason, MAX_SUMMARY_CHARS) : '';
-    if (!reason) {
-      throw new Error('observation change missing reason');
+    const observation = item as Record<string, unknown>;
+    const id = typeof observation.id === 'string' ? observation.id.trim() : '';
+    if (id) {
+      if (seenIds.has(id)) {
+        throw new Error(`duplicate observation id: ${id}`);
+      }
+      if (existingObservationIds.size > 0 && !existingObservationIds.has(id)) {
+        throw new Error(`unknown observation id: ${id}`);
+      }
+      seenIds.add(id);
     }
-    if (type === 'add') {
-      const text = typeof action.text === 'string' ? normalizeText(action.text) : '';
-      if (!text) {
-        throw new Error('add change missing text');
-      }
-      const references = normalizeIdList(action.references, 'add.references');
-      if (references.length === 0) {
-        throw new Error('add change must include references');
-      }
-      return {
-        type: 'add',
-        text,
-        category: normalizeCategory(action.category),
-        references,
-        reason,
-      };
+    const text = typeof observation.text === 'string' ? normalizeText(observation.text) : '';
+    if (!text) {
+      throw new Error('observation text is required');
     }
-    if (type === 'merge') {
-      const observationIds = normalizeIdList(action.observationIds, 'merge.observationIds');
-      if (observationIds.length < 2) {
-        throw new Error('merge change must include at least two observationIds');
-      }
-      for (const observationId of observationIds) {
-        claimModifiedObservationId(observationId, modifiedObservationIds);
-      }
-      const text = typeof action.text === 'string' ? normalizeText(action.text) : '';
-      if (!text) {
-        throw new Error('merge change missing text');
-      }
-      return {
-        type: 'merge',
-        observationIds,
-        text,
-        category: normalizeCategory(action.category),
-        reason,
-      };
+    const references = normalizeIdList(observation.references, 'observation references');
+    if (references.length === 0) {
+      throw new Error('observation references must include at least one reference');
     }
-    if (type === 'update') {
-      const observationId = typeof action.observationId === 'string' ? action.observationId.trim() : '';
-      claimModifiedObservationId(observationId, modifiedObservationIds);
-      const text = typeof action.text === 'string' ? normalizeText(action.text) : '';
-      if (!text) {
-        throw new Error('update change missing text');
+    if (allowedReferenceIds.size > 0) {
+      for (const reference of references) {
+        if (!allowedReferenceIds.has(reference)) {
+          throw new Error(`observation referenced non-visible memory id: ${reference}`);
+        }
       }
-      return {
-        type: 'update',
-        observationId,
-        text,
-        ...(action.category ? { category: normalizeCategory(action.category) } : {}),
-        ...(Array.isArray(action.references) ? { references: normalizeIdList(action.references, 'update.references') } : {}),
-        reason,
-      };
     }
-    if (type === 'delete') {
-      const observationId = typeof action.observationId === 'string' ? action.observationId.trim() : '';
-      claimModifiedObservationId(observationId, modifiedObservationIds);
-      return {
-        type: 'delete',
-        observationId,
-        reason,
-      };
-    }
-    throw new Error('unknown observation change type');
+    return {
+      ...(id ? { id } : {}),
+      text,
+      category: normalizeCategory(observation.category),
+      references,
+    };
   });
 }
 
@@ -450,19 +424,6 @@ function normalizeIdList(value: unknown, label: string): string[] {
     throw new Error(`${label} must be an array`);
   }
   return [...new Set(value.map((id) => typeof id === 'string' ? id.trim() : '').filter(Boolean))];
-}
-
-function claimModifiedObservationId(observationId: string, modifiedObservationIds: Set<string>): void {
-  if (!observationId) {
-    throw new Error('observation change missing observationId');
-  }
-  if (observationId.startsWith('session:')) {
-    throw new Error(`observation change cannot modify source turn id: ${observationId}`);
-  }
-  if (modifiedObservationIds.has(observationId)) {
-    throw new Error(`observation change modifies observationId more than once: ${observationId}`);
-  }
-  modifiedObservationIds.add(observationId);
 }
 
 function normalizeContextRefs(value: unknown): ContextRef[] {
@@ -652,7 +613,7 @@ async function writeObserveTrace(event: {
   toolCalls: LlmToolCall[];
   toolResults: unknown[];
   finalJson: string;
-  observationChanges: ObservationChange[];
+  observations: Observation[];
 }): Promise<void> {
   const file = process.env.MUNINN_THREAD_OBSERVING_TRACE_FILE;
   if (!file) {

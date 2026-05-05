@@ -4,6 +4,7 @@ export type Observation = {
   id?: string | null;
   text: string;
   category: ObservationCategory;
+  references: string[];
   updatedMemory?: string | null;
 };
 
@@ -129,9 +130,8 @@ export type ObserveRequest = {
 };
 
 export type ObserveResult = {
-  observingContent: ObservingContentUpdate;
+  observingContent: ObservingContent;
   contextRefs: ContextRef[];
-  observationChanges: ObservationChange[];
 };
 
 export type SessionFragment = {

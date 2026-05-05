@@ -5,7 +5,7 @@ type LabThread = {
   kind: 'session' | 'subject';
   title: string;
   summary: string;
-  observations: Array<{ id?: string | null; text: string; category: string }>;
+  observations: Array<{ id?: string | null; text: string; category: string; references: string[] }>;
   contextRefs: Array<{ turnId: string; summary: string }>;
   openQuestions: string[];
   nextSteps: string[];
@@ -19,7 +19,7 @@ type LabTurn = {
 type LabObservingContent = {
   title: string;
   summary: string;
-  observations: Array<{ id?: string | null; text: string; category: string }>;
+  observations: Array<{ id?: string | null; text: string; category: string; references: string[] }>;
   openQuestions: string[];
   nextSteps: string[];
 };
@@ -35,16 +35,11 @@ type LabObserveResult = {
   observingContent: {
     title: string;
     summary: string;
+    observations: Array<{ id?: string | null; text: string; category: string; references: string[] }>;
     openQuestions: string[];
     nextSteps: string[];
   };
   contextRefs: Array<{ turnId: string; summary: string }>;
-  observationChanges: Array<
-    | { type: 'add'; text: string; category: string; references: string[]; reason: string }
-    | { type: 'merge'; observationIds: string[]; text: string; category: string; reason: string }
-    | { type: 'update'; observationId: string; text: string; category?: string; reason: string }
-    | { type: 'delete'; observationId: string; reason: string }
-  >;
 };
 
 type LabPipeline = {
@@ -54,7 +49,10 @@ type LabPipeline = {
   }): Promise<{ sessionFragments: LabSessionFragment[] }>;
   observe(input: {
     observingContent: LabObservingContent;
-    sourceRefs: Array<{ turnId: string; excerpt: string }>;
+    fragments: Array<{
+      content: string;
+      turns: Array<{ turnId: string; prompt: string; response: string | null }>;
+    }>;
   }): Promise<LabObserveResult>;
 };
 
@@ -115,10 +113,14 @@ export async function runGatewayLab(params: {
           openQuestions: thread.openQuestions,
           nextSteps: thread.nextSteps,
         },
-        sourceRefs: fragment.turnIds.map((turnId) => ({
-          turnId,
-          excerpt: fragment.content,
-        })),
+        fragments: [{
+          content: fragment.content,
+          turns: fragment.turnIds.map((turnId) => ({
+            turnId,
+            prompt: fragment.content,
+            response: null,
+          })),
+        }],
       });
       applyObserveResult(thread, result);
     }
@@ -211,48 +213,15 @@ function createSessionThread(): LabThread {
 function applyObserveResult(thread: LabThread, result: LabObserveResult): void {
   thread.title = result.observingContent.title;
   thread.summary = result.observingContent.summary;
-  thread.observations = applyObservationChanges(thread.observations, result.observationChanges);
+  thread.observations = result.observingContent.observations.map((observation, index) => ({
+    id: observation.id ?? `lab-observation-${index + 1}`,
+    text: observation.text,
+    category: observation.category,
+    references: observation.references,
+  }));
   thread.contextRefs = mergeContextRefs(thread.contextRefs, result.contextRefs);
   thread.openQuestions = result.observingContent.openQuestions;
   thread.nextSteps = result.observingContent.nextSteps;
-}
-
-function applyObservationChanges(
-  current: LabThread['observations'],
-  changes: LabObserveResult['observationChanges'],
-): LabThread['observations'] {
-  const observations = new Map(current.flatMap((observation) => (
-    observation.id ? [[observation.id, observation]] : []
-  )));
-  let nextId = observations.size + 1;
-  for (const change of changes) {
-    if (change.type === 'add') {
-      const id = `lab-observation-${nextId++}`;
-      observations.set(id, { id, text: change.text, category: change.category });
-      continue;
-    }
-    if (change.type === 'update') {
-      const existing = observations.get(change.observationId);
-      if (existing) {
-        observations.set(change.observationId, {
-          ...existing,
-          text: change.text,
-          category: change.category ?? existing.category,
-        });
-      }
-      continue;
-    }
-    if (change.type === 'merge') {
-      for (const observationId of change.observationIds) {
-        observations.delete(observationId);
-      }
-      const id = `lab-observation-${nextId++}`;
-      observations.set(id, { id, text: change.text, category: change.category });
-      continue;
-    }
-    observations.delete(change.observationId);
-  }
-  return [...observations.values()];
 }
 
 function mergeContextRefs(

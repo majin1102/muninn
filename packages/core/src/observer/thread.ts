@@ -69,6 +69,7 @@ export function cloneObservingThread(thread: ObservingThread): ObservingThread {
         id: observation.id ?? null,
         text: observation.text,
         category: observation.category,
+        references: [...(observation.references ?? [])],
         updatedMemory: observation.updatedMemory ?? null,
       })),
       contextRefs: snapshot.contextRefs.map((reference) => ({ ...reference })),

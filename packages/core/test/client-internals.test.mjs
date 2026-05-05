@@ -2787,14 +2787,13 @@ test('observer.observeCurrentEpoch keeps thread state unchanged when pre-commit 
   }
 });
 
-test('snapshot observation consolidation merges updates and deletes observation rows', async (t) => {
+test('snapshot observation state rewrite updates and deletes observation rows', async (t) => {
   const { dir, homeDir, configPath } = await makeConfigHome();
   t.after(async () => rm(dir, { recursive: true, force: true }));
 
   process.env.MUNINN_HOME = homeDir;
   await writeObserverConfig(configPath);
 
-  const { applyObservationTableConsolidation } = await import('../dist/observer/memory-delta.js');
   const rows = [];
   const deleted = [];
   const client = {
@@ -2811,68 +2810,98 @@ test('snapshot observation consolidation merges updates and deletes observation 
       upsert: async ({ rows: next }) => rows.push(...next),
     },
   };
-  await applyObservationTableChanges(client, {
-    observations: [
-      { id: '9774aa94b2dfc9575c14a5d8', text: 'merged career memory', category: 'Fact' },
-      { id: 'obs-c', text: 'updated painting memory', category: 'Preference' },
-    ],
+  const state = applyObservationChanges([
+    { id: 'obs-a', text: 'obs-a old text', category: 'Fact', references: ['session:1'] },
+    { id: 'obs-b', text: 'obs-b old text', category: 'Fact', references: ['session:2'] },
+  ], {
+    observingContent: {
+      title: 'T',
+      summary: 'S',
+      observations: [
+        { id: 'obs-a', text: 'updated career memory', category: 'Decision', references: ['session:2'] },
+        { text: 'new painting memory', category: 'Preference', references: ['session:3'] },
+      ],
+      openQuestions: [],
+      nextSteps: [],
+    },
     contextRefs: [],
-    observationChanges: [
-      {
-        type: 'merge',
-        observationIds: ['obs-a', 'obs-b'],
-        text: 'merged career memory',
-        category: 'Fact',
-        reason: 'same career topic',
-      },
-      {
-        type: 'update',
-        observationId: 'obs-c',
-        text: 'updated painting memory',
-        category: 'Preference',
-        references: ['session:3'],
-        reason: 'clearer preference',
-      },
-      {
-        type: 'delete',
-        observationId: 'obs-d',
-        reason: 'low value',
-      },
-    ],
+  });
+  await applyObservationTableChanges(client, {
+    observations: state.observations,
+    contextRefs: [],
+    observationChanges: state.observationChanges,
   }, 'observing:12');
 
-  assert.deepEqual(deleted.sort(), ['obs-a', 'obs-b', 'obs-d']);
+  assert.deepEqual(deleted.sort(), ['obs-b']);
   assert.equal(rows.length, 2);
-  const mergedRow = rows.find((row) => row.text === 'merged career memory');
-  const updatedRow = rows.find((row) => row.id === 'obs-c');
-  assert.equal(mergedRow.category, 'fact');
-  assert.deepEqual(mergedRow.references, ['session:1']);
-  assert.equal(updatedRow.category, 'preference');
-  assert.deepEqual(updatedRow.references, ['session:1', 'session:3']);
+  const updatedRow = rows.find((row) => row.id === 'obs-a');
+  const addedRow = rows.find((row) => row.text === 'new painting memory');
+  assert.equal(updatedRow.category, 'decision');
+  assert.deepEqual(updatedRow.references, ['session:2']);
+  assert.equal(addedRow.category, 'preference');
+  assert.deepEqual(addedRow.references, ['session:3']);
 });
 
-test('observation changes reject invalid observation coverage', () => {
-  const current = [{ id: 'obs-a', text: 'A', category: 'Fact' }];
+test('observation state rewrite computes update add and delete changes', () => {
+  const current = [
+    { id: 'obs-a', text: 'old career memory', category: 'Fact', references: ['session:1'] },
+    { id: 'obs-b', text: 'old low value memory', category: 'Fact', references: ['session:2'] },
+  ];
+
+  const result = applyObservationChanges(current, {
+    observingContent: {
+      title: 'T',
+      summary: 'S',
+      observations: [
+        { id: 'obs-a', text: 'updated career memory', category: 'Decision', references: ['session:1', 'session:3'] },
+        { text: 'new painting memory', category: 'Preference', references: ['session:4'] },
+      ],
+      openQuestions: [],
+      nextSteps: [],
+    },
+    contextRefs: [],
+  });
+
+  assert.deepEqual(result.observationChanges.map((change) => change.type), ['update', 'add', 'delete']);
+  assert.equal(result.observations[0].id, 'obs-a');
+  assert.equal(result.observations[0].category, 'Decision');
+  assert.deepEqual(result.observations[0].references, ['session:1', 'session:3']);
+  assert.equal(result.observations[1].category, 'Preference');
+  assert.match(result.observations[1].id, /^[a-f0-9]{24}$/);
+});
+
+test('observation state rewrite rejects unknown and duplicate ids', () => {
+  const current = [{ id: 'obs-a', text: 'A', category: 'Fact', references: ['session:1'] }];
 
   assert.throws(
     () => applyObservationChanges(current, {
-      observingContent: { title: 'T', summary: 'S', openQuestions: [], nextSteps: [] },
+      observingContent: {
+        title: 'T',
+        summary: 'S',
+        observations: [{ id: 'missing', text: 'updated', category: 'Fact', references: ['session:1'] }],
+        openQuestions: [],
+        nextSteps: [],
+      },
       contextRefs: [],
-      observationChanges: [{ type: 'update', observationId: 'missing', text: 'updated', reason: 'fix wording' }],
     }),
-    /unknown observationId/i,
+    /unknown observation id/i,
   );
 
   assert.throws(
     () => applyObservationChanges(current, {
-      observingContent: { title: 'T', summary: 'S', openQuestions: [], nextSteps: [] },
+      observingContent: {
+        title: 'T',
+        summary: 'S',
+        observations: [
+          { id: 'obs-a', text: 'updated', category: 'Fact', references: ['session:1'] },
+          { id: 'obs-a', text: 'duplicate', category: 'Fact', references: ['session:1'] },
+        ],
+        openQuestions: [],
+        nextSteps: [],
+      },
       contextRefs: [],
-      observationChanges: [
-        { type: 'update', observationId: 'obs-a', text: 'updated', reason: 'fix wording' },
-        { type: 'delete', observationId: 'obs-a', reason: 'duplicate cleanup' },
-      ],
     }),
-    /modified observationId more than once/i,
+    /duplicate observation id/i,
   );
 });
 
@@ -3085,7 +3114,7 @@ test('buildObservation surfaces observation write failures and leaves work pendi
           observationChanges: [],
         },
         {
-          observations: [{ id: 'memory-1', text: 'remember this', category: 'Fact', updatedMemory: null }],
+          observations: [{ id: 'memory-1', text: 'remember this', category: 'Fact', references: ['session:existing'], updatedMemory: null }],
           contextRefs: [],
           openQuestions: [],
           nextSteps: [],
@@ -3224,6 +3253,11 @@ test('observer validation keeps valid context refs', () => {
     observingContent: {
       title: 'Painting',
       summary: 'Melanie painted a lake sunrise.',
+      observations: [{
+        text: 'Melanie painted a lake sunrise in 2022.',
+        category: 'Fact',
+        references: ['session:13'],
+      }],
       openQuestions: [],
       nextSteps: [],
     },
@@ -3231,56 +3265,63 @@ test('observer validation keeps valid context refs', () => {
       turnId: 'session:13',
       summary: 'Melanie says she painted the lake sunrise in 2022, described as last year relative to 8 May 2023.',
     }],
-    observationChanges: [],
   });
 
   assert.deepEqual(result.contextRefs, [{
     turnId: 'session:13',
     summary: 'Melanie says she painted the lake sunrise in 2022, described as last year relative to 8 May 2023.',
   }]);
-  assert.deepEqual(result.observationChanges, []);
+  assert.deepEqual(result.observingContent.observations, [{
+    text: 'Melanie painted a lake sunrise in 2022.',
+    category: 'Fact',
+    references: ['session:13'],
+  }]);
 });
 
-test('observer validation rejects returned final observations', () => {
+test('observer validation rejects legacy observation changes', () => {
   assert.throws(
     () => observingGatewayTesting.validateObserveResultForTests({
       observingContent: {
         title: 'Painting',
         summary: 'Melanie painted a lake sunrise.',
         observations: [{
-          id: 'observing:14',
           text: 'Melanie painted a lake sunrise.',
           category: 'Fact',
+          references: ['session:13'],
         }],
         openQuestions: [],
         nextSteps: [],
       },
       contextRefs: [],
-      observationChanges: [],
+      observationChanges: [{
+        type: 'add',
+        text: 'legacy patch',
+        category: 'Fact',
+        references: ['session:13'],
+        reason: 'legacy shape',
+      }],
     }),
-    /must not return observingContent\.observations/i,
+    /must not return observationChanges/i,
   );
 });
 
-test('observer validation rejects invalid observation changes', () => {
+test('observer validation rejects invalid returned observations', () => {
   assert.throws(
     () => observingGatewayTesting.validateObserveResultForTests({
       observingContent: {
         title: 'Painting',
         summary: 'Melanie painted a lake sunrise.',
+        observations: [{
+          text: 'missing references',
+          category: 'Fact',
+          references: [],
+        }],
         openQuestions: [],
         nextSteps: [],
       },
       contextRefs: [],
-      observationChanges: [{
-        type: 'merge',
-        observationIds: ['obs-1'],
-        text: 'one source merge',
-        category: 'Fact',
-        reason: 'too few sources',
-      }],
     }),
-    /merge change must include at least two observationIds/i,
+    /observation references/i,
   );
 });
 
@@ -3301,7 +3342,7 @@ test('thread observing memory-get expands fragment turns only', async (t) => {
     observingContent: {
       title: 'Caroline support group',
       summary: 'Caroline discussed a support group.',
-      observations: [{ id: 'obs-1', text: 'Existing support observation.', category: 'Fact' }],
+      observations: [{ id: 'obs-1', text: 'Existing support observation.', category: 'Fact', references: ['session:1'] }],
       openQuestions: [],
       nextSteps: [],
     },
@@ -3345,17 +3386,16 @@ test('thread observing memory-get expands fragment turns only', async (t) => {
           observingContent: {
             title: 'Caroline support group',
             summary: 'Caroline discussed a support group.',
+            observations: [{
+              id: 'obs-1',
+              text: 'Caroline attended an LGBTQ support group on 7 May 2023.',
+              category: 'Fact',
+              references: ['session:1'],
+            }],
             openQuestions: [],
             nextSteps: [],
           },
           contextRefs: [{ turnId: 'session:1', summary: 'Caroline discussed the support group.' }],
-          observationChanges: [{
-            type: 'add',
-            text: 'Caroline attended an LGBTQ support group on 7 May 2023.',
-            category: 'Fact',
-            references: ['session:1'],
-            reason: 'The source ref states the support group happened yesterday relative to 8 May 2023.',
-          }],
         }),
       };
     },
@@ -3383,10 +3423,10 @@ test('thread observing memory-get expands fragment turns only', async (t) => {
   assert.equal(toolPayload.memories[1].error, 'memory id is not allowlisted');
   assert.equal(toolPayload.memories[2].error, 'memory id is not allowlisted');
   assert.equal(toolPayload.memories[3].error, 'memory id is not allowlisted');
-  assert.equal(result.observationChanges[0].type, 'add');
+  assert.equal(result.observingContent.observations[0].text, 'Caroline attended an LGBTQ support group on 7 May 2023.');
   const trace = JSON.parse(await readFile(tracePath, 'utf8'));
   assert.equal(trace.toolCalls[0].name, 'memory-get');
-  assert.equal(trace.observationChanges[0].type, 'add');
+  assert.equal(trace.observations[0].text, 'Caroline attended an LGBTQ support group on 7 May 2023.');
   assert.equal(trace.input.allowedMemoryIds, undefined);
   assert.equal(trace.input.threadMemoryId, undefined);
 });
@@ -3425,6 +3465,7 @@ test('thread observing injects configured chat domain prompt', async (t) => {
           observingContent: {
             title: 'Caroline support group',
             summary: 'Caroline discussed a support group.',
+            observations: [],
             openQuestions: [],
             nextSteps: [],
           },
@@ -3432,15 +3473,14 @@ test('thread observing injects configured chat domain prompt', async (t) => {
             turnId: 'session:1',
             summary: 'Melanie briefly reacted to Caroline.',
           }],
-          observationChanges: [],
         }),
       };
     },
   });
 
-  assert.match(requests[0].messages[0].content, /Chat category guide/);
-  assert.match(requests[0].messages[0].content, /Observation category guidance/);
-  assert.match(requests[0].messages[0].content, /Use `Fact` for concrete, self-contained, answerable details/);
+  assert.match(requests[0].messages[0].content, /Chat observation categories and granularity/);
+  assert.match(requests[0].messages[0].content, /Domain category guidance/);
+  assert.match(requests[0].messages[0].content, /`Fact`: concrete event, status, goal, plan/);
   assert.match(requests[0].messages[0].content, /stable or reusable likes/);
   assert.doesNotMatch(requests[0].messages[0].content, /Observation granularity/);
   assert.doesNotMatch(requests[0].messages[0].content, /Chat filtering/);
@@ -3460,11 +3500,11 @@ test('observing snapshots keep complete cumulative context refs', () => {
     observingContent: {
       title: 'Career',
       summary,
+      observations: [],
       openQuestions: [],
       nextSteps: [],
     },
     contextRefs: [{ turnId, summary }],
-    observationChanges: [],
   });
 
   for (let index = 1; index <= 10; index += 1) {
@@ -3472,10 +3512,7 @@ test('observing snapshots keep complete cumulative context refs', () => {
       thread,
       result(`slice ${index}`, `session:${index}`),
       index,
-      (current, observeResult) => ({
-        observations: current,
-        observationChanges: observeResult.observationChanges,
-      }),
+      applyObservationChanges,
       '2026-01-01T00:00:00.000Z',
     );
   }
@@ -3521,31 +3558,25 @@ test('observing context refs update duplicate turn summaries without duplicates'
     observingContent: {
       title: 'Career',
       summary,
+      observations: [],
       openQuestions: [],
       nextSteps: [],
     },
     contextRefs: [{ turnId: 'session:1', summary }],
-    observationChanges: [],
   });
 
   threadTesting.applyObserveResultForTests(
     thread,
     observeResult('initial summary'),
     1,
-    (observations, result) => ({
-      observations,
-      observationChanges: result.observationChanges,
-    }),
+    applyObservationChanges,
     '2026-01-01T00:00:00.000Z',
   );
   threadTesting.applyObserveResultForTests(
     thread,
     observeResult('updated summary'),
     2,
-    (observations, result) => ({
-      observations,
-      observationChanges: result.observationChanges,
-    }),
+    applyObservationChanges,
     '2026-01-01T00:00:01.000Z',
   );
 
@@ -3566,6 +3597,7 @@ test('applyGatewayUpdates passes session fragments to observer', async () => {
       observingContent: {
         title: 'Painting',
         summary: 'Melanie painted a lake sunrise in 2022.',
+        observations: [],
         openQuestions: [],
         nextSteps: [],
       },
@@ -3573,7 +3605,6 @@ test('applyGatewayUpdates passes session fragments to observer', async () => {
         turnId: 'session:13',
         summary: 'Melanie says she painted the lake sunrise in 2022, described as last year relative to 8 May 2023.',
       }],
-      observationChanges: [],
     };
   };
 
@@ -3683,14 +3714,14 @@ test('routed turns without observer context refs are not persisted as references
   const now = '2026-01-01T00:00:00.000Z';
   const thread = createObservingThread('default-observer', 'Career', 'Career thread', [], 1, now);
   const observeThreadImpl = async () => ({
-    observingContent: {
-      title: 'Career',
-      summary: 'Career thread',
-      openQuestions: [],
-      nextSteps: [],
-    },
-    contextRefs: [],
-    observationChanges: [],
+      observingContent: {
+        title: 'Career',
+        summary: 'Career thread',
+        observations: [],
+        openQuestions: [],
+        nextSteps: [],
+      },
+      contextRefs: [],
   });
 
   await updateTesting.applyGatewayUpdatesForTests({
@@ -3743,6 +3774,7 @@ test('session fragments only route to existing threads', async () => {
       observingContent: {
         title: 'Melanie lake sunrise painting and creative outlet',
         summary: 'Melanie discusses her lake sunrise painting and painting as a creative outlet.',
+        observations: [],
         openQuestions: [],
         nextSteps: [],
       },
@@ -3750,7 +3782,6 @@ test('session fragments only route to existing threads', async () => {
         turnId: 'session:12',
         summary: 'Melanie shared a photo of a lake painting.',
       }],
-      observationChanges: [],
     };
   };
 
@@ -3803,7 +3834,7 @@ test('buildTouchedIndex immediately advances observation index for touched threa
     snapshots: [
       { observations: [], contextRefs: [], openQuestions: [], nextSteps: [], observationChanges: [] },
       {
-        observations: [{ id: 'memory-1', text: 'remember this', category: 'Fact', updatedMemory: null }],
+        observations: [{ id: 'memory-1', text: 'remember this', category: 'Fact', references: ['session:existing'], updatedMemory: null }],
         contextRefs: [],
         openQuestions: [],
         nextSteps: [],
@@ -3889,7 +3920,7 @@ test('observer.retryObservation refreshes the committed checkpoint snapshot afte
         nextSteps: [],
         observationDelta: {
           before: [],
-          after: [{ id: 'memory-1', text: 'remember this', category: 'Fact', updatedMemory: null }],
+          after: [{ id: 'memory-1', text: 'remember this', category: 'Fact', references: ['session:existing'], updatedMemory: null }],
         },
       },
     ],
@@ -4028,7 +4059,7 @@ test('observer.run retries pending observation index before queued epochs when d
           nextSteps: [],
           observationDelta: {
             before: [],
-            after: [{ id: 'memory-1', text: 'remember this', category: 'Fact', updatedMemory: null }],
+            after: [{ id: 'memory-1', text: 'remember this', category: 'Fact', references: ['session:existing'], updatedMemory: null }],
           },
         },
       ],

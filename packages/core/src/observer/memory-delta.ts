@@ -18,58 +18,86 @@ export function applyObservationChanges(
   observationChanges: ObservationChange[];
   observations: Observation[];
 } {
-  const observations = new Map<string, Observation>();
+  const currentById = new Map<string, Observation>();
   for (const observation of currentObservations) {
-    const normalized = cloneObservation(observation);
+    const normalized = cloneObservation(observation, { requireReferences: false });
     if (!normalized.id) {
       continue;
     }
-    observations.set(normalized.id, normalized);
+    currentById.set(normalized.id, normalized);
   }
 
-  const changes = normalizeChanges(result.observationChanges, observations);
-  for (const change of changes) {
-    if (change.type === 'add') {
-      const id = addedObservationId(change);
-      observations.set(id, {
-        id,
-        text: change.text,
-        category: change.category,
-        updatedMemory: null,
+  const nextObservations: Observation[] = [];
+  const changes: ObservationChange[] = [];
+  const seenIds = new Set<string>();
+
+  for (const rawObservation of result.observingContent.observations) {
+    const normalized = cloneObservation(rawObservation, { requireReferences: true });
+    const generatedId = addedObservationId({
+      type: 'add',
+      text: normalized.text,
+      category: normalized.category,
+      references: normalized.references,
+      reason: 'state rewrite added observation',
+    });
+    const id = normalized.id || generatedId;
+    if (seenIds.has(id)) {
+      throw new Error(`duplicate observation id in state rewrite: ${id}`);
+    }
+
+    const existing = currentById.get(id);
+    if (normalized.id && !existing) {
+      throw new Error(`unknown observation id in state rewrite: ${normalized.id}`);
+    }
+
+    seenIds.add(id);
+    const nextObservation = {
+      ...normalized,
+      id,
+      updatedMemory: existing?.updatedMemory ?? normalized.updatedMemory ?? null,
+    };
+    nextObservations.push(nextObservation);
+
+    if (!existing) {
+      changes.push({
+        type: 'add',
+        text: nextObservation.text,
+        category: nextObservation.category,
+        references: nextObservation.references,
+        reason: 'state rewrite added observation',
       });
       continue;
     }
-    if (change.type === 'merge') {
-      for (const observationId of change.observationIds) {
-        observations.delete(observationId);
-      }
-      const id = mergedObservationId(change);
-      observations.set(id, {
-        id,
-        text: change.text,
-        category: change.category,
-        updatedMemory: null,
+
+    if (
+      existing.text !== nextObservation.text
+      || existing.category !== nextObservation.category
+      || !sameStringSet(existing.references, nextObservation.references)
+    ) {
+      changes.push({
+        type: 'update',
+        observationId: id,
+        text: nextObservation.text,
+        category: nextObservation.category,
+        references: nextObservation.references,
+        reason: 'state rewrite updated observation',
       });
-      continue;
     }
-    if (change.type === 'update') {
-      const existing = observations.get(change.observationId);
-      if (!existing) {
-        throw new Error(`observation change referenced unknown observationId: ${change.observationId}`);
-      }
-      observations.set(change.observationId, {
-        ...existing,
-        text: change.text,
-        category: change.category ?? existing.category,
+  }
+
+  for (const observationId of currentById.keys()) {
+    if (!seenIds.has(observationId)) {
+      changes.push({
+        type: 'delete',
+        observationId,
+        reason: 'state rewrite omitted observation',
       });
-      continue;
     }
-    observations.delete(change.observationId);
   }
 
   return {
     observationChanges: changes,
-    observations: [...observations.values()],
+    observations: nextObservations,
   };
 }
 
@@ -271,12 +299,7 @@ function referencesForChange(
     return change.references;
   }
   if (change.type === 'update') {
-    return [
-      ...new Set([
-        ...(existingById.get(change.observationId)?.references ?? []),
-        ...(change.references ?? []),
-      ]),
-    ];
+    return change.references ?? existingById.get(change.observationId)?.references ?? [];
   }
   const references = [];
   for (const observationId of change.observationIds) {
@@ -310,13 +333,33 @@ function stableObservationId(value: unknown): string {
     .slice(0, 24);
 }
 
-function cloneObservation(observation: Observation): Observation {
+function cloneObservation(
+  observation: Observation,
+  options: { requireReferences: boolean } = { requireReferences: true },
+): Observation {
+  const text = normalizeText(observation.text);
+  if (!text) {
+    throw new Error('observation text is required');
+  }
+  const references = normalizeIds(observation.references);
+  if (options.requireReferences && references.length === 0) {
+    throw new Error('observation references must include at least one reference');
+  }
   return {
     id: observation.id?.trim() || null,
-    text: normalizeText(observation.text),
+    text,
     category: normalizeCategory(observation.category),
+    references,
     updatedMemory: observation.updatedMemory?.trim() || null,
   };
+}
+
+function sameStringSet(left: string[], right: string[]): boolean {
+  if (left.length !== right.length) {
+    return false;
+  }
+  const rightSet = new Set(right);
+  return left.every((value) => rightSet.has(value));
 }
 
 function normalizeIds(ids: string[]): string[] {
