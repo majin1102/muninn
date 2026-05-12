@@ -583,7 +583,7 @@ test('observer watermark reports pending turns until the observer flush complete
   assert.deepEqual(resolvedBody.pendingTurnIds, []);
 });
 
-test('detail returns notFound for missing observing memoryId', async () => {
+test('detail returns notFound for missing memoryId', async () => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   process.env.MUNINN_HOME = homeDir;
 
@@ -729,7 +729,7 @@ test('ui session endpoints reuse the cached session tree until a write invalidat
   assert.equal(getSessionTreeLoadCountForTests(), 2);
 });
 
-test('observing memories are readable through list/detail/timeline/recall', async (t) => {
+test('session snapshots are readable through list/detail/timeline/recall', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(async () => rm(dir, { recursive: true, force: true }));
 
@@ -747,35 +747,35 @@ test('observing memories are readable through list/detail/timeline/recall', asyn
   const listResponse = await app.request('/api/v1/list?mode=recency&limit=10');
   assert.equal(listResponse.status, 200);
   const listed = await json(listResponse);
-  const observingHit = listed.memoryHits.find((hit) => hit.memoryId.startsWith('observing:'));
-  assert.ok(observingHit);
-  assert.match(observingHit.content, /## Summary|## Detail/);
-  assert.match(observingHit.content, /observe this prompt|observe this response/);
+  const snapshotHit = listed.memoryHits.find((hit) => hit.memoryId.startsWith('session:'));
+  assert.ok(snapshotHit);
+  assert.match(snapshotHit.content, /## Summary|## Detail/);
+  assert.match(snapshotHit.content, /observe this prompt|observe this response/);
 
   const detailResponse = await app.request(
-    `/api/v1/detail?memoryId=${encodeURIComponent(observingHit.memoryId)}`
+    `/api/v1/detail?memoryId=${encodeURIComponent(snapshotHit.memoryId)}`
   );
   assert.equal(detailResponse.status, 200);
   const detail = await json(detailResponse);
   assert.equal(detail.memoryHits.length, 1);
-  assert.equal(detail.memoryHits[0].memoryId, observingHit.memoryId);
+  assert.equal(detail.memoryHits[0].memoryId, snapshotHit.memoryId);
   assert.match(detail.memoryHits[0].content, /## Detail/);
 
   const timelineResponse = await app.request(
-    `/api/v1/timeline?memoryId=${encodeURIComponent(observingHit.memoryId)}&beforeLimit=1&afterLimit=1`
+    `/api/v1/timeline?memoryId=${encodeURIComponent(snapshotHit.memoryId)}&beforeLimit=1&afterLimit=1`
   );
   assert.equal(timelineResponse.status, 200);
   const timeline = await json(timelineResponse);
   assert.equal(timeline.memoryHits.length, 1);
-  assert.equal(timeline.memoryHits[0].memoryId, observingHit.memoryId);
+  assert.equal(timeline.memoryHits[0].memoryId, snapshotHit.memoryId);
 
   const recallResponse = await app.request('/api/v1/recall?query=observe&limit=10');
   assert.equal(recallResponse.status, 200);
   const recalled = await json(recallResponse);
-  assert.ok(recalled.memoryHits.some((hit) => hit.memoryId === observingHit.memoryId));
+  assert.ok(recalled.memoryHits.some((hit) => hit.memoryId === snapshotHit.memoryId));
 });
 
-test('ui observing endpoints return live observings and documents', async (t) => {
+test('ui observing endpoint returns live session snapshots and documents', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(async () => rm(dir, { recursive: true, force: true }));
 
@@ -796,17 +796,17 @@ test('ui observing endpoints return live observings and documents', async (t) =>
   assert.equal(observingsResponse.status, 200);
   const observings = await json(observingsResponse);
   assert.ok(observings.extractions.length >= 1);
-  const observing = observings.extractions.find((item) => item.memoryId.startsWith('observing:'));
-  assert.ok(observing);
-  assert.ok(observing.references.length >= 1);
-  assert.match(observing.summary, /ui observing prompt|ui observing response/);
+  const snapshot = observings.extractions.find((item) => item.memoryId.startsWith('session:'));
+  assert.ok(snapshot);
+  assert.ok(snapshot.references.length >= 1);
+  assert.match(snapshot.summary, /ui observing prompt|ui observing response/);
 
   const documentResponse = await app.request(
-    `/api/v1/ui/memories/${encodeURIComponent(observing.memoryId)}/document`
+    `/api/v1/ui/memories/${encodeURIComponent(snapshot.memoryId)}/document`
   );
   assert.equal(documentResponse.status, 200);
   const document = await json(documentResponse);
-  assert.equal(document.document.kind, 'observing');
+  assert.equal(document.document.kind, 'session');
   assert.match(document.document.markdown, /## Detail/);
   assert.doesNotMatch(document.document.markdown, /## References/);
 });
