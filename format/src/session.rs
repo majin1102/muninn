@@ -91,7 +91,7 @@ impl SessionTable {
         Self {
             access: TableAccess::new(
                 options,
-                Path::parse("session").expect("valid session table path"),
+                Path::parse("session_snapshot").expect("valid session snapshot table path"),
             ),
         }
     }

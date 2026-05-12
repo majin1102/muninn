@@ -48,8 +48,8 @@ Using `[patch.crates-io]` for local experimentation preserves those guarantees w
 
 Current Rust-side boundaries are intentionally narrow:
 
-- `src/session.rs`, `src/observing.rs`, `src/semantic_index.rs`
-  - Typed session / observing / semantic table operations.
+- `src/turn.rs`, `src/session.rs`, `src/extraction.rs`
+  - Typed turn / session snapshot / extraction table operations.
 - `src/access.rs`, `src/codec.rs`, `src/schema.rs`, `src/memory_id.rs`
   - Shared table infrastructure below the table API boundary.
 - `src/config.rs`
