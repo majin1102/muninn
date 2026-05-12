@@ -120,13 +120,15 @@ impl ExtractionTable {
         optimize_extraction(&mut dataset, merge_count).await
     }
 
-    #[cfg(test)]
-    #[allow(dead_code)]
-    pub(crate) async fn list(&self) -> Result<Vec<Extraction>> {
+    pub async fn list(&self, limit: Option<usize>) -> Result<Vec<Extraction>> {
         let Some(dataset) = self.access.try_open().await? else {
             return Ok(Vec::new());
         };
-        let batch = dataset.scan().try_into_batch().await?;
+        let mut scan = dataset.scan();
+        if let Some(limit) = limit {
+            scan.limit(Some(limit as i64), None)?;
+        }
+        let batch = scan.try_into_batch().await?;
         if batch.num_rows() == 0 {
             return Ok(Vec::new());
         }

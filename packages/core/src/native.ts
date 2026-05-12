@@ -46,6 +46,30 @@ export type Extraction = {
   createdAt: string;
 };
 
+export type CurationSnapshot = {
+  snapshotId: string;
+  curationId: string;
+  snapshotSequence: number;
+  createdAt: string;
+  updatedAt: string;
+  observer: string;
+  anchor: string;
+  title: string;
+  summary: string;
+  content: string;
+  references: string[];
+};
+
+export type Observation = {
+  id: string;
+  curationId: string;
+  snapshotId: string;
+  text: string;
+  vector: number[];
+  references: string[];
+  createdAt: string;
+};
+
 type NativeCoreBinding = {
   close(): MaybePromise<void>;
   turnGet(turnId: string): MaybePromise<Turn | null>;
@@ -108,6 +132,9 @@ type NativeCoreBinding = {
   extractionLoadByIds(params: {
     ids: string[];
   }): MaybePromise<Extraction[]>;
+  extractionList(params: {
+    limit?: number;
+  }): MaybePromise<Extraction[]>;
   extractionUpsert(params: {
     rows: Extraction[];
   }): MaybePromise<void>;
@@ -128,6 +155,27 @@ type NativeCoreBinding = {
   extractionOptimize(params: {
     mergeCount: number;
   }): MaybePromise<CompactResult>;
+  curationInsert(params: {
+    snapshots: CurationSnapshot[];
+  }): MaybePromise<CurationSnapshot[]>;
+  curationLatest(params: {
+    curationId: string;
+  }): MaybePromise<CurationSnapshot | null>;
+  curationList(params: {
+    curationId?: string;
+  }): MaybePromise<CurationSnapshot[]>;
+  curationTableStats(): MaybePromise<TableStats | null>;
+  observationReplaceForCuration(params: {
+    curationId: string;
+    rows: Observation[];
+  }): MaybePromise<void>;
+  observationSearch(params: {
+    query: string;
+    vector: number[];
+    limit: number;
+    mode: RecallMode;
+  }): MaybePromise<Observation[]>;
+  observationTableStats(): MaybePromise<TableStats | null>;
   describeTurnTable(): MaybePromise<TableDescription | null>;
   describeSessionTable(): MaybePromise<TableDescription | null>;
   describeExtractionTable(): MaybePromise<TableDescription | null>;
@@ -207,6 +255,9 @@ export interface ExtractionTableBinding {
   loadByIds(params: {
     ids: string[];
   }): Promise<Extraction[]>;
+  list(params: {
+    limit?: number;
+  }): Promise<Extraction[]>;
   upsert(params: {
     rows: Extraction[];
   }): Promise<void>;
@@ -230,11 +281,40 @@ export interface ExtractionTableBinding {
   describe(): Promise<TableDescription | null>;
 }
 
+export interface CurationTableBinding {
+  insert(params: {
+    snapshots: CurationSnapshot[];
+  }): Promise<CurationSnapshot[]>;
+  latest(params: {
+    curationId: string;
+  }): Promise<CurationSnapshot | null>;
+  list(params: {
+    curationId?: string;
+  }): Promise<CurationSnapshot[]>;
+  stats(): Promise<TableStats | null>;
+}
+
+export interface ObservationTableBinding {
+  replaceForCuration(params: {
+    curationId: string;
+    rows: Observation[];
+  }): Promise<void>;
+  search(params: {
+    query: string;
+    vector: number[];
+    limit: number;
+    mode: RecallMode;
+  }): Promise<Observation[]>;
+  stats(): Promise<TableStats | null>;
+}
+
 export interface NativeTables {
   close(): Promise<void>;
   turnTable: TurnTableBinding;
   sessionTable: SessionTableBinding;
   extractionTable: ExtractionTableBinding;
+  curationTable: CurationTableBinding;
+  observationTable: ObservationTableBinding;
 }
 
 let singleton: NativeTables | null = null;
@@ -309,6 +389,7 @@ function wrapBinding(native: NativeCoreBinding): NativeTables {
       nearest: async (params) => resolveNativeResult(native.extractionNearest(params)),
       search: async (params) => resolveNativeResult(native.extractionSearch(params)),
       loadByIds: async (params) => resolveNativeResult(native.extractionLoadByIds(params)),
+      list: async (params) => resolveNativeResult(native.extractionList(params)),
       upsert: async (params) => resolveNativeResult(native.extractionUpsert(params)),
       delete: async (params) => resolveNativeResult(native.extractionDelete(params)),
       validateDimensions: async (params) => resolveNativeResult(native.extractionValidateDimensions(params)),
@@ -318,6 +399,20 @@ function wrapBinding(native: NativeCoreBinding): NativeTables {
       cleanup: async (params) => resolveNativeResult(native.extractionCleanup(params)),
       optimize: async (params) => resolveNativeResult(native.extractionOptimize(params)),
       describe: async () => resolveNativeResult(native.describeExtractionTable()),
+    },
+    curationTable: {
+      insert: async (params) => resolveNativeResult(native.curationInsert(params)),
+      latest: async (params) => normalizeOptionalRecord(
+        await resolveNativeResult(native.curationLatest(params)),
+        'snapshotId',
+      ),
+      list: async (params) => resolveNativeResult(native.curationList(params)),
+      stats: async () => resolveNativeResult(native.curationTableStats()),
+    },
+    observationTable: {
+      replaceForCuration: async (params) => resolveNativeResult(native.observationReplaceForCuration(params)),
+      search: async (params) => resolveNativeResult(native.observationSearch(params)),
+      stats: async () => resolveNativeResult(native.observationTableStats()),
     },
   };
 }

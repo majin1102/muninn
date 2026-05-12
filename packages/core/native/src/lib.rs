@@ -3,8 +3,9 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use muninn_format::{
-    MemoryId, MemoryLayer, Extraction, ExtractionTable, RecallMode, SessionSnapshot,
-    SessionTable, TableOptions, Turn, TurnTable, data_root,
+    CurationSnapshot, CurationSnapshotTable, Extraction, ExtractionTable, MemoryId, MemoryLayer,
+    Observation, ObservationTable, RecallMode, SessionSnapshot, SessionTable, TableOptions, Turn,
+    TurnTable, data_root,
 };
 use napi::{Error, Result as NapiResult};
 use napi_derive::napi;
@@ -14,9 +15,11 @@ use tokio::sync::Mutex;
 
 #[derive(Clone)]
 struct CoreResources {
+    curation_table: CurationSnapshotTable,
     session_table: SessionTable,
     turn_table: TurnTable,
     extraction_table: ExtractionTable,
+    observation_table: ObservationTable,
 }
 
 struct CoreState {
@@ -114,6 +117,12 @@ struct ExtractionLoadByIdsParams {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct ExtractionListParams {
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct ExtractionUpsertParams {
     rows: Vec<Extraction>,
 }
@@ -122,6 +131,40 @@ struct ExtractionUpsertParams {
 #[serde(rename_all = "camelCase")]
 struct ExtractionDeleteParams {
     ids: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CurationInsertParams {
+    snapshots: Vec<CurationSnapshot>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CurationLatestParams {
+    curation_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CurationListParams {
+    curation_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ObservationReplaceParams {
+    curation_id: String,
+    rows: Vec<Observation>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ObservationSearchParams {
+    query: String,
+    vector: Vec<f32>,
+    limit: usize,
+    mode: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -427,6 +470,13 @@ impl CoreBinding {
         into_napi_value(resources.extraction_table.load_by_ids(&params.ids).await)
     }
 
+    #[napi(js_name = "extractionList")]
+    pub async fn extraction_list(&self, params: Value) -> NapiResult<Value> {
+        let params = parse_params::<ExtractionListParams>(params)?;
+        let resources = self.resources().await?;
+        into_napi_value(resources.extraction_table.list(params.limit).await)
+    }
+
     #[napi(js_name = "extractionUpsert")]
     pub async fn extraction_upsert(&self, params: Value) -> NapiResult<()> {
         let params = parse_params::<ExtractionUpsertParams>(params)?;
@@ -519,6 +569,74 @@ impl CoreBinding {
         let resources = self.resources().await?;
         into_napi_value(resources.extraction_table.describe().await)
     }
+
+    #[napi(js_name = "curationInsert")]
+    pub async fn curation_insert(&self, params: Value) -> NapiResult<Value> {
+        let params = parse_params::<CurationInsertParams>(params)?;
+        let resources = self.resources().await?;
+        let mut snapshots = params.snapshots;
+        resources
+            .curation_table
+            .insert(&mut snapshots)
+            .await
+            .map_err(to_napi_error)?;
+        to_napi_value(snapshots)
+    }
+
+    #[napi(js_name = "curationLatest")]
+    pub async fn curation_latest(&self, params: Value) -> NapiResult<Value> {
+        let params = parse_params::<CurationLatestParams>(params)?;
+        let resources = self.resources().await?;
+        into_napi_value(resources.curation_table.latest(&params.curation_id).await)
+    }
+
+    #[napi(js_name = "curationList")]
+    pub async fn curation_list(&self, params: Value) -> NapiResult<Value> {
+        let params = parse_params::<CurationListParams>(params)?;
+        let resources = self.resources().await?;
+        into_napi_value(
+            resources
+                .curation_table
+                .list(params.curation_id.as_deref())
+                .await,
+        )
+    }
+
+    #[napi(js_name = "curationTableStats")]
+    pub async fn curation_table_stats(&self) -> NapiResult<Value> {
+        let resources = self.resources().await?;
+        into_napi_value(resources.curation_table.stats().await)
+    }
+
+    #[napi(js_name = "observationReplaceForCuration")]
+    pub async fn observation_replace_for_curation(&self, params: Value) -> NapiResult<()> {
+        let params = parse_params::<ObservationReplaceParams>(params)?;
+        let resources = self.resources().await?;
+        resources
+            .observation_table
+            .replace_for_curation(&params.curation_id, params.rows)
+            .await
+            .map_err(to_napi_error)
+    }
+
+    #[napi(js_name = "observationSearch")]
+    pub async fn observation_search(&self, params: Value) -> NapiResult<Value> {
+        let params = parse_params::<ObservationSearchParams>(params)?;
+        let resources = self.resources().await?;
+        let mode = parse_recall_mode(&params.mode)?;
+        into_napi_value(
+            resources
+                .observation_table
+                .search(&params.query, &params.vector, params.limit, mode)
+                .await,
+        )
+    }
+
+    #[napi(js_name = "observationTableStats")]
+    pub async fn observation_table_stats(&self) -> NapiResult<Value> {
+        let resources = self.resources().await?;
+        into_napi_value(resources.observation_table.stats().await)
+    }
 }
 
 #[napi(js_name = "createCoreBinding")]
@@ -526,13 +644,17 @@ pub fn create_core_binding() -> NapiResult<CoreBinding> {
     let table_options = TableOptions::load().map_err(to_napi_error)?;
     let turn_table = TurnTable::new(table_options.clone());
     let session_table = SessionTable::new(table_options.clone());
-    let extraction_table = ExtractionTable::new(table_options);
+    let extraction_table = ExtractionTable::new(table_options.clone());
+    let curation_table = CurationSnapshotTable::new(table_options.clone());
+    let observation_table = ObservationTable::new(table_options);
     Ok(CoreBinding {
         inner: Arc::new(CoreState {
             resources: Mutex::new(Some(CoreResources {
+                curation_table,
                 turn_table,
                 session_table,
                 extraction_table,
+                observation_table,
             })),
         }),
     })
@@ -569,6 +691,7 @@ fn parse_memory_id(raw: &str, expected_layer: MemoryLayer) -> NapiResult<MemoryI
         return Err(Error::from_reason(format!(
             "invalid params: expected {} memory id, got {}",
             match expected_layer {
+                MemoryLayer::Curation => "curation",
                 MemoryLayer::Turn => "turn",
                 MemoryLayer::Session => "session",
             },

@@ -21,6 +21,7 @@ import observingGatewayModule from '../dist/llm/observing-gateway.js';
 import { applyExtractionChanges, applyExtractionTableChanges } from '../dist/observer/memory-delta.js';
 import { recallMemories } from '../dist/memories/recall.js';
 import { validateMemoryRecallResult } from '../dist/memories/memory-recaller.js';
+import { getNativeTables } from '../dist/native.js';
 
 const { __testing: updateTesting } = updateModule;
 const { __testing: threadTesting } = threadModule;
@@ -119,6 +120,17 @@ test('config reads extraction embedding config and rejects semanticIndex', async
     llm: { observer_llm: { provider: 'mock' } },
     semanticIndex: { embedding: { provider: 'mock' } },
   })), /semanticIndex/);
+});
+
+test('native bindings expose curation and observation tables', async () => {
+  const tables = await getNativeTables();
+  assert.equal(typeof tables.extractionTable.list, 'function');
+  assert.equal(typeof tables.curationTable.insert, 'function');
+  assert.equal(typeof tables.curationTable.latest, 'function');
+  assert.equal(typeof tables.curationTable.stats, 'function');
+  assert.equal(typeof tables.observationTable.replaceForCuration, 'function');
+  assert.equal(typeof tables.observationTable.search, 'function');
+  assert.equal(typeof tables.observationTable.stats, 'function');
 });
 
 function deferred() {
