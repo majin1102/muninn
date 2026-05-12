@@ -245,22 +245,27 @@ export class MuninnBackend {
       if (!observer || !observerCheckpoint) {
         return null;
       }
-      const [turnStats, observingStats, extractionStats] = await Promise.all([
+      const [turnStats, sessionStats, extractionStats, curationStats, observationStats] = await Promise.all([
         this.client.turnTable.stats(),
         this.client.sessionTable.stats(),
         this.client.extractionTable.stats(),
+        this.client.curationTable.stats(),
+        this.client.observationTable.stats(),
       ]);
       const checkpoint: ObserverCheckpoint = {
         baseline: {
           turn: turnStats?.version ?? 0,
-          session: observingStats?.version ?? 0,
+          session: sessionStats?.version ?? 0,
           extraction: extractionStats?.version ?? 0,
+          curation: curationStats?.version ?? 0,
+          observation: observationStats?.version ?? 0,
         },
         committedEpoch: observerCheckpoint.committedEpoch,
         nextEpoch: observerCheckpoint.nextEpoch,
         recentSessions: this.sessionRegistry?.exportRecentSessions() ?? [],
         threads: observerCheckpoint.threads,
         runs: observerCheckpoint.runs,
+        curationRuns: observerCheckpoint.curationRuns,
       };
       return {
         schemaVersion: 4,

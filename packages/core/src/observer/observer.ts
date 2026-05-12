@@ -1,4 +1,5 @@
 import {
+  type CurationRun,
   type ObservingRun,
   type ObserverCheckpoint,
   type ThreadRef,
@@ -31,6 +32,7 @@ export type ObserverCheckpointState = {
   nextEpoch: number;
   threads: ThreadRef[];
   runs: ObservingRun[];
+  curationRuns: CurationRun[];
 };
 
 const noopCheckpointLock: CheckpointLock = {
@@ -56,6 +58,7 @@ export class Observer {
   private checkpointNextEpoch = 0;
   private checkpointThreads: ThreadRef[] = [];
   private checkpointRuns: ObservingRun[] = [];
+  private checkpointCurationRuns: CurationRun[] = [];
   // Serializes sealed epoch publish order so epoch N never lands after epoch N+1.
   private publishChain: Promise<void> = Promise.resolve();
   private loopPromise: Promise<void> | null = null;
@@ -79,6 +82,9 @@ export class Observer {
     this.epochTurns = config.epochTurns;
     this.epochWindowMs = config.epochWindowMs;
     this.checkpointRuns = checkpoint?.runs.filter((run) => run.status === 'running').map(cloneObservingRun) ?? [];
+    this.checkpointCurationRuns = checkpoint?.curationRuns
+      .filter((run) => run.stage !== 'completed' && run.stage !== 'failed')
+      .map(cloneCurationRun) ?? [];
   }
 
   async ensureBootstrapped(): Promise<void> {
@@ -168,6 +174,7 @@ export class Observer {
       nextEpoch: this.checkpointNextEpoch,
       threads: this.checkpointThreads.map((thread) => ({ ...thread })),
       runs: this.checkpointRuns.map(cloneObservingRun),
+      curationRuns: this.checkpointCurationRuns.map(cloneCurationRun),
     };
   }
 
@@ -220,11 +227,14 @@ export class Observer {
           turn: 0,
           session: 0,
           extraction: 0,
+          curation: 0,
+          observation: 0,
         },
         nextEpoch: 0,
         recentSessions: [],
         threads: [],
         runs: [],
+        curationRuns: [],
       }, snapshots, new Map(turns.map((turn) => [turn.turnId, turn])));
       if (fallback) {
         this.threads = fallback.threads;
@@ -497,6 +507,8 @@ export class Observer {
     this.checkpointNextEpoch = this.openEpoch?.epoch ?? (this.committedEpoch ?? -1) + 1;
     this.checkpointThreads = this.exportCheckpointThreads();
     this.checkpointRuns = this.checkpointRuns.filter((run) => run.status === 'running');
+    this.checkpointCurationRuns = this.checkpointCurationRuns
+      .filter((run) => run.stage !== 'completed' && run.stage !== 'failed');
   }
 
   private async restoreCheckpointState(): Promise<{
@@ -769,6 +781,21 @@ function cloneObservingRun(run: ObservingRun): ObservingRun {
       snapshotIds: [...run.committed.snapshotIds],
     },
     traceRefs: [...run.traceRefs],
+    errors: run.errors.map((error) => ({ ...error })),
+  };
+}
+
+function cloneCurationRun(run: CurationRun): CurationRun {
+  return {
+    ...run,
+    pendingExtractionIds: [...run.pendingExtractionIds],
+    parsedObservationDrafts: run.parsedObservationDrafts?.map((draft) => ({
+      ...draft,
+      references: [...draft.references],
+    })),
+    committedObservationIds: run.committedObservationIds
+      ? [...run.committedObservationIds]
+      : undefined,
     errors: run.errors.map((error) => ({ ...error })),
   };
 }

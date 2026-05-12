@@ -18,6 +18,7 @@ const DEFAULT_WATCHDOG_TARGET_PARTITION_SIZE = 1_024;
 const DEFAULT_WATCHDOG_OPTIMIZE_MERGE_COUNT = 4;
 const DEFAULT_EXTRACTION_DIMENSIONS = 8;
 const DEFAULT_RECALL_MODE = 'hybrid';
+const DEFAULT_CURATION_ANCHOR_THRESHOLD = 5;
 
 export type RecallMode = 'vector' | 'fts' | 'hybrid';
 
@@ -60,12 +61,17 @@ type ExtractionConfigRecord = {
   recallMode?: RecallMode;
 };
 
+type CurationConfigRecord = {
+  anchorThreshold?: number;
+};
+
 type MuninnConfigRecord = {
   storage?: Record<string, unknown>;
   turn?: TurnConfigRecord;
   observer?: ObserverConfigRecord;
   llm?: Record<string, LlmConfigRecord>;
   extraction?: ExtractionConfigRecord;
+  curation?: CurationConfigRecord;
   watchdog?: Record<string, unknown>;
 };
 
@@ -103,6 +109,10 @@ export type EmbeddingConfig = {
 
 export type RecallConfig = {
   mode: RecallMode;
+};
+
+export type CurationConfig = {
+  anchorThreshold: number;
 };
 
 export type WatchdogConfig = {
@@ -193,6 +203,20 @@ export function getEmbeddingConfig(): EmbeddingConfig {
 export function getRecallConfig(): RecallConfig {
   return {
     mode: parseRecallMode(loadMuninnConfig()?.extraction?.recallMode ?? DEFAULT_RECALL_MODE),
+  };
+}
+
+export function getCurationConfig(): CurationConfig {
+  return getCurationConfigFromConfig(loadMuninnConfig());
+}
+
+export function getCurationConfigFromConfigForTests(config: MuninnConfigRecord | null): CurationConfig {
+  return getCurationConfigFromConfig(config);
+}
+
+function getCurationConfigFromConfig(config: MuninnConfigRecord | null): CurationConfig {
+  return {
+    anchorThreshold: config?.curation?.anchorThreshold ?? DEFAULT_CURATION_ANCHOR_THRESHOLD,
   };
 }
 
@@ -340,6 +364,7 @@ function validateTopLevelConfig(config: MuninnConfigRecord): void {
   validateObserverConfig(config.observer);
   validateLlmConfig(config.llm);
   validateExtractionConfig(config.extraction);
+  validateCurationConfig(config.curation);
   validateWatchdogConfig(config.watchdog);
 }
 
@@ -423,6 +448,14 @@ function validateExtractionConfig(extraction: unknown): void {
   if (provider === 'openai') {
     requireNonEmptyString(embedding.apiKey, 'extraction.embedding.apiKey');
   }
+}
+
+function validateCurationConfig(curation: unknown): void {
+  if (curation === undefined) {
+    return;
+  }
+  const config = expectRecord(curation, 'curation');
+  validateOptionalPositiveInteger(config.anchorThreshold, 'curation.anchorThreshold');
 }
 
 export function parseRecallMode(value: unknown): RecallMode {

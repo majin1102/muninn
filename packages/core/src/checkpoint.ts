@@ -34,12 +34,15 @@ export type ObserverCheckpoint = {
     turn: number;
     session: number;
     extraction: number;
+    curation: number;
+    observation: number;
   };
   committedEpoch?: number;
   nextEpoch: number;
   recentSessions: RecentSessionCheckpoint[];
   threads: ThreadRef[];
   runs: ObservingRun[];
+  curationRuns: CurationRun[];
 };
 
 export type CheckpointContent = {
@@ -84,6 +87,34 @@ export type ObservingRun = {
   };
   traceRefs: string[];
   errors: ObservingRunError[];
+};
+
+export type CurationRunStage =
+  | 'selectingExtractions'
+  | 'generatingCuration'
+  | 'committingSnapshot'
+  | 'committingObservations'
+  | 'completed'
+  | 'failed';
+
+export type CurationRun = {
+  runId: string;
+  curationId: string;
+  anchor: string;
+  stage: CurationRunStage;
+  pendingExtractionIds: string[];
+  generatedContent?: string;
+  parsedObservationDrafts?: Array<{
+    id: string;
+    text: string;
+    references: string[];
+  }>;
+  committedSnapshotId?: string;
+  committedObservationIds?: string[];
+  errors: Array<{
+    message: string;
+    stage: string;
+  }>;
 };
 
 export function parseCheckpointFile(raw: string): CheckpointFile {
@@ -131,7 +162,8 @@ function parseObserverSection(value: unknown): ObserverCheckpoint | null {
   const recentSessions = parseRecentSessions(value.recentSessions);
   const threads = parseThreads(value.threads);
   const runs = parseObservingRuns(value.runs ?? []);
-  if (!baseline || typeof nextEpoch !== 'number' || !recentSessions || !threads || !runs) {
+  const curationRuns = parseCurationRuns(value.curationRuns ?? []);
+  if (!baseline || typeof nextEpoch !== 'number' || !recentSessions || !threads || !runs || !curationRuns) {
     return null;
   }
   const committedEpoch = value.committedEpoch;
@@ -145,6 +177,7 @@ function parseObserverSection(value: unknown): ObserverCheckpoint | null {
     recentSessions,
     threads,
     runs,
+    curationRuns,
   };
 }
 
@@ -156,6 +189,8 @@ function parseBaseline(value: unknown): ObserverCheckpoint['baseline'] | null {
     typeof value.turn !== 'number'
     || typeof value.session !== 'number'
     || typeof value.extraction !== 'number'
+    || (value.curation != null && typeof value.curation !== 'number')
+    || (value.observation != null && typeof value.observation !== 'number')
   ) {
     return null;
   }
@@ -163,6 +198,8 @@ function parseBaseline(value: unknown): ObserverCheckpoint['baseline'] | null {
     turn: value.turn,
     session: value.session,
     extraction: value.extraction,
+    curation: value.curation ?? 0,
+    observation: value.observation ?? 0,
   };
 }
 
@@ -367,6 +404,117 @@ function parseRunErrors(value: unknown): ObservingRunError[] | null {
   return errors;
 }
 
+function parseCurationRuns(value: unknown): CurationRun[] | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  const runs: CurationRun[] = [];
+  for (const run of value) {
+    const parsed = parseCurationRun(run);
+    if (!parsed) {
+      return null;
+    }
+    runs.push(parsed);
+  }
+  return runs;
+}
+
+function parseCurationRun(value: unknown): CurationRun | null {
+  if (!isObjectRecord(value)) {
+    return null;
+  }
+  if (
+    typeof value.runId !== 'string'
+    || typeof value.curationId !== 'string'
+    || typeof value.anchor !== 'string'
+    || !isCurationRunStage(value.stage)
+  ) {
+    return null;
+  }
+  const pendingExtractionIds = parseStringArray(value.pendingExtractionIds);
+  const errors = parseCurationRunErrors(value.errors);
+  if (!pendingExtractionIds || !errors) {
+    return null;
+  }
+  const parsedObservationDrafts = value.parsedObservationDrafts == null
+    ? undefined
+    : parseObservationDrafts(value.parsedObservationDrafts);
+  if (value.parsedObservationDrafts != null && !parsedObservationDrafts) {
+    return null;
+  }
+  const committedObservationIds = value.committedObservationIds == null
+    ? undefined
+    : parseStringArray(value.committedObservationIds);
+  if (value.committedObservationIds != null && !committedObservationIds) {
+    return null;
+  }
+  if (
+    (value.generatedContent != null && typeof value.generatedContent !== 'string')
+    || (value.committedSnapshotId != null && typeof value.committedSnapshotId !== 'string')
+  ) {
+    return null;
+  }
+  return {
+    runId: value.runId,
+    curationId: value.curationId,
+    anchor: value.anchor,
+    stage: value.stage,
+    pendingExtractionIds,
+    ...(value.generatedContent == null ? {} : { generatedContent: value.generatedContent }),
+    ...(parsedObservationDrafts ? { parsedObservationDrafts } : {}),
+    ...(value.committedSnapshotId == null ? {} : { committedSnapshotId: value.committedSnapshotId }),
+    ...(committedObservationIds ? { committedObservationIds } : {}),
+    errors,
+  };
+}
+
+function parseObservationDrafts(value: unknown): NonNullable<CurationRun['parsedObservationDrafts']> | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  const drafts: NonNullable<CurationRun['parsedObservationDrafts']> = [];
+  for (const draft of value) {
+    if (
+      !isObjectRecord(draft)
+      || typeof draft.id !== 'string'
+      || typeof draft.text !== 'string'
+    ) {
+      return null;
+    }
+    const references = parseStringArray(draft.references);
+    if (!references) {
+      return null;
+    }
+    drafts.push({
+      id: draft.id,
+      text: draft.text,
+      references,
+    });
+  }
+  return drafts;
+}
+
+function parseCurationRunErrors(value: unknown): CurationRun['errors'] | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  const errors: CurationRun['errors'] = [];
+  for (const error of value) {
+    if (
+      !isObjectRecord(error)
+      || typeof error.stage !== 'string'
+      || typeof error.message !== 'string'
+    ) {
+      return null;
+    }
+    errors.push({
+      stage: error.stage,
+      message: error.message,
+    });
+  }
+  return errors;
+}
+
 function parseStringArray(value: unknown): string[] | null {
   if (!Array.isArray(value) || value.some((item) => typeof item !== 'string')) {
     return null;
@@ -385,6 +533,15 @@ function isRunStage(value: unknown): value is ObservingRunStage {
     || value === 'committingSnapshots'
     || value === 'indexingSnapshots'
     || value === 'completed';
+}
+
+function isCurationRunStage(value: unknown): value is CurationRunStage {
+  return value === 'selectingExtractions'
+    || value === 'generatingCuration'
+    || value === 'committingSnapshot'
+    || value === 'committingObservations'
+    || value === 'completed'
+    || value === 'failed';
 }
 
 function isObjectRecord(value: unknown): value is Record<string, unknown> {

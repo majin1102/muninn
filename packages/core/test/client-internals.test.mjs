@@ -6,11 +6,15 @@ import { access, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/p
 
 import core from '../dist/index.js';
 import { __testing } from '../dist/client.js';
-import { getObserverLlmConfig, validateMuninnConfigInput } from '../dist/config.js';
+import {
+  getCurationConfigFromConfigForTests,
+  getObserverLlmConfig,
+  validateMuninnConfigInput,
+} from '../dist/config.js';
 import { MuninnBackend } from '../dist/backend.js';
 import { Observer } from '../dist/observer/observer.js';
 import { EpochQueue, OpenEpoch } from '../dist/observer/epoch.js';
-import { readCheckpointFile, resolveCheckpointPath } from '../dist/checkpoint.js';
+import { parseCheckpointFile, readCheckpointFile, resolveCheckpointPath } from '../dist/checkpoint.js';
 import { SessionRegistry } from '../dist/turn/registry.js';
 import { normalizeSessionId, sessionKey } from '../dist/turn/key.js';
 import { Session } from '../dist/turn/session.js';
@@ -120,6 +124,44 @@ test('config reads extraction embedding config and rejects semanticIndex', async
     llm: { observer_llm: { provider: 'mock' } },
     semanticIndex: { embedding: { provider: 'mock' } },
   })), /semanticIndex/);
+});
+
+test('curation anchor threshold defaults to five and validates positive integer', () => {
+  const config = {
+    storage: { uri: 'file:///tmp/muninn-test' },
+    observer: { name: 'default-observer', llm: 'observer_llm' },
+    llm: { observer_llm: { provider: 'mock' } },
+    extraction: { embedding: { provider: 'mock' } },
+  };
+  assert.equal(getCurationConfigFromConfigForTests(config).anchorThreshold, 5);
+  assert.throws(() => validateMuninnConfigInput(JSON.stringify({
+    ...config,
+    curation: { anchorThreshold: 0 },
+  })), /curation\.anchorThreshold must be a positive integer/);
+});
+
+test('checkpoint preserves curation runs', () => {
+  const checkpoint = parseCheckpointFile(JSON.stringify({
+    schemaVersion: CHECKPOINT_SCHEMA_VERSION,
+    writtenAt: new Date(0).toISOString(),
+    writerPid: 1,
+    observer: {
+      baseline: { turn: 0, session: 0, extraction: 0, curation: 0, observation: 0 },
+      nextEpoch: 1,
+      recentSessions: [],
+      threads: [],
+      runs: [],
+      curationRuns: [{
+        runId: 'run-1',
+        curationId: 'entity:caroline',
+        anchor: 'Caroline',
+        stage: 'generatingCuration',
+        pendingExtractionIds: ['abc'],
+        errors: [],
+      }],
+    },
+  }));
+  assert.equal(checkpoint.observer.curationRuns[0].curationId, 'entity:caroline');
 });
 
 test('native bindings expose curation and observation tables', async () => {
@@ -1563,6 +1605,7 @@ test('observer bootstrap restores committed state from checkpoint when baselines
     committedEpoch: 12,
     nextEpoch: 13,
     runs: [],
+    curationRuns: [],
     threads: [{
       sessionId: 'obs-1',
       latestSnapshotId: 'turn:42',
@@ -2133,6 +2176,7 @@ test('observer exportCheckpoint keeps the last committed snapshot while observeC
     committedEpoch: 0,
     nextEpoch: 2,
     runs: [],
+    curationRuns: [],
     threads: [{
       sessionId: 'session-a',
       latestSnapshotId: 'snapshot-0',
@@ -4524,6 +4568,7 @@ test('observer.retryExtraction refreshes the committed checkpoint snapshot after
     committedEpoch: 1,
     nextEpoch: 2,
     runs: [],
+    curationRuns: [],
     threads: [{
       sessionId: 'session-a',
       latestSnapshotId: 'snapshot-1',
