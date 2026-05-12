@@ -83,10 +83,13 @@ test('thread curating prompt organizes entity extractions by questions', () => {
   assert.match(prompt.system, /Seed questions/);
   assert.match(prompt.system, /Heading examples/);
   assert.match(prompt.system, /Preserve all context/);
+  assert.match(prompt.system, /Current curated content as the base document/);
+  assert.match(prompt.system, /Preserve existing sections unless new extractions update, merge, or correct them/);
   assert.match(prompt.system, /For each question, merge extractions/);
   assert.match(prompt.system, /merge them or promote the combined scope to `##`/);
   assert.match(prompt.system, /<refs: \[extraction:id, \.\.\.\]>/);
   assert.match(prompt.userTemplate, /Entity anchor:/);
+  assert.match(prompt.userTemplate, /Current curated content:/);
   assert.match(prompt.userTemplate, /Extraction units:/);
 });
 

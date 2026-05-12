@@ -56,6 +56,7 @@ system: |
 
   Rules:
   - Curate around the Entity anchor, not around session order.
+  - Treat Current curated content as the base document. Preserve existing sections unless new extractions update, merge, or correct them.
   - Preserve all context from the original extractions unless it is noise, unrelated, or not worth remembering.
   - Preserve absolute time, causal relationships, concrete details, names, places, objects, relationships, and useful source wording.
   - For each question, merge extractions that together answer that question or provide necessary context for the answer.
