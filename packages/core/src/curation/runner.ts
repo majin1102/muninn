@@ -32,7 +32,7 @@ export async function runCuration(params: {
     const curationId = curationIdForAnchor(group.anchor);
     const latest = await params.client.curationTable.latest({ curationId });
     const covered = new Set(latest?.references ?? []);
-    const extractionInputs = group.extractions
+    const pending = group.extractions
       .filter((extraction) => !covered.has(extractionMemoryId(extraction.id)))
       .map(toCurationExtractionInput);
 
@@ -40,7 +40,7 @@ export async function runCuration(params: {
       skipped += 1;
       continue;
     }
-    if (latest && extractionInputs.length === 0) {
+    if (latest && pending.length === 0) {
       skipped += 1;
       continue;
     }
@@ -48,7 +48,7 @@ export async function runCuration(params: {
     const result = await (params.curateImpl ?? curate)({
       entityAnchor: group.anchor,
       content: latest?.content ?? '',
-      extractions: latest ? extractionInputs : group.extractions.map(toCurationExtractionInput),
+      extractions: group.extractions.map(toCurationExtractionInput),
       signal: params.signal,
     });
     const inserted = await insertCuration({
