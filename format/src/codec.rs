@@ -10,10 +10,14 @@ use chrono::{TimeZone, Utc};
 use lance::dataset::ROW_ID;
 use lance::{Error, Result};
 
-use super::schema::{extraction_schema, session_schema, turn_schema};
+use super::schema::{
+    curation_snapshot_schema, extraction_schema, observation_schema, session_schema, turn_schema,
+};
 use crate::config::extraction_config;
+use crate::curation::CurationSnapshot;
 use crate::memory_id::{MemoryId, MemoryLayer};
 use crate::extraction::Extraction;
+use crate::observation::Observation;
 use crate::session::SessionSnapshot;
 use crate::turn::{Artifact, Turn, ToolCall};
 
@@ -422,6 +426,152 @@ pub(crate) fn record_batch_to_session_snapshots_with_row_ids(
     Ok(session_snapshots)
 }
 
+pub(crate) fn curation_snapshots_to_record_batch(
+    snapshots: &[CurationSnapshot],
+) -> std::result::Result<RecordBatch, ArrowError> {
+    let curation_ids = StringArray::from_iter_values(
+        snapshots.iter().map(|snapshot| snapshot.curation_id.as_str()),
+    );
+    let snapshot_sequence = Int64Array::from_iter_values(
+        snapshots.iter().map(|snapshot| snapshot.snapshot_sequence),
+    );
+    let created_at = TimestampMicrosecondArray::from_iter_values(
+        snapshots.iter().map(|snapshot| snapshot.created_at.timestamp_micros()),
+    )
+    .with_timezone("UTC");
+    let updated_at = TimestampMicrosecondArray::from_iter_values(
+        snapshots.iter().map(|snapshot| snapshot.updated_at.timestamp_micros()),
+    )
+    .with_timezone("UTC");
+    let observer = StringArray::from_iter_values(
+        snapshots.iter().map(|snapshot| snapshot.observer.as_str()),
+    );
+    let anchor = StringArray::from_iter_values(
+        snapshots.iter().map(|snapshot| snapshot.anchor.as_str()),
+    );
+    let title = StringArray::from_iter_values(
+        snapshots.iter().map(|snapshot| snapshot.title.as_str()),
+    );
+    let summary = StringArray::from_iter_values(
+        snapshots.iter().map(|snapshot| snapshot.summary.as_str()),
+    );
+    let content = StringArray::from_iter_values(
+        snapshots.iter().map(|snapshot| snapshot.content.as_str()),
+    );
+    let references = build_string_list_array(
+        snapshots.iter().map(|snapshot| Some(&snapshot.references)),
+    );
+
+    Ok(RecordBatch::try_new(
+        Arc::new(curation_snapshot_schema()),
+        vec![
+            Arc::new(curation_ids),
+            Arc::new(snapshot_sequence),
+            Arc::new(created_at),
+            Arc::new(updated_at),
+            Arc::new(observer),
+            Arc::new(anchor),
+            Arc::new(title),
+            Arc::new(summary),
+            Arc::new(content),
+            Arc::new(references),
+        ],
+    )?)
+}
+
+pub(crate) fn curation_snapshots_to_reader(
+    snapshots: Vec<CurationSnapshot>,
+) -> RecordBatchIterator<impl Iterator<Item = std::result::Result<RecordBatch, ArrowError>>> {
+    let schema = Arc::new(curation_snapshot_schema());
+    let batch = curation_snapshots_to_record_batch(&snapshots);
+    RecordBatchIterator::new(vec![batch].into_iter(), schema)
+}
+
+pub(crate) fn record_batch_to_curation_snapshots(batch: &RecordBatch) -> Result<Vec<CurationSnapshot>> {
+    let row_ids = batch_row_ids(batch)?;
+    record_batch_to_curation_snapshots_with_row_ids(batch, &row_ids)
+}
+
+pub(crate) fn record_batch_to_curation_snapshots_with_row_ids(
+    batch: &RecordBatch,
+    row_ids: &[u64],
+) -> Result<Vec<CurationSnapshot>> {
+    let curation_ids = batch
+        .column(0)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap();
+    let snapshot_sequence = batch
+        .column(1)
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .unwrap();
+    let created_at = batch
+        .column(2)
+        .as_any()
+        .downcast_ref::<TimestampMicrosecondArray>()
+        .unwrap();
+    let updated_at = batch
+        .column(3)
+        .as_any()
+        .downcast_ref::<TimestampMicrosecondArray>()
+        .unwrap();
+    let observer = batch
+        .column(4)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap();
+    let anchor = batch
+        .column(5)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap();
+    let title = batch
+        .column(6)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap();
+    let summary = batch
+        .column(7)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap();
+    let content = batch
+        .column(8)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap();
+    let references = batch
+        .column(9)
+        .as_any()
+        .downcast_ref::<ListArray>()
+        .unwrap();
+
+    (0..batch.num_rows())
+        .map(|index| {
+            Ok(CurationSnapshot {
+                snapshot_id: MemoryId::new(MemoryLayer::Curation, row_ids[index]),
+                curation_id: curation_ids.value(index).to_string(),
+                snapshot_sequence: snapshot_sequence.value(index),
+                created_at: Utc
+                    .timestamp_micros(created_at.value(index))
+                    .single()
+                    .unwrap(),
+                updated_at: Utc
+                    .timestamp_micros(updated_at.value(index))
+                    .single()
+                    .unwrap(),
+                observer: observer.value(index).to_string(),
+                anchor: anchor.value(index).to_string(),
+                title: title.value(index).to_string(),
+                summary: summary.value(index).to_string(),
+                content: content.value(index).to_string(),
+                references: optional_string_list(references, index).unwrap_or_default(),
+            })
+        })
+        .collect()
+}
+
 pub(crate) fn batch_row_ids(batch: &RecordBatch) -> Result<Vec<u64>> {
     let row_ids = batch
         .column_by_name(ROW_ID)
@@ -548,6 +698,114 @@ pub(crate) fn record_batch_to_extractions(batch: &RecordBatch) -> Result<Vec<Ext
                 vector,
                 importance: importance.value(index),
                 category: category.value(index).to_string(),
+                references: optional_string_list(references, index).unwrap_or_default(),
+                created_at: Utc
+                    .timestamp_micros(created_at.value(index))
+                    .single()
+                    .unwrap(),
+            })
+        })
+        .collect()
+}
+
+pub(crate) fn observations_to_record_batch(rows: &[Observation]) -> Result<RecordBatch> {
+    let dimensions = extraction_dimensions()?;
+    let ids = StringArray::from_iter_values(rows.iter().map(|row| row.id.as_str()));
+    let curation_ids = StringArray::from_iter_values(rows.iter().map(|row| row.curation_id.as_str()));
+    let snapshot_ids = StringArray::from_iter_values(rows.iter().map(|row| row.snapshot_id.as_str()));
+    let text = StringArray::from_iter_values(rows.iter().map(|row| row.text.as_str()));
+    let search_text = StringArray::from_iter_values(rows.iter().map(|row| row.text.as_str()));
+    let vector = build_float32_fixed_size_list_array(
+        rows.iter().map(|row| row.vector.as_slice()),
+        dimensions,
+    )
+    .map_err(|error| Error::invalid_input(format!("invalid observation vector: {error}")))?;
+    let references = build_string_list_array(rows.iter().map(|row| Some(&row.references)));
+    let created_at = TimestampMicrosecondArray::from_iter_values(
+        rows.iter().map(|row| row.created_at.timestamp_micros()),
+    )
+    .with_timezone("UTC");
+
+    RecordBatch::try_new(
+        Arc::new(observation_schema(dimensions)),
+        vec![
+            Arc::new(ids),
+            Arc::new(curation_ids),
+            Arc::new(snapshot_ids),
+            Arc::new(text),
+            Arc::new(search_text),
+            Arc::new(vector),
+            Arc::new(references),
+            Arc::new(created_at),
+        ],
+    )
+    .map_err(|error| Error::invalid_input(format!("build observation batch: {error}")))
+}
+
+pub(crate) fn observations_to_reader(
+    rows: Vec<Observation>,
+) -> Result<RecordBatchIterator<impl Iterator<Item = std::result::Result<RecordBatch, ArrowError>>>>
+{
+    let dimensions = extraction_dimensions()?;
+    let schema = Arc::new(observation_schema(dimensions));
+    let batch = observations_to_record_batch(&rows).map_err(arrow_error_from_lance)?;
+    Ok(RecordBatchIterator::new(
+        vec![Ok(batch)].into_iter(),
+        schema,
+    ))
+}
+
+pub(crate) fn record_batch_to_observations(batch: &RecordBatch) -> Result<Vec<Observation>> {
+    let ids = batch
+        .column(0)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap();
+    let curation_ids = batch
+        .column(1)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap();
+    let snapshot_ids = batch
+        .column(2)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap();
+    let text = batch
+        .column(3)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap();
+    let vector = batch.column(5);
+    let references = batch
+        .column(6)
+        .as_any()
+        .downcast_ref::<ListArray>()
+        .unwrap();
+    let created_at = batch
+        .column(7)
+        .as_any()
+        .downcast_ref::<TimestampMicrosecondArray>()
+        .unwrap();
+
+    (0..batch.num_rows())
+        .map(|index| {
+            let vector = if let Some(vector) = vector.as_any().downcast_ref::<FixedSizeListArray>()
+            {
+                optional_float32_fixed_size_list(vector, index).unwrap_or_default()
+            } else {
+                return Err(Error::invalid_input(format!(
+                    "observation.vector must be FixedSizeList<Float32, N>, got {:?}",
+                    vector.data_type()
+                )));
+            };
+
+            Ok(Observation {
+                id: ids.value(index).to_string(),
+                curation_id: curation_ids.value(index).to_string(),
+                snapshot_id: snapshot_ids.value(index).to_string(),
+                text: text.value(index).to_string(),
+                vector,
                 references: optional_string_list(references, index).unwrap_or_default(),
                 created_at: Utc
                     .timestamp_micros(created_at.value(index))

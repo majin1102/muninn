@@ -12,6 +12,8 @@ use lance_linalg::distance::MetricType;
 pub(crate) const SEMANTIC_VECTOR_INDEX_NAME: &str = "semantic_vector_idx";
 pub(crate) const EXTRACTION_FTS_INDEX_NAME: &str = "extraction_fts_idx";
 pub(crate) const EXTRACTION_SEARCH_TEXT_COLUMN: &str = "search_text";
+pub(crate) const OBSERVATION_FTS_INDEX_NAME: &str = "observation_fts_idx";
+pub(crate) const OBSERVATION_SEARCH_TEXT_COLUMN: &str = "search_text";
 
 pub(crate) async fn compact_dataset(dataset: Option<Dataset>) -> Result<bool> {
     let Some(mut dataset) = dataset else {
@@ -72,6 +74,26 @@ pub(crate) async fn ensure_extraction_fts_index(dataset: &mut Dataset) -> Result
             &InvertedIndexParams::default(),
         )
         .name(EXTRACTION_FTS_INDEX_NAME.to_string())
+        .await?;
+    Ok(true)
+}
+
+pub(crate) async fn ensure_observation_fts_index(dataset: &mut Dataset) -> Result<bool> {
+    if has_index_named(dataset, OBSERVATION_FTS_INDEX_NAME).await? {
+        return Ok(false);
+    }
+
+    let row_count = dataset.count_rows(None).await? as usize;
+    if row_count == 0 {
+        return Ok(false);
+    }
+    dataset
+        .create_index_builder(
+            &[OBSERVATION_SEARCH_TEXT_COLUMN],
+            IndexType::Inverted,
+            &InvertedIndexParams::default(),
+        )
+        .name(OBSERVATION_FTS_INDEX_NAME.to_string())
         .await?;
     Ok(true)
 }
