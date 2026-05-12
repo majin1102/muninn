@@ -56,8 +56,8 @@ Trigger rules:
 Incremental curation input:
 
 - `anchor`
-- latest `curation_snapshot.content`, if it exists
-- pending extraction rows not covered by the latest snapshot
+- `content`: latest `curation_snapshot.content`, or empty text for the first run
+- `extractions`: pending extraction rows not covered by the latest snapshot
 - related covered extraction rows when needed to keep the prompt grounded
 
 The curator still returns a complete curated Markdown document, not a patch. A new `curation_snapshot` is appended every time curation runs.
