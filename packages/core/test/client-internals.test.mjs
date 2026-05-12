@@ -175,6 +175,66 @@ test('native bindings expose curation and observation tables', async () => {
   assert.equal(typeof tables.observationTable.stats, 'function');
 });
 
+test('curation markdown parser derives parent and child observations', async () => {
+  const { parseCurationDocument } = await import('../dist/curation/markdown.js');
+  const parsed = parseCurationDocument([
+    '# Entity Memory: Alex',
+    '',
+    '## Who is Alex?',
+    '<refs: [extraction:a, extraction:b]>',
+    '',
+    'Alex is a product lead focused on onboarding.',
+    '',
+    '### What changed recently?',
+    '<refs: [extraction:c]>',
+    '',
+    'Alex moved the onboarding review to Thursday.',
+  ].join('\n'), new Set(['extraction:a', 'extraction:b', 'extraction:c']));
+
+  assert.equal(parsed.title, 'Entity Memory: Alex');
+  assert.equal(parsed.summary, 'Alex is a product lead focused on onboarding.');
+  assert.equal(parsed.observations.length, 2);
+  assert.deepEqual(parsed.observations[0], {
+    heading: 'Who is Alex?',
+    text: 'Who is Alex?\n\nAlex is a product lead focused on onboarding.',
+    references: ['extraction:a', 'extraction:b'],
+  });
+  assert.deepEqual(parsed.observations[1], {
+    heading: 'Who is Alex? / What changed recently?',
+    text: 'Who is Alex?\nWhat changed recently?\n\nAlex moved the onboarding review to Thursday.',
+    references: ['extraction:a', 'extraction:b', 'extraction:c'],
+  });
+});
+
+test('curation markdown parser rejects invalid refs and missing refs', async () => {
+  const { parseCurationDocument } = await import('../dist/curation/markdown.js');
+  assert.throws(() => parseCurationDocument([
+    '# Entity Memory: Alex',
+    '',
+    '## Who is Alex?',
+    '<refs: [session:a]>',
+    '',
+    'Alex is a product lead.',
+  ].join('\n'), new Set(['extraction:a'])), /extraction memory id/);
+
+  assert.throws(() => parseCurationDocument([
+    '# Entity Memory: Alex',
+    '',
+    '## Who is Alex?',
+    '',
+    'Alex is a product lead.',
+  ].join('\n'), new Set(['extraction:a'])), /must be followed by <refs/);
+
+  assert.throws(() => parseCurationDocument([
+    '# Entity Memory: Alex',
+    '',
+    '## Who is Alex?',
+    '<refs: [extraction:missing]>',
+    '',
+    'Alex is a product lead.',
+  ].join('\n'), new Set(['extraction:a'])), /unknown extraction ref/);
+});
+
 function deferred() {
   let resolve;
   let reject;
