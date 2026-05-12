@@ -54,6 +54,33 @@ pub fn session_schema() -> Schema {
     ])
 }
 
+pub fn curation_snapshot_schema() -> Schema {
+    Schema::new(vec![
+        Field::new("curation_id", DataType::Utf8, false),
+        Field::new("snapshot_sequence", DataType::Int64, false),
+        Field::new(
+            "created_at",
+            DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+            false,
+        ),
+        Field::new(
+            "updated_at",
+            DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+            false,
+        ),
+        Field::new("observer", DataType::Utf8, false),
+        Field::new("anchor", DataType::Utf8, false),
+        Field::new("title", DataType::Utf8, false),
+        Field::new("summary", DataType::Utf8, false),
+        Field::new("content", DataType::Utf8, false),
+        Field::new(
+            "references",
+            DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+            false,
+        ),
+    ])
+}
+
 pub fn extraction_schema(dimensions: usize) -> Schema {
     let mut id_metadata = HashMap::new();
     id_metadata.insert(
@@ -98,6 +125,44 @@ pub fn extraction_schema(dimensions: usize) -> Schema {
     ])
 }
 
+pub fn observation_schema(dimensions: usize) -> Schema {
+    let mut id_metadata = HashMap::new();
+    id_metadata.insert(
+        "lance-schema:unenforced-primary-key".to_string(),
+        "true".to_string(),
+    );
+    id_metadata.insert(
+        "lance-schema:unenforced-primary-key:position".to_string(),
+        "1".to_string(),
+    );
+
+    Schema::new(vec![
+        Field::new("id", DataType::Utf8, false).with_metadata(id_metadata),
+        Field::new("curation_id", DataType::Utf8, false),
+        Field::new("snapshot_id", DataType::Utf8, false),
+        Field::new("text", DataType::Utf8, false),
+        Field::new("search_text", DataType::Utf8, false),
+        Field::new(
+            "vector",
+            DataType::FixedSizeList(
+                Arc::new(Field::new("item", DataType::Float32, true)),
+                dimensions as i32,
+            ),
+            false,
+        ),
+        Field::new(
+            "references",
+            DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+            false,
+        ),
+        Field::new(
+            "created_at",
+            DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+            false,
+        ),
+    ])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -116,5 +181,35 @@ mod tests {
         assert!(schema.field_with_name("references").is_ok());
         assert!(schema.field_with_name("created_at").is_ok());
         assert!(schema.field_with_name("memory_id").is_err());
+    }
+
+    #[test]
+    fn curation_snapshot_schema_has_expected_fields() {
+        let schema = curation_snapshot_schema();
+        assert!(schema.field_with_name("curation_id").is_ok());
+        assert!(schema.field_with_name("snapshot_sequence").is_ok());
+        assert!(schema.field_with_name("created_at").is_ok());
+        assert!(schema.field_with_name("updated_at").is_ok());
+        assert!(schema.field_with_name("observer").is_ok());
+        assert!(schema.field_with_name("anchor").is_ok());
+        assert!(schema.field_with_name("title").is_ok());
+        assert!(schema.field_with_name("summary").is_ok());
+        assert!(schema.field_with_name("content").is_ok());
+        assert!(schema.field_with_name("references").is_ok());
+    }
+
+    #[test]
+    fn observation_schema_is_thin_index_row() {
+        let schema = observation_schema(3);
+        assert!(schema.field_with_name("id").is_ok());
+        assert!(schema.field_with_name("curation_id").is_ok());
+        assert!(schema.field_with_name("snapshot_id").is_ok());
+        assert!(schema.field_with_name("text").is_ok());
+        assert!(schema.field_with_name("search_text").is_ok());
+        assert!(schema.field_with_name("vector").is_ok());
+        assert!(schema.field_with_name("references").is_ok());
+        assert!(schema.field_with_name("created_at").is_ok());
+        assert!(schema.field_with_name("anchor").is_err());
+        assert!(schema.field_with_name("context").is_err());
     }
 }

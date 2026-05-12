@@ -8,6 +8,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 pub enum MemoryLayer {
     Session,
     Turn,
+    Curation,
 }
 
 impl MemoryLayer {
@@ -15,6 +16,7 @@ impl MemoryLayer {
         match self {
             Self::Session => "session",
             Self::Turn => "turn",
+            Self::Curation => "curation",
         }
     }
 }
@@ -32,6 +34,7 @@ impl FromStr for MemoryLayer {
         match value {
             "session" => Ok(Self::Session),
             "turn" => Ok(Self::Turn),
+            "curation" => Ok(Self::Curation),
             _ => Err(Error::invalid_input(format!(
                 "invalid memory layer: {value}"
             ))),
@@ -130,6 +133,11 @@ mod tests {
         assert_eq!(MemoryLayer::Session.to_string(), "session");
         assert_eq!(MemoryLayer::from_str("turn").unwrap(), MemoryLayer::Turn);
         assert_eq!(MemoryLayer::Turn.to_string(), "turn");
+        assert_eq!(
+            MemoryLayer::from_str("curation").unwrap(),
+            MemoryLayer::Curation
+        );
+        assert_eq!(MemoryLayer::Curation.to_string(), "curation");
         assert!(MemoryLayer::from_str("thinking").is_err());
     }
 
@@ -139,6 +147,14 @@ mod tests {
         assert_eq!(parsed.memory_layer(), MemoryLayer::Turn);
         assert_eq!(parsed.memory_point(), 42);
         assert_eq!(parsed.to_string(), "turn:42");
+    }
+
+    #[test]
+    fn curation_memory_id_roundtrip() {
+        let parsed = MemoryId::from_str("curation:7").unwrap();
+        assert_eq!(parsed.memory_layer(), MemoryLayer::Curation);
+        assert_eq!(parsed.memory_point(), 7);
+        assert_eq!(parsed.to_string(), "curation:7");
     }
 
     #[test]
