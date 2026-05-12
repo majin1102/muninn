@@ -93,6 +93,18 @@ function generateMockText(request: LlmTextRequest): string {
       refs,
     });
   }
+  if (request.system.includes('memory curator for an observing memory system')) {
+    const ref = request.prompt.match(/extraction:[A-Za-z0-9:_-]+/)?.[0] ?? 'extraction:mock';
+    const entity = extractLabeledValue(request.prompt, 'Entity anchor:') || 'Mock entity';
+    return [
+      `# Entity Memory: ${entity}`,
+      '',
+      `## Who is ${entity}?`,
+      `<refs: [${ref}]>`,
+      '',
+      `${entity} has curated memory from the provided extraction.`,
+    ].join('\n');
+  }
   if (request.system.includes('"memory_delta"')) {
     return JSON.stringify({
       observing_content_update: {

@@ -89,5 +89,8 @@ user_template: |
   Entity anchor:
   {{entity_anchor}}
 
+  Current curated content:
+  {{content}}
+
   Extraction units:
-  {{extraction_units}}
+  {{extractions}}

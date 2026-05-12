@@ -235,6 +235,23 @@ test('curation markdown parser rejects invalid refs and missing refs', async () 
   ].join('\n'), new Set(['extraction:a'])), /unknown extraction ref/);
 });
 
+test('curation prompt uses content and extractions inputs', async () => {
+  const { __testing: curatingTesting } = await import('../dist/llm/curating.js');
+  const rendered = curatingTesting.renderExtractions([{
+    id: 'abc',
+    text: 'Alex moved onboarding review to Thursday.',
+    context: 'The team compared review days.',
+    anchors: ['Entity: Alex', 'Decision: review day'],
+    references: ['session:1'],
+  }]);
+
+  assert.match(rendered, /extraction:abc/);
+  assert.match(rendered, /Anchors: Entity: Alex; Decision: review day/);
+  assert.match(rendered, /Context: The team compared review days\./);
+  assert.match(rendered, /Extraction: Alex moved onboarding review to Thursday\./);
+  assert.match(rendered, /Source refs: session:1/);
+});
+
 function deferred() {
   let resolve;
   let reject;
