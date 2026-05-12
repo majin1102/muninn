@@ -5,6 +5,7 @@ import {
   type ThreadRef,
 } from '../checkpoint.js';
 import type { CheckpointLock } from '../backend.js';
+import { runCuration } from '../curation/runner.js';
 import type { NativeTables } from '../native.js';
 import type { ObserverWatermark, Turn, TurnContent } from '../client.js';
 import { getObserverLlmConfig } from '../config.js';
@@ -366,6 +367,14 @@ export class Observer {
         console.error(`[muninn:observer] extraction index build failed: ${String(error)}`);
         this.nextIndexRetryAt = Date.now() + INDEX_RETRY_DELAY_MS;
       }
+      try {
+        await this.buildCurrentCuration();
+      } catch (error) {
+        if (this.shuttingDown || isAbortError(error)) {
+          throw error;
+        }
+        console.error(`[muninn:observer] curation build failed: ${String(error)}`);
+      }
       this.committedEpoch = this.currentEpoch?.epoch;
       this.currentEpoch = null;
       this.refreshCheckpointSnapshot();
@@ -380,6 +389,17 @@ export class Observer {
       touchedIds,
       this.shutdownController.signal,
     );
+  }
+
+  private async buildCurrentCuration(): Promise<void> {
+    if (!canBuildCuration(this.client)) {
+      return;
+    }
+    await runCuration({
+      client: this.client,
+      observerName: this.name,
+      signal: this.shutdownController.signal,
+    });
   }
 
   private scheduleOpenEpochSeal(openEpoch: OpenEpoch): void {
@@ -769,6 +789,18 @@ export class Observer {
     }
     this.changeWaiters.clear();
   }
+}
+
+function canBuildCuration(client: NativeTables): boolean {
+  const tables = client as unknown as {
+    extractionTable?: { list?: unknown };
+    curationTable?: { latest?: unknown; insert?: unknown };
+    observationTable?: { replaceForCuration?: unknown };
+  };
+  return typeof tables.extractionTable?.list === 'function'
+    && typeof tables.curationTable?.latest === 'function'
+    && typeof tables.curationTable?.insert === 'function'
+    && typeof tables.observationTable?.replaceForCuration === 'function';
 }
 
 function cloneObservingRun(run: ObservingRun): ObservingRun {

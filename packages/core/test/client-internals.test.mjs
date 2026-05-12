@@ -252,6 +252,50 @@ test('curation prompt uses content and extractions inputs', async () => {
   assert.match(rendered, /Source refs: session:1/);
 });
 
+test('curation runner groups extractions by entity anchor', async () => {
+  const { __testing: curationTesting } = await import('../dist/curation/runner.js');
+  const groups = curationTesting.groupByEntityAnchor([
+    {
+      id: 'a',
+      text: 'Alex chose Thursday.',
+      context: null,
+      anchors: ['Entity: Alex', 'Decision: review day'],
+      vector: [1, 0],
+      importance: 1,
+      category: 'decision',
+      references: ['session:1'],
+      createdAt: '2024-01-01T00:00:00Z',
+    },
+    {
+      id: 'b',
+      text: 'Alex owns onboarding.',
+      context: null,
+      anchors: ['Entity:  alex '],
+      vector: [1, 0],
+      importance: 1,
+      category: 'fact',
+      references: ['session:2'],
+      createdAt: '2024-01-01T00:00:00Z',
+    },
+    {
+      id: 'c',
+      text: 'No entity.',
+      context: null,
+      anchors: ['Fact: no entity'],
+      vector: [1, 0],
+      importance: 1,
+      category: 'fact',
+      references: ['session:3'],
+      createdAt: '2024-01-01T00:00:00Z',
+    },
+  ]);
+
+  assert.equal(curationTesting.curationIdForAnchor('  Alex  '), 'entity:alex');
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].anchor, 'Alex');
+  assert.deepEqual(groups[0].extractions.map((extraction) => extraction.id), ['a', 'b']);
+});
+
 function deferred() {
   let resolve;
   let reject;
