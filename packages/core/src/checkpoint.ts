@@ -4,7 +4,7 @@ import path from 'node:path';
 
 import { loadMuninnConfig, resolveMuninnHome, resolveStorageTarget } from './config.js';
 import type {
-  ObservingSnapshot,
+  SessionSnapshot,
   SessionFragment,
 } from './observer/types.js';
 
@@ -22,7 +22,7 @@ export type RecentSessionCheckpoint = {
 };
 
 export type ThreadRef = {
-  observingId: string;
+  sessionId: string;
   latestSnapshotId: string;
   latestSnapshotSequence: number;
   indexedSnapshotSequence?: number | null;
@@ -32,8 +32,8 @@ export type ThreadRef = {
 export type ObserverCheckpoint = {
   baseline: {
     turn: number;
-    observing: number;
-    observation: number;
+    session: number;
+    extraction: number;
   };
   committedEpoch?: number;
   nextEpoch: number;
@@ -56,7 +56,7 @@ export type ObservingRunStatus = 'running' | 'completed' | 'failed';
 
 export type ObservingRunStage =
   | 'fittingThreads'
-  | 'committingObservations'
+  | 'committingExtractions'
   | 'observingThreads'
   | 'committingSnapshots'
   | 'indexingSnapshots'
@@ -76,10 +76,10 @@ export type ObservingRun = {
   inputTurnIds: string[];
   pending?: {
     sessionFragments?: SessionFragment[];
-    snapshotResults?: ObservingSnapshot[];
+    snapshotResults?: SessionSnapshot[];
   };
   committed: {
-    observationIds: string[];
+    extractionIds: string[];
     snapshotIds: string[];
   };
   traceRefs: string[];
@@ -154,15 +154,15 @@ function parseBaseline(value: unknown): ObserverCheckpoint['baseline'] | null {
   }
   if (
     typeof value.turn !== 'number'
-    || typeof value.observing !== 'number'
-    || typeof value.observation !== 'number'
+    || typeof value.session !== 'number'
+    || typeof value.extraction !== 'number'
   ) {
     return null;
   }
   return {
     turn: value.turn,
-    observing: value.observing,
-    observation: value.observation,
+    session: value.session,
+    extraction: value.extraction,
   };
 }
 
@@ -239,7 +239,7 @@ function parseThreads(value: unknown): ThreadRef[] | null {
       return null;
     }
     if (
-      typeof thread.observingId !== 'string'
+      typeof thread.sessionId !== 'string'
       || typeof thread.latestSnapshotId !== 'string'
       || typeof thread.latestSnapshotSequence !== 'number'
       || typeof thread.updatedAt !== 'string'
@@ -251,7 +251,7 @@ function parseThreads(value: unknown): ThreadRef[] | null {
       return null;
     }
     threads.push({
-      observingId: thread.observingId,
+      sessionId: thread.sessionId,
       latestSnapshotId: thread.latestSnapshotId,
       latestSnapshotSequence: thread.latestSnapshotSequence,
       indexedSnapshotSequence: thread.indexedSnapshotSequence ?? null,
@@ -316,12 +316,12 @@ function parseRunCommitted(value: unknown): ObservingRun['committed'] | null {
   if (!isObjectRecord(value)) {
     return null;
   }
-  const observationIds = parseStringArray(value.observationIds);
+  const extractionIds = parseStringArray(value.extractionIds);
   const snapshotIds = parseStringArray(value.snapshotIds);
-  if (!observationIds || !snapshotIds) {
+  if (!extractionIds || !snapshotIds) {
     return null;
   }
-  return { observationIds, snapshotIds };
+  return { extractionIds, snapshotIds };
 }
 
 function parseRunPending(value: unknown): NonNullable<ObservingRun['pending']> | null {
@@ -339,7 +339,7 @@ function parseRunPending(value: unknown): NonNullable<ObservingRun['pending']> |
     if (!Array.isArray(value.snapshotResults)) {
       return null;
     }
-    pending.snapshotResults = value.snapshotResults as ObservingSnapshot[];
+    pending.snapshotResults = value.snapshotResults as SessionSnapshot[];
   }
   return pending;
 }
@@ -380,7 +380,7 @@ function isRunStatus(value: unknown): value is ObservingRunStatus {
 
 function isRunStage(value: unknown): value is ObservingRunStage {
   return value === 'fittingThreads'
-    || value === 'committingObservations'
+    || value === 'committingExtractions'
     || value === 'observingThreads'
     || value === 'committingSnapshots'
     || value === 'indexingSnapshots'

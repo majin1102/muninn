@@ -28,7 +28,10 @@ export interface ObserverWatermarkResponse extends ObserverWatermark {
 export interface RecallRequest {
   query: string;
   limit?: number;
+  budget?: number;
+  queryLimit?: number;
   thinkingRatio?: number;
+  recallMode?: 'vector' | 'fts' | 'hybrid';
 }
 
 export interface ListRequest {
@@ -109,7 +112,7 @@ export interface SessionTurnsResponse {
 
 export interface MemoryDocument {
   memoryId: string;
-  kind: 'session' | 'observing' | 'observation';
+  kind: 'turn' | 'session' | 'extraction';
   title: string;
   markdown: string;
   agent?: string;
@@ -138,7 +141,7 @@ export interface ObservingCard {
 }
 
 export interface ObservingListResponse {
-  observations: ObservingCard[];
+  extractions: ObservingCard[];
   requestId: string;
 }
 

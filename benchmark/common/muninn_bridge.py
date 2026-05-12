@@ -26,9 +26,6 @@ class BridgeError(RuntimeError):
 class RecallHit:
     memory_id: str
     evidence_ids: list[str]
-    date_time: str
-    title: str | None
-    summary: str | None
     detail: str | None
     matched_text: str = ""
     references: list[dict[str, Any]] | None = None
@@ -71,22 +68,30 @@ class MuninnBridge:
         query: str,
         limit: int,
         muninn_home: Path,
+        recall_mode: str = "hybrid",
+        budget: int = 0,
+        query_limit: int | None = None,
+        skip_watermark: bool = False,
     ) -> list[RecallHit]:
-        payload = self._run_json(
-            "recall",
-            query=query,
-            limit=str(limit),
-            muninn_home=str(muninn_home),
-        )
+        kwargs = {
+            "query": query,
+            "limit": str(limit),
+            "muninn_home": str(muninn_home),
+            "recall_mode": recall_mode,
+        }
+        if budget > 0:
+            kwargs["budget"] = str(budget)
+            if query_limit is not None:
+                kwargs["query_limit"] = str(query_limit)
+        if skip_watermark:
+            kwargs["skip_watermark"] = "1"
+        payload = self._run_json("recall", **kwargs)
         hits = []
         for item in payload["hits"]:
             hits.append(
                 RecallHit(
                     memory_id=item["memory_id"],
                     evidence_ids=[str(value) for value in item.get("evidence_ids", [])],
-                    date_time=item.get("date_time") or "",
-                    title=item.get("title"),
-                    summary=item.get("summary"),
                     detail=item.get("detail"),
                     matched_text=item.get("matched_text") or "",
                     references=item.get("references") or [],
@@ -99,6 +104,10 @@ class MuninnBridge:
         self,
         queries: list[dict[str, Any]],
         muninn_home: Path,
+        recall_mode: str = "hybrid",
+        budget: int = 0,
+        query_limit: int | None = None,
+        skip_watermark: bool = False,
     ) -> dict[str, list[RecallHit]]:
         with tempfile.NamedTemporaryFile(
             "w",
@@ -110,11 +119,18 @@ class MuninnBridge:
             query_file = Path(handle.name)
 
         try:
-            payload = self._run_json(
-                "recall-batch",
-                queries_file=str(query_file),
-                muninn_home=str(muninn_home),
-            )
+            kwargs = {
+                "queries_file": str(query_file),
+                "muninn_home": str(muninn_home),
+                "recall_mode": recall_mode,
+            }
+            if budget > 0:
+                kwargs["budget"] = str(budget)
+                if query_limit is not None:
+                    kwargs["query_limit"] = str(query_limit)
+            if skip_watermark:
+                kwargs["skip_watermark"] = "1"
+            payload = self._run_json("recall-batch", **kwargs)
         finally:
             query_file.unlink(missing_ok=True)
 
@@ -124,14 +140,11 @@ class MuninnBridge:
                 RecallHit(
                     memory_id=item["memory_id"],
                     evidence_ids=[str(value) for value in item.get("evidence_ids", [])],
-                    date_time=item.get("date_time") or "",
-                    title=item.get("title"),
-                    summary=item.get("summary"),
-                        detail=item.get("detail"),
-                        matched_text=item.get("matched_text") or "",
-                        references=item.get("references") or [],
-                        observation_ratio=item.get("observationRatio"),
-                    )
+                    detail=item.get("detail"),
+                    matched_text=item.get("matched_text") or "",
+                    references=item.get("references") or [],
+                    observation_ratio=item.get("observationRatio"),
+                )
                 for item in items
             ]
         return results

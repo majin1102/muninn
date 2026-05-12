@@ -1,10 +1,10 @@
-import type { SessionTurn } from '../client.js';
+import type { Turn } from '../client.js';
 import { normalizeSessionId } from './key.js';
 
-type SessionTurnPayload = SessionTurn & { session_id?: string | null };
+type TurnPayload = Turn & { session_id?: string | null };
 
-export function readSessionTurn(turn: SessionTurn): SessionTurn {
-  const payload = turn as SessionTurnPayload;
+export function readTurn(turn: Turn): Turn {
+  const payload = turn as TurnPayload;
   const sessionId = normalizeSessionId(turn.sessionId ?? payload.session_id);
   return {
     turnId: turn.turnId,
@@ -20,11 +20,11 @@ export function readSessionTurn(turn: SessionTurn): SessionTurn {
     prompt: turn.prompt,
     response: turn.response,
     observingEpoch: turn.observingEpoch,
-  } as SessionTurn;
+  } as Turn;
 }
 
-export function serializeSessionTurn(turn: SessionTurn): Record<string, unknown> {
-  const payload = turn as SessionTurnPayload;
+export function serializeTurn(turn: Turn): Record<string, unknown> {
+  const payload = turn as TurnPayload;
   const sessionId = normalizeSessionId(turn.sessionId);
   return {
     turnId: turn.turnId,

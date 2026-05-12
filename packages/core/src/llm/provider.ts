@@ -79,6 +79,20 @@ function generateMockText(request: LlmTextRequest): string {
   if (request.system.includes('routing gateway for an observing memory system')) {
     return JSON.stringify({ sessionFragments: [] });
   }
+  if (request.system.includes('memory recall agent')) {
+    const candidate = extractBlock(request.prompt, '[1]', '\n\n[2]')
+      || extractBlock(request.prompt, 'Candidate memories:', 'Task:')
+      || request.prompt;
+    const content = extractLabeledValue(candidate, 'Content:') || excerpt(candidate);
+    const refs = (extractLabeledValue(candidate, 'Refs:') || '')
+      .split(',')
+      .map((ref) => ref.trim())
+      .filter(Boolean);
+    return JSON.stringify({
+      content: excerpt(content),
+      refs,
+    });
+  }
   if (request.system.includes('"memory_delta"')) {
     return JSON.stringify({
       observing_content_update: {

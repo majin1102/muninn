@@ -28,9 +28,9 @@ pub fn turn_schema() -> Schema {
     ])
 }
 
-pub fn observing_schema() -> Schema {
+pub fn session_schema() -> Schema {
     Schema::new(vec![
-        Field::new("observing_id", DataType::Utf8, false),
+        Field::new("session_id", DataType::Utf8, false),
         Field::new("snapshot_sequence", DataType::Int64, false),
         Field::new(
             "created_at",
@@ -54,7 +54,7 @@ pub fn observing_schema() -> Schema {
     ])
 }
 
-pub fn observation_schema(dimensions: usize) -> Schema {
+pub fn extraction_schema(dimensions: usize) -> Schema {
     let mut id_metadata = HashMap::new();
     id_metadata.insert(
         "lance-schema:unenforced-primary-key".to_string(),
@@ -68,6 +68,13 @@ pub fn observation_schema(dimensions: usize) -> Schema {
     Schema::new(vec![
         Field::new("id", DataType::Utf8, false).with_metadata(id_metadata),
         Field::new("text", DataType::Utf8, false),
+        Field::new("context", DataType::Utf8, true),
+        Field::new(
+            "anchors",
+            DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+            false,
+        ),
+        Field::new("search_text", DataType::Utf8, false),
         Field::new(
             "vector",
             DataType::FixedSizeList(
@@ -96,10 +103,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn observation_schema_has_references_and_no_memory_id() {
-        let schema = observation_schema(3);
+    fn extraction_schema_has_references_and_no_memory_id() {
+        let schema = extraction_schema(3);
         assert!(schema.field_with_name("id").is_ok());
         assert!(schema.field_with_name("text").is_ok());
+        assert!(schema.field_with_name("context").is_ok());
+        assert!(schema.field_with_name("anchors").is_ok());
+        assert!(schema.field_with_name("search_text").is_ok());
         assert!(schema.field_with_name("vector").is_ok());
         assert!(schema.field_with_name("importance").is_ok());
         assert!(schema.field_with_name("category").is_ok());

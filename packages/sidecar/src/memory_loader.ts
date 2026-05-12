@@ -9,6 +9,7 @@ import type {
   MemoryResponse,
   ObserverWatermarkResponse,
 } from '@muninn/types';
+import type { RecallMode } from '@muninn/core';
 import { renderRecallHit, renderRenderedMemoryHit } from './render.js';
 import { generateRequestId } from './utils.js';
 
@@ -70,6 +71,16 @@ function parseNonNegativeInteger(
   return { value, error: null };
 }
 
+function parseRecallMode(raw: string | undefined): RecallMode | undefined {
+  if (raw === undefined) {
+    return undefined;
+  }
+  if (raw === 'vector' || raw === 'fts' || raw === 'hybrid') {
+    return raw;
+  }
+  throw new Error('recallMode must be one of: vector, fts, hybrid');
+}
+
 function mapCoreLookupError(error: unknown): { status: number; body: ErrorResponse } {
   const message = error instanceof Error ? error.message : String(error);
   const lowered = message.toLowerCase();
@@ -93,9 +104,18 @@ function mapCoreLookupError(error: unknown): { status: number; body: ErrorRespon
 memoryLoader.get('/api/v1/recall', async (c) => {
   const query = c.req.query('query');
   const limit = c.req.query('limit');
+  const budget = c.req.query('budget');
+  const queryLimit = c.req.query('queryLimit');
   const thinkingRatio = c.req.query('thinkingRatio');
+  let recallMode: RecallMode | undefined;
 
-  console.log('[RECALL] query:', query, 'limit:', limit, 'thinkingRatio:', thinkingRatio);
+  try {
+    recallMode = parseRecallMode(c.req.query('recallMode'));
+  } catch (error) {
+    return c.json(errorResponse('invalidRequest', error instanceof Error ? error.message : String(error)), 400);
+  }
+
+  console.log('[RECALL] query:', query, 'limit:', limit, 'budget:', budget, 'queryLimit:', queryLimit, 'thinkingRatio:', thinkingRatio, 'recallMode:', recallMode);
 
   if (!query) {
     return c.json(errorResponse('invalidRequest', 'query is required'), 400);
@@ -105,11 +125,26 @@ memoryLoader.get('/api/v1/recall', async (c) => {
   if (parsedLimit.error) {
     return c.json(errorResponse('invalidRequest', parsedLimit.error), 400);
   }
+  const parsedBudget = parseNonNegativeInteger(budget, 'budget');
+  if (parsedBudget.error) {
+    return c.json(errorResponse('invalidRequest', parsedBudget.error), 400);
+  }
+  const parsedQueryLimit = parseNonNegativeInteger(queryLimit, 'queryLimit');
+  if (parsedQueryLimit.error) {
+    return c.json(errorResponse('invalidRequest', parsedQueryLimit.error), 400);
+  }
+  if ((parsedBudget.value ?? 0) > 0 && parsedQueryLimit.value === 0) {
+    return c.json(errorResponse('invalidRequest', 'queryLimit must be positive when budget is positive'), 400);
+  }
 
   const maxResults = parsedLimit.value ?? 10;
   let matched;
   try {
-    matched = (await memories.recall(query, maxResults)).map(renderRecallHit);
+    matched = (await memories.recall(query, maxResults, {
+      mode: recallMode,
+      budget: parsedBudget.value,
+      queryLimit: parsedQueryLimit.value,
+    })).map(renderRecallHit);
   } catch (error) {
     const mapped = mapCoreLookupError(error);
     return c.json(mapped.body, mapped.status as 400 | 500);

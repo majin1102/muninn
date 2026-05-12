@@ -6,7 +6,7 @@ const require = createRequire(import.meta.url);
 const labModule = require('../dist/gateway-lab.js');
 
 test('observing lab renders raw locomo turns with date and media captions', () => {
-  const turns = labModule.locomoSessionTurns({
+  const turns = labModule.locomoTurns({
     conversation: {
       session_1_date_time: '1:56 pm on 8 May, 2023',
       session_1: [{
@@ -50,20 +50,19 @@ test('observing lab runs gateway fitting and thread observing', async () => {
           }],
         };
       },
-      observe: async ({ observingContent, sourceRefs }) => {
-        calls.push(`observe:${sourceRefs.map((reference) => reference.turnId).join(',')}`);
+      observe: async ({ observingContent, turns }) => {
+        calls.push(`observe:${turns.map((turn) => turn.turnId).join(',')}`);
+        const content = turns.map((turn) => turn.prompt).join(' ');
         return {
-          observingContent: {
-            title: "Caroline's LGBTQ support group and self-acceptance",
-            summary: sourceRefs.map((reference) => reference.excerpt).join(' '),
-            openQuestions: observingContent.openQuestions,
-            nextSteps: observingContent.nextSteps,
-          },
-          contextRefs: sourceRefs.map((reference) => ({
-            turnId: reference.turnId,
-            summary: reference.excerpt,
+          title: "Caroline's LGBTQ support group and self-acceptance",
+          threadMemory: content,
+          extractions: observingContent.extractions,
+          openQuestions: observingContent.openQuestions,
+          nextSteps: observingContent.nextSteps,
+          contextRefs: turns.map((turn) => ({
+            turnId: turn.turnId,
+            summary: turn.prompt,
           })),
-          observationChanges: [],
         };
       },
     },
@@ -95,24 +94,21 @@ test('observing lab applies session fragments into the session thread', async ()
           reason: 'The source introduces a painting topic.',
         }],
       }),
-      observe: async ({ observingContent, sourceRefs }) => ({
-        observingContent: {
-          title: observingContent.title,
-          summary: sourceRefs.map((reference) => reference.excerpt).join(' '),
-          openQuestions: [],
-          nextSteps: [],
-        },
-        contextRefs: sourceRefs.map((reference) => ({
-          turnId: reference.turnId,
-          summary: reference.excerpt,
-        })),
-        observationChanges: [{
-          type: 'add',
+      observe: async ({ observingContent, turns }) => ({
+        title: observingContent.title,
+        threadMemory: turns.map((turn) => turn.prompt).join(' '),
+        extractions: [{
+          id: 'lab-extraction-1',
           text: 'Melanie shared a lake painting.',
           category: 'Fact',
           references: ['D1:12'],
-          reason: 'The source introduces a painting topic.',
         }],
+        openQuestions: [],
+        nextSteps: [],
+        contextRefs: turns.map((turn) => ({
+          turnId: turn.turnId,
+          summary: turn.prompt,
+        })),
       }),
     },
   });

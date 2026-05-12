@@ -17,12 +17,9 @@ class ScoringTests(unittest.TestCase):
 
     def test_build_prediction_prefers_date_for_category_two(self) -> None:
         hit = RecallHit(
-            memory_id="observing:1",
+            memory_id="turn:1",
             evidence_ids=["D1:3"],
-            date_time="1:56 pm on 8 May, 2023",
-            title="LOCOMO dialog D1:3",
-            summary="Caroline attended a support group recently.",
-            detail="Response: 1:56 pm on 8 May, 2023",
+            detail="Caroline attended a support group on 8 May 2023.",
         )
         self.assertEqual(
             build_prediction("When did Caroline go to the support group?", 2, [hit]),
@@ -45,7 +42,32 @@ class ScoringTests(unittest.TestCase):
         self.assertEqual(scores, [1.0])
         self.assertEqual(recall, [0.0])
 
-    def test_category_five_fails_when_context_hits_evidence_even_with_negative_answer(self) -> None:
+    def test_category_five_accepts_locomo_choice_a_as_negative_answer(self) -> None:
+        scores, recall = evaluate_question_answering(
+            [
+                {
+                    "category": 5,
+                    "question": "What did Caroline realize after the race?",
+                    "adversarial_answer": "self-care is important",
+                    "evidence": ["D2:3"],
+                    "muninn_top_5_prediction": "a",
+                    "muninn_top_5_prediction_context": ["D2:3"],
+                },
+                {
+                    "category": 5,
+                    "question": "What did Caroline realize after the race?",
+                    "adversarial_answer": "self-care is important",
+                    "evidence": ["D2:3"],
+                    "muninn_top_5_prediction": "(a)",
+                    "muninn_top_5_prediction_context": ["D2:3"],
+                },
+            ],
+            "muninn_top_5_prediction",
+        )
+        self.assertEqual(scores, [1.0, 1.0])
+        self.assertEqual(recall, [1.0, 1.0])
+
+    def test_category_five_allows_negative_answer_when_context_hits_adversarial_evidence(self) -> None:
         scores, recall = evaluate_question_answering(
             [
                 {
@@ -58,7 +80,7 @@ class ScoringTests(unittest.TestCase):
             ],
             "muninn_top_5_prediction",
         )
-        self.assertEqual(scores, [0.0])
+        self.assertEqual(scores, [1.0])
         self.assertEqual(recall, [1.0])
 
     def test_category_five_penalizes_adversarial_answer_matches(self) -> None:
@@ -129,11 +151,8 @@ class ScoringTests(unittest.TestCase):
         ]
         hits = [
             RecallHit(
-                memory_id="observing:1",
+                memory_id="turn:1",
                 evidence_ids=["D1:3", "D1:4"],
-                date_time="1:56 pm on 8 May, 2023",
-                title="Support group memory",
-                summary="Caroline went to the support group.",
                 detail="Caroline went to the support group on 8 May 2023.",
             )
         ]
@@ -142,10 +161,12 @@ class ScoringTests(unittest.TestCase):
 
         self.assertEqual(qas[0]["muninn_top_5_prediction"], "8 May 2023")
         self.assertEqual(qas[0]["muninn_top_5_prediction_context"], ["D1:3", "D1:4"])
-        self.assertEqual(qas[0]["muninn_top_5_hits"][0]["memory_id"], "observing:1")
-        self.assertEqual(qas[0]["muninn_top_5_hits"][0]["title"], "Support group memory")
+        self.assertEqual(qas[0]["muninn_top_5_hits"][0]["memory_id"], "turn:1")
+        self.assertEqual(qas[0]["muninn_top_5_hits"][0]["detail"], "Caroline went to the support group on 8 May 2023.")
         self.assertEqual(qas[0]["muninn_top_5_hits"][0]["evidence_ids"], ["D1:3", "D1:4"])
-        self.assertEqual(qas[0]["muninn_top_5_hits"][0]["date_time"], "1:56 pm on 8 May, 2023")
+        self.assertNotIn("title", qas[0]["muninn_top_5_hits"][0])
+        self.assertNotIn("summary", qas[0]["muninn_top_5_hits"][0])
+        self.assertNotIn("date_time", qas[0]["muninn_top_5_hits"][0])
         self.assertIn("matched_text", qas[0]["muninn_top_5_hits"][0])
         self.assertIn("references", qas[0]["muninn_top_5_hits"][0])
 

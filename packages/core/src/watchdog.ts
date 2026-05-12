@@ -12,7 +12,7 @@ import { resolveMuninnHome, type WatchdogConfig } from './config.js';
 import type { CheckpointLock, MuninnBackend } from './backend.js';
 import type { NativeTables, TableStats } from './native.js';
 
-type DatasetName = 'turn' | 'observing' | 'observation';
+type DatasetName = 'turn' | 'session' | 'extraction';
 type WatchdogLevel = 'info' | 'error';
 type WatchdogEvent =
   | 'failed'
@@ -39,7 +39,7 @@ type DatasetState = {
 };
 
 const WATCHDOG_LOG_FILE_NAME = 'watchdog.jsonl';
-const DATASETS: DatasetName[] = ['turn', 'observing', 'observation'];
+const DATASETS: DatasetName[] = ['turn', 'session', 'extraction'];
 const noopCheckpointLock: CheckpointLock = {
   shared: async (operation) => operation(),
   exclusive: async (operation) => operation(),
@@ -120,8 +120,8 @@ export class Watchdog {
     }
     this.inFlight = (async () => {
       await this.maintainTurns();
-      await this.maintainObservings();
-      await this.maintainObservation();
+      await this.maintainSessions();
+      await this.maintainExtraction();
       await this.flushCheckpoint();
     })()
       .finally(() => {
@@ -180,7 +180,7 @@ export class Watchdog {
 
   private async maintainTurns(): Promise<void> {
     await this.checkpointLock.shared(() => this.runDatasetMaintenance('turn', async (setVersion) => {
-      const stats = await this.binding.sessionTable.stats();
+      const stats = await this.binding.turnTable.stats();
       if (!stats) {
         this.resetState('turn');
         return;
@@ -198,8 +198,8 @@ export class Watchdog {
         return;
       }
 
-      const result = await this.binding.sessionTable.compact();
-      const finalStats = await this.binding.sessionTable.stats() ?? stats;
+      const result = await this.binding.turnTable.compact();
+      const finalStats = await this.binding.turnTable.stats() ?? stats;
       this.updateMaintainedState('turn', finalStats);
       await this.logInfo('turn', 'compacted', finalStats.version, {
         changed: result.changed,
@@ -209,17 +209,17 @@ export class Watchdog {
     }));
   }
 
-  private async maintainObservings(): Promise<void> {
-    await this.checkpointLock.shared(() => this.runDatasetMaintenance('observing', async (setVersion) => {
-      const stats = await this.binding.observingTable.stats();
+  private async maintainSessions(): Promise<void> {
+    await this.checkpointLock.shared(() => this.runDatasetMaintenance('session', async (setVersion) => {
+      const stats = await this.binding.sessionTable.stats();
       if (!stats) {
-        this.resetState('observing');
+        this.resetState('session');
         return;
       }
 
       setVersion(stats.version);
-      const unchanged = this.versionUnchanged('observing', stats);
-      this.updateSeenState('observing', stats);
+      const unchanged = this.versionUnchanged('session', stats);
+      this.updateSeenState('session', stats);
 
       if (unchanged) {
         return;
@@ -229,10 +229,10 @@ export class Watchdog {
         return;
       }
 
-      const result = await this.binding.observingTable.compact();
-      const finalStats = await this.binding.observingTable.stats() ?? stats;
-      this.updateMaintainedState('observing', finalStats);
-      await this.logInfo('observing', 'compacted', finalStats.version, {
+      const result = await this.binding.sessionTable.compact();
+      const finalStats = await this.binding.sessionTable.stats() ?? stats;
+      this.updateMaintainedState('session', finalStats);
+      await this.logInfo('session', 'compacted', finalStats.version, {
         changed: result.changed,
         fragmentCount: finalStats.fragmentCount,
         rowCount: finalStats.rowCount,
@@ -240,20 +240,20 @@ export class Watchdog {
     }));
   }
 
-  private async maintainObservation(): Promise<void> {
-    await this.checkpointLock.shared(() => this.runDatasetMaintenance('observation', async (setVersion) => {
-      const ensured = await this.binding.observationTable.ensureVectorIndex({
-        targetPartitionSize: this.config.observation.targetPartitionSize,
+  private async maintainExtraction(): Promise<void> {
+    await this.checkpointLock.shared(() => this.runDatasetMaintenance('extraction', async (setVersion) => {
+      const ensured = await this.binding.extractionTable.ensureVectorIndex({
+        targetPartitionSize: this.config.extraction.targetPartitionSize,
       });
-      const stats = await this.binding.observationTable.stats();
+      const stats = await this.binding.extractionTable.stats();
       if (!stats) {
-        this.resetState('observation');
+        this.resetState('extraction');
         return;
       }
 
       setVersion(stats.version);
-      const unchanged = this.versionUnchanged('observation', stats);
-      this.updateSeenState('observation', stats);
+      const unchanged = this.versionUnchanged('extraction', stats);
+      this.updateSeenState('extraction', stats);
 
       if (!ensured.created && unchanged) {
         return;
@@ -261,31 +261,31 @@ export class Watchdog {
 
       let compactResult: { changed: boolean } | null = null;
       if (stats.fragmentCount >= this.config.compactMinFragments) {
-        compactResult = await this.binding.observationTable.compact();
+        compactResult = await this.binding.extractionTable.compact();
       }
-      const optimizeResult = await this.binding.observationTable.optimize({
-        mergeCount: this.config.observation.optimizeMergeCount,
+      const optimizeResult = await this.binding.extractionTable.optimize({
+        mergeCount: this.config.extraction.optimizeMergeCount,
       });
-      const finalStats = await this.binding.observationTable.stats() ?? stats;
-      this.updateMaintainedState('observation', finalStats);
+      const finalStats = await this.binding.extractionTable.stats() ?? stats;
+      this.updateMaintainedState('extraction', finalStats);
 
       if (ensured.created) {
-        await this.logInfo('observation', 'index_created', finalStats.version, {
-          targetPartitionSize: this.config.observation.targetPartitionSize,
+        await this.logInfo('extraction', 'index_created', finalStats.version, {
+          targetPartitionSize: this.config.extraction.targetPartitionSize,
           fragmentCount: finalStats.fragmentCount,
           rowCount: finalStats.rowCount,
         });
       }
       if (compactResult) {
-        await this.logInfo('observation', 'compacted', finalStats.version, {
+        await this.logInfo('extraction', 'compacted', finalStats.version, {
           changed: compactResult.changed,
           fragmentCount: finalStats.fragmentCount,
           rowCount: finalStats.rowCount,
         });
       }
-      await this.logInfo('observation', 'optimized', finalStats.version, {
+      await this.logInfo('extraction', 'optimized', finalStats.version, {
         changed: optimizeResult.changed,
-        mergeCount: this.config.observation.optimizeMergeCount,
+        mergeCount: this.config.extraction.optimizeMergeCount,
         fragmentCount: finalStats.fragmentCount,
         rowCount: finalStats.rowCount,
         indexCreated: ensured.created,
@@ -413,11 +413,11 @@ export class Watchdog {
   private cleanupDataset(dataset: DatasetName, floorVersion: number): Promise<{ changed: boolean }> {
     switch (dataset) {
       case 'turn':
+        return this.binding.turnTable.cleanup?.({ floorVersion }) ?? Promise.resolve({ changed: false });
+      case 'session':
         return this.binding.sessionTable.cleanup?.({ floorVersion }) ?? Promise.resolve({ changed: false });
-      case 'observing':
-        return this.binding.observingTable.cleanup?.({ floorVersion }) ?? Promise.resolve({ changed: false });
-      case 'observation':
-        return this.binding.observationTable.cleanup?.({ floorVersion }) ?? Promise.resolve({ changed: false });
+      case 'extraction':
+        return this.binding.extractionTable.cleanup?.({ floorVersion }) ?? Promise.resolve({ changed: false });
     }
   }
 
@@ -468,7 +468,7 @@ export class Watchdog {
 function checkpointFloors(checkpoint: CheckpointContent | CheckpointFile): Record<DatasetName, number | null> {
   return {
     turn: checkpoint.observer.baseline.turn,
-    observing: checkpoint.observer.baseline.observing,
-    observation: checkpoint.observer.baseline.observation,
+    session: checkpoint.observer.baseline.session,
+    extraction: checkpoint.observer.baseline.extraction,
   };
 }

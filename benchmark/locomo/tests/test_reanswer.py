@@ -11,7 +11,7 @@ from benchmark.locomo.reanswer import reanswer_trace
 class ReanswerTests(unittest.TestCase):
     def test_reanswer_trace_reuses_existing_hits_without_recall(self) -> None:
         trace = {
-            "model_key": "muninn_top_5",
+            "model_key": "muninn_hybrid_top_5",
             "samples": [
                 {
                     "sample_id": "sample-a",
@@ -23,13 +23,10 @@ class ReanswerTests(unittest.TestCase):
                             "evidence": ["D1:5"],
                             "hits": [
                                 {
-                                    "memory_id": "observing:5",
+                                    "memory_id": "turn:5",
                                     "matched_text": "Caroline found the support group personally meaningful.",
                                     "evidence_ids": ["D1:5"],
-                                    "date_time": "1:56 pm on 8 May, 2023",
-                                    "title": "Support group",
-                                    "summary": "Caroline discussed a support group.",
-                                    "detail": None,
+                                    "detail": "Caroline found the support group personally meaningful.",
                                     "references": [],
                                 }
                             ],
@@ -56,9 +53,9 @@ class ReanswerTests(unittest.TestCase):
             )
 
         qa = result["samples"][0]["qa"][0]
-        self.assertEqual(qa["muninn_top_5_prediction"], "Mock answer")
-        self.assertEqual(qa["muninn_top_5_prediction_context"], ["D1:5"])
-        self.assertEqual(qa["muninn_top_5_hits"][0]["matched_text"], "Caroline found the support group personally meaningful.")
+        self.assertEqual(qa["muninn_hybrid_top_5_prediction"], "Mock answer")
+        self.assertEqual(qa["muninn_hybrid_top_5_prediction_context"], ["D1:5"])
+        self.assertEqual(qa["muninn_hybrid_top_5_hits"][0]["matched_text"], "Caroline found the support group personally meaningful.")
         self.assertEqual(result["stats"]["qa_count"], 1)
         self.assertEqual(result["trace"]["samples"][0]["qa"][0]["prediction"], "Mock answer")
 

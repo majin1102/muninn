@@ -270,7 +270,7 @@ test('openclaw hook capture persists artifacts through sidecar and native readba
   assert.ok(match);
 
   const tables = await getNativeTables();
-  const persisted = await tables.sessionTable.getTurn(match.memoryId);
+  const persisted = await tables.turnTable.getTurn(match.memoryId);
   assert.ok(persisted);
   assert.deepEqual(persisted.toolCalls, [{
     id: 'tool-1',
@@ -489,7 +489,7 @@ test('recall and timeline surface request and not-found errors', async () => {
     assert.equal(missingQuery.status, 400);
 
     const missingTimeline = await app.request(
-      `/api/v1/timeline?memoryId=${encodeURIComponent('session:999999')}`
+      `/api/v1/timeline?memoryId=${encodeURIComponent('turn:999999')}`
     );
     assert.equal(missingTimeline.status, 404);
   } finally {
@@ -513,7 +513,7 @@ test('recall, list, and timeline reject invalid numeric query parameters', async
     assert.equal(badListBody.errorCode, 'invalidRequest');
 
     const badTimeline = await app.request(
-      `/api/v1/timeline?memoryId=${encodeURIComponent('session:999999')}&beforeLimit=1.5`
+      `/api/v1/timeline?memoryId=${encodeURIComponent('turn:999999')}&beforeLimit=1.5`
     );
     assert.equal(badTimeline.status, 400);
     const badTimelineBody = await json(badTimeline);
@@ -591,7 +591,7 @@ test('detail returns notFound for missing observing memoryId', async () => {
     await writeMuninnConfig(configPath);
 
     const missingDetail = await app.request(
-      `/api/v1/detail?memoryId=${encodeURIComponent('observing:999999')}`
+      `/api/v1/detail?memoryId=${encodeURIComponent('turn:999999')}`
     );
     assert.equal(missingDetail.status, 404);
     const missingDetailBody = await json(missingDetail);
@@ -795,8 +795,8 @@ test('ui observing endpoints return live observings and documents', async (t) =>
   const observingsResponse = await app.request('/api/v1/ui/observing');
   assert.equal(observingsResponse.status, 200);
   const observings = await json(observingsResponse);
-  assert.ok(observings.observations.length >= 1);
-  const observing = observings.observations.find((item) => item.memoryId.startsWith('observing:'));
+  assert.ok(observings.extractions.length >= 1);
+  const observing = observings.extractions.find((item) => item.memoryId.startsWith('observing:'));
   assert.ok(observing);
   assert.ok(observing.references.length >= 1);
   assert.match(observing.summary, /ui observing prompt|ui observing response/);

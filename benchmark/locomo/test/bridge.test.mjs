@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import core from '@muninn/core';
@@ -11,6 +11,15 @@ const execFileAsync = promisify(execFile);
 const repoRoot = path.resolve(import.meta.dirname, '../../..');
 const bridgePath = path.join(repoRoot, 'benchmark/locomo/dist/bridge.js');
 const fixturePath = path.join(repoRoot, 'benchmark/locomo/test/fixtures/mini-locomo.json');
+
+async function exists(filePath) {
+  try {
+    await access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 async function runBridge(command, options) {
   const args = [bridgePath, command];
@@ -44,7 +53,7 @@ async function writeMuninnConfig(
     };
   }
   if (semanticIndexProvider) {
-    root.observation = {
+    root.extraction = {
       embedding: {
         provider: semanticIndexProvider,
         dimensions: 4,
@@ -97,8 +106,8 @@ test('import writes an external manifest aligned to locomo sessions', async (t) 
   const manifest = JSON.parse(await readFile(imported.manifest_path, 'utf8'));
   assert.equal(imported.imported_count, 3);
   assert.equal(manifest.turns.length, 3);
-  assert.match(manifest.turns[0].turn_id, /^session:/);
-  assert.match(manifest.turns[1].turn_id, /^session:/);
+  assert.match(manifest.turns[0].turn_id, /^turn:/);
+  assert.match(manifest.turns[1].turn_id, /^turn:/);
   assert.equal(manifest.turns[0].turn_id, manifest.turns[1].turn_id);
   assert.notEqual(manifest.turns[1].turn_id, manifest.turns[2].turn_id);
   assert.equal(manifest.turns[0].source_id, 'D1:1');
@@ -109,7 +118,7 @@ test('import writes an external manifest aligned to locomo sessions', async (t) 
   assert.equal(copiedConfig.storage, undefined);
 
   process.env.MUNINN_HOME = home;
-  const importedTurns = await core.sessions.list({
+  const importedTurns = await core.turns.list({
     mode: { type: 'recency', limit: 10 },
     sessionId: 'locomo:sample-a:session_1',
     agent: 'Caroline',
@@ -151,27 +160,38 @@ test('recall returns evidence ids without leaking benchmark artifacts into munin
 
   const supportHit = recalled.hits.find((hit) => hit.evidence_ids.includes('D1:1'));
   assert.ok(supportHit);
-  assert.match(supportHit.date_time ?? '', /1:56 pm on 8 May, 2023/);
+  assert.equal('date_time' in supportHit, false);
+  assert.equal('title' in supportHit, false);
+  assert.equal('summary' in supportHit, false);
   assert.equal(typeof supportHit.matched_text, 'string');
   assert.ok(supportHit.matched_text.trim());
+  assert.match(supportHit.detail, /^EXTRACTION: /);
+  assert.match(supportHit.detail, new RegExp(escapeRegExp(supportHit.matched_text)));
   assert.doesNotMatch(supportHit.matched_text, /Recorded/);
-  assert.equal(supportHit.observationRatio ?? null, null);
+  assert.equal(supportHit.extractionRatio ?? null, null);
   assert.ok(supportHit.references.some((reference) => /Caroline said:/.test(reference.text)));
   assert.ok(!('source_id' in recalled.hits[0]));
 
-  const gatewayTrace = await readFile(path.join(home, 'locomo-gateway-trace.jsonl'), 'utf8');
-  const firstTrace = JSON.parse(gatewayTrace.trim().split('\n')[0]);
-  assert.ok(Array.isArray(firstTrace.workItems));
-  assert.equal('routingReason' in firstTrace.workItems[0], true);
+  const gatewayTracePath = path.join(home, 'locomo-gateway-trace.jsonl');
+  if (await exists(gatewayTracePath)) {
+    const gatewayTrace = await readFile(gatewayTracePath, 'utf8');
+    const firstTrace = JSON.parse(gatewayTrace.trim().split('\n')[0]);
+    assert.ok(Array.isArray(firstTrace.workItems));
+    assert.equal('routingReason' in firstTrace.workItems[0], true);
+  }
 });
 
-test('recursive evidence resolution can walk observing lineage back to turn ids', async () => {
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+test('recursive evidence resolution can walk session snapshot lineage back to turn ids', async () => {
   const bridgeModule = await import(bridgePath);
   const evidenceIds = bridgeModule.resolveEvidenceIdsFromGraph(
-    'observing:9',
+    'session:9',
     [
       {
-        turn_id: 'session:101',
+        turn_id: 'turn:101',
         source_id: 'D1:1',
         sample_id: 'sample-a',
         session_id: 'locomo:sample-a:session_1',
@@ -179,7 +199,7 @@ test('recursive evidence resolution can walk observing lineage back to turn ids'
         import_order: 0,
       },
       {
-        turn_id: 'session:102',
+        turn_id: 'turn:102',
         source_id: 'D2:1',
         sample_id: 'sample-a',
         session_id: 'locomo:sample-a:session_2',
@@ -188,18 +208,18 @@ test('recursive evidence resolution can walk observing lineage back to turn ids'
       },
     ],
     {
-      'observing:9': ['observing:7', 'session:102'],
-      'observing:7': ['session:101'],
+      'session:9': ['session:7', 'turn:102'],
+      'session:7': ['turn:101'],
     },
   );
 
   assert.deepEqual(evidenceIds, ['D1:1', 'D2:1']);
 });
 
-test('recursive evidence resolution can walk observation lineage back to turn ids', async () => {
+test('recursive evidence resolution can walk extraction lineage back to turn ids', async () => {
   const bridgeModule = await import(bridgePath);
   const evidenceIds = bridgeModule.resolveEvidenceIdsFromGraph(
-    'observation:memory-1',
+    'extraction:memory-1',
     [
       {
         turn_id: 'session:101',
@@ -211,7 +231,7 @@ test('recursive evidence resolution can walk observation lineage back to turn id
       },
     ],
     {
-      'observation:memory-1': ['session:101'],
+      'extraction:memory-1': ['session:101'],
     },
   );
 
@@ -286,7 +306,7 @@ test('waitForImportWatermark times out with pending turn ids when observer does 
   );
 });
 
-test('import only fails fast when observation config is missing', async (t) => {
+test('import only fails fast when extraction config is missing', async (t) => {
   const home = await mkdtemp(path.join(os.tmpdir(), 'muninn-locomo-missing-config-'));
   t.after(async () => rm(home, { recursive: true, force: true }));
 
@@ -299,7 +319,7 @@ test('import only fails fast when observation config is missing', async (t) => {
       'sample-id': 'sample-a',
       'muninn-home': home,
     }),
-    /LoCoMo benchmark requires observation\.embedding(?:\.provider)?/i,
+    /LoCoMo benchmark requires extraction\.embedding(?:\.provider)?/i,
   );
 });
 

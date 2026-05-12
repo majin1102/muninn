@@ -24,7 +24,7 @@ export async function embedText(text: string, signal?: AbortSignal): Promise<num
   }
   throwIfAborted(signal);
   if (!config.apiKey?.trim()) {
-    throw new Error('observation.embedding.apiKey is required for openai embeddings');
+    throw new Error('extraction.embedding.apiKey is required for openai embeddings');
   }
 
   const response = await fetch(config.baseUrl ?? 'https://api.openai.com/v1/embeddings', {
@@ -38,13 +38,13 @@ export async function embedText(text: string, signal?: AbortSignal): Promise<num
   });
   if (!response.ok) {
     throw new Error(
-      `observation embedding request failed with status ${response.status}: ${await response.text()}`,
+      `extraction embedding request failed with status ${response.status}: ${await response.text()}`,
     );
   }
   const payload = await response.json() as EmbeddingResponse;
   const vector = extractVector(payload);
   if (!vector) {
-    throw new Error('observation embedding response missing vector');
+    throw new Error('extraction embedding response missing vector');
   }
   return vector;
 }

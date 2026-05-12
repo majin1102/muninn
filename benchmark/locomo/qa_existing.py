@@ -37,7 +37,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--progress-file", default=None, type=Path)
     parser.add_argument("--runs-dir", default=Path("benchmark") / "locomo" / ".runs", type=Path)
     parser.add_argument("--sample-id", action="append", default=[])
-    parser.add_argument("--top-k", default=5, type=int)
+    parser.add_argument("--top-k", default=3, type=int)
+    parser.add_argument("--recall-mode", choices=["vector", "fts", "hybrid"], default="hybrid")
+    parser.add_argument("--budget", default=400, type=int)
+    parser.add_argument("--query-limit", default=8, type=int)
     parser.add_argument("--limit-questions", default=None, type=int)
     parser.add_argument("--answerer", choices=["llm", "heuristic"], default="llm")
     parser.add_argument("--expand-references", action="store_true")
@@ -57,7 +60,7 @@ def main() -> None:
     reporter = ProgressReporter(args.progress_file)
     reporter.start()
     started_at = monotonic()
-    model_key = build_model_key(args.top_k)
+    model_key = build_model_key(args.top_k, args.recall_mode, args.budget, args.query_limit)
     results: list[dict[str, Any]] = []
     gateway_routes_by_sample: dict[str, dict[str, list[dict[str, Any]]]] = {}
 
@@ -71,6 +74,10 @@ def main() -> None:
             sample_count=len(selected),
             samples=[sample["sample_id"] for sample in selected],
             top_k=args.top_k,
+            top_k_ignored=args.budget > 0,
+            budget=args.budget,
+            query_limit=args.query_limit,
+            recall_mode=args.recall_mode,
             limit_questions=args.limit_questions,
             answerer=args.answerer,
             expand_references=args.expand_references,
@@ -152,7 +159,16 @@ def run_sample(
         qa_count=len(qas),
     )
 
-    batch_hits = collect_batch_hits(bridge, qas, args.top_k, home)
+    batch_hits = collect_batch_hits(
+        bridge,
+        qas,
+        args.top_k,
+        home,
+        args.recall_mode,
+        args.budget,
+        args.query_limit,
+        True,
+    )
     answerer_config = load_answerer_config(home) if args.answerer == "llm" else None
     for qa_index, qa in enumerate(qas):
         answer_one(
@@ -229,6 +245,7 @@ def answer_one(
             category=category,
             answer_context=answer_context,
             config=answerer_config,
+            adversarial_answer=qa.get("adversarial_answer") if isinstance(qa.get("adversarial_answer"), str) else None,
         )
         qa[prediction_key] = answer_result["answer"]
         qa[f"{hit_key_prefix}_memory_clarity_score"] = answer_result.get("memory_clarity_score")
@@ -296,12 +313,9 @@ def serialize_hits(hits: list[RecallHit]) -> list[dict[str, Any]]:
         {
             "memory_id": hit.memory_id,
             "matched_text": hit.matched_text,
-            "title": hit.title,
-            "summary": hit.summary,
             "detail": hit.detail,
             "observationRatio": hit.observation_ratio,
             "evidence_ids": hit.evidence_ids,
-            "date_time": hit.date_time,
             "references": hit.references,
         }
         for hit in hits
@@ -313,7 +327,7 @@ def render_top_hits(hits: list[RecallHit], limit: int = 3) -> list[dict[str, Any
         {
             "memory_id": hit.memory_id,
             "evidence_ids": hit.evidence_ids,
-            "matched_text": hit.matched_text or hit.summary or hit.detail or hit.title or "",
+            "matched_text": hit.detail or hit.matched_text or "",
         }
         for hit in hits[:limit]
     ]
@@ -343,7 +357,7 @@ def print_qa_block(
                 f"Clarity reason: {clarity_reason or ''}",
                 "Top hits:",
                 *[
-                    f"  - {hit.memory_id} evidence={hit.evidence_ids} text={(hit.matched_text or hit.summary or hit.detail or hit.title or '')[:240]}"
+                    f"  - {hit.memory_id} evidence={hit.evidence_ids} text={(hit.detail or hit.matched_text or '')[:240]}"
                     for hit in hits[:3]
                 ],
             ]

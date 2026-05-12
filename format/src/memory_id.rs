@@ -6,15 +6,15 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum MemoryLayer {
-    Observing,
     Session,
+    Turn,
 }
 
 impl MemoryLayer {
     pub fn as_str(&self) -> &'static str {
         match self {
-            Self::Observing => "observing",
             Self::Session => "session",
+            Self::Turn => "turn",
         }
     }
 }
@@ -30,8 +30,8 @@ impl FromStr for MemoryLayer {
 
     fn from_str(value: &str) -> Result<Self> {
         match value {
-            "observing" => Ok(Self::Observing),
             "session" => Ok(Self::Session),
+            "turn" => Ok(Self::Turn),
             _ => Err(Error::invalid_input(format!(
                 "invalid memory layer: {value}"
             ))),
@@ -124,19 +124,21 @@ mod tests {
     #[test]
     fn memory_layer_roundtrip() {
         assert_eq!(
-            MemoryLayer::from_str("observing").unwrap(),
-            MemoryLayer::Observing
+            MemoryLayer::from_str("session").unwrap(),
+            MemoryLayer::Session
         );
-        assert_eq!(MemoryLayer::Observing.to_string(), "observing");
+        assert_eq!(MemoryLayer::Session.to_string(), "session");
+        assert_eq!(MemoryLayer::from_str("turn").unwrap(), MemoryLayer::Turn);
+        assert_eq!(MemoryLayer::Turn.to_string(), "turn");
         assert!(MemoryLayer::from_str("thinking").is_err());
     }
 
     #[test]
     fn memory_id_roundtrip() {
-        let parsed = MemoryId::from_str("session:42").unwrap();
-        assert_eq!(parsed.memory_layer(), MemoryLayer::Session);
+        let parsed = MemoryId::from_str("turn:42").unwrap();
+        assert_eq!(parsed.memory_layer(), MemoryLayer::Turn);
         assert_eq!(parsed.memory_point(), 42);
-        assert_eq!(parsed.to_string(), "session:42");
+        assert_eq!(parsed.to_string(), "turn:42");
     }
 
     #[test]
@@ -144,7 +146,7 @@ mod tests {
         assert!(MemoryId::from_str("session").is_err());
         assert!(MemoryId::from_str("unknown:42").is_err());
         assert!(MemoryId::from_str("thinking:42").is_err());
-        assert!(MemoryId::from_str("session:bad-row-id").is_err());
-        assert!(MemoryId::from_str("session:42:extra").is_err());
+        assert!(MemoryId::from_str("turn:bad-row-id").is_err());
+        assert!(MemoryId::from_str("turn:42:extra").is_err());
     }
 }

@@ -5,10 +5,10 @@ import {
 } from '../checkpoint.js';
 import type { CheckpointLock } from '../backend.js';
 import type { NativeTables } from '../native.js';
-import type { ObserverWatermark, SessionTurn, TurnContent } from '../client.js';
+import type { ObserverWatermark, Turn, TurnContent } from '../client.js';
 import { getObserverLlmConfig } from '../config.js';
-import type { SessionRegistry } from '../session/registry.js';
-import { readSessionTurn } from '../session/types.js';
+import type { SessionRegistry } from '../turn/registry.js';
+import { readTurn } from '../turn/types.js';
 import { EpochQueue, EpochSealedError, OpenEpoch, type SealedEpoch } from './epoch.js';
 import {
   cloneObservingThreads,
@@ -20,7 +20,7 @@ import {
   threadFromSnapshots,
 } from './thread.js';
 import type { ObservingThread } from './types.js';
-import { buildObservation, buildTouchedIndex, observeEpoch } from './update.js';
+import { buildExtraction, buildTouchedIndex, observeEpoch } from './update.js';
 
 const BASE_RETRY_DELAY_MS = 100;
 const MAX_RETRY_DELAY_MS = 2_000;
@@ -121,7 +121,7 @@ export class Observer {
 
   async watermark(): Promise<ObserverWatermark> {
     await this.ensureBootstrapped();
-    const pendingById = new Map<string, SessionTurn>();
+    const pendingById = new Map<string, Turn>();
     for (const turn of this.openEpoch.stagedTurns()) {
       keepNewestTurn(pendingById, turn);
     }
@@ -140,7 +140,7 @@ export class Observer {
       .sort(compareTurns)
       .map((turn) => turn.turnId);
     return {
-      resolved: pendingTurnIds.length === 0 && !this.hasPendingObservation() && !this.currentEpoch,
+      resolved: pendingTurnIds.length === 0 && !this.hasPendingExtraction() && !this.currentEpoch,
       pendingTurnIds,
       observingEpoch: this.currentEpoch?.epoch,
       committedEpoch: this.committedEpoch,
@@ -182,7 +182,7 @@ export class Observer {
     const barrierRequiresObserve = sealedEpoch.turns.length > 0;
     const barrierComplete = () => {
       const observed = !barrierRequiresObserve || (this.committedEpoch ?? -1) >= barrier.epoch;
-      return observed && !this.hasPendingObservationUpTo(barrier.epoch);
+      return observed && !this.hasPendingExtractionUpTo(barrier.epoch);
     };
 
     while (true) {
@@ -201,25 +201,25 @@ export class Observer {
   }
 
   private async bootstrapInternal(): Promise<void> {
-    let pendingTurns: SessionTurn[] = [];
+    let pendingTurns: Turn[] = [];
     const restored = await this.restoreCheckpointState();
     if (restored) {
       this.threads = restored.threads;
       this.committedEpoch = restored.committedEpoch;
       pendingTurns = restored.pendingTurns;
     } else {
-      const snapshots = await this.client.observingTable.listSnapshots({
+      const snapshots = await this.client.sessionTable.listSnapshots({
         observer: this.name,
       });
-      const turns = (await this.client.sessionTable.loadTurnsAfterEpoch({
+      const turns = (await this.client.turnTable.loadTurnsAfterEpoch({
         observer: this.name,
         committedEpoch: null,
-      })).map(readSessionTurn);
+      })).map(readTurn);
       const fallback = await this.restoreThreadsFromCheckpoint({
         baseline: {
           turn: 0,
-          observing: 0,
-          observation: 0,
+          session: 0,
+          extraction: 0,
         },
         nextEpoch: 0,
         recentSessions: [],
@@ -247,7 +247,7 @@ export class Observer {
 
     let nextEpoch = this.committedEpoch == null ? 0 : this.committedEpoch + 1;
     if (pendingTurns.length > 0) {
-      const turnsByEpoch = new Map<number, SessionTurn[]>();
+      const turnsByEpoch = new Map<number, Turn[]>();
       for (const turn of pendingTurns) {
         if (turn.observingEpoch == null) {
           throw new Error(`pending observable turn ${turn.turnId} is missing observingEpoch`);
@@ -293,8 +293,8 @@ export class Observer {
           continue;
         }
 
-        if (this.shouldRetryObservation()) {
-          await this.retryObservation();
+        if (this.shouldRetryExtraction()) {
+          await this.retryExtraction();
           retryDelayMs = BASE_RETRY_DELAY_MS;
           continue;
         }
@@ -306,7 +306,7 @@ export class Observer {
           continue;
         }
 
-        if (this.hasPendingObservation()) {
+        if (this.hasPendingExtraction()) {
           await this.waitForIndexRetryOrChange();
           retryDelayMs = BASE_RETRY_DELAY_MS;
           continue;
@@ -346,14 +346,14 @@ export class Observer {
       this.threads = result.threads;
       try {
         await this.buildCurrentEpochIndex(result.touchedIds);
-        if (!this.hasPendingObservation()) {
+        if (!this.hasPendingExtraction()) {
           this.nextIndexRetryAt = undefined;
         }
       } catch (error) {
         if (this.shuttingDown || isAbortError(error)) {
           throw error;
         }
-        console.error(`[muninn:observer] observation index build failed: ${String(error)}`);
+        console.error(`[muninn:observer] extraction index build failed: ${String(error)}`);
         this.nextIndexRetryAt = Date.now() + INDEX_RETRY_DELAY_MS;
       }
       this.committedEpoch = this.currentEpoch?.epoch;
@@ -445,23 +445,23 @@ export class Observer {
     };
   }
 
-  private hasPendingObservation(): boolean {
+  private hasPendingExtraction(): boolean {
     return this.threads.some((thread) => getPendingIndex(thread) !== null);
   }
 
-  private hasPendingObservationUpTo(maxEpoch: number): boolean {
+  private hasPendingExtractionUpTo(maxEpoch: number): boolean {
     return this.threads.some((thread) => getPendingIndexUpTo(thread, maxEpoch) !== null);
   }
 
-  private shouldRetryObservation(): boolean {
-    return this.hasPendingObservation()
+  private shouldRetryExtraction(): boolean {
+    return this.hasPendingExtraction()
       && (this.nextIndexRetryAt == null || Date.now() >= this.nextIndexRetryAt);
   }
 
-  private async retryObservation(): Promise<void> {
+  private async retryExtraction(): Promise<void> {
     try {
       await this.checkpointLock.shared(async () => {
-        await buildObservation(this.client, this.threads, this.shutdownController.signal);
+        await buildExtraction(this.client, this.threads, this.shutdownController.signal);
         this.refreshCheckpointSnapshot();
         this.nextIndexRetryAt = undefined;
       });
@@ -469,10 +469,10 @@ export class Observer {
       if (this.shuttingDown || isAbortError(error)) {
         throw error;
       }
-      console.error(`[muninn:observer] observation index retry failed: ${String(error)}`);
+      console.error(`[muninn:observer] extraction index retry failed: ${String(error)}`);
       this.nextIndexRetryAt = Date.now() + INDEX_RETRY_DELAY_MS;
     } finally {
-      if (!this.hasPendingObservation()) {
+      if (!this.hasPendingExtraction()) {
         this.nextIndexRetryAt = undefined;
       }
       this.notifyChange();
@@ -483,7 +483,7 @@ export class Observer {
     return this.threads
       .filter((thread) => isActiveThread(thread.updatedAt, this.activeWindowDays))
       .map((thread) => ({
-        observingId: thread.observingId,
+        sessionId: thread.sessionId ?? thread.observingId,
         latestSnapshotId: thread.snapshotId ?? '',
         latestSnapshotSequence: thread.snapshots.length - 1,
         indexedSnapshotSequence: thread.indexedSnapshotSequence ?? null,
@@ -502,24 +502,24 @@ export class Observer {
   private async restoreCheckpointState(): Promise<{
     threads: ObservingThread[];
     committedEpoch?: number;
-    pendingTurns: SessionTurn[];
+    pendingTurns: Turn[];
   } | null> {
     const section = this.checkpoint;
     if (!section) {
       return null;
     }
-    const observingDelta = await this.client.observingTable.delta({
+    const sessionDelta = await this.client.sessionTable.delta({
       observer: this.name,
-      baselineVersion: section.baseline.observing,
+      baselineVersion: section.baseline.session,
     });
-    const turns = (await this.client.sessionTable.loadTurnsAfterEpoch({
+    const turns = (await this.client.turnTable.loadTurnsAfterEpoch({
       observer: this.name,
       committedEpoch: section.committedEpoch ?? null,
-    })).map(readSessionTurn);
+    })).map(readTurn);
     const turnById = new Map(turns.map((turn) => [turn.turnId, turn]));
     const restored = await this.restoreThreadsFromCheckpoint(
       section,
-      observingDelta,
+      sessionDelta,
       turnById,
     );
     if (!restored) {
@@ -537,18 +537,18 @@ export class Observer {
 
   private async restoreThreadsFromCheckpoint(
     section: ObserverCheckpoint,
-    deltaRows: Array<import('./types.js').ObservingSnapshot>,
-    turnById: Map<string, SessionTurn>,
+    deltaRows: Array<import('./types.js').SessionSnapshot>,
+    turnById: Map<string, Turn>,
   ): Promise<{
     threads: ObservingThread[];
     observedTurnIds: Set<string>;
     committedEpoch?: number;
   } | null> {
-    const rowsById = new Map<string, Array<import('./types.js').ObservingSnapshot>>();
+    const rowsById = new Map<string, Array<import('./types.js').SessionSnapshot>>();
     for (const row of deltaRows) {
-      const rows = rowsById.get(row.observingId) ?? [];
+      const rows = rowsById.get(row.sessionId) ?? [];
       rows.push(row);
-      rowsById.set(row.observingId, rows);
+      rowsById.set(row.sessionId, rows);
     }
     const restored: ObservingThread[] = [];
     const observedTurnIds = new Set<string>();
@@ -558,7 +558,7 @@ export class Observer {
       if (!isActiveThread(threadRef.updatedAt, this.activeWindowDays)) {
         continue;
       }
-      const rows = await this.client.observingTable.threadSnapshots(threadRef.observingId);
+      const rows = await this.client.sessionTable.threadSnapshots(threadRef.sessionId);
       if (rows.length === 0) {
         return null;
       }
@@ -578,7 +578,7 @@ export class Observer {
         threadRef.indexedSnapshotSequence ?? null,
       );
       let previousRefs = new Set(latest.references);
-      const appendedRows = (rowsById.get(threadRef.observingId) ?? [])
+      const appendedRows = (rowsById.get(threadRef.sessionId) ?? [])
         .filter((row) => row.snapshotSequence > threadRef.latestSnapshotSequence)
         .sort((left, right) => left.snapshotSequence - right.snapshotSequence);
       for (const row of appendedRows) {
@@ -590,7 +590,7 @@ export class Observer {
         for (const reference of newRefs) {
           let turn = turnCache.get(reference);
           if (!turn) {
-            turn = await this.client.sessionTable.getTurn?.(reference) ?? undefined;
+            turn = await this.client.turnTable.getTurn?.(reference) ?? undefined;
             if (turn) {
               turnCache.set(reference, turn);
             }
@@ -615,7 +615,7 @@ export class Observer {
           : committedEpoch;
         previousRefs = new Set(row.references);
       }
-      rowsById.delete(threadRef.observingId);
+      rowsById.delete(threadRef.sessionId);
       restored.push(thread);
     }
     for (const rows of rowsById.values()) {
@@ -624,7 +624,7 @@ export class Observer {
       if (!first) {
         continue;
       }
-      const fullRows = (await this.client.observingTable.threadSnapshots(first.observingId))
+      const fullRows = (await this.client.sessionTable.threadSnapshots(first.sessionId))
         .sort((left, right) => left.snapshotSequence - right.snapshotSequence);
       const firstIndex = fullRows.findIndex((row) => row.snapshotId === first.snapshotId);
       if (firstIndex < 0) {
@@ -650,7 +650,7 @@ export class Observer {
         for (const reference of newRefs) {
           let turn = turnCache.get(reference);
           if (!turn) {
-            turn = await this.client.sessionTable.getTurn?.(reference) ?? undefined;
+            turn = await this.client.turnTable.getTurn?.(reference) ?? undefined;
             if (turn) {
               turnCache.set(reference, turn);
             }
@@ -685,7 +685,7 @@ export class Observer {
         for (const reference of newRefs) {
           let turn = turnCache.get(reference);
           if (!turn) {
-            turn = await this.client.sessionTable.getTurn?.(reference) ?? undefined;
+            turn = await this.client.turnTable.getTurn?.(reference) ?? undefined;
             if (turn) {
               turnCache.set(reference, turn);
             }
@@ -765,7 +765,7 @@ function cloneObservingRun(run: ObservingRun): ObservingRun {
     inputTurnIds: [...run.inputTurnIds],
     pending: run.pending ? { ...run.pending } : undefined,
     committed: {
-      observationIds: [...run.committed.observationIds],
+      extractionIds: [...run.committed.extractionIds],
       snapshotIds: [...run.committed.snapshotIds],
     },
     traceRefs: [...run.traceRefs],
@@ -773,11 +773,11 @@ function cloneObservingRun(run: ObservingRun): ObservingRun {
   };
 }
 
-function isObservable(turn: SessionTurn): boolean {
+function isObservable(turn: Turn): boolean {
   return Boolean(turn.response?.trim() && turn.summary?.trim());
 }
 
-function keepNewestTurn(byId: Map<string, SessionTurn>, turn: SessionTurn): void {
+function keepNewestTurn(byId: Map<string, Turn>, turn: Turn): void {
   const existing = byId.get(turn.turnId);
   if (!existing || existing.updatedAt < turn.updatedAt) {
     byId.set(turn.turnId, turn);
@@ -785,9 +785,9 @@ function keepNewestTurn(byId: Map<string, SessionTurn>, turn: SessionTurn): void
 }
 
 function pendingObservableTurns(
-  turns: SessionTurn[],
+  turns: Turn[],
   committedEpoch?: number,
-): SessionTurn[] {
+): Turn[] {
   const recoveredEpoch = committedEpoch == null ? 0 : committedEpoch + 1;
   return turns
     .filter(isObservable)
@@ -803,7 +803,7 @@ function pendingObservableTurns(
     ));
 }
 
-function compareTurns(left: SessionTurn, right: SessionTurn): number {
+function compareTurns(left: Turn, right: Turn): number {
   return left.createdAt.localeCompare(right.createdAt)
     || left.updatedAt.localeCompare(right.updatedAt)
     || left.turnId.localeCompare(right.turnId);

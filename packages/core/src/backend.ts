@@ -1,6 +1,6 @@
 import {
   __testing as nativeTesting,
-  describeObservationForStorage,
+  describeExtractionForStorage,
   getNativeTables,
   shutdownNativeTablesForTests,
   type NativeTables,
@@ -23,12 +23,12 @@ import {
 } from './checkpoint.js';
 import { Memories } from './memories/memories.js';
 import { Observer } from './observer/observer.js';
-import { SessionRegistry } from './session/registry.js';
-import { readSessionTurn } from './session/types.js';
+import { SessionRegistry } from './turn/registry.js';
+import { readTurn } from './turn/types.js';
 import { Watchdog } from './watchdog.js';
 import type { Artifact, ToolCall, TurnContent } from '@muninn/types';
 
-export interface SessionTurn {
+export interface Turn {
   turnId: string;
   createdAt: string;
   updatedAt: string;
@@ -46,9 +46,9 @@ export interface SessionTurn {
   recentContext?: RecentTurn[];
 }
 
-export interface ObservingSnapshot {
+export interface SessionSnapshot {
   snapshotId: string;
-  observingId: string;
+  sessionId: string;
   snapshotSequence: number;
   createdAt: string;
   updatedAt: string;
@@ -71,7 +71,10 @@ export interface RenderedMemory {
 export interface RecallHit {
   memoryId: string;
   text: string;
+  references?: string[];
 }
+
+export type RecallMode = 'vector' | 'fts' | 'hybrid';
 
 export interface ObserverWatermark {
   resolved: boolean;
@@ -227,8 +230,12 @@ export class MuninnBackend {
     return this.checkpointLock.shared(async () => (await this.ensureObserver()).watermark());
   }
 
-  async recallMemories(query: string, limit?: number): Promise<RecallHit[]> {
-    return this.memories.recall(query, limit);
+  async recallMemories(
+    query: string,
+    limit?: number,
+    options?: { mode?: RecallMode; budget?: number; queryLimit?: number },
+  ): Promise<RecallHit[]> {
+    return this.memories.recall(query, limit, options);
   }
 
   async exportCheckpoint(): Promise<CheckpointContent | null> {
@@ -238,16 +245,16 @@ export class MuninnBackend {
       if (!observer || !observerCheckpoint) {
         return null;
       }
-      const [turnStats, observingStats, observationStats] = await Promise.all([
+      const [turnStats, observingStats, extractionStats] = await Promise.all([
+        this.client.turnTable.stats(),
         this.client.sessionTable.stats(),
-        this.client.observingTable.stats(),
-        this.client.observationTable.stats(),
+        this.client.extractionTable.stats(),
       ]);
       const checkpoint: ObserverCheckpoint = {
         baseline: {
           turn: turnStats?.version ?? 0,
-          observing: observingStats?.version ?? 0,
-          observation: observationStats?.version ?? 0,
+          session: observingStats?.version ?? 0,
+          extraction: extractionStats?.version ?? 0,
         },
         committedEpoch: observerCheckpoint.committedEpoch,
         nextEpoch: observerCheckpoint.nextEpoch,
@@ -301,12 +308,12 @@ export class MuninnBackend {
         session.turns,
       );
     }
-    const delta = await this.client.sessionTable.delta({
+    const delta = await this.client.turnTable.delta({
       observer: this.sessionRegistry.observerName,
       baselineVersion: this.checkpoint.observer.baseline.turn,
     });
     for (const row of delta) {
-      const turn = readSessionTurn(row);
+      const turn = readTurn(row);
       if (!turn.observer || turn.observer !== this.sessionRegistry.observerName) {
         continue;
       }
@@ -333,7 +340,7 @@ async function ensureBootstrapped() {
 async function bootstrap(tables: Awaited<ReturnType<typeof getNativeTables>>): Promise<void> {
   if (loadMuninnConfig()?.observer) {
     const embedding = getEmbeddingConfig();
-    await tables.observationTable.validateDimensions({ expected: embedding.dimensions });
+    await tables.extractionTable.validateDimensions({ expected: embedding.dimensions });
   }
 }
 
@@ -363,34 +370,34 @@ export async function addMessage(turnContent: TurnContent): Promise<void> {
 export async function validateSettings(content: string): Promise<void> {
   const config = validateMuninnConfigInput(content);
   const storage = resolveStorageTarget(config);
-  const description = await describeObservationForStorage(storage);
+  const description = await describeExtractionForStorage(storage);
   await validateMuninnConfigStorage(config, description);
 }
 
-export const sessions = {
-  async get(memoryId: string): Promise<SessionTurn | null> {
-    return (await getBackend()).memories.getSession(memoryId);
+export const turns = {
+  async get(memoryId: string): Promise<Turn | null> {
+    return (await getBackend()).memories.getTurn(memoryId);
   },
 
   async list(params: {
     mode: ListModeInput;
     agent?: string;
     sessionId?: string;
-  }): Promise<SessionTurn[]> {
-    return (await getBackend()).memories.listSessions(params);
+  }): Promise<Turn[]> {
+    return (await getBackend()).memories.listTurns(params);
   },
 };
 
-export const observings = {
-  async get(memoryId: string): Promise<ObservingSnapshot | null> {
-    return (await getBackend()).memories.getObserving(memoryId);
+export const sessions = {
+  async get(memoryId: string): Promise<SessionSnapshot | null> {
+    return (await getBackend()).memories.getSession(memoryId);
   },
 
   async list(params: {
     mode: ListModeInput;
     observer?: string;
-  }): Promise<ObservingSnapshot[]> {
-    return (await getBackend()).memories.listObservings(params);
+  }): Promise<SessionSnapshot[]> {
+    return (await getBackend()).memories.listSessions(params);
   },
 };
 
@@ -413,8 +420,12 @@ export const memories = {
     return (await getBackend()).memories.timeline(params);
   },
 
-  async recall(query: string, limit?: number): Promise<RecallHit[]> {
-    return (await getBackend()).recallMemories(query, limit);
+  async recall(
+    query: string,
+    limit?: number,
+    options?: { mode?: RecallMode; budget?: number; queryLimit?: number },
+  ): Promise<RecallHit[]> {
+    return (await getBackend()).recallMemories(query, limit, options);
   },
 };
 
@@ -443,8 +454,8 @@ export const __testing = {
 const core = {
   addMessage,
   validateSettings,
+  turns,
   sessions,
-  observings,
   memories,
   observer,
   shutdownCoreForTests,

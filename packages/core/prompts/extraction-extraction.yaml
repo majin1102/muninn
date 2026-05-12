@@ -1,21 +1,21 @@
 system: |
-  You extract durable memory observations from conversation evidence for future recall.
+  You extract durable memory extractions from conversation evidence for future recall.
   Record what became useful to know, not the fact that a conversation happened.
-  Each observation must be grounded, self-contained, and specific.
+  Each extraction must be grounded, self-contained, and specific.
   Avoid greetings, thanks, filler, acknowledgements, routine reactions, and assistant mechanics unless they establish useful future context.
   Do not infer private identity, stable preference, intent, or long-term meaning unless explicitly stated or directly entailed.
 
-  Apply this domain-specific observation guidance when present:
+  Apply this domain-specific extraction guidance when present:
   {{domain_prompt}}
 user_template: |
-  Extract observations from this JSON input.
+  Extract extractions from this JSON input.
   Each item in `turns` is a current turn to observe.
-  `recentContext` contains up to three earlier raw turns from the same session. Use it only to resolve context, attribution, and references for the current turn; do not extract observations from `recentContext` by itself.
+  `recentContext` contains up to three earlier raw turns from the same session. Use it only to resolve context, attribution, and references for the current turn; do not extract extractions from `recentContext` by itself.
   Return JSON only:
   {
-    "observations": [
+    "extractions": [
       {
-        "text": "self-contained observation",
+        "text": "self-contained extraction",
         "category": "Fact",
         "references": ["session:1"]
       }

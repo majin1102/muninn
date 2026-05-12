@@ -20,6 +20,7 @@ def build_run_metadata(
     mode: str = "diagnostic",
     answerer: str = "llm",
     expand_references: bool = False,
+    recall_mode: str = "hybrid",
 ) -> dict[str, Any]:
     config_path = active_config_path()
     config = read_json_object(config_path)
@@ -28,8 +29,8 @@ def build_run_metadata(
     observer_llm = {}
     if isinstance(observer_ref, str) and isinstance(config.get("llm"), dict):
         observer_llm = config["llm"].get(observer_ref, {}) or {}
-    semantic_index = config.get("semanticIndex", {})
-    embedding = semantic_index.get("embedding", {}) if isinstance(semantic_index, dict) else {}
+    observation = config.get("observation", {})
+    embedding = observation.get("embedding", {}) if isinstance(observation, dict) else {}
     return {
         "run_name": run_name,
         "data_file": str(data_file),
@@ -38,6 +39,7 @@ def build_run_metadata(
         "mode": mode,
         "answerer": answerer,
         "expand_references": expand_references,
+        "recall_mode": recall_mode,
         "started_at": started_at,
         "completed_at": completed_at,
         "config_path": str(config_path),
@@ -63,6 +65,9 @@ def write_run_metadata(out_file: Path, metadata: dict[str, Any]) -> Path:
 
 
 def active_config_path() -> Path:
+    local = Path.cwd() / "muninn.json"
+    if local.exists():
+        return local
     home = os.environ.get("MUNINN_HOME")
     if home and home.strip():
         return Path(home) / "muninn.json"

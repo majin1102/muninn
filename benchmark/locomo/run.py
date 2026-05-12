@@ -28,7 +28,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--data-file", required=True, type=Path)
     parser.add_argument("--out-file", required=True, type=Path)
     parser.add_argument("--progress-file", default=None, type=Path)
-    parser.add_argument("--top-k", default=5, type=int)
+    parser.add_argument("--top-k", default=3, type=int)
+    parser.add_argument("--recall-mode", choices=["vector", "fts", "hybrid"], default="hybrid")
+    parser.add_argument("--budget", default=400, type=int)
+    parser.add_argument("--query-limit", default=8, type=int)
     parser.add_argument("--sample-id", default=None)
     parser.add_argument("--limit-questions", default=None, type=int)
     parser.add_argument("--keep-home", action="store_true")
@@ -63,6 +66,10 @@ def main() -> None:
         progress_file=args.progress_file,
         sample_count=len(selected),
         top_k=args.top_k,
+        top_k_ignored=args.budget > 0,
+        budget=args.budget,
+        query_limit=args.query_limit,
+        recall_mode=args.recall_mode,
         keep_home=args.keep_home,
         limit_questions=args.limit_questions,
         sample_filter=args.sample_id,
@@ -71,7 +78,7 @@ def main() -> None:
         expand_references=args.expand_references,
     )
 
-    model_key = build_model_key(args.top_k)
+    model_key = build_model_key(args.top_k, args.recall_mode, args.budget, args.query_limit)
     try:
         results = []
         gateway_routes_by_sample: dict[str, dict[str, list[dict[str, Any]]]] = {}
@@ -157,6 +164,7 @@ def main() -> None:
                     mode=args.mode,
                     answerer=args.answerer,
                     expand_references=args.expand_references,
+                    recall_mode=args.recall_mode,
                 ),
             ),
             out_file=args.out_file.with_name(f"{args.out_file.stem}_metadata.json"),
@@ -204,8 +212,10 @@ def ensure_selected_samples(
     )
 
 
-def build_model_key(top_k: int) -> str:
-    return f"muninn_top_{top_k}"
+def build_model_key(top_k: int, recall_mode: str = "hybrid", budget: int = 0, query_limit: int = 8) -> str:
+    if budget > 0:
+        return f"muninn_{recall_mode}_encoded_budget_{budget}_query_{query_limit}"
+    return f"muninn_{recall_mode}_top_{top_k}"
 
 
 def utc_now() -> str:
@@ -318,11 +328,17 @@ def run_unit(
                 qas,
                 args.top_k,
                 home_dir.path,
+                args.recall_mode,
+                args.budget,
+                args.query_limit,
             ),
             sample_id=sample_id,
             qa_count=len(qas),
             query_candidate_count=query_count,
             top_k=args.top_k,
+            budget=args.budget,
+            query_limit=args.query_limit,
+            recall_mode=args.recall_mode,
             home_dir=home_dir.path,
         )
         run_phase(
@@ -565,6 +581,7 @@ def apply_predictions(
                 category=category,
                 answer_context=answer_context,
                 config=answerer_config,
+                adversarial_answer=qa.get("adversarial_answer") if isinstance(qa.get("adversarial_answer"), str) else None,
             )
             qa[f"{hit_key_prefix}_answer_elapsed_s"] = round(monotonic() - answer_started_at, 4)
             qa[prediction_key] = answer_result["answer"]
@@ -590,12 +607,9 @@ def apply_predictions(
             {
                 "memory_id": hit.memory_id,
                 "matched_text": hit.matched_text,
-                "title": hit.title,
-                "summary": hit.summary,
                 "detail": hit.detail,
                 "observationRatio": hit.observation_ratio,
                 "evidence_ids": hit.evidence_ids,
-                "date_time": hit.date_time,
                 "references": hit.references,
             }
             for hit in hits
@@ -666,6 +680,10 @@ def collect_batch_hits(
     qas: list[dict[str, object]],
     top_k: int,
     home_dir: Path,
+    recall_mode: str = "hybrid",
+    budget: int = 0,
+    query_limit: int = 8,
+    skip_watermark: bool = False,
 ) -> dict[int, list[RecallHit]]:
     queries = []
     ordered_candidates: dict[int, list[str]] = {}
@@ -678,7 +696,14 @@ def collect_batch_hits(
             queries.append({"key": key, "query": query, "limit": top_k})
         ordered_candidates[index] = candidate_keys
 
-    batch_results = bridge.recall_batch(queries, home_dir)
+    batch_results = bridge.recall_batch(
+        queries,
+        home_dir,
+        recall_mode,
+        budget=budget,
+        query_limit=query_limit,
+        skip_watermark=skip_watermark,
+    )
     merged_results: dict[int, list[RecallHit]] = {}
     for qa_index, candidate_keys in ordered_candidates.items():
         hits: list[RecallHit] = []
@@ -689,9 +714,9 @@ def collect_batch_hits(
                     continue
                 seen_memory_ids.add(hit.memory_id)
                 hits.append(hit)
-                if len(hits) >= top_k:
+                if budget > 0 or len(hits) >= top_k:
                     break
-            if len(hits) >= top_k:
+            if budget > 0 or len(hits) >= top_k:
                 break
         merged_results[qa_index] = hits
     return merged_results

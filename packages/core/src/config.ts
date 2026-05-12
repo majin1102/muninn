@@ -16,7 +16,10 @@ const DEFAULT_WATCHDOG_INTERVAL_MS = 60_000;
 const DEFAULT_WATCHDOG_COMPACT_MIN_FRAGMENTS = 8;
 const DEFAULT_WATCHDOG_TARGET_PARTITION_SIZE = 1_024;
 const DEFAULT_WATCHDOG_OPTIMIZE_MERGE_COUNT = 4;
-const DEFAULT_OBSERVATION_DIMENSIONS = 8;
+const DEFAULT_EXTRACTION_DIMENSIONS = 8;
+const DEFAULT_RECALL_MODE = 'hybrid';
+
+export type RecallMode = 'vector' | 'fts' | 'hybrid';
 
 type LlmConfigRecord = {
   provider: string;
@@ -51,9 +54,10 @@ type EmbeddingConfigRecord = {
   dimensions?: number;
 };
 
-type ObservationConfigRecord = {
+type ExtractionConfigRecord = {
   embedding?: EmbeddingConfigRecord;
   defaultImportance?: number;
+  recallMode?: RecallMode;
 };
 
 type MuninnConfigRecord = {
@@ -61,7 +65,7 @@ type MuninnConfigRecord = {
   turn?: TurnConfigRecord;
   observer?: ObserverConfigRecord;
   llm?: Record<string, LlmConfigRecord>;
-  observation?: ObservationConfigRecord;
+  extraction?: ExtractionConfigRecord;
   watchdog?: Record<string, unknown>;
 };
 
@@ -97,11 +101,15 @@ export type EmbeddingConfig = {
   defaultImportance: number;
 };
 
+export type RecallConfig = {
+  mode: RecallMode;
+};
+
 export type WatchdogConfig = {
   enabled: boolean;
   intervalMs: number;
   compactMinFragments: number;
-  observation: {
+  extraction: {
     targetPartitionSize: number;
     optimizeMergeCount: number;
   };
@@ -110,7 +118,7 @@ export type WatchdogConfig = {
 type CoreRuntimeConfig = {
   observer: ObserverConfigRecord;
   observerLlm: LlmConfigRecord;
-  observation: ObservationConfigRecord;
+  extraction: ExtractionConfigRecord;
   embedding: EmbeddingConfigRecord & { dimensions: number };
 };
 
@@ -171,20 +179,26 @@ export function getEffectiveObserverName(): string {
 }
 
 export function getEmbeddingConfig(): EmbeddingConfig {
-  const { observation, embedding } = requireCoreRuntimeConfig(loadMuninnConfig());
+  const { extraction, embedding } = requireCoreRuntimeConfig(loadMuninnConfig());
   return {
     provider: parseEmbeddingProvider(embedding.provider),
     model: embedding.model,
     apiKey: embedding.apiKey,
     baseUrl: embedding.baseUrl,
     dimensions: embedding.dimensions,
-    defaultImportance: observation.defaultImportance ?? DEFAULT_IMPORTANCE,
+    defaultImportance: extraction.defaultImportance ?? DEFAULT_IMPORTANCE,
+  };
+}
+
+export function getRecallConfig(): RecallConfig {
+  return {
+    mode: parseRecallMode(loadMuninnConfig()?.extraction?.recallMode ?? DEFAULT_RECALL_MODE),
   };
 }
 
 export function getWatchdogConfig(): WatchdogConfig {
   const watchdog = loadMuninnConfig()?.watchdog as Record<string, unknown> | undefined;
-  const observation = watchdog?.observation as Record<string, unknown> | undefined;
+  const extraction = watchdog?.extraction as Record<string, unknown> | undefined;
   return {
     enabled: typeof watchdog?.enabled === 'boolean' ? watchdog.enabled : true,
     intervalMs: typeof watchdog?.intervalMs === 'number'
@@ -193,12 +207,12 @@ export function getWatchdogConfig(): WatchdogConfig {
     compactMinFragments: typeof watchdog?.compactMinFragments === 'number'
       ? watchdog.compactMinFragments
       : DEFAULT_WATCHDOG_COMPACT_MIN_FRAGMENTS,
-    observation: {
-      targetPartitionSize: typeof observation?.targetPartitionSize === 'number'
-        ? observation.targetPartitionSize
+    extraction: {
+      targetPartitionSize: typeof extraction?.targetPartitionSize === 'number'
+        ? extraction.targetPartitionSize
         : DEFAULT_WATCHDOG_TARGET_PARTITION_SIZE,
-      optimizeMergeCount: typeof observation?.optimizeMergeCount === 'number'
-        ? observation.optimizeMergeCount
+      optimizeMergeCount: typeof extraction?.optimizeMergeCount === 'number'
+        ? extraction.optimizeMergeCount
         : DEFAULT_WATCHDOG_OPTIMIZE_MERGE_COUNT,
     },
   };
@@ -254,7 +268,7 @@ export async function validateMuninnConfigStorage(
   }
   if (actualDimensions !== expectedDimensions) {
     throw new Error(
-      `observation dimension mismatch: muninn.json expects ${expectedDimensions}, but the existing observation table stores ${actualDimensions}; update observation.embedding.dimensions or rebuild the observation table`,
+      `extraction dimension mismatch: muninn.json expects ${expectedDimensions}, but the existing extraction table stores ${actualDimensions}; update extraction.embedding.dimensions or rebuild the extraction table`,
     );
   }
 }
@@ -266,21 +280,21 @@ function requireCoreRuntimeConfig(config: MuninnConfigRecord | null): CoreRuntim
   if (!config.llm) {
     throw new Error('llm is required.');
   }
-  if (!config.observation) {
-    throw new Error('observation is required.');
+  if (!config.extraction) {
+    throw new Error('extraction is required.');
   }
-  if (!config.observation.embedding) {
-    throw new Error('observation.embedding is required.');
+  if (!config.extraction.embedding) {
+    throw new Error('extraction.embedding is required.');
   }
 
   const observer = config.observer;
   const llm = config.llm;
-  const observation = config.observation;
-  const embedding = config.observation.embedding;
+  const extraction = config.extraction;
+  const embedding = config.extraction.embedding;
 
   requireNonEmptyString(observer.name, 'observer.name');
   requireNonEmptyString(observer.llm, 'observer.llm');
-  requireNonEmptyString(embedding.provider, 'observation.embedding.provider');
+  requireNonEmptyString(embedding.provider, 'extraction.embedding.provider');
   const dimensions = effectiveEmbeddingDimensions(config);
   parseEmbeddingProvider(embedding.provider);
 
@@ -294,7 +308,7 @@ function requireCoreRuntimeConfig(config: MuninnConfigRecord | null): CoreRuntim
   return {
     observer,
     observerLlm,
-    observation,
+    extraction,
     embedding: {
       ...embedding,
       dimensions,
@@ -319,20 +333,20 @@ function parseEmbeddingProvider(provider: string): 'mock' | 'openai' {
 function validateTopLevelConfig(config: MuninnConfigRecord): void {
   const raw = config as Record<string, unknown>;
   if (raw.semanticIndex !== undefined) {
-    throw new Error('semanticIndex is no longer supported; use observation instead.');
+    throw new Error('semanticIndex is no longer supported; use extraction instead.');
   }
   validateStorageConfig(config.storage);
   validateTurnConfig(config.turn);
   validateObserverConfig(config.observer);
   validateLlmConfig(config.llm);
-  validateObservationConfig(config.observation);
+  validateExtractionConfig(config.extraction);
   validateWatchdogConfig(config.watchdog);
 }
 
 function validateConfiguredProviders(config: MuninnConfigRecord): void {
   validateReferencedProvider(config.llm, config.turn?.llm, 'turn.llm');
   validateReferencedProvider(config.llm, config.observer?.llm, 'observer.llm');
-  const embeddingProvider = config.observation?.embedding?.provider;
+  const embeddingProvider = config.extraction?.embedding?.provider;
   if (embeddingProvider) {
     parseEmbeddingProvider(embeddingProvider);
   }
@@ -387,33 +401,43 @@ function validateLlmConfig(llm: unknown): void {
   }
 }
 
-function validateObservationConfig(observation: unknown): void {
-  if (observation === undefined) {
+function validateExtractionConfig(extraction: unknown): void {
+  if (extraction === undefined) {
     return;
   }
-  const config = expectRecord(observation, 'observation');
+  const config = expectRecord(extraction, 'extraction');
   if (config.embedding === undefined) {
-    throw new Error('observation.embedding is required.');
+    throw new Error('extraction.embedding is required.');
   }
-  const embedding = expectRecord(config.embedding, 'observation.embedding');
-  requireNonEmptyString(embedding.provider, 'observation.embedding.provider');
+  const embedding = expectRecord(config.embedding, 'extraction.embedding');
+  requireNonEmptyString(embedding.provider, 'extraction.embedding.provider');
   const provider = parseEmbeddingProvider(embedding.provider as string);
-  validateOptionalString(embedding.model, 'observation.embedding.model');
-  validateOptionalString(embedding.apiKey, 'observation.embedding.apiKey');
-  validateOptionalString(embedding.baseUrl, 'observation.embedding.baseUrl');
-  validateOptionalPositiveInteger(embedding.dimensions, 'observation.embedding.dimensions');
-  validateOptionalNumber(config.defaultImportance, 'observation.defaultImportance');
+  validateOptionalString(embedding.model, 'extraction.embedding.model');
+  validateOptionalString(embedding.apiKey, 'extraction.embedding.apiKey');
+  validateOptionalString(embedding.baseUrl, 'extraction.embedding.baseUrl');
+  validateOptionalPositiveInteger(embedding.dimensions, 'extraction.embedding.dimensions');
+  validateOptionalNumber(config.defaultImportance, 'extraction.defaultImportance');
+  if (config.recallMode !== undefined) {
+    parseRecallMode(config.recallMode);
+  }
   if (provider === 'openai') {
-    requireNonEmptyString(embedding.apiKey, 'observation.embedding.apiKey');
+    requireNonEmptyString(embedding.apiKey, 'extraction.embedding.apiKey');
   }
 }
 
-function effectiveEmbeddingDimensions(config: MuninnConfigRecord | null): number {
-  const dimensions = config?.observation?.embedding?.dimensions;
-  if (dimensions === undefined) {
-    return DEFAULT_OBSERVATION_DIMENSIONS;
+export function parseRecallMode(value: unknown): RecallMode {
+  if (value === 'vector' || value === 'fts' || value === 'hybrid') {
+    return value;
   }
-  return requirePositiveInteger(dimensions, 'observation.embedding.dimensions');
+  throw new Error('extraction.recallMode must be one of: vector, fts, hybrid');
+}
+
+function effectiveEmbeddingDimensions(config: MuninnConfigRecord | null): number {
+  const dimensions = config?.extraction?.embedding?.dimensions;
+  if (dimensions === undefined) {
+    return DEFAULT_EXTRACTION_DIMENSIONS;
+  }
+  return requirePositiveInteger(dimensions, 'extraction.embedding.dimensions');
 }
 
 function validateWatchdogConfig(watchdog: unknown): void {
@@ -424,15 +448,15 @@ function validateWatchdogConfig(watchdog: unknown): void {
   validateOptionalBoolean(config.enabled, 'watchdog.enabled');
   validateOptionalPositiveInteger(config.intervalMs, 'watchdog.intervalMs');
   validateOptionalPositiveInteger(config.compactMinFragments, 'watchdog.compactMinFragments');
-  if (config.observation !== undefined) {
-    const observation = expectRecord(config.observation, 'watchdog.observation');
+  if (config.extraction !== undefined) {
+    const extraction = expectRecord(config.extraction, 'watchdog.extraction');
     validateOptionalPositiveInteger(
-      observation.targetPartitionSize,
-      'watchdog.observation.targetPartitionSize',
+      extraction.targetPartitionSize,
+      'watchdog.extraction.targetPartitionSize',
     );
     validateOptionalPositiveInteger(
-      observation.optimizeMergeCount,
-      'watchdog.observation.optimizeMergeCount',
+      extraction.optimizeMergeCount,
+      'watchdog.extraction.optimizeMergeCount',
     );
   }
 }

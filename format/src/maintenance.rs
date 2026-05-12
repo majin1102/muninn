@@ -4,11 +4,14 @@ use lance::dataset::cleanup::CleanupPolicy;
 use lance::dataset::optimize::{CompactionOptions, compact_files};
 use lance::index::vector::VectorIndexParams;
 use lance_index::optimize::OptimizeOptions;
+use lance_index::scalar::InvertedIndexParams;
 use lance_index::vector::ivf::builder::recommended_num_partitions;
 use lance_index::{DatasetIndexExt, IndexType};
 use lance_linalg::distance::MetricType;
 
 pub(crate) const SEMANTIC_VECTOR_INDEX_NAME: &str = "semantic_vector_idx";
+pub(crate) const EXTRACTION_FTS_INDEX_NAME: &str = "extraction_fts_idx";
+pub(crate) const EXTRACTION_SEARCH_TEXT_COLUMN: &str = "search_text";
 
 pub(crate) async fn compact_dataset(dataset: Option<Dataset>) -> Result<bool> {
     let Some(mut dataset) = dataset else {
@@ -53,18 +56,41 @@ pub(crate) async fn ensure_semantic_vector_index(
     Ok(true)
 }
 
-pub(crate) async fn optimize_observation(
-    dataset: &mut Dataset,
-    merge_count: usize,
-) -> Result<bool> {
-    if !has_index_named(dataset, SEMANTIC_VECTOR_INDEX_NAME).await? {
+pub(crate) async fn ensure_extraction_fts_index(dataset: &mut Dataset) -> Result<bool> {
+    if has_index_named(dataset, EXTRACTION_FTS_INDEX_NAME).await? {
+        return Ok(false);
+    }
+
+    let row_count = dataset.count_rows(None).await? as usize;
+    if row_count == 0 {
         return Ok(false);
     }
     dataset
-        .optimize_indices(
-            &OptimizeOptions::merge(merge_count)
-                .index_names(vec![SEMANTIC_VECTOR_INDEX_NAME.to_string()]),
+        .create_index_builder(
+            &[EXTRACTION_SEARCH_TEXT_COLUMN],
+            IndexType::Inverted,
+            &InvertedIndexParams::default(),
         )
+        .name(EXTRACTION_FTS_INDEX_NAME.to_string())
+        .await?;
+    Ok(true)
+}
+
+pub(crate) async fn optimize_extraction(
+    dataset: &mut Dataset,
+    merge_count: usize,
+) -> Result<bool> {
+    let mut names = Vec::new();
+    for name in [SEMANTIC_VECTOR_INDEX_NAME, EXTRACTION_FTS_INDEX_NAME] {
+        if has_index_named(dataset, name).await? {
+            names.push(name.to_string());
+        }
+    }
+    if names.is_empty() {
+        return Ok(false);
+    }
+    dataset
+        .optimize_indices(&OptimizeOptions::merge(merge_count).index_names(names))
         .await?;
     Ok(true)
 }
@@ -86,11 +112,11 @@ mod tests {
 
     use super::{
         SEMANTIC_VECTOR_INDEX_NAME, cleanup_dataset, compact_dataset, ensure_semantic_vector_index,
-        optimize_observation,
+        optimize_extraction,
     };
     use crate::config::{CONFIG_FILE_NAME, llm_test_env_guard};
     use crate::{
-        MemoryId, MemoryLayer, Observation, ObservationTable, SessionTable, SessionTurn,
+        MemoryId, MemoryLayer, Extraction, ExtractionTable, TurnTable, Turn,
         TableOptions,
     };
 
@@ -104,7 +130,7 @@ mod tests {
         fs::write(
             home.join(CONFIG_FILE_NAME),
             serde_json::to_string_pretty(&json!({
-                "observation": {
+                "extraction": {
                     "embedding": {
                         "provider": "mock",
                         "dimensions": 4
@@ -127,15 +153,17 @@ mod tests {
         }
         write_watchdog_config(&dir);
 
-        let table = ObservationTable::new(test_table_options());
+        let table = ExtractionTable::new(test_table_options());
         table
-            .upsert(vec![Observation {
+            .upsert(vec![Extraction {
                 id: "row-1".to_string(),
                 text: "alpha".to_string(),
+                context: None,
+                anchors: vec![],
                 vector: vec![0.1, 0.2, 0.3, 0.4],
                 importance: 0.7,
                 category: "fact".to_string(),
-                references: vec!["observing:1".to_string()],
+                references: vec!["turn:1".to_string()],
                 created_at: chrono::Utc::now(),
             }])
             .await
@@ -168,7 +196,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn optimize_observation_noops_without_index() {
+    async fn optimize_extraction_noops_without_index() {
         let _guard = llm_test_env_guard();
         let dir = tempfile::tempdir().unwrap();
         let home = dir.path().join("muninn");
@@ -178,27 +206,29 @@ mod tests {
         }
         write_watchdog_config(&dir);
 
-        let session_table = SessionTable::new(test_table_options());
+        let session_table = TurnTable::new(test_table_options());
         let compacted = compact_dataset(session_table.try_open_dataset().await.unwrap())
             .await
             .unwrap();
         assert!(!compacted);
 
-        let table = ObservationTable::new(test_table_options());
+        let table = ExtractionTable::new(test_table_options());
         table
-            .upsert(vec![Observation {
+            .upsert(vec![Extraction {
                 id: "row-1".to_string(),
                 text: "alpha".to_string(),
+                context: None,
+                anchors: vec![],
                 vector: vec![0.1, 0.2, 0.3, 0.4],
                 importance: 0.7,
                 category: "fact".to_string(),
-                references: vec!["observing:1".to_string()],
+                references: vec!["turn:1".to_string()],
                 created_at: chrono::Utc::now(),
             }])
             .await
             .unwrap();
         let mut dataset = table.try_open_dataset().await.unwrap().unwrap();
-        let optimized = optimize_observation(&mut dataset, 2).await.unwrap();
+        let optimized = optimize_extraction(&mut dataset, 2).await.unwrap();
         assert!(!optimized);
     }
 
@@ -212,10 +242,10 @@ mod tests {
             std::env::set_var("MUNINN_HOME", &home);
         }
 
-        let table = SessionTable::new(test_table_options());
+        let table = TurnTable::new(test_table_options());
         let now = chrono::Utc::now();
-        let mut turn = SessionTurn {
-            turn_id: MemoryId::new(MemoryLayer::Session, u64::MAX),
+        let mut turn = Turn {
+            turn_id: MemoryId::new(MemoryLayer::Turn, u64::MAX),
             created_at: now,
             updated_at: now,
             session_id: Some("group-a".to_string()),
@@ -231,7 +261,7 @@ mod tests {
         };
         table.insert(std::slice::from_mut(&mut turn)).await.unwrap();
         let mut second_turn = turn.clone();
-        second_turn.turn_id = MemoryId::new(MemoryLayer::Session, u64::MAX);
+        second_turn.turn_id = MemoryId::new(MemoryLayer::Turn, u64::MAX);
         second_turn.created_at = chrono::Utc::now();
         second_turn.updated_at = second_turn.created_at;
         second_turn.prompt = Some("prompt-2".to_string());

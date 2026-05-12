@@ -33,20 +33,20 @@ test('thread preparation memory-get expands allowlisted memories only', async (t
   };
 
   const result = await __testing.prepareThreadsWithModel({
-    reviewedObservations: [
-      storedObservation('obs-1'),
-      storedObservation('obs-2'),
+    reviewedExtractions: [
+      storedExtraction('obs-1'),
+      storedExtraction('obs-2'),
     ],
     activeThreads: [
       {
         threadId: 'thread-1',
-        memoryId: 'observing:snapshot-1',
+        memoryId: 'session:1',
         title: 'Existing thread',
         summary: 'Existing summary',
       },
     ],
     candidateMemories: [
-      { memoryId: 'session:1', title: 'Candidate session', summary: 'Candidate summary' },
+      { memoryId: 'turn:1', title: 'Candidate session', summary: 'Candidate summary' },
     ],
   }, {
     memories,
@@ -62,10 +62,10 @@ test('thread preparation memory-get expands allowlisted memories only', async (t
               name: 'memory-get',
               arguments: {
                 memoryIds: [
+                  'turn:1',
                   'session:1',
-                  'observing:snapshot-1',
-                  'observation:obs-1',
-                  'session:not-allowed',
+                  'extraction:obs-1',
+                  'turn:not-allowed',
                 ],
               },
             },
@@ -73,64 +73,64 @@ test('thread preparation memory-get expands allowlisted memories only', async (t
         };
       }
       const toolMessage = request.messages.find((message) => message.role === 'tool');
+      assert.match(toolMessage.content, /"memoryId":"turn:1"/);
       assert.match(toolMessage.content, /"memoryId":"session:1"/);
-      assert.match(toolMessage.content, /"memoryId":"observing:snapshot-1"/);
-      assert.match(toolMessage.content, /"memoryId":"observation:obs-1"/);
-      assert.match(toolMessage.content, /"memoryId":"session:not-allowed","error":"memory id is not allowlisted"/);
+      assert.match(toolMessage.content, /"memoryId":"extraction:obs-1"/);
+      assert.match(toolMessage.content, /"memoryId":"turn:not-allowed","error":"memory id is not allowlisted"/);
       return {
         type: 'final',
         text: JSON.stringify({
           workItems: [
             {
-              observationIds: ['obs-1', 'obs-2'],
-              newThreadTitle: 'Related observations',
-              rationale: 'The observations describe the same topic.',
+              extractionIds: ['obs-1', 'obs-2'],
+              newThreadTitle: 'Related extractions',
+              rationale: 'The extractions describe the same topic.',
             },
           ],
-          unthreadedObservationIds: [],
+          unthreadedExtractionIds: [],
         }),
       };
     },
   });
 
-  assert.deepEqual(requested, ['session:1', 'observing:snapshot-1', 'observation:obs-1']);
+  assert.deepEqual(requested, ['turn:1', 'session:1', 'extraction:obs-1']);
   assert.deepEqual(result, {
     workItems: [
       {
-        observationIds: ['obs-1', 'obs-2'],
-        newThreadTitle: 'Related observations',
-        rationale: 'The observations describe the same topic.',
+        extractionIds: ['obs-1', 'obs-2'],
+        newThreadTitle: 'Related extractions',
+        rationale: 'The extractions describe the same topic.',
       },
     ],
-    unthreadedObservationIds: [],
+    unthreadedExtractionIds: [],
   });
 });
 
-test('thread preparation candidates recall related memories and exclude reviewed observations', async () => {
+test('thread preparation candidates recall related memories and exclude reviewed extractions', async () => {
   const calls = [];
   const memories = {
     recall: async (query, limit) => {
       calls.push({ query, limit });
       if (query.includes('support group')) {
         return [
-          { memoryId: 'observation:obs-1', text: 'Current support observation' },
-          { memoryId: 'observation:old-support', text: 'Older support observation' },
+          { memoryId: 'extraction:obs-1', text: 'Current support extraction' },
+          { memoryId: 'extraction:old-support', text: 'Older support extraction' },
         ];
       }
       return [
-        { memoryId: 'observation:old-support', text: 'Older support observation duplicate' },
-        { memoryId: 'observation:career', text: 'Career observation' },
+        { memoryId: 'extraction:old-support', text: 'Older support extraction duplicate' },
+        { memoryId: 'extraction:career', text: 'Career extraction' },
       ];
     },
   };
 
   const candidates = await __testing.collectCandidateMemories({
-    reviewedObservations: [
-      storedObservation('obs-1', 'Caroline joined a support group.'),
-      storedObservation('obs-2', 'Caroline is considering counseling.'),
+    reviewedExtractions: [
+      storedExtraction('obs-1', 'Caroline joined a support group.'),
+      storedExtraction('obs-2', 'Caroline is considering counseling.'),
     ],
     memories,
-    limitPerObservation: 2,
+    limitPerExtraction: 2,
   });
 
   assert.deepEqual(calls, [
@@ -139,29 +139,29 @@ test('thread preparation candidates recall related memories and exclude reviewed
   ]);
   assert.deepEqual(candidates, [
     {
-      memoryId: 'observation:old-support',
-      title: 'Older support observation',
-      summary: 'Older support observation',
+      memoryId: 'extraction:old-support',
+      title: 'Older support extraction',
+      summary: 'Older support extraction',
     },
     {
-      memoryId: 'observation:career',
-      title: 'Career observation',
-      summary: 'Career observation',
+      memoryId: 'extraction:career',
+      title: 'Career extraction',
+      summary: 'Career extraction',
     },
   ]);
 });
 
 test('thread preparation candidate recall fails open', async () => {
   const candidates = await __testing.collectCandidateMemories({
-    reviewedObservations: [
-      storedObservation('obs-1', 'Caroline joined a support group.'),
+    reviewedExtractions: [
+      storedExtraction('obs-1', 'Caroline joined a support group.'),
     ],
     memories: {
       recall: async () => {
         throw new Error('recall unavailable');
       },
     },
-    limitPerObservation: 2,
+    limitPerExtraction: 2,
   });
 
   assert.deepEqual(candidates, []);
@@ -180,12 +180,12 @@ test('thread preparation writes trace with input, tool calls, and final result',
   });
 
   await __testing.prepareThreadsWithModel({
-    reviewedObservations: [
-      storedObservation('obs-1', 'Caroline joined a support group.'),
+    reviewedExtractions: [
+      storedExtraction('obs-1', 'Caroline joined a support group.'),
     ],
     activeThreads: [],
     candidateMemories: [
-      { memoryId: 'observation:old-support', title: 'Older support', summary: 'Older support summary' },
+      { memoryId: 'extraction:old-support', title: 'Older support', summary: 'Older support summary' },
     ],
   }, {
     memories: {
@@ -206,7 +206,7 @@ test('thread preparation writes trace with input, tool calls, and final result',
             {
               id: 'call-1',
               name: 'memory-get',
-              arguments: { memoryIds: ['observation:old-support'] },
+              arguments: { memoryIds: ['extraction:old-support'] },
             },
           ],
         };
@@ -215,7 +215,7 @@ test('thread preparation writes trace with input, tool calls, and final result',
         type: 'final',
         text: JSON.stringify({
           workItems: [],
-          unthreadedObservationIds: ['obs-1'],
+          unthreadedExtractionIds: ['obs-1'],
         }),
       };
     },
@@ -227,26 +227,26 @@ test('thread preparation writes trace with input, tool calls, and final result',
     .map((line) => JSON.parse(line));
   assert.equal(events.length, 1);
   assert.deepEqual(events[0].candidateMemories, [
-    { memoryId: 'observation:old-support', title: 'Older support', summary: 'Older support summary' },
+    { memoryId: 'extraction:old-support', title: 'Older support', summary: 'Older support summary' },
   ]);
   assert.deepEqual(events[0].toolCalls, [
-    { id: 'call-1', name: 'memory-get', arguments: { memoryIds: ['observation:old-support'] } },
+    { id: 'call-1', name: 'memory-get', arguments: { memoryIds: ['extraction:old-support'] } },
   ]);
   assert.equal(events[0].toolResults[0].id, 'call-1');
   assert.deepEqual(events[0].result, {
     workItems: [],
-    unthreadedObservationIds: ['obs-1'],
+    unthreadedExtractionIds: ['obs-1'],
   });
 });
 
-function storedObservation(id, text = `${id} text`) {
+function storedExtraction(id, text = `${id} text`) {
   return {
     id,
     text,
     vector: [1, 0, 0, 0],
     importance: 1,
     category: 'Fact',
-    references: ['session:1'],
+    references: ['turn:1'],
     createdAt: '2024-01-01T00:00:00Z',
   };
 }
@@ -275,7 +275,7 @@ async function writeObserverConfig(configPath) {
         apiKey: 'test-key',
       },
     },
-    observation: {
+    extraction: {
       embedding: {
         provider: 'mock',
         dimensions: 4,

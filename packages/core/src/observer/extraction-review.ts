@@ -1,22 +1,22 @@
 import { getObserverLlmConfig } from '../config.js';
 import { generateText } from '../llm/provider.js';
 import { loadPromptTemplate, renderPromptTemplate } from '../llm/prompt-loader.js';
-import type { Observation } from '../native.js';
+import type { Extraction } from '../native.js';
 
-export type ObservationReviewInput = {
-  newObservations: Observation[];
-  candidateObservations: Observation[];
+export type ExtractionReviewInput = {
+  newExtractions: Extraction[];
+  candidateExtractions: Extraction[];
 };
 
-export type ObservationReviewResult = {
-  removeObservationIds: string[];
-  reviewedObservationIds: string[];
+export type ExtractionReviewResult = {
+  removeExtractionIds: string[];
+  reviewedExtractionIds: string[];
 };
 
-export async function reviewObservations(
-  input: ObservationReviewInput,
+export async function reviewExtractions(
+  input: ExtractionReviewInput,
   signal?: AbortSignal,
-): Promise<ObservationReviewResult> {
+): Promise<ExtractionReviewResult> {
   throwIfAborted(signal);
   const config = getObserverLlmConfig();
   if (!config) {
@@ -24,12 +24,12 @@ export async function reviewObservations(
   }
   if (config.provider === 'mock') {
     return {
-      removeObservationIds: [],
-      reviewedObservationIds: input.newObservations.map((observation) => observation.id),
+      removeExtractionIds: [],
+      reviewedExtractionIds: input.newExtractions.map((extraction) => extraction.id),
     };
   }
 
-  const template = loadPromptTemplate('observation_review');
+  const template = loadPromptTemplate('extraction_review');
   const inputJson = JSON.stringify(input, null, 2);
   const raw = await generateText('observer', {
     system: template.system,
@@ -39,40 +39,40 @@ export async function reviewObservations(
   if (!raw) {
     throw new Error('observer is not configured');
   }
-  return validateReview(input, parseJson<ObservationReviewResult>(raw));
+  return validateReview(input, parseJson<ExtractionReviewResult>(raw));
 }
 
 function validateReview(
-  input: ObservationReviewInput,
-  result: ObservationReviewResult,
-): ObservationReviewResult {
+  input: ExtractionReviewInput,
+  result: ExtractionReviewResult,
+): ExtractionReviewResult {
   if (!result || typeof result !== 'object') {
-    throw new Error('observation review must return an object');
+    throw new Error('extraction review must return an object');
   }
-  const removeObservationIds = normalizeIdList(result.removeObservationIds, 'removeObservationIds');
-  const reviewedObservationIds = normalizeIdList(result.reviewedObservationIds, 'reviewedObservationIds');
-  const candidateIds = new Set(input.candidateObservations.map((observation) => observation.id));
-  const newIds = new Set(input.newObservations.map((observation) => observation.id));
-  const coveredNewIds = new Set([...removeObservationIds, ...reviewedObservationIds]);
+  const removeExtractionIds = normalizeIdList(result.removeExtractionIds, 'removeExtractionIds');
+  const reviewedExtractionIds = normalizeIdList(result.reviewedExtractionIds, 'reviewedExtractionIds');
+  const candidateIds = new Set(input.candidateExtractions.map((extraction) => extraction.id));
+  const newIds = new Set(input.newExtractions.map((extraction) => extraction.id));
+  const coveredNewIds = new Set([...removeExtractionIds, ...reviewedExtractionIds]);
 
-  for (const id of removeObservationIds) {
+  for (const id of removeExtractionIds) {
     if (!candidateIds.has(id) && !newIds.has(id)) {
-      throw new Error(`removeObservationIds includes unknown observation id: ${id}`);
+      throw new Error(`removeExtractionIds includes unknown extraction id: ${id}`);
     }
   }
-  for (const id of reviewedObservationIds) {
+  for (const id of reviewedExtractionIds) {
     if (!newIds.has(id)) {
-      throw new Error(`reviewedObservationIds includes non-new observation id: ${id}`);
+      throw new Error(`reviewedExtractionIds includes non-new extraction id: ${id}`);
     }
   }
   for (const id of newIds) {
     if (!coveredNewIds.has(id)) {
-      throw new Error(`new observation id was not reviewed: ${id}`);
+      throw new Error(`new extraction id was not reviewed: ${id}`);
     }
   }
   return {
-    removeObservationIds,
-    reviewedObservationIds,
+    removeExtractionIds,
+    reviewedExtractionIds,
   };
 }
 
@@ -82,7 +82,7 @@ function normalizeIdList(value: unknown, label: string): string[] {
   }
   const ids = value.map((id) => (typeof id === 'string' ? id.trim() : '')).filter(Boolean);
   if (ids.length !== new Set(ids).size) {
-    throw new Error(`${label} contains duplicate observation ids`);
+    throw new Error(`${label} contains duplicate extraction ids`);
   }
   return ids;
 }

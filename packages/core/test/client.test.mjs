@@ -14,8 +14,7 @@ const {
   addMessage,
   memories,
   observer,
-  observings,
-  sessions,
+    turns,
   shutdownCoreForTests,
   validateSettings,
 } = core;
@@ -53,7 +52,7 @@ async function waitForObserverResolved({ timeoutMs = 2_000, intervalMs = 20 } = 
   throw new Error('timed out waiting for observer watermark');
 }
 
-function makePendingSessionTurn({
+function makePendingTurn({
   sessionId,
   agent,
   observer,
@@ -62,7 +61,7 @@ function makePendingSessionTurn({
 }) {
   const now = new Date().toISOString();
   return {
-    turnId: 'session:18446744073709551615',
+    turnId: 'turn:18446744073709551615',
     createdAt: now,
     updatedAt: now,
     session_id: sessionId ?? null,
@@ -94,7 +93,7 @@ function normalizeTestSessionId(sessionId) {
 
 async function writeTurnAndGet(turn) {
   await addMessage(turn);
-  const listed = await sessions.list({
+  const listed = await turns.list({
     mode: { type: 'recency', limit: 20 },
     agent: turn.agent,
     sessionId: normalizeTestSessionId(turn.sessionId),
@@ -154,7 +153,7 @@ async function writeMuninnConfig(configPath, {
     root.llm = llm;
   }
   if (observerProvider) {
-    root.observation = {
+    root.extraction = {
       embedding: {
         provider: 'mock',
         dimensions: semanticDimensions,
@@ -220,7 +219,7 @@ test('observer config accepts an optional domain prompt name', async (t) => {
   assert.equal(observerConfig.domainPrompt, 'chat');
 });
 
-test('addMessage and sessions.get roundtrip through the native binding', async (t) => {
+test('addMessage and turns.get roundtrip through the native binding', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(cleanupDataset(dir));
 
@@ -235,7 +234,7 @@ test('addMessage and sessions.get roundtrip through the native binding', async (
   assert.ok(typeof created.turnId === 'string');
   assert.equal(created.sessionId, 'group-a');
 
-  const detail = await sessions.get(created.turnId);
+  const detail = await turns.get(created.turnId);
   assert.ok(detail);
   assert.equal(detail.turnId, created.turnId);
   assert.equal(detail.sessionId, 'group-a');
@@ -266,11 +265,11 @@ test('addMessage normalizes sessionId whitespace through the native binding', as
   assert.equal(second.sessionId, 'group-a');
   assert.notEqual(second.turnId, first.turnId);
 
-  const detail = await sessions.get(first.turnId);
+  const detail = await turns.get(first.turnId);
   assert.ok(detail);
   assert.equal(detail.sessionId, 'group-a');
 
-  const listed = await sessions.list({
+  const listed = await turns.list({
     mode: { type: 'recency', limit: 10 },
     sessionId: ' group-a ',
   });
@@ -334,7 +333,7 @@ test('addMessage dedupes identical prompt and response within the same session',
   assert.equal(second.turnId, first.turnId);
 });
 
-test('sessions.list returns the recent window in chronological order, and memories.timeline covers the happy path', async (t) => {
+test('turns.list returns the recent window in chronological order, and memories.timeline covers the happy path', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(cleanupDataset(dir));
 
@@ -356,7 +355,7 @@ test('sessions.list returns the recent window in chronological order, and memori
     response: 'other response',
   }));
 
-  const listed = await sessions.list({ mode: { type: 'recency', limit: 2 } });
+  const listed = await turns.list({ mode: { type: 'recency', limit: 2 } });
   assert.equal(listed.length, 2);
   assert.equal(listed[0].turnId, second.turnId);
   assert.equal(listed[1].sessionId, 'group-b');
@@ -392,22 +391,22 @@ test('pure read APIs work without observer bootstrap config', async (t) => {
   }
 
   const hitsBefore = await memories.recall('bootstrap-free prompt', 1);
-  assert.ok(hitsBefore[0]?.memoryId.startsWith('observation:'));
-  const observationId = hitsBefore[0].memoryId;
+  assert.ok(hitsBefore[0]?.memoryId.startsWith('extraction:'));
+  const extractionId = hitsBefore[0].memoryId;
 
   await shutdownCoreForTests();
   await writeFile(configPath, '{}\n', 'utf8');
 
-  const sessionDetail = await sessions.get(created.turnId);
+  const sessionDetail = await turns.get(created.turnId);
   assert.ok(sessionDetail);
   assert.equal(sessionDetail.turnId, created.turnId);
 
-  const sessionList = await sessions.list({ mode: { type: 'recency', limit: 10 } });
+  const sessionList = await turns.list({ mode: { type: 'recency', limit: 10 } });
   assert.ok(sessionList.some((turn) => turn.turnId === created.turnId));
 
-  const observationDetail = await memories.get(observationId);
-  assert.ok(observationDetail);
-  assert.equal(observationDetail.memoryId, observationId);
+  const extractionDetail = await memories.get(extractionId);
+  assert.ok(extractionDetail);
+  assert.equal(extractionDetail.memoryId, extractionId);
 
   const renderedDetail = await memories.get(created.turnId);
   assert.ok(renderedDetail);
@@ -432,12 +431,12 @@ test('invalid memory ids reject through the native binding', async (t) => {
   await writeMuninnConfig(configPath);
 
   await assert.rejects(
-    () => sessions.get('bad-memory-id'),
+    () => turns.get('bad-memory-id'),
     /invalid/i,
   );
 
   await assert.rejects(
-    () => sessions.get('thinking:42'),
+    () => turns.get('thinking:42'),
     /invalid/i,
   );
 });
@@ -460,7 +459,7 @@ test('shutdownCoreForTests allows the native binding to restart cleanly', async 
     prompt: 'second prompt',
     response: 'second response',
   }));
-  const listed = await sessions.list({ mode: { type: 'recency', limit: 10 } });
+  const listed = await turns.list({ mode: { type: 'recency', limit: 10 } });
   const first = listed.find((turn) => turn.prompt === 'first prompt' && turn.response === 'first response');
   const second = listed.find((turn) => turn.prompt === 'second prompt' && turn.response === 'second response');
   assert.ok(first);
@@ -468,7 +467,7 @@ test('shutdownCoreForTests allows the native binding to restart cleanly', async 
   assert.ok(second.turnId);
   assert.notEqual(second.turnId, first.turnId);
 
-  const detail = await sessions.get(first.turnId);
+  const detail = await turns.get(first.turnId);
   assert.ok(detail);
   assert.equal(detail.prompt, 'first prompt');
 });
@@ -486,7 +485,7 @@ test('checkpoint restore keeps recent turn dedupe within the same observer', asy
       prompt: 'same prompt',
       response: 'same response',
     }));
-    const first = (await firstBackend.memories.listSessions({ mode: { type: 'recency', limit: 1 } }))[0];
+    const first = (await firstBackend.memories.listTurns({ mode: { type: 'recency', limit: 1 } }))[0];
     assert.ok(first);
     await firstBackend.accept(makeTurnContent({
       prompt: 'before checkpoint',
@@ -517,7 +516,7 @@ test('checkpoint restore keeps recent turn dedupe within the same observer', asy
         prompt: 'same prompt',
         response: 'same response',
       }));
-      const listed = await secondBackend.memories.listSessions({ mode: { type: 'recency', limit: 10 } });
+      const listed = await secondBackend.memories.listTurns({ mode: { type: 'recency', limit: 10 } });
       assert.equal(listed.filter((turn) => turn.prompt === 'same prompt' && turn.response === 'same response').length, 1);
       assert.equal(listed.filter((turn) => turn.prompt === 'after checkpoint' && turn.response === 'after checkpoint response').length, 1);
       assert.equal(listed[0].turnId, first.turnId);
@@ -540,7 +539,7 @@ test('cold start does not wait for the first watchdog interval before serving wr
       enabled: true,
       intervalMs: 250,
       compactMinFragments: 1,
-      observation: {
+      extraction: {
         targetPartitionSize: 16,
         optimizeMergeCount: 2,
       },
@@ -561,7 +560,7 @@ test('cold start does not wait for the first watchdog interval before serving wr
 
   await new Promise((resolve) => setTimeout(resolve, 350));
   const logContent = await readFile(path.join(homeDir, 'watchdog.jsonl'), 'utf8');
-  assert.match(logContent, /"dataset":"observation"/);
+  assert.match(logContent, /"dataset":"turn"/);
 });
 
 test('addMessage rejects empty message payloads through the native binding', async (t) => {
@@ -577,7 +576,7 @@ test('addMessage rejects empty message payloads through the native binding', asy
   );
 });
 
-test('validateSettings rejects observation index dimension changes that mismatch existing data', async (t) => {
+test('validateSettings rejects extraction index dimension changes that mismatch existing data', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(cleanupDataset(dir));
 
@@ -587,9 +586,9 @@ test('validateSettings rejects observation index dimension changes that mismatch
   await addMessage({
     sessionId: 'group-a',
     agent: 'agent-a',
-    prompt: 'observation prompt',
-    response: 'observation response',
-    summary: 'observation summary',
+    prompt: 'extraction prompt',
+    response: 'extraction response',
+    summary: 'extraction summary',
   });
   await new Promise((resolve) => setTimeout(resolve, 50));
 
@@ -605,7 +604,7 @@ test('validateSettings rejects observation index dimension changes that mismatch
           provider: 'mock',
         },
       },
-      observation: {
+      extraction: {
         embedding: {
           provider: 'mock',
           dimensions: 8,
@@ -613,7 +612,7 @@ test('validateSettings rejects observation index dimension changes that mismatch
         defaultImportance: 0.7,
       },
     }, null, 2)),
-    /observation dimension mismatch/i,
+    /extraction dimension mismatch/i,
   );
 });
 
@@ -651,7 +650,7 @@ test('validateSettings rejects invalid observer.activeWindowDays', async (t) => 
           provider: 'mock',
         },
       },
-      observation: {
+      extraction: {
         embedding: {
           provider: 'mock',
           dimensions: 8,
@@ -683,7 +682,7 @@ test('validateSettings rejects invalid observer.continuityHints', async (t) => {
           provider: 'mock',
         },
       },
-      observation: {
+      extraction: {
         embedding: {
           provider: 'mock',
           dimensions: 8,
@@ -721,7 +720,7 @@ test('validateSettings rejects invalid observer epoch seal settings', async (t) 
             provider: 'mock',
           },
         },
-        observation: {
+        extraction: {
           embedding: {
             provider: 'mock',
             dimensions: 8,
@@ -754,7 +753,7 @@ test('validateSettings rejects unknown observer.domainPrompt', async (t) => {
           provider: 'mock',
         },
       },
-      observation: {
+      extraction: {
         embedding: {
           provider: 'mock',
           dimensions: 8,
@@ -779,7 +778,7 @@ test('validateSettings rejects missing observer config', async (t) => {
           provider: 'mock',
         },
       },
-      observation: {
+      extraction: {
         embedding: {
           provider: 'mock',
           dimensions: 8,
@@ -803,7 +802,7 @@ test('validateSettings rejects missing llm config', async (t) => {
         name: 'test-observer',
         llm: 'test_observer_llm',
       },
-      observation: {
+      extraction: {
         embedding: {
           provider: 'mock',
           dimensions: 8,
@@ -815,7 +814,7 @@ test('validateSettings rejects missing llm config', async (t) => {
   );
 });
 
-test('validateSettings rejects missing observation config', async (t) => {
+test('validateSettings rejects missing extraction config', async (t) => {
   const { dir, homeDir } = await makeDatasetUri();
   t.after(cleanupDataset(dir));
 
@@ -833,11 +832,11 @@ test('validateSettings rejects missing observation config', async (t) => {
         },
       },
     }, null, 2)),
-    /observation is required/i,
+    /extraction is required/i,
   );
 });
 
-test('validateSettings rejects missing observation.embedding config', async (t) => {
+test('validateSettings rejects missing extraction.embedding config', async (t) => {
   const { dir, homeDir } = await makeDatasetUri();
   t.after(cleanupDataset(dir));
 
@@ -854,15 +853,15 @@ test('validateSettings rejects missing observation.embedding config', async (t) 
           provider: 'mock',
         },
       },
-      observation: {
+      extraction: {
         defaultImportance: 0.5,
       },
     }, null, 2)),
-    /observation\.embedding is required/i,
+    /extraction\.embedding is required/i,
   );
 });
 
-test('validateSettings accepts omitted observation dimensions when the default runtime dimensions apply', async (t) => {
+test('validateSettings accepts omitted extraction dimensions when the default runtime dimensions apply', async (t) => {
   const { dir, homeDir } = await makeDatasetUri();
   t.after(cleanupDataset(dir));
 
@@ -879,7 +878,7 @@ test('validateSettings accepts omitted observation dimensions when the default r
           provider: 'mock',
         },
       },
-      observation: {
+      extraction: {
         embedding: {
           provider: 'mock',
         },
@@ -889,7 +888,7 @@ test('validateSettings accepts omitted observation dimensions when the default r
   );
 });
 
-test('validateSettings rejects omitted observation dimensions for an existing non-default table', async (t) => {
+test('validateSettings rejects omitted extraction dimensions for an existing non-default table', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(cleanupDataset(dir));
 
@@ -899,9 +898,9 @@ test('validateSettings rejects omitted observation dimensions for an existing no
   await addMessage({
     sessionId: 'group-a',
     agent: 'agent-a',
-    prompt: 'observation prompt',
-    response: 'observation response',
-    summary: 'observation summary',
+    prompt: 'extraction prompt',
+    response: 'extraction response',
+    summary: 'extraction summary',
   });
   await new Promise((resolve) => setTimeout(resolve, 50));
 
@@ -917,18 +916,18 @@ test('validateSettings rejects omitted observation dimensions for an existing no
           provider: 'mock',
         },
       },
-      observation: {
+      extraction: {
         embedding: {
           provider: 'mock',
         },
         defaultImportance: 0.5,
       },
     }, null, 2)),
-    /observation dimension mismatch/i,
+    /extraction dimension mismatch/i,
   );
 });
 
-test('validateSettings rejects observation.embedding.provider when it is empty', async (t) => {
+test('validateSettings rejects extraction.embedding.provider when it is empty', async (t) => {
   const { dir, homeDir } = await makeDatasetUri();
   t.after(cleanupDataset(dir));
 
@@ -936,13 +935,13 @@ test('validateSettings rejects observation.embedding.provider when it is empty',
 
   await assert.rejects(
     () => validateSettings(JSON.stringify({
-      observation: {
+      extraction: {
         embedding: {
           provider: '',
         },
       },
     }, null, 2)),
-    /observation\.embedding\.provider must be a non-empty string/i,
+    /extraction\.embedding\.provider must be a non-empty string/i,
   );
 });
 
@@ -1014,7 +1013,7 @@ test('validateSettings rejects openai turn llm without apiKey', async (t) => {
           provider: 'mock',
         },
       },
-      observation: {
+      extraction: {
         embedding: {
           provider: 'mock',
           dimensions: 8,
@@ -1042,7 +1041,7 @@ test('validateSettings rejects openai observer llm without apiKey', async (t) =>
           provider: 'openai',
         },
       },
-      observation: {
+      extraction: {
         embedding: {
           provider: 'mock',
           dimensions: 8,
@@ -1053,7 +1052,7 @@ test('validateSettings rejects openai observer llm without apiKey', async (t) =>
   );
 });
 
-test('validateSettings rejects openai observation embeddings without apiKey', async (t) => {
+test('validateSettings rejects openai extraction embeddings without apiKey', async (t) => {
   const { dir, homeDir } = await makeDatasetUri();
   t.after(cleanupDataset(dir));
 
@@ -1070,14 +1069,14 @@ test('validateSettings rejects openai observation embeddings without apiKey', as
           provider: 'mock',
         },
       },
-      observation: {
+      extraction: {
         embedding: {
           provider: 'openai',
           dimensions: 8,
         },
       },
     }, null, 2)),
-    /observation\.embedding\.apiKey must be a non-empty string/i,
+    /extraction\.embedding\.apiKey must be a non-empty string/i,
   );
 });
 
@@ -1097,7 +1096,7 @@ test('validateSettings does not create the default storage root while checking s
         provider: 'mock',
       },
     },
-    observation: {
+    extraction: {
       embedding: {
         provider: 'mock',
         dimensions: 8,
@@ -1109,7 +1108,7 @@ test('validateSettings does not create the default storage root while checking s
   await assert.rejects(() => access(homeDir));
 });
 
-test('validateSettings rejects observation dimension changes when the table exists but is empty', async (t) => {
+test('validateSettings rejects extraction dimension changes when the table exists but is empty', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(cleanupDataset(dir));
 
@@ -1117,24 +1116,26 @@ test('validateSettings rejects observation dimension changes when the table exis
   await writeMuninnConfig(configPath, { observerProvider: 'mock' });
 
   const binding = await getNativeTables();
+  assert.ok(typeof binding.turnTable.describe === 'function');
   assert.ok(typeof binding.sessionTable.describe === 'function');
-  assert.ok(typeof binding.observingTable.describe === 'function');
-  assert.ok(typeof binding.observationTable.describe === 'function');
+  assert.ok(typeof binding.extractionTable.describe === 'function');
 
-  await binding.observationTable.upsert({
+  await binding.extractionTable.upsert({
     rows: [{
       id: 'mem-1',
-      text: 'observation text',
+      text: 'extraction text',
+      context: null,
+      anchors: [],
       vector: [0.1, 0.2, 0.3, 0.4],
       importance: 0.7,
       category: 'fact',
-      references: ['observing:1'],
+      references: ['turn:1'],
       createdAt: '2024-01-01T00:00:00Z',
     }],
   });
-  await binding.observationTable.delete({ ids: ['mem-1'] });
+  await binding.extractionTable.delete({ ids: ['mem-1'] });
 
-  const description = await binding.observationTable.describe();
+  const description = await binding.extractionTable.describe();
   assert.ok(description);
   assert.equal(description.dimensions?.vector, 4);
 
@@ -1150,7 +1151,7 @@ test('validateSettings rejects observation dimension changes when the table exis
           provider: 'mock',
         },
       },
-      observation: {
+      extraction: {
         embedding: {
           provider: 'mock',
           dimensions: 8,
@@ -1158,7 +1159,7 @@ test('validateSettings rejects observation dimension changes when the table exis
         defaultImportance: 0.7,
       },
     }, null, 2)),
-    /observation dimension mismatch/i,
+    /extraction dimension mismatch/i,
   );
 });
 
@@ -1205,7 +1206,7 @@ test('validateSettings checks the pending storage target instead of the current 
           provider: 'mock',
         },
       },
-      observation: {
+      extraction: {
         embedding: {
           provider: 'mock',
           dimensions: 8,
@@ -1213,7 +1214,7 @@ test('validateSettings checks the pending storage target instead of the current 
         defaultImportance: 0.7,
       },
     }, null, 2)),
-    /observation dimension mismatch/i,
+    /extraction dimension mismatch/i,
   );
 });
 
@@ -1240,7 +1241,7 @@ test('validateSettings is not blocked by the current config storage when the pen
         provider: 'mock',
       },
     },
-    observation: {
+    extraction: {
       embedding: {
         provider: 'mock',
         dimensions: 8,
@@ -1306,7 +1307,7 @@ test('addMessage summarizes response turns when a summary provider is configured
     response: 'response body',
   });
 
-  const detail = await sessions.get(created.turnId);
+  const detail = await turns.get(created.turnId);
   assert.ok(detail);
   assert.equal(detail.title, 'summarize this');
   assert.equal(detail.summary, 'summarize this\n\nresponse body');
@@ -1325,13 +1326,13 @@ test('addMessage persists response turns when the summarizer is not configured',
     response: 'response body',
   }));
 
-  const detail = await sessions.get(created.turnId);
+  const detail = await turns.get(created.turnId);
   assert.ok(detail);
   assert.equal(detail.response, 'response body');
   assert.equal(detail.summary, 'response prompt\n\nresponse body');
 });
 
-test('observer writes atomic observations before observing snapshots', async (t) => {
+test('observer writes atomic extractions before observing snapshots', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(cleanupDataset(dir));
 
@@ -1348,10 +1349,10 @@ test('observer writes atomic observations before observing snapshots', async (t)
   await waitForObserverResolved();
 
   const hits = await memories.recall('counseling programs', 5);
-  assert.ok(hits.some((hit) => hit.memoryId.startsWith('observation:')));
+  assert.ok(hits.some((hit) => hit.memoryId.startsWith('extraction:')));
 });
 
-test('rendered memory binding returns unified turn and observation reads', async (t) => {
+test('rendered memory binding returns unified turn and extraction reads', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(cleanupDataset(dir));
 
@@ -1378,16 +1379,16 @@ test('rendered memory binding returns unified turn and observation reads', async
   assert.match(turnDetail.summary ?? turnDetail.detail ?? '', /rendered prompt|rendered response/);
 
   const recalled = await memories.recall('rendered', 10);
-  const observation = recalled.find((memory) => memory.memoryId.startsWith('observation:'));
-  assert.ok(observation);
+  const extraction = recalled.find((memory) => memory.memoryId.startsWith('extraction:'));
+  assert.ok(extraction);
 
-  const observationDetail = await memories.get(observation.memoryId);
-  assert.ok(observationDetail);
-  assert.equal(observationDetail.memoryId, observation.memoryId);
-  assert.match(observationDetail.summary ?? observationDetail.title ?? '', /rendered prompt|rendered response/);
+  const extractionDetail = await memories.get(extraction.memoryId);
+  assert.ok(extractionDetail);
+  assert.equal(extractionDetail.memoryId, extraction.memoryId);
+  assert.match(extractionDetail.summary ?? extractionDetail.title ?? '', /rendered prompt|rendered response/);
 });
 
-test('recall returns observation memory ids and detail renders references', async (t) => {
+test('recall returns extraction memory ids and detail renders references', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(cleanupDataset(dir));
 
@@ -1395,24 +1396,26 @@ test('recall returns observation memory ids and detail renders references', asyn
   await writeMuninnConfig(configPath, { observerProvider: 'mock' });
 
   const binding = await getNativeTables();
-  await binding.observationTable.upsert({
+  await binding.extractionTable.upsert({
     rows: [{
       id: 'obs-1',
       text: 'Caroline joined an LGBTQ support group in May 2023.',
+      context: null,
+      anchors: [],
       vector: [1, 0, 0, 0],
       importance: 1,
       category: 'fact',
-      references: ['session:1'],
+      references: ['turn:1'],
       createdAt: new Date().toISOString(),
     }],
   });
 
   const hits = await memories.recall('support group', 1);
-  assert.equal(hits[0].memoryId, 'observation:obs-1');
-  const detail = await memories.get('observation:obs-1');
+  assert.equal(hits[0].memoryId, 'extraction:obs-1');
+  const detail = await memories.get('extraction:obs-1');
   assert.ok(detail);
-  assert.equal(detail.memoryId, 'observation:obs-1');
-  assert.match(detail.detail ?? '', /session:1/);
+  assert.equal(detail.memoryId, 'extraction:obs-1');
+  assert.match(detail.detail ?? '', /turn:1/);
 });
 
 test('rendered memory page mode paginates after combining session and observing results', async (t) => {

@@ -13,7 +13,7 @@ import {
 } from '../llm/provider.js';
 import type { Memories } from '../memories/memories.js';
 import { renderRenderedMemoryMarkdown } from '../memories/rendered.js';
-import type { Observation } from '../native.js';
+import type { Extraction } from '../native.js';
 import type {
   ThreadCandidateMemory,
   ThreadPreparationResult,
@@ -22,7 +22,7 @@ import type {
 } from './types.js';
 
 export type ThreadPreparationInput = {
-  reviewedObservations: Observation[];
+  reviewedExtractions: Extraction[];
   activeThreads: ThreadPreparationThread[];
   candidateMemories?: ThreadCandidateMemory[];
 };
@@ -50,7 +50,7 @@ export async function prepareThreads(
   if (config.provider === 'mock') {
     return validateThreadPreparation(input, {
       workItems: [],
-      unthreadedObservationIds: input.reviewedObservations.map((observation) => observation.id),
+      unthreadedExtractionIds: input.reviewedExtractions.map((extraction) => extraction.id),
     });
   }
 
@@ -90,7 +90,7 @@ function validateOrFallback(input: ThreadPreparationInput, raw: string): ThreadP
   } catch {
     return {
       workItems: [],
-      unthreadedObservationIds: input.reviewedObservations.map((observation) => observation.id),
+      unthreadedExtractionIds: input.reviewedExtractions.map((extraction) => extraction.id),
     };
   }
 }
@@ -163,16 +163,16 @@ async function runNativeToolLoop(params: {
 type ToolHandler = (args: Record<string, unknown>, call: LlmToolCall) => Promise<unknown> | unknown;
 
 export async function collectCandidateMemories(params: {
-  reviewedObservations: Observation[];
+  reviewedExtractions: Extraction[];
   memories: Pick<Memories, 'recall'>;
-  limitPerObservation?: number;
+  limitPerExtraction?: number;
 }): Promise<ThreadCandidateMemory[]> {
-  const limit = params.limitPerObservation ?? 5;
-  const reviewedMemoryIds = new Set(params.reviewedObservations.map((observation) => `observation:${observation.id}`));
+  const limit = params.limitPerExtraction ?? 5;
+  const reviewedMemoryIds = new Set(params.reviewedExtractions.map((extraction) => `extraction:${extraction.id}`));
   const seen = new Set<string>();
   const candidates: ThreadCandidateMemory[] = [];
-  for (const observation of params.reviewedObservations) {
-    const hits = await params.memories.recall(observation.text, limit).catch(() => []);
+  for (const extraction of params.reviewedExtractions) {
+    const hits = await params.memories.recall(extraction.text, limit).catch(() => []);
     for (const hit of hits) {
       if (reviewedMemoryIds.has(hit.memoryId) || seen.has(hit.memoryId)) {
         continue;
@@ -237,7 +237,7 @@ function memoryGetSpec(): LlmTool {
         memoryIds: {
           type: 'array',
           items: { type: 'string' },
-          description: 'Allowlisted memory ids from reviewedObservations, activeThreads, or candidateMemories.',
+          description: 'Allowlisted memory ids from reviewedExtractions, activeThreads, or candidateMemories.',
         },
       },
       required: ['memoryIds'],
@@ -247,7 +247,7 @@ function memoryGetSpec(): LlmTool {
 
 function createThreadPreparationTrace(input: ThreadPreparationInput) {
   return {
-    reviewedObservations: toPromptInput(input).reviewedObservations,
+    reviewedExtractions: toPromptInput(input).reviewedExtractions,
     activeThreads: input.activeThreads,
     candidateMemories: input.candidateMemories ?? [],
     toolCalls: [] as LlmToolCall[],
@@ -261,7 +261,7 @@ function createThreadPreparationTrace(input: ThreadPreparationInput) {
 }
 
 async function writeThreadPreparationTrace(event: {
-  reviewedObservations: unknown;
+  reviewedExtractions: unknown;
   activeThreads: ThreadPreparationThread[];
   candidateMemories: ThreadCandidateMemory[];
   toolCalls: LlmToolCall[];
@@ -277,7 +277,7 @@ async function writeThreadPreparationTrace(event: {
 
 function buildMemoryGetAllowlist(input: ThreadPreparationInput): Set<string> {
   return new Set([
-    ...input.reviewedObservations.map((observation) => `observation:${observation.id}`),
+    ...input.reviewedExtractions.map((extraction) => `extraction:${extraction.id}`),
     ...input.activeThreads
       .map((thread) => thread.memoryId)
       .filter((memoryId): memoryId is string => Boolean(memoryId?.trim())),
@@ -306,32 +306,32 @@ function validateThreadPreparation(
     throw new Error('thread preparation workItems must be an array');
   }
 
-  const reviewedIds = new Set(input.reviewedObservations.map((observation) => observation.id));
+  const reviewedIds = new Set(input.reviewedExtractions.map((extraction) => extraction.id));
   const activeThreadIds = new Set(input.activeThreads.map((thread) => thread.threadId));
   const seen = new Set<string>();
   const workItems = result.workItems.map((item) => (
     validateWorkItem(item, reviewedIds, activeThreadIds, seen)
   ));
-  const unthreadedObservationIds = normalizeIdList(result.unthreadedObservationIds, 'unthreadedObservationIds');
-  for (const id of unthreadedObservationIds) {
+  const unthreadedExtractionIds = normalizeIdList(result.unthreadedExtractionIds, 'unthreadedExtractionIds');
+  for (const id of unthreadedExtractionIds) {
     if (!reviewedIds.has(id)) {
-      throw new Error(`unthreadedObservationIds includes unknown observation id: ${id}`);
+      throw new Error(`unthreadedExtractionIds includes unknown extraction id: ${id}`);
     }
     if (seen.has(id)) {
-      throw new Error(`reviewed observation id must appear exactly once: ${id}`);
+      throw new Error(`reviewed extraction id must appear exactly once: ${id}`);
     }
     seen.add(id);
   }
 
   for (const id of reviewedIds) {
     if (!seen.has(id)) {
-      throw new Error(`reviewed observation id must appear exactly once: ${id}`);
+      throw new Error(`reviewed extraction id must appear exactly once: ${id}`);
     }
   }
 
   return {
     workItems,
-    unthreadedObservationIds,
+    unthreadedExtractionIds,
   };
 }
 
@@ -344,16 +344,16 @@ function validateWorkItem(
   if (!item || typeof item !== 'object') {
     throw new Error('thread preparation work item must be an object');
   }
-  const observationIds = normalizeIdList(item.observationIds, 'workItems[].observationIds');
-  if (observationIds.length === 0) {
-    throw new Error('workItems[].observationIds must include at least one observation id');
+  const extractionIds = normalizeIdList(item.extractionIds, 'workItems[].extractionIds');
+  if (extractionIds.length === 0) {
+    throw new Error('workItems[].extractionIds must include at least one extraction id');
   }
-  for (const id of observationIds) {
+  for (const id of extractionIds) {
     if (!reviewedIds.has(id)) {
-      throw new Error(`work item includes unknown observation id: ${id}`);
+      throw new Error(`work item includes unknown extraction id: ${id}`);
     }
     if (seen.has(id)) {
-      throw new Error(`reviewed observation id must appear exactly once: ${id}`);
+      throw new Error(`reviewed extraction id must appear exactly once: ${id}`);
     }
     seen.add(id);
   }
@@ -366,8 +366,8 @@ function validateWorkItem(
   if (targetThreadId && !activeThreadIds.has(targetThreadId)) {
     throw new Error(`unknown targetThreadId: ${targetThreadId}`);
   }
-  if (newThreadTitle && observationIds.length < 2) {
-    throw new Error('newThreadTitle requires at least two related observations');
+  if (newThreadTitle && extractionIds.length < 2) {
+    throw new Error('newThreadTitle requires at least two related extractions');
   }
 
   const rationale = typeof item.rationale === 'string' ? item.rationale.trim() : '';
@@ -376,7 +376,7 @@ function validateWorkItem(
   }
 
   return {
-    observationIds,
+    extractionIds,
     ...(targetThreadId ? { targetThreadId } : {}),
     ...(newThreadTitle ? { newThreadTitle } : {}),
     rationale,
@@ -389,7 +389,7 @@ function normalizeIdList(value: unknown, label: string): string[] {
   }
   const ids = value.map((id) => (typeof id === 'string' ? id.trim() : '')).filter(Boolean);
   if (ids.length !== new Set(ids).size) {
-    throw new Error(`${label} contains duplicate observation ids`);
+    throw new Error(`${label} contains duplicate extraction ids`);
   }
   return ids;
 }
@@ -400,12 +400,12 @@ function normalizeOptionalString(value: unknown): string | null {
 
 function toPromptInput(input: ThreadPreparationInput): Record<string, unknown> {
   return {
-    reviewedObservations: input.reviewedObservations.map((observation) => ({
-      id: observation.id,
-      memoryId: `observation:${observation.id}`,
-      text: observation.text,
-      category: observation.category,
-      references: observation.references,
+    reviewedExtractions: input.reviewedExtractions.map((extraction) => ({
+      id: extraction.id,
+      memoryId: `extraction:${extraction.id}`,
+      text: extraction.text,
+      category: extraction.category,
+      references: extraction.references,
     })),
     activeThreads: input.activeThreads,
     candidateMemories: input.candidateMemories ?? [],

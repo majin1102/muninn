@@ -9,9 +9,9 @@ use serde::Deserialize;
 
 pub(crate) const CONFIG_FILE_NAME: &str = "muninn.json";
 
-const DEFAULT_OBSERVATION_DIMENSIONS: usize = 8;
+const DEFAULT_EXTRACTION_DIMENSIONS: usize = 8;
 #[cfg(test)]
-const DEFAULT_OBSERVATION_IMPORTANCE: f32 = 0.7;
+const DEFAULT_EXTRACTION_IMPORTANCE: f32 = 0.7;
 #[cfg(test)]
 #[allow(dead_code)]
 const DEFAULT_OBSERVER_NAME: &str = "default-observer";
@@ -45,7 +45,7 @@ struct MuninnConfig {
     storage: Option<StorageFileConfig>,
     #[cfg(test)]
     observer: Option<ObserverFileConfig>,
-    observation: Option<ObservationFileConfig>,
+    extraction: Option<ExtractionFileConfig>,
     #[serde(rename = "semanticIndex")]
     semantic_index: Option<serde_json::Value>,
 }
@@ -68,7 +68,7 @@ struct ObserverFileConfig {
 #[derive(Debug, Clone, Deserialize)]
 #[cfg_attr(not(test), allow(dead_code))]
 #[serde(rename_all = "camelCase")]
-struct ObservationFileConfig {
+struct ExtractionFileConfig {
     embedding: EmbeddingFileConfig,
     #[cfg(test)]
     default_importance: Option<f32>,
@@ -102,8 +102,8 @@ pub fn current_storage_config() -> Result<Option<StorageConfig>> {
     }))
 }
 
-pub fn observation_config() -> Result<EmbeddingConfig> {
-    let file_config = load_muninn_config()?.and_then(|config| config.observation);
+pub fn extraction_config() -> Result<EmbeddingConfig> {
+    let file_config = load_muninn_config()?.and_then(|config| config.extraction);
     Ok(EmbeddingConfig {
         #[cfg(test)]
         provider: file_config
@@ -125,51 +125,51 @@ pub fn observation_config() -> Result<EmbeddingConfig> {
         dimensions: file_config
             .as_ref()
             .and_then(|config| config.embedding.dimensions)
-            .unwrap_or(DEFAULT_OBSERVATION_DIMENSIONS),
+            .unwrap_or(DEFAULT_EXTRACTION_DIMENSIONS),
         #[cfg(test)]
         default_importance: file_config
             .as_ref()
             .and_then(|config| config.default_importance)
-            .unwrap_or(DEFAULT_OBSERVATION_IMPORTANCE),
+            .unwrap_or(DEFAULT_EXTRACTION_IMPORTANCE),
     })
 }
 
 #[cfg(test)]
-pub fn observation_config_from_raw(raw: &str) -> Result<EmbeddingConfig> {
+pub fn extraction_config_from_raw(raw: &str) -> Result<EmbeddingConfig> {
     let parsed = parse_muninn_config(raw, "provided Muninn config")?;
     Ok(EmbeddingConfig {
         #[cfg(test)]
         provider: parsed
-            .observation
+            .extraction
             .as_ref()
             .map(|config| config.embedding.provider.clone())
             .unwrap_or_else(|| "mock".to_string()),
         #[cfg(test)]
         model: parsed
-            .observation
+            .extraction
             .as_ref()
             .and_then(|config| config.embedding.model.clone()),
         #[cfg(test)]
         api_key: parsed
-            .observation
+            .extraction
             .as_ref()
             .and_then(|config| config.embedding.api_key.clone()),
         #[cfg(test)]
         base_url: parsed
-            .observation
+            .extraction
             .as_ref()
             .and_then(|config| config.embedding.base_url.clone()),
         dimensions: parsed
-            .observation
+            .extraction
             .as_ref()
             .and_then(|config| config.embedding.dimensions)
-            .unwrap_or(DEFAULT_OBSERVATION_DIMENSIONS),
+            .unwrap_or(DEFAULT_EXTRACTION_DIMENSIONS),
         #[cfg(test)]
         default_importance: parsed
-            .observation
+            .extraction
             .as_ref()
             .and_then(|config| config.default_importance)
-            .unwrap_or(DEFAULT_OBSERVATION_IMPORTANCE),
+            .unwrap_or(DEFAULT_EXTRACTION_IMPORTANCE),
     })
 }
 
@@ -207,7 +207,7 @@ fn parse_muninn_config(raw: &str, source: &str) -> Result<MuninnConfig> {
         .map_err(|error| Error::invalid_input(format!("invalid Muninn config {source}: {error}")))?;
     if parsed.semantic_index.is_some() {
         return Err(Error::invalid_input(
-            "semanticIndex is no longer supported; use observation instead.",
+            "semanticIndex is no longer supported; use extraction instead.",
         ));
     }
     Ok(parsed)
@@ -254,7 +254,7 @@ pub(crate) fn llm_test_env_guard() -> std::sync::MutexGuard<'static, ()> {
 pub(crate) fn write_test_muninn_config(
     path: &Path,
     observer_name: Option<&str>,
-    observation_provider: Option<&str>,
+    extraction_provider: Option<&str>,
 ) {
     use serde_json::{Map, Value, json};
 
@@ -266,9 +266,9 @@ pub(crate) fn write_test_muninn_config(
         }),
     );
 
-    if let Some(provider) = observation_provider {
+    if let Some(provider) = extraction_provider {
         root.insert(
-            "observation".to_string(),
+            "extraction".to_string(),
             json!({
                 "embedding": {
                     "provider": provider,
@@ -288,19 +288,19 @@ pub(crate) fn write_test_muninn_config(
 
 #[cfg(test)]
 mod tests {
-    use super::{DEFAULT_OBSERVATION_DIMENSIONS, observation_config_from_raw};
+    use super::{DEFAULT_EXTRACTION_DIMENSIONS, extraction_config_from_raw};
 
     #[test]
-    fn observation_config_uses_defaults_when_section_is_missing() {
-        let config = observation_config_from_raw("{}").unwrap();
+    fn extraction_config_uses_defaults_when_section_is_missing() {
+        let config = extraction_config_from_raw("{}").unwrap();
         assert_eq!(config.provider, "mock");
-        assert_eq!(config.dimensions, DEFAULT_OBSERVATION_DIMENSIONS);
+        assert_eq!(config.dimensions, DEFAULT_EXTRACTION_DIMENSIONS);
         assert_eq!(config.default_importance, 0.7);
     }
 
     #[test]
-    fn observation_config_rejects_semantic_index() {
-        let error = observation_config_from_raw(
+    fn extraction_config_rejects_semantic_index() {
+        let error = extraction_config_from_raw(
             r#"{
   "semanticIndex": {
     "embedding": {

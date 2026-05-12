@@ -39,7 +39,7 @@ function makeConfig(embedding) {
         provider: 'mock',
       },
     },
-    observation: {
+    extraction: {
       embedding,
       defaultImportance: 0.7,
     },

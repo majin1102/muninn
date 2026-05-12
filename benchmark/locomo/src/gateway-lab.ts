@@ -5,7 +5,7 @@ type LabThread = {
   kind: 'session' | 'subject';
   title: string;
   summary: string;
-  observations: Array<{ id?: string | null; text: string; category: string; references: string[] }>;
+  extractions: Array<{ id?: string | null; text: string; category: string; references: string[] }>;
   contextRefs: Array<{ turnId: string; summary: string }>;
   openQuestions: string[];
   nextSteps: string[];
@@ -19,7 +19,7 @@ type LabTurn = {
 type LabObservingContent = {
   title: string;
   summary: string;
-  observations: Array<{ id?: string | null; text: string; category: string; references: string[] }>;
+  extractions: Array<{ id?: string | null; text: string; category: string; references: string[] }>;
   openQuestions: string[];
   nextSteps: string[];
 };
@@ -32,13 +32,11 @@ type LabSessionFragment = {
 };
 
 type LabObserveResult = {
-  observingContent: {
-    title: string;
-    summary: string;
-    observations: Array<{ id?: string | null; text: string; category: string; references: string[] }>;
-    openQuestions: string[];
-    nextSteps: string[];
-  };
+  title: string;
+  threadMemory: string;
+  extractions: Array<{ id?: string | null; text: string; category: string; references: string[] }>;
+  openQuestions: string[];
+  nextSteps: string[];
   contextRefs: Array<{ turnId: string; summary: string }>;
 };
 
@@ -49,10 +47,7 @@ type LabPipeline = {
   }): Promise<{ sessionFragments: LabSessionFragment[] }>;
   observe(input: {
     observingContent: LabObservingContent;
-    fragments: Array<{
-      content: string;
-      turns: Array<{ turnId: string; prompt: string; response: string | null }>;
-    }>;
+    turns: Array<{ turnId: string; prompt: string; response: string | null }>;
   }): Promise<LabObserveResult>;
 };
 
@@ -109,18 +104,15 @@ export async function runGatewayLab(params: {
         observingContent: {
           title: thread.title,
           summary: thread.summary,
-          observations: thread.observations,
+          extractions: thread.extractions,
           openQuestions: thread.openQuestions,
           nextSteps: thread.nextSteps,
         },
-        fragments: [{
-          content: fragment.content,
-          turns: fragment.turnIds.map((turnId) => ({
-            turnId,
-            prompt: fragment.content,
-            response: null,
-          })),
-        }],
+        turns: fragment.turnIds.map((turnId) => ({
+          turnId,
+          prompt: fragment.content,
+          response: null,
+        })),
       });
       applyObserveResult(thread, result);
     }
@@ -147,7 +139,7 @@ export function expectedTopicCoverage(threads: LabThread[]): {
   const combined = threads.map((thread) => [
     thread.title,
     thread.summary,
-    ...thread.observations.map((observation) => observation.text),
+    ...thread.extractions.map((extraction) => extraction.text),
     ...thread.contextRefs.map((reference) => reference.summary),
   ].join('\n').toLowerCase()).join('\n');
   return {
@@ -157,7 +149,7 @@ export function expectedTopicCoverage(threads: LabThread[]): {
   };
 }
 
-export function locomoSessionTurns(sample: LocomoSample, sessionNo: number): Array<{
+export function locomoTurns(sample: LocomoSample, sessionNo: number): Array<{
   turnId: string;
   text: string;
 }> {
@@ -191,7 +183,7 @@ async function defaultPipeline(): Promise<LabPipeline> {
   return {
     fit: async (input) => observingModule.routeObservingThreads(
       input.observingThreads,
-      toSessionTurns(input.pendingTurns),
+      toTurns(input.pendingTurns),
     ),
     observe: async (input) => observingModule.observeThread(input as never),
   };
@@ -203,7 +195,7 @@ function createSessionThread(): LabThread {
     kind: 'session',
     title: 'Session observing thread',
     summary: 'Default observing thread for this session.',
-    observations: [],
+    extractions: [],
     contextRefs: [],
     openQuestions: [],
     nextSteps: [],
@@ -211,17 +203,17 @@ function createSessionThread(): LabThread {
 }
 
 function applyObserveResult(thread: LabThread, result: LabObserveResult): void {
-  thread.title = result.observingContent.title;
-  thread.summary = result.observingContent.summary;
-  thread.observations = result.observingContent.observations.map((observation, index) => ({
-    id: observation.id ?? `lab-observation-${index + 1}`,
-    text: observation.text,
-    category: observation.category,
-    references: observation.references,
+  thread.title = result.title;
+  thread.summary = result.threadMemory;
+  thread.extractions = result.extractions.map((extraction, index) => ({
+    id: extraction.id ?? `lab-extraction-${index + 1}`,
+    text: extraction.text,
+    category: extraction.category,
+    references: extraction.references,
   }));
   thread.contextRefs = mergeContextRefs(thread.contextRefs, result.contextRefs);
-  thread.openQuestions = result.observingContent.openQuestions;
-  thread.nextSteps = result.observingContent.nextSteps;
+  thread.openQuestions = result.openQuestions;
+  thread.nextSteps = result.nextSteps;
 }
 
 function mergeContextRefs(
@@ -239,7 +231,7 @@ function mergeContextRefs(
   return merged;
 }
 
-function toSessionTurns(turns: LabTurn[]) {
+function toTurns(turns: LabTurn[]) {
   return turns.map((turn) => ({
     turnId: turn.turnId,
     prompt: turn.text,

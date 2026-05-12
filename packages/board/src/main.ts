@@ -45,7 +45,7 @@ type ObservingCard = {
 
 type MemoryDocument = {
   memoryId: string;
-  kind: 'session' | 'observing';
+  kind: 'turn' | 'session';
   title: string;
   markdown: string;
   agent?: string;
@@ -68,7 +68,7 @@ type SessionTurnsResponse = {
 };
 
 type ObservingListResponse = {
-  observations: ObservingCard[];
+  extractions: ObservingCard[];
 };
 
 type MemoryDocumentResponse = {
@@ -344,7 +344,7 @@ async function ensureObservings() {
       state.observings = await getDemoObservings();
     } else {
       const response = await fetchJson<ObservingListResponse>('/api/v1/ui/observing');
-      state.observings = response.observations;
+      state.observings = response.extractions;
     }
     state.paneError = null;
   } catch (error) {
@@ -753,25 +753,25 @@ function renderObservingBlock(observing: ObservingCard): string {
   const selected = state.route.memoryId === observing.memoryId;
 
   return `
-    <article class="observation-block ${selected ? 'observation-block-active' : ''}">
+    <article class="extraction-block ${selected ? 'extraction-block-active' : ''}">
       <button
-        class="observation-open"
+        class="extraction-open"
         data-action="open-memory"
         data-memory-id="${escapeAttr(observing.memoryId)}"
       >
-        <div class="observation-date">${escapeHtml(formatTimestamp(observing.updatedAt))}</div>
+        <div class="extraction-date">${escapeHtml(formatTimestamp(observing.updatedAt))}</div>
         <h3>${escapeHtml(observing.title)}</h3>
         <p>${escapeHtml(expanded ? observing.summary : truncate(observing.summary, 180))}</p>
       </button>
-      <div class="observation-actions">
+      <div class="extraction-actions">
         <button
-          class="observation-toggle"
-          data-action="toggle-observation"
+          class="extraction-toggle"
+          data-action="toggle-extraction"
           data-memory-id="${escapeAttr(observing.memoryId)}"
         >${expanded ? 'Collapse' : 'Expand'}</button>
       </div>
       ${expanded ? `
-        <div class="observation-references">
+        <div class="extraction-references">
           ${observing.references.length > 0 ? `
             ${observing.references.map((reference) => `
               <button
@@ -1016,7 +1016,7 @@ function bindViewEvents() {
     });
   });
 
-  document.querySelectorAll<HTMLElement>('[data-action="toggle-observation"]').forEach((element) => {
+  document.querySelectorAll<HTMLElement>('[data-action="toggle-extraction"]').forEach((element) => {
     element.addEventListener('click', () => {
       const memoryId = element.dataset.memoryId;
       if (!memoryId) {

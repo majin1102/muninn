@@ -7,7 +7,7 @@ import urllib.error
 import urllib.request
 from base64 import urlsafe_b64decode
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from benchmark.common.muninn_bridge import RecallHit
 from benchmark.locomo.scoring import score_qa
@@ -15,10 +15,12 @@ from benchmark.locomo.scoring import score_qa
 
 SYSTEM_PROMPT = (
     "You answer LoCoMo benchmark questions using only the provided Muninn "
-    "memory context. Return JSON only with answer, memory_clarity_score, "
-    "and memory_clarity_reason."
+    "observation context. Return only the short answer text."
 )
 MIN_CODEX_TOKEN_TTL_SECONDS = 24 * 60 * 60
+ANSWERER_ATTEMPTS = 3
+ANSWERER_RETRY_DELAY_SECONDS = 2
+TRANSIENT_HTTP_STATUS = {429, 500, 502, 503, 504}
 
 
 def build_answer_context(
@@ -28,27 +30,44 @@ def build_answer_context(
     hits: list[RecallHit],
     expand_references: bool,
 ) -> str:
-    lines = [
-        f"Question: {question}",
-        f"Category: {category}",
-        "Related Memories:",
-    ]
     if not hits:
-        lines.append("- No related memories were retrieved.")
-        return "\n".join(lines)
+        return ""
 
-    for index, hit in enumerate(hits, start=1):
-        lines.extend(
-            [
-                f"- HIT {index}",
-                f"  DATE: {hit.date_time or '(unknown)'}",
-                f"  MEMORY_ID: {hit.memory_id}",
-                f"  MEMORY: {hit.matched_text or hit.summary or hit.detail or hit.title or ''}",
-                f"  EVIDENCE_IDS: {', '.join(hit.evidence_ids) if hit.evidence_ids else '(none)'}",
-            ]
-        )
+    lines = [render_locomo_context_line(hit) for hit in hits]
+    return "\n".join(line for line in lines if line)
 
-    return "\n".join(lines)
+
+def render_locomo_context_line(hit: RecallHit) -> str:
+    text = normalize_recall_text(hit.detail or hit.matched_text or "")
+    if not text:
+        return ""
+    date_time = hit_date_time(hit)
+    return f"{date_time}: {text}" if date_time else text
+
+
+def normalize_recall_text(text: str) -> str:
+    parts: list[str] = []
+    for line in text.strip().splitlines():
+        stripped = line.strip()
+        if stripped.startswith("OBSERVATION:"):
+            stripped = stripped.removeprefix("OBSERVATION:").strip()
+        elif stripped.startswith("CONTEXT:"):
+            stripped = stripped.removeprefix("CONTEXT:").strip()
+        if stripped:
+            parts.append(stripped)
+    return " ".join(parts)
+
+
+def hit_date_time(hit: RecallHit) -> str:
+    date_times: list[str] = []
+    seen: set[str] = set()
+    for reference in hit.references or []:
+        value = str(reference.get("date_time") or "").strip()
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        date_times.append(value)
+    return " | ".join(date_times)
 
 
 def build_qa_trace(
@@ -113,13 +132,14 @@ def run_llm_answerer(
     category: int,
     answer_context: str,
     config: dict[str, Any],
+    adversarial_answer: str | None = None,
 ) -> dict[str, Any]:
     provider = str(config.get("provider", "")).strip()
     if provider == "mock":
         return {
             "answer": "Mock answer",
-            "memory_clarity_score": 1,
-            "memory_clarity_reason": "Mock answerer did not evaluate memory clarity.",
+            "memory_clarity_score": None,
+            "memory_clarity_reason": "",
         }
     if provider == "openai-codex":
         return run_openai_codex_answerer(
@@ -127,6 +147,7 @@ def run_llm_answerer(
             category=category,
             answer_context=answer_context,
             config=config,
+            adversarial_answer=adversarial_answer,
         )
     if provider != "openai":
         raise ValueError(f"unsupported LoCoMo answerer provider: {provider}")
@@ -149,22 +170,20 @@ def run_llm_answerer(
         question=question,
         category=category,
         answer_context=answer_context,
+        adversarial_answer=adversarial_answer,
     )
-    request = urllib.request.Request(
-        normalize_chat_completions_url(base_url) if api_style == "chat_completions" else base_url,
-        data=json.dumps(payload).encode("utf8"),
-        headers={
-            "authorization": f"Bearer {api_key}",
-            "content-type": "application/json",
-        },
-        method="POST",
+    raw = read_with_retries(
+        lambda: urllib.request.Request(
+            normalize_chat_completions_url(base_url) if api_style == "chat_completions" else base_url,
+            data=json.dumps(payload).encode("utf8"),
+            headers={
+                "authorization": f"Bearer {api_key}",
+                "content-type": "application/json",
+            },
+            method="POST",
+        ),
+        "LoCoMo answerer request",
     )
-    try:
-        with urllib.request.urlopen(request, timeout=120) as response:
-            raw = response.read().decode("utf8")
-    except urllib.error.HTTPError as error:
-        detail = error.read().decode("utf8", errors="replace")
-        raise RuntimeError(f"LoCoMo answerer request failed with status {error.code}: {detail}") from error
     return extract_answer(json.loads(raw), api_style)
 
 
@@ -174,6 +193,7 @@ def run_openai_codex_answerer(
     category: int,
     answer_context: str,
     config: dict[str, Any],
+    adversarial_answer: str | None = None,
 ) -> dict[str, Any]:
     token = load_codex_access_token()
     base_url = str(config.get("baseUrl") or "https://chatgpt.com/backend-api")
@@ -183,6 +203,7 @@ def run_openai_codex_answerer(
         question=question,
         category=category,
         answer_context=answer_context,
+        adversarial_answer=adversarial_answer,
     )
     payload["instructions"] = SYSTEM_PROMPT
     payload["store"] = False
@@ -192,25 +213,44 @@ def run_openai_codex_answerer(
         for item in payload["input"]
         if isinstance(item, dict) and item.get("role") != "system"
     ]
-    request = urllib.request.Request(
-        normalize_codex_responses_url(base_url),
-        data=json.dumps(payload).encode("utf8"),
-        headers={
-            "authorization": f"Bearer {token}",
-            "content-type": "application/json",
-        },
-        method="POST",
+    raw = read_with_retries(
+        lambda: urllib.request.Request(
+            normalize_codex_responses_url(base_url),
+            data=json.dumps(payload).encode("utf8"),
+            headers={
+                "authorization": f"Bearer {token}",
+                "content-type": "application/json",
+            },
+            method="POST",
+        ),
+        "LoCoMo openai-codex answerer request",
     )
-    try:
-        with urllib.request.urlopen(request, timeout=120) as response:
-            raw = response.read().decode("utf8")
-    except urllib.error.HTTPError as error:
-        detail = error.read().decode("utf8", errors="replace")
-        raise RuntimeError(f"LoCoMo openai-codex answerer request failed with status {error.code}: {detail}") from error
     text = extract_codex_stream_text(raw)
     if not text:
         raise RuntimeError("LoCoMo openai-codex answerer response did not contain text")
     return parse_answer_text(text)
+
+
+def read_with_retries(
+    build_request: Callable[[], urllib.request.Request],
+    label: str,
+) -> str:
+    last_error: urllib.error.HTTPError | urllib.error.URLError | None = None
+    for attempt in range(1, ANSWERER_ATTEMPTS + 1):
+        try:
+            with urllib.request.urlopen(build_request(), timeout=120) as response:
+                return response.read().decode("utf8")
+        except urllib.error.HTTPError as error:
+            last_error = error
+            detail = error.read().decode("utf8", errors="replace")
+            if error.code not in TRANSIENT_HTTP_STATUS or attempt == ANSWERER_ATTEMPTS:
+                raise RuntimeError(f"{label} failed with status {error.code}: {detail}") from error
+        except urllib.error.URLError as error:
+            last_error = error
+            if attempt == ANSWERER_ATTEMPTS:
+                raise RuntimeError(f"{label} failed: {error}") from error
+        time.sleep(ANSWERER_RETRY_DELAY_SECONDS)
+    raise RuntimeError(f"{label} failed: {last_error}")
 
 
 def load_codex_access_token(now: float | None = None) -> str:
@@ -271,19 +311,26 @@ def build_openai_payload(
     question: str,
     category: int,
     answer_context: str,
+    adversarial_answer: str | None = None,
 ) -> dict[str, Any]:
-    user_prompt = (
-        f"{answer_context}\n\n"
-        f"Question: {question}\n"
-        f"Category: {category}\n"
-        "Answer based on Related Memories. "
-        "Use the shortest direct answer that answers the question; put evidence and reasoning in memory_clarity_reason. "
-        "For dates, years, names, places, or short phrases, output only the factual span itself with no prepositions or full sentence. "
-        "If the question is subjective or interpretive, a reasonable inference is allowed when supported by the memory context. "
-        "If the memory context is insufficient, answer \"Not mentioned in the conversation\". "
-        "Rate memory_clarity_score from 1 to 10 based on the clarity of the memory evidence. "
-        "Return JSON only: {\"answer\":\"...\",\"memory_clarity_score\":1,\"memory_clarity_reason\":\"...\"}."
-    )
+    if category == 5 and adversarial_answer:
+        user_prompt = (
+            f"{answer_context}\n\n"
+            "Based on the above context, answer the following question.\n\n"
+            f"Question: {question} Select the correct answer: "
+            f"(a) Not mentioned in the conversation (b) {adversarial_answer}.\n\n"
+            "Short answer:"
+        )
+    else:
+        question_text = question
+        if category == 2:
+            question_text = f"{question} Use DATE of CONVERSATION to answer with an approximate date."
+        user_prompt = (
+            f"{answer_context}\n\n"
+            "Based on the above context, write an answer in the form of a short phrase "
+            "for the following question. Answer with exact words from the context whenever possible.\n\n"
+            f"Question: {question_text} Short answer:"
+        )
     if api_style == "chat_completions":
         return {
             "model": model,
@@ -337,16 +384,6 @@ def extract_responses_text(payload: dict[str, Any]) -> str:
 
 def parse_answer_text(raw: str) -> dict[str, Any]:
     text = raw.strip()
-    try:
-        parsed = json.loads(text)
-    except json.JSONDecodeError:
-        return {"answer": text, "memory_clarity_score": None, "memory_clarity_reason": ""}
-    if isinstance(parsed, dict) and isinstance(parsed.get("answer"), str):
-        return {
-            "answer": parsed["answer"].strip(),
-            "memory_clarity_score": normalize_clarity_score(parsed.get("memory_clarity_score")),
-            "memory_clarity_reason": str(parsed.get("memory_clarity_reason") or "").strip(),
-        }
     return {"answer": text, "memory_clarity_score": None, "memory_clarity_reason": ""}
 
 

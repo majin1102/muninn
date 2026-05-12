@@ -101,12 +101,9 @@ class MuninnBridgeTests(unittest.TestCase):
                 "results": {
                     "0:0": [
                         {
-                            "memory_id": "observing:1",
+                            "memory_id": "turn:1",
                             "evidence_ids": ["D1:1", "D1:2"],
-                            "date_time": "1:56 pm on 8 May, 2023",
-                            "title": "title",
-                            "summary": "summary",
-                            "detail": "detail",
+                            "detail": "memory",
                             "observationRatio": 0.5,
                         }
                     ]
@@ -119,9 +116,28 @@ class MuninnBridgeTests(unittest.TestCase):
             Path("/tmp/muninn-home"),
         )
 
-        self.assertEqual(results["0:0"][0].memory_id, "observing:1")
+        self.assertEqual(results["0:0"][0].memory_id, "turn:1")
         self.assertEqual(results["0:0"][0].evidence_ids, ["D1:1", "D1:2"])
         self.assertEqual(results["0:0"][0].observation_ratio, 0.5)
+
+    def test_recall_batch_passes_budget_and_query_limit(self) -> None:
+        bridge = MuninnBridge()
+        bridge.ensure_built = MagicMock()
+        bridge._run_json = MagicMock(return_value={"results": {"0:0": []}})
+
+        bridge.recall_batch(
+            [{"key": "0:0", "query": "summer plans", "limit": 5}],
+            Path("/tmp/muninn-home"),
+            recall_mode="hybrid",
+            budget=220,
+            query_limit=20,
+            skip_watermark=True,
+        )
+
+        _, kwargs = bridge._run_json.call_args
+        self.assertEqual(kwargs["budget"], "220")
+        self.assertEqual(kwargs["query_limit"], "20")
+        self.assertEqual(kwargs["skip_watermark"], "1")
 
     def test_run_json_uses_configured_node_binary(self) -> None:
         bridge = MuninnBridge()

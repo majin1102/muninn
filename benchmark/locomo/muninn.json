@@ -5,7 +5,7 @@
     "maxAttempts": 3
   },
   "llm": {},
-  "observation": {
+  "extraction": {
     "defaultImportance": 0.7
   }
 }

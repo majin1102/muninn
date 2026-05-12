@@ -1,10 +1,9 @@
-import type { SessionTurn } from '../client.js';
+import type { Turn } from '../client.js';
 import { Memories } from '../memories/memories.js';
 import type { NativeTables } from '../native.js';
-import { routeObservingThreads, observeThread } from '../llm/observing-gateway.js';
-import { applyObservationChanges, applyObservationTableChanges } from './memory-delta.js';
+import { observeThread } from '../llm/observing-gateway.js';
+import { applyExtractionChanges, applyExtractionTableChanges } from './memory-delta.js';
 import type { SealedEpoch } from './epoch.js';
-import { writeGatewayTrace } from './gateway-trace.js';
 import {
   isActiveThread,
   applyObserveResult,
@@ -12,18 +11,18 @@ import {
   currentObservingContent,
   getPendingIndex,
   snapshotRef,
-  toObservingSnapshot,
+  toSessionSnapshot,
 } from './thread.js';
-import type { ObserveFragmentInput, ObservingThread, SessionFragment } from './types.js';
+import type { FragmentTurnInput, ObservingThread } from './types.js';
 
 type ObserveThreadImpl = typeof observeThread;
+const DEFAULT_SESSION_ID = '__muninn_default_session__';
 
-type ApplyGatewayUpdatesParams = {
+type ObserveSessionThreadParams = {
   threads: ObservingThread[];
   observerName: string;
-  pendingTurns: SessionTurn[];
+  pendingTurns: Turn[];
   observingEpoch: number;
-  sessionFragments: SessionFragment[];
   signal?: AbortSignal;
   memories?: Pick<Memories, 'get'>;
   observeThreadImpl?: ObserveThreadImpl;
@@ -36,49 +35,77 @@ export async function observeEpoch(params: {
   threads: ObservingThread[];
   sealedEpoch: SealedEpoch;
   signal?: AbortSignal;
+  observeThreadImpl?: ObserveThreadImpl;
 }): Promise<{ threads: ObservingThread[]; touchedIds: Set<string> }> {
   throwIfAborted(params.signal);
   ensureActiveThreads(
     params.threads,
     params.activeWindowDays,
   );
-  ensureSessionThread(
-    params.threads,
-    params.observerName,
-    params.sealedEpoch.turns,
-    params.sealedEpoch.epoch,
-  );
   const memories = new Memories(params.client);
-  const gatewayStartedAt = Date.now();
-  const fitting = await routeObservingThreads(
-    activeGatewayInputs(
+  const touchedIds = new Set<string>();
+  for (const turns of groupTurnsBySession(params.sealedEpoch.turns)) {
+    ensureSessionThread(
       params.threads,
       params.observerName,
-      params.activeWindowDays,
-    ),
-    params.sealedEpoch.turns,
-    params.signal,
-  );
-  const gatewayDurationMs = Date.now() - gatewayStartedAt;
-  await writeGatewayTrace({
-    observingEpoch: params.sealedEpoch.epoch,
-    durationMs: gatewayDurationMs,
-    sessionFragments: fitting.sessionFragments,
-  });
-  const touchedIds = await applyGatewayUpdates({
-    threads: params.threads,
-    observerName: params.observerName,
-    pendingTurns: params.sealedEpoch.turns,
-    observingEpoch: params.sealedEpoch.epoch,
-    sessionFragments: fitting.sessionFragments,
-    signal: params.signal,
-    memories,
-  });
+      turns,
+      params.sealedEpoch.epoch,
+    );
+    const groupTouchedIds = await observeSessionThread({
+      threads: params.threads,
+      observerName: params.observerName,
+      pendingTurns: turns,
+      observingEpoch: params.sealedEpoch.epoch,
+      signal: params.signal,
+      memories,
+      observeThreadImpl: params.observeThreadImpl,
+    });
+    for (const touchedId of groupTouchedIds) {
+      touchedIds.add(touchedId);
+    }
+  }
   await flushThreads(params.client, params.threads, touchedIds);
   return {
     threads: params.threads,
     touchedIds,
   };
+}
+
+function normalizedSessionId(turn: Pick<Turn, 'sessionId'>): string | null {
+  const sessionId = turn.sessionId?.trim();
+  return sessionId && sessionId.length > 0 ? sessionId : null;
+}
+
+function groupTurnsBySession(turns: Turn[]): Turn[][] {
+  const groups = new Map<string, Turn[]>();
+  const order: string[] = [];
+  for (const turn of turns) {
+    const sessionId = normalizedSessionId(turn);
+    const key = sessionId ?? DEFAULT_SESSION_ID;
+    let group = groups.get(key);
+    if (!group) {
+      group = [];
+      groups.set(key, group);
+      order.push(key);
+    }
+    group.push(turn);
+  }
+  return order.map((key) => groups.get(key)!);
+}
+
+function sessionIdForTurns(turns: Turn[]): string {
+  let expected: string | null | undefined;
+  for (const turn of turns) {
+    const sessionId = normalizedSessionId(turn);
+    if (expected === undefined) {
+      expected = sessionId;
+      continue;
+    }
+    if (sessionId !== expected) {
+      throw new Error('observeSessionThread requires pendingTurns from a single session');
+    }
+  }
+  return expected ?? DEFAULT_SESSION_ID;
 }
 
 function activeThreadInputs(
@@ -105,29 +132,13 @@ function ensureActiveThreads(
   threads.splice(0, threads.length, ...activeThreads);
 }
 
-function activeGatewayInputs(
-  threads: ObservingThread[],
-  observerName: string,
-  activeWindowDays: number,
-) {
-  return threads
-    .filter((thread) => thread.observer === observerName)
-    .filter((thread) => isActiveThread(thread.updatedAt, activeWindowDays))
-    .map((thread) => ({
-      threadId: thread.observingId,
-      kind: thread.kind,
-      title: thread.title,
-      summary: thread.summary,
-    }));
-}
-
 function ensureSessionThread(
   threads: ObservingThread[],
   observerName: string,
-  pendingTurns: SessionTurn[],
+  pendingTurns: Turn[],
   observingEpoch: number,
 ): ObservingThread | null {
-  const sessionId = pendingTurns.find((turn) => turn.sessionId?.trim())?.sessionId?.trim() ?? null;
+  const sessionId = sessionIdForTurns(pendingTurns);
   const existing = threads.find((thread) => (
     thread.observer === observerName
     && thread.kind === 'session'
@@ -154,69 +165,43 @@ function ensureSessionThread(
   return thread;
 }
 
-async function applyGatewayUpdates(params: ApplyGatewayUpdatesParams): Promise<Set<string>> {
+async function observeSessionThread(params: ObserveSessionThreadParams): Promise<Set<string>> {
   const {
     threads,
     observerName,
     pendingTurns,
     observingEpoch,
-    sessionFragments,
     signal,
     memories,
     observeThreadImpl = observeThread,
   } = params;
   throwIfAborted(signal);
-  const turnMap = new Map(pendingTurns.map((turn) => [turn.turnId, turn]));
-  const observeFragmentsByThread = new Map<string, ObserveFragmentInput[]>();
   const touchedIds = new Set<string>();
   const now = new Date().toISOString();
-
-  for (const fragment of sessionFragments) {
-    const turns = fragment.turnIds.flatMap((turnId): ObserveFragmentInput['turns'] => {
-      const turn = turnMap.get(turnId);
-      if (!turn) {
-        return [];
-      }
-      return [{
-        turnId: turn.turnId,
-        prompt: turn.prompt,
-        response: turn.response,
-      }];
-    });
-    if (turns.length === 0) {
-      continue;
-    }
-
-    const threadId = fragment.threadId.trim();
-    const thread = threads.find((candidate) => candidate.observingId === threadId);
-    if (!thread) {
-      continue;
-    }
-    touchedIds.add(threadId);
-    mergeObservingFragments(observeFragmentsByThread, threadId, [{
-      content: fragment.content,
-      turns,
-    }]);
-    thread.updatedAt = now;
-    thread.observingEpoch = observingEpoch;
+  const sessionId = sessionIdForTurns(pendingTurns);
+  const thread = threads.find((candidate) => (
+    candidate.observer === observerName
+    && candidate.kind === 'session'
+    && (candidate.sessionId ?? null) === sessionId
+  ));
+  if (!thread || pendingTurns.length === 0) {
+    return touchedIds;
   }
 
-  for (const [observingId, fragments] of observeFragmentsByThread.entries()) {
-    throwIfAborted(signal);
-    const thread = threads.find((candidate) => candidate.observingId === observingId);
-    if (!thread) {
-      continue;
-    }
-    const result = await observeThreadImpl({
-      observingContent: currentObservingContent(thread),
-      fragments,
-    }, signal, {
-      memories,
-    });
-    applyObserveResult(thread, result, observingEpoch, applyObservationChanges);
-    touchedIds.add(observingId);
-  }
-
+  const turns: FragmentTurnInput[] = pendingTurns.map((turn) => ({
+    turnId: turn.turnId,
+    prompt: turn.prompt,
+    response: turn.response,
+    summary: turn.summary,
+  }));
+  thread.updatedAt = now;
+  thread.observingEpoch = observingEpoch;
+  const result = await observeThreadImpl({
+    observingContent: currentObservingContent(thread),
+    turns,
+  }, signal, { memories });
+  applyObserveResult(thread, result, observingEpoch, applyExtractionChanges);
+  touchedIds.add(thread.observingId);
   return touchedIds;
 }
 
@@ -232,8 +217,8 @@ async function flushThreads(
     return;
   }
 
-  const persistedRows = await client.observingTable.insert({
-    snapshots: touched.map(toObservingSnapshot),
+  const persistedRows = await client.sessionTable.insert({
+    snapshots: touched.map(toSessionSnapshot),
   });
   updateThreadsFromRows(threads, persistedRows);
 }
@@ -251,9 +236,31 @@ async function catchUpIndex(
   let latestIndexedSequence = thread.indexedSnapshotSequence ?? null;
   for (let snapshotIndex = pending.start; snapshotIndex <= pending.end; snapshotIndex += 1) {
     throwIfAborted(signal);
-    await applyObservationTableChanges(
+    const current = thread.snapshots[snapshotIndex];
+    const previous = snapshotIndex > 0 ? thread.snapshots[snapshotIndex - 1] : undefined;
+    const previousIds = new Set((previous?.extractions ?? [])
+      .map((extraction) => extraction.id)
+      .filter((id): id is string => Boolean(id)));
+    const diff = applyExtractionChanges(previous?.extractions ?? [], {
+      title: thread.title,
+      summary: thread.summary,
+      threadMemory: current.threadMemory,
+      extractions: current.extractions.map((extraction) => (
+        extraction.id && previousIds.has(extraction.id)
+          ? extraction
+          : { ...extraction, id: undefined }
+      )),
+      openQuestions: current.openQuestions ?? [],
+      nextSteps: current.nextSteps ?? [],
+      contextRefs: current.contextRefs,
+    });
+    await applyExtractionTableChanges(
       client,
-      thread.snapshots[snapshotIndex],
+      {
+        ...current,
+        extractions: diff.extractions,
+        extractionChanges: diff.extractionChanges,
+      },
       snapshotRef(thread, snapshotIndex),
       signal,
     );
@@ -265,7 +272,7 @@ async function catchUpIndex(
   }
 }
 
-export async function buildObservation(
+export async function buildExtraction(
   client: NativeTables,
   threads: ObservingThread[],
   signal?: AbortSignal,
@@ -312,9 +319,9 @@ export async function buildTouchedIndex(
 
 function updateThreadsFromRows(
   threads: ObservingThread[],
-  rows: Array<import('./types.js').ObservingSnapshot>,
+  rows: Array<import('./types.js').SessionSnapshot>,
 ): void {
-  const rowsById = new Map(rows.map((row) => [row.observingId, row]));
+  const rowsById = new Map(rows.map((row) => [row.sessionId, row]));
   for (const thread of threads) {
     const row = rowsById.get(thread.observingId);
     if (!row) {
@@ -329,24 +336,13 @@ function updateThreadsFromRows(
   }
 }
 
-function mergeObservingFragments(
-  byThread: Map<string, ObserveFragmentInput[]>,
-  observingId: string,
-  inputs: ObserveFragmentInput[],
-): void {
-  const fragments = byThread.get(observingId) ?? [];
-  fragments.push(...inputs);
-  byThread.set(observingId, fragments);
-}
-
 export const __testing = {
   flushThreads,
   buildTouchedIndex,
-  buildObservation,
+  buildExtraction,
   observeEpoch,
   activeThreadInputsForTests: activeThreadInputs,
-  activeGatewayInputsForTests: activeGatewayInputs,
-  applyGatewayUpdatesForTests: applyGatewayUpdates,
+  observeSessionThreadForTests: observeSessionThread,
 };
 
 function throwIfAborted(signal?: AbortSignal): void {

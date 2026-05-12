@@ -52,7 +52,7 @@ system: |
   `reason`
   - Required for every session fragment.
   - Write one short sentence explaining why this fragment routes to the target thread.
-  - Reason is for trace/debug only; it is not an observation and will not be sent to the observer.
+  - Reason is for trace/debug only; it is not an extraction and will not be sent to the observer.
 
   Example
   Observing threads

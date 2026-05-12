@@ -74,7 +74,9 @@ def multi_answer_f1(prediction: str, ground_truth: str) -> float:
 
 def is_negative_answer(prediction: str) -> bool:
     lowered = prediction.lower()
-    return "not mentioned" in lowered or "no information available" in lowered
+    choice = lowered.strip().strip(string.punctuation).strip()
+    normalized = normalize_answer(prediction)
+    return choice == "a" or normalized == "a" or "not mentioned" in lowered or "no information available" in lowered
 
 
 def score_qa(qa: dict[str, Any], prediction_key: str) -> ScoredQA:
@@ -107,7 +109,7 @@ def score_qa(qa: dict[str, Any], prediction_key: str) -> ScoredQA:
         answer = str(qa.get("answer", "")).strip()
         score = multi_answer_f1(prediction, answer)
     elif category == 5:
-        score = 1.0 if is_negative_answer(prediction) and recall == 0.0 and not adversarial_match else 0.0
+        score = 1.0 if is_negative_answer(prediction) and not adversarial_match else 0.0
     else:
         raise ValueError(f"unsupported category: {category}")
 

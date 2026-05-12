@@ -1,4 +1,4 @@
-import type { SessionTurn } from '../client.js';
+import type { Turn } from '../client.js';
 import type { RecentSessionCheckpoint, RecentTurn } from '../checkpoint.js';
 import type { NativeTables } from '../native.js';
 import { Session } from './session.js';
@@ -34,7 +34,7 @@ export class SessionRegistry {
     });
   }
 
-  rememberTurn(turn: SessionTurn): void {
+  rememberTurn(turn: Turn): void {
     const normalizedSessionId = normalizeSessionId(turn.sessionId ?? undefined);
     const key = sessionKey(normalizedSessionId, turn.agent, this.observerName);
     const existing = this.sessions.get(key)?.resolved;

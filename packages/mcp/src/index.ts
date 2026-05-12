@@ -103,6 +103,9 @@ async function main() {
       inputSchema: z.object({
         query: z.string().describe('Search query'),
         limit: z.number().int().positive().optional().describe('Maximum number of results'),
+        budget: z.number().int().nonnegative().optional().describe('Character budget for recalled memory context; 0 disables recall composition'),
+        queryLimit: z.number().int().positive().optional().describe('Candidate count used before recall composition'),
+        recallMode: z.enum(['vector', 'fts', 'hybrid']).optional().describe('Recall mode'),
         thinkingRatio: z.number().min(0).max(1).optional().describe('Ratio of thinking memories'),
       }),
     },

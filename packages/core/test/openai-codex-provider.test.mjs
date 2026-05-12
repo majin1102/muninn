@@ -30,7 +30,7 @@ function makeConfig({ provider = 'openai-codex', model, baseUrl } = {}) {
         ...(baseUrl ? { baseUrl } : {}),
       },
     },
-    observation: {
+    extraction: {
       embedding: {
         provider: 'mock',
         dimensions: 4,
@@ -86,7 +86,7 @@ test('validateMuninnConfigInput accepts openai-codex llm without apiKey', () => 
 
 test('validateMuninnConfigInput keeps openai-codex out of embedding providers', () => {
   const config = makeConfig();
-  config.observation.embedding.provider = 'openai-codex';
+  config.extraction.embedding.provider = 'openai-codex';
 
   assert.throws(
     () => validateMuninnConfigInput(JSON.stringify(config)),
@@ -146,7 +146,7 @@ test('generateWithTools sends openai-codex Responses tools and parses calls', as
         type: 'function_call',
         call_id: 'call-1',
         name: 'memory-get',
-        arguments: '{"memoryIds":["observation:1"]}',
+        arguments: '{"memoryIds":["extraction:1"]}',
         }],
       },
     }));
@@ -201,7 +201,7 @@ test('generateWithTools sends openai-codex Responses tools and parses calls', as
     toolCalls: [{
       id: 'call-1',
       name: 'memory-get',
-      arguments: { memoryIds: ['observation:1'] },
+      arguments: { memoryIds: ['extraction:1'] },
     }],
   });
 });

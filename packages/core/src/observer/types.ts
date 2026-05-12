@@ -1,16 +1,20 @@
-export type ObservationCategory = 'Preference' | 'Fact' | 'Decision' | 'Entity' | 'Concept' | 'Other';
+export type ExtractionCategory = 'Preference' | 'Fact' | 'Decision' | 'Entity' | 'Concept' | 'Other';
 
-export type Observation = {
+export type Extraction = {
   id?: string | null;
   text: string;
-  category: ObservationCategory;
+  context?: string | null;
+  anchors?: string[];
+  category: ExtractionCategory;
   references: string[];
   updatedMemory?: string | null;
 };
 
-export type ObservationInput = {
+export type ExtractionInput = {
   text: string;
-  category: ObservationCategory;
+  context?: string | null;
+  anchors?: string[];
+  category: ExtractionCategory;
   references: string[];
 };
 
@@ -19,43 +23,50 @@ export type ContextRef = {
   summary: string;
 };
 
-export type ObservationChange =
+export type ExtractionChange =
   | {
     type: 'add';
     text: string;
-    category: ObservationCategory;
+    context?: string | null;
+    anchors?: string[];
+    category: ExtractionCategory;
     references: string[];
     reason: string;
   }
   | {
     type: 'merge';
-    observationIds: string[];
+    extractionIds: string[];
     text: string;
-    category: ObservationCategory;
+    context?: string | null;
+    anchors?: string[];
+    category: ExtractionCategory;
     reason: string;
   }
   | {
     type: 'update';
-    observationId: string;
+    extractionId: string;
     text: string;
-    category?: ObservationCategory;
+    context?: string | null;
+    anchors?: string[];
+    category?: ExtractionCategory;
     references?: string[];
     reason: string;
   }
   | {
     type: 'delete';
-    observationId: string;
+    extractionId: string;
     reason: string;
   };
 
 export type SnapshotContent = {
   threadKind?: ObservingThreadKind;
   sessionId?: string | null;
-  observations: Observation[];
+  threadMemory: string;
+  extractions: Extraction[];
   contextRefs: ContextRef[];
   openQuestions?: string[];
   nextSteps?: string[];
-  observationChanges: ObservationChange[];
+  extractionChanges: ExtractionChange[];
 };
 
 export type ObservingThreadKind = 'session' | 'subject';
@@ -78,9 +89,9 @@ export type ObservingThread = {
   updatedAt: string;
 };
 
-export type ObservingSnapshot = {
+export type SessionSnapshot = {
   snapshotId: string;
-  observingId: string;
+  sessionId: string;
   snapshotSequence: number;
   createdAt: string;
   updatedAt: string;
@@ -107,30 +118,32 @@ export type FragmentTurnInput = {
   turnId: string;
   prompt?: string | null;
   response?: string | null;
-};
-
-export type ObserveFragmentInput = {
-  content: string;
-  turns: FragmentTurnInput[];
+  summary?: string | null;
 };
 
 export type ObservingContent = {
   title: string;
   summary: string;
-  observations: Observation[];
+  threadMemory?: string;
+  extractions: Extraction[];
   openQuestions: string[];
   nextSteps: string[];
 };
 
-export type ObservingContentUpdate = Omit<ObservingContent, 'observations'>;
+export type ObservingContentUpdate = Omit<ObservingContent, 'extractions'>;
 
 export type ObserveRequest = {
   observingContent: ObservingContent;
-  fragments: ObserveFragmentInput[];
+  turns: FragmentTurnInput[];
 };
 
 export type ObserveResult = {
-  observingContent: ObservingContent;
+  title: string;
+  summary: string;
+  threadMemory: string;
+  extractions: Extraction[];
+  openQuestions: string[];
+  nextSteps: string[];
   contextRefs: ContextRef[];
 };
 
@@ -159,7 +172,7 @@ export type ThreadPreparationThread = {
 };
 
 export type ThreadPreparationWorkItem = {
-  observationIds: string[];
+  extractionIds: string[];
   targetThreadId?: string | null;
   newThreadTitle?: string | null;
   rationale: string;
@@ -167,5 +180,5 @@ export type ThreadPreparationWorkItem = {
 
 export type ThreadPreparationResult = {
   workItems: ThreadPreparationWorkItem[];
-  unthreadedObservationIds: string[];
+  unthreadedExtractionIds: string[];
 };

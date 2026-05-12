@@ -37,6 +37,7 @@ benchmark/**/out/
 benchmark/**/.cache/
 benchmark/**/__pycache__/
 benchmark/**/.venv/
+experiment/
 *.tsbuildinfo
 
 Cargo.lock

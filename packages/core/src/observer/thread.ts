@@ -1,18 +1,17 @@
-import { randomUUID } from 'node:crypto';
-
 import type {
   ObserveResult,
-  Observation,
+  Extraction,
   ObservingContent,
-  ObservingSnapshot,
+  SessionSnapshot,
   ObservingThread,
   ObservingThreadKind,
   PendingIndex,
   ContextRef,
   SnapshotContent,
 } from './types.js';
+import { parseThreadMemoryDocument } from './thread-memory.js';
 
-const PENDING_SNAPSHOT_ID = 'observing:18446744073709551615';
+const PENDING_SNAPSHOT_ID = 'session:18446744073709551615';
 const MAX_REFERENCES = 1000;
 
 export function activeWindowMs(activeWindowDays: number): number {
@@ -37,10 +36,11 @@ export function createObservingThread(
   kind: ObservingThreadKind = 'subject',
   sessionId: string | null = null,
 ): ObservingThread {
+  const threadSessionId = sessionId ?? 'default';
   return {
-    observingId: randomUUID(),
+    observingId: threadSessionId,
     kind,
-    sessionId,
+    sessionId: threadSessionId,
     snapshotIds: [],
     snapshotEpochs: [],
     observingEpoch,
@@ -65,17 +65,20 @@ export function cloneObservingThread(thread: ObservingThread): ObservingThread {
     snapshots: thread.snapshots.map((snapshot) => ({
       threadKind: snapshot.threadKind ?? thread.kind,
       sessionId: snapshot.sessionId ?? thread.sessionId ?? null,
-      observations: snapshot.observations.map((observation) => ({
-        id: observation.id ?? null,
-        text: observation.text,
-        category: observation.category,
-        references: [...(observation.references ?? [])],
-        updatedMemory: observation.updatedMemory ?? null,
+      threadMemory: snapshot.threadMemory,
+      extractions: snapshot.extractions.map((extraction) => ({
+        id: extraction.id ?? null,
+        text: extraction.text,
+        context: extraction.context ?? null,
+        anchors: [...(extraction.anchors ?? [])],
+        category: extraction.category,
+        references: [...(extraction.references ?? [])],
+        updatedMemory: extraction.updatedMemory ?? null,
       })),
       contextRefs: snapshot.contextRefs.map((reference) => ({ ...reference })),
       openQuestions: [...(snapshot.openQuestions ?? [])],
       nextSteps: [...(snapshot.nextSteps ?? [])],
-      observationChanges: (snapshot.observationChanges ?? []).map((change) => ({ ...change })),
+      extractionChanges: (snapshot.extractionChanges ?? []).map((change) => ({ ...change })),
     })),
     indexedSnapshotSequence: thread.indexedSnapshotSequence ?? null,
   };
@@ -86,19 +89,19 @@ export function cloneObservingThreads(threads: ObservingThread[]): ObservingThre
 }
 
 export function loadThreads(
-  snapshots: ObservingSnapshot[],
+  snapshots: SessionSnapshot[],
   observer: string,
   activeWindowDays: number,
   observingEpoch = 0,
 ): ObservingThread[] {
-  const grouped = new Map<string, ObservingSnapshot[]>();
+  const grouped = new Map<string, SessionSnapshot[]>();
   for (const snapshot of snapshots) {
     if (snapshot.observer !== observer) {
       continue;
     }
-    const rows = grouped.get(snapshot.observingId) ?? [];
+    const rows = grouped.get(snapshot.sessionId) ?? [];
     rows.push(snapshot);
-    grouped.set(snapshot.observingId, rows);
+    grouped.set(snapshot.sessionId, rows);
   }
   return [...grouped.values()]
     .map((rows) => threadFromSnapshots(rows, observingEpoch))
@@ -107,7 +110,7 @@ export function loadThreads(
 }
 
 export function threadFromSnapshots(
-  rows: ObservingSnapshot[],
+  rows: SessionSnapshot[],
   observingEpoch = 0,
   indexedSnapshotSequence: number | null = null,
 ): ObservingThread {
@@ -121,9 +124,9 @@ export function threadFromSnapshots(
   }
   const latestContent = deserializeSnapshot(latest);
   return {
-    observingId: latest.observingId,
+    observingId: latest.sessionId,
     kind: latestContent.threadKind ?? 'subject',
-    sessionId: latestContent.sessionId ?? null,
+    sessionId: latest.sessionId,
     snapshotId: latest.snapshotId,
     snapshotIds: ordered.map((row) => row.snapshotId),
     snapshotEpochs: ordered.map(() => observingEpoch),
@@ -141,7 +144,7 @@ export function threadFromSnapshots(
 
 export function replaySnapshots(
   thread: ObservingThread,
-  rows: ObservingSnapshot[],
+  rows: SessionSnapshot[],
   observingEpoch = thread.observingEpoch,
 ): void {
   const ordered = [...rows].sort((left, right) => (
@@ -175,7 +178,8 @@ export function currentObservingContent(thread: ObservingThread): ObservingConte
   return {
     title: thread.title,
     summary: thread.summary,
-    observations: snapshot.observations,
+    threadMemory: snapshot.threadMemory,
+    extractions: snapshot.extractions,
     openQuestions: snapshot.openQuestions ?? [],
     nextSteps: snapshot.nextSteps ?? [],
   };
@@ -185,28 +189,29 @@ export function applyObserveResult(
   thread: ObservingThread,
   result: ObserveResult,
   observingEpoch: number,
-  applyObservationChanges: (
-    observations: Observation[],
+  applyExtractionChanges: (
+    extractions: Extraction[],
     result: ObserveResult,
-  ) => { observationChanges: SnapshotContent['observationChanges']; observations: Observation[] },
+  ) => { extractionChanges: SnapshotContent['extractionChanges']; extractions: Extraction[] },
   now = new Date().toISOString(),
 ): void {
   const current = latestSnapshot(thread) ?? emptySnapshot();
-  const patched = applyObservationChanges(current.observations, result);
-  thread.title = result.observingContent.title;
-  thread.summary = result.observingContent.summary;
+  const patched = applyExtractionChanges(current.extractions, result);
+  thread.title = result.title;
+  thread.summary = result.summary ?? thread.summary;
   thread.observingEpoch = observingEpoch;
   thread.snapshots.push({
     threadKind: thread.kind,
     sessionId: thread.sessionId ?? null,
-    observations: patched.observations,
+    threadMemory: result.threadMemory ?? '',
+    extractions: patched.extractions,
     contextRefs: mergeContextRefs(
       current.contextRefs,
       result.contextRefs,
     ),
-    openQuestions: result.observingContent.openQuestions,
-    nextSteps: result.observingContent.nextSteps,
-    observationChanges: patched.observationChanges,
+    openQuestions: result.openQuestions,
+    nextSteps: result.nextSteps,
+    extractionChanges: patched.extractionChanges,
   });
   thread.references = latestSnapshot(thread)?.contextRefs.map((reference) => reference.turnId) ?? [];
   thread.snapshotEpochs = [...(thread.snapshotEpochs ?? []), observingEpoch];
@@ -221,21 +226,21 @@ export function pushReference(thread: ObservingThread, reference: string): void 
   }
 }
 
-export function toObservingSnapshot(thread: ObservingThread): ObservingSnapshot {
+export function toSessionSnapshot(thread: ObservingThread): SessionSnapshot {
   if (thread.snapshots.length === 0) {
     throw new Error(`missing snapshots for observing thread ${thread.observingId}`);
   }
   const snapshot = latestSnapshot(thread)!;
   return {
     snapshotId: thread.snapshotId ?? PENDING_SNAPSHOT_ID,
-    observingId: thread.observingId,
+    sessionId: thread.sessionId ?? thread.observingId,
     snapshotSequence: thread.snapshots.length - 1,
     createdAt: thread.updatedAt,
     updatedAt: thread.updatedAt,
     observer: thread.observer,
     title: thread.title,
     summary: thread.summary,
-    content: JSON.stringify(snapshot, null, 2),
+    content: snapshot.threadMemory,
     references: snapshot.contextRefs.map((reference) => reference.turnId),
   };
 }
@@ -293,16 +298,17 @@ export function getPendingIndexUpTo(
   };
 }
 
-function deserializeSnapshot(row: ObservingSnapshot): SnapshotContent {
-  const parsed = JSON.parse(row.content) as Partial<SnapshotContent>;
+function deserializeSnapshot(row: SessionSnapshot): SnapshotContent {
+  const parsed = parseThreadMemoryDocument(row.content, new Set(row.references));
   return {
-    threadKind: parsed.threadKind,
-    sessionId: parsed.sessionId ?? null,
-    observations: Array.isArray(parsed.observations) ? parsed.observations as Observation[] : [],
-    contextRefs: normalizeContextRefs(parsed.contextRefs),
-    openQuestions: Array.isArray(parsed.openQuestions) ? parsed.openQuestions : [],
-    nextSteps: Array.isArray(parsed.nextSteps) ? parsed.nextSteps : [],
-    observationChanges: Array.isArray(parsed.observationChanges) ? parsed.observationChanges : [],
+    threadKind: 'subject',
+    sessionId: null,
+    threadMemory: parsed.threadMemory,
+    extractions: parsed.extractions,
+    contextRefs: row.references.map((turnId) => ({ turnId, summary: turnId })),
+    openQuestions: [],
+    nextSteps: [],
+    extractionChanges: [],
   };
 }
 
@@ -310,11 +316,12 @@ function emptySnapshot(): SnapshotContent {
   return {
     threadKind: 'subject',
     sessionId: null,
-    observations: [],
+    threadMemory: '',
+    extractions: [],
     contextRefs: [],
     openQuestions: [],
     nextSteps: [],
-    observationChanges: [],
+    extractionChanges: [],
   };
 }
 
@@ -370,7 +377,7 @@ function normalizeText(value: string): string {
 
 function trimReferences(references: string[]): void {
   while (references.length > MAX_REFERENCES) {
-    const removableIndex = references.findIndex((reference) => reference.startsWith('session:'));
+    const removableIndex = references.findIndex((reference) => reference.startsWith('turn:'));
     references.splice(removableIndex >= 0 ? removableIndex : 0, 1);
   }
 }

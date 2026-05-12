@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import urllib.error
 import unittest
 from base64 import urlsafe_b64encode
 from pathlib import Path
@@ -14,6 +15,7 @@ from benchmark.locomo.answering import (
     build_answer_context,
     build_qa_trace,
     load_answerer_config,
+    parse_answer_text,
     run_llm_answerer,
 )
 from benchmark.locomo.scoring import score_qa
@@ -28,18 +30,18 @@ def make_jwt(exp: int = 4_102_444_800) -> str:
 
 
 class AnsweringTests(unittest.TestCase):
-    def test_answer_context_includes_related_memories_only(self) -> None:
+    def test_answer_context_uses_original_locomo_rag_context_shape(self) -> None:
         hit = RecallHit(
-            memory_id="observing:3",
+            memory_id="turn:3",
             evidence_ids=["D1:3"],
-            date_time="1:56 pm on 8 May, 2023",
-            title="Support group",
-            summary="Wide summary",
-            detail="Wide detail",
+            detail=(
+                "OBSERVATION: Caroline attended an LGBTQ support group on 7 May 2023.\n"
+                "CONTEXT: Caroline mentioned it after Melanie asked about her week."
+            ),
             matched_text="Caroline attended an LGBTQ support group on 7 May 2023.",
             references=[
                 {
-                    "memory_id": "session:9",
+                    "memory_id": "turn:9",
                     "source_id": "D1:3",
                     "date_time": "1:56 pm on 8 May, 2023",
                     "text": 'Caroline said: "I went to the LGBTQ support group yesterday."',
@@ -54,28 +56,36 @@ class AnsweringTests(unittest.TestCase):
             expand_references=False,
         )
 
-        self.assertIn("Related Memories:", context)
-        self.assertIn("MEMORY: Caroline attended an LGBTQ support group on 7 May 2023.", context)
-        self.assertIn("DATE: 1:56 pm on 8 May, 2023", context)
-        self.assertIn("MEMORY_ID: observing:3", context)
+        self.assertEqual(
+            context,
+            (
+                "1:56 pm on 8 May, 2023: "
+                "Caroline attended an LGBTQ support group on 7 May 2023. "
+                "Caroline mentioned it after Melanie asked about her week."
+            ),
+        )
+        self.assertNotIn("Related Observations:", context)
+        self.assertNotIn("OBSERVATION:", context)
+        self.assertNotIn("CONTEXT:", context)
+        self.assertNotIn("OBSERVATION_ID: turn:3", context)
+        self.assertNotIn("EVIDENCE_IDS:", context)
+        self.assertNotIn("Related Memories:", context)
+        self.assertNotIn("MEMORY:", context)
+        self.assertNotIn("MEMORY_ID:", context)
         self.assertNotIn("Related Sessions:", context)
         self.assertNotIn('SESSION D1:3', context)
         self.assertNotIn('TEXT: Caroline said: "I went to the LGBTQ support group yesterday."', context)
         self.assertNotIn("compute dates", context.lower())
-        self.assertNotIn("Wide detail", context)
 
     def test_answer_context_does_not_expand_direct_references(self) -> None:
         hit = RecallHit(
-            memory_id="observing:3",
+            memory_id="turn:3",
             evidence_ids=["D1:3"],
-            date_time="1:56 pm on 8 May, 2023",
-            title="Support group",
-            summary="Wide summary",
-            detail="Wide detail",
+            detail="Caroline attended an LGBTQ support group on 7 May 2023.",
             matched_text="Caroline attended an LGBTQ support group on 7 May 2023.",
             references=[
                 {
-                    "memory_id": "session:9",
+                    "memory_id": "turn:9",
                     "source_id": "D1:3",
                     "date_time": "1:56 pm on 8 May, 2023",
                     "text": "Caroline: I went to the LGBTQ support group yesterday.",
@@ -90,7 +100,7 @@ class AnsweringTests(unittest.TestCase):
             expand_references=True,
         )
 
-        self.assertIn("MEMORY: Caroline attended an LGBTQ support group on 7 May 2023.", context)
+        self.assertIn("Caroline attended an LGBTQ support group on 7 May 2023.", context)
         self.assertNotIn("SESSION D1:3", context)
         self.assertNotIn("TEXT: Caroline: I went to the LGBTQ support group yesterday.", context)
 
@@ -108,11 +118,10 @@ class AnsweringTests(unittest.TestCase):
             "muninn_top_5_prediction_context": ["D1:3"],
             "muninn_top_5_hits": [
                 {
-                    "memory_id": "observing:3",
+                    "memory_id": "turn:3",
                     "matched_text": "Caroline attended an LGBTQ support group on 7 May 2023.",
                     "evidence_ids": ["D1:3"],
-                    "date_time": "1:56 pm on 8 May, 2023",
-                    "title": "Support group",
+                    "detail": "Caroline attended an LGBTQ support group on 7 May 2023.",
                 }
             ],
             "muninn_top_5_answer_context": "Question: When did Caroline go to the support group?",
@@ -157,7 +166,7 @@ class AnsweringTests(unittest.TestCase):
         self.assertEqual(loaded["model"], "doubao-seed")
         self.assertEqual(loaded["apiKey"], "secret")
 
-    def test_llm_answerer_mock_returns_json_answer(self) -> None:
+    def test_llm_answerer_mock_returns_short_answer(self) -> None:
         result = run_llm_answerer(
             question="When did Caroline go to the support group?",
             category=2,
@@ -166,8 +175,8 @@ class AnsweringTests(unittest.TestCase):
         )
 
         self.assertEqual(result["answer"], "Mock answer")
-        self.assertEqual(result["memory_clarity_score"], 1)
-        self.assertIn("mock", result["memory_clarity_reason"].lower())
+        self.assertIsNone(result["memory_clarity_score"])
+        self.assertEqual(result["memory_clarity_reason"], "")
 
     def test_llm_answerer_openai_codex_uses_codex_cli_auth(self) -> None:
         captured = {}
@@ -184,11 +193,7 @@ class AnsweringTests(unittest.TestCase):
                     "data: "
                     + json.dumps({
                         "type": "response.output_text.delta",
-                        "delta": json.dumps({
-                            "answer": "7 May 2023",
-                            "memory_clarity_score": 9,
-                            "memory_clarity_reason": "The memory states the date.",
-                        }),
+                        "delta": "7 May 2023",
                     })
                     + "\n\ndata: [DONE]\n\n"
                 ).encode("utf8")
@@ -216,7 +221,7 @@ class AnsweringTests(unittest.TestCase):
                     result = run_llm_answerer(
                         question="When did Caroline go to the support group?",
                         category=2,
-                        answer_context="MEMORY: Caroline attended on 7 May 2023.",
+                        answer_context="OBSERVATION: Caroline attended on 7 May 2023.",
                         config={"provider": "openai-codex", "model": "gpt-5.4-mini"},
                     )
             finally:
@@ -226,48 +231,133 @@ class AnsweringTests(unittest.TestCase):
                     os.environ["CODEX_HOME"] = previous_codex_home
 
         self.assertEqual(result["answer"], "7 May 2023")
-        self.assertEqual(result["memory_clarity_score"], 9)
+        self.assertIsNone(result["memory_clarity_score"])
         self.assertEqual(captured["url"], "https://chatgpt.com/backend-api/codex/responses")
         self.assertEqual(captured["timeout"], 120)
         self.assertIn("Bearer ", captured["headers"]["Authorization"])
         self.assertEqual(captured["body"]["model"], "gpt-5.4-mini")
-        self.assertEqual(captured["body"]["instructions"], "You answer LoCoMo benchmark questions using only the provided Muninn memory context. Return JSON only with answer, memory_clarity_score, and memory_clarity_reason.")
+        self.assertEqual(captured["body"]["instructions"], "You answer LoCoMo benchmark questions using only the provided Muninn observation context. Return only the short answer text.")
         self.assertEqual(captured["body"]["store"], False)
         self.assertEqual(captured["body"]["stream"], True)
         self.assertEqual(captured["body"]["input"][0]["role"], "user")
 
-    def test_openai_payload_uses_concise_memory_grounded_answer_prompt(self) -> None:
+    def test_llm_answerer_openai_codex_retries_transient_http_errors(self) -> None:
+        attempts = 0
+
+        class FakeResponse:
+            def __enter__(self) -> "FakeResponse":
+                return self
+
+            def __exit__(self, *args: object) -> None:
+                return None
+
+            def read(self) -> bytes:
+                return (
+                    "data: "
+                    + json.dumps({
+                        "type": "response.output_text.delta",
+                        "delta": "7 May 2023",
+                    })
+                    + "\n\ndata: [DONE]\n\n"
+                ).encode("utf8")
+
+        def fake_urlopen(request, timeout):  # type: ignore[no-untyped-def]
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise urllib.error.HTTPError(
+                    request.full_url,
+                    503,
+                    "Service Unavailable",
+                    hdrs=None,
+                    fp=None,
+                )
+            return FakeResponse()
+
+        previous_codex_home = os.environ.get("CODEX_HOME")
+        with TemporaryDirectory() as tmpdir:
+            codex_home = Path(tmpdir)
+            (codex_home / "auth.json").write_text(
+                json.dumps({
+                    "auth_mode": "chatgpt",
+                    "tokens": {"access_token": make_jwt()},
+                }),
+                encoding="utf8",
+            )
+            os.environ["CODEX_HOME"] = str(codex_home)
+            try:
+                with patch("urllib.request.urlopen", fake_urlopen), patch("time.sleep", lambda _seconds: None):
+                    result = run_llm_answerer(
+                        question="When did Caroline go to the support group?",
+                        category=2,
+                        answer_context="OBSERVATION: Caroline attended on 7 May 2023.",
+                        config={"provider": "openai-codex", "model": "gpt-5.4-mini"},
+                    )
+            finally:
+                if previous_codex_home is None:
+                    os.environ.pop("CODEX_HOME", None)
+                else:
+                    os.environ["CODEX_HOME"] = previous_codex_home
+
+        self.assertEqual(attempts, 2)
+        self.assertEqual(result["answer"], "7 May 2023")
+
+    def test_openai_payload_uses_locomo_short_answer_prompt(self) -> None:
         payload = build_openai_payload(
             api_style="chat_completions",
             model="mock-model",
             question="What is Caroline's identity?",
             category=1,
-            answer_context="Related Memories:\n- MEMORY: Caroline found the support meaningful.",
+            answer_context="1:56 pm on 8 May, 2023: Caroline found the support meaningful.",
         )
         user_prompt = payload["messages"][1]["content"]
 
-        self.assertIn("Answer based on Related Memories", user_prompt)
-        self.assertNotIn("Related Memories and Related Sessions", user_prompt)
-        self.assertIn("Use the shortest direct answer", user_prompt)
-        self.assertIn("For dates, years, names, places, or short phrases", user_prompt)
-        self.assertIn("output only the factual span itself", user_prompt)
-        self.assertIn("reasonable inference", user_prompt)
-        self.assertIn("subjective or interpretive", user_prompt)
-        self.assertIn("Not mentioned in the conversation", user_prompt)
-        self.assertNotIn("Identity inference rule", user_prompt)
+        self.assertIn("Based on the above context, write an answer in the form of a short phrase", user_prompt)
+        self.assertIn("Answer with exact words from the context whenever possible.", user_prompt)
+        self.assertIn("Question: What is Caroline's identity? Short answer:", user_prompt)
+        self.assertNotIn("Answer based on Related Memories", user_prompt)
+        self.assertNotIn("Use the shortest direct answer", user_prompt)
+        self.assertNotIn("reasonable inference", user_prompt)
+        self.assertNotIn("Return JSON only", user_prompt)
+        self.assertNotIn("memory_clarity_score", user_prompt)
+        self.assertNotIn("memory_clarity_reason", user_prompt)
 
-    def test_openai_payload_does_not_add_locomo_approximate_date_instruction(self) -> None:
+    def test_openai_payload_uses_locomo_category_five_choice_prompt(self) -> None:
+        payload = build_openai_payload(
+            api_style="chat_completions",
+            model="mock-model",
+            question="What did Caroline realize after her charity race?",
+            category=5,
+            answer_context="1:14 pm on 25 May, 2023: Melanie realized self-care is important.",
+            adversarial_answer="self-care is important",
+        )
+        user_prompt = payload["messages"][1]["content"]
+
+        self.assertIn("Select the correct answer", user_prompt)
+        self.assertIn("(a) Not mentioned in the conversation", user_prompt)
+        self.assertIn("(b) self-care is important", user_prompt)
+        self.assertIn("Short answer:", user_prompt)
+        self.assertNotIn("Return JSON only", user_prompt)
+        self.assertNotIn("memory_clarity_score", user_prompt)
+
+    def test_openai_payload_adds_locomo_approximate_date_instruction_for_category_two(self) -> None:
         payload = build_openai_payload(
             api_style="chat_completions",
             model="mock-model",
             question="When did Caroline go to the LGBTQ support group?",
             category=2,
-            answer_context="Related Memories:\n- MEMORY: Caroline attended on 7 May 2023.",
+            answer_context="1:56 pm on 8 May, 2023: Caroline attended on 7 May 2023.",
         )
         user_prompt = payload["messages"][1]["content"]
 
-        self.assertIn("Question: When did Caroline go to the LGBTQ support group?", user_prompt)
-        self.assertNotIn("Use DATE of CONVERSATION to answer with an approximate date", user_prompt)
+        self.assertIn("Question: When did Caroline go to the LGBTQ support group? Use DATE of CONVERSATION to answer with an approximate date. Short answer:", user_prompt)
+
+    def test_parse_answer_text_returns_plain_short_answer(self) -> None:
+        result = parse_answer_text("  7 May 2023  ")
+
+        self.assertEqual(result["answer"], "7 May 2023")
+        self.assertIsNone(result["memory_clarity_score"])
+        self.assertEqual(result["memory_clarity_reason"], "")
 
     def test_load_answerer_config_fails_without_observer_llm(self) -> None:
         with TemporaryDirectory() as tmpdir:

@@ -2,113 +2,135 @@ import { createHash } from 'node:crypto';
 
 import { getEmbeddingConfig } from '../config.js';
 import { embedText } from '../llm/embedding-provider.js';
-import type { NativeTables, Observation as StoredObservation } from '../native.js';
+import type { NativeTables, Extraction as StoredExtraction } from '../native.js';
 import type {
-  Observation,
-  ObservationCategory,
-  ObservationChange,
+  Extraction,
+  ExtractionCategory,
+  ExtractionChange,
   ObserveResult,
   SnapshotContent,
 } from './types.js';
 
-export function applyObservationChanges(
-  currentObservations: Observation[],
+export function applyExtractionChanges(
+  currentExtractions: Extraction[],
   result: ObserveResult,
 ): {
-  observationChanges: ObservationChange[];
-  observations: Observation[];
+  extractionChanges: ExtractionChange[];
+  extractions: Extraction[];
 } {
-  const currentById = new Map<string, Observation>();
-  for (const observation of currentObservations) {
-    const normalized = cloneObservation(observation, { requireReferences: false });
+  const currentById = new Map<string, Extraction>();
+  const currentByUnitKey = new Map<string, Extraction>();
+  for (const extraction of currentExtractions) {
+    const normalized = cloneExtraction(extraction, { requireReferences: false });
     if (!normalized.id) {
       continue;
     }
     currentById.set(normalized.id, normalized);
+    const key = extractionUnitKey(normalized);
+    if (key) {
+      currentByUnitKey.set(key, normalized);
+    }
   }
 
-  const nextObservations: Observation[] = [];
-  const changes: ObservationChange[] = [];
+  const nextExtractions: Extraction[] = [];
+  const changes: ExtractionChange[] = [];
   const seenIds = new Set<string>();
 
-  for (const rawObservation of result.observingContent.observations) {
-    const normalized = cloneObservation(rawObservation, { requireReferences: true });
-    const generatedId = addedObservationId({
+  for (const rawExtraction of result.extractions) {
+    const normalized = cloneExtraction(rawExtraction, { requireReferences: true });
+    const generatedId = addedExtractionId({
       type: 'add',
       text: normalized.text,
       category: normalized.category,
       references: normalized.references,
-      reason: 'state rewrite added observation',
+      reason: 'state rewrite added extraction',
     });
-    const id = normalized.id || generatedId;
+    const matched = normalized.id
+      ? currentById.get(normalized.id)
+      : currentById.get(generatedId) ?? currentByUnitKey.get(extractionUnitKey(normalized));
+    const id = normalized.id || matched?.id || generatedId;
     if (seenIds.has(id)) {
-      throw new Error(`duplicate observation id in state rewrite: ${id}`);
+      throw new Error(`duplicate extraction id in state rewrite: ${id}`);
     }
 
     const existing = currentById.get(id);
     if (normalized.id && !existing) {
-      throw new Error(`unknown observation id in state rewrite: ${normalized.id}`);
+      throw new Error(`unknown extraction id in state rewrite: ${normalized.id}`);
     }
 
     seenIds.add(id);
-    const nextObservation = {
+    const nextExtraction = {
       ...normalized,
       id,
       updatedMemory: existing?.updatedMemory ?? normalized.updatedMemory ?? null,
     };
-    nextObservations.push(nextObservation);
+    nextExtractions.push(nextExtraction);
 
     if (!existing) {
       changes.push({
         type: 'add',
-        text: nextObservation.text,
-        category: nextObservation.category,
-        references: nextObservation.references,
-        reason: 'state rewrite added observation',
+        text: nextExtraction.text,
+        context: nextExtraction.context ?? null,
+        anchors: nextExtraction.anchors ?? [],
+        category: nextExtraction.category,
+        references: nextExtraction.references,
+        reason: 'state rewrite added extraction',
       });
       continue;
     }
 
     if (
-      existing.text !== nextObservation.text
-      || existing.category !== nextObservation.category
-      || !sameStringSet(existing.references, nextObservation.references)
+      existing.text !== nextExtraction.text
+      || (existing.context ?? null) !== (nextExtraction.context ?? null)
+      || !sameStringSet(existing.anchors ?? [], nextExtraction.anchors ?? [])
+      || existing.category !== nextExtraction.category
+      || !sameStringSet(existing.references, nextExtraction.references)
     ) {
       changes.push({
         type: 'update',
-        observationId: id,
-        text: nextObservation.text,
-        category: nextObservation.category,
-        references: nextObservation.references,
-        reason: 'state rewrite updated observation',
+        extractionId: id,
+        text: nextExtraction.text,
+        category: nextExtraction.category,
+        references: nextExtraction.references,
+        context: nextExtraction.context ?? null,
+        anchors: nextExtraction.anchors ?? [],
+        reason: 'state rewrite updated extraction',
       });
     }
   }
 
-  for (const observationId of currentById.keys()) {
-    if (!seenIds.has(observationId)) {
+  for (const extractionId of currentById.keys()) {
+    if (!seenIds.has(extractionId)) {
       changes.push({
         type: 'delete',
-        observationId,
-        reason: 'state rewrite omitted observation',
+        extractionId,
+        reason: 'state rewrite omitted extraction',
       });
     }
   }
 
   return {
-    observationChanges: changes,
-    observations: nextObservations,
+    extractionChanges: changes,
+    extractions: nextExtractions,
   };
 }
 
-export async function applyObservationTableChanges(
+function extractionUnitKey(extraction: Extraction): string {
+  return [
+    extraction.category,
+    [...(extraction.anchors ?? [])].sort().join('\u0001'),
+    [...(extraction.references ?? [])].sort().join('\u0001'),
+  ].join('\u0002');
+}
+
+export async function applyExtractionTableChanges(
   client: NativeTables,
   snapshot: SnapshotContent,
   _memoryId: string,
   signal?: AbortSignal,
 ): Promise<void> {
   throwIfAborted(signal);
-  const changes = snapshot.observationChanges ?? [];
+  const changes = snapshot.extractionChanges ?? [];
   if (changes.length === 0) {
     return;
   }
@@ -118,63 +140,63 @@ export async function applyObservationTableChanges(
   const upsertIds = new Set<string>();
   for (const change of changes) {
     if (change.type === 'add') {
-      upsertIds.add(addedObservationId(change));
+      upsertIds.add(addedExtractionId(change));
       continue;
     }
     if (change.type === 'merge') {
-      for (const observationId of change.observationIds) {
-        sourceIds.add(observationId);
-        deletedIds.add(observationId);
+      for (const extractionId of change.extractionIds) {
+        sourceIds.add(extractionId);
+        deletedIds.add(extractionId);
       }
-      upsertIds.add(mergedObservationId(change));
+      upsertIds.add(mergedExtractionId(change));
       continue;
     }
     if (change.type === 'update') {
-      sourceIds.add(change.observationId);
-      upsertIds.add(change.observationId);
+      sourceIds.add(change.extractionId);
+      upsertIds.add(change.extractionId);
       continue;
     }
-    sourceIds.add(change.observationId);
-    deletedIds.add(change.observationId);
+    sourceIds.add(change.extractionId);
+    deletedIds.add(change.extractionId);
   }
 
   const existingRows = sourceIds.size > 0
-    ? await client.observationTable.loadByIds({ ids: [...sourceIds] })
+    ? await client.extractionTable.loadByIds({ ids: [...sourceIds] })
     : [];
   const existingById = new Map(existingRows.map((row) => [row.id, row]));
 
   if (deletedIds.size > 0) {
-    await client.observationTable.delete({ ids: [...deletedIds] });
+    await client.extractionTable.delete({ ids: [...deletedIds] });
   }
 
   if (upsertIds.size === 0) {
     return;
   }
 
-  const storedUpserts = await client.observationTable.loadByIds({ ids: [...upsertIds] });
+  const storedUpserts = await client.extractionTable.loadByIds({ ids: [...upsertIds] });
   const storedById = new Map(storedUpserts.map((row) => [row.id, row]));
-  const observationsById = new Map(
-    snapshot.observations
-      .filter((observation): observation is Observation & { id: string } => Boolean(observation.id))
-      .map((observation) => [observation.id, observation]),
+  const extractionsById = new Map(
+    snapshot.extractions
+      .filter((extraction): extraction is Extraction & { id: string } => Boolean(extraction.id))
+      .map((extraction) => [extraction.id, extraction]),
   );
   const embeddingConfig = getEmbeddingConfig();
-  const rows: StoredObservation[] = [];
+  const rows: StoredExtraction[] = [];
 
   for (const change of changes) {
     const id = change.type === 'add'
-      ? addedObservationId(change)
+      ? addedExtractionId(change)
       : change.type === 'merge'
-        ? mergedObservationId(change)
+        ? mergedExtractionId(change)
         : change.type === 'update'
-          ? change.observationId
+          ? change.extractionId
           : null;
     if (!id || !upsertIds.has(id)) {
       continue;
     }
-    const observation = observationsById.get(id);
-    const text = observation?.text.trim() ?? '';
-    if (!observation || !text) {
+    const extraction = extractionsById.get(id);
+    const text = extraction?.text.trim() ?? '';
+    if (!extraction || !text) {
       continue;
     }
     const existing = storedById.get(id) ?? (change.type === 'update' ? existingById.get(id) : undefined);
@@ -182,31 +204,33 @@ export async function applyObservationTableChanges(
     rows.push({
       id,
       text,
-      vector: await embedText(text, signal),
+      context: extraction.context ?? null,
+      anchors: extraction.anchors ?? [],
+      vector: await embedText(embeddingText(extraction), signal),
       importance: existing?.importance ?? embeddingConfig.defaultImportance,
-      category: semanticCategory(observation.category),
+      category: semanticCategory(extraction.category),
       references,
       createdAt: existing?.createdAt ?? new Date().toISOString(),
     });
   }
 
   if (rows.length > 0) {
-    await client.observationTable.upsert({ rows });
+    await client.extractionTable.upsert({ rows });
   }
 }
 
 function normalizeChanges(
-  changes: ObservationChange[],
-  observations: Map<string, Observation>,
-): ObservationChange[] {
+  changes: ExtractionChange[],
+  extractions: Map<string, Extraction>,
+): ExtractionChange[] {
   if (!Array.isArray(changes)) {
-    throw new Error('observationChanges must be an array');
+    throw new Error('extractionChanges must be an array');
   }
   const modifiedIds = new Set<string>();
   return changes.map((change) => {
     const reason = normalizeText(change.reason);
     if (!reason) {
-      throw new Error('observation change missing reason');
+      throw new Error('extraction change missing reason');
     }
     if (change.type === 'add') {
       const text = normalizeText(change.text);
@@ -220,18 +244,19 @@ function normalizeChanges(
       return {
         type: 'add',
         text,
+        ...(change.context ? { context: normalizeText(change.context) } : {}),
         category: normalizeCategory(change.category),
         references,
         reason,
       };
     }
     if (change.type === 'merge') {
-      const observationIds = normalizeIds(change.observationIds);
-      if (observationIds.length < 2) {
-        throw new Error('merge change must include at least two observationIds');
+      const extractionIds = normalizeIds(change.extractionIds);
+      if (extractionIds.length < 2) {
+        throw new Error('merge change must include at least two extractionIds');
       }
-      for (const observationId of observationIds) {
-        claimObservationId(observationId, observations, modifiedIds);
+      for (const extractionId of extractionIds) {
+        claimExtractionId(extractionId, extractions, modifiedIds);
       }
       const text = normalizeText(change.text);
       if (!text) {
@@ -239,77 +264,79 @@ function normalizeChanges(
       }
       return {
         type: 'merge',
-        observationIds,
+        extractionIds,
         text,
+        ...(change.context ? { context: normalizeText(change.context) } : {}),
         category: normalizeCategory(change.category),
         reason,
       };
     }
     if (change.type === 'update') {
-      const observationId = change.observationId?.trim();
-      claimObservationId(observationId, observations, modifiedIds);
+      const extractionId = change.extractionId?.trim();
+      claimExtractionId(extractionId, extractions, modifiedIds);
       const text = normalizeText(change.text);
       if (!text) {
         throw new Error('update change missing text');
       }
       return {
         type: 'update',
-        observationId,
+        extractionId,
         text,
+        ...(change.context ? { context: normalizeText(change.context) } : {}),
         ...(change.category ? { category: normalizeCategory(change.category) } : {}),
         ...(Array.isArray(change.references) ? { references: normalizeIds(change.references) } : {}),
         reason,
       };
     }
     if (change.type === 'delete') {
-      const observationId = change.observationId?.trim();
-      claimObservationId(observationId, observations, modifiedIds);
+      const extractionId = change.extractionId?.trim();
+      claimExtractionId(extractionId, extractions, modifiedIds);
       return {
         type: 'delete',
-        observationId,
+        extractionId,
         reason,
       };
     }
-    throw new Error('unknown observation change type');
+    throw new Error('unknown extraction change type');
   });
 }
 
-function claimObservationId(
-  observationId: string | undefined,
-  observations: Map<string, Observation>,
+function claimExtractionId(
+  extractionId: string | undefined,
+  extractions: Map<string, Extraction>,
   modifiedIds: Set<string>,
-): asserts observationId is string {
-  if (!observationId || !observations.has(observationId)) {
-    throw new Error(`observation change referenced unknown observationId: ${observationId ?? ''}`);
+): asserts extractionId is string {
+  if (!extractionId || !extractions.has(extractionId)) {
+    throw new Error(`extraction change referenced unknown extractionId: ${extractionId ?? ''}`);
   }
-  if (observationId.startsWith('session:')) {
-    throw new Error(`observation change cannot modify source turn id: ${observationId}`);
+  if (extractionId.startsWith('session:')) {
+    throw new Error(`extraction change cannot modify source turn id: ${extractionId}`);
   }
-  if (modifiedIds.has(observationId)) {
-    throw new Error(`observation change modified observationId more than once: ${observationId}`);
+  if (modifiedIds.has(extractionId)) {
+    throw new Error(`extraction change modified extractionId more than once: ${extractionId}`);
   }
-  modifiedIds.add(observationId);
+  modifiedIds.add(extractionId);
 }
 
 function referencesForChange(
-  change: Extract<ObservationChange, { type: 'add' | 'merge' | 'update' }>,
-  existingById: Map<string, StoredObservation>,
+  change: Extract<ExtractionChange, { type: 'add' | 'merge' | 'update' }>,
+  existingById: Map<string, StoredExtraction>,
 ): string[] {
   if (change.type === 'add') {
     return change.references;
   }
   if (change.type === 'update') {
-    return change.references ?? existingById.get(change.observationId)?.references ?? [];
+    return change.references ?? existingById.get(change.extractionId)?.references ?? [];
   }
   const references = [];
-  for (const observationId of change.observationIds) {
-    references.push(...(existingById.get(observationId)?.references ?? []));
+  for (const extractionId of change.extractionIds) {
+    references.push(...(existingById.get(extractionId)?.references ?? []));
   }
   return [...new Set(references)];
 }
 
-function addedObservationId(change: Extract<ObservationChange, { type: 'add' }>): string {
-  return stableObservationId({
+function addedExtractionId(change: Extract<ExtractionChange, { type: 'add' }>): string {
+  return stableExtractionId({
     type: change.type,
     text: change.text,
     category: change.category,
@@ -317,40 +344,42 @@ function addedObservationId(change: Extract<ObservationChange, { type: 'add' }>)
   });
 }
 
-function mergedObservationId(change: Extract<ObservationChange, { type: 'merge' }>): string {
-  return stableObservationId({
+function mergedExtractionId(change: Extract<ExtractionChange, { type: 'merge' }>): string {
+  return stableExtractionId({
     type: change.type,
-    observationIds: [...change.observationIds].sort(),
+    extractionIds: [...change.extractionIds].sort(),
     text: change.text,
     category: change.category,
   });
 }
 
-function stableObservationId(value: unknown): string {
+function stableExtractionId(value: unknown): string {
   return createHash('sha256')
     .update(JSON.stringify(value))
     .digest('hex')
     .slice(0, 24);
 }
 
-function cloneObservation(
-  observation: Observation,
+function cloneExtraction(
+  extraction: Extraction,
   options: { requireReferences: boolean } = { requireReferences: true },
-): Observation {
-  const text = normalizeText(observation.text);
+): Extraction {
+  const text = normalizeText(extraction.text);
   if (!text) {
-    throw new Error('observation text is required');
+    throw new Error('extraction text is required');
   }
-  const references = normalizeIds(observation.references);
+  const references = normalizeIds(extraction.references);
   if (options.requireReferences && references.length === 0) {
-    throw new Error('observation references must include at least one reference');
+    throw new Error('extraction references must include at least one reference');
   }
   return {
-    id: observation.id?.trim() || null,
+    id: extraction.id?.trim() || null,
     text,
-    category: normalizeCategory(observation.category),
+    context: normalizeText(extraction.context ?? '') || null,
+    anchors: normalizeAnchors(extraction.anchors ?? []),
+    category: normalizeCategory(extraction.category),
     references,
-    updatedMemory: observation.updatedMemory?.trim() || null,
+    updatedMemory: extraction.updatedMemory?.trim() || null,
   };
 }
 
@@ -366,7 +395,11 @@ function normalizeIds(ids: string[]): string[] {
   return [...new Set((ids ?? []).map((id) => id.trim()).filter(Boolean))];
 }
 
-function normalizeCategory(category: ObservationCategory): ObservationCategory {
+function normalizeAnchors(anchors: string[]): string[] {
+  return [...new Set((anchors ?? []).map((anchor) => normalizeText(anchor)).filter(Boolean))];
+}
+
+function normalizeCategory(category: ExtractionCategory): ExtractionCategory {
   if ([
     'Preference',
     'Fact',
@@ -377,10 +410,10 @@ function normalizeCategory(category: ObservationCategory): ObservationCategory {
   ].includes(category)) {
     return category;
   }
-  throw new Error(`invalid observation category: ${category}`);
+  throw new Error(`invalid extraction category: ${category}`);
 }
 
-function semanticCategory(category: Observation['category']): string {
+function semanticCategory(category: Extraction['category']): string {
   switch (category) {
     case 'Preference':
       return 'preference';
@@ -400,6 +433,16 @@ function semanticCategory(category: Observation['category']): string {
 
 function normalizeText(value: string): string {
   return value.split(/\s+/).join(' ').trim();
+}
+
+function embeddingText(extraction: Extraction): string {
+  const anchors = normalizeAnchors(extraction.anchors ?? []);
+  const context = normalizeText(extraction.context ?? '');
+  return [
+    anchors.length > 0 ? `Anchors: ${anchors.join('; ')}` : '',
+    context,
+    extraction.text,
+  ].filter(Boolean).join('\n');
 }
 
 function throwIfAborted(signal?: AbortSignal): void {

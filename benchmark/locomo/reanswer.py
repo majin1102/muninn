@@ -21,7 +21,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--trace-file", required=True, type=Path)
     parser.add_argument("--home", required=True, type=Path)
     parser.add_argument("--out-file", required=True, type=Path)
-    parser.add_argument("--top-k", default=5, type=int)
+    parser.add_argument("--top-k", default=3, type=int)
     parser.add_argument("--expand-references", action="store_true")
     return parser.parse_args(argv)
 
@@ -106,9 +106,6 @@ def hit_from_trace(row: dict[str, Any]) -> RecallHit:
     return RecallHit(
         memory_id=str(row.get("memory_id", "")),
         evidence_ids=[str(value) for value in row.get("evidence_ids", [])],
-        date_time=str(row.get("date_time") or ""),
-        title=row.get("title"),
-        summary=row.get("summary"),
         detail=row.get("detail"),
         matched_text=str(row.get("matched_text") or ""),
         references=row.get("references") or [],

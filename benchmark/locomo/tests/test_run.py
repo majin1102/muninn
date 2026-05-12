@@ -39,6 +39,10 @@ class RunTests(unittest.TestCase):
 
         self.assertEqual(args.mode, "diagnostic")
         self.assertEqual(args.answerer, "llm")
+        self.assertEqual(args.top_k, 3)
+        self.assertEqual(args.budget, 400)
+        self.assertEqual(args.query_limit, 8)
+        self.assertEqual(args.recall_mode, "hybrid")
         self.assertFalse(args.expand_references)
 
     def test_parse_args_accepts_benchmark_heuristic_flow(self) -> None:
@@ -141,7 +145,7 @@ class RunTests(unittest.TestCase):
                 "muninn_top_5_prediction": "counseling",
                 "muninn_top_5_heuristic_prediction": "counseling",
                 "muninn_top_5_hits": [{
-                    "memory_id": "observing:1",
+                    "memory_id": "turn:1",
                     "matched_text": "Caroline is interested in counseling.",
                     "evidence_ids": ["D1:11"],
                     "references": [],
@@ -151,9 +155,9 @@ class RunTests(unittest.TestCase):
 
         trace = build_trace([sample], "muninn_top_5", gateway_routes_by_sample={
             "conv-a": {
-                "observing:1": [{
-                    "threadId": "observing:1",
-                    "turnIds": ["session:11"],
+                "turn:1": [{
+                    "threadId": "turn:1",
+                    "turnIds": ["turn:11"],
                     "content": "Caroline is interested in counseling.",
                     "reason": "This continues the career thread.",
                 }],
@@ -169,13 +173,13 @@ class RunTests(unittest.TestCase):
         path = Path("/tmp/muninn-gateway-routes-test.jsonl")
         self.addCleanup(lambda: path.unlink(missing_ok=True))
         path.write_text(
-            '{"observingEpoch":2,"sessionFragments":[{"threadId":"observing:1","turnIds":["session:11"],"content":"Caroline is interested in counseling.","reason":"This continues the career thread."}]}\n',
+            '{"observingEpoch":2,"sessionFragments":[{"threadId":"turn:1","turnIds":["turn:11"],"content":"Caroline is interested in counseling.","reason":"This continues the career thread."}]}\n',
             encoding="utf8",
         )
 
         routes = load_gateway_routes(path)
 
-        self.assertEqual(routes["observing:1"][0]["content"], "Caroline is interested in counseling.")
+        self.assertEqual(routes["turn:1"][0]["content"], "Caroline is interested in counseling.")
 
 
 if __name__ == "__main__":

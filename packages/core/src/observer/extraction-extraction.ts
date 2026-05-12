@@ -1,15 +1,15 @@
 import { randomUUID } from 'node:crypto';
 
-import type { SessionTurn } from '../client.js';
+import type { Turn } from '../client.js';
 import { getEmbeddingConfig, getObserverLlmConfig } from '../config.js';
 import { loadDomainPrompt } from '../llm/domain-prompt.js';
 import { embedText } from '../llm/embedding-provider.js';
 import { generateText } from '../llm/provider.js';
 import { loadPromptTemplate, renderPromptTemplate } from '../llm/prompt-loader.js';
-import type { NativeTables, Observation as StoredObservation } from '../native.js';
-import type { ObservationCategory, ObservationInput } from './types.js';
+import type { NativeTables, Extraction as StoredExtraction } from '../native.js';
+import type { ExtractionCategory, ExtractionInput } from './types.js';
 
-const CATEGORIES = new Set<ObservationCategory>([
+const CATEGORIES = new Set<ExtractionCategory>([
   'Preference',
   'Fact',
   'Decision',
@@ -18,14 +18,14 @@ const CATEGORIES = new Set<ObservationCategory>([
   'Other',
 ]);
 
-export type ObservationExtractionResult = {
-  observations: ObservationInput[];
+export type ExtractionExtractionResult = {
+  extractions: ExtractionInput[];
 };
 
-export async function extractObservations(
-  turns: SessionTurn[],
+export async function extractExtractions(
+  turns: Turn[],
   signal?: AbortSignal,
-): Promise<ObservationExtractionResult> {
+): Promise<ExtractionExtractionResult> {
   throwIfAborted(signal);
   const config = getObserverLlmConfig();
   if (!config) {
@@ -48,37 +48,39 @@ export async function extractObservations(
   if (!raw) {
     throw new Error('observer is not configured');
   }
-  return validateExtraction(parseJson<ObservationExtractionResult>(raw));
+  return validateExtraction(parseJson<ExtractionExtractionResult>(raw));
 }
 
-export async function commitObservations(
+export async function commitExtractions(
   client: NativeTables,
-  inputs: ObservationInput[],
+  inputs: ExtractionInput[],
   signal?: AbortSignal,
-): Promise<StoredObservation[]> {
+): Promise<StoredExtraction[]> {
   throwIfAborted(signal);
   const embeddingConfig = getEmbeddingConfig();
-  const rows: StoredObservation[] = [];
-  for (const input of validateExtraction({ observations: inputs }).observations) {
+  const rows: StoredExtraction[] = [];
+  for (const input of validateExtraction({ extractions: inputs }).extractions) {
     const text = input.text.trim();
     rows.push({
       id: randomUUID(),
       text,
+      context: input.context ?? null,
+      anchors: [],
       vector: await embedText(text, signal),
       importance: embeddingConfig.defaultImportance,
-      category: observationCategory(input.category),
+      category: extractionCategory(input.category),
       references: [...new Set(input.references.map((reference) => reference.trim()).filter(Boolean))],
       createdAt: new Date().toISOString(),
     });
   }
   if (rows.length > 0) {
-    await client.observationTable.upsert({ rows });
+    await client.extractionTable.upsert({ rows });
   }
   return rows;
 }
 
-function buildMockExtraction(turns: SessionTurn[]): ObservationExtractionResult {
-  const observations: ObservationInput[] = [];
+function buildMockExtraction(turns: Turn[]): ExtractionExtractionResult {
+  const extractions: ExtractionInput[] = [];
   for (const turn of turns) {
     const text = [turn.prompt, turn.response, turn.summary]
       .map((value) => value?.trim())
@@ -86,7 +88,7 @@ function buildMockExtraction(turns: SessionTurn[]): ObservationExtractionResult 
       .join(' ')
       .trim();
     if (text) {
-      observations.push({
+      extractions.push({
         text,
         category: 'Fact',
         references: [turn.turnId],
@@ -94,7 +96,7 @@ function buildMockExtraction(turns: SessionTurn[]): ObservationExtractionResult 
     }
   }
   return validateExtraction({
-    observations,
+    extractions,
   });
 }
 
@@ -102,7 +104,7 @@ function renderExtractionPrompt(input: {
   inputJson: string;
   domainPrompt?: string;
 }): { system: string; prompt: string } {
-  const template = loadPromptTemplate('observation_extraction');
+  const template = loadPromptTemplate('extraction_extraction');
   return {
     system: renderPromptTemplate(template.system, {
       domain_prompt: input.domainPrompt?.trim() || 'No additional domain guidance.',
@@ -111,34 +113,34 @@ function renderExtractionPrompt(input: {
   };
 }
 
-function validateExtraction(result: ObservationExtractionResult): ObservationExtractionResult {
-  if (!result || typeof result !== 'object' || !Array.isArray(result.observations)) {
-    throw new Error('observation extraction must include observations');
+function validateExtraction(result: ExtractionExtractionResult): ExtractionExtractionResult {
+  if (!result || typeof result !== 'object' || !Array.isArray(result.extractions)) {
+    throw new Error('extraction extraction must include extractions');
   }
   return {
-    observations: result.observations.map(validateObservationInput),
+    extractions: result.extractions.map(validateExtractionInput),
   };
 }
 
-function validateObservationInput(input: ObservationInput): ObservationInput {
+function validateExtractionInput(input: ExtractionInput): ExtractionInput {
   if (!input || typeof input !== 'object') {
-    throw new Error('observation must be an object');
+    throw new Error('extraction must be an object');
   }
   const text = typeof input.text === 'string' ? input.text.trim() : '';
   if (!text) {
-    throw new Error('observation.text must be a non-empty string');
+    throw new Error('extraction.text must be a non-empty string');
   }
   if (!CATEGORIES.has(input.category)) {
-    throw new Error(`invalid observation category: ${String(input.category)}`);
+    throw new Error(`invalid extraction category: ${String(input.category)}`);
   }
   if (!Array.isArray(input.references)) {
-    throw new Error('observation.references must be an array');
+    throw new Error('extraction.references must be an array');
   }
   const references = [...new Set(input.references.map((reference) => (
     typeof reference === 'string' ? reference.trim() : ''
   )).filter(Boolean))];
   if (references.length === 0) {
-    throw new Error('observation.references must include at least one reference');
+    throw new Error('extraction.references must include at least one reference');
   }
   return {
     text,
@@ -147,7 +149,7 @@ function validateObservationInput(input: ObservationInput): ObservationInput {
   };
 }
 
-function toExtractionTurn(turn: SessionTurn): Record<string, unknown> {
+function toExtractionTurn(turn: Turn): Record<string, unknown> {
   return {
     turnId: turn.turnId,
     ...(turn.createdAt ? { createdAt: turn.createdAt } : {}),
@@ -160,7 +162,7 @@ function toExtractionTurn(turn: SessionTurn): Record<string, unknown> {
   };
 }
 
-function toExtractionContextTurn(turn: NonNullable<SessionTurn['recentContext']>[number]): Record<string, unknown> {
+function toExtractionContextTurn(turn: NonNullable<Turn['recentContext']>[number]): Record<string, unknown> {
   return {
     turnId: turn.turnId,
     ...(turn.updatedAt ? { updatedAt: turn.updatedAt } : {}),
@@ -169,7 +171,7 @@ function toExtractionContextTurn(turn: NonNullable<SessionTurn['recentContext']>
   };
 }
 
-function observationCategory(category: ObservationCategory): string {
+function extractionCategory(category: ExtractionCategory): string {
   switch (category) {
     case 'Preference':
       return 'preference';

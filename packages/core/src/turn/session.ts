@@ -1,15 +1,15 @@
 import type { RecentSessionCheckpoint, RecentTurn } from '../checkpoint.js';
 import type { NativeTables } from '../native.js';
-import type { SessionTurn, TurnContent } from '../client.js';
+import type { Turn, TurnContent } from '../client.js';
 import { resolveTurnSummary } from '../llm/turn-generator.js';
-import { readSessionTurn, serializeSessionTurn } from './types.js';
+import { readTurn, serializeTurn } from './types.js';
 import { hasText, normalizeSessionId } from './key.js';
 
-const PENDING_TURN_ID = 'session:18446744073709551615';
+const PENDING_TURN_ID = 'turn:18446744073709551615';
 const RECENT_TURN_WINDOW = 3;
 
 export type AcceptedTurn = {
-  turn: SessionTurn | null;
+  turn: Turn | null;
   deduped: boolean;
 };
 
@@ -41,7 +41,7 @@ export class Session {
         if (!duplicate) {
           break;
         }
-        const persisted = await this.client.sessionTable.getTurn(duplicate.turnId);
+        const persisted = await this.client.turnTable.getTurn(duplicate.turnId);
         if (persisted) {
           this.touch();
           return {
@@ -59,10 +59,10 @@ export class Session {
         sessionId,
         observingEpoch,
       );
-      const rows = await this.client.sessionTable.insert({
-        turns: [serializeSessionTurn(turn)],
+      const rows = await this.client.turnTable.insert({
+        turns: [serializeTurn(turn)],
       });
-      const persisted = readSessionTurn(rows[0]);
+      const persisted = readTurn(rows[0]);
       this.rememberTurn(persisted);
       this.touch();
       return {
@@ -106,7 +106,7 @@ export class Session {
     }
   }
 
-  rememberTurn(turn: SessionTurn): void {
+  rememberTurn(turn: Turn): void {
     this.touch();
     this.recentTurns.push({
       turnId: turn.turnId,
@@ -142,13 +142,13 @@ async function buildTurn(
   content: TurnContent,
   sessionId: string | undefined,
   observingEpoch: number,
-): Promise<SessionTurn> {
+): Promise<Turn> {
   const summary = await resolveTurnSummary({
     prompt: content.prompt,
     response: content.response,
   });
   const now = new Date().toISOString();
-  const turn: SessionTurn = {
+  const turn: Turn = {
     turnId: PENDING_TURN_ID,
     createdAt: now,
     updatedAt: now,
@@ -216,10 +216,10 @@ function summarizeRecentTurn(turn: RecentTurn | undefined): string | null {
 }
 
 function decorateAcceptedTurn(
-  turn: SessionTurn,
+  turn: Turn,
   recentContext: RecentTurn[],
   previousTurnSummary: string | null,
-): SessionTurn {
+): Turn {
   return {
     ...turn,
     ...(previousTurnSummary ? { previousTurnSummary } : {}),
@@ -227,6 +227,6 @@ function decorateAcceptedTurn(
   };
 }
 
-export function isObservable(turn: SessionTurn): boolean {
+export function isObservable(turn: Turn): boolean {
   return hasText(turn.response) && hasText(turn.summary);
 }

@@ -1,9 +1,9 @@
-import type { SessionTurn, TurnContent } from '../client.js';
-import type { SessionRegistry } from '../session/registry.js';
+import type { Turn, TurnContent } from '../client.js';
+import type { SessionRegistry } from '../turn/registry.js';
 
 export type SealedEpoch = {
   epoch: number;
-  turns: SessionTurn[];
+  turns: Turn[];
 };
 
 export class EpochSealedError extends Error {
@@ -15,12 +15,12 @@ export class EpochSealedError extends Error {
 
 export class OpenEpoch {
   private acceptChain: Promise<void> = Promise.resolve();
-  private stagedObservableTurns: SessionTurn[];
+  private stagedObservableTurns: Turn[];
   private sealed = false;
 
   constructor(
     readonly epoch: number,
-    stagedObservableTurns: SessionTurn[] = [],
+    stagedObservableTurns: Turn[] = [],
   ) {
     this.stagedObservableTurns = [...stagedObservableTurns];
   }
@@ -70,7 +70,7 @@ export class OpenEpoch {
     return this.stagedObservableTurns.length;
   }
 
-  stagedTurns(): SessionTurn[] {
+  stagedTurns(): Turn[] {
     return [...this.stagedObservableTurns];
   }
 
@@ -125,7 +125,7 @@ export class EpochQueue {
     return this.items.length === 0;
   }
 
-  pendingTurns(): SessionTurn[] {
+  pendingTurns(): Turn[] {
     return this.items.flatMap((sealedEpoch) => sealedEpoch.turns);
   }
 
@@ -137,6 +137,6 @@ export class EpochQueue {
   }
 }
 
-function isObservable(turn: SessionTurn): boolean {
+function isObservable(turn: Turn): boolean {
   return Boolean(turn.response?.trim() && turn.summary?.trim());
 }

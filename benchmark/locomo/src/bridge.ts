@@ -3,9 +3,11 @@
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { existsSync } from 'node:fs';
 import { access, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
-import type { RenderedMemory, SessionTurn, TurnContent } from '@muninn/core';
+import type { RenderedMemory, Turn, TurnContent } from '@muninn/core';
 import * as coreClient from '@muninn/core';
+import type { RecallMode } from '@muninn/core';
 
 const CONFIG_FILE_NAME = 'muninn.json';
 const WATERMARK_POLL_MS = 2_000;
@@ -60,11 +62,8 @@ type BridgeHit = {
   memory_id: string;
   matched_text: string;
   evidence_ids: string[];
-  date_time?: string;
-  title?: string;
-  summary?: string;
   detail?: string;
-  observationRatio?: number | null;
+  extractionRatio?: number | null;
   references: BridgeReference[];
 };
 
@@ -205,9 +204,15 @@ async function recallCommand(options: Map<string, string>) {
   setGatewayTraceFile(home);
   const query = requireOption(options, 'query');
   const limit = parsePositiveInt(requireOption(options, 'limit'), 'limit');
+  const recallMode = parseRecallMode(options.get('recall-mode'));
+  const budget = parseOptionalNonNegativeInt(options.get('budget'), 'budget') ?? 0;
+  const queryLimit = parseOptionalPositiveInt(options.get('query-limit'), 'query-limit');
+  const skipWatermark = options.has('skip-watermark');
   const manifest = await readManifest(home);
-  await waitForImportWatermark(manifest);
-  const hits = await recallHits(query, limit, manifest);
+  if (!skipWatermark) {
+    await waitForImportWatermark(manifest);
+  }
+  const hits = await recallHits(query, limit, manifest, recallMode, budget, queryLimit);
   return { hits };
 }
 
@@ -216,14 +221,20 @@ async function recallBatchCommand(options: Map<string, string>) {
   process.env.MUNINN_HOME = home;
   setGatewayTraceFile(home);
   const queriesFile = requireOption(options, 'queries-file');
+  const recallMode = parseRecallMode(options.get('recall-mode'));
+  const budget = parseOptionalNonNegativeInt(options.get('budget'), 'budget') ?? 0;
+  const queryLimit = parseOptionalPositiveInt(options.get('query-limit'), 'query-limit');
+  const skipWatermark = options.has('skip-watermark');
   const raw = await readFile(queriesFile, 'utf8');
   const queries = JSON.parse(raw) as RecallBatchQuery[];
   const manifest = await readManifest(home);
-  await waitForImportWatermark(manifest);
+  if (!skipWatermark) {
+    await waitForImportWatermark(manifest);
+  }
   const results: Record<string, BridgeHit[]> = {};
 
   for (const item of queries) {
-    results[item.key] = await recallHits(item.query, item.limit, manifest);
+    results[item.key] = await recallHits(item.query, item.limit, manifest, recallMode, budget, queryLimit);
   }
 
   return { results };
@@ -320,9 +331,12 @@ async function recallHits(
   query: string,
   limit: number,
   manifest: ImportManifest,
+  mode: RecallMode,
+  budget = 0,
+  queryLimit?: number,
 ): Promise<BridgeHit[]> {
   const rows = await withTransientRetry(
-    () => coreClient.memories.recall(query, limit),
+    () => coreClient.memories.recall(query, limit, { mode, budget, queryLimit }),
     {
       attempts: envPositiveInt('MUNINN_LOCOMO_RECALL_ATTEMPTS', RECALL_ATTEMPTS),
       delayMs: envPositiveInt('MUNINN_LOCOMO_RECALL_RETRY_DELAY_MS', RECALL_RETRY_DELAY_MS),
@@ -333,6 +347,10 @@ async function recallHits(
   const hits: BridgeHit[] = [];
 
   for (const row of rows) {
+    if (row.memoryId === 'recalled:memory') {
+      hits.push(await toRecalledBridgeHit(row, turnMap));
+      continue;
+    }
     const rendered = await coreClient.memories.get(row.memoryId);
     if (!rendered) {
       continue;
@@ -341,6 +359,31 @@ async function recallHits(
   }
 
   return hits;
+}
+
+async function toRecalledBridgeHit(
+  row: { memoryId: string; text: string; references?: string[] },
+  turnMap: Map<string, ManifestTurn[]>,
+): Promise<BridgeHit> {
+  const evidenceIds = await resolveRecalledEvidenceIds(row.references ?? [], turnMap);
+  return {
+    memory_id: row.memoryId,
+    matched_text: row.text,
+    evidence_ids: evidenceIds,
+    detail: row.text,
+    extractionRatio: undefined,
+    references: await directSessionReferencesFromIds(row.references ?? [], turnMap),
+  };
+}
+
+function parseRecallMode(raw: string | undefined): RecallMode {
+  if (!raw) {
+    return 'hybrid';
+  }
+  if (raw === 'vector' || raw === 'fts' || raw === 'hybrid') {
+    return raw;
+  }
+  throw new Error(`invalid recall mode: ${raw}`);
 }
 
 export async function withTransientRetry<T>(
@@ -381,23 +424,30 @@ async function toBridgeHit(
   matchedText: string,
 ): Promise<BridgeHit> {
   const evidenceIds = await resolveEvidenceIds(rendered.memoryId, turnMap);
-  const dateTimes = uniquePreservingOrder(
-    evidenceIds
-      .map((sourceId) => findTurnBySourceId(turnMap, sourceId)?.date_time)
-      .filter((value): value is string => Boolean(value)),
-  );
+  const memoryText = renderBridgeMemoryText(rendered, matchedText);
 
   return {
     memory_id: rendered.memoryId,
     matched_text: matchedText,
     evidence_ids: evidenceIds,
-    date_time: dateTimes.join(' | ') || undefined,
-    title: rendered.title ?? undefined,
-    summary: rendered.summary ?? undefined,
-    detail: rendered.detail ?? undefined,
-    observationRatio: observingRatio(rendered.detail),
+    detail: memoryText,
+    extractionRatio: observingRatio(rendered.detail),
     references: await directSessionReferences(rendered.memoryId, turnMap),
   };
+}
+
+function renderBridgeMemoryText(rendered: RenderedMemory, matchedText: string): string {
+  if (rendered.memoryId.startsWith('extraction:')) {
+    const extraction = matchedText || rendered.summary || rendered.title || '';
+    const anchors = rendered.detail?.match(/(?:^|\n)Anchors:\n([\s\S]*?)(?:\n\nContext:|\n\nReferences:|$)/)?.[1]?.trim();
+    const context = rendered.detail?.match(/(?:^|\n)Context:\n([\s\S]*?)(?:\n\nReferences:|$)/)?.[1]?.trim();
+    return [
+      `EXTRACTION: ${extraction}`,
+      anchors ? `ANCHORS:\n${anchors}` : '',
+      context ? `CONTEXT: ${context}` : '',
+    ].filter(Boolean).join('\n');
+  }
+  return matchedText || rendered.summary || rendered.title || rendered.detail || '';
 }
 
 function observingRatio(detail?: string | null): number | null | undefined {
@@ -414,27 +464,27 @@ function observingRatio(detail?: string | null): number | null | undefined {
     return undefined;
   }
   const record = parsed as Record<string, unknown>;
-  const observations = Array.isArray(record.observations) ? record.observations : [];
+  const extractions = Array.isArray(record.extractions) ? record.extractions : [];
   const contextRefs = Array.isArray(record.contextRefs) ? record.contextRefs : [];
   if (contextRefs.length === 0) {
     return null;
   }
-  return observations.length / contextRefs.length;
+  return extractions.length / contextRefs.length;
 }
 
 async function directSessionReferences(
   memoryId: string,
   turnMap: Map<string, ManifestTurn[]>,
 ): Promise<BridgeReference[]> {
-  if (memoryId.startsWith('observation:')) {
+  if (memoryId.startsWith('extraction:')) {
     const rendered = await coreClient.memories.get(memoryId);
     const references = renderedReferences(rendered);
     return directSessionReferencesFromIds(references, turnMap);
   }
-  if (!memoryId.startsWith('observing:')) {
+  if (!memoryId.startsWith('session:')) {
     return [];
   }
-  const observing = await coreClient.observings.get(memoryId);
+  const observing = await coreClient.sessions.get(memoryId);
   if (!observing) {
     return [];
   }
@@ -452,7 +502,7 @@ async function directSessionReferencesFromIds(
     if (manifestTurns.length === 0) {
       continue;
     }
-    const turn = await coreClient.sessions.get(reference);
+    const turn = await coreClient.turns.get(reference);
     for (const manifestTurn of manifestTurns) {
       rows.push({
         memory_id: reference,
@@ -465,7 +515,38 @@ async function directSessionReferencesFromIds(
   return rows;
 }
 
-function renderReferenceText(turn: SessionTurn | null): string {
+async function resolveRecalledEvidenceIds(
+  references: string[],
+  turnMap: Map<string, ManifestTurn[]>,
+): Promise<string[]> {
+  const sourceIds: string[] = [];
+  for (const reference of references) {
+    const direct = turnMap.get(reference) ?? [];
+    if (direct.length > 0) {
+      for (const sourceId of direct.map((turn) => turn.source_id)) {
+        if (!sourceIds.includes(sourceId)) {
+          sourceIds.push(sourceId);
+        }
+      }
+      continue;
+    }
+    if (manifestHasSourceId(turnMap, reference) && !sourceIds.includes(reference)) {
+      sourceIds.push(reference);
+    }
+  }
+  return sourceIds;
+}
+
+function manifestHasSourceId(turnMap: Map<string, ManifestTurn[]>, sourceId: string): boolean {
+  for (const turns of turnMap.values()) {
+    if (turns.some((turn) => turn.source_id === sourceId)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function renderReferenceText(turn: Turn | null): string {
   if (!turn) {
     return '';
   }
@@ -477,9 +558,9 @@ function renderReferenceText(turn: SessionTurn | null): string {
   return prompt || response || '';
 }
 
-async function addTurnAndFind(content: TurnContent): Promise<SessionTurn> {
+async function addTurnAndFind(content: TurnContent): Promise<Turn> {
   await coreClient.addMessage(content);
-  const turns = await coreClient.sessions.list({
+  const turns = await coreClient.turns.list({
     mode: { type: 'recency', limit: 20 },
     agent: content.agent,
     sessionId: content.sessionId,
@@ -511,7 +592,7 @@ async function resolveEvidenceIds(
     return direct.map((turn) => turn.source_id);
   }
 
-  if (memoryId.startsWith('observation:')) {
+  if (memoryId.startsWith('extraction:')) {
     const rendered = await coreClient.memories.get(memoryId);
     const sourceIds: string[] = [];
     for (const reference of renderedReferences(rendered)) {
@@ -524,11 +605,11 @@ async function resolveEvidenceIds(
     return sourceIds;
   }
 
-  if (!memoryId.startsWith('observing:')) {
+  if (!memoryId.startsWith('session:')) {
     return [];
   }
 
-  const observing = await coreClient.observings.get(memoryId);
+  const observing = await coreClient.sessions.get(memoryId);
   if (!observing) {
     return [];
   }
@@ -645,6 +726,10 @@ function resolveActiveConfigPath(): string {
   if (currentHome && currentHome.trim().length > 0) {
     return path.join(currentHome, CONFIG_FILE_NAME);
   }
+  const localConfigPath = path.resolve(process.cwd(), CONFIG_FILE_NAME);
+  if (existsSync(localConfigPath)) {
+    return localConfigPath;
+  }
   return path.join(os.homedir(), '.muninn', CONFIG_FILE_NAME);
 }
 
@@ -693,13 +778,13 @@ function mergeJsonObjects(
 }
 
 function validateBenchmarkConfig(config: Record<string, unknown>): void {
-  const observation = requireObjectField(config, 'observation', 'observation');
+  const extraction = requireObjectField(config, 'extraction', 'extraction');
   const embedding = requireObjectField(
-    observation,
+    extraction,
     'embedding',
-    'observation.embedding',
+    'extraction.embedding',
   );
-  requireStringField(embedding, 'provider', 'observation.embedding.provider');
+  requireStringField(embedding, 'provider', 'extraction.embedding.provider');
 }
 
 function requireObjectField(
@@ -789,20 +874,6 @@ function manifestTurnEntries(turns: ManifestTurn[]): Map<string, ManifestTurn[]>
   return byTurnId;
 }
 
-function findTurnBySourceId(
-  turnMap: Map<string, ManifestTurn[]>,
-  sourceId: string,
-): ManifestTurn | undefined {
-  for (const turns of turnMap.values()) {
-    for (const turn of turns) {
-      if (turn.source_id === sourceId) {
-        return turn;
-      }
-    }
-  }
-  return undefined;
-}
-
 function dialogText(dialog: LocomoDialog): string {
   const base = dialog.text ?? dialog.clean_text ?? dialog.compressed_text ?? '';
   if (dialog.blip_caption) {
@@ -847,23 +918,25 @@ function getDateTime(conversation: LocomoSample['conversation'], sessionNo: numb
   return value;
 }
 
-function uniquePreservingOrder(values: string[]): string[] {
-  const seen = new Set<string>();
-  const output: string[] = [];
-  for (const value of values) {
-    if (!value || seen.has(value)) {
-      continue;
-    }
-    seen.add(value);
-    output.push(value);
-  }
-  return output;
-}
-
 function parsePositiveInt(value: string, label: string): number {
   const parsed = parseInt(value, 10);
   if (!Number.isFinite(parsed) || parsed <= 0) {
     throw new Error(`${label} must be a positive integer, got: ${value}`);
+  }
+  return parsed;
+}
+
+function parseOptionalPositiveInt(value: string | undefined, label: string): number | undefined {
+  return value === undefined ? undefined : parsePositiveInt(value, label);
+}
+
+function parseOptionalNonNegativeInt(value: string | undefined, label: string): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const parsed = parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    throw new Error(`${label} must be a non-negative integer, got: ${value}`);
   }
   return parsed;
 }
