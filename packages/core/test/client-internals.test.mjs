@@ -175,6 +175,46 @@ test('native bindings expose curation and observation tables', async () => {
   assert.equal(typeof tables.observationTable.stats, 'function');
 });
 
+test('memories.get renders curated observation memories', async () => {
+  const client = {
+    observationTable: {
+      loadByIds: async ({ ids }) => ids.includes('obs-1')
+        ? [{
+            id: 'obs-1',
+            curationId: 'entity:caroline',
+            snapshotId: 'curation:1',
+            text: 'Caroline researched adoption agencies.',
+            vector: [],
+            references: ['extraction:ext-1'],
+            createdAt: '2024-01-01T00:00:00Z',
+          }]
+        : [],
+    },
+    extractionTable: { loadByIds: async () => [] },
+    sessionTable: { get: async () => null },
+    turnTable: { get: async () => null },
+  };
+  const { Memories } = await import('../dist/memories/memories.js');
+  const memory = await new Memories(client).get('observation:obs-1');
+
+  assert.equal(memory.memoryId, 'observation:obs-1');
+  assert.equal(memory.title, 'Caroline researched adoption agencies.');
+  assert.equal(memory.summary, 'Caroline researched adoption agencies.');
+  assert.match(memory.detail, /References:/);
+  assert.match(memory.detail, /extraction:ext-1/);
+});
+
+test('memories.get returns null for unknown curated observation memories', async () => {
+  const client = {
+    observationTable: { loadByIds: async () => [] },
+    extractionTable: { loadByIds: async () => [] },
+    sessionTable: { get: async () => null },
+    turnTable: { get: async () => null },
+  };
+  const { Memories } = await import('../dist/memories/memories.js');
+  assert.equal(await new Memories(client).get('observation:missing'), null);
+});
+
 test('curation markdown parser derives parent and child observations', async () => {
   const { parseCurationDocument } = await import('../dist/curation/markdown.js');
   const parsed = parseCurationDocument([

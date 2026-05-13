@@ -2,9 +2,10 @@ import type { NativeTables } from '../native.js';
 import type { ListModeInput, SessionSnapshot, RecallHit, RenderedMemory, Turn } from '../client.js';
 import { getSessionSnapshot, listSessionSnapshots, timelineSessionSnapshots } from './sessions.js';
 import { getExtraction } from './extractions.js';
+import { getObservation } from './observations.js';
 import { recallMemories } from './recall.js';
 import type { RecallMode } from './recall.js';
-import { renderExtraction, renderSessionSnapshot, renderTurn } from './rendered.js';
+import { renderExtraction, renderObservation, renderSessionSnapshot, renderTurn } from './rendered.js';
 import { getTurn, listTurns, timelineTurns } from './turns.js';
 
 export class Memories {
@@ -37,6 +38,10 @@ export class Memories {
     if (memoryId.startsWith('extraction:')) {
       const extraction = await getExtraction(this.client, memoryId);
       return extraction ? renderExtraction(extraction) : null;
+    }
+    if (memoryId.startsWith('observation:')) {
+      const observation = await getObservation(this.client, memoryId);
+      return observation ? renderObservation(observation) : null;
     }
     if (memoryId.startsWith('session:')) {
       const observing = await getSessionSnapshot(this.client, memoryId);

@@ -102,6 +102,30 @@ impl ObservationTable {
         record_batch_to_observations(&batch)
     }
 
+    pub async fn load_by_ids(&self, ids: &[String]) -> Result<Vec<Observation>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let Some(dataset) = self.access.try_open().await? else {
+            return Ok(Vec::new());
+        };
+        let predicate = if ids.len() == 1 {
+            format!("id = '{}'", escape_predicate_string(&ids[0]))
+        } else {
+            let quoted = ids
+                .iter()
+                .map(|id| format!("'{}'", escape_predicate_string(id)))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("id IN ({quoted})")
+        };
+        let batch = dataset.scan().filter(&predicate)?.try_into_batch().await?;
+        if batch.num_rows() == 0 {
+            return Ok(Vec::new());
+        }
+        record_batch_to_observations(&batch)
+    }
+
     pub async fn replace_for_curation(
         &self,
         curation_id: &str,

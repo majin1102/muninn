@@ -1,5 +1,5 @@
 import type { SessionSnapshot, RenderedMemory, Turn } from '../client.js';
-import type { Extraction } from '../native.js';
+import type { Extraction, Observation } from '../native.js';
 
 export function inferRenderedMemoryKind(memoryId: string): 'turn' | 'session' | 'extraction' {
   if (memoryId.startsWith('turn:')) {
@@ -81,6 +81,20 @@ export function renderExtraction(memory: Extraction): RenderedMemory {
     title: memory.text,
     summary: memory.text,
     detail,
+    createdAt: memory.createdAt,
+    updatedAt: memory.createdAt,
+  };
+}
+
+export function renderObservation(memory: Observation): RenderedMemory {
+  const references = memory.references.length > 0
+    ? `References:\n${memory.references.map((ref) => `- ${ref}`).join('\n')}`
+    : undefined;
+  return {
+    memoryId: `observation:${memory.id}`,
+    title: memory.text,
+    summary: memory.text,
+    detail: references,
     createdAt: memory.createdAt,
     updatedAt: memory.createdAt,
   };

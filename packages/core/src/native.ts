@@ -175,6 +175,9 @@ type NativeCoreBinding = {
     limit: number;
     mode: RecallMode;
   }): MaybePromise<Observation[]>;
+  observationLoadByIds(params: {
+    ids: string[];
+  }): MaybePromise<Observation[]>;
   observationTableStats(): MaybePromise<TableStats | null>;
   describeTurnTable(): MaybePromise<TableDescription | null>;
   describeSessionTable(): MaybePromise<TableDescription | null>;
@@ -305,6 +308,9 @@ export interface ObservationTableBinding {
     limit: number;
     mode: RecallMode;
   }): Promise<Observation[]>;
+  loadByIds(params: {
+    ids: string[];
+  }): Promise<Observation[]>;
   stats(): Promise<TableStats | null>;
 }
 
@@ -412,6 +418,7 @@ function wrapBinding(native: NativeCoreBinding): NativeTables {
     observationTable: {
       replaceForCuration: async (params) => resolveNativeResult(native.observationReplaceForCuration(params)),
       search: async (params) => resolveNativeResult(native.observationSearch(params)),
+      loadByIds: async (params) => resolveNativeResult(native.observationLoadByIds(params)),
       stats: async () => resolveNativeResult(native.observationTableStats()),
     },
   };

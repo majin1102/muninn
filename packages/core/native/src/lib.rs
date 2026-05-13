@@ -169,6 +169,12 @@ struct ObservationSearchParams {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct ObservationLoadByIdsParams {
+    ids: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct StorageTargetParams {
     uri: String,
     storage_options: Option<HashMap<String, String>>,
@@ -630,6 +636,13 @@ impl CoreBinding {
                 .search(&params.query, &params.vector, params.limit, mode)
                 .await,
         )
+    }
+
+    #[napi(js_name = "observationLoadByIds")]
+    pub async fn observation_load_by_ids(&self, params: Value) -> NapiResult<Value> {
+        let params = parse_params::<ObservationLoadByIdsParams>(params)?;
+        let resources = self.resources().await?;
+        into_napi_value(resources.observation_table.load_by_ids(&params.ids).await)
     }
 
     #[napi(js_name = "observationTableStats")]
