@@ -2704,9 +2704,18 @@ test('recallMemories supports fts mode without embedding the query', async () =>
 
 test('recallMemories returns recalled memory when budget is positive', async () => {
   const calls = [];
+  let seenCandidates = [];
   const client = {
     observationTable: {
-      search: async () => [],
+      search: async () => [{
+        id: 'curated-1',
+        curationId: 'entity:caroline',
+        snapshotId: 'curation:1',
+        text: 'Caroline plans to research adoption agencies.',
+        vector: [],
+        references: ['extraction:obs-2'],
+        createdAt: '2024-01-01T00:00:00Z',
+      }],
     },
     extractionTable: {
       search: async (params) => {
@@ -2741,26 +2750,41 @@ test('recallMemories returns recalled memory when budget is positive', async () 
     budget: 80,
     queryLimit: 20,
     embed: async () => [1, 0],
-    recallMemory: async (input) => ({
-      content: 'Caroline researched adoption agencies.',
-      refs: ['D2:8'],
-      raw: '{"content":"Caroline researched adoption agencies.","refs":["D2:8"]}',
-      candidates: input.candidates,
-    }),
+    recallMemory: async (input) => {
+      seenCandidates = input.candidates;
+      return {
+        content: 'Caroline researched adoption agencies.',
+        refs: ['D2:8'],
+        raw: '{"content":"Caroline researched adoption agencies.","refs":["D2:8"]}',
+        candidates: input.candidates,
+      };
+    },
   });
 
   assert.deepEqual(hits, [{
     memoryId: 'recalled:memory',
     text: 'Caroline researched adoption agencies.',
-    references: ['D12:17', 'D2:8'],
+    references: ['extraction:obs-2', 'D12:17'],
   }]);
   assert.equal(calls[0].limit, 20);
+  assert.deepEqual(seenCandidates.map((candidate) => candidate.memoryId), [
+    'observation:curated-1',
+    'extraction:obs-1',
+  ]);
 });
 
 test('recallMemories uses candidate refs for recalled memory', async () => {
   const client = {
     observationTable: {
-      search: async () => [],
+      search: async () => [{
+        id: 'curated-1',
+        curationId: 'entity:caroline',
+        snapshotId: 'curation:1',
+        text: 'Caroline plans to research adoption agencies.',
+        vector: [],
+        references: ['extraction:curated-source'],
+        createdAt: '2024-01-01T00:00:00Z',
+      }],
     },
     extractionTable: {
       search: async () => [
@@ -2793,7 +2817,7 @@ test('recallMemories uses candidate refs for recalled memory', async () => {
   assert.deepEqual(hits, [{
     memoryId: 'recalled:memory',
     text: 'Caroline researched adoption agencies.',
-    references: ['D2:8'],
+    references: ['extraction:curated-source', 'D2:8'],
   }]);
 });
 
