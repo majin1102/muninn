@@ -238,6 +238,29 @@ test('recursive evidence resolution can walk extraction lineage back to turn ids
   assert.deepEqual(evidenceIds, ['D1:1']);
 });
 
+test('recursive evidence resolution can walk observation lineage through extraction ids', async () => {
+  const bridgeModule = await import(bridgePath);
+  const evidenceIds = bridgeModule.resolveEvidenceIdsFromGraph(
+    'observation:curated-1',
+    [
+      {
+        turn_id: 'session:101',
+        source_id: 'D2:8',
+        sample_id: 'sample-a',
+        session_id: 'locomo:sample-a:session_2',
+        date_time: '1:14 pm on 25 May, 2023',
+        import_order: 0,
+      },
+    ],
+    {
+      'observation:curated-1': ['extraction:raw-1'],
+      'extraction:raw-1': ['session:101'],
+    },
+  );
+
+  assert.deepEqual(evidenceIds, ['D2:8']);
+});
+
 test('withTransientRetry retries transient provider failures', async () => {
   const bridgeModule = await import(bridgePath);
   let attempts = 0;

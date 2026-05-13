@@ -372,7 +372,7 @@ async function toRecalledBridgeHit(
     evidence_ids: evidenceIds,
     detail: row.text,
     extractionRatio: undefined,
-    references: await directSessionReferencesFromIds(row.references ?? [], turnMap),
+    references: await directSessionReferencesFromIds(evidenceIds, turnMap),
   };
 }
 
@@ -476,6 +476,10 @@ async function directSessionReferences(
   memoryId: string,
   turnMap: Map<string, ManifestTurn[]>,
 ): Promise<BridgeReference[]> {
+  if (memoryId.startsWith('observation:')) {
+    const evidenceIds = await resolveEvidenceIds(memoryId, turnMap);
+    return directSessionReferencesFromIds(evidenceIds, turnMap);
+  }
   if (memoryId.startsWith('extraction:')) {
     const rendered = await coreClient.memories.get(memoryId);
     const references = renderedReferences(rendered);
@@ -498,14 +502,14 @@ async function directSessionReferencesFromIds(
 ): Promise<BridgeReference[]> {
   const rows: BridgeReference[] = [];
   for (const reference of references) {
-    const manifestTurns = turnMap.get(reference) ?? [];
+    const manifestTurns = turnMap.get(reference) ?? manifestTurnsBySourceId(turnMap, reference);
     if (manifestTurns.length === 0) {
       continue;
     }
-    const turn = await coreClient.turns.get(reference);
     for (const manifestTurn of manifestTurns) {
+      const turn = await coreClient.turns.get(manifestTurn.turn_id);
       rows.push({
-        memory_id: reference,
+        memory_id: manifestTurn.turn_id,
         source_id: manifestTurn.source_id,
         date_time: manifestTurn.date_time,
         text: renderReferenceText(turn),
@@ -532,18 +536,34 @@ async function resolveRecalledEvidenceIds(
     }
     if (manifestHasSourceId(turnMap, reference) && !sourceIds.includes(reference)) {
       sourceIds.push(reference);
+      continue;
+    }
+    for (const sourceId of await resolveEvidenceIds(reference, turnMap)) {
+      if (!sourceIds.includes(sourceId)) {
+        sourceIds.push(sourceId);
+      }
     }
   }
   return sourceIds;
 }
 
-function manifestHasSourceId(turnMap: Map<string, ManifestTurn[]>, sourceId: string): boolean {
+function manifestTurnsBySourceId(
+  turnMap: Map<string, ManifestTurn[]>,
+  sourceId: string,
+): ManifestTurn[] {
+  const matches: ManifestTurn[] = [];
   for (const turns of turnMap.values()) {
-    if (turns.some((turn) => turn.source_id === sourceId)) {
-      return true;
+    for (const turn of turns) {
+      if (turn.source_id === sourceId) {
+        matches.push(turn);
+      }
     }
   }
-  return false;
+  return matches;
+}
+
+function manifestHasSourceId(turnMap: Map<string, ManifestTurn[]>, sourceId: string): boolean {
+  return manifestTurnsBySourceId(turnMap, sourceId).length > 0;
 }
 
 function renderReferenceText(turn: Turn | null): string {
@@ -593,6 +613,19 @@ async function resolveEvidenceIds(
   }
 
   if (memoryId.startsWith('extraction:')) {
+    const rendered = await coreClient.memories.get(memoryId);
+    const sourceIds: string[] = [];
+    for (const reference of renderedReferences(rendered)) {
+      for (const sourceId of await resolveEvidenceReference(reference, turnMap, seen)) {
+        if (!sourceIds.includes(sourceId)) {
+          sourceIds.push(sourceId);
+        }
+      }
+    }
+    return sourceIds;
+  }
+
+  if (memoryId.startsWith('observation:')) {
     const rendered = await coreClient.memories.get(memoryId);
     const sourceIds: string[] = [];
     for (const reference of renderedReferences(rendered)) {
