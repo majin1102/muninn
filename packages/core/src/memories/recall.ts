@@ -17,6 +17,10 @@ type RecallOptions = {
   recallMemory?: (input: MemoryRecallInput) => Promise<MemoryRecallResult>;
 };
 
+type RouteHit = RecallHit & {
+  route: 'curated' | 'raw';
+};
+
 export async function recallMemories(
   client: NativeTables,
   query: string,
@@ -42,23 +46,63 @@ export async function recallMemories(
   const vector = mode === 'fts'
     ? []
     : await (options.embed ?? embedText)(trimmed);
-  const rows = await client.extractionTable.search({
-    query: trimmed,
-    vector,
-    limit: queryLimit,
-    mode,
-  });
+  const [observationRows, extractionRows] = await Promise.all([
+    client.observationTable.search({
+      query: trimmed,
+      vector,
+      limit: queryLimit,
+      mode,
+    }),
+    client.extractionTable.search({
+      query: trimmed,
+      vector,
+      limit: queryLimit,
+      mode,
+    }),
+  ]);
+  const curatedHits: RouteHit[] = observationRows.map((row) => ({
+    route: 'curated',
+    memoryId: `observation:${row.id}`,
+    text: row.text,
+    references: row.references,
+  }));
+  const rawHits: RouteHit[] = extractionRows.map((row) => ({
+    route: 'raw',
+    memoryId: `extraction:${row.id}`,
+    text: row.text,
+    references: row.references,
+  }));
+  const merged = mergeRoutes(curatedHits, rawHits, budget > 0 ? queryLimit : limit);
   if (budget > 0) {
-    if (rows.length === 0) {
+    if (merged.length === 0) {
       return [];
     }
-    const candidates = rows.map((row) => ({
-      memoryId: `extraction:${row.id}`,
-      content: row.text,
-      context: row.context,
-      anchors: row.anchors,
-      refs: row.references,
-    }));
+    const extractionById = new Map(extractionRows.map((row) => [`extraction:${row.id}`, row]));
+    const observationById = new Map(observationRows.map((row) => [`observation:${row.id}`, row]));
+    const candidates = merged.map((hit) => {
+      if (hit.route === 'curated') {
+        const row = observationById.get(hit.memoryId);
+        if (!row) {
+          throw new Error(`missing recalled observation row: ${hit.memoryId}`);
+        }
+        return {
+          memoryId: hit.memoryId,
+          content: row.text,
+          refs: row.references,
+        };
+      }
+      const row = extractionById.get(hit.memoryId);
+      if (!row) {
+        throw new Error(`missing recalled extraction row: ${hit.memoryId}`);
+      }
+      return {
+        memoryId: hit.memoryId,
+        content: row.text,
+        context: row.context,
+        anchors: row.anchors,
+        refs: row.references,
+      };
+    });
     const input = {
       query: trimmed,
       budget,
@@ -74,14 +118,54 @@ export async function recallMemories(
       references: uniqueRefs(candidates.flatMap((candidate) => candidate.refs)),
     }];
   }
-  return rows.slice(0, limit).map((row) => ({
-    memoryId: `extraction:${row.id}`,
-    text: row.text,
-    references: row.references,
-  }));
+  return merged.slice(0, limit).map(({ route: _route, ...hit }) => hit);
 }
 
 export type { RecallMode };
+
+function curatedQuota(limit: number): number {
+  return Math.ceil(limit * 0.7);
+}
+
+function coveredExtractionIds(hits: RouteHit[]): Set<string> {
+  const covered = new Set<string>();
+  for (const hit of hits) {
+    if (hit.route !== 'curated') {
+      continue;
+    }
+    for (const ref of hit.references ?? []) {
+      if (ref.startsWith('extraction:')) {
+        covered.add(ref);
+      }
+    }
+  }
+  return covered;
+}
+
+function mergeRoutes(curated: RouteHit[], raw: RouteHit[], limit: number): RouteHit[] {
+  if (limit <= 0) {
+    return [];
+  }
+  const firstCurated = curated.slice(0, curatedQuota(limit));
+  const covered = coveredExtractionIds(firstCurated);
+  const rawFallback = raw.filter((hit) => !covered.has(hit.memoryId));
+  const rawQuota = limit - firstCurated.length;
+  const selected = firstCurated.concat(rawFallback.slice(0, rawQuota));
+  if (selected.length >= limit) {
+    return selected.slice(0, limit);
+  }
+  const selectedIds = new Set(selected.map((hit) => hit.memoryId));
+  for (const hit of curated.concat(rawFallback)) {
+    if (selected.length >= limit) {
+      break;
+    }
+    if (!selectedIds.has(hit.memoryId)) {
+      selected.push(hit);
+      selectedIds.add(hit.memoryId);
+    }
+  }
+  return selected;
+}
 
 function uniqueRefs(values: string[]): string[] {
   const seen = new Set<string>();

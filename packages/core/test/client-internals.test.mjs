@@ -2520,48 +2520,165 @@ test('muninn.recallMemories does not wait for observer flushes', async () => {
   assert.equal(recallCalls, 1);
 });
 
-test('recallMemories defaults to hybrid mode and passes query text to extraction search', async () => {
+test('recallMemories searches curated and raw routes then returns curated-first hits', async () => {
   const calls = [];
   const client = {
+    observationTable: {
+      search: async (params) => {
+        calls.push(['observation', params]);
+        return [{
+          id: 'curated-1',
+          curationId: 'entity:caroline',
+          snapshotId: 'curation:1',
+          text: 'Caroline plans to research adoption agencies.',
+          vector: [],
+          references: ['extraction:raw-1'],
+          createdAt: '2024-01-01T00:00:00Z',
+        }];
+      },
+    },
     extractionTable: {
       search: async (params) => {
-        calls.push(params);
+        calls.push(['extraction', params]);
         return [{
-          id: 'obs-1',
-          text: 'Caroline researched adoption agencies.',
+          id: 'raw-2',
+          text: 'Caroline is interested in counseling work.',
+          context: null,
+          anchors: [],
           vector: [],
           importance: 1,
-          category: 'fact',
-          references: ['turn:1'],
+          category: 'Fact',
+          references: ['session:2'],
           createdAt: '2024-01-01T00:00:00Z',
         }];
       },
     },
   };
 
-  const hits = await recallMemories(client, 'What did Caroline research?', 3, { embed: async () => [1, 0] });
+  const hits = await recallMemories(client, 'What are Caroline plans?', 3, { embed: async () => [1, 0] });
 
-  assert.deepEqual(hits, [{
-    memoryId: 'extraction:obs-1',
-    text: 'Caroline researched adoption agencies.',
-    references: ['turn:1'],
-  }]);
-  assert.equal(calls.length, 1);
-  assert.deepEqual(calls[0], {
-    query: 'What did Caroline research?',
+  assert.deepEqual(hits, [
+    {
+      memoryId: 'observation:curated-1',
+      text: 'Caroline plans to research adoption agencies.',
+      references: ['extraction:raw-1'],
+    },
+    {
+      memoryId: 'extraction:raw-2',
+      text: 'Caroline is interested in counseling work.',
+      references: ['session:2'],
+    },
+  ]);
+  assert.deepEqual(calls.map(([table]) => table), ['observation', 'extraction']);
+  assert.deepEqual(calls[0][1], {
+    query: 'What are Caroline plans?',
     vector: [1, 0],
     limit: 3,
     mode: 'hybrid',
   });
 });
 
+test('recallMemories filters raw hits covered by selected curated hits', async () => {
+  const client = {
+    observationTable: {
+      search: async () => [
+        {
+          id: 'curated-1',
+          curationId: 'entity:caroline',
+          snapshotId: 'curation:1',
+          text: 'Caroline researched adoption agencies.',
+          vector: [],
+          references: ['extraction:raw-1'],
+          createdAt: '2024-01-01T00:00:00Z',
+        },
+      ],
+    },
+    extractionTable: {
+      search: async () => [
+        {
+          id: 'raw-1',
+          text: 'Caroline researched adoption agencies.',
+          context: null,
+          anchors: [],
+          vector: [],
+          importance: 1,
+          category: 'Fact',
+          references: ['session:1'],
+          createdAt: '2024-01-01T00:00:00Z',
+        },
+        {
+          id: 'raw-2',
+          text: 'Melanie painted a lake sunrise in 2022.',
+          context: null,
+          anchors: [],
+          vector: [],
+          importance: 1,
+          category: 'Fact',
+          references: ['session:2'],
+          createdAt: '2024-01-01T00:00:00Z',
+        },
+      ],
+    },
+  };
+
+  const hits = await recallMemories(client, 'Caroline research', 2, { embed: async () => [1, 0] });
+  assert.deepEqual(hits.map((hit) => hit.memoryId), ['observation:curated-1', 'extraction:raw-2']);
+});
+
+test('recallMemories does not filter raw hits covered only by unselected curated candidates', async () => {
+  const curated = Array.from({ length: 5 }, (_, index) => ({
+    id: `curated-${index + 1}`,
+    curationId: `entity:${index + 1}`,
+    snapshotId: `curation:${index + 1}`,
+    text: `Curated memory ${index + 1}.`,
+    vector: [],
+    references: [`extraction:raw-${index + 1}`],
+    createdAt: '2024-01-01T00:00:00Z',
+  }));
+  const client = {
+    observationTable: {
+      search: async () => curated,
+    },
+    extractionTable: {
+      search: async () => [
+        {
+          id: 'raw-5',
+          text: 'Raw memory covered only by unselected curated memory.',
+          context: null,
+          anchors: [],
+          vector: [],
+          importance: 1,
+          category: 'Fact',
+          references: ['session:5'],
+          createdAt: '2024-01-01T00:00:00Z',
+        },
+      ],
+    },
+  };
+
+  const hits = await recallMemories(client, 'query', 5, { embed: async () => [1, 0] });
+  assert.deepEqual(hits.map((hit) => hit.memoryId), [
+    'observation:curated-1',
+    'observation:curated-2',
+    'observation:curated-3',
+    'observation:curated-4',
+    'extraction:raw-5',
+  ]);
+});
+
 test('recallMemories supports fts mode without embedding the query', async () => {
   let embedCalls = 0;
   const calls = [];
   const client = {
+    observationTable: {
+      search: async (params) => {
+        calls.push(['observation', params]);
+        return [];
+      },
+    },
     extractionTable: {
       search: async (params) => {
-        calls.push(params);
+        calls.push(['extraction', params]);
         return [];
       },
     },
@@ -2576,17 +2693,21 @@ test('recallMemories supports fts mode without embedding the query', async () =>
   });
 
   assert.equal(embedCalls, 0);
-  assert.deepEqual(calls[0], {
+  assert.deepEqual(calls[0][1], {
     query: 'adoption agencies',
     vector: [],
     limit: 2,
     mode: 'fts',
   });
+  assert.deepEqual(calls.map(([table]) => table), ['observation', 'extraction']);
 });
 
 test('recallMemories returns recalled memory when budget is positive', async () => {
   const calls = [];
   const client = {
+    observationTable: {
+      search: async () => [],
+    },
     extractionTable: {
       search: async (params) => {
         calls.push(params);
@@ -2638,6 +2759,9 @@ test('recallMemories returns recalled memory when budget is positive', async () 
 
 test('recallMemories uses candidate refs for recalled memory', async () => {
   const client = {
+    observationTable: {
+      search: async () => [],
+    },
     extractionTable: {
       search: async () => [
         {
