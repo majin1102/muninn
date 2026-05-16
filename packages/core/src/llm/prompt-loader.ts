@@ -11,12 +11,12 @@ const PROMPT_FILE_NAMES = {
   turn: 'turn',
   chat: 'chat',
   thread_observing: 'thread-observing',
-  observing_gateway: 'observing-gateway',
+  thread_extracting: 'thread-extracting',
+  extracting_gateway: 'extracting-gateway',
   extraction_extraction: 'extraction-extraction',
   extraction_review: 'extraction-review',
   thread_preparation: 'thread-preparation',
   memory_recaller: 'memory-recaller',
-  thread_curating: 'thread-curating',
 } as const;
 
 export function loadPromptTemplate(name: keyof typeof PROMPT_FILE_NAMES): PromptTemplate {

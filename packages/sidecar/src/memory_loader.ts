@@ -7,7 +7,7 @@ import type {
   ErrorResponse,
   MemoryHit,
   MemoryResponse,
-  ObserverWatermarkResponse,
+  MemoryWatermarkResponse,
 } from '@muninn/types';
 import type { RecallMode } from '@muninn/core';
 import { renderRecallHit, renderRenderedMemoryHit } from './render.js';
@@ -30,17 +30,19 @@ function memoryResponse(memoryHits: MemoryHit[]): MemoryResponse {
   };
 }
 
-function observerWatermarkResponse(
+function memoryWatermarkResponse(
   resolved: boolean,
   pendingTurnIds: string[],
-  observingEpoch?: number,
+  extractingEpoch?: number,
   committedEpoch?: number,
-): ObserverWatermarkResponse {
+  observerPending?: boolean,
+): MemoryWatermarkResponse {
   return {
     resolved,
     pendingTurnIds,
-    observingEpoch,
+    extractingEpoch,
     committedEpoch,
+    observerPending,
     requestId: generateRequestId(),
   };
 }
@@ -239,7 +241,7 @@ memoryLoader.get('/api/v1/detail', async (c) => {
   return c.json(memoryResponse([renderRenderedMemoryHit(memory)]));
 });
 
-memoryLoader.get('/api/v1/observer/watermark', async (c) => {
+memoryLoader.get('/api/v1/memory/watermark', async (c) => {
   let watermark;
   try {
     watermark = await observer.watermark();
@@ -249,11 +251,12 @@ memoryLoader.get('/api/v1/observer/watermark', async (c) => {
   }
 
   return c.json(
-    observerWatermarkResponse(
+    memoryWatermarkResponse(
       watermark.resolved,
       watermark.pendingTurnIds,
-      watermark.observingEpoch,
+      watermark.extractingEpoch,
       watermark.committedEpoch,
+      watermark.observerPending,
     )
   );
 });

@@ -1,6 +1,6 @@
 import { appendFile } from 'node:fs/promises';
 
-import { getObserverLlmConfig } from '../config.js';
+import { getExtractorLlmConfig } from '../config.js';
 import { loadPromptTemplate, renderPromptTemplate } from '../llm/prompt-loader.js';
 import {
   generateWithTools,
@@ -43,7 +43,7 @@ export async function prepareThreads(
   deps: ThreadPreparationDeps = {},
 ): Promise<ThreadPreparationResult> {
   throwIfAborted(signal);
-  const config = getObserverLlmConfig();
+  const config = getExtractorLlmConfig();
   if (!config) {
     throw new Error('observer is not configured');
   }
@@ -116,7 +116,7 @@ async function runNativeToolLoop(params: {
   const messages = [...params.messages];
   for (let step = 0; step < maxSteps; step += 1) {
     throwIfAborted(params.signal);
-    const result = await params.model('observer', {
+    const result = await params.model('extractor', {
       messages,
       tools: params.tools,
       signal: params.signal,
@@ -405,7 +405,7 @@ function toPromptInput(input: ThreadPreparationInput): Record<string, unknown> {
       memoryId: `extraction:${extraction.id}`,
       text: extraction.text,
       category: extraction.category,
-      references: extraction.references,
+      references: extraction.turnRefs,
     })),
     activeThreads: input.activeThreads,
     candidateMemories: input.candidateMemories ?? [],

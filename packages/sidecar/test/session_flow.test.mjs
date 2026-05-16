@@ -90,19 +90,26 @@ async function writeMuninnConfig(configPath, {
   }
 
   if (observerProvider) {
-    root.semanticIndex = {
+    root.extraction = {
       embedding: {
         provider: 'mock',
         dimensions: semanticDimensions,
       },
       defaultImportance: 0.7,
     };
-    root.observer = {
+    root.extractor = {
       name: 'test-observer',
-      llm: 'test_observer_llm',
+      llm: 'test_extractor_llm',
       maxAttempts: 3,
       ...(activeWindowDays === undefined ? {} : { activeWindowDays }),
     };
+    root.observer = {
+      name: 'test-observer-curator',
+      llm: 'test_observer_llm',
+      maxAttempts: 3,
+      anchorThreshold: 5,
+    };
+    llm.test_extractor_llm = { provider: observerProvider };
     llm.test_observer_llm = { provider: observerProvider };
   }
 
@@ -122,18 +129,27 @@ function createValidSettings({
   activeWindowDays = 7,
 } = {}) {
   const config = {
+    extractor: {
+      name: 'default-extractor',
+      llm: 'default_extractor_llm',
+      maxAttempts: 3,
+      activeWindowDays,
+    },
     observer: {
       name: 'default-observer',
       llm: 'default_observer_llm',
       maxAttempts: 3,
-      activeWindowDays,
+      anchorThreshold: 5,
     },
     llm: {
+      default_extractor_llm: {
+        provider: observerProvider,
+      },
       default_observer_llm: {
         provider: observerProvider,
       },
     },
-    semanticIndex: {
+    extraction: {
       embedding: {
         provider: 'mock',
         dimensions: semanticDimensions,
@@ -559,7 +575,7 @@ test('observer watermark reports pending turns until the observer flush complete
     response: 'watermark response',
   }));
 
-  const currentResponse = await app.request('/api/v1/observer/watermark');
+  const currentResponse = await app.request('/api/v1/memory/watermark');
   assert.equal(currentResponse.status, 200);
   const currentBody = await json(currentResponse);
   assert.equal(currentBody.resolved, false);
@@ -570,7 +586,7 @@ test('observer watermark reports pending turns until the observer flush complete
 
   let resolvedBody = null;
   for (let attempt = 0; attempt < 50; attempt += 1) {
-    const resolvedResponse = await app.request('/api/v1/observer/watermark');
+    const resolvedResponse = await app.request('/api/v1/memory/watermark');
     assert.equal(resolvedResponse.status, 200);
     resolvedBody = await json(resolvedResponse);
     if (resolvedBody.resolved) {

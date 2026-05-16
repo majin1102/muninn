@@ -1,7 +1,7 @@
 import { appendFile } from 'node:fs/promises';
 
 import type { Turn } from '../client.js';
-import { getObserverLlmConfig } from '../config.js';
+import { getExtractorLlmConfig } from '../config.js';
 import type { Memories } from '../memories/memories.js';
 import { renderRenderedMemoryMarkdown } from '../memories/rendered.js';
 import type {
@@ -11,8 +11,8 @@ import type {
   Extraction,
   ObservingThreadGatewayInput,
   ContextRef,
-} from '../observer/types.js';
-import { parseThreadMemoryDocument } from '../observer/thread-memory.js';
+} from '../extractor/types.js';
+import { parseThreadMemoryDocument } from '../extractor/thread-memory.js';
 import {
   generateText,
   generateWithTools,
@@ -44,9 +44,9 @@ export async function routeObservingThreads(
   signal?: AbortSignal,
 ): Promise<GatewayResult> {
   throwIfAborted(signal);
-  const config = getObserverLlmConfig();
+  const config = getExtractorLlmConfig();
   if (!config) {
-    throw new Error('observer gateway is not configured');
+    throw new Error('extractor gateway is not configured');
   }
 
   const gatewayTurns = toGatewayTurns(pendingTurns);
@@ -59,7 +59,7 @@ export async function routeObservingThreads(
     );
   }
 
-  const template = loadPromptTemplate('observing_gateway');
+  const template = loadPromptTemplate('extracting_gateway');
   const inputJson = JSON.stringify(
     {
       observingThreads: observingThreads.map((thread) => ({
@@ -79,10 +79,10 @@ export async function routeObservingThreads(
   const systemPrompt = buildGatewaySystemPrompt(config.domainPrompt);
   const basePrompt = renderPromptTemplate(template.userTemplate, { input_json: inputJson });
 
-  let lastError = 'observer gateway returned no output';
+  let lastError = 'extractor gateway returned no output';
   for (let attempt = 1; attempt <= config.maxAttempts; attempt += 1) {
     throwIfAborted(signal);
-    const raw = await generateText('observer', {
+    const raw = await generateText('extractor', {
       system: systemPrompt,
       prompt: buildRetryPrompt(
         basePrompt,
@@ -93,7 +93,7 @@ export async function routeObservingThreads(
       signal,
     });
     if (!raw) {
-      throw new Error('observer gateway is not configured');
+      throw new Error('extractor gateway is not configured');
     }
     throwIfAborted(signal);
 
@@ -105,7 +105,7 @@ export async function routeObservingThreads(
     }
   }
 
-  throw new Error(`observer gateway returned invalid output: ${lastError}`);
+  throw new Error(`extractor gateway returned invalid output: ${lastError}`);
 }
 
 function toGatewayTurns(pendingTurns: Turn[]): Array<{ turnId: string; text: string }> {
@@ -132,7 +132,7 @@ function labeledText(label: string, value?: string | null): string | null {
 }
 
 function buildGatewaySystemPrompt(domainPrompt?: string): string {
-  const template = loadPromptTemplate('observing_gateway');
+  const template = loadPromptTemplate('extracting_gateway');
   return renderPromptTemplate(template.system, {
     domain_prompt: loadGatewayDomainPrompt(domainPrompt)?.trim() || 'No additional domain thread guidance.',
   });
@@ -144,16 +144,16 @@ export async function observeThread(
   deps: ObserveThreadDeps = {},
 ): Promise<ObserveResult> {
   throwIfAborted(signal);
-  const config = getObserverLlmConfig();
+  const config = getExtractorLlmConfig();
   if (!config) {
-    throw new Error('observing update is not configured');
+    throw new Error('extraction update is not configured');
   }
 
   if (config.provider === 'mock') {
     return validateObserveResult(buildMockThreadMemory(input), input);
   }
 
-  const template = loadPromptTemplate('thread_observing');
+  const template = loadPromptTemplate('thread_extracting');
   const systemPrompt = template.system;
   const inputJson = JSON.stringify(
     {
@@ -171,7 +171,7 @@ export async function observeThread(
   const basePrompt = renderPromptTemplate(template.userTemplate, { input_json: inputJson });
   const trace = createObserveTrace(input);
 
-  let lastError = 'observing update returned no output';
+  let lastError = 'extraction update returned no output';
   for (let attempt = 1; attempt <= config.maxAttempts; attempt += 1) {
     throwIfAborted(signal);
     const attemptToolResults: typeof trace.toolResults = [];
@@ -203,7 +203,7 @@ export async function observeThread(
     });
     const durationMs = Date.now() - startedAt;
     if (!raw) {
-      throw new Error('observing update is not configured');
+      throw new Error('extraction update is not configured');
     }
     throwIfAborted(signal);
 
@@ -230,7 +230,7 @@ export async function observeThread(
     }
   }
 
-  throw new Error(`observing update returned invalid output: ${lastError}`);
+  throw new Error(`extraction update returned invalid output: ${lastError}`);
 }
 
 function buildMockGatewayResult(
@@ -308,31 +308,31 @@ function validateGatewayResult(
   const validTurnIds = new Set(pendingTurns.map((turn) => turn.turnId));
   const validThreadIds = new Set(observingThreads.map((thread) => thread.threadId));
   if (!Array.isArray(result.sessionFragments)) {
-    throw new Error('observer gateway returned sessionFragments that are not an array');
+    throw new Error('extractor gateway returned sessionFragments that are not an array');
   }
   const sessionFragments = result.sessionFragments.map((fragment) => {
     const threadId = typeof fragment.threadId === 'string' ? fragment.threadId.trim() : '';
     if (!validThreadIds.has(threadId)) {
-      throw new Error(`observer gateway referenced unknown threadId: ${threadId}`);
+      throw new Error(`extractor gateway referenced unknown threadId: ${threadId}`);
     }
     const turnIds = Array.isArray(fragment.turnIds)
       ? [...new Set(fragment.turnIds.map((turnId) => typeof turnId === 'string' ? turnId.trim() : '').filter(Boolean))]
       : [];
     if (turnIds.length === 0) {
-      throw new Error('observer gateway sessionFragment must include turnIds');
+      throw new Error('extractor gateway sessionFragment must include turnIds');
     }
     for (const turnId of turnIds) {
       if (!validTurnIds.has(turnId)) {
-        throw new Error(`observer gateway referenced unknown turnId: ${turnId}`);
+        throw new Error(`extractor gateway referenced unknown turnId: ${turnId}`);
       }
     }
     const content = normalizeText(typeof fragment.content === 'string' ? fragment.content : '');
     if (!content) {
-      throw new Error('observer gateway returned empty content');
+      throw new Error('extractor gateway returned empty content');
     }
     const reason = normalizeText(fragment.reason ?? '', MAX_SUMMARY_CHARS);
     if (!reason) {
-      throw new Error('observer gateway returned empty reason');
+      throw new Error('extractor gateway returned empty reason');
     }
       return {
         threadId,
@@ -399,7 +399,7 @@ async function runToolLoop(params: {
   const messages = [...params.messages];
   for (let step = 0; step < maxSteps; step += 1) {
     throwIfAborted(params.signal);
-    const result = await params.model('observer', {
+    const result = await params.model('extractor', {
       messages,
       tools: params.tools,
       signal: params.signal,

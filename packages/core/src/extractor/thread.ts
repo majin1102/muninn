@@ -301,8 +301,8 @@ export function getPendingIndexUpTo(
 function deserializeSnapshot(row: SessionSnapshot): SnapshotContent {
   const parsed = parseThreadMemoryDocument(row.content, new Set(row.references));
   return {
-    threadKind: 'subject',
-    sessionId: null,
+    threadKind: 'session',
+    sessionId: row.sessionId,
     threadMemory: parsed.threadMemory,
     extractions: parsed.extractions,
     contextRefs: row.references.map((turnId) => ({ turnId, summary: turnId })),

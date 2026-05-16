@@ -6,7 +6,7 @@ import { loadMuninnConfig, resolveMuninnHome, resolveStorageTarget } from './con
 import type {
   SessionSnapshot,
   SessionFragment,
-} from './observer/types.js';
+} from './extractor/types.js';
 
 export type RecentTurn = {
   turnId: string;
@@ -29,12 +29,11 @@ export type ThreadRef = {
   updatedAt: string;
 };
 
-export type ObserverCheckpoint = {
+export type ExtractorCheckpoint = {
   baseline: {
     turn: number;
     session: number;
     extraction: number;
-    curation: number;
     observation: number;
   };
   committedEpoch?: number;
@@ -42,11 +41,11 @@ export type ObserverCheckpoint = {
   recentSessions: RecentSessionCheckpoint[];
   threads: ThreadRef[];
   runs: ObservingRun[];
-  curationRuns: CurationRun[];
 };
 
 export type CheckpointContent = {
-  schemaVersion: 4;
+  schemaVersion: 5;
+  extractor: ExtractorCheckpoint;
   observer: ObserverCheckpoint;
 };
 
@@ -89,19 +88,19 @@ export type ObservingRun = {
   errors: ObservingRunError[];
 };
 
-export type CurationRunStage =
+export type ObserverRunStage =
   | 'selectingExtractions'
-  | 'generatingCuration'
+  | 'generatingObservation'
   | 'committingSnapshot'
   | 'committingObservations'
   | 'completed'
   | 'failed';
 
-export type CurationRun = {
+export type ObserverRun = {
   runId: string;
-  curationId: string;
+  observeId: string;
   anchor: string;
-  stage: CurationRunStage;
+  stage: ObserverRunStage;
   pendingExtractionIds: string[];
   generatedContent?: string;
   parsedObservationDrafts?: Array<{
@@ -117,22 +116,36 @@ export type CurationRun = {
   }>;
 };
 
+export type ObserverCheckpoint = {
+  baseline: {
+    extraction: number;
+    observationContext: number;
+    observation: number;
+  };
+  runs: ObserverRun[];
+};
+
 export function parseCheckpointFile(raw: string): CheckpointFile {
   const parsed = JSON.parse(raw) as Partial<CheckpointFile>;
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
     throw new Error('checkpoint must be a JSON object');
   }
-  if (parsed.schemaVersion !== 4) {
+  if (parsed.schemaVersion !== 5) {
     throw new Error(`unsupported checkpoint schemaVersion: ${String(parsed.schemaVersion)}`);
   }
+  const extractor = parseExtractorSection(parsed.extractor);
   const observer = parseObserverSection(parsed.observer);
+  if (!extractor) {
+    throw new Error('checkpoint extractor section is invalid');
+  }
   if (!observer) {
     throw new Error('checkpoint observer section is invalid');
   }
   return {
-    schemaVersion: 4,
+    schemaVersion: 5,
     writtenAt: typeof parsed.writtenAt === 'string' ? parsed.writtenAt : new Date(0).toISOString(),
     writerPid: typeof parsed.writerPid === 'number' ? parsed.writerPid : 0,
+    extractor,
     observer,
   };
 }
@@ -153,17 +166,16 @@ export function serializeCheckpointFile(file: CheckpointFile): string {
   return `${JSON.stringify(file, null, 2)}\n`;
 }
 
-function parseObserverSection(value: unknown): ObserverCheckpoint | null {
+function parseExtractorSection(value: unknown): ExtractorCheckpoint | null {
   if (!isObjectRecord(value)) {
     return null;
   }
-  const baseline = parseBaseline(value.baseline);
+  const baseline = parseExtractorBaseline(value.baseline);
   const nextEpoch = value.nextEpoch;
   const recentSessions = parseRecentSessions(value.recentSessions);
   const threads = parseThreads(value.threads);
   const runs = parseObservingRuns(value.runs ?? []);
-  const curationRuns = parseCurationRuns(value.curationRuns ?? []);
-  if (!baseline || typeof nextEpoch !== 'number' || !recentSessions || !threads || !runs || !curationRuns) {
+  if (!baseline || typeof nextEpoch !== 'number' || !recentSessions || !threads || !runs) {
     return null;
   }
   const committedEpoch = value.committedEpoch;
@@ -177,11 +189,10 @@ function parseObserverSection(value: unknown): ObserverCheckpoint | null {
     recentSessions,
     threads,
     runs,
-    curationRuns,
   };
 }
 
-function parseBaseline(value: unknown): ObserverCheckpoint['baseline'] | null {
+function parseExtractorBaseline(value: unknown): ExtractorCheckpoint['baseline'] | null {
   if (!isObjectRecord(value)) {
     return null;
   }
@@ -189,7 +200,6 @@ function parseBaseline(value: unknown): ObserverCheckpoint['baseline'] | null {
     typeof value.turn !== 'number'
     || typeof value.session !== 'number'
     || typeof value.extraction !== 'number'
-    || (value.curation != null && typeof value.curation !== 'number')
     || (value.observation != null && typeof value.observation !== 'number')
   ) {
     return null;
@@ -198,8 +208,37 @@ function parseBaseline(value: unknown): ObserverCheckpoint['baseline'] | null {
     turn: value.turn,
     session: value.session,
     extraction: value.extraction,
-    curation: value.curation ?? 0,
     observation: value.observation ?? 0,
+  };
+}
+
+function parseObserverSection(value: unknown): ObserverCheckpoint | null {
+  if (!isObjectRecord(value)) {
+    return null;
+  }
+  const baseline = parseObserverBaseline(value.baseline);
+  const runs = parseObserverRuns(value.runs ?? []);
+  if (!baseline || !runs) {
+    return null;
+  }
+  return { baseline, runs };
+}
+
+function parseObserverBaseline(value: unknown): ObserverCheckpoint['baseline'] | null {
+  if (!isObjectRecord(value)) {
+    return null;
+  }
+  if (
+    typeof value.extraction !== 'number'
+    || typeof value.observationContext !== 'number'
+    || typeof value.observation !== 'number'
+  ) {
+    return null;
+  }
+  return {
+    extraction: value.extraction,
+    observationContext: value.observationContext,
+    observation: value.observation,
   };
 }
 
@@ -404,13 +443,13 @@ function parseRunErrors(value: unknown): ObservingRunError[] | null {
   return errors;
 }
 
-function parseCurationRuns(value: unknown): CurationRun[] | null {
+function parseObserverRuns(value: unknown): ObserverRun[] | null {
   if (!Array.isArray(value)) {
     return null;
   }
-  const runs: CurationRun[] = [];
+  const runs: ObserverRun[] = [];
   for (const run of value) {
-    const parsed = parseCurationRun(run);
+    const parsed = parseObserverRun(run);
     if (!parsed) {
       return null;
     }
@@ -419,20 +458,20 @@ function parseCurationRuns(value: unknown): CurationRun[] | null {
   return runs;
 }
 
-function parseCurationRun(value: unknown): CurationRun | null {
+function parseObserverRun(value: unknown): ObserverRun | null {
   if (!isObjectRecord(value)) {
     return null;
   }
   if (
     typeof value.runId !== 'string'
-    || typeof value.curationId !== 'string'
+    || typeof value.observeId !== 'string'
     || typeof value.anchor !== 'string'
-    || !isCurationRunStage(value.stage)
+    || !isObserverRunStage(value.stage)
   ) {
     return null;
   }
   const pendingExtractionIds = parseStringArray(value.pendingExtractionIds);
-  const errors = parseCurationRunErrors(value.errors);
+  const errors = parseObserverRunErrors(value.errors);
   if (!pendingExtractionIds || !errors) {
     return null;
   }
@@ -456,7 +495,7 @@ function parseCurationRun(value: unknown): CurationRun | null {
   }
   return {
     runId: value.runId,
-    curationId: value.curationId,
+    observeId: value.observeId,
     anchor: value.anchor,
     stage: value.stage,
     pendingExtractionIds,
@@ -468,11 +507,11 @@ function parseCurationRun(value: unknown): CurationRun | null {
   };
 }
 
-function parseObservationDrafts(value: unknown): NonNullable<CurationRun['parsedObservationDrafts']> | null {
+function parseObservationDrafts(value: unknown): NonNullable<ObserverRun['parsedObservationDrafts']> | null {
   if (!Array.isArray(value)) {
     return null;
   }
-  const drafts: NonNullable<CurationRun['parsedObservationDrafts']> = [];
+  const drafts: NonNullable<ObserverRun['parsedObservationDrafts']> = [];
   for (const draft of value) {
     if (
       !isObjectRecord(draft)
@@ -494,11 +533,11 @@ function parseObservationDrafts(value: unknown): NonNullable<CurationRun['parsed
   return drafts;
 }
 
-function parseCurationRunErrors(value: unknown): CurationRun['errors'] | null {
+function parseObserverRunErrors(value: unknown): ObserverRun['errors'] | null {
   if (!Array.isArray(value)) {
     return null;
   }
-  const errors: CurationRun['errors'] = [];
+  const errors: ObserverRun['errors'] = [];
   for (const error of value) {
     if (
       !isObjectRecord(error)
@@ -535,9 +574,9 @@ function isRunStage(value: unknown): value is ObservingRunStage {
     || value === 'completed';
 }
 
-function isCurationRunStage(value: unknown): value is CurationRunStage {
+function isObserverRunStage(value: unknown): value is ObserverRunStage {
   return value === 'selectingExtractions'
-    || value === 'generatingCuration'
+    || value === 'generatingObservation'
     || value === 'committingSnapshot'
     || value === 'committingObservations'
     || value === 'completed'
@@ -560,9 +599,9 @@ export function resolveCheckpointPath(): string {
 function storageScopeKey(): string {
   const config = loadMuninnConfig();
   const storage = config ? resolveStorageTarget(config) : null;
-  const observer = config?.observer?.name ?? '';
+  const extractor = config?.extractor?.name ?? '';
   if (!storage) {
-    return `local:${resolveMuninnHome()}#observer=${observer}`;
+    return `local:${resolveMuninnHome()}#extractor=${extractor}`;
   }
   const options = storage.storageOptions
     ? Object.entries(storage.storageOptions)
@@ -570,5 +609,5 @@ function storageScopeKey(): string {
       .map(([key, value]) => `${key}=${value}`)
       .join('&')
     : '';
-  return `${storage.uri}#${options}#observer=${observer}`;
+  return `${storage.uri}#${options}#extractor=${extractor}`;
 }

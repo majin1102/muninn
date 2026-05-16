@@ -7,22 +7,23 @@ import { access, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/p
 import core from '../dist/index.js';
 import { __testing } from '../dist/client.js';
 import {
-  getCurationConfigFromConfigForTests,
+  getObserverRuntimeConfigFromConfigForTests,
+  getExtractorLlmConfig,
   getObserverLlmConfig,
   validateMuninnConfigInput,
 } from '../dist/config.js';
 import { MuninnBackend } from '../dist/backend.js';
-import { Observer } from '../dist/observer/observer.js';
-import { EpochQueue, OpenEpoch } from '../dist/observer/epoch.js';
+import { Extractor as Observer } from '../dist/extractor/extractor.js';
+import { EpochQueue, OpenEpoch } from '../dist/extractor/epoch.js';
 import { parseCheckpointFile, readCheckpointFile, resolveCheckpointPath } from '../dist/checkpoint.js';
 import { SessionRegistry } from '../dist/turn/registry.js';
 import { normalizeSessionId, sessionKey } from '../dist/turn/key.js';
 import { Session } from '../dist/turn/session.js';
 import { Watchdog } from '../dist/watchdog.js';
-import updateModule from '../dist/observer/update.js';
-import threadModule from '../dist/observer/thread.js';
-import observingGatewayModule from '../dist/llm/observing-gateway.js';
-import { applyExtractionChanges, applyExtractionTableChanges } from '../dist/observer/memory-delta.js';
+import updateModule from '../dist/extractor/update.js';
+import threadModule from '../dist/extractor/thread.js';
+import observingGatewayModule from '../dist/llm/extracting.js';
+import { applyExtractionChanges, applyExtractionTableChanges } from '../dist/extractor/memory-delta.js';
 import { recallMemories } from '../dist/memories/recall.js';
 import { validateMemoryRecallResult } from '../dist/memories/memory-recaller.js';
 import { getNativeTables } from '../dist/native.js';
@@ -32,11 +33,56 @@ const { __testing: threadTesting } = threadModule;
 const { __testing: observingGatewayTesting } = observingGatewayModule;
 const { createObservingThread, getPendingIndex, getPendingIndexUpTo, loadThreads, toSessionSnapshot } = threadModule;
 const { addMessage, observer: observerApi, shutdownCoreForTests } = core;
-const CHECKPOINT_SCHEMA_VERSION = 4;
+const CHECKPOINT_SCHEMA_VERSION = 5;
 
 function createCheckpointBackend(exported = null) {
   return {
     exportCheckpoint: async () => exported,
+  };
+}
+
+function makeExtractorCheckpoint(overrides = {}) {
+  const baseline = {
+    turn: 10,
+    session: 21,
+    extraction: 8,
+    observation: 0,
+    ...(overrides.baseline ?? {}),
+  };
+  return {
+    baseline,
+    committedEpoch: 12,
+    nextEpoch: 13,
+    recentSessions: [],
+    threads: [],
+    runs: [],
+    ...overrides,
+    baseline,
+  };
+}
+
+function makeObserverCheckpoint(overrides = {}) {
+  const baseline = {
+    extraction: 8,
+    observationContext: 0,
+    observation: 0,
+    ...(overrides.baseline ?? {}),
+  };
+  return {
+    baseline,
+    runs: [],
+    ...overrides,
+    baseline,
+  };
+}
+
+function makeCheckpointContent(overrides = {}) {
+  return {
+    schemaVersion: CHECKPOINT_SCHEMA_VERSION,
+    ...(overrides.writtenAt === undefined ? {} : { writtenAt: overrides.writtenAt }),
+    ...(overrides.writerPid === undefined ? {} : { writerPid: overrides.writerPid }),
+    extractor: overrides.extractor ?? makeExtractorCheckpoint(),
+    observer: overrides.observer ?? makeObserverCheckpoint(),
   };
 }
 
@@ -57,15 +103,24 @@ async function writeObserverConfig(configPath, {
 } = {}) {
   await mkdir(path.dirname(configPath), { recursive: true });
   await writeFile(configPath, `${JSON.stringify({
-    observer: {
+    extractor: {
       name,
-      llm: 'observer_llm',
+      llm: 'extractor_llm',
       maxAttempts: 3,
       activeWindowDays,
       ...(epochTurns === undefined ? {} : { epochTurns }),
       ...(epochWindowMs === undefined ? {} : { epochWindowMs }),
     },
+    observer: {
+      name: 'default-observer',
+      llm: 'observer_llm',
+      maxAttempts: 3,
+      anchorThreshold: 5,
+    },
     llm: {
+      extractor_llm: {
+        provider: 'mock',
+      },
       observer_llm: {
         provider: 'mock',
       },
@@ -86,15 +141,25 @@ async function writeOpenAiObserverConfig(configPath) {
     turn: {
       llm: 'turn_llm',
     },
+    extractor: {
+      name: 'default-observer',
+      llm: 'extractor_llm',
+      maxAttempts: 3,
+      activeWindowDays: 3650,
+    },
     observer: {
       name: 'default-observer',
       llm: 'observer_llm',
       maxAttempts: 3,
-      activeWindowDays: 3650,
+      anchorThreshold: 5,
     },
     llm: {
       turn_llm: {
         provider: 'mock',
+      },
+      extractor_llm: {
+        provider: 'openai',
+        apiKey: 'test-key',
       },
       observer_llm: {
         provider: 'openai',
@@ -114,63 +179,79 @@ async function writeOpenAiObserverConfig(configPath) {
 test('config reads extraction embedding config and rejects semanticIndex', async () => {
   assert.doesNotThrow(() => validateMuninnConfigInput(JSON.stringify({
     storage: { uri: 'file:///tmp/muninn-test' },
+    extractor: { name: 'default-extractor', llm: 'extractor_llm' },
     observer: { name: 'default-observer', llm: 'observer_llm' },
-    llm: { observer_llm: { provider: 'mock' } },
+    llm: {
+      extractor_llm: { provider: 'mock' },
+      observer_llm: { provider: 'mock' },
+    },
     extraction: { embedding: { provider: 'mock' } },
   })));
   assert.throws(() => validateMuninnConfigInput(JSON.stringify({
     storage: { uri: 'file:///tmp/muninn-test' },
+    extractor: { name: 'default-extractor', llm: 'extractor_llm' },
     observer: { name: 'default-observer', llm: 'observer_llm' },
-    llm: { observer_llm: { provider: 'mock' } },
+    llm: {
+      extractor_llm: { provider: 'mock' },
+      observer_llm: { provider: 'mock' },
+    },
     semanticIndex: { embedding: { provider: 'mock' } },
   })), /semanticIndex/);
 });
 
-test('curation anchor threshold defaults to five and validates positive integer', () => {
+test('observer anchor threshold defaults to five and validates positive integer', () => {
   const config = {
     storage: { uri: 'file:///tmp/muninn-test' },
+    extractor: { name: 'default-extractor', llm: 'extractor_llm' },
     observer: { name: 'default-observer', llm: 'observer_llm' },
-    llm: { observer_llm: { provider: 'mock' } },
+    llm: {
+      extractor_llm: { provider: 'mock' },
+      observer_llm: { provider: 'mock' },
+    },
     extraction: { embedding: { provider: 'mock' } },
   };
-  assert.equal(getCurationConfigFromConfigForTests(config).anchorThreshold, 5);
+  assert.equal(getObserverRuntimeConfigFromConfigForTests(config).anchorThreshold, 5);
   assert.throws(() => validateMuninnConfigInput(JSON.stringify({
     ...config,
-    curation: { anchorThreshold: 0 },
-  })), /curation\.anchorThreshold must be a positive integer/);
+    observer: { name: 'default-observer', llm: 'observer_llm', anchorThreshold: 0 },
+  })), /observer\.anchorThreshold must be a positive integer/);
 });
 
-test('checkpoint preserves curation runs', () => {
+test('checkpoint preserves observer runs', () => {
   const checkpoint = parseCheckpointFile(JSON.stringify({
     schemaVersion: CHECKPOINT_SCHEMA_VERSION,
     writtenAt: new Date(0).toISOString(),
     writerPid: 1,
-    observer: {
-      baseline: { turn: 0, session: 0, extraction: 0, curation: 0, observation: 0 },
+    extractor: {
+      baseline: { turn: 0, session: 0, extraction: 0, observation: 0 },
       nextEpoch: 1,
       recentSessions: [],
       threads: [],
       runs: [],
-      curationRuns: [{
+    },
+    observer: {
+      baseline: { extraction: 0, observationContext: 0, observation: 0 },
+      runs: [{
         runId: 'run-1',
-        curationId: 'entity:caroline',
+        observeId: 'entity:caroline',
         anchor: 'Caroline',
-        stage: 'generatingCuration',
+        stage: 'generatingObservation',
         pendingExtractionIds: ['abc'],
         errors: [],
       }],
     },
   }));
-  assert.equal(checkpoint.observer.curationRuns[0].curationId, 'entity:caroline');
+  assert.equal(checkpoint.observer.runs[0].observeId, 'entity:caroline');
 });
 
-test('native bindings expose curation and observation tables', async () => {
+test('native bindings expose observation context and observation tables', async () => {
   const tables = await getNativeTables();
   assert.equal(typeof tables.extractionTable.list, 'function');
-  assert.equal(typeof tables.curationTable.insert, 'function');
-  assert.equal(typeof tables.curationTable.latest, 'function');
-  assert.equal(typeof tables.curationTable.stats, 'function');
-  assert.equal(typeof tables.observationTable.replaceForCuration, 'function');
+  assert.equal(typeof tables.observationContextTable.upsert, 'function');
+  assert.equal(typeof tables.observationContextTable.list, 'function');
+  assert.equal(typeof tables.observationContextTable.stats, 'function');
+  assert.equal(typeof tables.observationTable.upsert, 'function');
+  assert.equal(typeof tables.observationTable.delete, 'function');
   assert.equal(typeof tables.observationTable.search, 'function');
   assert.equal(typeof tables.observationTable.stats, 'function');
 });
@@ -181,12 +262,12 @@ test('memories.get renders curated observation memories', async () => {
       loadByIds: async ({ ids }) => ids.includes('obs-1')
         ? [{
             id: 'obs-1',
-            curationId: 'entity:caroline',
-            snapshotId: 'curation:1',
+            observingPath: 'Caroline / Research',
             text: 'Caroline researched adoption agencies.',
             vector: [],
-            references: ['extraction:ext-1'],
+            extractionRefs: ['extraction:ext-1'],
             createdAt: '2024-01-01T00:00:00Z',
+            updatedAt: '2024-01-01T00:00:00Z',
           }]
         : [],
     },
@@ -215,86 +296,74 @@ test('memories.get returns null for unknown curated observation memories', async
   assert.equal(await new Memories(client).get('observation:missing'), null);
 });
 
-test('curation markdown parser derives parent and child observations', async () => {
-  const { parseCurationDocument } = await import('../dist/curation/markdown.js');
-  const parsed = parseCurationDocument([
-    '# Entity Memory: Alex',
+test('observer markdown parser derives parent and child observations', async () => {
+  const { parseObserverDocument } = await import('../dist/observer/markdown.js');
+  const parsed = parseObserverDocument([
+    '# Alex',
     '',
     '## Who is Alex?',
-    '<refs: [extraction:a, extraction:b]>',
     '',
     'Alex is a product lead focused on onboarding.',
     '',
-    '### What changed recently?',
-    '<refs: [extraction:c]>',
+    '### What changed recently? <!-- refs: [extraction:c] -->',
     '',
     'Alex moved the onboarding review to Thursday.',
-  ].join('\n'), new Set(['extraction:a', 'extraction:b', 'extraction:c']));
+  ].join('\n'), new Set(['extraction:c']));
 
-  assert.equal(parsed.title, 'Entity Memory: Alex');
-  assert.equal(parsed.summary, 'Alex is a product lead focused on onboarding.');
-  assert.equal(parsed.observations.length, 2);
-  assert.deepEqual(parsed.observations[0], {
-    heading: 'Who is Alex?',
-    text: 'Who is Alex?\n\nAlex is a product lead focused on onboarding.',
-    references: ['extraction:a', 'extraction:b'],
-  });
-  assert.deepEqual(parsed.observations[1], {
-    heading: 'Who is Alex? / What changed recently?',
-    text: 'Who is Alex?\nWhat changed recently?\n\nAlex moved the onboarding review to Thursday.',
-    references: ['extraction:a', 'extraction:b', 'extraction:c'],
-  });
+  assert.equal(parsed.title, 'Alex');
+  assert.equal(parsed.sections.length, 1);
+  assert.equal(parsed.sections[0].heading, 'Who is Alex?');
+  assert.equal(parsed.sections[0].children[0].heading, 'What changed recently?');
+  assert.deepEqual(parsed.sections[0].children[0].refs, ['extraction:c']);
 });
 
-test('curation markdown parser rejects invalid refs and missing refs', async () => {
-  const { parseCurationDocument } = await import('../dist/curation/markdown.js');
-  assert.throws(() => parseCurationDocument([
-    '# Entity Memory: Alex',
+test('observer markdown parser rejects invalid refs and missing refs', async () => {
+  const { parseObserverDocument } = await import('../dist/observer/markdown.js');
+  assert.throws(() => parseObserverDocument([
+    '# Alex',
     '',
-    '## Who is Alex?',
-    '<refs: [session:a]>',
+    '## Who is Alex? <!-- refs: [session:a] -->',
     '',
     'Alex is a product lead.',
-  ].join('\n'), new Set(['extraction:a'])), /extraction memory id/);
+  ].join('\n'), new Set(['extraction:a'])), /unknown extraction id|unknown extraction/i);
 
-  assert.throws(() => parseCurationDocument([
-    '# Entity Memory: Alex',
+  assert.throws(() => parseObserverDocument([
+    '# Alex',
     '',
     '## Who is Alex?',
     '',
     'Alex is a product lead.',
-  ].join('\n'), new Set(['extraction:a'])), /must be followed by <refs/);
+  ].join('\n'), new Set(['extraction:a'])), /leaf observer section must declare refs/);
 
-  assert.throws(() => parseCurationDocument([
-    '# Entity Memory: Alex',
+  assert.throws(() => parseObserverDocument([
+    '# Alex',
     '',
-    '## Who is Alex?',
-    '<refs: [extraction:missing]>',
+    '## Who is Alex? <!-- refs: [extraction:missing] -->',
     '',
     'Alex is a product lead.',
-  ].join('\n'), new Set(['extraction:a'])), /unknown extraction ref/);
+  ].join('\n'), new Set(['extraction:a'])), /unknown extraction id|unknown extraction/i);
 });
 
-test('curation prompt uses content and extractions inputs', async () => {
-  const { __testing: curatingTesting } = await import('../dist/llm/curating.js');
-  const rendered = curatingTesting.renderExtractions([{
+test('observer prompt uses content and extractions inputs', async () => {
+  const { __testing: observingTesting } = await import('../dist/llm/observing.js');
+  const rendered = observingTesting.renderExtractions([{
     id: 'abc',
     text: 'Alex moved onboarding review to Thursday.',
     context: 'The team compared review days.',
     anchors: ['Entity: Alex', 'Decision: review day'],
-    references: ['session:1'],
+    turnRefs: ['session:1'],
   }]);
 
-  assert.match(rendered, /extraction:abc/);
+  assert.match(rendered, /- abc/);
   assert.match(rendered, /Anchors: Entity: Alex; Decision: review day/);
   assert.match(rendered, /Context: The team compared review days\./);
   assert.match(rendered, /Extraction: Alex moved onboarding review to Thursday\./);
   assert.match(rendered, /Source refs: session:1/);
 });
 
-test('curation runner groups extractions by entity anchor', async () => {
-  const { __testing: curationTesting } = await import('../dist/curation/runner.js');
-  const groups = curationTesting.groupByEntityAnchor([
+test('observer runner groups extractions by entity anchor', async () => {
+  const { __testing: observerTesting } = await import('../dist/observer/runner.js');
+  const groups = observerTesting.groupByEntityAnchor([
     {
       id: 'a',
       text: 'Alex chose Thursday.',
@@ -303,8 +372,11 @@ test('curation runner groups extractions by entity anchor', async () => {
       vector: [1, 0],
       importance: 1,
       category: 'decision',
-      references: ['session:1'],
+      turnRefs: ['session:1'],
+      observationIds: [],
+      observedRootAnchors: [],
       createdAt: '2024-01-01T00:00:00Z',
+      updatedAt: '2024-01-01T00:00:00Z',
     },
     {
       id: 'b',
@@ -314,8 +386,11 @@ test('curation runner groups extractions by entity anchor', async () => {
       vector: [1, 0],
       importance: 1,
       category: 'fact',
-      references: ['session:2'],
+      turnRefs: ['session:2'],
+      observationIds: [],
+      observedRootAnchors: [],
       createdAt: '2024-01-01T00:00:00Z',
+      updatedAt: '2024-01-01T00:00:00Z',
     },
     {
       id: 'c',
@@ -325,12 +400,14 @@ test('curation runner groups extractions by entity anchor', async () => {
       vector: [1, 0],
       importance: 1,
       category: 'fact',
-      references: ['session:3'],
+      turnRefs: ['session:3'],
+      observationIds: [],
+      observedRootAnchors: [],
       createdAt: '2024-01-01T00:00:00Z',
+      updatedAt: '2024-01-01T00:00:00Z',
     },
   ]);
 
-  assert.equal(curationTesting.curationIdForAnchor('  Alex  '), 'entity:alex');
   assert.equal(groups.length, 1);
   assert.equal(groups[0].anchor, 'Alex');
   assert.deepEqual(groups[0].extractions.map((extraction) => extraction.id), ['a', 'b']);
@@ -514,19 +591,27 @@ test.after(async () => {
   delete process.env.MUNINN_HOME;
 });
 
-test('getObserverLlmConfig defaults activeWindowDays to 7 and continuityHints to 1', async (t) => {
+test('getExtractorLlmConfig defaults activeWindowDays to 7 and continuityHints to 1', async (t) => {
   const { dir, homeDir, configPath } = await makeConfigHome();
   t.after(async () => rm(dir, { recursive: true, force: true }));
   process.env.MUNINN_HOME = homeDir;
 
   await mkdir(path.dirname(configPath), { recursive: true });
   await writeFile(configPath, `${JSON.stringify({
+    extractor: {
+      name: 'default-extractor',
+      llm: 'extractor_llm',
+      maxAttempts: 3,
+    },
     observer: {
       name: 'default-observer',
       llm: 'observer_llm',
       maxAttempts: 3,
     },
     llm: {
+      extractor_llm: {
+        provider: 'mock',
+      },
       observer_llm: {
         provider: 'mock',
       },
@@ -540,7 +625,7 @@ test('getObserverLlmConfig defaults activeWindowDays to 7 and continuityHints to
     },
   }, null, 2)}\n`, 'utf8');
 
-  const config = getObserverLlmConfig();
+  const config = getExtractorLlmConfig();
   assert.ok(config);
   assert.equal(config.activeWindowDays, 7);
   assert.equal(config.continuityHints, 1);
@@ -911,33 +996,25 @@ test('watchdog writes observer checkpoint files', async (t) => {
       compact: async () => ({ changed: false }),
       optimize: async () => ({ changed: false }),
     },
-  }, createWatchdogConfig({ intervalMs: 25, compactMinFragments: 3 }), createCheckpointBackend({
-    schemaVersion: CHECKPOINT_SCHEMA_VERSION,
-    observer: {
-        baseline: {
-          turn: 10,
-          session: 21,
-          extraction: 8,
-        },
-        committedEpoch: 12,
-        nextEpoch: 13,
-        recentSessions: [makeRecentSessionCheckpoint([makeRecentTurn('turn:101', 'checkpoint-1')])],
-        threads: [{
-          sessionId: 'obs-1',
-          latestSnapshotId: 'turn:42',
-          latestSnapshotSequence: 2,
-          indexedSnapshotSequence: 1,
-          updatedAt: '2024-01-01T00:00:00Z',
-        }],
-      },
-  }));
+  }, createWatchdogConfig({ intervalMs: 25, compactMinFragments: 3 }), createCheckpointBackend(makeCheckpointContent({
+    extractor: makeExtractorCheckpoint({
+      recentSessions: [makeRecentSessionCheckpoint([makeRecentTurn('turn:101', 'checkpoint-1')])],
+      threads: [{
+        sessionId: 'obs-1',
+        latestSnapshotId: 'turn:42',
+        latestSnapshotSequence: 2,
+        indexedSnapshotSequence: 1,
+        updatedAt: '2024-01-01T00:00:00Z',
+      }],
+    }),
+  })));
   t.after(async () => runtime.stop());
 
   runtime.start();
   await waitFor(async () => {
     try {
       const checkpoint = await readCheckpoint();
-      return checkpoint.observer?.threads?.length === 1;
+      return checkpoint.extractor?.threads?.length === 1;
     } catch {
       return false;
     }
@@ -945,11 +1022,12 @@ test('watchdog writes observer checkpoint files', async (t) => {
 
   const checkpoint = await readCheckpoint();
   assert.equal(checkpoint.schemaVersion, CHECKPOINT_SCHEMA_VERSION);
-  assert.deepEqual(checkpoint.observer, {
+  assert.deepEqual(checkpoint.extractor, {
     baseline: {
       turn: 10,
       session: 21,
       extraction: 8,
+      observation: 0,
     },
     committedEpoch: 12,
     nextEpoch: 13,
@@ -961,6 +1039,7 @@ test('watchdog writes observer checkpoint files', async (t) => {
       indexedSnapshotSequence: 1,
       updatedAt: '2024-01-01T00:00:00Z',
     }],
+    runs: [],
   });
 });
 
@@ -971,22 +1050,11 @@ test('watchdog skips checkpoint writes when contributors return no observer stat
   await writeObserverConfig(configPath);
 
   await mkdir(path.dirname(resolveCheckpointPath()), { recursive: true });
-  const existing = {
-    schemaVersion: CHECKPOINT_SCHEMA_VERSION,
+  const existing = makeCheckpointContent({
     writtenAt: '2024-01-01T00:00:00Z',
     writerPid: 123,
-    observer: {
-        baseline: {
-          turn: 10,
-          session: 21,
-          extraction: 8,
-        },
-        committedEpoch: 12,
-        nextEpoch: 13,
-        recentSessions: [],
-        threads: [],
-      },
-  };
+    extractor: makeExtractorCheckpoint(),
+  });
   await writeFile(resolveCheckpointPath(), `${JSON.stringify(existing, null, 2)}\n`, 'utf8');
   const before = await readFile(resolveCheckpointPath(), 'utf8');
   const beforeStat = await stat(resolveCheckpointPath());
@@ -1024,26 +1092,18 @@ test('watchdog skips checkpoint writes when observer content is unchanged', asyn
   process.env.MUNINN_HOME = homeDir;
   await writeObserverConfig(configPath);
 
-  const checkpointContent = {
-    schemaVersion: CHECKPOINT_SCHEMA_VERSION,
-    observer: {
-        baseline: {
-          turn: 10,
-          session: 21,
-          extraction: 8,
-        },
-        committedEpoch: 12,
-        nextEpoch: 13,
-        recentSessions: [makeRecentSessionCheckpoint([makeRecentTurn('turn:101', 'checkpoint-2')])],
-        threads: [{
-          sessionId: 'obs-1',
-          latestSnapshotId: 'turn:42',
-          latestSnapshotSequence: 2,
-          indexedSnapshotSequence: 1,
-          updatedAt: '2024-01-01T00:00:00Z',
-        }],
-      },
-  };
+  const checkpointContent = makeCheckpointContent({
+    extractor: makeExtractorCheckpoint({
+      recentSessions: [makeRecentSessionCheckpoint([makeRecentTurn('turn:101', 'checkpoint-2')])],
+      threads: [{
+        sessionId: 'obs-1',
+        latestSnapshotId: 'turn:42',
+        latestSnapshotSequence: 2,
+        indexedSnapshotSequence: 1,
+        updatedAt: '2024-01-01T00:00:00Z',
+      }],
+    }),
+  });
   await mkdir(path.dirname(resolveCheckpointPath()), { recursive: true });
   await writeFile(resolveCheckpointPath(), `${JSON.stringify({
     ...checkpointContent,
@@ -1091,26 +1151,18 @@ test('watchdog rewrites checkpoint when the file is deleted after startup', asyn
   process.env.MUNINN_HOME = homeDir;
   await writeObserverConfig(configPath);
 
-  const checkpointContent = {
-    schemaVersion: CHECKPOINT_SCHEMA_VERSION,
-    observer: {
-        baseline: {
-          turn: 10,
-          session: 21,
-          extraction: 8,
-        },
-        committedEpoch: 12,
-        nextEpoch: 13,
-        recentSessions: [makeRecentSessionCheckpoint([makeRecentTurn('turn:101', 'checkpoint-3')])],
-        threads: [{
-          sessionId: 'obs-1',
-          latestSnapshotId: 'turn:42',
-          latestSnapshotSequence: 2,
-          indexedSnapshotSequence: 1,
-          updatedAt: '2024-01-01T00:00:00Z',
-        }],
-      },
-  };
+  const checkpointContent = makeCheckpointContent({
+    extractor: makeExtractorCheckpoint({
+      recentSessions: [makeRecentSessionCheckpoint([makeRecentTurn('turn:101', 'checkpoint-3')])],
+      threads: [{
+        sessionId: 'obs-1',
+        latestSnapshotId: 'turn:42',
+        latestSnapshotSequence: 2,
+        indexedSnapshotSequence: 1,
+        updatedAt: '2024-01-01T00:00:00Z',
+      }],
+    }),
+  });
   const lastCheckpointJson = JSON.stringify(checkpointContent);
   await mkdir(path.dirname(resolveCheckpointPath()), { recursive: true });
   await writeFile(resolveCheckpointPath(), `${JSON.stringify({
@@ -1153,7 +1205,7 @@ test('watchdog rewrites checkpoint when the file is deleted after startup', asyn
   });
 
   const checkpoint = await readCheckpoint();
-  assert.equal(checkpoint.observer.committedEpoch, 12);
+  assert.equal(checkpoint.extractor.committedEpoch, 12);
 });
 
 test('readCheckpointFile throws when the checkpoint file is invalid JSON', async (t) => {
@@ -1194,7 +1246,7 @@ test('readCheckpointFile rejects the legacy observers checkpoint schema', async 
 
   await assert.rejects(
     () => readCheckpointFile(),
-    /checkpoint observer section is invalid/i,
+    /checkpoint extractor section is invalid/i,
   );
 });
 
@@ -1218,8 +1270,8 @@ test('checkpoint preserves session runs', async () => {
     schemaVersion: CHECKPOINT_SCHEMA_VERSION,
     writtenAt: new Date().toISOString(),
     writerPid: 1,
-    observer: {
-      baseline: { turn: 1, session: 1, extraction: 1 },
+    extractor: {
+      baseline: { turn: 1, session: 1, extraction: 1, observation: 0 },
       nextEpoch: 2,
       recentSessions: [],
       threads: [],
@@ -1242,12 +1294,13 @@ test('checkpoint preserves session runs', async () => {
         errors: [],
       }],
     },
+    observer: makeObserverCheckpoint({ baseline: { extraction: 1, observationContext: 0, observation: 0 } }),
   };
 
   const parsed = parseCheckpointFile(serializeCheckpointFile(file));
-  assert.equal(parsed.observer.runs[0].stage, 'fittingThreads');
-  assert.equal(parsed.observer.runs[0].pending.sessionFragments[0].content, 'source content');
-  assert.deepEqual(parsed.observer.runs[0].committed.extractionIds, ['obs-1']);
+  assert.equal(parsed.extractor.runs[0].stage, 'fittingThreads');
+  assert.equal(parsed.extractor.runs[0].pending.sessionFragments[0].content, 'source content');
+  assert.deepEqual(parsed.extractor.runs[0].committed.extractionIds, ['obs-1']);
 });
 
 test('watchdog rewrites checkpoint when observer content changes', async (t) => {
@@ -1257,22 +1310,11 @@ test('watchdog rewrites checkpoint when observer content changes', async (t) => 
   await writeObserverConfig(configPath);
 
   await mkdir(path.dirname(resolveCheckpointPath()), { recursive: true });
-  await writeFile(resolveCheckpointPath(), `${JSON.stringify({
-    schemaVersion: CHECKPOINT_SCHEMA_VERSION,
+  await writeFile(resolveCheckpointPath(), `${JSON.stringify(makeCheckpointContent({
     writtenAt: '2024-01-01T00:00:00Z',
     writerPid: 123,
-    observer: {
-        baseline: {
-          turn: 10,
-          session: 21,
-          extraction: 8,
-        },
-        committedEpoch: 11,
-        nextEpoch: 12,
-        recentSessions: [],
-        threads: [],
-      },
-  }, null, 2)}\n`, 'utf8');
+    extractor: makeExtractorCheckpoint({ committedEpoch: 11, nextEpoch: 12 }),
+  }), null, 2)}\n`, 'utf8');
   const beforeStat = await stat(resolveCheckpointPath());
 
   const runtime = new Watchdog({
@@ -1294,32 +1336,21 @@ test('watchdog rewrites checkpoint when observer content changes', async (t) => 
       compact: async () => ({ changed: false }),
       optimize: async () => ({ changed: false }),
     },
-  }, createWatchdogConfig({ intervalMs: 25 }), createCheckpointBackend({
-    schemaVersion: CHECKPOINT_SCHEMA_VERSION,
-    observer: {
-        baseline: {
-          turn: 10,
-          session: 21,
-          extraction: 8,
-        },
-        committedEpoch: 12,
-        nextEpoch: 13,
-        recentSessions: [],
-        threads: [],
-      },
-  }));
+  }, createWatchdogConfig({ intervalMs: 25 }), createCheckpointBackend(makeCheckpointContent({
+    extractor: makeExtractorCheckpoint({ committedEpoch: 12, nextEpoch: 13 }),
+  })));
   t.after(async () => runtime.stop());
 
   runtime.start();
   await waitFor(async () => {
     const checkpoint = await readCheckpoint();
-    return checkpoint.observer?.committedEpoch === 12;
+    return checkpoint.extractor?.committedEpoch === 12;
   });
 
   const after = await readCheckpoint();
   const afterStat = await stat(resolveCheckpointPath());
-  assert.equal(after.observer.committedEpoch, 12);
-  assert.equal(after.observer.nextEpoch, 13);
+  assert.equal(after.extractor.committedEpoch, 12);
+  assert.equal(after.extractor.nextEpoch, 13);
   assert.ok(after.writtenAt !== '2024-01-01T00:00:00Z');
   assert.ok(afterStat.mtimeMs >= beforeStat.mtimeMs);
 });
@@ -1404,6 +1435,7 @@ test('loadThreads filters snapshots by the configured active window', () => {
 
   const threads = loadThreads(snapshots, 'default-observer', 7);
   assert.equal(threads.length, 1);
+  assert.equal(threads[0].kind, 'session');
   assert.equal(threads[0].sessionId, 'fresh-thread');
 });
 
@@ -1439,6 +1471,7 @@ test('loadThreads keeps full history for active threads', () => {
 
   const threads = loadThreads(snapshots, 'default-observer', 7);
   assert.equal(threads.length, 1);
+  assert.equal(threads[0].kind, 'session');
   assert.equal(threads[0].sessionId, 'mixed-thread');
   assert.deepEqual(threads[0].snapshotIds, ['snapshot-0', 'snapshot-1']);
   assert.equal(threads[0].snapshots.length, 2);
@@ -1669,32 +1702,24 @@ test('observer bootstrap restores committed state from checkpoint when baselines
   await writeObserverConfig(configPath);
 
   await mkdir(path.dirname(resolveCheckpointPath()), { recursive: true });
-  await writeFile(resolveCheckpointPath(), `${JSON.stringify({
-    schemaVersion: CHECKPOINT_SCHEMA_VERSION,
+  await writeFile(resolveCheckpointPath(), `${JSON.stringify(makeCheckpointContent({
     writtenAt: '2024-01-01T00:00:00Z',
     writerPid: 123,
-    observer: {
-        baseline: {
-          turn: 10,
-          session: 21,
-          extraction: 8,
-        },
-        committedEpoch: 12,
-        nextEpoch: 13,
-        recentSessions: [makeRecentSessionCheckpoint([makeRecentTurn('turn:101', 'checkpoint-4')])],
-        threads: [{
-          sessionId: 'obs-1',
-          latestSnapshotId: 'turn:42',
-          latestSnapshotSequence: 1,
-          indexedSnapshotSequence: 1,
-          updatedAt: '2024-01-01T00:00:01Z',
-        }],
-      },
-  }, null, 2)}\n`, 'utf8');
+    extractor: makeExtractorCheckpoint({
+      recentSessions: [makeRecentSessionCheckpoint([makeRecentTurn('turn:101', 'checkpoint-4')])],
+      threads: [{
+        sessionId: 'obs-1',
+        latestSnapshotId: 'turn:42',
+        latestSnapshotSequence: 1,
+        indexedSnapshotSequence: 1,
+        updatedAt: '2024-01-01T00:00:01Z',
+      }],
+    }),
+  }), null, 2)}\n`, 'utf8');
 
   let listSnapshotsCalls = 0;
   let loadTurnsAfterEpochCalls = 0;
-  const checkpoint = (await readCheckpointFile())?.observer ?? null;
+  const checkpoint = (await readCheckpointFile())?.extractor ?? null;
   const observer = new Observer({
     turnTable: {
       stats: async () => ({
@@ -1766,7 +1791,6 @@ test('observer bootstrap restores committed state from checkpoint when baselines
     committedEpoch: 12,
     nextEpoch: 13,
     runs: [],
-    curationRuns: [],
     threads: [{
       sessionId: 'obs-1',
       latestSnapshotId: 'turn:42',
@@ -1786,30 +1810,22 @@ test('observer checkpoint restore keeps full history for active threads', async 
   const staleUpdatedAt = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString();
   const freshUpdatedAt = new Date().toISOString();
   await mkdir(path.dirname(resolveCheckpointPath()), { recursive: true });
-  await writeFile(resolveCheckpointPath(), `${JSON.stringify({
-    schemaVersion: CHECKPOINT_SCHEMA_VERSION,
+  await writeFile(resolveCheckpointPath(), `${JSON.stringify(makeCheckpointContent({
     writtenAt: new Date().toISOString(),
     writerPid: 123,
-    observer: {
-        baseline: {
-          turn: 10,
-          session: 21,
-          extraction: 8,
-        },
-        committedEpoch: 12,
-        nextEpoch: 13,
-        recentSessions: [],
-        threads: [{
-          sessionId: 'mixed-thread',
-          latestSnapshotId: 'snapshot-1',
-          latestSnapshotSequence: 1,
-          indexedSnapshotSequence: 1,
-          updatedAt: freshUpdatedAt,
-        }],
-      },
-  }, null, 2)}\n`, 'utf8');
+    extractor: makeExtractorCheckpoint({
+      recentSessions: [],
+      threads: [{
+        sessionId: 'mixed-thread',
+        latestSnapshotId: 'snapshot-1',
+        latestSnapshotSequence: 1,
+        indexedSnapshotSequence: 1,
+        updatedAt: freshUpdatedAt,
+      }],
+    }),
+  }), null, 2)}\n`, 'utf8');
 
-  const checkpoint = (await readCheckpointFile())?.observer ?? null;
+  const checkpoint = (await readCheckpointFile())?.extractor ?? null;
   const observer = new Observer({
     turnTable: {
       stats: async () => ({
@@ -1885,30 +1901,21 @@ test('observer restoreCheckpointState advances committedEpoch and excludes obser
   const snapshot2At = new Date().toISOString();
 
   await mkdir(path.dirname(resolveCheckpointPath()), { recursive: true });
-  await writeFile(resolveCheckpointPath(), `${JSON.stringify({
-    schemaVersion: CHECKPOINT_SCHEMA_VERSION,
+  await writeFile(resolveCheckpointPath(), `${JSON.stringify(makeCheckpointContent({
     writtenAt: '2024-01-01T00:00:00Z',
     writerPid: 123,
-    observer: {
-        baseline: {
-          turn: 10,
-          session: 21,
-          extraction: 8,
-        },
-        committedEpoch: 12,
-        nextEpoch: 13,
-        recentSessions: [],
-        threads: [{
-          sessionId: 'obs-1',
-          latestSnapshotId: 'snapshot-0',
-          latestSnapshotSequence: 0,
-          indexedSnapshotSequence: 0,
-          updatedAt: snapshot0At,
-        }],
-      },
-  }, null, 2)}\n`, 'utf8');
+    extractor: makeExtractorCheckpoint({
+      threads: [{
+        sessionId: 'obs-1',
+        latestSnapshotId: 'snapshot-0',
+        latestSnapshotSequence: 0,
+        indexedSnapshotSequence: 0,
+        updatedAt: snapshot0At,
+      }],
+    }),
+  }), null, 2)}\n`, 'utf8');
 
-  const checkpoint = (await readCheckpointFile())?.observer ?? null;
+  const checkpoint = (await readCheckpointFile())?.extractor ?? null;
   const observer = new Observer({
     turnTable: {
       loadTurnsAfterEpoch: async () => [
@@ -2001,30 +2008,21 @@ test('observer restoreCheckpointState falls back when session delta refs are mis
   await writeObserverConfig(configPath, { activeWindowDays: 7 });
 
   await mkdir(path.dirname(resolveCheckpointPath()), { recursive: true });
-  await writeFile(resolveCheckpointPath(), `${JSON.stringify({
-    schemaVersion: CHECKPOINT_SCHEMA_VERSION,
+  await writeFile(resolveCheckpointPath(), `${JSON.stringify(makeCheckpointContent({
     writtenAt: '2024-01-01T00:00:00Z',
     writerPid: 123,
-    observer: {
-        baseline: {
-          turn: 10,
-          session: 21,
-          extraction: 8,
-        },
-        committedEpoch: 12,
-        nextEpoch: 13,
-        recentSessions: [],
-        threads: [{
-          sessionId: 'obs-1',
-          latestSnapshotId: 'snapshot-0',
-          latestSnapshotSequence: 0,
-          indexedSnapshotSequence: 0,
-          updatedAt: '2024-01-01T00:00:00Z',
-        }],
-      },
-  }, null, 2)}\n`, 'utf8');
+    extractor: makeExtractorCheckpoint({
+      threads: [{
+        sessionId: 'obs-1',
+        latestSnapshotId: 'snapshot-0',
+        latestSnapshotSequence: 0,
+        indexedSnapshotSequence: 0,
+        updatedAt: '2024-01-01T00:00:00Z',
+      }],
+    }),
+  }), null, 2)}\n`, 'utf8');
 
-  const checkpoint = (await readCheckpointFile())?.observer ?? null;
+  const checkpoint = (await readCheckpointFile())?.extractor ?? null;
   const observer = new Observer({
     turnTable: {
       loadTurnsAfterEpoch: async () => [makeObservableTurn('turn-13', 13, 'epoch13')],
@@ -2076,24 +2074,13 @@ test('observer restoreCheckpointState skips stale threads recovered only from se
   const staleUpdatedAt = new Date(Date.now() - 4000 * 24 * 60 * 60 * 1000).toISOString();
 
   await mkdir(path.dirname(resolveCheckpointPath()), { recursive: true });
-  await writeFile(resolveCheckpointPath(), `${JSON.stringify({
-    schemaVersion: CHECKPOINT_SCHEMA_VERSION,
+  await writeFile(resolveCheckpointPath(), `${JSON.stringify(makeCheckpointContent({
     writtenAt: '2024-01-01T00:00:00Z',
     writerPid: 123,
-    observer: {
-        baseline: {
-          turn: 10,
-          session: 21,
-          extraction: 8,
-        },
-        committedEpoch: 12,
-        nextEpoch: 13,
-        recentSessions: [],
-        threads: [],
-      },
-  }, null, 2)}\n`, 'utf8');
+    extractor: makeExtractorCheckpoint({ threads: [] }),
+  }), null, 2)}\n`, 'utf8');
 
-  const checkpoint = (await readCheckpointFile())?.observer ?? null;
+  const checkpoint = (await readCheckpointFile())?.extractor ?? null;
   const staleRow = {
     snapshotId: 'snapshot-1',
     sessionId: 'obs-stale',
@@ -2133,24 +2120,13 @@ test('observer restoreCheckpointState rebuilds delta-only threads from full hist
   const rowTimes = Array.from({ length: 8 }, (_, index) => new Date(Date.now() - (8 - index) * 1000).toISOString());
 
   await mkdir(path.dirname(resolveCheckpointPath()), { recursive: true });
-  await writeFile(resolveCheckpointPath(), `${JSON.stringify({
-    schemaVersion: CHECKPOINT_SCHEMA_VERSION,
+  await writeFile(resolveCheckpointPath(), `${JSON.stringify(makeCheckpointContent({
     writtenAt: '2024-01-01T00:00:00Z',
     writerPid: 123,
-    observer: {
-        baseline: {
-          turn: 10,
-          session: 21,
-          extraction: 8,
-        },
-        committedEpoch: 5,
-        nextEpoch: 6,
-        recentSessions: [],
-        threads: [],
-      },
-  }, null, 2)}\n`, 'utf8');
+    extractor: makeExtractorCheckpoint({ committedEpoch: 5, nextEpoch: 6, threads: [] }),
+  }), null, 2)}\n`, 'utf8');
 
-  const checkpoint = (await readCheckpointFile())?.observer ?? null;
+  const checkpoint = (await readCheckpointFile())?.extractor ?? null;
   const fullRows = Array.from({ length: 8 }, (_, index) => ({
     snapshotId: `snapshot-${index}`,
     sessionId: 'obs-legacy',
@@ -2202,30 +2178,21 @@ test('observer bootstrap skips stale checkpoint threads', async (t) => {
 
   const staleUpdatedAt = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString();
   await mkdir(path.dirname(resolveCheckpointPath()), { recursive: true });
-  await writeFile(resolveCheckpointPath(), `${JSON.stringify({
-    schemaVersion: CHECKPOINT_SCHEMA_VERSION,
+  await writeFile(resolveCheckpointPath(), `${JSON.stringify(makeCheckpointContent({
     writtenAt: new Date().toISOString(),
     writerPid: 123,
-    observer: {
-        baseline: {
-          turn: 10,
-          session: 21,
-          extraction: 8,
-        },
-        committedEpoch: 12,
-        nextEpoch: 13,
-        recentSessions: [],
-        threads: [{
-          sessionId: 'stale-thread',
-          latestSnapshotId: 'turn:42',
-          latestSnapshotSequence: 0,
-          indexedSnapshotSequence: 0,
-          updatedAt: staleUpdatedAt,
-        }],
-      },
-  }, null, 2)}\n`, 'utf8');
+    extractor: makeExtractorCheckpoint({
+      threads: [{
+        sessionId: 'stale-thread',
+        latestSnapshotId: 'turn:42',
+        latestSnapshotSequence: 0,
+        indexedSnapshotSequence: 0,
+        updatedAt: staleUpdatedAt,
+      }],
+    }),
+  }), null, 2)}\n`, 'utf8');
 
-  const checkpoint = (await readCheckpointFile())?.observer ?? null;
+  const checkpoint = (await readCheckpointFile())?.extractor ?? null;
   const observer = new Observer({
     turnTable: {
       stats: async () => ({
@@ -2272,7 +2239,7 @@ test('observer exportCheckpoint keeps the last committed snapshot while observeC
 
   const entered = deferred();
   const release = deferred();
-  const checkpoint = (await readCheckpointFile())?.observer ?? null;
+  const checkpoint = (await readCheckpointFile())?.extractor ?? null;
   const observer = new Observer({
     sessionTable: {
       insert: async ({ snapshots }) => snapshots.map((snapshot) => ({
@@ -2337,7 +2304,6 @@ test('observer exportCheckpoint keeps the last committed snapshot while observeC
     committedEpoch: 0,
     nextEpoch: 2,
     runs: [],
-    curationRuns: [],
     threads: [{
       sessionId: 'session-a',
       latestSnapshotId: 'snapshot-0',
@@ -2369,31 +2335,22 @@ test('observer bootstrap ignores extraction version mismatches when session base
   await writeObserverConfig(configPath);
 
   await mkdir(path.dirname(resolveCheckpointPath()), { recursive: true });
-  await writeFile(resolveCheckpointPath(), `${JSON.stringify({
-    schemaVersion: CHECKPOINT_SCHEMA_VERSION,
+  await writeFile(resolveCheckpointPath(), `${JSON.stringify(makeCheckpointContent({
     writtenAt: '2024-01-01T00:00:00Z',
     writerPid: 123,
-    observer: {
-        baseline: {
-          turn: 10,
-          session: 21,
-          extraction: 8,
-        },
-        committedEpoch: 12,
-        nextEpoch: 13,
-        recentSessions: [],
-        threads: [{
-          sessionId: 'obs-1',
-          latestSnapshotId: 'turn:42',
-          latestSnapshotSequence: 1,
-          indexedSnapshotSequence: 1,
-          updatedAt: '2024-01-01T00:00:01Z',
-        }],
-      },
-  }, null, 2)}\n`, 'utf8');
+    extractor: makeExtractorCheckpoint({
+      threads: [{
+        sessionId: 'obs-1',
+        latestSnapshotId: 'turn:42',
+        latestSnapshotSequence: 1,
+        indexedSnapshotSequence: 1,
+        updatedAt: '2024-01-01T00:00:01Z',
+      }],
+    }),
+  }), null, 2)}\n`, 'utf8');
 
   let listSnapshotsCalls = 0;
-  const checkpoint = (await readCheckpointFile())?.observer ?? null;
+  const checkpoint = (await readCheckpointFile())?.extractor ?? null;
   const observer = new Observer({
     turnTable: {
       stats: async () => ({
@@ -2464,32 +2421,23 @@ test('readCheckpointFile throws when the checkpoint section is structurally inva
   await writeObserverConfig(configPath);
 
   await mkdir(path.dirname(resolveCheckpointPath()), { recursive: true });
-  await writeFile(resolveCheckpointPath(), `${JSON.stringify({
-    schemaVersion: CHECKPOINT_SCHEMA_VERSION,
+  await writeFile(resolveCheckpointPath(), `${JSON.stringify(makeCheckpointContent({
     writtenAt: '2024-01-01T00:00:00Z',
     writerPid: 123,
-    observer: {
-        baseline: {
-          turn: 10,
-          session: 21,
-          extraction: 8,
-        },
-        committedEpoch: 12,
-        nextEpoch: 13,
-        recentSessions: [],
-        threads: [{
-          sessionId: 'obs-1',
-          latestSnapshotId: 'turn:42',
-          latestSnapshotSequence: 'bad-sequence',
-          indexedSnapshotSequence: 1,
-          updatedAt: '2024-01-01T00:00:01Z',
-        }],
-      },
-  }, null, 2)}\n`, 'utf8');
+    extractor: makeExtractorCheckpoint({
+      threads: [{
+        sessionId: 'obs-1',
+        latestSnapshotId: 'turn:42',
+        latestSnapshotSequence: 'bad-sequence',
+        indexedSnapshotSequence: 1,
+        updatedAt: '2024-01-01T00:00:01Z',
+      }],
+    }),
+  }), null, 2)}\n`, 'utf8');
 
   await assert.rejects(
     () => readCheckpointFile(),
-    /checkpoint observer section is invalid/i,
+    /checkpoint extractor section is invalid/i,
   );
 });
 
@@ -2528,12 +2476,12 @@ test('recallMemories searches curated and raw routes then returns curated-first 
         calls.push(['observation', params]);
         return [{
           id: 'curated-1',
-          curationId: 'entity:caroline',
-          snapshotId: 'curation:1',
+          observingPath: 'Caroline / Plans',
           text: 'Caroline plans to research adoption agencies.',
           vector: [],
-          references: ['extraction:raw-1'],
+          extractionRefs: ['extraction:raw-1'],
           createdAt: '2024-01-01T00:00:00Z',
+          updatedAt: '2024-01-01T00:00:00Z',
         }];
       },
     },
@@ -2548,8 +2496,11 @@ test('recallMemories searches curated and raw routes then returns curated-first 
           vector: [],
           importance: 1,
           category: 'Fact',
-          references: ['session:2'],
+          turnRefs: ['session:2'],
+          observationIds: [],
+          observedRootAnchors: [],
           createdAt: '2024-01-01T00:00:00Z',
+          updatedAt: '2024-01-01T00:00:00Z',
         }];
       },
     },
@@ -2584,12 +2535,12 @@ test('recallMemories filters raw hits covered by selected curated hits', async (
       search: async () => [
         {
           id: 'curated-1',
-          curationId: 'entity:caroline',
-          snapshotId: 'curation:1',
+          observingPath: 'Caroline / Research',
           text: 'Caroline researched adoption agencies.',
           vector: [],
-          references: ['extraction:raw-1'],
+          extractionRefs: ['extraction:raw-1'],
           createdAt: '2024-01-01T00:00:00Z',
+          updatedAt: '2024-01-01T00:00:00Z',
         },
       ],
     },
@@ -2603,8 +2554,11 @@ test('recallMemories filters raw hits covered by selected curated hits', async (
           vector: [],
           importance: 1,
           category: 'Fact',
-          references: ['session:1'],
+          turnRefs: ['session:1'],
+          observationIds: [],
+          observedRootAnchors: [],
           createdAt: '2024-01-01T00:00:00Z',
+          updatedAt: '2024-01-01T00:00:00Z',
         },
         {
           id: 'raw-2',
@@ -2614,8 +2568,11 @@ test('recallMemories filters raw hits covered by selected curated hits', async (
           vector: [],
           importance: 1,
           category: 'Fact',
-          references: ['session:2'],
+          turnRefs: ['session:2'],
+          observationIds: [],
+          observedRootAnchors: [],
           createdAt: '2024-01-01T00:00:00Z',
+          updatedAt: '2024-01-01T00:00:00Z',
         },
       ],
     },
@@ -2628,12 +2585,12 @@ test('recallMemories filters raw hits covered by selected curated hits', async (
 test('recallMemories does not filter raw hits covered only by unselected curated candidates', async () => {
   const curated = Array.from({ length: 5 }, (_, index) => ({
     id: `curated-${index + 1}`,
-    curationId: `entity:${index + 1}`,
-    snapshotId: `curation:${index + 1}`,
+    observingPath: `Entity ${index + 1}`,
     text: `Curated memory ${index + 1}.`,
     vector: [],
-    references: [`extraction:raw-${index + 1}`],
+    extractionRefs: [`extraction:raw-${index + 1}`],
     createdAt: '2024-01-01T00:00:00Z',
+    updatedAt: '2024-01-01T00:00:00Z',
   }));
   const client = {
     observationTable: {
@@ -2649,8 +2606,11 @@ test('recallMemories does not filter raw hits covered only by unselected curated
           vector: [],
           importance: 1,
           category: 'Fact',
-          references: ['session:5'],
+          turnRefs: ['session:5'],
+          observationIds: [],
+          observedRootAnchors: [],
           createdAt: '2024-01-01T00:00:00Z',
+          updatedAt: '2024-01-01T00:00:00Z',
         },
       ],
     },
@@ -2709,12 +2669,12 @@ test('recallMemories returns recalled memory when budget is positive', async () 
     observationTable: {
       search: async () => [{
         id: 'curated-1',
-        curationId: 'entity:caroline',
-        snapshotId: 'curation:1',
+        observingPath: 'Caroline / Research',
         text: 'Caroline plans to research adoption agencies.',
         vector: [],
-        references: ['extraction:obs-2'],
+        extractionRefs: ['extraction:obs-2'],
         createdAt: '2024-01-01T00:00:00Z',
+        updatedAt: '2024-01-01T00:00:00Z',
       }],
     },
     extractionTable: {
@@ -2728,8 +2688,12 @@ test('recallMemories returns recalled memory when budget is positive', async () 
             vector: [],
             importance: 1,
             category: 'Fact',
-            references: ['D12:17'],
+            anchors: [],
+            turnRefs: ['D12:17'],
+            observationIds: [],
+            observedRootAnchors: [],
             createdAt: '2024-01-01T00:00:00Z',
+            updatedAt: '2024-01-01T00:00:00Z',
           },
           {
             id: 'obs-2',
@@ -2738,8 +2702,12 @@ test('recallMemories returns recalled memory when budget is positive', async () 
             vector: [],
             importance: 1,
             category: 'Fact',
-            references: ['D2:8'],
+            anchors: [],
+            turnRefs: ['D2:8'],
+            observationIds: [],
+            observedRootAnchors: [],
             createdAt: '2024-01-01T00:00:00Z',
+            updatedAt: '2024-01-01T00:00:00Z',
           },
         ];
       },
@@ -2778,12 +2746,12 @@ test('recallMemories uses candidate refs for recalled memory', async () => {
     observationTable: {
       search: async () => [{
         id: 'curated-1',
-        curationId: 'entity:caroline',
-        snapshotId: 'curation:1',
+        observingPath: 'Caroline / Research',
         text: 'Caroline plans to research adoption agencies.',
         vector: [],
-        references: ['extraction:curated-source'],
+        extractionRefs: ['extraction:curated-source'],
         createdAt: '2024-01-01T00:00:00Z',
+        updatedAt: '2024-01-01T00:00:00Z',
       }],
     },
     extractionTable: {
@@ -2795,8 +2763,12 @@ test('recallMemories uses candidate refs for recalled memory', async () => {
           vector: [],
           importance: 1,
           category: 'Fact',
-          references: ['D2:8'],
+          anchors: [],
+          turnRefs: ['D2:8'],
+          observationIds: [],
+          observedRootAnchors: [],
           createdAt: '2024-01-01T00:00:00Z',
+          updatedAt: '2024-01-01T00:00:00Z',
         },
       ],
     },
@@ -2839,22 +2811,11 @@ test('memory recaller validation treats budget as a soft target', () => {
 });
 
 test('backend exportCheckpoint returns null before observer creation', async () => {
-  const checkpoint = {
-    schemaVersion: CHECKPOINT_SCHEMA_VERSION,
+  const checkpoint = makeCheckpointContent({
     writtenAt: '2024-01-01T00:00:00Z',
     writerPid: 123,
-    observer: {
-        baseline: {
-          turn: 10,
-          session: 21,
-          extraction: 8,
-        },
-        committedEpoch: 12,
-        nextEpoch: 13,
-        recentSessions: [],
-        threads: [],
-      },
-  };
+    extractor: makeExtractorCheckpoint({ threads: [] }),
+  });
   const backend = new MuninnBackend({}, checkpoint);
 
   const exported = await backend.exportCheckpoint();
@@ -3266,11 +3227,11 @@ test('snapshot extraction state rewrite updates and deletes extraction rows', as
   assert.equal(updatedRow.category, 'decision');
   assert.equal(updatedRow.context, 'updated context');
   assert.deepEqual(updatedRow.anchors, ['Decision: career plan']);
-  assert.deepEqual(updatedRow.references, ['turn:2']);
+  assert.deepEqual(updatedRow.turnRefs, ['turn:2']);
   assert.equal(addedRow.category, 'preference');
   assert.equal(addedRow.context, 'new context');
   assert.deepEqual(addedRow.anchors, ['Preference: painting']);
-  assert.deepEqual(addedRow.references, ['turn:3']);
+  assert.deepEqual(addedRow.turnRefs, ['turn:3']);
 });
 
 test('extraction state rewrite computes update add and delete changes', () => {
@@ -4877,7 +4838,6 @@ test('observer.retryExtraction refreshes the committed checkpoint snapshot after
     committedEpoch: 1,
     nextEpoch: 2,
     runs: [],
-    curationRuns: [],
     threads: [{
       sessionId: 'session-a',
       latestSnapshotId: 'snapshot-1',
@@ -5316,7 +5276,7 @@ test('observer.accept rejects new writes after shutdown starts', async (t) => {
         accept: async () => makeObservableTurn('turn-late', 1, 'late'),
       }),
     }),
-    /observer is shutting down/,
+    /extractor is shutting down/,
   );
 });
 

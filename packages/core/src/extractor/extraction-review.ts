@@ -1,4 +1,4 @@
-import { getObserverLlmConfig } from '../config.js';
+import { getExtractorLlmConfig } from '../config.js';
 import { generateText } from '../llm/provider.js';
 import { loadPromptTemplate, renderPromptTemplate } from '../llm/prompt-loader.js';
 import type { Extraction } from '../native.js';
@@ -18,7 +18,7 @@ export async function reviewExtractions(
   signal?: AbortSignal,
 ): Promise<ExtractionReviewResult> {
   throwIfAborted(signal);
-  const config = getObserverLlmConfig();
+  const config = getExtractorLlmConfig();
   if (!config) {
     throw new Error('observer is not configured');
   }
@@ -31,7 +31,7 @@ export async function reviewExtractions(
 
   const template = loadPromptTemplate('extraction_review');
   const inputJson = JSON.stringify(input, null, 2);
-  const raw = await generateText('observer', {
+  const raw = await generateText('extractor', {
     system: template.system,
     prompt: renderPromptTemplate(template.userTemplate, { input_json: inputJson }),
     signal,

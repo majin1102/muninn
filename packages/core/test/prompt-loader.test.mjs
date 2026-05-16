@@ -68,28 +68,20 @@ test('memory recaller prompt composes recall context with a soft budget', () => 
   assert.match(prompt.userTemplate, /"refs"/);
 });
 
-test('thread curating prompt organizes entity extractions by questions', () => {
-  const prompt = loadPromptTemplate('thread_curating');
+test('thread observing prompt organizes entity extractions by questions', () => {
+  const prompt = loadPromptTemplate('thread_observing');
 
-  assert.match(prompt.system, /memory curator for an observing memory system/i);
-  assert.match(prompt.system, /one Entity anchor/);
-  assert.match(prompt.system, /top-down curated memory/);
-  assert.match(prompt.system, /Question hierarchy/);
-  assert.match(prompt.system, /often around 3-8 words/);
-  assert.match(prompt.system, /often around 4-10 words/);
-  assert.match(prompt.system, /usually 200-500 characters/);
-  assert.match(prompt.system, /usually 300-700 characters/);
-  assert.match(prompt.system, /Avoid `and` in `###` headings/);
-  assert.match(prompt.system, /Seed questions/);
-  assert.match(prompt.system, /Heading examples/);
-  assert.match(prompt.system, /Preserve all context/);
-  assert.match(prompt.system, /Current curated content as the base document/);
-  assert.match(prompt.system, /Preserve existing sections unless new extractions update, merge, or correct them/);
-  assert.match(prompt.system, /For each question, merge extractions/);
-  assert.match(prompt.system, /merge them or promote the combined scope to `##`/);
-  assert.match(prompt.system, /<refs: \[extraction:id, \.\.\.\]>/);
+  assert.match(prompt.system, /observer that rewrites an observing document/i);
+  assert.match(prompt.system, /root anchor is fixed/);
+  assert.match(prompt.system, /heading is an observation context node/);
+  assert.match(prompt.system, /leaf heading has no child headings and must declare refs/);
+  assert.match(prompt.system, /Preserve existing heading ids/);
+  assert.match(prompt.system, /delete: true/);
+  assert.match(prompt.system, /Use only `##` and `###` headings/);
+  assert.match(prompt.system, /<!-- id:/);
+  assert.match(prompt.system, /refs: \[extraction-id/);
   assert.match(prompt.userTemplate, /Entity anchor:/);
-  assert.match(prompt.userTemplate, /Current curated content:/);
+  assert.match(prompt.userTemplate, /Current observing document:/);
   assert.match(prompt.userTemplate, /Extraction units:/);
 });
 
@@ -155,7 +147,7 @@ test('chat domain prompt sections are loaded by observing stage', () => {
 });
 
 test('thread observing prompt uses generic recall-ready memory guidance', () => {
-  const template = loadPromptTemplate('thread_observing');
+  const template = loadPromptTemplate('thread_extracting');
   const system = template.system;
 
   assert.doesNotMatch(system, /Extraction state: the complete current list of extractions this thread should keep/);
@@ -168,7 +160,7 @@ test('thread observing prompt uses generic recall-ready memory guidance', () => 
   assert.match(system, /what local situation it belongs to/);
   assert.match(system, /\[Extraction\]` captures the remembered content/);
   assert.match(system, /Memory unit boundaries are based on the primary remembered subject/);
-  assert.match(system, /observer that rewrites one thread memory document from conversation turns/);
+  assert.match(system, /extractor that rewrites one session extraction document from conversation turns/);
   assert.match(system, /Use `memory` as the current document/);
   assert.match(system, /fold in `newTurns\[\]`/);
   assert.doesNotMatch(system, /existingThreadMemory/);
@@ -233,7 +225,7 @@ test('thread observing prompt uses generic recall-ready memory guidance', () => 
 });
 
 test('observing prompt preserves the current extraction schema', () => {
-  const template = loadPromptTemplate('thread_observing');
+  const template = loadPromptTemplate('thread_extracting');
   const system = template.system;
 
   for (const anchor of ['Preference', 'Fact', 'Decision', 'Entity']) {
@@ -296,7 +288,7 @@ test('observing prompt preserves the current extraction schema', () => {
 });
 
 test('observing gateway prompt uses session and subject threads', () => {
-  const template = loadPromptTemplate('observing_gateway');
+  const template = loadPromptTemplate('extracting_gateway');
   const system = template.system;
 
   assert.match(system, /Domain observing thread guidance/);
@@ -313,7 +305,7 @@ test('observing gateway prompt uses session and subject threads', () => {
 });
 
 test('observing gateway prompt is routing-only', () => {
-  const template = loadPromptTemplate('observing_gateway');
+  const template = loadPromptTemplate('extracting_gateway');
   const system = template.system;
 
   assert.match(system, /Concepts/);
@@ -371,7 +363,7 @@ test('chat domain prompt defines subject routing boundaries', () => {
 });
 
 test('observing prompt uses raw turns and returns thread memory document', () => {
-  const template = loadPromptTemplate('thread_observing');
+  const template = loadPromptTemplate('thread_extracting');
   const system = template.system;
 
   assert.match(system, /newTurns/);

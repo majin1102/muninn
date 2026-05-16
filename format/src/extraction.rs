@@ -30,8 +30,11 @@ pub struct Extraction {
     pub vector: Vec<f32>,
     pub importance: f32,
     pub category: String,
-    pub references: Vec<String>,
+    pub turn_refs: Vec<String>,
+    pub observation_ids: Vec<String>,
+    pub observed_root_anchors: Vec<String>,
     pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -511,8 +514,11 @@ mod tests {
             vector,
             importance: 0.7,
             category: "Fact".to_string(),
-            references: vec!["turn:1".to_string()],
+            turn_refs: vec!["turn:1".to_string()],
+            observation_ids: vec![],
+            observed_root_anchors: vec![],
             created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
         }
     }
 

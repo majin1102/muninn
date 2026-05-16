@@ -14,14 +14,15 @@ export interface ErrorResponse {
   requestId: string;
 }
 
-export interface ObserverWatermark {
+export interface MemoryWatermark {
   resolved: boolean;
   pendingTurnIds: string[];
-  observingEpoch?: number;
+  extractingEpoch?: number;
   committedEpoch?: number;
+  observerPending?: boolean;
 }
 
-export interface ObserverWatermarkResponse extends ObserverWatermark {
+export interface MemoryWatermarkResponse extends MemoryWatermark {
   requestId: string;
 }
 

@@ -53,7 +53,7 @@ export type ManifestTurn = {
 
 export type ImportManifest = {
   sample_id: string;
-  baseline_observing_epoch?: number;
+  baseline_extracting_epoch?: number;
   baseline_committed_epoch?: number;
   turns: ManifestTurn[];
 };
@@ -129,7 +129,7 @@ async function importSampleCommand(options: Map<string, string>) {
   await bootstrapHome(home, templateConfigPath, sourceConfigPath);
   process.env.MUNINN_HOME = home;
   const gatewayTracePath = setGatewayTraceFile(home);
-  const baselineWatermark = await fetchObserverWatermark();
+  const baselineWatermark = await fetchMemoryWatermark();
 
   const sample = await loadSample(dataFile, sampleId);
   const manifestTurns: ManifestTurn[] = [];
@@ -177,7 +177,7 @@ async function importSampleCommand(options: Map<string, string>) {
 
   const manifest = {
     sample_id: sample.sample_id,
-    baseline_observing_epoch: baselineWatermark.observingEpoch,
+    baseline_extracting_epoch: baselineWatermark.extractingEpoch,
     baseline_committed_epoch: baselineWatermark.committedEpoch,
     turns: manifestTurns,
   } satisfies ImportManifest;
@@ -271,7 +271,7 @@ export async function waitForImportWatermark(
   let stalledWarningEmitted = false;
 
   while (Date.now() - startedAt <= timeoutMs) {
-    const watermark = await fetchObserverWatermark();
+    const watermark = await fetchMemoryWatermark();
     pendingTurnIds = watermark.pendingTurnIds;
     const preview = pendingTurnIds.slice(0, 5).join(', ') || '(none)';
     console.error(
@@ -287,7 +287,7 @@ export async function waitForImportWatermark(
     ) {
       stalledWarningEmitted = true;
       console.error(
-        `[locomo] warning: no observing progress detected after ${warningDelayMs}ms; pending turn ids: ${preview}; observingEpoch=${formatEpoch(watermark.observingEpoch)} committedEpoch=${formatEpoch(watermark.committedEpoch)}`
+        `[locomo] warning: no memory progress detected after ${warningDelayMs}ms; pending turn ids: ${preview}; extractingEpoch=${formatEpoch(watermark.extractingEpoch)} committedEpoch=${formatEpoch(watermark.committedEpoch)} observerPending=${watermark.observerPending ? 'true' : 'false'}`
       );
     }
     await sleep(pollMs);
@@ -297,19 +297,20 @@ export async function waitForImportWatermark(
     ? pendingTurnIds.join(', ')
     : '(none)';
   throw new Error(
-    `observer watermark timeout for ${targetTurnId}; pending turn ids: ${pendingText}`
+    `memory watermark timeout for ${targetTurnId}; pending turn ids: ${pendingText}`
   );
 }
 
-async function fetchObserverWatermark() {
+async function fetchMemoryWatermark() {
   const { app: sidecarApp } = await import(pathToFileURL(SIDECAR_APP_PATH).href);
-  const response = await sidecarApp.request('http://sidecar.local/api/v1/observer/watermark');
+  const response = await sidecarApp.request('http://sidecar.local/api/v1/memory/watermark');
   const payload = await response.json() as {
     errorMessage?: string;
     resolved?: boolean;
     pendingTurnIds?: unknown[];
-    observingEpoch?: number;
+    extractingEpoch?: number;
     committedEpoch?: number;
+    observerPending?: boolean;
   };
   if (!response.ok) {
     const message = typeof payload?.errorMessage === 'string'
@@ -322,8 +323,9 @@ async function fetchObserverWatermark() {
     pendingTurnIds: Array.isArray(payload.pendingTurnIds)
       ? payload.pendingTurnIds.map((value) => String(value))
       : [],
-    observingEpoch: typeof payload.observingEpoch === 'number' ? payload.observingEpoch : undefined,
+    extractingEpoch: typeof payload.extractingEpoch === 'number' ? payload.extractingEpoch : undefined,
     committedEpoch: typeof payload.committedEpoch === 'number' ? payload.committedEpoch : undefined,
+    observerPending: payload.observerPending === true,
   };
 }
 
@@ -853,10 +855,28 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 function normalizeObserverConfig(config: Record<string, unknown>): void {
-  if (hasConfiguredObserverConfig(config)) {
-    return;
+  const observer = isPlainObject(config.observer) ? config.observer : null;
+  const extractor = isPlainObject(config.extractor) ? config.extractor : {};
+  if (observer && !hasConfiguredLlm(config, extractor.llm)) {
+    if (typeof observer.llm === 'string' && observer.llm.trim().length > 0) {
+      extractor.llm = observer.llm;
+    }
+    if (typeof observer.domainPrompt === 'string' && typeof extractor.domainPrompt !== 'string') {
+      extractor.domainPrompt = observer.domainPrompt;
+    }
+    if (typeof observer.maxAttempts === 'number' && typeof extractor.maxAttempts !== 'number') {
+      extractor.maxAttempts = observer.maxAttempts;
+    }
   }
-  delete config.observer;
+  if (Object.keys(extractor).length > 0) {
+    config.extractor = extractor;
+  }
+  if (observer && !hasConfiguredLlm(config, observer.llm) && hasConfiguredLlm(config, extractor.llm)) {
+    observer.llm = extractor.llm;
+  }
+  if (!hasConfiguredObserverConfig(config)) {
+    delete config.observer;
+  }
 }
 
 function hasConfiguredObserverConfig(config: Record<string, unknown>): boolean {
@@ -878,6 +898,20 @@ function hasConfiguredObserverConfig(config: Record<string, unknown>): boolean {
   }
   const provider = observerLlm.provider;
   return typeof provider === 'string' && provider.trim().length > 0;
+}
+
+function hasConfiguredLlm(config: Record<string, unknown>, llmName: unknown): boolean {
+  if (typeof llmName !== 'string' || llmName.trim().length === 0) {
+    return false;
+  }
+  const llm = config.llm;
+  if (!isPlainObject(llm)) {
+    return false;
+  }
+  const record = llm[llmName];
+  return isPlainObject(record)
+    && typeof record.provider === 'string'
+    && record.provider.trim().length > 0;
 }
 
 function manifestPath(home: string): string {

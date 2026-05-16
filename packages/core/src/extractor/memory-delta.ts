@@ -201,6 +201,7 @@ export async function applyExtractionTableChanges(
     }
     const existing = storedById.get(id) ?? (change.type === 'update' ? existingById.get(id) : undefined);
     const references = change.type === 'delete' ? [] : referencesForChange(change, existingById);
+    const now = new Date().toISOString();
     rows.push({
       id,
       text,
@@ -209,8 +210,11 @@ export async function applyExtractionTableChanges(
       vector: await embedText(embeddingText(extraction), signal),
       importance: existing?.importance ?? embeddingConfig.defaultImportance,
       category: semanticCategory(extraction.category),
-      references,
-      createdAt: existing?.createdAt ?? new Date().toISOString(),
+      turnRefs: references,
+      observationIds: existing?.observationIds ?? [],
+      observedRootAnchors: existing?.observedRootAnchors ?? [],
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
     });
   }
 
@@ -326,11 +330,11 @@ function referencesForChange(
     return change.references;
   }
   if (change.type === 'update') {
-    return change.references ?? existingById.get(change.extractionId)?.references ?? [];
+    return change.references ?? existingById.get(change.extractionId)?.turnRefs ?? [];
   }
   const references = [];
   for (const extractionId of change.extractionIds) {
-    references.push(...(existingById.get(extractionId)?.references ?? []));
+    references.push(...(existingById.get(extractionId)?.turnRefs ?? []));
   }
   return [...new Set(references)];
 }

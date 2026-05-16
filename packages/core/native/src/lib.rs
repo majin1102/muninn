@@ -3,9 +3,9 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use muninn_format::{
-    CurationSnapshot, CurationSnapshotTable, Extraction, ExtractionTable, MemoryId, MemoryLayer,
-    Observation, ObservationTable, RecallMode, SessionSnapshot, SessionTable, TableOptions, Turn,
-    TurnTable, data_root,
+    Extraction, ExtractionTable, MemoryId, MemoryLayer, Observation, ObservationContext,
+    ObservationContextTable, ObservationTable, RecallMode, SessionSnapshot, SessionTable,
+    TableOptions, Turn, TurnTable, data_root,
 };
 use napi::{Error, Result as NapiResult};
 use napi_derive::napi;
@@ -15,7 +15,7 @@ use tokio::sync::Mutex;
 
 #[derive(Clone)]
 struct CoreResources {
-    curation_table: CurationSnapshotTable,
+    observation_context_table: ObservationContextTable,
     session_table: SessionTable,
     turn_table: TurnTable,
     extraction_table: ExtractionTable,
@@ -135,27 +135,38 @@ struct ExtractionDeleteParams {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct CurationInsertParams {
-    snapshots: Vec<CurationSnapshot>,
+struct ObservationContextUpsertParams {
+    rows: Vec<ObservationContext>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct CurationLatestParams {
-    curation_id: String,
+struct ObservationContextListParams {
+    observer: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct CurationListParams {
-    curation_id: Option<String>,
+struct ObservationContextLoadByIdsParams {
+    ids: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct ObservationReplaceParams {
-    curation_id: String,
+struct ObservationContextDeleteParams {
+    ids: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ObservationUpsertParams {
     rows: Vec<Observation>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ObservationDeleteParams {
+    ids: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -576,53 +587,73 @@ impl CoreBinding {
         into_napi_value(resources.extraction_table.describe().await)
     }
 
-    #[napi(js_name = "curationInsert")]
-    pub async fn curation_insert(&self, params: Value) -> NapiResult<Value> {
-        let params = parse_params::<CurationInsertParams>(params)?;
+    #[napi(js_name = "observationContextUpsert")]
+    pub async fn observation_context_upsert(&self, params: Value) -> NapiResult<()> {
+        let params = parse_params::<ObservationContextUpsertParams>(params)?;
         let resources = self.resources().await?;
-        let mut snapshots = params.snapshots;
         resources
-            .curation_table
-            .insert(&mut snapshots)
+            .observation_context_table
+            .upsert(params.rows)
             .await
-            .map_err(to_napi_error)?;
-        to_napi_value(snapshots)
+            .map_err(to_napi_error)
     }
 
-    #[napi(js_name = "curationLatest")]
-    pub async fn curation_latest(&self, params: Value) -> NapiResult<Value> {
-        let params = parse_params::<CurationLatestParams>(params)?;
-        let resources = self.resources().await?;
-        into_napi_value(resources.curation_table.latest(&params.curation_id).await)
-    }
-
-    #[napi(js_name = "curationList")]
-    pub async fn curation_list(&self, params: Value) -> NapiResult<Value> {
-        let params = parse_params::<CurationListParams>(params)?;
+    #[napi(js_name = "observationContextList")]
+    pub async fn observation_context_list(&self, params: Value) -> NapiResult<Value> {
+        let params = parse_params::<ObservationContextListParams>(params)?;
         let resources = self.resources().await?;
         into_napi_value(
             resources
-                .curation_table
-                .list(params.curation_id.as_deref())
+                .observation_context_table
+                .list(params.observer.as_deref())
                 .await,
         )
     }
 
-    #[napi(js_name = "curationTableStats")]
-    pub async fn curation_table_stats(&self) -> NapiResult<Value> {
+    #[napi(js_name = "observationContextLoadByIds")]
+    pub async fn observation_context_load_by_ids(&self, params: Value) -> NapiResult<Value> {
+        let params = parse_params::<ObservationContextLoadByIdsParams>(params)?;
         let resources = self.resources().await?;
-        into_napi_value(resources.curation_table.stats().await)
+        into_napi_value(resources.observation_context_table.load_by_ids(&params.ids).await)
     }
 
-    #[napi(js_name = "observationReplaceForCuration")]
-    pub async fn observation_replace_for_curation(&self, params: Value) -> NapiResult<()> {
-        let params = parse_params::<ObservationReplaceParams>(params)?;
+    #[napi(js_name = "observationContextDelete")]
+    pub async fn observation_context_delete(&self, params: Value) -> NapiResult<Value> {
+        let params = parse_params::<ObservationContextDeleteParams>(params)?;
         let resources = self.resources().await?;
-        resources
-            .observation_table
-            .replace_for_curation(&params.curation_id, params.rows)
-            .await
-            .map_err(to_napi_error)
+        into_napi_value(
+            resources
+                .observation_context_table
+                .delete(params.ids)
+                .await
+                .map(|deleted| DeletedCount { deleted }),
+        )
+    }
+
+    #[napi(js_name = "observationContextTableStats")]
+    pub async fn observation_context_table_stats(&self) -> NapiResult<Value> {
+        let resources = self.resources().await?;
+        into_napi_value(resources.observation_context_table.stats().await)
+    }
+
+    #[napi(js_name = "observationUpsert")]
+    pub async fn observation_upsert(&self, params: Value) -> NapiResult<()> {
+        let params = parse_params::<ObservationUpsertParams>(params)?;
+        let resources = self.resources().await?;
+        resources.observation_table.upsert(params.rows).await.map_err(to_napi_error)
+    }
+
+    #[napi(js_name = "observationDelete")]
+    pub async fn observation_delete(&self, params: Value) -> NapiResult<Value> {
+        let params = parse_params::<ObservationDeleteParams>(params)?;
+        let resources = self.resources().await?;
+        into_napi_value(
+            resources
+                .observation_table
+                .delete(params.ids)
+                .await
+                .map(|deleted| DeletedCount { deleted }),
+        )
     }
 
     #[napi(js_name = "observationSearch")]
@@ -658,12 +689,12 @@ pub fn create_core_binding() -> NapiResult<CoreBinding> {
     let turn_table = TurnTable::new(table_options.clone());
     let session_table = SessionTable::new(table_options.clone());
     let extraction_table = ExtractionTable::new(table_options.clone());
-    let curation_table = CurationSnapshotTable::new(table_options.clone());
+    let observation_context_table = ObservationContextTable::new(table_options.clone());
     let observation_table = ObservationTable::new(table_options);
     Ok(CoreBinding {
         inner: Arc::new(CoreState {
             resources: Mutex::new(Some(CoreResources {
-                curation_table,
+                observation_context_table,
                 turn_table,
                 session_table,
                 extraction_table,
@@ -704,7 +735,7 @@ fn parse_memory_id(raw: &str, expected_layer: MemoryLayer) -> NapiResult<MemoryI
         return Err(Error::from_reason(format!(
             "invalid params: expected {} memory id, got {}",
             match expected_layer {
-                MemoryLayer::Curation => "curation",
+                MemoryLayer::Observe => "observe",
                 MemoryLayer::Turn => "turn",
                 MemoryLayer::Session => "session",
             },

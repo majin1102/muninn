@@ -9,6 +9,7 @@ import {
   loadMuninnConfig,
   resolveStorageTarget,
   getEmbeddingConfig,
+  getExtractorLlmConfig,
   getObserverLlmConfig,
   getWatchdogConfig,
   validateMuninnConfigInput,
@@ -18,10 +19,12 @@ import {
   readCheckpointFile,
   type CheckpointContent,
   type CheckpointFile,
+  type ExtractorCheckpoint,
   type ObserverCheckpoint,
   type RecentTurn,
 } from './checkpoint.js';
 import { Memories } from './memories/memories.js';
+import { Extractor } from './extractor/extractor.js';
 import { Observer } from './observer/observer.js';
 import { SessionRegistry } from './turn/registry.js';
 import { readTurn } from './turn/types.js';
@@ -76,11 +79,12 @@ export interface RecallHit {
 
 export type RecallMode = 'vector' | 'fts' | 'hybrid';
 
-export interface ObserverWatermark {
+export interface MemoryWatermark {
   resolved: boolean;
   pendingTurnIds: string[];
-  observingEpoch?: number;
+  extractingEpoch?: number;
   committedEpoch?: number;
+  observerPending?: boolean;
 }
 
 export type ListModeInput =
@@ -178,6 +182,7 @@ let bootstrapPromise: Promise<void> | null = null;
 export class MuninnBackend {
   readonly memories: Memories;
   readonly checkpointLock: CheckpointLock;
+  private extractor: Extractor | null = null;
   private observer: Observer | null = null;
   private sessionRegistry: SessionRegistry | null = null;
   private watchdog: Watchdog | null = null;
@@ -188,9 +193,9 @@ export class MuninnBackend {
   ) {
     this.memories = new Memories(client);
     this.checkpointLock = new AsyncCheckpointLock();
-    const observerName = loadMuninnConfig()?.observer?.name;
-    this.sessionRegistry = observerName
-      ? new SessionRegistry(client, observerName)
+    const extractorName = loadMuninnConfig()?.extractor?.name;
+    this.sessionRegistry = extractorName
+      ? new SessionRegistry(client, extractorName)
       : null;
   }
 
@@ -203,6 +208,7 @@ export class MuninnBackend {
       const lastCheckpointJson = checkpoint
         ? JSON.stringify({
           schemaVersion: checkpoint.schemaVersion,
+          extractor: checkpoint.extractor,
           observer: checkpoint.observer,
         })
         : null;
@@ -220,14 +226,27 @@ export class MuninnBackend {
 
   async accept(turnContent: TurnContent): Promise<void> {
     return this.checkpointLock.shared(async () => {
-      const observer = await this.ensureObserver();
-      const registry = this.ensureSessionRegistry(observer.name);
-      await observer.accept(turnContent, registry);
+      await this.ensureObserver();
+      const extractor = await this.ensureExtractor();
+      const registry = this.ensureSessionRegistry(extractor.name);
+      await extractor.accept(turnContent, registry);
     });
   }
 
-  async observerWatermark(): Promise<ObserverWatermark> {
-    return this.checkpointLock.shared(async () => (await this.ensureObserver()).watermark());
+  async memoryWatermark(): Promise<MemoryWatermark> {
+    return this.checkpointLock.shared(async () => {
+      const extractor = await this.ensureExtractor();
+      const observer = await this.ensureObserver();
+      const extractorWatermark = await extractor.watermark();
+      const observerWatermark = await observer.watermark();
+      return {
+        resolved: extractorWatermark.resolved && observerWatermark.resolved,
+        pendingTurnIds: extractorWatermark.pendingTurnIds,
+        extractingEpoch: extractorWatermark.extractingEpoch,
+        committedEpoch: extractorWatermark.committedEpoch,
+        observerPending: !observerWatermark.resolved,
+      };
+    });
   }
 
   async recallMemories(
@@ -240,41 +259,53 @@ export class MuninnBackend {
 
   async exportCheckpoint(): Promise<CheckpointContent | null> {
     return this.checkpointLock.exclusive(async () => {
+      const extractor = this.extractor;
       const observer = this.observer;
+      const extractorCheckpoint = extractor?.exportCheckpoint();
       const observerCheckpoint = observer?.exportCheckpoint();
-      if (!observer || !observerCheckpoint) {
+      if (!extractor || !extractorCheckpoint || !observer || !observerCheckpoint) {
         return null;
       }
-      const [turnStats, sessionStats, extractionStats, curationStats, observationStats] = await Promise.all([
+      const [turnStats, sessionStats, extractionStats, observationContextStats, observationStats] = await Promise.all([
         this.client.turnTable.stats(),
         this.client.sessionTable.stats(),
         this.client.extractionTable.stats(),
-        this.client.curationTable.stats(),
+        this.client.observationContextTable.stats(),
         this.client.observationTable.stats(),
       ]);
-      const checkpoint: ObserverCheckpoint = {
+      const extractorSection: ExtractorCheckpoint = {
         baseline: {
           turn: turnStats?.version ?? 0,
           session: sessionStats?.version ?? 0,
           extraction: extractionStats?.version ?? 0,
-          curation: curationStats?.version ?? 0,
           observation: observationStats?.version ?? 0,
         },
-        committedEpoch: observerCheckpoint.committedEpoch,
-        nextEpoch: observerCheckpoint.nextEpoch,
+        committedEpoch: extractorCheckpoint.committedEpoch,
+        nextEpoch: extractorCheckpoint.nextEpoch,
         recentSessions: this.sessionRegistry?.exportRecentSessions() ?? [],
-        threads: observerCheckpoint.threads,
+        threads: extractorCheckpoint.threads,
+        runs: extractorCheckpoint.runs,
+      };
+      const observerSection: ObserverCheckpoint = {
+        baseline: {
+          extraction: extractionStats?.version ?? 0,
+          observationContext: observationContextStats?.version ?? 0,
+          observation: observationStats?.version ?? 0,
+        },
         runs: observerCheckpoint.runs,
-        curationRuns: observerCheckpoint.curationRuns,
       };
       return {
-        schemaVersion: 4,
-        observer: checkpoint,
+        schemaVersion: 5,
+        extractor: extractorSection,
+        observer: observerSection,
       };
     });
   }
 
   async shutdown(): Promise<void> {
+    if (this.extractor) {
+      await this.extractor.shutdown();
+    }
     if (this.observer) {
       await this.observer.shutdown();
     }
@@ -282,8 +313,18 @@ export class MuninnBackend {
       await this.watchdog.stop({ flushCheckpoint: true });
     }
     this.watchdog = null;
+    this.extractor = null;
     this.observer = null;
     this.sessionRegistry = null;
+  }
+
+  private async ensureExtractor(): Promise<Extractor> {
+    if (!this.extractor) {
+      const checkpoint = this.checkpoint?.extractor ?? null;
+      this.extractor = new Extractor(this.client, checkpoint, this.checkpointLock, () => this.observer?.notify());
+    }
+    await this.extractor.ensureBootstrapped();
+    return this.extractor;
   }
 
   private async ensureObserver(): Promise<Observer> {
@@ -291,7 +332,7 @@ export class MuninnBackend {
       const checkpoint = this.checkpoint?.observer ?? null;
       this.observer = new Observer(this.client, checkpoint, this.checkpointLock);
     }
-    await this.observer.ensureBootstrapped();
+    this.observer.start();
     return this.observer;
   }
 
@@ -306,7 +347,7 @@ export class MuninnBackend {
     if (!this.sessionRegistry || !this.checkpoint) {
       return;
     }
-    for (const session of this.checkpoint.observer.recentSessions) {
+    for (const session of this.checkpoint.extractor.recentSessions) {
       this.sessionRegistry.restoreSession(
         session.sessionId ?? undefined,
         session.agent,
@@ -315,7 +356,7 @@ export class MuninnBackend {
     }
     const delta = await this.client.turnTable.delta({
       observer: this.sessionRegistry.observerName,
-      baselineVersion: this.checkpoint.observer.baseline.turn,
+      baselineVersion: this.checkpoint.extractor.baseline.turn,
     });
     for (const row of delta) {
       const turn = readTurn(row);
@@ -343,7 +384,7 @@ async function ensureBootstrapped() {
 }
 
 async function bootstrap(tables: Awaited<ReturnType<typeof getNativeTables>>): Promise<void> {
-  if (loadMuninnConfig()?.observer) {
+  if (loadMuninnConfig()?.extractor) {
     const embedding = getEmbeddingConfig();
     await tables.extractionTable.validateDimensions({ expected: embedding.dimensions });
   }
@@ -435,8 +476,8 @@ export const memories = {
 };
 
 export const observer = {
-  async watermark(): Promise<ObserverWatermark> {
-    return (await getBackend()).observerWatermark();
+  async watermark(): Promise<MemoryWatermark> {
+    return (await getBackend()).memoryWatermark();
   },
 };
 

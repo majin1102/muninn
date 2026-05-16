@@ -1,7 +1,8 @@
-import { getObserverLlmConfig, getTurnLlmConfig, type TextProviderConfig } from './config.js';
+import { getExtractorLlmConfig, getObserverLlmConfig, getTurnLlmConfig, type TextProviderConfig } from './config.js';
 import { loadCodexCliAuth } from './codex-auth.js';
+import { withProviderTimeout } from './timeout.js';
 
-export type LlmTask = 'turn' | 'observer';
+export type LlmTask = 'turn' | 'extractor' | 'observer';
 
 export type LlmTextRequest = {
   system: string;
@@ -41,7 +42,11 @@ export async function generateText(
   task: LlmTask,
   request: LlmTextRequest,
 ): Promise<string | null> {
-  const config = task === 'turn' ? getTurnLlmConfig() : getObserverLlmConfig();
+  const config = task === 'turn'
+    ? getTurnLlmConfig()
+    : task === 'extractor'
+      ? getExtractorLlmConfig()
+      : getObserverLlmConfig();
   if (!config) {
     return null;
   }
@@ -58,7 +63,11 @@ export async function generateWithTools(
   task: LlmTask,
   request: LlmToolRequest,
 ): Promise<LlmToolResult | null> {
-  const config = task === 'turn' ? getTurnLlmConfig() : getObserverLlmConfig();
+  const config = task === 'turn'
+    ? getTurnLlmConfig()
+    : task === 'extractor'
+      ? getExtractorLlmConfig()
+      : getObserverLlmConfig();
   if (!config) {
     return null;
   }
@@ -93,7 +102,7 @@ function generateMockText(request: LlmTextRequest): string {
       refs,
     });
   }
-  if (request.system.includes('memory curator for an observing memory system')) {
+  if (request.system.includes('observer for an observing memory system')) {
     const ref = request.prompt.match(/extraction:[A-Za-z0-9:_-]+/)?.[0] ?? 'extraction:mock';
     const entity = extractLabeledValue(request.prompt, 'Entity anchor:') || 'Mock entity';
     return [
@@ -103,6 +112,21 @@ function generateMockText(request: LlmTextRequest): string {
       `<refs: [${ref}]>`,
       '',
       `${entity} has curated memory from the provided extraction.`,
+    ].join('\n');
+  }
+  if (request.system.includes('extractor that rewrites one session extraction document')) {
+    const ref = request.prompt.match(/(?:session|turn):[A-Za-z0-9:_-]+/)?.[0] ?? 'turn:mock';
+    return [
+      '# Mock Session Memory',
+      '',
+      '## Summary',
+      'Mock session extraction summary.',
+      '',
+      '## Extractions',
+      `<!-- refs: [${ref}] -->`,
+      '[Entity] Mock entity',
+      '[Fact] mock extraction',
+      '[Extraction] Mock extraction from the provided turn.',
     ].join('\n');
   }
   if (request.system.includes('"memory_delta"')) {
@@ -137,47 +161,52 @@ async function generateOpenAiWithTools(
   }
 
   const baseUrl = config.baseUrl ?? 'https://api.openai.com/v1/chat/completions';
-  const response = await fetch(normalizeChatCompletionsUrl(baseUrl), {
-    method: 'POST',
-    headers: {
-      authorization: `Bearer ${config.apiKey}`,
-      'content-type': 'application/json',
-    },
-    signal: request.signal,
-    body: JSON.stringify({
-      model: config.model ?? 'gpt-5.4-mini',
-      messages: request.messages.map(toOpenAiToolMessage),
-      tools: request.tools.map((tool) => ({
-        type: 'function',
-        function: {
-          name: tool.name,
-          description: tool.description,
-          parameters: tool.parameters,
-        },
-      })),
-      tool_choice: 'auto',
-    }),
-  });
+  const timeout = withProviderTimeout(request.signal, 'openai tool request');
+  try {
+    const response = await fetch(normalizeChatCompletionsUrl(baseUrl), {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${config.apiKey}`,
+        'content-type': 'application/json',
+      },
+      signal: timeout.signal,
+      body: JSON.stringify({
+        model: config.model ?? 'gpt-5.4-mini',
+        messages: request.messages.map(toOpenAiToolMessage),
+        tools: request.tools.map((tool) => ({
+          type: 'function',
+          function: {
+            name: tool.name,
+            description: tool.description,
+            parameters: tool.parameters,
+          },
+        })),
+        tool_choice: 'auto',
+      }),
+    });
 
-  if (!response.ok) {
-    throw new Error(`openai request failed with status ${response.status}: ${await response.text()}`);
-  }
+    if (!response.ok) {
+      throw new Error(`openai request failed with status ${response.status}: ${await response.text()}`);
+    }
 
-  const payload = await response.json() as Record<string, unknown>;
-  const choices = Array.isArray(payload.choices) ? payload.choices as Array<{ message?: Record<string, unknown> }> : [];
-  const message = choices[0]?.message;
-  if (!message) {
-    throw new Error('openai-compatible response did not contain a message');
+    const payload = await response.json() as Record<string, unknown>;
+    const choices = Array.isArray(payload.choices) ? payload.choices as Array<{ message?: Record<string, unknown> }> : [];
+    const message = choices[0]?.message;
+    if (!message) {
+      throw new Error('openai-compatible response did not contain a message');
+    }
+    const toolCalls = parseOpenAiToolCalls(message.tool_calls);
+    if (toolCalls.length > 0) {
+      return { type: 'tool_calls', toolCalls };
+    }
+    const content = typeof message.content === 'string' ? message.content.trim() : '';
+    if (!content) {
+      throw new Error('openai-compatible response did not contain text content or tool calls');
+    }
+    return { type: 'final', text: content };
+  } finally {
+    timeout.cleanup();
   }
-  const toolCalls = parseOpenAiToolCalls(message.tool_calls);
-  if (toolCalls.length > 0) {
-    return { type: 'tool_calls', toolCalls };
-  }
-  const content = typeof message.content === 'string' ? message.content.trim() : '';
-  if (!content) {
-    throw new Error('openai-compatible response did not contain text content or tool calls');
-  }
-  return { type: 'final', text: content };
 }
 
 function toOpenAiToolMessage(message: LlmToolMessage): Record<string, unknown> {
@@ -269,60 +298,65 @@ async function generateOpenAiText(
       ? 'https://api.openai.com/v1/chat/completions'
       : 'https://api.openai.com/v1/responses'
   );
-  const response = await fetch(
-    apiStyle === 'chatCompletions' ? normalizeChatCompletionsUrl(baseUrl) : baseUrl,
-    {
-      method: 'POST',
-      headers: {
-        authorization: `Bearer ${config.apiKey}`,
-        'content-type': 'application/json',
+  const timeout = withProviderTimeout(request.signal, 'openai text request');
+  try {
+    const response = await fetch(
+      apiStyle === 'chatCompletions' ? normalizeChatCompletionsUrl(baseUrl) : baseUrl,
+      {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${config.apiKey}`,
+          'content-type': 'application/json',
+        },
+        signal: timeout.signal,
+        body: JSON.stringify(
+          apiStyle === 'chatCompletions'
+            ? {
+                model: config.model ?? 'gpt-5.4-mini',
+                messages: [
+                  { role: 'system', content: request.system },
+                  { role: 'user', content: request.prompt },
+                ],
+              }
+            : {
+                model: config.model ?? 'gpt-5.4-mini',
+                input: [
+                  {
+                    role: 'system',
+                    content: [{ type: 'input_text', text: request.system }],
+                  },
+                  {
+                    role: 'user',
+                    content: [{ type: 'input_text', text: request.prompt }],
+                  },
+                ],
+              },
+        ),
       },
-      signal: request.signal,
-      body: JSON.stringify(
-        apiStyle === 'chatCompletions'
-          ? {
-              model: config.model ?? 'gpt-5.4-mini',
-              messages: [
-                { role: 'system', content: request.system },
-                { role: 'user', content: request.prompt },
-              ],
-            }
-          : {
-              model: config.model ?? 'gpt-5.4-mini',
-              input: [
-                {
-                  role: 'system',
-                  content: [{ type: 'input_text', text: request.system }],
-                },
-                {
-                  role: 'user',
-                  content: [{ type: 'input_text', text: request.prompt }],
-                },
-              ],
-            },
-      ),
-    },
-  );
+    );
 
-  if (!response.ok) {
-    throw new Error(`openai request failed with status ${response.status}: ${await response.text()}`);
-  }
-
-  const payload = await response.json() as Record<string, unknown>;
-  if (apiStyle === 'chatCompletions') {
-    const choices = Array.isArray(payload.choices) ? payload.choices as Array<{ message?: { content?: string } }> : [];
-    const content = choices[0]?.message?.content?.trim();
-    if (!content) {
-      throw new Error('openai-compatible response did not contain text content');
+    if (!response.ok) {
+      throw new Error(`openai request failed with status ${response.status}: ${await response.text()}`);
     }
-    return content;
-  }
 
-  const text = extractResponsesText(payload);
-  if (!text) {
-    throw new Error('openai response did not contain text output');
+    const payload = await response.json() as Record<string, unknown>;
+    if (apiStyle === 'chatCompletions') {
+      const choices = Array.isArray(payload.choices) ? payload.choices as Array<{ message?: { content?: string } }> : [];
+      const content = choices[0]?.message?.content?.trim();
+      if (!content) {
+        throw new Error('openai-compatible response did not contain text content');
+      }
+      return content;
+    }
+
+    const text = extractResponsesText(payload);
+    if (!text) {
+      throw new Error('openai response did not contain text output');
+    }
+    return text;
+  } finally {
+    timeout.cleanup();
   }
-  return text;
 }
 
 async function generateOpenAiCodexText(
@@ -331,36 +365,41 @@ async function generateOpenAiCodexText(
 ): Promise<string> {
   throwIfAborted(request.signal);
   const auth = loadCodexCliAuth();
-  const response = await fetch(normalizeCodexResponsesUrl(config.baseUrl), {
-    method: 'POST',
-    headers: {
-      authorization: `Bearer ${auth.accessToken}`,
-      'content-type': 'application/json',
-    },
-    signal: request.signal,
-    body: JSON.stringify({
-      model: config.model ?? 'gpt-5.4',
-      instructions: request.system,
-      store: false,
-      stream: true,
-      input: [
-        {
-          role: 'user',
-          content: [{ type: 'input_text', text: request.prompt }],
-        },
-      ],
-    }),
-  });
+  const timeout = withProviderTimeout(request.signal, 'openai-codex text request');
+  try {
+    const response = await fetch(normalizeCodexResponsesUrl(config.baseUrl), {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${auth.accessToken}`,
+        'content-type': 'application/json',
+      },
+      signal: timeout.signal,
+      body: JSON.stringify({
+        model: config.model ?? 'gpt-5.4',
+        instructions: request.system,
+        store: false,
+        stream: true,
+        input: [
+          {
+            role: 'user',
+            content: [{ type: 'input_text', text: request.prompt }],
+          },
+        ],
+      }),
+    });
 
-  if (!response.ok) {
-    throw new Error(`openai-codex request failed with status ${response.status}: ${await response.text()}`);
-  }
+    if (!response.ok) {
+      throw new Error(`openai-codex request failed with status ${response.status}: ${await response.text()}`);
+    }
 
-  const text = extractCodexStreamText(await response.text());
-  if (!text) {
-    throw new Error('openai-codex response did not contain text output');
+    const text = extractCodexStreamText(await response.text());
+    if (!text) {
+      throw new Error('openai-codex response did not contain text output');
+    }
+    return text;
+  } finally {
+    timeout.cleanup();
   }
-  return text;
 }
 
 async function generateOpenAiCodexWithTools(
@@ -369,44 +408,49 @@ async function generateOpenAiCodexWithTools(
 ): Promise<LlmToolResult> {
   throwIfAborted(request.signal);
   const auth = loadCodexCliAuth();
-  const response = await fetch(normalizeCodexResponsesUrl(config.baseUrl), {
-    method: 'POST',
-    headers: {
-      authorization: `Bearer ${auth.accessToken}`,
-      'content-type': 'application/json',
-    },
-    signal: request.signal,
-    body: JSON.stringify({
-      model: config.model ?? 'gpt-5.4',
-      instructions: codexInstructions(request.messages),
-      store: false,
-      stream: true,
-      input: request.messages.flatMap(toCodexInputItems),
-      tools: request.tools.map((tool) => ({
-        type: 'function',
-        name: tool.name,
-        description: tool.description,
-        parameters: tool.parameters,
-      })),
-      tool_choice: 'auto',
-    }),
-  });
+  const timeout = withProviderTimeout(request.signal, 'openai-codex tool request');
+  try {
+    const response = await fetch(normalizeCodexResponsesUrl(config.baseUrl), {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${auth.accessToken}`,
+        'content-type': 'application/json',
+      },
+      signal: timeout.signal,
+      body: JSON.stringify({
+        model: config.model ?? 'gpt-5.4',
+        instructions: codexInstructions(request.messages),
+        store: false,
+        stream: true,
+        input: request.messages.flatMap(toCodexInputItems),
+        tools: request.tools.map((tool) => ({
+          type: 'function',
+          name: tool.name,
+          description: tool.description,
+          parameters: tool.parameters,
+        })),
+        tool_choice: 'auto',
+      }),
+    });
 
-  if (!response.ok) {
-    throw new Error(`openai-codex request failed with status ${response.status}: ${await response.text()}`);
-  }
+    if (!response.ok) {
+      throw new Error(`openai-codex request failed with status ${response.status}: ${await response.text()}`);
+    }
 
-  const stream = parseCodexStream(await response.text());
-  const toolCalls = stream.toolCalls;
-  if (toolCalls.length > 0) {
-    return { type: 'tool_calls', toolCalls };
-  }
+    const stream = parseCodexStream(await response.text());
+    const toolCalls = stream.toolCalls;
+    if (toolCalls.length > 0) {
+      return { type: 'tool_calls', toolCalls };
+    }
 
-  const text = stream.text;
-  if (!text) {
-    throw new Error('openai-codex response did not contain text output or tool calls');
+    const text = stream.text;
+    if (!text) {
+      throw new Error('openai-codex response did not contain text output or tool calls');
+    }
+    return { type: 'final', text };
+  } finally {
+    timeout.cleanup();
   }
-  return { type: 'final', text };
 }
 
 function extractCodexStreamText(raw: string): string | null {

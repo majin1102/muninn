@@ -72,8 +72,8 @@ export function renderExtraction(memory: Extraction): RenderedMemory {
   const context = trimText(memory.context)
     ? `Context:\n${memory.context!.trim()}`
     : undefined;
-  const references = memory.references.length > 0
-    ? `References:\n${memory.references.map((ref) => `- ${ref}`).join('\n')}`
+  const references = memory.turnRefs.length > 0
+    ? `References:\n${memory.turnRefs.map((ref) => `- ${ref}`).join('\n')}`
     : undefined;
   const detail = [anchors, context, references].filter(Boolean).join('\n\n') || undefined;
   return {
@@ -87,8 +87,8 @@ export function renderExtraction(memory: Extraction): RenderedMemory {
 }
 
 export function renderObservation(memory: Observation): RenderedMemory {
-  const references = memory.references.length > 0
-    ? `References:\n${memory.references.map((ref) => `- ${ref}`).join('\n')}`
+  const references = memory.extractionRefs.length > 0
+    ? `References:\n${memory.extractionRefs.map((ref) => `- ${ref}`).join('\n')}`
     : undefined;
   return {
     memoryId: `observation:${memory.id}`,
@@ -96,7 +96,7 @@ export function renderObservation(memory: Observation): RenderedMemory {
     summary: memory.text,
     detail: references,
     createdAt: memory.createdAt,
-    updatedAt: memory.createdAt,
+    updatedAt: memory.updatedAt,
   };
 }
 

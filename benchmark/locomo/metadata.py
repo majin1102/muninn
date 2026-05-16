@@ -24,11 +24,17 @@ def build_run_metadata(
 ) -> dict[str, Any]:
     config_path = active_config_path()
     config = read_json_object(config_path)
+    extractor = config.get("extractor", {}) if isinstance(config.get("extractor"), dict) else {}
     observer = config.get("observer", {}) if isinstance(config.get("observer"), dict) else {}
+    extractor_ref = extractor.get("llm")
     observer_ref = observer.get("llm")
+    extractor_llm = {}
     observer_llm = {}
-    if isinstance(observer_ref, str) and isinstance(config.get("llm"), dict):
-        observer_llm = config["llm"].get(observer_ref, {}) or {}
+    if isinstance(config.get("llm"), dict):
+        if isinstance(extractor_ref, str):
+            extractor_llm = config["llm"].get(extractor_ref, {}) or {}
+        if isinstance(observer_ref, str):
+            observer_llm = config["llm"].get(observer_ref, {}) or {}
     observation = config.get("observation", {})
     embedding = observation.get("embedding", {}) if isinstance(observation, dict) else {}
     return {
@@ -43,6 +49,11 @@ def build_run_metadata(
         "started_at": started_at,
         "completed_at": completed_at,
         "config_path": str(config_path),
+        "extractor": {
+            "name": extractor.get("name"),
+            "provider": extractor_llm.get("provider") if isinstance(extractor_llm, dict) else None,
+            "model": extractor_llm.get("model") if isinstance(extractor_llm, dict) else None,
+        },
         "observer": {
             "name": observer.get("name"),
             "provider": observer_llm.get("provider") if isinstance(observer_llm, dict) else None,

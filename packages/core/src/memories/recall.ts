@@ -64,13 +64,13 @@ export async function recallMemories(
     route: 'curated',
     memoryId: `observation:${row.id}`,
     text: row.text,
-    references: row.references,
+    references: row.extractionRefs,
   }));
   const rawHits: RouteHit[] = extractionRows.map((row) => ({
     route: 'raw',
     memoryId: `extraction:${row.id}`,
     text: row.text,
-    references: row.references,
+    references: row.turnRefs,
   }));
   const merged = mergeRoutes(curatedHits, rawHits, budget > 0 ? queryLimit : limit);
   if (budget > 0) {
@@ -88,7 +88,7 @@ export async function recallMemories(
         return {
           memoryId: hit.memoryId,
           content: row.text,
-          refs: row.references,
+          refs: row.extractionRefs,
         };
       }
       const row = extractionById.get(hit.memoryId);
@@ -100,7 +100,7 @@ export async function recallMemories(
         content: row.text,
         context: row.context,
         anchors: row.anchors,
-        refs: row.references,
+        refs: row.turnRefs,
       };
     });
     const input = {

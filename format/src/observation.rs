@@ -2,10 +2,13 @@ use std::collections::HashMap;
 
 use arrow_array::Float32Array;
 use chrono::{DateTime, Utc};
-use lance::{Error, Result};
+use lance::dataset::MergeInsertBuilder;
+use lance::dataset::{WhenMatched, WhenNotMatched};
+use lance::Result;
 use lance_index::scalar::FullTextSearchQuery;
 use object_store::path::Path;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 use super::access::{
     LanceDataset, TableAccess, TableDescription, TableOptions, TableStats, delete_by_ids,
@@ -22,12 +25,12 @@ use crate::maintenance::{
 #[serde(rename_all = "camelCase")]
 pub struct Observation {
     pub id: String,
-    pub curation_id: String,
-    pub snapshot_id: String,
+    pub observing_path: String,
     pub text: String,
     pub vector: Vec<f32>,
-    pub references: Vec<String>,
+    pub extraction_refs: Vec<String>,
     pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone)]
@@ -84,24 +87,6 @@ impl ObservationTable {
         Ok(vector_created || fts_created)
     }
 
-    pub async fn list_for_curation(&self, curation_id: &str) -> Result<Vec<Observation>> {
-        let Some(dataset) = self.access.try_open().await? else {
-            return Ok(Vec::new());
-        };
-        let batch = dataset
-            .scan()
-            .filter(&format!(
-                "curation_id = '{}'",
-                escape_predicate_string(curation_id)
-            ))?
-            .try_into_batch()
-            .await?;
-        if batch.num_rows() == 0 {
-            return Ok(Vec::new());
-        }
-        record_batch_to_observations(&batch)
-    }
-
     pub async fn load_by_ids(&self, ids: &[String]) -> Result<Vec<Observation>> {
         if ids.is_empty() {
             return Ok(Vec::new());
@@ -126,39 +111,27 @@ impl ObservationTable {
         record_batch_to_observations(&batch)
     }
 
-    pub async fn replace_for_curation(
-        &self,
-        curation_id: &str,
-        rows: Vec<Observation>,
-    ) -> Result<()> {
-        let existing = self.list_for_curation(curation_id).await?;
-        if !existing.is_empty() {
-            delete_by_ids(
-                self.access.try_open().await?,
-                "id",
-                existing.into_iter().map(|row| row.id).collect(),
-            )
-            .await?;
-        }
+    pub async fn upsert(&self, rows: Vec<Observation>) -> Result<()> {
         if rows.is_empty() {
             return Ok(());
         }
-        if rows.iter().any(|row| row.curation_id != curation_id) {
-            return Err(Error::invalid_input(
-                "observation replace rows must match curation_id",
-            ));
-        }
-        if let Some(mut dataset) = self.access.try_open().await? {
-            dataset
-                .append(
-                    observations_to_reader(rows)?,
-                    self.access.options().write_params(),
-                )
-                .await?;
+        if let Some(dataset) = self.access.try_open().await? {
+            let dataset = Arc::new(dataset);
+            let mut builder = MergeInsertBuilder::try_new(dataset, vec!["id".to_string()])?;
+            builder
+                .skip_auto_cleanup(true)
+                .when_matched(WhenMatched::UpdateAll)
+                .when_not_matched(WhenNotMatched::InsertAll);
+            let job = builder.try_build()?;
+            job.execute_reader(observations_to_reader(rows)?).await?;
         } else {
             self.access.write(observations_to_reader(rows)?).await?;
         }
         Ok(())
+    }
+
+    pub async fn delete(&self, ids: Vec<String>) -> Result<usize> {
+        delete_by_ids(self.access.try_open().await?, "id", ids).await
     }
 
     pub async fn search(
@@ -385,7 +358,7 @@ mod tests {
     use crate::{TableOptions, config::llm_test_env_guard};
 
     #[tokio::test]
-    async fn observation_table_replaces_rows_by_curation_id() {
+    async fn observation_table_upserts_and_deletes_rows() {
         let _guard = llm_test_env_guard();
         let dir = tempfile::tempdir().unwrap();
         let home = dir.path().join("muninn");
@@ -412,39 +385,37 @@ mod tests {
         let now = Utc::now();
 
         table
-            .replace_for_curation(
-                "entity:caroline",
-                vec![Observation {
-                    id: "one".to_string(),
-                    curation_id: "entity:caroline".to_string(),
-                    snapshot_id: "curation:0".to_string(),
-                    text: "first".to_string(),
-                    vector: vec![0.1, 0.2, 0.3, 0.4],
-                    references: vec!["extraction:a".to_string()],
-                    created_at: now,
-                }],
-            )
+            .upsert(vec![Observation {
+                id: "one".to_string(),
+                observing_path: "Caroline".to_string(),
+                text: "first".to_string(),
+                vector: vec![0.1, 0.2, 0.3, 0.4],
+                extraction_refs: vec!["extraction:a".to_string()],
+                created_at: now,
+                updated_at: now,
+            }])
             .await
             .unwrap();
 
         table
-            .replace_for_curation(
-                "entity:caroline",
-                vec![Observation {
-                    id: "two".to_string(),
-                    curation_id: "entity:caroline".to_string(),
-                    snapshot_id: "curation:1".to_string(),
-                    text: "second".to_string(),
-                    vector: vec![0.4, 0.3, 0.2, 0.1],
-                    references: vec!["extraction:b".to_string()],
-                    created_at: now,
-                }],
-            )
+            .upsert(vec![Observation {
+                id: "one".to_string(),
+                observing_path: "Caroline".to_string(),
+                text: "second".to_string(),
+                vector: vec![0.4, 0.3, 0.2, 0.1],
+                extraction_refs: vec!["extraction:b".to_string()],
+                created_at: now,
+                updated_at: now,
+            }])
             .await
             .unwrap();
 
-        let rows = table.list_for_curation("entity:caroline").await.unwrap();
+        let rows = table.load_by_ids(&["one".to_string()]).await.unwrap();
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].id, "two");
+        assert_eq!(rows[0].text, "second");
+        assert_eq!(rows[0].extraction_refs, vec!["extraction:b"]);
+
+        assert_eq!(table.delete(vec!["one".to_string()]).await.unwrap(), 1);
+        assert!(table.load_by_ids(&["one".to_string()]).await.unwrap().is_empty());
     }
 }

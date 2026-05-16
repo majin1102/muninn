@@ -1,7 +1,7 @@
 import type { Turn } from '../client.js';
 import { Memories } from '../memories/memories.js';
 import type { NativeTables } from '../native.js';
-import { observeThread } from '../llm/observing-gateway.js';
+import { observeThread } from '../llm/extracting.js';
 import { applyExtractionChanges, applyExtractionTableChanges } from './memory-delta.js';
 import type { SealedEpoch } from './epoch.js';
 import {

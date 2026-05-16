@@ -467,8 +467,8 @@ export class Watchdog {
 
 function checkpointFloors(checkpoint: CheckpointContent | CheckpointFile): Record<DatasetName, number | null> {
   return {
-    turn: checkpoint.observer.baseline.turn,
-    session: checkpoint.observer.baseline.session,
-    extraction: checkpoint.observer.baseline.extraction,
+    turn: checkpoint.extractor.baseline.turn,
+    session: checkpoint.extractor.baseline.session,
+    extraction: checkpoint.extractor.baseline.extraction,
   };
 }

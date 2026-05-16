@@ -1,4 +1,5 @@
 import { getEmbeddingConfig, type EmbeddingConfig } from './config.js';
+import { withProviderTimeout } from './timeout.js';
 
 type EmbeddingResponse = {
   data?: Array<{
@@ -27,26 +28,31 @@ export async function embedText(text: string, signal?: AbortSignal): Promise<num
     throw new Error('extraction.embedding.apiKey is required for openai embeddings');
   }
 
-  const response = await fetch(config.baseUrl ?? 'https://api.openai.com/v1/embeddings', {
-    method: 'POST',
-    headers: {
-      authorization: `Bearer ${config.apiKey}`,
-      'content-type': 'application/json',
-    },
-    signal,
-    body: JSON.stringify(makeEmbeddingRequest(config, text)),
-  });
-  if (!response.ok) {
-    throw new Error(
-      `extraction embedding request failed with status ${response.status}: ${await response.text()}`,
-    );
+  const timeout = withProviderTimeout(signal, 'embedding request');
+  try {
+    const response = await fetch(config.baseUrl ?? 'https://api.openai.com/v1/embeddings', {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${config.apiKey}`,
+        'content-type': 'application/json',
+      },
+      signal: timeout.signal,
+      body: JSON.stringify(makeEmbeddingRequest(config, text)),
+    });
+    if (!response.ok) {
+      throw new Error(
+        `extraction embedding request failed with status ${response.status}: ${await response.text()}`,
+      );
+    }
+    const payload = await response.json() as EmbeddingResponse;
+    const vector = extractVector(payload);
+    if (!vector) {
+      throw new Error('extraction embedding response missing vector');
+    }
+    return vector;
+  } finally {
+    timeout.cleanup();
   }
-  const payload = await response.json() as EmbeddingResponse;
-  const vector = extractVector(payload);
-  if (!vector) {
-    throw new Error('extraction embedding response missing vector');
-  }
-  return vector;
 }
 
 function makeEmbeddingRequest(config: EmbeddingConfig, text: string): Record<string, unknown> {

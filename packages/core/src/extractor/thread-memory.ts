@@ -19,7 +19,7 @@ export function parseThreadMemoryDocument(
 ): ParsedThreadMemoryDocument {
   const threadMemory = stripMarkdownFence(typeof raw === 'string' ? raw.trim() : '');
   if (!threadMemory) {
-    throw new Error('observing update returned empty threadMemory');
+    throw new Error('extraction update returned empty threadMemory');
   }
   if (/^\s*\{/.test(threadMemory)) {
     throw new Error('observe result must return thread memory Markdown, not JSON');

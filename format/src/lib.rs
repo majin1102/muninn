@@ -1,10 +1,10 @@
 pub mod access;
 pub mod codec;
 pub(crate) mod config;
-pub mod curation;
 pub(crate) mod maintenance;
 pub mod memory_id;
 pub mod extraction;
+pub mod observation_context;
 pub mod observation;
 pub mod turn;
 pub mod schema;
@@ -12,9 +12,9 @@ pub mod session;
 
 pub use access::{TableDescription, TableOptions, TableStats};
 pub use config::data_root;
-pub use curation::{CurationSnapshot, CurationSnapshotTable};
 pub use memory_id::{MemoryId, MemoryLayer, deserialize_memory_id, serialize_memory_id};
 pub use extraction::{Extraction, ExtractionTable, RecallMode};
+pub use observation_context::{ObservationContext, ObservationContextTable};
 pub use observation::{Observation, ObservationTable};
 pub use session::{ObservedMemory, SessionSnapshot, SessionTable};
 pub use turn::{Artifact, ToolCall, Turn, TurnTable};

@@ -179,13 +179,13 @@ export function locomoTurns(sample: LocomoSample, sessionNo: number): Array<{
 }
 
 async function defaultPipeline(): Promise<LabPipeline> {
-  const observingModule = await import('../../../packages/core/dist/llm/observing-gateway.js');
+  const extractingModule = await import('../../../packages/core/dist/llm/extracting.js');
   return {
-    fit: async (input) => observingModule.routeObservingThreads(
+    fit: async (input) => extractingModule.routeObservingThreads(
       input.observingThreads,
       toTurns(input.pendingTurns),
     ),
-    observe: async (input) => observingModule.observeThread(input as never),
+    observe: async (input) => extractingModule.observeThread(input as never),
   };
 }
 

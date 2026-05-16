@@ -185,8 +185,11 @@ mod tests {
                 vector: vec![0.1, 0.2, 0.3, 0.4],
                 importance: 0.7,
                 category: "fact".to_string(),
-                references: vec!["turn:1".to_string()],
+                turn_refs: vec!["turn:1".to_string()],
+                observation_ids: vec![],
+                observed_root_anchors: vec![],
                 created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
             }])
             .await
             .unwrap();
@@ -244,8 +247,11 @@ mod tests {
                 vector: vec![0.1, 0.2, 0.3, 0.4],
                 importance: 0.7,
                 category: "fact".to_string(),
-                references: vec!["turn:1".to_string()],
+                turn_refs: vec!["turn:1".to_string()],
+                observation_ids: vec![],
+                observed_root_anchors: vec![],
                 created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
             }])
             .await
             .unwrap();

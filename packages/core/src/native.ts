@@ -2,7 +2,7 @@ import { accessSync, constants as fsConstants } from 'node:fs';
 import path from 'node:path';
 
 import type { ListModeInput, SessionSnapshot, Turn } from './client.js';
-import type { SessionSnapshot as SessionSnapshotPayload } from './observer/types.js';
+import type { SessionSnapshot as SessionSnapshotPayload } from './extractor/types.js';
 import type { RecallMode } from './config.js';
 
 type MaybePromise<T> = Promise<T> | T;
@@ -42,32 +42,32 @@ export type Extraction = {
   vector: number[];
   importance: number;
   category: string;
-  references: string[];
-  createdAt: string;
-};
-
-export type CurationSnapshot = {
-  snapshotId: string;
-  curationId: string;
-  snapshotSequence: number;
+  turnRefs: string[];
+  observationIds: string[];
+  observedRootAnchors: string[];
   createdAt: string;
   updatedAt: string;
-  observer: string;
-  anchor: string;
-  title: string;
-  summary: string;
+};
+
+export type ObservationContext = {
+  id: string;
+  observingPath: string;
+  parentId?: string | null;
+  position: number;
   content: string;
-  references: string[];
+  observer: string;
+  createdAt: string;
+  updatedAt: string;
 };
 
 export type Observation = {
   id: string;
-  curationId: string;
-  snapshotId: string;
+  observingPath: string;
   text: string;
   vector: number[];
-  references: string[];
+  extractionRefs: string[];
   createdAt: string;
+  updatedAt: string;
 };
 
 type NativeCoreBinding = {
@@ -155,20 +155,25 @@ type NativeCoreBinding = {
   extractionOptimize(params: {
     mergeCount: number;
   }): MaybePromise<CompactResult>;
-  curationInsert(params: {
-    snapshots: CurationSnapshot[];
-  }): MaybePromise<CurationSnapshot[]>;
-  curationLatest(params: {
-    curationId: string;
-  }): MaybePromise<CurationSnapshot | null>;
-  curationList(params: {
-    curationId?: string;
-  }): MaybePromise<CurationSnapshot[]>;
-  curationTableStats(): MaybePromise<TableStats | null>;
-  observationReplaceForCuration(params: {
-    curationId: string;
+  observationContextUpsert(params: {
+    rows: ObservationContext[];
+  }): MaybePromise<void>;
+  observationContextList(params: {
+    observer?: string;
+  }): MaybePromise<ObservationContext[]>;
+  observationContextLoadByIds(params: {
+    ids: string[];
+  }): MaybePromise<ObservationContext[]>;
+  observationContextDelete(params: {
+    ids: string[];
+  }): MaybePromise<{ deleted: number }>;
+  observationContextTableStats(): MaybePromise<TableStats | null>;
+  observationUpsert(params: {
     rows: Observation[];
   }): MaybePromise<void>;
+  observationDelete(params: {
+    ids: string[];
+  }): MaybePromise<{ deleted: number }>;
   observationSearch(params: {
     query: string;
     vector: number[];
@@ -284,24 +289,29 @@ export interface ExtractionTableBinding {
   describe(): Promise<TableDescription | null>;
 }
 
-export interface CurationTableBinding {
-  insert(params: {
-    snapshots: CurationSnapshot[];
-  }): Promise<CurationSnapshot[]>;
-  latest(params: {
-    curationId: string;
-  }): Promise<CurationSnapshot | null>;
+export interface ObservationContextTableBinding {
+  upsert(params: {
+    rows: ObservationContext[];
+  }): Promise<void>;
   list(params: {
-    curationId?: string;
-  }): Promise<CurationSnapshot[]>;
+    observer?: string;
+  }): Promise<ObservationContext[]>;
+  loadByIds(params: {
+    ids: string[];
+  }): Promise<ObservationContext[]>;
+  delete(params: {
+    ids: string[];
+  }): Promise<{ deleted: number }>;
   stats(): Promise<TableStats | null>;
 }
 
 export interface ObservationTableBinding {
-  replaceForCuration(params: {
-    curationId: string;
+  upsert(params: {
     rows: Observation[];
   }): Promise<void>;
+  delete(params: {
+    ids: string[];
+  }): Promise<{ deleted: number }>;
   search(params: {
     query: string;
     vector: number[];
@@ -319,7 +329,7 @@ export interface NativeTables {
   turnTable: TurnTableBinding;
   sessionTable: SessionTableBinding;
   extractionTable: ExtractionTableBinding;
-  curationTable: CurationTableBinding;
+  observationContextTable: ObservationContextTableBinding;
   observationTable: ObservationTableBinding;
 }
 
@@ -406,17 +416,16 @@ function wrapBinding(native: NativeCoreBinding): NativeTables {
       optimize: async (params) => resolveNativeResult(native.extractionOptimize(params)),
       describe: async () => resolveNativeResult(native.describeExtractionTable()),
     },
-    curationTable: {
-      insert: async (params) => resolveNativeResult(native.curationInsert(params)),
-      latest: async (params) => normalizeOptionalRecord(
-        await resolveNativeResult(native.curationLatest(params)),
-        'snapshotId',
-      ),
-      list: async (params) => resolveNativeResult(native.curationList(params)),
-      stats: async () => resolveNativeResult(native.curationTableStats()),
+    observationContextTable: {
+      upsert: async (params) => resolveNativeResult(native.observationContextUpsert(params)),
+      list: async (params) => resolveNativeResult(native.observationContextList(params)),
+      loadByIds: async (params) => resolveNativeResult(native.observationContextLoadByIds(params)),
+      delete: async (params) => resolveNativeResult(native.observationContextDelete(params)),
+      stats: async () => resolveNativeResult(native.observationContextTableStats()),
     },
     observationTable: {
-      replaceForCuration: async (params) => resolveNativeResult(native.observationReplaceForCuration(params)),
+      upsert: async (params) => resolveNativeResult(native.observationUpsert(params)),
+      delete: async (params) => resolveNativeResult(native.observationDelete(params)),
       search: async (params) => resolveNativeResult(native.observationSearch(params)),
       loadByIds: async (params) => resolveNativeResult(native.observationLoadByIds(params)),
       stats: async () => resolveNativeResult(native.observationTableStats()),

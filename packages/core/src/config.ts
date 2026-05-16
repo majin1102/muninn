@@ -6,11 +6,12 @@ import type { StorageTarget, TableDescription } from './native.js';
 const CONFIG_FILE_NAME = 'muninn.json';
 const DEFAULT_SUMMARY_THRESHOLD = 500;
 const DEFAULT_TITLE_MAX_CHARS = 100;
+const DEFAULT_EXTRACTOR_MAX_ATTEMPTS = 3;
+const DEFAULT_EXTRACTOR_ACTIVE_WINDOW_DAYS = 7;
+const DEFAULT_EXTRACTOR_CONTINUITY_HINTS = 1;
+const DEFAULT_EXTRACTOR_EPOCH_TURNS = 3;
+const DEFAULT_EXTRACTOR_EPOCH_WINDOW_MS = 10_000;
 const DEFAULT_OBSERVER_MAX_ATTEMPTS = 3;
-const DEFAULT_OBSERVER_ACTIVE_WINDOW_DAYS = 7;
-const DEFAULT_OBSERVER_CONTINUITY_HINTS = 1;
-const DEFAULT_OBSERVER_EPOCH_TURNS = 3;
-const DEFAULT_OBSERVER_EPOCH_WINDOW_MS = 10_000;
 const DEFAULT_IMPORTANCE = 0.7;
 const DEFAULT_WATCHDOG_INTERVAL_MS = 60_000;
 const DEFAULT_WATCHDOG_COMPACT_MIN_FRAGMENTS = 8;
@@ -18,7 +19,8 @@ const DEFAULT_WATCHDOG_TARGET_PARTITION_SIZE = 1_024;
 const DEFAULT_WATCHDOG_OPTIMIZE_MERGE_COUNT = 4;
 const DEFAULT_EXTRACTION_DIMENSIONS = 8;
 const DEFAULT_RECALL_MODE = 'hybrid';
-const DEFAULT_CURATION_ANCHOR_THRESHOLD = 5;
+const DEFAULT_OBSERVER_ANCHOR_THRESHOLD = 5;
+const DEFAULT_OBSERVER_CONTENT_BUDGET_CHARS = 24_000;
 
 export type RecallMode = 'vector' | 'fts' | 'hybrid';
 
@@ -36,7 +38,7 @@ type TurnConfigRecord = {
   titleMaxChars?: number;
 };
 
-type ObserverConfigRecord = {
+type ExtractorConfigRecord = {
   name: string;
   llm: string;
   maxAttempts?: number;
@@ -45,6 +47,14 @@ type ObserverConfigRecord = {
   epochTurns?: number;
   epochWindowMs?: number;
   domainPrompt?: string;
+};
+
+type ObserverConfigRecord = {
+  name: string;
+  llm: string;
+  maxAttempts?: number;
+  anchorThreshold?: number;
+  contentBudgetChars?: number;
 };
 
 type EmbeddingConfigRecord = {
@@ -61,17 +71,13 @@ type ExtractionConfigRecord = {
   recallMode?: RecallMode;
 };
 
-type CurationConfigRecord = {
-  anchorThreshold?: number;
-};
-
 type MuninnConfigRecord = {
   storage?: Record<string, unknown>;
   turn?: TurnConfigRecord;
+  extractor?: ExtractorConfigRecord;
   observer?: ObserverConfigRecord;
   llm?: Record<string, LlmConfigRecord>;
   extraction?: ExtractionConfigRecord;
-  curation?: CurationConfigRecord;
   watchdog?: Record<string, unknown>;
 };
 
@@ -88,7 +94,7 @@ export type TurnLlmConfig = TextProviderConfig & {
   titleMaxChars: number;
 };
 
-export type ObserverLlmConfig = TextProviderConfig & {
+export type ExtractorLlmConfig = TextProviderConfig & {
   name: string;
   maxAttempts: number;
   activeWindowDays: number;
@@ -96,6 +102,11 @@ export type ObserverLlmConfig = TextProviderConfig & {
   epochTurns: number;
   epochWindowMs: number;
   domainPrompt?: string;
+};
+
+export type ObserverLlmConfig = TextProviderConfig & {
+  name: string;
+  maxAttempts: number;
 };
 
 export type EmbeddingConfig = {
@@ -111,8 +122,9 @@ export type RecallConfig = {
   mode: RecallMode;
 };
 
-export type CurationConfig = {
+export type ObserverRuntimeConfig = {
   anchorThreshold: number;
+  contentBudgetChars: number;
 };
 
 export type WatchdogConfig = {
@@ -126,6 +138,8 @@ export type WatchdogConfig = {
 };
 
 type CoreRuntimeConfig = {
+  extractor: ExtractorConfigRecord;
+  extractorLlm: LlmConfigRecord;
   observer: ObserverConfigRecord;
   observerLlm: LlmConfigRecord;
   extraction: ExtractionConfigRecord;
@@ -166,16 +180,16 @@ export function getTurnLlmConfig(): TurnLlmConfig | null {
   };
 }
 
-export function getObserverLlmConfig(): ObserverLlmConfig | null {
-  const { observer, observerLlm: llm } = requireCoreRuntimeConfig(loadMuninnConfig());
+export function getExtractorLlmConfig(): ExtractorLlmConfig | null {
+  const { extractor, extractorLlm: llm } = requireCoreRuntimeConfig(loadMuninnConfig());
   return {
-    name: observer.name,
-    maxAttempts: observer.maxAttempts ?? DEFAULT_OBSERVER_MAX_ATTEMPTS,
-    activeWindowDays: observer.activeWindowDays ?? DEFAULT_OBSERVER_ACTIVE_WINDOW_DAYS,
-    continuityHints: observer.continuityHints ?? DEFAULT_OBSERVER_CONTINUITY_HINTS,
-    epochTurns: observer.epochTurns ?? DEFAULT_OBSERVER_EPOCH_TURNS,
-    epochWindowMs: observer.epochWindowMs ?? DEFAULT_OBSERVER_EPOCH_WINDOW_MS,
-    domainPrompt: observer.domainPrompt,
+    name: extractor.name,
+    maxAttempts: extractor.maxAttempts ?? DEFAULT_EXTRACTOR_MAX_ATTEMPTS,
+    activeWindowDays: extractor.activeWindowDays ?? DEFAULT_EXTRACTOR_ACTIVE_WINDOW_DAYS,
+    continuityHints: extractor.continuityHints ?? DEFAULT_EXTRACTOR_CONTINUITY_HINTS,
+    epochTurns: extractor.epochTurns ?? DEFAULT_EXTRACTOR_EPOCH_TURNS,
+    epochWindowMs: extractor.epochWindowMs ?? DEFAULT_EXTRACTOR_EPOCH_WINDOW_MS,
+    domainPrompt: extractor.domainPrompt,
     provider: parseLlmProvider(llm.provider),
     model: llm.model,
     api: llm.api,
@@ -184,8 +198,21 @@ export function getObserverLlmConfig(): ObserverLlmConfig | null {
   };
 }
 
-export function getEffectiveObserverName(): string {
-  return requireCoreRuntimeConfig(loadMuninnConfig()).observer.name;
+export function getObserverLlmConfig(): ObserverLlmConfig | null {
+  const { observer, observerLlm: llm } = requireCoreRuntimeConfig(loadMuninnConfig());
+  return {
+    name: observer.name,
+    maxAttempts: observer.maxAttempts ?? DEFAULT_OBSERVER_MAX_ATTEMPTS,
+    provider: parseLlmProvider(llm.provider),
+    model: llm.model,
+    api: llm.api,
+    apiKey: llm.apiKey,
+    baseUrl: llm.baseUrl,
+  };
+}
+
+export function getEffectiveExtractorName(): string {
+  return requireCoreRuntimeConfig(loadMuninnConfig()).extractor.name;
 }
 
 export function getEmbeddingConfig(): EmbeddingConfig {
@@ -206,17 +233,18 @@ export function getRecallConfig(): RecallConfig {
   };
 }
 
-export function getCurationConfig(): CurationConfig {
-  return getCurationConfigFromConfig(loadMuninnConfig());
+export function getObserverRuntimeConfig(): ObserverRuntimeConfig {
+  return getObserverRuntimeConfigFromConfig(loadMuninnConfig());
 }
 
-export function getCurationConfigFromConfigForTests(config: MuninnConfigRecord | null): CurationConfig {
-  return getCurationConfigFromConfig(config);
+export function getObserverRuntimeConfigFromConfigForTests(config: MuninnConfigRecord | null): ObserverRuntimeConfig {
+  return getObserverRuntimeConfigFromConfig(config);
 }
 
-function getCurationConfigFromConfig(config: MuninnConfigRecord | null): CurationConfig {
+function getObserverRuntimeConfigFromConfig(config: MuninnConfigRecord | null): ObserverRuntimeConfig {
   return {
-    anchorThreshold: config?.curation?.anchorThreshold ?? DEFAULT_CURATION_ANCHOR_THRESHOLD,
+    anchorThreshold: config?.observer?.anchorThreshold ?? DEFAULT_OBSERVER_ANCHOR_THRESHOLD,
+    contentBudgetChars: config?.observer?.contentBudgetChars ?? DEFAULT_OBSERVER_CONTENT_BUDGET_CHARS,
   };
 }
 
@@ -259,7 +287,7 @@ export function parseMuninnConfigContent(content: string): MuninnConfigRecord {
 
 export function validateMuninnConfigInput(content: string): MuninnConfigRecord {
   const config = parseMuninnConfigContent(content);
-  if (config.observer && !config.llm) {
+  if ((config.extractor || config.observer) && !config.llm) {
     throw new Error('llm is required.');
   }
   validateConfiguredProviders(config);
@@ -298,6 +326,9 @@ export async function validateMuninnConfigStorage(
 }
 
 function requireCoreRuntimeConfig(config: MuninnConfigRecord | null): CoreRuntimeConfig {
+  if (!config?.extractor) {
+    throw new Error('extractor is required.');
+  }
   if (!config?.observer) {
     throw new Error('observer is required.');
   }
@@ -311,16 +342,26 @@ function requireCoreRuntimeConfig(config: MuninnConfigRecord | null): CoreRuntim
     throw new Error('extraction.embedding is required.');
   }
 
+  const extractor = config.extractor;
   const observer = config.observer;
   const llm = config.llm;
   const extraction = config.extraction;
   const embedding = config.extraction.embedding;
 
+  requireNonEmptyString(extractor.name, 'extractor.name');
+  requireNonEmptyString(extractor.llm, 'extractor.llm');
   requireNonEmptyString(observer.name, 'observer.name');
   requireNonEmptyString(observer.llm, 'observer.llm');
   requireNonEmptyString(embedding.provider, 'extraction.embedding.provider');
   const dimensions = effectiveEmbeddingDimensions(config);
   parseEmbeddingProvider(embedding.provider);
+
+  const extractorLlm = llm[extractor.llm];
+  if (!extractorLlm) {
+    throw new Error(`extractor.llm references missing llm.${extractor.llm}.`);
+  }
+  requireNonEmptyString(extractorLlm.provider, `llm.${extractor.llm}.provider`);
+  parseLlmProvider(extractorLlm.provider);
 
   const observerLlm = llm[observer.llm];
   if (!observerLlm) {
@@ -330,6 +371,8 @@ function requireCoreRuntimeConfig(config: MuninnConfigRecord | null): CoreRuntim
   parseLlmProvider(observerLlm.provider);
 
   return {
+    extractor,
+    extractorLlm,
     observer,
     observerLlm,
     extraction,
@@ -361,15 +404,16 @@ function validateTopLevelConfig(config: MuninnConfigRecord): void {
   }
   validateStorageConfig(config.storage);
   validateTurnConfig(config.turn);
+  validateExtractorConfig(config.extractor);
   validateObserverConfig(config.observer);
   validateLlmConfig(config.llm);
   validateExtractionConfig(config.extraction);
-  validateCurationConfig(config.curation);
   validateWatchdogConfig(config.watchdog);
 }
 
 function validateConfiguredProviders(config: MuninnConfigRecord): void {
   validateReferencedProvider(config.llm, config.turn?.llm, 'turn.llm');
+  validateReferencedProvider(config.llm, config.extractor?.llm, 'extractor.llm');
   validateReferencedProvider(config.llm, config.observer?.llm, 'observer.llm');
   const embeddingProvider = config.extraction?.embedding?.provider;
   if (embeddingProvider) {
@@ -396,6 +440,21 @@ function validateTurnConfig(turn: unknown): void {
   validateOptionalPositiveInteger(config.titleMaxChars, 'turn.titleMaxChars');
 }
 
+function validateExtractorConfig(extractor: unknown): void {
+  if (extractor === undefined) {
+    return;
+  }
+  const config = expectRecord(extractor, 'extractor');
+  requireNonEmptyString(config.name, 'extractor.name');
+  requireNonEmptyString(config.llm, 'extractor.llm');
+  validateOptionalPositiveInteger(config.maxAttempts, 'extractor.maxAttempts');
+  validateOptionalPositiveInteger(config.activeWindowDays, 'extractor.activeWindowDays');
+  validateOptionalPositiveInteger(config.continuityHints, 'extractor.continuityHints');
+  validateOptionalPositiveInteger(config.epochTurns, 'extractor.epochTurns');
+  validateOptionalPositiveInteger(config.epochWindowMs, 'extractor.epochWindowMs');
+  validateOptionalDomainPrompt(config.domainPrompt);
+}
+
 function validateObserverConfig(observer: unknown): void {
   if (observer === undefined) {
     return;
@@ -404,11 +463,8 @@ function validateObserverConfig(observer: unknown): void {
   requireNonEmptyString(config.name, 'observer.name');
   requireNonEmptyString(config.llm, 'observer.llm');
   validateOptionalPositiveInteger(config.maxAttempts, 'observer.maxAttempts');
-  validateOptionalPositiveInteger(config.activeWindowDays, 'observer.activeWindowDays');
-  validateOptionalPositiveInteger(config.continuityHints, 'observer.continuityHints');
-  validateOptionalPositiveInteger(config.epochTurns, 'observer.epochTurns');
-  validateOptionalPositiveInteger(config.epochWindowMs, 'observer.epochWindowMs');
-  validateOptionalDomainPrompt(config.domainPrompt);
+  validateOptionalPositiveInteger(config.anchorThreshold, 'observer.anchorThreshold');
+  validateOptionalPositiveInteger(config.contentBudgetChars, 'observer.contentBudgetChars');
 }
 
 function validateLlmConfig(llm: unknown): void {
@@ -448,14 +504,6 @@ function validateExtractionConfig(extraction: unknown): void {
   if (provider === 'openai') {
     requireNonEmptyString(embedding.apiKey, 'extraction.embedding.apiKey');
   }
-}
-
-function validateCurationConfig(curation: unknown): void {
-  if (curation === undefined) {
-    return;
-  }
-  const config = expectRecord(curation, 'curation');
-  validateOptionalPositiveInteger(config.anchorThreshold, 'curation.anchorThreshold');
 }
 
 export function parseRecallMode(value: unknown): RecallMode {
@@ -544,7 +592,7 @@ function validateOptionalDomainPrompt(value: unknown): void {
     return;
   }
   if (value !== 'chat') {
-    throw new Error('observer.domainPrompt must be one of: chat');
+    throw new Error('extractor.domainPrompt must be one of: chat');
   }
 }
 

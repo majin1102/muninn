@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import type { Turn } from '../client.js';
-import { getEmbeddingConfig, getObserverLlmConfig } from '../config.js';
+import { getEmbeddingConfig, getExtractorLlmConfig } from '../config.js';
 import { loadDomainPrompt } from '../llm/domain-prompt.js';
 import { embedText } from '../llm/embedding-provider.js';
 import { generateText } from '../llm/provider.js';
@@ -27,7 +27,7 @@ export async function extractExtractions(
   signal?: AbortSignal,
 ): Promise<ExtractionExtractionResult> {
   throwIfAborted(signal);
-  const config = getObserverLlmConfig();
+  const config = getExtractorLlmConfig();
   if (!config) {
     throw new Error('observer is not configured');
   }
@@ -40,7 +40,7 @@ export async function extractExtractions(
     inputJson,
     domainPrompt: loadDomainPrompt(config.domainPrompt),
   });
-  const raw = await generateText('observer', {
+  const raw = await generateText('extractor', {
     system: rendered.system,
     prompt: rendered.prompt,
     signal,
@@ -61,6 +61,7 @@ export async function commitExtractions(
   const rows: StoredExtraction[] = [];
   for (const input of validateExtraction({ extractions: inputs }).extractions) {
     const text = input.text.trim();
+    const now = new Date().toISOString();
     rows.push({
       id: randomUUID(),
       text,
@@ -69,8 +70,11 @@ export async function commitExtractions(
       vector: await embedText(text, signal),
       importance: embeddingConfig.defaultImportance,
       category: extractionCategory(input.category),
-      references: [...new Set(input.references.map((reference) => reference.trim()).filter(Boolean))],
-      createdAt: new Date().toISOString(),
+      turnRefs: [...new Set(input.references.map((reference) => reference.trim()).filter(Boolean))],
+      observationIds: [],
+      observedRootAnchors: [],
+      createdAt: now,
+      updatedAt: now,
     });
   }
   if (rows.length > 0) {
