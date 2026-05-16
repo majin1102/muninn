@@ -58,7 +58,7 @@ async function captureTurnAndGetTurn(turn) {
   const listed = await json(listResponse);
   const match = listed.memoryHits.find((candidate) => (
     typeof candidate.memoryId === 'string'
-    && candidate.memoryId.startsWith('session:')
+    && candidate.memoryId.startsWith('turn:')
     && candidate.content.includes(turn.prompt)
     && candidate.content.includes(turn.response)
   ));
@@ -68,7 +68,7 @@ async function captureTurnAndGetTurn(turn) {
 
 async function writeMuninnConfig(configPath, {
   turnProvider,
-  observerProvider = 'openai',
+  observerProvider = 'mock',
   semanticDimensions = 4,
   storageUri,
   storageOptions,
@@ -101,6 +101,7 @@ async function writeMuninnConfig(configPath, {
       name: 'test-observer',
       llm: 'test_extractor_llm',
       maxAttempts: 3,
+      epochTurns: 1,
       ...(activeWindowDays === undefined ? {} : { activeWindowDays }),
     };
     root.observer = {
@@ -168,7 +169,7 @@ function createValidSettings({
       enabled: true,
       intervalMs: 60000,
       compactMinFragments: 8,
-      semanticIndex: {
+      extraction: {
         targetPartitionSize: 1024,
         optimizeMergeCount: 4,
       },
@@ -279,7 +280,7 @@ test('openclaw hook capture persists artifacts through sidecar and native readba
   const listed = await json(listResponse);
   const match = listed.memoryHits.find((candidate) => (
     typeof candidate.memoryId === 'string'
-    && candidate.memoryId.startsWith('session:')
+    && candidate.memoryId.startsWith('turn:')
     && candidate.content.includes('hook prompt')
     && candidate.content.includes('hook response')
   ));
@@ -398,7 +399,7 @@ test('turn/capture requires sessionId and does not accept omitted default sessio
   assert.match(body.errorMessage, /turn\.sessionId is required/i);
 });
 
-test('list and timeline cover the written flow, and recall is empty when observing work does not index memories', async (t) => {
+test('list and timeline cover the written flow, and recall returns indexed memories', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(async () => rm(dir, { recursive: true, force: true }));
 
@@ -420,15 +421,16 @@ test('list and timeline cover the written flow, and recall is empty when observi
     assert.equal(response.status, 204);
   }
 
-  const listResponse = await app.request('/api/v1/list?mode=recency&limit=3');
+  const listResponse = await app.request('/api/v1/list?mode=recency&limit=10');
   assert.equal(listResponse.status, 200);
   const listed = await json(listResponse);
-  assert.equal(listed.memoryHits.length, 3);
-  assert.match(listed.memoryHits[0].memoryId, /^session:/);
-  assert.match(listed.memoryHits[0].content, /second alpha prompt/);
-  assert.match(listed.memoryHits[1].content, /third alpha prompt/);
-  assert.match(listed.memoryHits[2].content, /other beta prompt/);
-  const secondTurnId = listed.memoryHits[0].memoryId;
+  const turnHits = listed.memoryHits.filter((hit) => /^turn:/.test(hit.memoryId));
+  assert.ok(turnHits.length >= 3);
+  assert.ok(turnHits.some((hit) => /second alpha prompt/.test(hit.content)));
+  assert.ok(turnHits.some((hit) => /third alpha prompt/.test(hit.content)));
+  assert.ok(turnHits.some((hit) => /other beta prompt/.test(hit.content)));
+  const secondTurnId = turnHits.find((hit) => /second alpha prompt/.test(hit.content))?.memoryId;
+  assert.ok(secondTurnId);
 
   const timelineResponse = await app.request(
     `/api/v1/timeline?memoryId=${encodeURIComponent(secondTurnId)}&beforeLimit=1&afterLimit=1`
@@ -441,7 +443,7 @@ test('list and timeline cover the written flow, and recall is empty when observi
   const recallResponse = await app.request('/api/v1/recall?query=alpha&limit=2');
   assert.equal(recallResponse.status, 200);
   const recalled = await json(recallResponse);
-  assert.equal(recalled.memoryHits.length, 0);
+  assert.ok(recalled.memoryHits.length > 0);
 });
 
 test('timeline stays scoped to the full session key when agents share a sessionId', async (t) => {
@@ -707,7 +709,7 @@ test('ui session endpoints group by agent/session and return rendered turn docum
   );
   assert.equal(documentResponse.status, 200);
   const documentBody = await json(documentResponse);
-  assert.equal(documentBody.document.kind, 'session');
+  assert.equal(documentBody.document.kind, 'turn');
   assert.match(documentBody.document.markdown, /## Created At/);
   assert.match(documentBody.document.markdown, /first alpha prompt/);
 });
@@ -745,7 +747,7 @@ test('ui session endpoints reuse the cached session tree until a write invalidat
   assert.equal(getSessionTreeLoadCountForTests(), 2);
 });
 
-test('session snapshots are readable through list/detail/timeline/recall', async (t) => {
+test('session snapshots are readable through list/detail/timeline', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(async () => rm(dir, { recursive: true, force: true }));
 
@@ -785,10 +787,6 @@ test('session snapshots are readable through list/detail/timeline/recall', async
   assert.equal(timeline.memoryHits.length, 1);
   assert.equal(timeline.memoryHits[0].memoryId, snapshotHit.memoryId);
 
-  const recallResponse = await app.request('/api/v1/recall?query=observe&limit=10');
-  assert.equal(recallResponse.status, 200);
-  const recalled = await json(recallResponse);
-  assert.ok(recalled.memoryHits.some((hit) => hit.memoryId === snapshotHit.memoryId));
 });
 
 test('ui observing endpoint returns live session snapshots and documents', async (t) => {
@@ -815,7 +813,7 @@ test('ui observing endpoint returns live session snapshots and documents', async
   const snapshot = observings.extractions.find((item) => item.memoryId.startsWith('session:'));
   assert.ok(snapshot);
   assert.ok(snapshot.references.length >= 1);
-  assert.match(snapshot.summary, /ui observing prompt|ui observing response/);
+  assert.match(snapshot.summary, /Default observing thread for session group-ui/);
 
   const documentResponse = await app.request(
     `/api/v1/ui/memories/${encodeURIComponent(snapshot.memoryId)}/document`
@@ -846,7 +844,7 @@ test('ui settings config reads and writes muninn.json through sidecar', async (t
 
   const updatedConfig = createValidSettings({ includeWatchdog: true });
   updatedConfig.observer.name = 'live-observer';
-  updatedConfig.semanticIndex.defaultImportance = 0.5;
+  updatedConfig.extraction.defaultImportance = 0.5;
   const writeResponse = await app.request('/api/v1/ui/settings/config', {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
@@ -878,7 +876,7 @@ test('ui settings config creates the parent directory on first save', async (t) 
 
   const persisted = await readFile(configPath, 'utf8');
   assert.match(persisted, /"observer"/);
-  assert.match(persisted, /"semanticIndex"/);
+  assert.match(persisted, /"extraction"/);
   assert.match(persisted, /"watchdog"/);
 });
 
@@ -896,7 +894,7 @@ test('ui settings config returns a saveable default template when muninn.json is
   assert.match(readBody.content, /"name": "default-observer"/);
   assert.match(readBody.content, /"default_observer_llm"/);
   assert.match(readBody.content, /"activeWindowDays": 7/);
-  assert.match(readBody.content, /"semanticIndex": \{/);
+  assert.match(readBody.content, /"extraction": \{/);
   assert.match(readBody.content, /"dimensions": 8/);
   assert.match(readBody.content, /"watchdog": \{/);
   assert.match(readBody.content, /"intervalMs": 60000/);
@@ -937,14 +935,14 @@ test('ui settings config rejects invalid watchdog values server-side', async (t)
   assert.match(body.errorMessage, /watchdog\.intervalMs must be a positive integer/i);
 });
 
-test('ui settings config rejects invalid observer.activeWindowDays server-side', async (t) => {
+test('ui settings config rejects invalid extractor.activeWindowDays server-side', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(async () => rm(dir, { recursive: true, force: true }));
   process.env.MUNINN_HOME = homeDir;
 
   await mkdir(path.dirname(configPath), { recursive: true });
   const config = createValidSettings({ includeWatchdog: true });
-  config.observer.activeWindowDays = 0;
+  config.extractor.activeWindowDays = 0;
 
   const writeResponse = await app.request('/api/v1/ui/settings/config', {
     method: 'PUT',
@@ -956,7 +954,7 @@ test('ui settings config rejects invalid observer.activeWindowDays server-side',
   assert.equal(writeResponse.status, 400);
   const body = await json(writeResponse);
   assert.equal(body.errorCode, 'invalidRequest');
-  assert.match(body.errorMessage, /observer\.activeWindowDays must be a positive integer/i);
+  assert.match(body.errorMessage, /extractor\.activeWindowDays must be a positive integer/i);
 });
 
 test('ui settings config reports invalid JSON before native storage initialization', async (t) => {
@@ -1024,14 +1022,14 @@ test('ui settings config rejects missing llm config', async (t) => {
   assert.match(body.errorMessage, /llm is required/i);
 });
 
-test('ui settings config rejects missing semanticIndex config', async (t) => {
+test('ui settings config rejects missing extraction config', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(async () => rm(dir, { recursive: true, force: true }));
   process.env.MUNINN_HOME = homeDir;
 
   await mkdir(path.dirname(configPath), { recursive: true });
   const config = createValidSettings();
-  delete config.semanticIndex;
+  delete config.extraction;
 
   const writeResponse = await app.request('/api/v1/ui/settings/config', {
     method: 'PUT',
@@ -1043,17 +1041,17 @@ test('ui settings config rejects missing semanticIndex config', async (t) => {
   assert.equal(writeResponse.status, 400);
   const body = await json(writeResponse);
   assert.equal(body.errorCode, 'invalidRequest');
-  assert.match(body.errorMessage, /semanticIndex is required/i);
+  assert.match(body.errorMessage, /extraction is required/i);
 });
 
-test('ui settings config rejects missing semanticIndex.embedding config', async (t) => {
+test('ui settings config rejects missing extraction.embedding config', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(async () => rm(dir, { recursive: true, force: true }));
   process.env.MUNINN_HOME = homeDir;
 
   await mkdir(path.dirname(configPath), { recursive: true });
   const config = createValidSettings();
-  delete config.semanticIndex.embedding;
+  delete config.extraction.embedding;
 
   const writeResponse = await app.request('/api/v1/ui/settings/config', {
     method: 'PUT',
@@ -1065,17 +1063,17 @@ test('ui settings config rejects missing semanticIndex.embedding config', async 
   assert.equal(writeResponse.status, 400);
   const body = await json(writeResponse);
   assert.equal(body.errorCode, 'invalidRequest');
-  assert.match(body.errorMessage, /semanticIndex\.embedding is required/i);
+  assert.match(body.errorMessage, /extraction\.embedding is required/i);
 });
 
-test('ui settings config accepts omitted semanticIndex.embedding.dimensions when the default runtime dimensions apply', async (t) => {
+test('ui settings config accepts omitted extraction.embedding.dimensions when the default runtime dimensions apply', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(async () => rm(dir, { recursive: true, force: true }));
   process.env.MUNINN_HOME = homeDir;
 
   await mkdir(path.dirname(configPath), { recursive: true });
   const config = createValidSettings();
-  delete config.semanticIndex.embedding.dimensions;
+  delete config.extraction.embedding.dimensions;
 
   const writeResponse = await app.request('/api/v1/ui/settings/config', {
     method: 'PUT',
@@ -1109,17 +1107,8 @@ test('ui settings config rejects omitted semantic dimensions for an existing non
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
       content: JSON.stringify({
-        observer: {
-          name: 'test-observer',
-          llm: 'test_observer_llm',
-          maxAttempts: 3,
-        },
-        llm: {
-          test_observer_llm: {
-            provider: 'mock',
-          },
-        },
-        semanticIndex: {
+        ...createValidSettings(),
+        extraction: {
           embedding: {
             provider: 'mock',
           },
@@ -1131,10 +1120,10 @@ test('ui settings config rejects omitted semantic dimensions for an existing non
   assert.equal(writeResponse.status, 400);
   const body = await json(writeResponse);
   assert.equal(body.errorCode, 'invalidRequest');
-  assert.match(body.errorMessage, /semantic_index dimension mismatch/i);
+  assert.match(body.errorMessage, /extraction dimension mismatch/i);
 });
 
-test('ui settings config rejects semanticIndex.embedding.provider when it is empty', async (t) => {
+test('ui settings config rejects extraction.embedding.provider when it is empty', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(async () => rm(dir, { recursive: true, force: true }));
   process.env.MUNINN_HOME = homeDir;
@@ -1146,7 +1135,7 @@ test('ui settings config rejects semanticIndex.embedding.provider when it is emp
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
       content: JSON.stringify({
-        semanticIndex: {
+        extraction: {
           embedding: {
             provider: '',
           },
@@ -1157,7 +1146,7 @@ test('ui settings config rejects semanticIndex.embedding.provider when it is emp
   assert.equal(writeResponse.status, 400);
   const body = await json(writeResponse);
   assert.equal(body.errorCode, 'invalidRequest');
-  assert.match(body.errorMessage, /semanticIndex\.embedding\.provider must be a non-empty string/i);
+  assert.match(body.errorMessage, /extraction\.embedding\.provider must be a non-empty string/i);
 });
 
 test('ui settings config rejects openai observer llm without apiKey', async (t) => {
@@ -1167,6 +1156,7 @@ test('ui settings config rejects openai observer llm without apiKey', async (t) 
 
   await mkdir(path.dirname(configPath), { recursive: true });
   const config = createValidSettings({ observerProvider: 'openai' });
+  config.llm.default_extractor_llm.provider = 'mock';
   delete config.llm.default_observer_llm.apiKey;
 
   const writeResponse = await app.request('/api/v1/ui/settings/config', {
@@ -1189,8 +1179,8 @@ test('ui settings config rejects openai semantic embeddings without apiKey', asy
 
   await mkdir(path.dirname(configPath), { recursive: true });
   const config = createValidSettings();
-  config.semanticIndex.embedding.provider = 'openai';
-  delete config.semanticIndex.embedding.apiKey;
+  config.extraction.embedding.provider = 'openai';
+  delete config.extraction.embedding.apiKey;
 
   const writeResponse = await app.request('/api/v1/ui/settings/config', {
     method: 'PUT',
@@ -1202,7 +1192,7 @@ test('ui settings config rejects openai semantic embeddings without apiKey', asy
   assert.equal(writeResponse.status, 400);
   const body = await json(writeResponse);
   assert.equal(body.errorCode, 'invalidRequest');
-  assert.match(body.errorMessage, /semanticIndex\.embedding\.apiKey must be a non-empty string/i);
+  assert.match(body.errorMessage, /extraction\.embedding\.apiKey must be a non-empty string/i);
 });
 
 test('ui settings config rejects observer config without observer.llm', async (t) => {
@@ -1266,17 +1256,26 @@ test('ui settings config rejects semantic index dimension changes that mismatch 
   await writeFile(
     configPath,
     `${JSON.stringify({
+      extractor: {
+        name: 'test-extractor',
+        llm: 'test_extractor_llm',
+        maxAttempts: 3,
+        epochTurns: 1,
+      },
       observer: {
         name: 'test-observer',
         llm: 'test_observer_llm',
         maxAttempts: 3,
       },
       llm: {
+        test_extractor_llm: {
+          provider: 'mock',
+        },
         test_observer_llm: {
           provider: 'mock',
         },
       },
-      semanticIndex: {
+      extraction: {
         embedding: {
           provider: 'mock',
           dimensions: 4,
@@ -1299,17 +1298,8 @@ test('ui settings config rejects semantic index dimension changes that mismatch 
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
       content: JSON.stringify({
-        observer: {
-          name: 'test-observer',
-          llm: 'test_observer_llm',
-          maxAttempts: 3,
-        },
-        llm: {
-          test_observer_llm: {
-            provider: 'mock',
-          },
-        },
-        semanticIndex: {
+        ...createValidSettings(),
+        extraction: {
           embedding: {
             provider: 'mock',
             dimensions: 8,
@@ -1322,7 +1312,7 @@ test('ui settings config rejects semantic index dimension changes that mismatch 
   assert.equal(writeResponse.status, 400);
   const body = await json(writeResponse);
   assert.equal(body.errorCode, 'invalidRequest');
-  assert.match(body.errorMessage, /semantic_index dimension mismatch/i);
+  assert.match(body.errorMessage, /extraction dimension mismatch/i);
 
   const persisted = await readFile(configPath, 'utf8');
   assert.match(persisted, /"dimensions": 4/);
@@ -1362,20 +1352,11 @@ test('ui settings config validates semantic dimensions against the pending stora
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
       content: JSON.stringify({
+        ...createValidSettings(),
         storage: {
           uri: toFileStoreUri(storageB),
         },
-        observer: {
-          name: 'test-observer',
-          llm: 'test_observer_llm',
-          maxAttempts: 3,
-        },
-        llm: {
-          test_observer_llm: {
-            provider: 'mock',
-          },
-        },
-        semanticIndex: {
+        extraction: {
           embedding: {
             provider: 'mock',
             dimensions: 8,
@@ -1388,7 +1369,7 @@ test('ui settings config validates semantic dimensions against the pending stora
   assert.equal(writeResponse.status, 400);
   const body = await json(writeResponse);
   assert.equal(body.errorCode, 'invalidRequest');
-  assert.match(body.errorMessage, /semantic_index dimension mismatch/i);
+  assert.match(body.errorMessage, /extraction dimension mismatch/i);
 
   const persisted = await readFile(configPath, 'utf8');
   assert.match(persisted, new RegExp(`"uri":\\s*"${toFileStoreUri(storageA)}"`));

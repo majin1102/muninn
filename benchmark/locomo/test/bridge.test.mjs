@@ -325,7 +325,7 @@ test('waitForImportWatermark times out with pending turn ids when observer does 
       pollMs: 10,
       timeoutMs: 50,
     }),
-    /observer watermark timeout.*pending turn ids/i,
+    /memory watermark timeout.*pending turn ids/i,
   );
 });
 
@@ -382,13 +382,13 @@ test('waitForImportWatermark emits a delayed unresolved-watermark warning', asyn
         timeoutMs: 60,
         warningDelayMs: 0,
       }),
-      /observer watermark timeout.*pending turn ids/i,
+      /memory watermark timeout.*pending turn ids/i,
     );
   } finally {
     console.error = originalError;
   }
 
-  assert.ok(messages.some((message) => /no observing progress detected/i.test(message)));
+  assert.ok(messages.some((message) => /no memory progress detected/i.test(message)));
 });
 
 test('waitForImportWatermark reads timeout and warning defaults from env', async (t) => {
@@ -421,7 +421,7 @@ test('waitForImportWatermark reads timeout and warning defaults from env', async
 
   await assert.rejects(
     () => bridgeModule.waitForImportWatermark(manifest, { pollMs: 10 }),
-    /observer watermark timeout.*pending turn ids/i,
+    /memory watermark timeout.*pending turn ids/i,
   );
 });
 
@@ -463,6 +463,6 @@ test('waitForImportWatermark does not depend on repo-root cwd to load sidecar ap
       pollMs: 10,
       timeoutMs: 50,
     }),
-    /observer watermark timeout.*pending turn ids/i,
+    /memory watermark timeout.*pending turn ids/i,
   );
 });

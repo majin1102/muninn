@@ -14,6 +14,7 @@ class MetadataTests(unittest.TestCase):
         with TemporaryDirectory() as tmpdir:
             home = Path(tmpdir)
             config = {
+                "extractor": {"name": "default-extractor", "llm": "default"},
                 "observer": {"name": "default-observer", "llm": "default"},
                 "llm": {
                     "default": {
@@ -23,7 +24,7 @@ class MetadataTests(unittest.TestCase):
                         "baseUrl": "https://example.test",
                     }
                 },
-                "semanticIndex": {
+                "extraction": {
                     "embedding": {
                         "provider": "openai",
                         "model": "embedding-model",

@@ -35,8 +35,8 @@ def build_run_metadata(
             extractor_llm = config["llm"].get(extractor_ref, {}) or {}
         if isinstance(observer_ref, str):
             observer_llm = config["llm"].get(observer_ref, {}) or {}
-    observation = config.get("observation", {})
-    embedding = observation.get("embedding", {}) if isinstance(observation, dict) else {}
+    extraction = config.get("extraction", {})
+    embedding = extraction.get("embedding", {}) if isinstance(extraction, dict) else {}
     return {
         "run_name": run_name,
         "data_file": str(data_file),
@@ -76,12 +76,12 @@ def write_run_metadata(out_file: Path, metadata: dict[str, Any]) -> Path:
 
 
 def active_config_path() -> Path:
-    local = Path.cwd() / "muninn.json"
-    if local.exists():
-        return local
     home = os.environ.get("MUNINN_HOME")
     if home and home.strip():
         return Path(home) / "muninn.json"
+    local = Path.cwd() / "muninn.json"
+    if local.exists():
+        return local
     return Path.home() / ".muninn" / "muninn.json"
 
 
