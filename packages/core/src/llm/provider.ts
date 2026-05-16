@@ -102,14 +102,13 @@ function generateMockText(request: LlmTextRequest): string {
       refs,
     });
   }
-  if (request.system.includes('observer for an observing memory system')) {
-    const ref = request.prompt.match(/extraction:[A-Za-z0-9:_-]+/)?.[0] ?? 'extraction:mock';
+  if (request.system.includes('observer that rewrites an observing document')) {
+    const ref = request.prompt.match(/^\s*-\s+([A-Za-z0-9:_-]+)/m)?.[1] ?? 'mock-extraction';
     const entity = extractLabeledValue(request.prompt, 'Entity anchor:') || 'Mock entity';
     return [
-      `# Entity Memory: ${entity}`,
+      `# ${entity}`,
       '',
-      `## Who is ${entity}?`,
-      `<refs: [${ref}]>`,
+      `## What is remembered about ${entity}? <!-- refs: [${ref}] -->`,
       '',
       `${entity} has curated memory from the provided extraction.`,
     ].join('\n');

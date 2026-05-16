@@ -261,12 +261,12 @@ function buildMockThreadMemory(input: ObserveRequest): string {
     : '';
   const references = input.turns.map((turn) => turn.turnId).filter(Boolean);
   const newMemory = joined && references.length > 0
-    ? `${threadMemoryMetadata(references)}\n[Fact] observed turn\n[Extraction] ${joined}`
+    ? `${threadMemoryMetadata(references)}\n[Entity] mock entity\n[Fact] observed turn\n[Extraction] ${joined}`
     : '';
   const extractions = [extractExtractionSection(existingMemory), newMemory]
     .filter((value) => value && value.trim())
     .join('\n\n----\n')
-    .trim() || `${threadMemoryMetadata([references[0] ?? 'session:mock'])}\n[Fact] mock memory\n[Extraction] ${input.observingContent.title || 'Mock observing thread'}`;
+    .trim() || `${threadMemoryMetadata([references[0] ?? 'session:mock'])}\n[Entity] mock entity\n[Fact] mock memory\n[Extraction] ${input.observingContent.title || 'Mock observing thread'}`;
   return [
     `# ${input.observingContent.title || 'Observing Thread'}`,
     '',
@@ -283,8 +283,8 @@ function threadMemoryMetadata(references: string[]): string {
 }
 
 function promptMemory(summary: string): string {
-  const text = normalizeText(summary);
-  return isDefaultSummary(text) ? '' : text;
+  const text = typeof summary === 'string' ? summary.trim() : '';
+  return isDefaultSummary(normalizeText(text)) ? '' : text;
 }
 
 function extractExtractionSection(memory: string): string {

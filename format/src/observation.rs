@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use arrow_array::Float32Array;
+use arrow_array::{Float32Array, RecordBatch, StringArray};
 use chrono::{DateTime, Utc};
 use lance::dataset::MergeInsertBuilder;
 use lance::dataset::{WhenMatched, WhenNotMatched};
@@ -198,7 +198,8 @@ impl ObservationTable {
                 if batch.num_rows() == 0 {
                     return Ok(Vec::new());
                 }
-                return record_batch_to_observations(&batch);
+                let ids = batch_ids(&batch)?;
+                return self.load_by_ids_preserving_order(&ids).await;
             }
         }
         fallback_full_text(&dataset, normalized_query, limit).await
@@ -218,6 +219,26 @@ impl ObservationTable {
         let fts_rows = self.full_text(query, candidate_limit).await?;
         Ok(merge_ranked(vector_rows, fts_rows, limit))
     }
+
+    async fn load_by_ids_preserving_order(&self, ids: &[String]) -> Result<Vec<Observation>> {
+        let rows = self.load_by_ids(ids).await?;
+        let mut by_id = rows
+            .into_iter()
+            .map(|row| (row.id.clone(), row))
+            .collect::<HashMap<_, _>>();
+        Ok(ids.iter().filter_map(|id| by_id.remove(id)).collect())
+    }
+
+}
+
+fn batch_ids(batch: &RecordBatch) -> Result<Vec<String>> {
+    let ids = batch
+        .column_by_name("id")
+        .ok_or_else(|| lance::Error::invalid_input("observation search result missing id column"))?
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .ok_or_else(|| lance::Error::invalid_input("observation search id column must be Utf8"))?;
+    Ok((0..batch.num_rows()).map(|index| ids.value(index).to_string()).collect())
 }
 
 fn merge_ranked(
