@@ -10,8 +10,8 @@ const promptCache = new Map<string, PromptTemplate>();
 const PROMPT_FILE_NAMES = {
   turn: 'turn',
   chat: 'chat',
-  thread_observing: 'thread-observing',
-  thread_extracting: 'thread-extracting',
+  thread_observing: 'observer',
+  thread_extracting: 'extractor',
   extracting_gateway: 'extracting-gateway',
   extraction_extraction: 'extraction-extraction',
   extraction_review: 'extraction-review',

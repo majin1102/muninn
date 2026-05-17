@@ -71,16 +71,29 @@ test('memory recaller prompt composes recall context with a soft budget', () => 
 test('thread observing prompt organizes entity extractions by questions', () => {
   const prompt = loadPromptTemplate('thread_observing');
 
-  assert.match(prompt.system, /observer that rewrites an observing document/i);
+  assert.match(prompt.system, /observer that rewrites a cross-session curated observation document/i);
   assert.match(prompt.system, /root anchor is fixed/);
   assert.match(prompt.system, /heading is an observation context node/);
+  assert.match(prompt.system, /cross-session curated observation document/);
+  assert.match(prompt.system, /not an extraction copy/);
+  assert.match(prompt.system, /broad observed scope to narrower observed scope/);
+  assert.match(prompt.system, /child heading must narrow, explain, specialize, or update its parent heading's scope/);
+  assert.match(prompt.system, /same observed scope/);
+  assert.match(prompt.system, /overall meaning, role, state, purpose, or development/);
+  assert.match(prompt.system, /Non-leaf headings may use who, what, why, or how framing/);
+  assert.match(prompt.system, /choose titles based on the actual subject and scope/);
+  assert.match(prompt.system, /Leaf headings should summarize their own remembered content naturally/);
+  assert.match(prompt.system, /3-8 words/);
+  assert.match(prompt.system, /200-500 characters/);
+  assert.match(prompt.system, /4-10 words/);
+  assert.match(prompt.system, /100-500 characters/);
   assert.match(prompt.system, /leaf heading has no child headings and must declare refs/);
   assert.match(prompt.system, /Preserve existing heading ids/);
   assert.match(prompt.system, /delete: true/);
   assert.match(prompt.system, /Use only `##` and `###` headings/);
   assert.match(prompt.system, /<!-- id:/);
   assert.match(prompt.system, /refs: \[extraction-id/);
-  assert.match(prompt.userTemplate, /Entity anchor:/);
+  assert.match(prompt.userTemplate, /Root anchor:/);
   assert.match(prompt.userTemplate, /Current observing document:/);
   assert.match(prompt.userTemplate, /Extraction units:/);
 });
@@ -188,7 +201,8 @@ test('thread observing prompt uses generic recall-ready memory guidance', () => 
   assert.match(system, /update the unit instead of removing it/);
   assert.match(system, /When remembered content contains a time expression/);
   assert.match(system, /normalize it to absolute time using grounded context anchors when possible/);
-  assert.match(system, /source wording that defines what the remembered content is about or what question it answers/);
+  assert.match(system, /including key source wording/);
+  assert.match(system, /what any response, judgment, or feedback is about/);
   assert.doesNotMatch(system, /Granularity:/);
   assert.doesNotMatch(system, /memory unit purpose/);
   assert.match(system, /Memory anchors/);
@@ -237,7 +251,7 @@ test('observing prompt preserves the current extraction schema', () => {
   assert.doesNotMatch(system, /`Goal`/);
   assert.match(system, /thread memory/i);
   assert.match(system, /Memory unit/);
-  assert.match(system, /<!-- refs: \[session:x, session:y\] -->/);
+  assert.match(system, /<!-- refs: \[turn:x, turn:y\] -->/);
   assert.match(system, /must start with metadata/);
   assert.match(system, /1-3 memory anchor lines/);
   assert.match(system, /\[Entity\] Alex/);
@@ -254,6 +268,9 @@ test('observing prompt preserves the current extraction schema', () => {
   assert.match(system, /new conversation turns to fold into memory/);
   assert.match(system, /Preserve memory as losslessly as possible/);
   assert.match(system, /do not invent facts or infer beyond what was said/);
+  assert.match(system, /Put remembered content in `\[Extraction\]`/);
+  assert.match(system, /use `\[Context\]` for why it was mentioned/);
+  assert.match(system, /keep the target and key wording of responses, judgments, reactions, or feedback in `\[Extraction\]`/);
   assert.match(system, /One new turn may affect multiple memory units/);
   assert.match(system, /the same context may be added to more than one unit/);
   assert.match(system, /only when it supports each unit's extraction/);

@@ -26,20 +26,20 @@ system: |
   - `[Extraction]` captures the remembered content.
 
   Memory unit format
-  - Each memory unit must start with metadata, such as `<!-- refs: [session:x, session:y] -->`.
+  - Each memory unit must start with metadata, such as `<!-- refs: [turn:x, turn:y] -->`.
   - Then write 1-3 memory anchor lines, such as `[Entity] Alex` or `[Decision] onboarding focus`.
   - Then write an optional `[Context]` line.
   - Then write one required `[Extraction]` line.
   - Existing units already have metadata and may already have `[Context]` / `[Extraction]`; keep or update them without removing required structure.
   - Separate units with a line containing exactly `----`.
   - Example:
-    `<!-- refs: [session:1] -->`
+    `<!-- refs: [turn:1] -->`
     `[Entity] Jamie`
     `[Decision] onboarding focus`
     `[Context] Alex asked Jamie what they wanted to focus on next quarter.`
     `[Extraction] Jamie plans to focus next quarter on improving onboarding for new users.`
     `----`
-    `<!-- refs: [session:2] -->`
+    `<!-- refs: [turn:2] -->`
     `[Decision] planning meeting`
     `[Context] The team compared Monday and Thursday as possible planning meeting days.`
     `[Extraction] The team moved the weekly planning meeting to Thursday.`
@@ -49,8 +49,8 @@ system: |
   - `newTurns[]`: new conversation turns to fold into memory.
 
   Rules
-  - Preserve memory as losslessly as possible, especially source wording that defines what the remembered content is about or what question it answers; do not invent facts or infer beyond what was said.
-  - Put durable remembered content in `[Extraction]`; put source context in `[Context]` when it explains why the extraction was mentioned or what local situation it belongs to.
+  - Preserve memory as losslessly as possible, including key source wording and what any response, judgment, or feedback is about; do not invent facts or infer beyond what was said.
+  - Put remembered content in `[Extraction]`; use `[Context]` for why it was mentioned or what local situation it belongs to, but keep the target and key wording of responses, judgments, reactions, or feedback in `[Extraction]`.
   - One new turn may affect multiple memory units: different parts may be remembered separately, and the same context may be added to more than one unit only when it supports each unit's extraction.
   - Update existing memory units first when new turn content directly develops the unit's primary subject or adds useful context without breaking its boundaries. Shared people, time, mood, or conversation adjacency alone is not enough.
   - Add a new memory unit when new turn content should be remembered but does not fit an existing unit as an update; append new units at the end to keep existing unit order stable.
