@@ -4,6 +4,7 @@ use std::sync::Arc;
 use arrow_array::Float32Array;
 use arrow_schema::DataType;
 use chrono::{DateTime, Utc};
+use futures_util::TryStreamExt;
 use lance::dataset::{MergeInsertBuilder, WhenMatched, WhenNotMatched};
 use lance::{Error, Result};
 use lance_index::scalar::FullTextSearchQuery;
@@ -16,8 +17,8 @@ use super::access::{
 };
 use super::codec::{extractions_to_reader, record_batch_to_extractions};
 use crate::maintenance::{
-    cleanup_dataset, compact_dataset, ensure_extraction_fts_index, ensure_semantic_vector_index,
-    optimize_extraction, EXTRACTION_SEARCH_TEXT_COLUMN,
+    cleanup_dataset, compact_dataset, ensure_extraction_fts_index, ensure_extraction_id_index,
+    ensure_semantic_vector_index, optimize_extraction, EXTRACTION_SEARCH_TEXT_COLUMN,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -105,7 +106,8 @@ impl ExtractionTable {
         };
         let vector_created = ensure_semantic_vector_index(&mut dataset, target_partition_size).await?;
         let fts_created = ensure_extraction_fts_index(&mut dataset).await?;
-        Ok(vector_created || fts_created)
+        let id_created = ensure_extraction_id_index(&mut dataset).await?;
+        Ok(vector_created || fts_created || id_created)
     }
 
     pub async fn compact(&self) -> Result<bool> {
@@ -138,7 +140,55 @@ impl ExtractionTable {
         record_batch_to_extractions(&batch)
     }
 
-    pub async fn load_by_ids(&self, ids: &[String]) -> Result<Vec<Extraction>> {
+    pub async fn delta(&self, baseline_version: u64) -> Result<Vec<Extraction>> {
+        let Some(dataset) = self.access.try_open().await? else {
+            return Ok(Vec::new());
+        };
+        let version = dataset.version().version;
+        if version <= baseline_version {
+            return Ok(Vec::new());
+        }
+        let delta = dataset
+            .delta()
+            .compared_against_version(baseline_version)
+            .build()?;
+        let mut rows = Vec::new();
+        let mut inserted = delta.get_inserted_rows().await?;
+        while let Some(batch) = inserted.try_next().await? {
+            if batch.num_rows() == 0 {
+                continue;
+            }
+            rows.extend(record_batch_to_extractions(&batch)?);
+        }
+        let mut updated = delta.get_updated_rows().await?;
+        while let Some(batch) = updated.try_next().await? {
+            if batch.num_rows() == 0 {
+                continue;
+            }
+            rows.extend(record_batch_to_extractions(&batch)?);
+        }
+        let mut by_id = HashMap::<String, Extraction>::new();
+        for row in rows {
+            by_id
+                .entry(row.id.clone())
+                .and_modify(|existing| {
+                    if row.updated_at > existing.updated_at {
+                        *existing = row.clone();
+                    }
+                })
+                .or_insert(row);
+        }
+        let mut rows = by_id.into_values().collect::<Vec<_>>();
+        rows.sort_by(|left, right| {
+            left.updated_at
+                .cmp(&right.updated_at)
+                .then(left.created_at.cmp(&right.created_at))
+                .then(left.id.cmp(&right.id))
+        });
+        Ok(rows)
+    }
+
+    pub async fn get(&self, ids: &[String]) -> Result<Vec<Extraction>> {
         if ids.is_empty() {
             return Ok(Vec::new());
         }
@@ -159,7 +209,12 @@ impl ExtractionTable {
         if batch.num_rows() == 0 {
             return Ok(Vec::new());
         }
-        record_batch_to_extractions(&batch)
+        let rows = record_batch_to_extractions(&batch)?;
+        let mut by_id = rows
+            .into_iter()
+            .map(|row| (row.id.clone(), row))
+            .collect::<HashMap<_, _>>();
+        Ok(ids.iter().filter_map(|id| by_id.remove(id)).collect())
     }
 
     pub async fn nearest(&self, query_vector: &[f32], limit: usize) -> Result<Vec<Extraction>> {
@@ -562,6 +617,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn get_returns_rows_in_requested_order_and_omits_missing_ids() {
+        let _guard = llm_test_env_guard();
+        let dir = tempfile::tempdir().unwrap();
+        write_config(&dir);
+
+        let table = ExtractionTable::new(TableOptions::local(crate::config::data_root().unwrap()).unwrap());
+        table
+            .upsert(vec![
+                row("first", "First memory.", None, vec![1.0, 0.0, 0.0, 0.0]),
+                row("second", "Second memory.", None, vec![0.0, 1.0, 0.0, 0.0]),
+            ])
+            .await
+            .unwrap();
+
+        let rows = table
+            .get(&["second".to_string(), "missing".to_string(), "first".to_string()])
+            .await
+            .unwrap();
+
+        assert_eq!(
+            rows.iter().map(|row| row.id.as_str()).collect::<Vec<_>>(),
+            vec!["second", "first"],
+        );
+    }
+
+    #[tokio::test]
     async fn fts_search_matches_extraction_text_not_context() {
         let _guard = llm_test_env_guard();
         let dir = tempfile::tempdir().unwrap();
@@ -594,5 +675,42 @@ mod tests {
 
         assert!(fts.iter().any(|item| item.id == "text-hit"));
         assert!(!fts.iter().any(|item| item.id == "context-only"));
+    }
+
+    #[tokio::test]
+    async fn delta_returns_inserted_and_updated_rows_since_baseline() {
+        let _guard = llm_test_env_guard();
+        let dir = tempfile::tempdir().unwrap();
+        write_config(&dir);
+
+        let table = ExtractionTable::new(TableOptions::local(crate::config::data_root().unwrap()).unwrap());
+        table
+            .upsert(vec![
+                row("stable", "Stable memory.", None, vec![1.0, 0.0, 0.0, 0.0]),
+                row("updated", "Old memory.", None, vec![0.0, 1.0, 0.0, 0.0]),
+            ])
+            .await
+            .unwrap();
+        let baseline = table.stats().await.unwrap().unwrap().version;
+
+        table
+            .upsert(vec![
+                row("updated", "Updated memory.", None, vec![0.0, 1.0, 0.0, 0.0]),
+                row("inserted", "Inserted memory.", None, vec![0.0, 0.0, 1.0, 0.0]),
+            ])
+            .await
+            .unwrap();
+
+        let mut delta = table.delta(baseline).await.unwrap();
+        delta.sort_by(|left, right| left.id.cmp(&right.id));
+
+        assert_eq!(
+            delta.iter().map(|row| row.id.as_str()).collect::<Vec<_>>(),
+            vec!["inserted", "updated"],
+        );
+        assert_eq!(
+            delta.iter().find(|row| row.id == "updated").unwrap().text,
+            "Updated memory.",
+        );
     }
 }

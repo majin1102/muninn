@@ -7,6 +7,25 @@ type DraftSection = ParsedObserverSection & {
 };
 
 export function parseObserverDocument(raw: string, validRefs: Set<string>): ParsedObserverDocument {
+  return parseObserverMarkdown(raw, validRefs, {});
+}
+
+export function parseObserverSubtree(
+  raw: string,
+  validRefs: Set<string>,
+  fallbackTitle: string,
+): ParsedObserverDocument {
+  return parseObserverMarkdown(raw, validRefs, { fallbackTitle, allowRootlessSubtree: true });
+}
+
+function parseObserverMarkdown(
+  raw: string,
+  validRefs: Set<string>,
+  options: {
+    fallbackTitle?: string;
+    allowRootlessSubtree?: boolean;
+  },
+): ParsedObserverDocument {
   const content = stripFence(typeof raw === 'string' ? raw.trim() : '');
   if (!content) {
     throw new Error('observer document is empty');
@@ -17,6 +36,15 @@ export function parseObserverDocument(raw: string, validRefs: Set<string>): Pars
 
   const lines = content.split(/\r?\n/);
   const titleIndexes = lines.flatMap((line, index) => /^#\s+(.+?)\s*$/.test(line) ? [index] : []);
+  if (titleIndexes.length === 0 && options.allowRootlessSubtree) {
+    const title = clean(options.fallbackTitle ?? '');
+    if (!title) {
+      throw new Error('observer document title cannot be empty');
+    }
+    const sections = parseSections(lines, validRefs, { allowRootlessSubtree: true });
+    validateTree(sections, validRefs);
+    return { title, sections: sections.map(stripParent) };
+  }
   if (titleIndexes.length !== 1) {
     throw new Error('observer document must include exactly one # root title');
   }
@@ -25,7 +53,9 @@ export function parseObserverDocument(raw: string, validRefs: Set<string>): Pars
     throw new Error('observer document title cannot be empty');
   }
 
-  const sections = parseSections(lines.slice(titleIndexes[0] + 1), validRefs);
+  const sections = parseSections(lines.slice(titleIndexes[0] + 1), validRefs, {
+    allowRootlessSubtree: options.allowRootlessSubtree,
+  });
   validateTree(sections, validRefs);
   return { title, sections: sections.map(stripParent) };
 }
@@ -35,7 +65,11 @@ export function stripFence(value: string): string {
   return (match?.[1] ?? value).trim();
 }
 
-function parseSections(lines: string[], validRefs: Set<string>): DraftSection[] {
+function parseSections(
+  lines: string[],
+  validRefs: Set<string>,
+  options: { allowRootlessSubtree?: boolean } = {},
+): DraftSection[] {
   const roots: DraftSection[] = [];
   const stack: DraftSection[] = [];
 
@@ -57,7 +91,7 @@ function parseSections(lines: string[], validRefs: Set<string>): DraftSection[] 
     if (!heading) {
       throw new Error('observer section heading cannot be empty');
     }
-    if (level === 3 && !stack.some((section) => section.level === 2)) {
+    if (level === 3 && !stack.some((section) => section.level === 2) && !options.allowRootlessSubtree) {
       throw new Error('observer ### section must belong to a ## section');
     }
 
@@ -123,12 +157,24 @@ function parseRefs(value: string, validRefs: Set<string>): string[] {
   if (refs.length === 0) {
     throw new Error('observer refs cannot be empty');
   }
-  for (const ref of refs) {
-    if (!validRefs.has(ref)) {
-      throw new Error(`observer referenced unknown extraction id: ${ref}`);
-    }
+  return refs.map((ref) => resolveRef(ref, validRefs));
+}
+
+function resolveRef(ref: string, validRefs: Set<string>): string {
+  if (validRefs.has(ref)) {
+    return ref;
   }
-  return refs;
+  if (ref.length < 12) {
+    throw new Error(`observer referenced unknown extraction id: ${ref}`);
+  }
+  const matches = [...validRefs].filter((validRef) => validRef.startsWith(ref));
+  if (matches.length === 1) {
+    return matches[0]!;
+  }
+  if (matches.length > 1) {
+    throw new Error(`observer referenced ambiguous extraction id prefix: ${ref}`);
+  }
+  throw new Error(`observer referenced unknown extraction id: ${ref}`);
 }
 
 function validateTree(sections: DraftSection[], validRefs: Set<string>): void {
@@ -197,4 +243,5 @@ function clean(value: string): string {
 
 export const __testing = {
   parseObserverDocument,
+  parseObserverSubtree,
 };

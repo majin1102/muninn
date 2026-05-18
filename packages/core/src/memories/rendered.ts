@@ -88,7 +88,7 @@ export function renderExtraction(memory: Extraction): RenderedMemory {
 
 export function renderObservation(memory: Observation): RenderedMemory {
   const references = memory.extractionRefs.length > 0
-    ? `References:\n${memory.extractionRefs.map((ref) => `- ${ref}`).join('\n')}`
+    ? `References:\n${memory.extractionRefs.map((ref) => `- ${renderExtractionRef(ref)}`).join('\n')}`
     : undefined;
   return {
     memoryId: `observation:${memory.id}`,
@@ -98,6 +98,10 @@ export function renderObservation(memory: Observation): RenderedMemory {
     createdAt: memory.createdAt,
     updatedAt: memory.updatedAt,
   };
+}
+
+function renderExtractionRef(ref: string): string {
+  return ref.startsWith('extraction:') ? ref : `extraction:${ref}`;
 }
 
 export function renderTurnDetail(turn: Turn): string | undefined {

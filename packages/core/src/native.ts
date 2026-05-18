@@ -1,4 +1,5 @@
 import { accessSync, constants as fsConstants } from 'node:fs';
+import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
 
 import type { ListModeInput, SessionSnapshot, Turn } from './client.js';
@@ -129,11 +130,14 @@ type NativeCoreBinding = {
     limit: number;
     mode: RecallMode;
   }): MaybePromise<Extraction[]>;
-  extractionLoadByIds(params: {
+  extractionGet(params: {
     ids: string[];
   }): MaybePromise<Extraction[]>;
   extractionList(params: {
     limit?: number;
+  }): MaybePromise<Extraction[]>;
+  extractionDelta(params: {
+    baselineVersion: number;
   }): MaybePromise<Extraction[]>;
   extractionUpsert(params: {
     rows: Extraction[];
@@ -161,13 +165,17 @@ type NativeCoreBinding = {
   observationContextList(params: {
     observer?: string;
   }): MaybePromise<ObservationContext[]>;
-  observationContextLoadByIds(params: {
+  observationContextGet(params: {
     ids: string[];
   }): MaybePromise<ObservationContext[]>;
   observationContextDelete(params: {
     ids: string[];
   }): MaybePromise<{ deleted: number }>;
   observationContextTableStats(): MaybePromise<TableStats | null>;
+  observationContextEnsureIdIndex(): MaybePromise<EnsureVectorIndexResult>;
+  observationContextOptimize(params: {
+    mergeCount: number;
+  }): MaybePromise<CompactResult>;
   observationUpsert(params: {
     rows: Observation[];
   }): MaybePromise<void>;
@@ -180,17 +188,27 @@ type NativeCoreBinding = {
     limit: number;
     mode: RecallMode;
   }): MaybePromise<Observation[]>;
-  observationLoadByIds(params: {
+  observationGet(params: {
     ids: string[];
   }): MaybePromise<Observation[]>;
   observationTableStats(): MaybePromise<TableStats | null>;
+  observationEnsureVectorIndex(params: {
+    targetPartitionSize: number;
+  }): MaybePromise<EnsureVectorIndexResult>;
+  observationCompact(): MaybePromise<CompactResult>;
+  observationCleanup(params: {
+    floorVersion: number;
+  }): MaybePromise<CompactResult>;
+  observationOptimize(params: {
+    mergeCount: number;
+  }): MaybePromise<CompactResult>;
   describeTurnTable(): MaybePromise<TableDescription | null>;
   describeSessionTable(): MaybePromise<TableDescription | null>;
   describeExtractionTable(): MaybePromise<TableDescription | null>;
 };
 
 type NativeModule = {
-  createCoreBinding(): MaybePromise<NativeCoreBinding>;
+  createCoreBinding(storageTarget?: StorageTarget | null): MaybePromise<NativeCoreBinding>;
   describeExtractionForStorage(storageTarget: StorageTarget | null): MaybePromise<TableDescription | null>;
 };
 
@@ -260,11 +278,14 @@ export interface ExtractionTableBinding {
     limit: number;
     mode: RecallMode;
   }): Promise<Extraction[]>;
-  loadByIds(params: {
+  get(params: {
     ids: string[];
   }): Promise<Extraction[]>;
   list(params: {
     limit?: number;
+  }): Promise<Extraction[]>;
+  delta(params: {
+    baselineVersion: number;
   }): Promise<Extraction[]>;
   upsert(params: {
     rows: Extraction[];
@@ -296,13 +317,17 @@ export interface ObservationContextTableBinding {
   list(params: {
     observer?: string;
   }): Promise<ObservationContext[]>;
-  loadByIds(params: {
+  get(params: {
     ids: string[];
   }): Promise<ObservationContext[]>;
   delete(params: {
     ids: string[];
   }): Promise<{ deleted: number }>;
   stats(): Promise<TableStats | null>;
+  ensureIdIndex(): Promise<EnsureVectorIndexResult>;
+  optimize(params: {
+    mergeCount: number;
+  }): Promise<CompactResult>;
 }
 
 export interface ObservationTableBinding {
@@ -318,10 +343,20 @@ export interface ObservationTableBinding {
     limit: number;
     mode: RecallMode;
   }): Promise<Observation[]>;
-  loadByIds(params: {
+  get(params: {
     ids: string[];
   }): Promise<Observation[]>;
   stats(): Promise<TableStats | null>;
+  ensureVectorIndex(params: {
+    targetPartitionSize: number;
+  }): Promise<EnsureVectorIndexResult>;
+  compact(): Promise<CompactResult>;
+  cleanup(params: {
+    floorVersion: number;
+  }): Promise<CompactResult>;
+  optimize(params: {
+    mergeCount: number;
+  }): Promise<CompactResult>;
 }
 
 export interface NativeTables {
@@ -333,31 +368,41 @@ export interface NativeTables {
   observationTable: ObservationTableBinding;
 }
 
-let singleton: NativeTables | null = null;
-let singletonPromise: Promise<NativeTables> | null = null;
+const singletons = new Map<string, NativeTables>();
+const singletonPromises = new Map<string, Promise<NativeTables>>();
 
-export async function getNativeTables(): Promise<NativeTables> {
-  if (singleton) {
-    return singleton;
+export async function createNativeTables(storageTarget?: StorageTarget | null): Promise<NativeTables> {
+  const native = loadNativeModule();
+  await ensureLocalStorageRoot(storageTarget);
+  return wrapBinding(await resolveNativeResult(native.createCoreBinding(storageTarget ?? null)));
+}
+
+export async function getNativeTables(storageTarget?: StorageTarget | null): Promise<NativeTables> {
+  const key = storageTargetKey(storageTarget);
+  const cached = singletons.get(key);
+  if (cached) {
+    return cached;
   }
-  if (!singletonPromise) {
-    const native = loadNativeModule();
-    singletonPromise = resolveNativeResult(native.createCoreBinding())
-      .then((binding) => {
-        singleton = wrapBinding(binding);
-        return singleton;
+  const pending = singletonPromises.get(key);
+  if (pending) {
+    return pending;
+  }
+  const promise = createNativeTables(storageTarget)
+      .then((tables) => {
+        singletons.set(key, tables);
+        return tables;
       })
       .catch((error) => {
-        singletonPromise = null;
+        singletonPromises.delete(key);
         throw error;
       });
-  }
-  return singletonPromise;
+  singletonPromises.set(key, promise);
+  return promise;
 }
 
 export async function shutdownNativeTablesForTests(): Promise<void> {
-  singleton = null;
-  singletonPromise = null;
+  singletons.clear();
+  singletonPromises.clear();
 }
 
 export async function describeExtractionForStorage(
@@ -404,8 +449,9 @@ function wrapBinding(native: NativeCoreBinding): NativeTables {
     extractionTable: {
       nearest: async (params) => resolveNativeResult(native.extractionNearest(params)),
       search: async (params) => resolveNativeResult(native.extractionSearch(params)),
-      loadByIds: async (params) => resolveNativeResult(native.extractionLoadByIds(params)),
+      get: async (params) => resolveNativeResult(native.extractionGet(params)),
       list: async (params) => resolveNativeResult(native.extractionList(params)),
+      delta: async (params) => resolveNativeResult(native.extractionDelta(params)),
       upsert: async (params) => resolveNativeResult(native.extractionUpsert(params)),
       delete: async (params) => resolveNativeResult(native.extractionDelete(params)),
       validateDimensions: async (params) => resolveNativeResult(native.extractionValidateDimensions(params)),
@@ -419,16 +465,22 @@ function wrapBinding(native: NativeCoreBinding): NativeTables {
     observationContextTable: {
       upsert: async (params) => resolveNativeResult(native.observationContextUpsert(params)),
       list: async (params) => resolveNativeResult(native.observationContextList(params)),
-      loadByIds: async (params) => resolveNativeResult(native.observationContextLoadByIds(params)),
+      get: async (params) => resolveNativeResult(native.observationContextGet(params)),
       delete: async (params) => resolveNativeResult(native.observationContextDelete(params)),
       stats: async () => resolveNativeResult(native.observationContextTableStats()),
+      ensureIdIndex: async () => resolveNativeResult(native.observationContextEnsureIdIndex()),
+      optimize: async (params) => resolveNativeResult(native.observationContextOptimize(params)),
     },
     observationTable: {
       upsert: async (params) => resolveNativeResult(native.observationUpsert(params)),
       delete: async (params) => resolveNativeResult(native.observationDelete(params)),
       search: async (params) => resolveNativeResult(native.observationSearch(params)),
-      loadByIds: async (params) => resolveNativeResult(native.observationLoadByIds(params)),
+      get: async (params) => resolveNativeResult(native.observationGet(params)),
       stats: async () => resolveNativeResult(native.observationTableStats()),
+      ensureVectorIndex: async (params) => resolveNativeResult(native.observationEnsureVectorIndex(params)),
+      compact: async () => resolveNativeResult(native.observationCompact()),
+      cleanup: async (params) => resolveNativeResult(native.observationCleanup(params)),
+      optimize: async (params) => resolveNativeResult(native.observationOptimize(params)),
     },
   };
 }
@@ -446,6 +498,27 @@ export function resolveNativeBindingPath(): string {
 export const __testing = {
   resolveNativeBindingPath,
 };
+
+function storageTargetKey(storageTarget?: StorageTarget | null): string {
+  if (!storageTarget) {
+    return 'default';
+  }
+  const options = storageTarget.storageOptions
+    ? Object.entries(storageTarget.storageOptions)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, value]) => `${key}=${value}`)
+      .join('&')
+    : '';
+  return `${storageTarget.uri}#${options}`;
+}
+
+async function ensureLocalStorageRoot(storageTarget?: StorageTarget | null): Promise<void> {
+  if (!storageTarget?.uri.startsWith('file-object-store://')) {
+    return;
+  }
+  const filePath = storageTarget.uri.slice('file-object-store://'.length);
+  await mkdir(filePath, { recursive: true });
+}
 
 function normalizeOptionalRecord<T>(
   value: T | null | undefined,

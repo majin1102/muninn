@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
 import { access, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { execFile } from 'node:child_process';
+import net from 'node:net';
+import http from 'node:http';
+import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import core from '@muninn/core';
 
@@ -11,6 +13,7 @@ const execFileAsync = promisify(execFile);
 const repoRoot = path.resolve(import.meta.dirname, '../../..');
 const bridgePath = path.join(repoRoot, 'benchmark/locomo/dist/bridge.js');
 const fixturePath = path.join(repoRoot, 'benchmark/locomo/test/fixtures/mini-locomo.json');
+let activeSidecarLogs = null;
 
 async function exists(filePath) {
   try {
@@ -26,11 +29,133 @@ async function runBridge(command, options) {
   for (const [key, value] of Object.entries(options)) {
     args.push(`--${key}`, String(value));
   }
-  const { stdout } = await execFileAsync(process.execPath, args, {
-    cwd: repoRoot,
-    env: process.env,
+  let stdout;
+  try {
+    ({ stdout } = await execFileAsync(process.execPath, args, {
+      cwd: repoRoot,
+      env: process.env,
+    }));
+  } catch (error) {
+    if (activeSidecarLogs) {
+      error.stderr = `${error.stderr ?? ''}\n[sidecar]\n${activeSidecarLogs.join('')}`;
+    }
+    throw error;
+  }
+  const envelope = JSON.parse(stdout);
+  assert.equal(envelope.ok, true);
+  return envelope.result;
+}
+
+async function freePort() {
+  return new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address();
+      server.close(() => {
+        if (address && typeof address === 'object') {
+          resolve(address.port);
+        } else {
+          reject(new Error('failed to allocate port'));
+        }
+      });
+    });
+    server.on('error', reject);
   });
-  return JSON.parse(stdout);
+}
+
+async function startSidecar(t, home) {
+  const port = await freePort();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const previousBaseUrl = process.env.MUNINN_SIDECAR_BASE_URL;
+  process.env.MUNINN_SIDECAR_BASE_URL = baseUrl;
+  const sidecar = spawn(process.execPath, [path.join(repoRoot, 'packages/sidecar/dist/index.js')], {
+    cwd: repoRoot,
+    env: {
+      ...process.env,
+      PORT: String(port),
+      MUNINN_HOME: home,
+      MUNINN_OBSERVER_GATEWAY_TRACE_FILE: path.join(home, 'locomo-gateway-trace.jsonl'),
+      MUNINN_THREAD_OBSERVING_TRACE_FILE: path.join(home, 'locomo-thread-observing-trace.jsonl'),
+      MUNINN_OBSERVER_TRACE_FILE: path.join(home, 'locomo-observer-trace.jsonl'),
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  const logs = [];
+  activeSidecarLogs = logs;
+  sidecar.stdout.on('data', (chunk) => logs.push(String(chunk)));
+  sidecar.stderr.on('data', (chunk) => logs.push(String(chunk)));
+  t.after(async () => {
+    if (previousBaseUrl === undefined) {
+      delete process.env.MUNINN_SIDECAR_BASE_URL;
+    } else {
+      process.env.MUNINN_SIDECAR_BASE_URL = previousBaseUrl;
+    }
+    if (sidecar.exitCode === null) {
+      sidecar.kill('SIGTERM');
+      await new Promise((resolve) => sidecar.once('exit', resolve));
+    }
+    activeSidecarLogs = null;
+  });
+
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    if (sidecar.exitCode !== null) {
+      throw new Error(`sidecar exited before health check: ${logs.join('')}`);
+    }
+    try {
+      const response = await fetch(`${baseUrl}/health`);
+      if (response.ok) {
+        return baseUrl;
+      }
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  }
+  throw new Error(`sidecar health check timed out: ${logs.join('')}`);
+}
+
+async function mockWatermarkSidecar(t, responses) {
+  const port = await freePort();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const previousBaseUrl = process.env.MUNINN_SIDECAR_BASE_URL;
+  process.env.MUNINN_SIDECAR_BASE_URL = baseUrl;
+  const calls = [];
+  const server = http.createServer((request, response) => {
+    calls.push({ url: `${baseUrl}${request.url}`, method: request.method ?? 'GET' });
+    const next = responses.shift() ?? {
+      resolved: false,
+      pendingTurnIds: ['turn:1'],
+    };
+    response.writeHead(200, { 'content-type': 'application/json' });
+    response.end(JSON.stringify(next));
+  });
+  await new Promise((resolve, reject) => {
+    server.listen(port, '127.0.0.1', resolve);
+    server.on('error', reject);
+  });
+  t.after(() => {
+    if (previousBaseUrl === undefined) {
+      delete process.env.MUNINN_SIDECAR_BASE_URL;
+    } else {
+      process.env.MUNINN_SIDECAR_BASE_URL = previousBaseUrl;
+    }
+    server.close();
+  });
+  return calls;
+}
+
+function watermarkManifest() {
+  return {
+    sample_id: 'sample-a',
+    turns: [{
+      turn_id: 'turn:1',
+      source_id: 'D1:1',
+      sample_id: 'sample-a',
+      session_id: 'locomo:sample-a:session_1',
+      date_time: '1:56 pm on 8 May, 2023',
+      import_order: 0,
+    }],
+  };
 }
 
 async function writeMuninnConfig(
@@ -96,6 +221,7 @@ test('import writes an external manifest aligned to locomo sessions', async (t) 
     storageUri: 'file-object-store:///tmp/muninn-shared-storage',
   });
   await runBridge('reset-home', { 'muninn-home': home });
+  await startSidecar(t, home);
   const imported = await runBridge('import-sample', {
     'data-file': fixturePath,
     'sample-id': 'sample-a',
@@ -145,6 +271,7 @@ test('recall returns evidence ids without leaking benchmark artifacts into munin
     semanticIndexProvider: 'mock',
   });
   await runBridge('reset-home', { 'muninn-home': home });
+  await startSidecar(t, home);
   process.env.MUNINN_OBSERVER_POLL_MS = '20';
   await runBridge('import-sample', {
     'data-file': fixturePath,
@@ -165,10 +292,10 @@ test('recall returns evidence ids without leaking benchmark artifacts into munin
   assert.equal('summary' in supportHit, false);
   assert.equal(typeof supportHit.matched_text, 'string');
   assert.ok(supportHit.matched_text.trim());
-  assert.match(supportHit.detail, /^EXTRACTION: /);
+  assert.match(supportHit.detail, /^(EXTRACTION|OBSERVATION): /);
   assert.match(supportHit.detail, new RegExp(escapeRegExp(supportHit.matched_text)));
   assert.doesNotMatch(supportHit.matched_text, /Recorded/);
-  assert.equal(supportHit.extractionRatio ?? null, null);
+  assert.equal(supportHit.observationRatio ?? null, null);
   assert.ok(supportHit.references.some((reference) => /Caroline said:/.test(reference.text)));
   assert.ok(!('source_id' in recalled.hits[0]));
 
@@ -296,32 +423,32 @@ test('withTransientRetry does not retry non-transient failures', async () => {
   assert.equal(attempts, 1);
 });
 
+test('bridge emits JSON error envelope for command failures', async () => {
+  await assert.rejects(
+    async () => {
+      await execFileAsync(process.execPath, [bridgePath, 'unknown-command'], {
+        cwd: repoRoot,
+        env: process.env,
+      });
+    },
+    (error) => {
+      const envelope = JSON.parse(error.stdout);
+      assert.equal(envelope.ok, false);
+      assert.match(envelope.error.message, /unknown command: unknown-command/);
+      assert.match(envelope.error.stack, /unknown command: unknown-command/);
+      return true;
+    },
+  );
+});
+
 test('waitForImportWatermark times out with pending turn ids when observer does not flush in time', async (t) => {
-  const home = await mkdtemp(path.join(os.tmpdir(), 'muninn-locomo-watermark-timeout-'));
-  t.after(async () => rm(home, { recursive: true, force: true }));
-  t.after(async () => core.shutdownCoreForTests());
-  t.after(() => {
-    delete process.env.MUNINN_OBSERVER_POLL_MS;
-  });
-
-  await prepareSourceConfig(t, {
-    observerProvider: 'openai',
-    semanticIndexProvider: 'mock',
-  });
-  await runBridge('reset-home', { 'muninn-home': home });
-  process.env.MUNINN_OBSERVER_POLL_MS = '60000';
-  await runBridge('import-sample', {
-    'data-file': fixturePath,
-    'sample-id': 'sample-a',
-    'muninn-home': home,
-  });
-
-  process.env.MUNINN_HOME = home;
+  await mockWatermarkSidecar(t, [
+    { resolved: false, pendingTurnIds: ['turn:1'] },
+  ]);
   const bridgeModule = await import(bridgePath);
-  const manifest = JSON.parse(await readFile(path.join(home, 'locomo-manifest.json'), 'utf8'));
 
   await assert.rejects(
-    () => bridgeModule.waitForImportWatermark(manifest, {
+    () => bridgeModule.waitForImportWatermark(watermarkManifest(), {
       pollMs: 10,
       timeoutMs: 50,
     }),
@@ -347,28 +474,10 @@ test('import only fails fast when extraction config is missing', async (t) => {
 });
 
 test('waitForImportWatermark emits a delayed unresolved-watermark warning', async (t) => {
-  const home = await mkdtemp(path.join(os.tmpdir(), 'muninn-locomo-warning-'));
-  t.after(async () => rm(home, { recursive: true, force: true }));
-  t.after(async () => core.shutdownCoreForTests());
-  t.after(() => {
-    delete process.env.MUNINN_OBSERVER_POLL_MS;
-  });
-
-  await prepareSourceConfig(t, {
-    observerProvider: 'openai',
-    semanticIndexProvider: 'mock',
-  });
-  await runBridge('reset-home', { 'muninn-home': home });
-  await runBridge('import-sample', {
-    'data-file': fixturePath,
-    'sample-id': 'sample-a',
-    'muninn-home': home,
-  });
-
-  process.env.MUNINN_HOME = home;
-  process.env.MUNINN_OBSERVER_POLL_MS = '60000';
+  await mockWatermarkSidecar(t, [
+    { resolved: false, pendingTurnIds: ['turn:1'], extractingEpoch: 1, committedEpoch: 0 },
+  ]);
   const bridgeModule = await import(bridgePath);
-  const manifest = JSON.parse(await readFile(path.join(home, 'locomo-manifest.json'), 'utf8'));
   const originalError = console.error;
   const messages = [];
   console.error = (...args) => {
@@ -377,7 +486,7 @@ test('waitForImportWatermark emits a delayed unresolved-watermark warning', asyn
 
   try {
     await assert.rejects(
-      () => bridgeModule.waitForImportWatermark(manifest, {
+      () => bridgeModule.waitForImportWatermark(watermarkManifest(), {
         pollMs: 10,
         timeoutMs: 60,
         warningDelayMs: 0,
@@ -392,35 +501,19 @@ test('waitForImportWatermark emits a delayed unresolved-watermark warning', asyn
 });
 
 test('waitForImportWatermark reads timeout and warning defaults from env', async (t) => {
-  const home = await mkdtemp(path.join(os.tmpdir(), 'muninn-locomo-env-timeout-'));
-  t.after(async () => rm(home, { recursive: true, force: true }));
-  t.after(async () => core.shutdownCoreForTests());
+  await mockWatermarkSidecar(t, [
+    { resolved: false, pendingTurnIds: ['turn:1'] },
+  ]);
   t.after(() => {
     delete process.env.MUNINN_LOCOMO_WATERMARK_TIMEOUT_MS;
     delete process.env.MUNINN_LOCOMO_WATERMARK_WARNING_DELAY_MS;
-    delete process.env.MUNINN_OBSERVER_POLL_MS;
   });
-
-  await prepareSourceConfig(t, {
-    observerProvider: 'openai',
-    semanticIndexProvider: 'mock',
-  });
-  await runBridge('reset-home', { 'muninn-home': home });
-  await runBridge('import-sample', {
-    'data-file': fixturePath,
-    'sample-id': 'sample-a',
-    'muninn-home': home,
-  });
-
-  process.env.MUNINN_HOME = home;
-  process.env.MUNINN_OBSERVER_POLL_MS = '60000';
   process.env.MUNINN_LOCOMO_WATERMARK_TIMEOUT_MS = '50';
   process.env.MUNINN_LOCOMO_WATERMARK_WARNING_DELAY_MS = '0';
   const bridgeModule = await import(`${bridgePath}?env-timeout=${Date.now()}`);
-  const manifest = JSON.parse(await readFile(path.join(home, 'locomo-manifest.json'), 'utf8'));
 
   await assert.rejects(
-    () => bridgeModule.waitForImportWatermark(manifest, { pollMs: 10 }),
+    () => bridgeModule.waitForImportWatermark(watermarkManifest(), { pollMs: 10 }),
     /memory watermark timeout.*pending turn ids/i,
   );
 });
@@ -431,35 +524,44 @@ test('waitForImportWatermark default timeout is thirty minutes', async () => {
   assert.equal(bridgeModule.__testing.WATERMARK_TIMEOUT_MS, 30 * 60 * 1000);
 });
 
-test('waitForImportWatermark does not depend on repo-root cwd to load sidecar app', async (t) => {
-  const home = await mkdtemp(path.join(os.tmpdir(), 'muninn-locomo-cwd-'));
+test('waitForImportWatermark calls the configured persistent sidecar', async (t) => {
+  const calls = await mockWatermarkSidecar(t, [{
+    resolved: true,
+    pendingTurnIds: [],
+    observerPending: false,
+  }]);
+
+  const bridgeModule = await import(`${bridgePath}?persistent-sidecar=${Date.now()}`);
+  await bridgeModule.waitForImportWatermark({
+    sample_id: 'sample-a',
+    turns: [{
+      turn_id: 'turn:1',
+      source_id: 'D1:1',
+      sample_id: 'sample-a',
+      session_id: 'locomo:sample-a:session_1',
+      date_time: '1:56 pm on 8 May, 2023',
+      import_order: 0,
+    }],
+  });
+
+  assert.equal(calls.length, 1);
+  assert.equal(new URL(calls[0].url).pathname, '/api/v1/memory/finalize');
+  assert.equal(calls[0].method, 'POST');
+});
+
+test('waitForImportWatermark does not depend on repo-root cwd', async (t) => {
   const originalCwd = process.cwd();
-  t.after(async () => rm(home, { recursive: true, force: true }));
-  t.after(async () => core.shutdownCoreForTests());
   t.after(() => {
     process.chdir(originalCwd);
-    delete process.env.MUNINN_OBSERVER_POLL_MS;
   });
-
-  await prepareSourceConfig(t, {
-    observerProvider: 'openai',
-    semanticIndexProvider: 'mock',
-  });
-  await runBridge('reset-home', { 'muninn-home': home });
-  await runBridge('import-sample', {
-    'data-file': fixturePath,
-    'sample-id': 'sample-a',
-    'muninn-home': home,
-  });
-
-  process.env.MUNINN_HOME = home;
-  process.env.MUNINN_OBSERVER_POLL_MS = '60000';
+  await mockWatermarkSidecar(t, [
+    { resolved: false, pendingTurnIds: ['turn:1'] },
+  ]);
   process.chdir(path.join(repoRoot, 'benchmark/locomo'));
   const bridgeModule = await import(bridgePath);
-  const manifest = JSON.parse(await readFile(path.join(home, 'locomo-manifest.json'), 'utf8'));
 
   await assert.rejects(
-    () => bridgeModule.waitForImportWatermark(manifest, {
+    () => bridgeModule.waitForImportWatermark(watermarkManifest(), {
       pollMs: 10,
       timeoutMs: 50,
     }),

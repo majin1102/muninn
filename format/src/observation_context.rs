@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
@@ -11,7 +12,10 @@ use super::access::{
     describe_dataset, escape_predicate_string,
 };
 use super::codec::{observation_contexts_to_reader, record_batch_to_observation_contexts};
-use crate::maintenance::{cleanup_dataset, compact_dataset};
+use crate::maintenance::{
+    cleanup_dataset, compact_dataset, ensure_observation_context_id_index,
+    optimize_observation_context,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -60,6 +64,20 @@ impl ObservationContextTable {
         compact_dataset(self.access.try_open().await?).await
     }
 
+    pub async fn ensure_id_index(&self) -> Result<bool> {
+        let Some(mut dataset) = self.access.try_open().await? else {
+            return Ok(false);
+        };
+        ensure_observation_context_id_index(&mut dataset).await
+    }
+
+    pub async fn optimize(&self, merge_count: usize) -> Result<bool> {
+        let Some(mut dataset) = self.access.try_open().await? else {
+            return Ok(false);
+        };
+        optimize_observation_context(&mut dataset, merge_count).await
+    }
+
     pub async fn cleanup(&self, floor_version: u64) -> Result<bool> {
         cleanup_dataset(self.access.try_open().await?, floor_version).await
     }
@@ -96,7 +114,7 @@ impl ObservationContextTable {
         Ok(rows)
     }
 
-    pub async fn load_by_ids(&self, ids: &[String]) -> Result<Vec<ObservationContext>> {
+    pub async fn get(&self, ids: &[String]) -> Result<Vec<ObservationContext>> {
         if ids.is_empty() {
             return Ok(Vec::new());
         }
@@ -117,7 +135,12 @@ impl ObservationContextTable {
         if batch.num_rows() == 0 {
             return Ok(Vec::new());
         }
-        record_batch_to_observation_contexts(&batch)
+        let rows = record_batch_to_observation_contexts(&batch)?;
+        let mut by_id = rows
+            .into_iter()
+            .map(|row| (row.id.clone(), row))
+            .collect::<HashMap<_, _>>();
+        Ok(ids.iter().filter_map(|id| by_id.remove(id)).collect())
     }
 
     pub async fn upsert(&self, rows: Vec<ObservationContext>) -> Result<()> {
@@ -184,10 +207,39 @@ mod tests {
             }])
             .await
             .unwrap();
+        table
+            .upsert(vec![ObservationContext {
+                id: "00000000-0000-4000-8000-000000000002".to_string(),
+                observing_path: "Melanie / What happened?".to_string(),
+                parent_id: None,
+                position: 1,
+                content: "Melanie painted a lake sunrise.".to_string(),
+                created_at: now,
+                updated_at: now,
+                observer: "default-observer".to_string(),
+            }])
+            .await
+            .unwrap();
 
         let rows = table.list(Some("default-observer")).await.unwrap();
-        assert_eq!(rows.len(), 1);
+        assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].content, "Caroline attended an LGBTQ support group.");
+
+        let rows = table
+            .get(&[
+                "00000000-0000-4000-8000-000000000002".to_string(),
+                "missing".to_string(),
+                "00000000-0000-4000-8000-000000000001".to_string(),
+            ])
+            .await
+            .unwrap();
+        assert_eq!(
+            rows.iter().map(|row| row.id.as_str()).collect::<Vec<_>>(),
+            vec![
+                "00000000-0000-4000-8000-000000000002",
+                "00000000-0000-4000-8000-000000000001",
+            ],
+        );
 
         assert_eq!(
             table
@@ -196,6 +248,6 @@ mod tests {
                 .unwrap(),
             1,
         );
-        assert!(table.list(Some("default-observer")).await.unwrap().is_empty());
+        assert_eq!(table.list(Some("default-observer")).await.unwrap().len(), 1);
     }
 }

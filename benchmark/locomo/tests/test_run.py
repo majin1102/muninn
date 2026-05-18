@@ -10,7 +10,9 @@ from benchmark.locomo.run import (
     ensure_selected_samples,
     load_gateway_routes,
     max_evidence_session,
+    merge_import_manifests,
     parse_args,
+    run_home_name,
 )
 
 
@@ -63,6 +65,39 @@ class RunTests(unittest.TestCase):
         self.assertEqual(args.mode, "benchmark")
         self.assertEqual(args.answerer, "heuristic")
         self.assertTrue(args.expand_references)
+
+    def test_run_home_name_uses_sample_for_single_and_out_file_for_multiple(self) -> None:
+        self.assertEqual(
+            run_home_name([{"sample_id": "conv-26"}], Path("benchmark/locomo/out/one.json")),
+            "conv-26",
+        )
+        self.assertEqual(
+            run_home_name(
+                [{"sample_id": "conv-26"}, {"sample_id": "conv-30"}],
+                Path("benchmark/locomo/out/conv-26-30.json"),
+            ),
+            "conv-26-30",
+        )
+
+    def test_merge_import_manifests_combines_turns(self) -> None:
+        merged = merge_import_manifests([
+            {
+                "sample_id": "conv-26",
+                "baseline_extracting_epoch": 1,
+                "baseline_committed_epoch": 1,
+                "turns": [{"turn_id": "turn:1", "source_id": "D1:1", "sample_id": "conv-26"}],
+            },
+            {
+                "sample_id": "conv-30",
+                "baseline_extracting_epoch": 4,
+                "baseline_committed_epoch": 4,
+                "turns": [{"turn_id": "turn:2", "source_id": "D1:1", "sample_id": "conv-30"}],
+            },
+        ])
+
+        self.assertEqual(merged["sample_id"], "conv-26+conv-30")
+        self.assertEqual(merged["baseline_extracting_epoch"], 1)
+        self.assertEqual([turn["sample_id"] for turn in merged["turns"]], ["conv-26", "conv-30"])
 
     def test_build_import_sample_keeps_sessions_needed_by_selected_qas(self) -> None:
         sample = {

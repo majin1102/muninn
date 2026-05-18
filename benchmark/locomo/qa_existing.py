@@ -36,6 +36,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--out-file", required=True, type=Path)
     parser.add_argument("--progress-file", default=None, type=Path)
     parser.add_argument("--runs-dir", default=Path("benchmark") / "locomo" / ".runs", type=Path)
+    parser.add_argument("--home-dir", default=None, type=Path)
     parser.add_argument("--sample-id", action="append", default=[])
     parser.add_argument("--top-k", default=3, type=int)
     parser.add_argument("--recall-mode", choices=["vector", "fts", "hybrid"], default="hybrid")
@@ -71,6 +72,7 @@ def main() -> None:
             out_file=args.out_file,
             progress_file=args.progress_file,
             runs_dir=args.runs_dir,
+            home_dir=args.home_dir,
             sample_count=len(selected),
             samples=[sample["sample_id"] for sample in selected],
             top_k=args.top_k,
@@ -139,7 +141,7 @@ def run_sample(
     model_key: str,
 ) -> tuple[dict[str, Any], dict[str, list[dict[str, Any]]]]:
     sample_id = str(sample["sample_id"])
-    home = args.runs_dir / sample_id
+    home = args.home_dir or (args.runs_dir / sample_id)
     if not home.exists():
         raise FileNotFoundError(f"existing LoCoMo run home not found: {home}")
 
@@ -168,6 +170,7 @@ def run_sample(
         args.budget,
         args.query_limit,
         True,
+        sample_id=sample_id,
     )
     answerer_config = load_answerer_config(home) if args.answerer == "llm" else None
     for qa_index, qa in enumerate(qas):
@@ -193,7 +196,7 @@ def run_sample(
         elapsed_s=round(monotonic() - sample_started_at, 4),
         stats=stats,
     )
-    gateway_routes = load_gateway_routes(home / "locomo-gateway-trace.jsonl")
+    gateway_routes = load_gateway_routes(home / sample_id / "logs" / "locomo-gateway-trace.jsonl")
     return sample_result, gateway_routes
 
 

@@ -33,7 +33,7 @@ const { __testing: threadTesting } = threadModule;
 const { __testing: observingGatewayTesting } = observingGatewayModule;
 const { createObservingThread, getPendingIndex, getPendingIndexUpTo, loadThreads, toSessionSnapshot } = threadModule;
 const { addMessage, observer: observerApi, shutdownCoreForTests } = core;
-const CHECKPOINT_SCHEMA_VERSION = 5;
+const CHECKPOINT_SCHEMA_VERSION = 6;
 
 function createCheckpointBackend(exported = null) {
   return {
@@ -56,6 +56,7 @@ function makeExtractorCheckpoint(overrides = {}) {
     recentSessions: [],
     threads: [],
     runs: [],
+    pendingExtractionChanges: [],
     ...overrides,
     baseline,
   };
@@ -63,13 +64,13 @@ function makeExtractorCheckpoint(overrides = {}) {
 
 function makeObserverCheckpoint(overrides = {}) {
   const baseline = {
-    extraction: 8,
     observationContext: 0,
     observation: 0,
     ...(overrides.baseline ?? {}),
   };
   return {
     baseline,
+    observeQueue: { anchors: [] },
     runs: [],
     ...overrides,
     baseline,
@@ -199,7 +200,7 @@ test('config reads extraction embedding config and rejects semanticIndex', async
   })), /semanticIndex/);
 });
 
-test('observer anchor threshold defaults to five and validates positive integer', () => {
+test('observer anchor threshold defaults to eight and validates positive integer', () => {
   const config = {
     storage: { uri: 'file:///tmp/muninn-test' },
     extractor: { name: 'default-extractor', llm: 'extractor_llm' },
@@ -210,7 +211,7 @@ test('observer anchor threshold defaults to five and validates positive integer'
     },
     extraction: { embedding: { provider: 'mock' } },
   };
-  assert.equal(getObserverRuntimeConfigFromConfigForTests(config).anchorThreshold, 5);
+  assert.equal(getObserverRuntimeConfigFromConfigForTests(config).anchorThreshold, 8);
   assert.throws(() => validateMuninnConfigInput(JSON.stringify({
     ...config,
     observer: { name: 'default-observer', llm: 'observer_llm', anchorThreshold: 0 },
@@ -228,9 +229,11 @@ test('checkpoint preserves observer runs', () => {
       recentSessions: [],
       threads: [],
       runs: [],
+      pendingExtractionChanges: [],
     },
     observer: {
-      baseline: { extraction: 0, observationContext: 0, observation: 0 },
+      baseline: { observationContext: 0, observation: 0 },
+      observeQueue: { anchors: [] },
       runs: [{
         runId: 'run-1',
         observeId: 'entity:caroline',
@@ -239,6 +242,7 @@ test('checkpoint preserves observer runs', () => {
         pendingExtractionIds: ['abc'],
         errors: [],
       }],
+      pendingExtractionChanges: [],
     },
   }));
   assert.equal(checkpoint.observer.runs[0].observeId, 'entity:caroline');
@@ -247,31 +251,131 @@ test('checkpoint preserves observer runs', () => {
 test('native bindings expose observation context and observation tables', async () => {
   const tables = await getNativeTables();
   assert.equal(typeof tables.extractionTable.list, 'function');
+  assert.equal(typeof tables.extractionTable.delta, 'function');
   assert.equal(typeof tables.observationContextTable.upsert, 'function');
   assert.equal(typeof tables.observationContextTable.list, 'function');
   assert.equal(typeof tables.observationContextTable.stats, 'function');
+  assert.equal(typeof tables.observationContextTable.ensureIdIndex, 'function');
+  assert.equal(typeof tables.observationContextTable.optimize, 'function');
   assert.equal(typeof tables.observationTable.upsert, 'function');
   assert.equal(typeof tables.observationTable.delete, 'function');
   assert.equal(typeof tables.observationTable.search, 'function');
   assert.equal(typeof tables.observationTable.stats, 'function');
+  assert.equal(typeof tables.observationTable.ensureVectorIndex, 'function');
+  assert.equal(typeof tables.observationTable.compact, 'function');
+  assert.equal(typeof tables.observationTable.cleanup, 'function');
+  assert.equal(typeof tables.observationTable.optimize, 'function');
+});
+
+test('table mutation locks serialize writes on the same table', async () => {
+  const { TableMutationLocks } = await import('../dist/table-locks.js');
+  const locks = new TableMutationLocks();
+  const firstEntered = deferred();
+  const releaseFirst = deferred();
+  const secondEntered = deferred();
+
+  const first = locks.with('observation', async () => {
+    firstEntered.resolve();
+    await releaseFirst.promise;
+    return 'first';
+  });
+  await firstEntered.promise;
+
+  const second = locks.with('observation', async () => {
+    secondEntered.resolve();
+    return 'second';
+  });
+
+  const secondStartedEarly = await Promise.race([
+    secondEntered.promise.then(() => true),
+    new Promise((resolve) => setTimeout(() => resolve(false), 30)),
+  ]);
+  assert.equal(secondStartedEarly, false);
+
+  releaseFirst.resolve();
+  assert.equal(await first, 'first');
+  assert.equal(await second, 'second');
+});
+
+test('table mutation locks allow writes on different tables to overlap', async () => {
+  const { TableMutationLocks } = await import('../dist/table-locks.js');
+  const locks = new TableMutationLocks();
+  const extractionEntered = deferred();
+  const observationEntered = deferred();
+  const release = deferred();
+
+  const extraction = locks.with('extraction', async () => {
+    extractionEntered.resolve();
+    await release.promise;
+  });
+  const observation = locks.with('observation', async () => {
+    observationEntered.resolve();
+    await release.promise;
+  });
+
+  await extractionEntered.promise;
+  await observationEntered.promise;
+  release.resolve();
+  await Promise.all([extraction, observation]);
+});
+
+test('lockNativeTables serializes same-table mutations without locking reads', async () => {
+  const { TableMutationLocks, lockNativeTables } = await import('../dist/table-locks.js');
+  const locks = new TableMutationLocks();
+  const upsertEntered = deferred();
+  const releaseUpsert = deferred();
+  const optimizeEntered = deferred();
+  let searchCalls = 0;
+  const tables = lockNativeTables({
+    observationTable: {
+      upsert: async () => {
+        upsertEntered.resolve();
+        await releaseUpsert.promise;
+      },
+      optimize: async () => {
+        optimizeEntered.resolve();
+        return { changed: true };
+      },
+      search: async () => {
+        searchCalls += 1;
+        return [];
+      },
+    },
+  }, locks);
+
+  const upsert = tables.observationTable.upsert({ rows: [] });
+  await upsertEntered.promise;
+  const optimize = tables.observationTable.optimize({ mergeCount: 1 });
+  await tables.observationTable.search({ query: 'q', vector: [], limit: 1, mode: 'hybrid' });
+  assert.equal(searchCalls, 1);
+
+  const optimizeStartedEarly = await Promise.race([
+    optimizeEntered.promise.then(() => true),
+    new Promise((resolve) => setTimeout(() => resolve(false), 30)),
+  ]);
+  assert.equal(optimizeStartedEarly, false);
+
+  releaseUpsert.resolve();
+  await upsert;
+  assert.deepEqual(await optimize, { changed: true });
 });
 
 test('memories.get renders curated observation memories', async () => {
   const client = {
     observationTable: {
-      loadByIds: async ({ ids }) => ids.includes('obs-1')
+      get: async ({ ids }) => ids.includes('obs-1')
         ? [{
             id: 'obs-1',
             observingPath: 'Caroline / Research',
             text: 'Caroline researched adoption agencies.',
             vector: [],
-            extractionRefs: ['extraction:ext-1'],
+            extractionRefs: ['ext-1'],
             createdAt: '2024-01-01T00:00:00Z',
             updatedAt: '2024-01-01T00:00:00Z',
           }]
         : [],
     },
-    extractionTable: { loadByIds: async () => [] },
+    extractionTable: { get: async () => [] },
     sessionTable: { get: async () => null },
     turnTable: { get: async () => null },
   };
@@ -287,8 +391,8 @@ test('memories.get renders curated observation memories', async () => {
 
 test('memories.get returns null for unknown curated observation memories', async () => {
   const client = {
-    observationTable: { loadByIds: async () => [] },
-    extractionTable: { loadByIds: async () => [] },
+    observationTable: { get: async () => [] },
+    extractionTable: { get: async () => [] },
     sessionTable: { get: async () => null },
     turnTable: { get: async () => null },
   };
@@ -315,6 +419,19 @@ test('observer markdown parser derives parent and child observations', async () 
   assert.equal(parsed.sections[0].heading, 'Who is Alex?');
   assert.equal(parsed.sections[0].children[0].heading, 'What changed recently?');
   assert.deepEqual(parsed.sections[0].children[0].refs, ['extraction:c']);
+});
+
+test('observer markdown parser normalizes unique extraction id prefixes', async () => {
+  const { parseObserverDocument } = await import('../dist/observer/markdown.js');
+  const parsed = parseObserverDocument([
+    '# Alex',
+    '',
+    '## Who is Alex? <!-- refs: [08d7c1e281aa5df631a8] -->',
+    '',
+    'Alex finished a pottery project.',
+  ].join('\n'), new Set(['08d7c1e281aa5df631a8c1c3']));
+
+  assert.deepEqual(parsed.sections[0].refs, ['08d7c1e281aa5df631a8c1c3']);
 });
 
 test('observer markdown parser rejects invalid refs and missing refs', async () => {
@@ -344,10 +461,11 @@ test('observer markdown parser rejects invalid refs and missing refs', async () 
   ].join('\n'), new Set(['extraction:a'])), /unknown extraction id|unknown extraction/i);
 });
 
-test('observer prompt uses content and extractions inputs', async () => {
+test('observer prompt renders status and extraction inputs', async () => {
   const { __testing: observingTesting } = await import('../dist/llm/observing.js');
   const rendered = observingTesting.renderExtractions([{
     id: 'abc',
+    status: 'new',
     text: 'Alex moved onboarding review to Thursday.',
     context: 'The team compared review days.',
     anchors: ['Entity: Alex', 'Decision: review day'],
@@ -355,6 +473,7 @@ test('observer prompt uses content and extractions inputs', async () => {
   }]);
 
   assert.match(rendered, /- abc/);
+  assert.match(rendered, /Status: new/);
   assert.match(rendered, /Anchors: Entity: Alex; Decision: review day/);
   assert.match(rendered, /Context: The team compared review days\./);
   assert.match(rendered, /Extraction: Alex moved onboarding review to Thursday\./);
@@ -532,7 +651,7 @@ function makeObserverClient() {
     },
     extractionTable: {
       delete: async () => ({ deleted: 0 }),
-      loadByIds: async () => [],
+      get: async () => [],
       upsert: async () => undefined,
     },
   };
@@ -778,6 +897,125 @@ test('watchdog creates and optimizes extraction index only once for an unchanged
   )));
   assert.ok(records.some((record) => (
     record.dataset === 'extraction'
+    && record.event === 'optimized'
+    && record.details?.indexCreated === true
+  )));
+  assert.equal(records.length, 2);
+});
+
+test('watchdog creates and optimizes observation index only once for an unchanged version', async (t) => {
+  const { dir, homeDir } = await makeConfigHome();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+  process.env.MUNINN_HOME = homeDir;
+
+  let ensureCalls = 0;
+  let optimizeCalls = 0;
+  const runtime = new Watchdog({
+    turnTable: {
+      stats: async () => null,
+      compact: async () => ({ changed: false }),
+    },
+    sessionTable: {
+      stats: async () => null,
+      compact: async () => ({ changed: false }),
+    },
+    extractionTable: {
+      ensureVectorIndex: async () => ({ created: false }),
+      stats: async () => null,
+      compact: async () => ({ changed: false }),
+      optimize: async () => ({ changed: false }),
+    },
+    observationTable: {
+      ensureVectorIndex: async () => {
+        ensureCalls += 1;
+        return { created: ensureCalls === 1 };
+      },
+      stats: async () => ({
+        version: 17,
+        fragmentCount: 1,
+        rowCount: 3,
+      }),
+      compact: async () => ({ changed: false }),
+      optimize: async () => {
+        optimizeCalls += 1;
+        return { changed: true };
+      },
+    },
+  }, createWatchdogConfig({ compactMinFragments: 3 }));
+  t.after(async () => runtime.stop());
+
+  runtime.start();
+  await waitFor(() => optimizeCalls === 1);
+  await new Promise((resolve) => setTimeout(resolve, 80));
+
+  assert.equal(optimizeCalls, 1);
+  const records = await readWatchdogLog(homeDir);
+  assert.ok(records.some((record) => (
+    record.dataset === 'observation'
+    && record.event === 'index_created'
+    && record.version === 17
+  )));
+  assert.ok(records.some((record) => (
+    record.dataset === 'observation'
+    && record.event === 'optimized'
+    && record.details?.indexCreated === true
+  )));
+  assert.equal(records.length, 2);
+});
+
+test('watchdog creates and optimizes observation context id index only once for an unchanged version', async (t) => {
+  const { dir, homeDir } = await makeConfigHome();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+  process.env.MUNINN_HOME = homeDir;
+
+  let ensureCalls = 0;
+  let optimizeCalls = 0;
+  const runtime = new Watchdog({
+    turnTable: {
+      stats: async () => null,
+      compact: async () => ({ changed: false }),
+    },
+    sessionTable: {
+      stats: async () => null,
+      compact: async () => ({ changed: false }),
+    },
+    extractionTable: {
+      ensureVectorIndex: async () => ({ created: false }),
+      stats: async () => null,
+      compact: async () => ({ changed: false }),
+      optimize: async () => ({ changed: false }),
+    },
+    observationContextTable: {
+      ensureIdIndex: async () => {
+        ensureCalls += 1;
+        return { created: ensureCalls === 1 };
+      },
+      stats: async () => ({
+        version: 19,
+        fragmentCount: 1,
+        rowCount: 3,
+      }),
+      optimize: async () => {
+        optimizeCalls += 1;
+        return { changed: true };
+      },
+    },
+  }, createWatchdogConfig({ compactMinFragments: 3 }));
+  t.after(async () => runtime.stop());
+
+  runtime.start();
+  await waitFor(() => optimizeCalls === 1);
+  await new Promise((resolve) => setTimeout(resolve, 80));
+
+  assert.equal(optimizeCalls, 1);
+  const records = await readWatchdogLog(homeDir);
+  assert.ok(records.some((record) => (
+    record.dataset === 'observationContext'
+    && record.event === 'index_created'
+    && record.version === 19
+  )));
+  assert.ok(records.some((record) => (
+    record.dataset === 'observationContext'
     && record.event === 'optimized'
     && record.details?.indexCreated === true
   )));
@@ -1040,7 +1278,45 @@ test('watchdog writes observer checkpoint files', async (t) => {
       updatedAt: '2024-01-01T00:00:00Z',
     }],
     runs: [],
+    pendingExtractionChanges: [],
   });
+});
+
+test('watchdog serializes concurrent checkpoint flushes', async (t) => {
+  const { dir, homeDir, configPath } = await makeConfigHome();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+  process.env.MUNINN_HOME = homeDir;
+  await writeObserverConfig(configPath);
+
+  const checkpointContent = makeCheckpointContent({
+    extractor: makeExtractorCheckpoint({
+      recentSessions: [makeRecentSessionCheckpoint([makeRecentTurn('turn:101', 'checkpoint-concurrent')])],
+    }),
+  });
+  let exportCalls = 0;
+  let releaseExport;
+  const exportGate = new Promise((resolve) => {
+    releaseExport = resolve;
+  });
+  const runtime = new Watchdog({}, createWatchdogConfig({ intervalMs: 25 }), {
+    exportCheckpoint: async () => {
+      exportCalls += 1;
+      await exportGate;
+      return checkpointContent;
+    },
+  });
+
+  const first = runtime.flushCheckpoint();
+  const second = runtime.flushCheckpoint();
+  const third = runtime.flushCheckpoint();
+  await waitFor(() => exportCalls === 1);
+  assert.equal(exportCalls, 1);
+  releaseExport();
+  await Promise.all([first, second, third]);
+
+  assert.equal(exportCalls, 1);
+  const checkpoint = await readCheckpoint();
+  assert.deepEqual(checkpoint.extractor.recentSessions, checkpointContent.extractor.recentSessions);
 });
 
 test('watchdog skips checkpoint writes when contributors return no observer state', async (t) => {
@@ -1293,8 +1569,9 @@ test('checkpoint preserves session runs', async () => {
         traceRefs: [],
         errors: [],
       }],
+      pendingExtractionChanges: [],
     },
-    observer: makeObserverCheckpoint({ baseline: { extraction: 1, observationContext: 0, observation: 0 } }),
+    observer: makeObserverCheckpoint({ baseline: { observationContext: 0, observation: 0 } }),
   };
 
   const parsed = parseCheckpointFile(serializeCheckpointFile(file));
@@ -1791,6 +2068,7 @@ test('observer bootstrap restores committed state from checkpoint when baselines
     committedEpoch: 12,
     nextEpoch: 13,
     runs: [],
+    pendingExtractionChanges: [],
     threads: [{
       sessionId: 'obs-1',
       latestSnapshotId: 'turn:42',
@@ -2254,7 +2532,7 @@ test('observer exportCheckpoint keeps the last committed snapshot while observeC
     },
     extractionTable: {
       delete: async () => ({ deleted: 0 }),
-      loadByIds: async () => [],
+      get: async () => [],
       upsert: async () => undefined,
       stats: async () => ({
         version: 7,
@@ -2304,6 +2582,7 @@ test('observer exportCheckpoint keeps the last committed snapshot while observeC
     committedEpoch: 0,
     nextEpoch: 2,
     runs: [],
+    pendingExtractionChanges: [],
     threads: [{
       sessionId: 'session-a',
       latestSnapshotId: 'snapshot-0',
@@ -2442,7 +2721,7 @@ test('readCheckpointFile throws when the checkpoint section is structurally inva
 });
 
 test('muninn.recallMemories does not wait for observer flushes', async () => {
-  const muninn = new MuninnBackend({});
+  const muninn = MuninnBackend.createForTests({});
   let flushPendingCalls = 0;
   let recallCalls = 0;
 
@@ -2511,7 +2790,7 @@ test('recallMemories searches curated and raw routes then returns curated-first 
   assert.deepEqual(hits, [
     {
       memoryId: 'observation:curated-1',
-      text: 'Caroline plans to research adoption agencies.',
+      text: 'OBSERVATION: Caroline plans to research adoption agencies.',
       references: ['extraction:raw-1'],
     },
     {
@@ -2580,6 +2859,149 @@ test('recallMemories filters raw hits covered by selected curated hits', async (
 
   const hits = await recallMemories(client, 'Caroline research', 2, { embed: async () => [1, 0] });
   assert.deepEqual(hits.map((hit) => hit.memoryId), ['observation:curated-1', 'extraction:raw-2']);
+});
+
+test('recallMemories includes referenced extraction text for observation hits', async () => {
+  const client = {
+    observationTable: {
+      search: async () => [
+        {
+          id: 'curated-1',
+          observingPath: 'Caroline / Summer plans',
+          text: 'Caroline is working on summer plans.',
+          vector: [],
+          extractionRefs: ['raw-1', 'raw-2'],
+          createdAt: '2024-01-01T00:00:00Z',
+          updatedAt: '2024-01-01T00:00:00Z',
+        },
+      ],
+    },
+    extractionTable: {
+      search: async () => [],
+      get: async ({ ids }) => [
+        {
+          id: 'raw-1',
+          text: 'Caroline researched adoption agencies.',
+          context: 'Melanie asked Caroline about her summer plans.',
+          anchors: ['Entity: Caroline'],
+          turnRefs: ['turn:1'],
+          vector: [],
+          importance: 1,
+          category: 'Fact',
+          observationIds: [],
+          observedRootAnchors: [],
+          createdAt: '2024-01-01T00:00:00Z',
+          updatedAt: '2024-01-01T00:00:00Z',
+        },
+        {
+          id: 'raw-2',
+          text: 'Caroline chose an LGBTQ+ inclusive adoption agency.',
+          context: null,
+          anchors: [],
+          turnRefs: ['turn:2'],
+          vector: [],
+          importance: 1,
+          category: 'Fact',
+          observationIds: [],
+          observedRootAnchors: [],
+          createdAt: '2024-01-01T00:00:00Z',
+          updatedAt: '2024-01-01T00:00:00Z',
+        },
+      ].filter((row) => ids.includes(row.id)),
+    },
+  };
+
+  const hits = await recallMemories(client, 'Caroline summer plans', 1, { embed: async () => [1, 0] });
+
+  assert.equal(hits[0].memoryId, 'observation:curated-1');
+  assert.match(hits[0].text, /OBSERVATION: Caroline is working on summer plans/);
+  assert.match(hits[0].text, /^CONTEXT: Melanie asked Caroline about her summer plans\.$/m);
+  assert.match(hits[0].text, /^EXTRACTION: Caroline researched adoption agencies\.$/m);
+  assert.match(hits[0].text, /^EXTRACTION: Caroline chose an LGBTQ\+ inclusive adoption agency\.$/m);
+  assert.doesNotMatch(hits[0].text, /SUPPORTING EXTRACTIONS:/);
+  assert.deepEqual(hits[0].references, ['raw-1', 'raw-2']);
+});
+
+test('recallMemories filters parent observation contexts from curated hits', async () => {
+  const calls = [];
+  const client = {
+    observationContextTable: {
+      list: async () => [
+        {
+          id: 'parent-1',
+          observingPath: 'Caroline / Family plans',
+          parentId: null,
+          position: 0,
+          content: 'Caroline is pursuing adoption.',
+          observer: 'default',
+          createdAt: '2024-01-01T00:00:00Z',
+          updatedAt: '2024-01-01T00:00:00Z',
+        },
+        {
+          id: 'leaf-1',
+          observingPath: 'Caroline / Family plans / Summer plans',
+          parentId: 'parent-1',
+          position: 0,
+          content: 'Caroline researched adoption agencies.',
+          observer: 'default',
+          createdAt: '2024-01-01T00:00:00Z',
+          updatedAt: '2024-01-01T00:00:00Z',
+        },
+        {
+          id: 'leaf-2',
+          observingPath: 'Caroline / Family plans / Agency choice',
+          parentId: 'parent-1',
+          position: 1,
+          content: 'Caroline chose an LGBTQ-supportive adoption agency.',
+          observer: 'default',
+          createdAt: '2024-01-01T00:00:00Z',
+          updatedAt: '2024-01-01T00:00:00Z',
+        },
+      ],
+    },
+    observationTable: {
+      search: async (params) => {
+        calls.push(params);
+        return [
+          {
+            id: 'parent-1',
+            observingPath: 'Caroline / Family plans',
+            text: 'Caroline is pursuing adoption.',
+            vector: [],
+            extractionRefs: ['extraction:raw-parent'],
+            createdAt: '2024-01-01T00:00:00Z',
+            updatedAt: '2024-01-01T00:00:00Z',
+          },
+          {
+            id: 'leaf-1',
+            observingPath: 'Caroline / Family plans / Summer plans',
+            text: 'Caroline researched adoption agencies.',
+            vector: [],
+            extractionRefs: ['extraction:raw-1'],
+            createdAt: '2024-01-01T00:00:00Z',
+            updatedAt: '2024-01-01T00:00:00Z',
+          },
+          {
+            id: 'leaf-2',
+            observingPath: 'Caroline / Family plans / Agency choice',
+            text: 'Caroline chose an LGBTQ-supportive adoption agency.',
+            vector: [],
+            extractionRefs: ['extraction:raw-2'],
+            createdAt: '2024-01-01T00:00:00Z',
+            updatedAt: '2024-01-01T00:00:00Z',
+          },
+        ];
+      },
+    },
+    extractionTable: {
+      search: async () => [],
+    },
+  };
+
+  const hits = await recallMemories(client, 'Caroline summer plans', 2, { embed: async () => [1, 0] });
+
+  assert.deepEqual(hits.map((hit) => hit.memoryId), ['observation:leaf-1', 'observation:leaf-2']);
+  assert.equal(calls[0].limit, 8);
 });
 
 test('recallMemories does not filter raw hits covered only by unselected curated candidates', async () => {
@@ -2816,7 +3238,7 @@ test('backend exportCheckpoint returns null before observer creation', async () 
     writerPid: 123,
     extractor: makeExtractorCheckpoint({ threads: [] }),
   });
-  const backend = new MuninnBackend({}, checkpoint);
+  const backend = MuninnBackend.createForTests({}, checkpoint);
 
   const exported = await backend.exportCheckpoint();
 
@@ -3128,7 +3550,7 @@ test('observer.observeCurrentEpoch keeps thread state unchanged when pre-commit 
       },
       extractionTable: {
         delete: async () => ({ deleted: 0 }),
-        loadByIds: async () => [],
+        get: async () => [],
         upsert: async () => {
           throw new Error('persist failed');
         },
@@ -3188,7 +3610,7 @@ test('snapshot extraction state rewrite updates and deletes extraction rows', as
   const deleted = [];
   const client = {
     extractionTable: {
-      loadByIds: async ({ ids }) => ids.map((id) => ({
+      get: async ({ ids }) => ids.map((id) => ({
         ...storedExtraction(id),
         text: `${id} old text`,
         createdAt: '2024-01-01T00:00:00Z',
@@ -3529,7 +3951,7 @@ test('buildExtraction surfaces extraction write failures and leaves work pending
       },
       extractionTable: {
         delete: async () => ({ deleted: 0 }),
-        loadByIds: async () => [],
+        get: async () => [],
         upsert: async () => {
           semanticUpserts += 1;
           throw new Error('extraction write failed');
@@ -4760,7 +5182,7 @@ test('buildTouchedIndex immediately advances extraction index for touched thread
     },
     extractionTable: {
       delete: async () => ({ deleted: 0 }),
-      loadByIds: async () => [],
+      get: async () => [],
       upsert: async () => {
         semanticUpserts += 1;
       },
@@ -4790,7 +5212,7 @@ test('observer.retryExtraction refreshes the committed checkpoint snapshot after
     },
     extractionTable: {
       delete: async () => ({ deleted: 0 }),
-      loadByIds: async () => [],
+      get: async () => [],
       upsert: async () => undefined,
       stats: async () => ({
         version: 9,
@@ -4838,6 +5260,7 @@ test('observer.retryExtraction refreshes the committed checkpoint snapshot after
     committedEpoch: 1,
     nextEpoch: 2,
     runs: [],
+    pendingExtractionChanges: [],
     threads: [{
       sessionId: 'session-a',
       latestSnapshotId: 'snapshot-1',
@@ -4867,7 +5290,7 @@ test('observer.observeCurrentEpoch commits session rows before retrying extracti
     },
     extractionTable: {
       delete: async () => ({ deleted: 0 }),
-      loadByIds: async () => [],
+      get: async () => [],
       upsert: async () => {
         extractionUpserts += 1;
       },
@@ -4927,7 +5350,7 @@ test('observer.run retries pending extraction index before queued epochs when du
     },
     extractionTable: {
       delete: async () => ({ deleted: 0 }),
-      loadByIds: async () => [],
+      get: async () => [],
       upsert: async () => {
         calls.push('index');
       },

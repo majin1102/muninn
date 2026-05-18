@@ -13,6 +13,6 @@ export async function getObservation(
   memoryId: string,
 ): Promise<Observation | null> {
   const id = parseObservationMemoryId(memoryId);
-  const rows = await client.observationTable.loadByIds({ ids: [id] });
+  const rows = await client.observationTable.get({ ids: [id] });
   return rows[0] ?? null;
 }

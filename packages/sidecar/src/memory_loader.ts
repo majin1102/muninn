@@ -1,6 +1,8 @@
 import {
   memories,
   observer,
+  sessions,
+  turns,
 } from '@muninn/core';
 import { Hono } from 'hono';
 import type {
@@ -9,7 +11,7 @@ import type {
   MemoryResponse,
   MemoryWatermarkResponse,
 } from '@muninn/types';
-import type { RecallMode } from '@muninn/core';
+import type { RecallMode, RenderedMemory, Turn } from '@muninn/core';
 import { renderRecallHit, renderRenderedMemoryHit } from './render.js';
 import { generateRequestId } from './utils.js';
 
@@ -36,6 +38,9 @@ function memoryWatermarkResponse(
   extractingEpoch?: number,
   committedEpoch?: number,
   observerPending?: boolean,
+  observerQueuedCount?: number,
+  observerReadyCount?: number,
+  observerReadyBucketCount?: number,
 ): MemoryWatermarkResponse {
   return {
     resolved,
@@ -43,6 +48,9 @@ function memoryWatermarkResponse(
     extractingEpoch,
     committedEpoch,
     observerPending,
+    observerQueuedCount,
+    observerReadyCount,
+    observerReadyBucketCount,
     requestId: generateRequestId(),
   };
 }
@@ -89,11 +97,19 @@ function mapCoreLookupError(error: unknown): { status: number; body: ErrorRespon
 
   if (
     lowered.includes('invalid')
+    || lowered.includes('database must')
     || lowered.includes('memory layer')
   ) {
     return {
       status: 400,
       body: errorResponse('invalidRequest', message),
+    };
+  }
+
+  if (isTransientUpstreamError(message)) {
+    return {
+      status: 503,
+      body: errorResponse('upstreamError', message),
     };
   }
 
@@ -103,8 +119,44 @@ function mapCoreLookupError(error: unknown): { status: number; body: ErrorRespon
   };
 }
 
+function isTransientUpstreamError(message: string): boolean {
+  return /fetch failed|upstream connect error|connection termination|ECONNRESET|ETIMEDOUT/i.test(message)
+    || /\b(?:408|429|502|503|504)\b/.test(message);
+}
+
+type LocomoManifestTurn = {
+  turn_id: string;
+  source_id: string;
+  sample_id: string;
+  session_id: string;
+  date_time: string;
+  import_order: number;
+};
+
+type LocomoImportManifest = {
+  sample_id: string;
+  turns: LocomoManifestTurn[];
+};
+
+type LocomoBridgeReference = {
+  memory_id: string;
+  source_id: string;
+  date_time: string;
+  text: string;
+};
+
+type LocomoBridgeHit = {
+  memory_id: string;
+  matched_text: string;
+  evidence_ids: string[];
+  detail?: string;
+  observationRatio?: number | null;
+  references: LocomoBridgeReference[];
+};
+
 memoryLoader.get('/api/v1/recall', async (c) => {
   const query = c.req.query('query');
+  const database = c.req.query('database');
   const limit = c.req.query('limit');
   const budget = c.req.query('budget');
   const queryLimit = c.req.query('queryLimit');
@@ -117,7 +169,7 @@ memoryLoader.get('/api/v1/recall', async (c) => {
     return c.json(errorResponse('invalidRequest', error instanceof Error ? error.message : String(error)), 400);
   }
 
-  console.log('[RECALL] query:', query, 'limit:', limit, 'budget:', budget, 'queryLimit:', queryLimit, 'thinkingRatio:', thinkingRatio, 'recallMode:', recallMode);
+  console.log('[RECALL] database:', database ?? 'main', 'query:', query, 'limit:', limit, 'budget:', budget, 'queryLimit:', queryLimit, 'thinkingRatio:', thinkingRatio, 'recallMode:', recallMode);
 
   if (!query) {
     return c.json(errorResponse('invalidRequest', 'query is required'), 400);
@@ -146,6 +198,7 @@ memoryLoader.get('/api/v1/recall', async (c) => {
       mode: recallMode,
       budget: parsedBudget.value,
       queryLimit: parsedQueryLimit.value,
+      database,
     })).map(renderRecallHit);
   } catch (error) {
     const mapped = mapCoreLookupError(error);
@@ -155,12 +208,83 @@ memoryLoader.get('/api/v1/recall', async (c) => {
   return c.json(memoryResponse(matched));
 });
 
+memoryLoader.post('/api/v1/benchmark/locomo/recall', async (c) => {
+  let body: {
+    query?: unknown;
+    database?: unknown;
+    limit?: unknown;
+    budget?: unknown;
+    queryLimit?: unknown;
+    recallMode?: unknown;
+    manifest?: unknown;
+  };
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json(errorResponse('invalidRequest', 'Invalid JSON body'), 400);
+  }
+
+  if (typeof body.query !== 'string' || body.query.trim().length === 0) {
+    return c.json(errorResponse('invalidRequest', 'query is required'), 400);
+  }
+  const parsedLimit = parseRequestInteger(body.limit, 'limit', 10, false);
+  if (parsedLimit.error) {
+    return c.json(errorResponse('invalidRequest', parsedLimit.error), 400);
+  }
+  const parsedBudget = parseRequestInteger(body.budget, 'budget', undefined, true);
+  if (parsedBudget.error) {
+    return c.json(errorResponse('invalidRequest', parsedBudget.error), 400);
+  }
+  const parsedQueryLimit = parseRequestInteger(body.queryLimit, 'queryLimit', undefined, false);
+  if (parsedQueryLimit.error) {
+    return c.json(errorResponse('invalidRequest', parsedQueryLimit.error), 400);
+  }
+  let recallMode: RecallMode | undefined;
+  try {
+    recallMode = parseRecallMode(typeof body.recallMode === 'string' ? body.recallMode : undefined);
+  } catch (error) {
+    return c.json(errorResponse('invalidRequest', error instanceof Error ? error.message : String(error)), 400);
+  }
+  const manifest = parseLocomoManifest(body.manifest);
+  if (!manifest) {
+    return c.json(errorResponse('invalidRequest', 'manifest.turns is required'), 400);
+  }
+
+  const database = typeof body.database === 'string' ? body.database : undefined;
+  try {
+    const rows = await memories.recall(body.query, parsedLimit.value ?? 10, {
+      mode: recallMode,
+      budget: parsedBudget.value,
+      queryLimit: parsedQueryLimit.value,
+      database,
+    });
+    const turnMap = manifestTurnMap(manifest);
+    const hits: LocomoBridgeHit[] = [];
+    for (const row of rows) {
+      if (row.memoryId === 'recalled:memory') {
+        hits.push(await toRecalledLocomoHit(row, turnMap, database));
+        continue;
+      }
+      const rendered = await memories.get(row.memoryId, database);
+      if (!rendered) {
+        continue;
+      }
+      hits.push(await toLocomoHit(rendered, turnMap, row.text, database));
+    }
+    return c.json({ hits, requestId: generateRequestId() });
+  } catch (error) {
+    const mapped = mapCoreLookupError(error);
+    return c.json(mapped.body, mapped.status as 400 | 500);
+  }
+});
+
 memoryLoader.get('/api/v1/list', async (c) => {
   const mode = c.req.query('mode');
+  const database = c.req.query('database');
   const limit = c.req.query('limit');
   const thinkingRatio = c.req.query('thinkingRatio');
 
-  console.log('[LIST] mode:', mode, 'limit:', limit, 'thinkingRatio:', thinkingRatio);
+  console.log('[LIST] database:', database ?? 'main', 'mode:', mode, 'limit:', limit, 'thinkingRatio:', thinkingRatio);
 
   if (mode && mode !== 'recency') {
     return c.json(errorResponse('invalidRequest', 'mode must be "recency"'), 400);
@@ -172,17 +296,300 @@ memoryLoader.get('/api/v1/list', async (c) => {
   }
 
   const maxResults = parsedLimit.value ?? 10;
-  const recent = (await memories.list({ mode: { type: 'recency', limit: maxResults } })).map(renderRenderedMemoryHit);
+  const recent = (await memories.list({ mode: { type: 'recency', limit: maxResults }, database })).map(renderRenderedMemoryHit);
 
   return c.json(memoryResponse(recent));
 });
 
+function parseRequestInteger(
+  raw: unknown,
+  fieldName: string,
+  fallback: number | undefined,
+  allowZero: boolean,
+): { value: number | undefined; error: string | null } {
+  if (raw === undefined || raw === null) {
+    return { value: fallback, error: null };
+  }
+  if (typeof raw !== 'number' || !Number.isSafeInteger(raw) || raw < 0 || (!allowZero && raw === 0)) {
+    return {
+      value: undefined,
+      error: allowZero
+        ? `${fieldName} must be a non-negative integer`
+        : `${fieldName} must be a positive integer`,
+    };
+  }
+  return { value: raw, error: null };
+}
+
+function parseLocomoManifest(value: unknown): LocomoImportManifest | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+  const manifest = value as Record<string, unknown>;
+  if (typeof manifest.sample_id !== 'string' || !Array.isArray(manifest.turns)) {
+    return null;
+  }
+  const parsedTurns: LocomoManifestTurn[] = [];
+  for (const turn of manifest.turns) {
+    if (!turn || typeof turn !== 'object' || Array.isArray(turn)) {
+      return null;
+    }
+    const row = turn as Record<string, unknown>;
+    if (
+      typeof row.turn_id !== 'string'
+      || typeof row.source_id !== 'string'
+      || typeof row.sample_id !== 'string'
+      || typeof row.session_id !== 'string'
+      || typeof row.date_time !== 'string'
+      || typeof row.import_order !== 'number'
+    ) {
+      return null;
+    }
+    parsedTurns.push({
+      turn_id: row.turn_id,
+      source_id: row.source_id,
+      sample_id: row.sample_id,
+      session_id: row.session_id,
+      date_time: row.date_time,
+      import_order: row.import_order,
+    });
+  }
+  return {
+    sample_id: manifest.sample_id,
+    turns: parsedTurns,
+  };
+}
+
+function manifestTurnMap(manifest: LocomoImportManifest): Map<string, LocomoManifestTurn[]> {
+  const map = new Map<string, LocomoManifestTurn[]>();
+  for (const turn of manifest.turns) {
+    const existing = map.get(turn.turn_id) ?? [];
+    existing.push(turn);
+    map.set(turn.turn_id, existing);
+  }
+  return map;
+}
+
+async function toRecalledLocomoHit(
+  row: { memoryId: string; text: string; references?: string[] },
+  turnMap: Map<string, LocomoManifestTurn[]>,
+  database?: string,
+): Promise<LocomoBridgeHit> {
+  const evidenceIds = await resolveRecalledEvidenceIds(row.references ?? [], turnMap, database);
+  return {
+    memory_id: row.memoryId,
+    matched_text: row.text,
+    evidence_ids: evidenceIds,
+    detail: row.text,
+    references: await directSessionReferencesFromIds(evidenceIds, turnMap, database),
+  };
+}
+
+async function toLocomoHit(
+  rendered: RenderedMemory,
+  turnMap: Map<string, LocomoManifestTurn[]>,
+  matchedText: string,
+  database?: string,
+): Promise<LocomoBridgeHit> {
+  return {
+    memory_id: rendered.memoryId,
+    matched_text: matchedText,
+    evidence_ids: await resolveEvidenceIds(rendered.memoryId, turnMap, database),
+    detail: renderBridgeMemoryText(rendered, matchedText),
+    observationRatio: observingRatio(rendered.detail),
+    references: await directSessionReferences(rendered.memoryId, turnMap, database),
+  };
+}
+
+function renderBridgeMemoryText(rendered: RenderedMemory, matchedText: string): string {
+  if (rendered.memoryId.startsWith('extraction:')) {
+    const extraction = matchedText || rendered.summary || rendered.title || '';
+    const anchors = rendered.detail?.match(/(?:^|\n)Anchors:\n([\s\S]*?)(?:\n\nContext:|\n\nReferences:|$)/)?.[1]?.trim();
+    const context = rendered.detail?.match(/(?:^|\n)Context:\n([\s\S]*?)(?:\n\nReferences:|$)/)?.[1]?.trim();
+    return [
+      `EXTRACTION: ${extraction}`,
+      anchors ? `ANCHORS:\n${anchors}` : '',
+      context ? `CONTEXT: ${context}` : '',
+    ].filter(Boolean).join('\n');
+  }
+  return matchedText || rendered.summary || rendered.title || rendered.detail || '';
+}
+
+function observingRatio(detail?: string | null): number | null | undefined {
+  if (!detail) {
+    return undefined;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(detail);
+  } catch {
+    return undefined;
+  }
+  if (!parsed || typeof parsed !== 'object') {
+    return undefined;
+  }
+  const record = parsed as Record<string, unknown>;
+  const extractions = Array.isArray(record.extractions) ? record.extractions : [];
+  const contextRefs = Array.isArray(record.contextRefs) ? record.contextRefs : [];
+  return contextRefs.length === 0 ? null : extractions.length / contextRefs.length;
+}
+
+async function directSessionReferences(
+  memoryId: string,
+  turnMap: Map<string, LocomoManifestTurn[]>,
+  database?: string,
+): Promise<LocomoBridgeReference[]> {
+  if (memoryId.startsWith('observation:')) {
+    return directSessionReferencesFromIds(await resolveEvidenceIds(memoryId, turnMap, database), turnMap, database);
+  }
+  if (memoryId.startsWith('extraction:')) {
+    const rendered = await memories.get(memoryId, database);
+    return directSessionReferencesFromIds(renderedReferences(rendered), turnMap, database);
+  }
+  if (!memoryId.startsWith('session:')) {
+    return [];
+  }
+  const observing = await sessions.get(memoryId, database);
+  return observing ? directSessionReferencesFromIds(observing.references, turnMap, database) : [];
+}
+
+async function directSessionReferencesFromIds(
+  references: string[],
+  turnMap: Map<string, LocomoManifestTurn[]>,
+  database?: string,
+): Promise<LocomoBridgeReference[]> {
+  const rows: LocomoBridgeReference[] = [];
+  for (const reference of references) {
+    const manifestTurns = turnMap.get(reference) ?? manifestTurnsBySourceId(turnMap, reference);
+    for (const manifestTurn of manifestTurns) {
+      const turn = await turns.get(manifestTurn.turn_id, database);
+      rows.push({
+        memory_id: manifestTurn.turn_id,
+        source_id: manifestTurn.source_id,
+        date_time: manifestTurn.date_time,
+        text: renderReferenceText(turn),
+      });
+    }
+  }
+  return rows;
+}
+
+async function resolveRecalledEvidenceIds(
+  references: string[],
+  turnMap: Map<string, LocomoManifestTurn[]>,
+  database?: string,
+): Promise<string[]> {
+  const sourceIds: string[] = [];
+  for (const reference of references) {
+    const direct = turnMap.get(reference) ?? [];
+    if (direct.length > 0) {
+      for (const sourceId of direct.map((turn) => turn.source_id)) {
+        if (!sourceIds.includes(sourceId)) {
+          sourceIds.push(sourceId);
+        }
+      }
+      continue;
+    }
+    if (manifestTurnsBySourceId(turnMap, reference).length > 0 && !sourceIds.includes(reference)) {
+      sourceIds.push(reference);
+      continue;
+    }
+    for (const sourceId of await resolveEvidenceIds(reference, turnMap, database)) {
+      if (!sourceIds.includes(sourceId)) {
+        sourceIds.push(sourceId);
+      }
+    }
+  }
+  return sourceIds;
+}
+
+async function resolveEvidenceIds(
+  memoryId: string,
+  turnMap: Map<string, LocomoManifestTurn[]>,
+  database?: string,
+  seen = new Set<string>(),
+): Promise<string[]> {
+  if (seen.has(memoryId)) {
+    return [];
+  }
+  seen.add(memoryId);
+  const direct = turnMap.get(memoryId) ?? [];
+  if (direct.length > 0) {
+    return direct.map((turn) => turn.source_id);
+  }
+  if (memoryId.startsWith('extraction:') || memoryId.startsWith('observation:')) {
+    const rendered = await memories.get(memoryId, database);
+    const sourceIds: string[] = [];
+    for (const reference of renderedReferences(rendered)) {
+      for (const sourceId of await resolveEvidenceIds(reference, turnMap, database, seen)) {
+        if (!sourceIds.includes(sourceId)) {
+          sourceIds.push(sourceId);
+        }
+      }
+    }
+    return sourceIds;
+  }
+  if (!memoryId.startsWith('session:')) {
+    return [];
+  }
+  const observing = await sessions.get(memoryId, database);
+  if (!observing) {
+    return [];
+  }
+  const sourceIds: string[] = [];
+  for (const reference of observing.references) {
+    for (const sourceId of await resolveEvidenceIds(reference, turnMap, database, seen)) {
+      if (!sourceIds.includes(sourceId)) {
+        sourceIds.push(sourceId);
+      }
+    }
+  }
+  return sourceIds;
+}
+
+function manifestTurnsBySourceId(
+  turnMap: Map<string, LocomoManifestTurn[]>,
+  sourceId: string,
+): LocomoManifestTurn[] {
+  const matches: LocomoManifestTurn[] = [];
+  for (const turns of turnMap.values()) {
+    matches.push(...turns.filter((turn) => turn.source_id === sourceId));
+  }
+  return matches;
+}
+
+function renderedReferences(rendered: RenderedMemory | null): string[] {
+  const detail = rendered?.detail;
+  if (!detail) {
+    return [];
+  }
+  return detail
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith('- '))
+    .map((line) => line.slice(2).trim())
+    .filter(Boolean);
+}
+
+function renderReferenceText(turn: Turn | null): string {
+  if (!turn) {
+    return '';
+  }
+  const prompt = turn.prompt?.trim();
+  const response = turn.response?.trim();
+  if (prompt && response) {
+    return `${prompt}\nResponse: ${response}`;
+  }
+  return prompt || response || '';
+}
+
 memoryLoader.get('/api/v1/timeline', async (c) => {
   const memoryId = c.req.query('memoryId');
+  const database = c.req.query('database');
   const beforeLimit = c.req.query('beforeLimit');
   const afterLimit = c.req.query('afterLimit');
 
-  console.log('[TIMELINE] memoryId:', memoryId, 'beforeLimit:', beforeLimit, 'afterLimit:', afterLimit);
+  console.log('[TIMELINE] database:', database ?? 'main', 'memoryId:', memoryId, 'beforeLimit:', beforeLimit, 'afterLimit:', afterLimit);
 
   if (!memoryId) {
     return c.json(errorResponse('invalidRequest', 'memoryId is required'), 400);
@@ -204,6 +611,7 @@ memoryLoader.get('/api/v1/timeline', async (c) => {
       memoryId,
       beforeLimit: parsedBeforeLimit.value ?? 3,
       afterLimit: parsedAfterLimit.value ?? 3,
+      database,
     })).map(renderRenderedMemoryHit);
   } catch (error) {
     const mapped = mapCoreLookupError(error);
@@ -219,8 +627,9 @@ memoryLoader.get('/api/v1/timeline', async (c) => {
 
 memoryLoader.get('/api/v1/detail', async (c) => {
   const memoryId = c.req.query('memoryId');
+  const database = c.req.query('database');
 
-  console.log('[DETAIL] memoryId:', memoryId);
+  console.log('[DETAIL] database:', database ?? 'main', 'memoryId:', memoryId);
 
   if (!memoryId) {
     return c.json(errorResponse('invalidRequest', 'memoryId is required'), 400);
@@ -228,7 +637,7 @@ memoryLoader.get('/api/v1/detail', async (c) => {
 
   let memory;
   try {
-    memory = await memories.get(memoryId);
+    memory = await memories.get(memoryId, database);
   } catch (error) {
     const mapped = mapCoreLookupError(error);
     return c.json(mapped.body, mapped.status as 400 | 500);
@@ -242,9 +651,10 @@ memoryLoader.get('/api/v1/detail', async (c) => {
 });
 
 memoryLoader.get('/api/v1/memory/watermark', async (c) => {
+  const database = c.req.query('database');
   let watermark;
   try {
-    watermark = await observer.watermark();
+    watermark = await observer.watermark(database);
   } catch (error) {
     const mapped = mapCoreLookupError(error);
     return c.json(mapped.body, mapped.status as 400 | 500);
@@ -257,6 +667,39 @@ memoryLoader.get('/api/v1/memory/watermark', async (c) => {
       watermark.extractingEpoch,
       watermark.committedEpoch,
       watermark.observerPending,
+      watermark.observerQueuedCount,
+      watermark.observerReadyCount,
+      watermark.observerReadyBucketCount,
+    )
+  );
+});
+
+memoryLoader.post('/api/v1/memory/finalize', async (c) => {
+  let database: string | undefined;
+  try {
+    const body = await c.req.json().catch(() => ({})) as { database?: unknown };
+    database = typeof body.database === 'string' ? body.database : c.req.query('database');
+  } catch {
+    database = c.req.query('database');
+  }
+  let watermark;
+  try {
+    watermark = await observer.finalize(database);
+  } catch (error) {
+    const mapped = mapCoreLookupError(error);
+    return c.json(mapped.body, mapped.status as 400 | 500);
+  }
+
+  return c.json(
+    memoryWatermarkResponse(
+      watermark.resolved,
+      watermark.pendingTurnIds,
+      watermark.extractingEpoch,
+      watermark.committedEpoch,
+      watermark.observerPending,
+      watermark.observerQueuedCount,
+      watermark.observerReadyCount,
+      watermark.observerReadyBucketCount,
     )
   );
 });

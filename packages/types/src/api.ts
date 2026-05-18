@@ -20,6 +20,9 @@ export interface MemoryWatermark {
   extractingEpoch?: number;
   committedEpoch?: number;
   observerPending?: boolean;
+  observerQueuedCount?: number;
+  observerReadyCount?: number;
+  observerReadyBucketCount?: number;
 }
 
 export interface MemoryWatermarkResponse extends MemoryWatermark {
@@ -28,6 +31,7 @@ export interface MemoryWatermarkResponse extends MemoryWatermark {
 
 export interface RecallRequest {
   query: string;
+  database?: string;
   limit?: number;
   budget?: number;
   queryLimit?: number;
@@ -37,17 +41,20 @@ export interface RecallRequest {
 
 export interface ListRequest {
   mode: 'recency';
+  database?: string;
   limit?: number;
   thinkingRatio?: number;
 }
 
 export interface GetTimelineRequest {
+  database?: string;
   memoryId: string;
   beforeLimit?: number;
   afterLimit?: number;
 }
 
 export interface GetDetailRequest {
+  database?: string;
   memoryId: string;
 }
 
@@ -73,6 +80,7 @@ export interface TurnContent {
 }
 
 export interface CaptureTurnRequest {
+  database?: string;
   turn: TurnContent;
 }
 

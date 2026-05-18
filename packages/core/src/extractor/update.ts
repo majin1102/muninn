@@ -1,4 +1,5 @@
 import type { Turn } from '../client.js';
+import type { QueuedExtractionChange } from '../checkpoint.js';
 import { Memories } from '../memories/memories.js';
 import type { NativeTables } from '../native.js';
 import { observeThread } from '../llm/extracting.js';
@@ -24,6 +25,7 @@ type ObserveSessionThreadParams = {
   pendingTurns: Turn[];
   observingEpoch: number;
   signal?: AbortSignal;
+  database?: string;
   memories?: Pick<Memories, 'get'>;
   observeThreadImpl?: ObserveThreadImpl;
 };
@@ -35,6 +37,7 @@ export async function observeEpoch(params: {
   threads: ObservingThread[];
   sealedEpoch: SealedEpoch;
   signal?: AbortSignal;
+  database?: string;
   observeThreadImpl?: ObserveThreadImpl;
 }): Promise<{ threads: ObservingThread[]; touchedIds: Set<string> }> {
   throwIfAborted(params.signal);
@@ -57,6 +60,7 @@ export async function observeEpoch(params: {
       pendingTurns: turns,
       observingEpoch: params.sealedEpoch.epoch,
       signal: params.signal,
+      database: params.database,
       memories,
       observeThreadImpl: params.observeThreadImpl,
     });
@@ -199,7 +203,7 @@ async function observeSessionThread(params: ObserveSessionThreadParams): Promise
   const result = await observeThreadImpl({
     observingContent: currentObservingContent(thread),
     turns,
-  }, signal, { memories });
+  }, signal, { memories, database: params.database });
   applyObserveResult(thread, result, observingEpoch, applyExtractionChanges);
   touchedIds.add(thread.observingId);
   return touchedIds;
@@ -227,13 +231,14 @@ async function catchUpIndex(
   client: NativeTables,
   thread: ObservingThread,
   signal?: AbortSignal,
-): Promise<void> {
+): Promise<QueuedExtractionChange[]> {
   const pending = getPendingIndex(thread);
   if (!pending) {
-    return;
+    return [];
   }
 
   let latestIndexedSequence = thread.indexedSnapshotSequence ?? null;
+  const queued: QueuedExtractionChange[] = [];
   for (let snapshotIndex = pending.start; snapshotIndex <= pending.end; snapshotIndex += 1) {
     throwIfAborted(signal);
     const current = thread.snapshots[snapshotIndex];
@@ -254,7 +259,7 @@ async function catchUpIndex(
       nextSteps: current.nextSteps ?? [],
       contextRefs: current.contextRefs,
     });
-    await applyExtractionTableChanges(
+    queued.push(...await applyExtractionTableChanges(
       client,
       {
         ...current,
@@ -263,28 +268,30 @@ async function catchUpIndex(
       },
       snapshotRef(thread, snapshotIndex),
       signal,
-    );
+    ));
     latestIndexedSequence = snapshotIndex;
   }
 
   if (latestIndexedSequence !== thread.indexedSnapshotSequence) {
     thread.indexedSnapshotSequence = latestIndexedSequence;
   }
+  return queued;
 }
 
 export async function buildExtraction(
   client: NativeTables,
   threads: ObservingThread[],
   signal?: AbortSignal,
-): Promise<void> {
+): Promise<QueuedExtractionChange[]> {
   let firstError: unknown = null;
+  const queued: QueuedExtractionChange[] = [];
   for (const thread of threads) {
     throwIfAborted(signal);
     if (!getPendingIndex(thread)) {
       continue;
     }
     try {
-      await catchUpIndex(client, thread, signal);
+      queued.push(...await catchUpIndex(client, thread, signal));
     } catch (error) {
       firstError ??= error;
     }
@@ -292,6 +299,7 @@ export async function buildExtraction(
   if (firstError) {
     throw firstError;
   }
+  return queued;
 }
 
 export async function buildTouchedIndex(
@@ -299,15 +307,16 @@ export async function buildTouchedIndex(
   threads: ObservingThread[],
   touchedIds: Set<string>,
   signal?: AbortSignal,
-): Promise<void> {
+): Promise<QueuedExtractionChange[]> {
   let firstError: unknown = null;
+  const queued: QueuedExtractionChange[] = [];
   for (const thread of threads) {
     throwIfAborted(signal);
     if (!touchedIds.has(thread.observingId) || !getPendingIndex(thread)) {
       continue;
     }
     try {
-      await catchUpIndex(client, thread, signal);
+      queued.push(...await catchUpIndex(client, thread, signal));
     } catch (error) {
       firstError ??= error;
     }
@@ -315,6 +324,7 @@ export async function buildTouchedIndex(
   if (firstError) {
     throw firstError;
   }
+  return queued;
 }
 
 function updateThreadsFromRows(

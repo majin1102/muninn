@@ -50,9 +50,23 @@ export async function embedText(text: string, signal?: AbortSignal): Promise<num
       throw new Error('extraction embedding response missing vector');
     }
     return vector;
+  } catch (error) {
+    throw wrapEmbeddingError(config, error);
   } finally {
     timeout.cleanup();
   }
+}
+
+function wrapEmbeddingError(config: EmbeddingConfig, cause: unknown): Error {
+  const message = cause instanceof Error ? cause.message : String(cause);
+  const details = [
+    `provider=${config.provider}`,
+    config.model ? `model=${config.model}` : null,
+    config.baseUrl ? `baseUrl=${config.baseUrl}` : null,
+  ].filter(Boolean).join(' ');
+  const error = new Error(`embedding request failed (${details}): ${message}`);
+  (error as Error & { cause?: unknown }).cause = cause;
+  return error;
 }
 
 function makeEmbeddingRequest(config: EmbeddingConfig, text: string): Record<string, unknown> {

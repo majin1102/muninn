@@ -2,11 +2,10 @@
 
 import os from 'node:os';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
+import http from 'node:http';
+import https from 'node:https';
 import { existsSync } from 'node:fs';
 import { access, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
-import type { RenderedMemory, Turn, TurnContent } from '@muninn/core';
-import * as coreClient from '@muninn/core';
 import type { RecallMode } from '@muninn/core';
 
 const CONFIG_FILE_NAME = 'muninn.json';
@@ -15,8 +14,7 @@ const WATERMARK_TIMEOUT_MS = 30 * 60 * 1_000;
 const WATERMARK_WARNING_DELAY_MS = 60_000;
 const RECALL_ATTEMPTS = 3;
 const RECALL_RETRY_DELAY_MS = 1_000;
-const REPO_ROOT = path.resolve(__dirname, '../../..');
-const SIDECAR_APP_PATH = path.join(REPO_ROOT, 'packages/sidecar/dist/app.js');
+const RECALL_QUERY_TIMEOUT_MS = 120_000;
 const NO_PAIRED_RESPONSE = '[no paired response dialogue]';
 
 function envPositiveInt(name: string, fallback: number): number {
@@ -63,7 +61,7 @@ type BridgeHit = {
   matched_text: string;
   evidence_ids: string[];
   detail?: string;
-  extractionRatio?: number | null;
+  observationRatio?: number | null;
   references: BridgeReference[];
 };
 
@@ -74,11 +72,28 @@ type BridgeReference = {
   text: string;
 };
 
+type TurnContent = {
+  sessionId: string;
+  agent: string;
+  prompt: string;
+  response: string;
+};
+
+type CapturedTurn = {
+  turnId: string;
+  prompt?: string | null;
+  response?: string | null;
+};
+
 type RecallBatchQuery = {
   key: string;
   query: string;
   limit: number;
 };
+
+type BridgeEnvelope =
+  | { ok: true; result: unknown }
+  | { ok: false; error: { message: string; stack?: string } };
 
 export const __testing = {
   WATERMARK_TIMEOUT_MS,
@@ -89,29 +104,45 @@ async function main() {
   const options = parseArgs(rest);
 
   try {
-    switch (command) {
-      case 'reset-home':
-        await resetHome(requireOption(options, 'muninn-home'));
-        emitJson({ ok: true });
-        break;
-      case 'import-sample':
-        emitJson(await importSampleCommand(options));
-        break;
-      case 'recall':
-        emitJson(await recallCommand(options));
-        break;
-      case 'recall-batch':
-        emitJson(await recallBatchCommand(options));
-        break;
-      default:
-        throw new Error(`unknown command: ${command ?? '<missing>'}`);
-    }
+    const result = await runCommand(command, options);
+    emitBridgeEnvelope({ ok: true, result });
   } catch (error) {
-    console.error(error instanceof Error ? error.message : String(error));
+    await shutdownQuietly();
+    const payload = errorPayload(error);
+    console.error(payload.stack ?? payload.message);
+    emitBridgeEnvelope({ ok: false, error: payload });
     process.exitCode = 1;
-  } finally {
-    await coreClient.shutdownCoreForTests();
   }
+}
+
+async function runCommand(command: string | undefined, options: Map<string, string>): Promise<unknown> {
+  switch (command) {
+    case 'reset-home':
+      await resetHome(requireOption(options, 'muninn-home'));
+      return { ok: true };
+    case 'import-sample':
+      return importSampleCommand(options);
+    case 'recall':
+      return recallCommand(options);
+    case 'recall-batch':
+      return recallBatchCommand(options);
+    default:
+      throw new Error(`unknown command: ${command ?? '<missing>'}`);
+  }
+}
+
+async function shutdownQuietly(): Promise<void> {
+}
+
+function errorPayload(error: unknown): { message: string; stack?: string } {
+  if (error instanceof Error) {
+    return { message: error.message, stack: error.stack };
+  }
+  return { message: String(error) };
+}
+
+function emitBridgeEnvelope(envelope: BridgeEnvelope): void {
+  emitJson(envelope);
 }
 
 async function resetHome(home: string) {
@@ -128,10 +159,10 @@ async function importSampleCommand(options: Map<string, string>) {
   await mkdir(home, { recursive: true });
   await bootstrapHome(home, templateConfigPath, sourceConfigPath);
   process.env.MUNINN_HOME = home;
-  const gatewayTracePath = setGatewayTraceFile(home);
-  const baselineWatermark = await fetchMemoryWatermark();
 
   const sample = await loadSample(dataFile, sampleId);
+  const database = sample.sample_id;
+  const gatewayTracePath = setGatewayTraceFile(home, database);
   const manifestTurns: ManifestTurn[] = [];
   let importOrder = 0;
   const totalDialogs = countSampleDialogs(sample);
@@ -149,12 +180,12 @@ async function importSampleCommand(options: Map<string, string>) {
       console.error(
         `[locomo] import_turn_start sample_id=${sample.sample_id} imported=${importOrder}/${totalDialogs} session=${sessionNo} prompt_source_id=${promptDialog.dia_id} response_source_id=${responseDialog?.dia_id ?? '(none)'}`
       );
-      const turn = await addTurnAndFind({
+      const turn = await captureTurn({
         sessionId,
         agent: promptDialog.speaker,
         prompt: dialogLine(promptDialog, dateTime),
         response: responseDialog ? dialogLine(responseDialog, dateTime) : noPairedResponseLine(dateTime),
-      });
+      }, database);
       for (const dialog of [promptDialog, responseDialog].filter(Boolean) as LocomoDialog[]) {
         manifestTurns.push({
           turn_id: turn.turnId,
@@ -177,11 +208,10 @@ async function importSampleCommand(options: Map<string, string>) {
 
   const manifest = {
     sample_id: sample.sample_id,
-    baseline_extracting_epoch: baselineWatermark.extractingEpoch,
-    baseline_committed_epoch: baselineWatermark.committedEpoch,
     turns: manifestTurns,
   } satisfies ImportManifest;
   await writeManifest(home, manifest);
+  await waitForImportWatermark(manifest, { database });
 
   return {
     sample_id: sample.sample_id,
@@ -201,16 +231,17 @@ function countSampleDialogs(sample: LocomoSample): number {
 async function recallCommand(options: Map<string, string>) {
   const home = requireOption(options, 'muninn-home');
   process.env.MUNINN_HOME = home;
-  setGatewayTraceFile(home);
   const query = requireOption(options, 'query');
   const limit = parsePositiveInt(requireOption(options, 'limit'), 'limit');
   const recallMode = parseRecallMode(options.get('recall-mode'));
   const budget = parseOptionalNonNegativeInt(options.get('budget'), 'budget') ?? 0;
   const queryLimit = parseOptionalPositiveInt(options.get('query-limit'), 'query-limit');
   const skipWatermark = options.has('skip-watermark');
-  const manifest = await readManifest(home);
+  const manifest = filterManifestBySample(await readManifest(home), options.get('sample-id'));
+  const database = manifest.sample_id;
+  setGatewayTraceFile(home, database);
   if (!skipWatermark) {
-    await waitForImportWatermark(manifest);
+    await waitForImportWatermark(manifest, { database });
   }
   const hits = await recallHits(query, limit, manifest, recallMode, budget, queryLimit);
   return { hits };
@@ -219,7 +250,6 @@ async function recallCommand(options: Map<string, string>) {
 async function recallBatchCommand(options: Map<string, string>) {
   const home = requireOption(options, 'muninn-home');
   process.env.MUNINN_HOME = home;
-  setGatewayTraceFile(home);
   const queriesFile = requireOption(options, 'queries-file');
   const recallMode = parseRecallMode(options.get('recall-mode'));
   const budget = parseOptionalNonNegativeInt(options.get('budget'), 'budget') ?? 0;
@@ -227,30 +257,78 @@ async function recallBatchCommand(options: Map<string, string>) {
   const skipWatermark = options.has('skip-watermark');
   const raw = await readFile(queriesFile, 'utf8');
   const queries = JSON.parse(raw) as RecallBatchQuery[];
-  const manifest = await readManifest(home);
+  const manifest = filterManifestBySample(await readManifest(home), options.get('sample-id'));
+  const database = manifest.sample_id;
+  setGatewayTraceFile(home, database);
   if (!skipWatermark) {
-    await waitForImportWatermark(manifest);
+    await waitForImportWatermark(manifest, { database });
   }
   const results: Record<string, BridgeHit[]> = {};
+  const queryTimeoutMs = envPositiveInt('MUNINN_LOCOMO_RECALL_QUERY_TIMEOUT_MS', RECALL_QUERY_TIMEOUT_MS);
 
-  for (const item of queries) {
-    results[item.key] = await recallHits(item.query, item.limit, manifest, recallMode, budget, queryLimit);
+  console.error(
+    `[locomo] recall_batch_start total=${queries.length} mode=${recallMode} budget=${budget} query_limit=${queryLimit ?? '(none)'} timeout_ms=${queryTimeoutMs}`
+  );
+
+  for (let index = 0; index < queries.length; index += 1) {
+    const item = queries[index]!;
+    const startedAt = Date.now();
+    console.error(
+      `[locomo] recall_query_start index=${index + 1}/${queries.length} key=${JSON.stringify(item.key)} limit=${item.limit} query=${JSON.stringify(item.query)}`
+    );
+    try {
+      const hits = await withTimeout(
+        recallHits(item.query, item.limit, manifest, recallMode, budget, queryLimit),
+        queryTimeoutMs,
+        `recall query timed out after ${queryTimeoutMs}ms: key=${item.key} query=${item.query}`
+      );
+      results[item.key] = hits;
+      console.error(
+        `[locomo] recall_query_complete index=${index + 1}/${queries.length} key=${JSON.stringify(item.key)} elapsed_ms=${Date.now() - startedAt} hit_count=${hits.length}`
+      );
+    } catch (error) {
+      console.error(
+        `[locomo] recall_query_failed index=${index + 1}/${queries.length} key=${JSON.stringify(item.key)} elapsed_ms=${Date.now() - startedAt} error=${JSON.stringify(error instanceof Error ? error.message : String(error))}`
+      );
+      throw error;
+    }
   }
 
+  console.error(`[locomo] recall_batch_complete total=${queries.length}`);
   return { results };
 }
 
-function setGatewayTraceFile(home: string): string {
-  const gatewayTracePath = path.join(home, 'locomo-gateway-trace.jsonl');
-  const observingTracePath = path.join(home, 'locomo-thread-observing-trace.jsonl');
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+}
+
+function setGatewayTraceFile(home: string, database: string): string {
+  const logsDir = path.join(home, database, 'logs');
+  const gatewayTracePath = path.join(logsDir, 'locomo-gateway-trace.jsonl');
+  const observingTracePath = path.join(logsDir, 'locomo-thread-observing-trace.jsonl');
+  const observerTracePath = path.join(logsDir, 'locomo-observer-trace.jsonl');
   process.env.MUNINN_OBSERVER_GATEWAY_TRACE_FILE = gatewayTracePath;
   process.env.MUNINN_THREAD_OBSERVING_TRACE_FILE = observingTracePath;
+  process.env.MUNINN_OBSERVER_TRACE_FILE = observerTracePath;
   return gatewayTracePath;
 }
 
 export async function waitForImportWatermark(
   manifest: ImportManifest,
   options?: {
+    database?: string;
     pollMs?: number;
     timeoutMs?: number;
     warningDelayMs?: number;
@@ -269,9 +347,24 @@ export async function waitForImportWatermark(
   const startedAt = Date.now();
   let pendingTurnIds: string[] = [];
   let stalledWarningEmitted = false;
+  const finalized = await withTransientRetry(
+    () => fetchMemoryFinalize(options?.database ?? manifest.sample_id),
+    {
+      attempts: envPositiveInt('MUNINN_LOCOMO_WATERMARK_ATTEMPTS', RECALL_ATTEMPTS),
+      delayMs: envPositiveInt('MUNINN_LOCOMO_WATERMARK_RETRY_DELAY_MS', RECALL_RETRY_DELAY_MS),
+      label: 'memory finalize',
+    },
+  );
+  pendingTurnIds = finalized.pendingTurnIds;
+  if (finalized.resolved) {
+    console.error(
+      `[locomo] finalized memory database=${options?.database ?? manifest.sample_id} for ${targetTurnId}: observerPending=${finalized.observerPending ? 'true' : 'false'}`
+    );
+    return;
+  }
 
   while (Date.now() - startedAt <= timeoutMs) {
-    const watermark = await fetchMemoryWatermark();
+    const watermark = await fetchMemoryWatermark(options?.database ?? manifest.sample_id);
     pendingTurnIds = watermark.pendingTurnIds;
     const preview = pendingTurnIds.slice(0, 5).join(', ') || '(none)';
     console.error(
@@ -301,10 +394,64 @@ export async function waitForImportWatermark(
   );
 }
 
-async function fetchMemoryWatermark() {
-  const { app: sidecarApp } = await import(pathToFileURL(SIDECAR_APP_PATH).href);
-  const response = await sidecarApp.request('http://sidecar.local/api/v1/memory/watermark');
-  const payload = await response.json() as {
+async function fetchMemoryWatermark(database: string) {
+  const url = new URL(`${sidecarBaseUrl()}/api/v1/memory/watermark`);
+  url.searchParams.set('database', database);
+  const response = await fetch(url);
+  const payload = await response.json();
+  return parseMemoryWatermarkPayload(payload, response.status, response.ok, 'watermark');
+}
+
+async function fetchMemoryFinalize(database?: string) {
+  const { payload, statusCode } = await requestJson(`${sidecarBaseUrl()}/api/v1/memory/finalize`, {
+    method: 'POST',
+    body: JSON.stringify({ database }),
+  });
+  return parseMemoryWatermarkPayload(payload, statusCode, statusCode >= 200 && statusCode < 300, 'finalize');
+}
+
+async function requestJson(url: string, options: { method: string; body?: string }): Promise<{ payload: unknown; statusCode: number }> {
+  const target = new URL(url);
+  const transport = target.protocol === 'https:' ? https : http;
+  return new Promise((resolve, reject) => {
+    const request = transport.request(target, {
+      method: options.method,
+      headers: options.body ? {
+        'content-type': 'application/json',
+        'content-length': Buffer.byteLength(options.body),
+      } : undefined,
+    }, (response) => {
+      const chunks: Buffer[] = [];
+      response.on('data', (chunk) => {
+        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      });
+      response.on('end', () => {
+        const body = Buffer.concat(chunks).toString('utf8');
+        try {
+          resolve({
+            payload: body ? JSON.parse(body) : {},
+            statusCode: response.statusCode ?? 0,
+          });
+        } catch (error) {
+          reject(new Error(`sidecar response was not valid JSON: ${error instanceof Error ? error.message : String(error)}`));
+        }
+      });
+    });
+    request.on('error', reject);
+    if (options.body) {
+      request.write(options.body);
+    }
+    request.end();
+  });
+}
+
+async function parseMemoryWatermarkPayload(
+  rawPayload: unknown,
+  status: number,
+  ok: boolean,
+  label: string,
+) {
+  const payload = rawPayload as {
     errorMessage?: string;
     resolved?: boolean;
     pendingTurnIds?: unknown[];
@@ -312,10 +459,11 @@ async function fetchMemoryWatermark() {
     committedEpoch?: number;
     observerPending?: boolean;
   };
-  if (!response.ok) {
-    const message = typeof payload?.errorMessage === 'string'
+  if (!ok) {
+    const detail = typeof payload?.errorMessage === 'string'
       ? payload.errorMessage
-      : `sidecar watermark request failed with status ${response.status}`;
+      : `sidecar ${label} request failed with status ${status}`;
+    const message = `sidecar ${label} request failed with status ${status}: ${detail}`;
     throw new Error(message);
   }
   return {
@@ -337,45 +485,15 @@ async function recallHits(
   budget = 0,
   queryLimit?: number,
 ): Promise<BridgeHit[]> {
-  const rows = await withTransientRetry(
-    () => coreClient.memories.recall(query, limit, { mode, budget, queryLimit }),
+  const payload = await withTransientRetry(
+    () => fetchLocomoRecall(query, limit, manifest, mode, budget, queryLimit),
     {
       attempts: envPositiveInt('MUNINN_LOCOMO_RECALL_ATTEMPTS', RECALL_ATTEMPTS),
       delayMs: envPositiveInt('MUNINN_LOCOMO_RECALL_RETRY_DELAY_MS', RECALL_RETRY_DELAY_MS),
       label: 'recall',
     },
   );
-  const turnMap = manifestTurnMap(manifest);
-  const hits: BridgeHit[] = [];
-
-  for (const row of rows) {
-    if (row.memoryId === 'recalled:memory') {
-      hits.push(await toRecalledBridgeHit(row, turnMap));
-      continue;
-    }
-    const rendered = await coreClient.memories.get(row.memoryId);
-    if (!rendered) {
-      continue;
-    }
-    hits.push(await toBridgeHit(rendered, turnMap, row.text));
-  }
-
-  return hits;
-}
-
-async function toRecalledBridgeHit(
-  row: { memoryId: string; text: string; references?: string[] },
-  turnMap: Map<string, ManifestTurn[]>,
-): Promise<BridgeHit> {
-  const evidenceIds = await resolveRecalledEvidenceIds(row.references ?? [], turnMap);
-  return {
-    memory_id: row.memoryId,
-    matched_text: row.text,
-    evidence_ids: evidenceIds,
-    detail: row.text,
-    extractionRatio: undefined,
-    references: await directSessionReferencesFromIds(evidenceIds, turnMap),
-  };
+  return payload.hits;
 }
 
 function parseRecallMode(raw: string | undefined): RecallMode {
@@ -420,268 +538,98 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-async function toBridgeHit(
-  rendered: RenderedMemory,
-  turnMap: Map<string, ManifestTurn[]>,
-  matchedText: string,
-): Promise<BridgeHit> {
-  const evidenceIds = await resolveEvidenceIds(rendered.memoryId, turnMap);
-  const memoryText = renderBridgeMemoryText(rendered, matchedText);
+async function captureTurn(content: TurnContent, database: string): Promise<CapturedTurn> {
+  const payload = await fetchJsonObject(`${sidecarBaseUrl()}/api/v1/benchmark/locomo/turn/capture`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ database, turn: content }),
+  }, 'benchmark capture');
+  const turn = payload.turn;
+  if (!turn || typeof turn !== 'object' || typeof (turn as Record<string, unknown>).turnId !== 'string') {
+    throw new Error('benchmark capture response did not include turn.turnId');
+  }
+  return turn as CapturedTurn;
+}
 
+async function fetchLocomoRecall(
+  query: string,
+  limit: number,
+  manifest: ImportManifest,
+  mode: RecallMode,
+  budget = 0,
+  queryLimit?: number,
+): Promise<{ hits: BridgeHit[] }> {
+  const payload = await fetchJsonObject(`${sidecarBaseUrl()}/api/v1/benchmark/locomo/recall`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      query,
+      database: manifest.sample_id,
+      limit,
+      recallMode: mode,
+      budget,
+      queryLimit,
+      manifest,
+    }),
+  }, 'benchmark recall');
+  const hits = payload.hits;
+  if (!Array.isArray(hits)) {
+    throw new Error('benchmark recall response did not include hits array');
+  }
+  return { hits: hits.map(parseBridgeHit) };
+}
+
+async function fetchJsonObject(url: string, init: RequestInit, label: string): Promise<Record<string, unknown>> {
+  const response = await fetch(url, init);
+  let payload: unknown = null;
+  try {
+    payload = await response.json();
+  } catch {
+    payload = null;
+  }
+  if (!response.ok) {
+    const record = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {};
+    const detail = typeof record.errorMessage === 'string' ? record.errorMessage : `status ${response.status}`;
+    throw new Error(`${label} request failed with status ${response.status}: ${detail}`);
+  }
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    throw new Error(`${label} response must be a JSON object`);
+  }
+  return payload as Record<string, unknown>;
+}
+
+function parseBridgeHit(value: unknown): BridgeHit {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('benchmark recall hit must be an object');
+  }
+  const hit = value as Record<string, unknown>;
   return {
-    memory_id: rendered.memoryId,
-    matched_text: matchedText,
-    evidence_ids: evidenceIds,
-    detail: memoryText,
-    extractionRatio: observingRatio(rendered.detail),
-    references: await directSessionReferences(rendered.memoryId, turnMap),
+    memory_id: String(hit.memory_id ?? ''),
+    matched_text: String(hit.matched_text ?? ''),
+    evidence_ids: Array.isArray(hit.evidence_ids) ? hit.evidence_ids.map((item) => String(item)) : [],
+    detail: typeof hit.detail === 'string' ? hit.detail : undefined,
+    observationRatio: typeof hit.observationRatio === 'number' || hit.observationRatio === null
+      ? hit.observationRatio
+      : undefined,
+    references: Array.isArray(hit.references) ? hit.references.map(parseBridgeReference) : [],
   };
 }
 
-function renderBridgeMemoryText(rendered: RenderedMemory, matchedText: string): string {
-  if (rendered.memoryId.startsWith('extraction:')) {
-    const extraction = matchedText || rendered.summary || rendered.title || '';
-    const anchors = rendered.detail?.match(/(?:^|\n)Anchors:\n([\s\S]*?)(?:\n\nContext:|\n\nReferences:|$)/)?.[1]?.trim();
-    const context = rendered.detail?.match(/(?:^|\n)Context:\n([\s\S]*?)(?:\n\nReferences:|$)/)?.[1]?.trim();
-    return [
-      `EXTRACTION: ${extraction}`,
-      anchors ? `ANCHORS:\n${anchors}` : '',
-      context ? `CONTEXT: ${context}` : '',
-    ].filter(Boolean).join('\n');
+function parseBridgeReference(value: unknown): BridgeReference {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return { memory_id: '', source_id: '', date_time: '', text: '' };
   }
-  return matchedText || rendered.summary || rendered.title || rendered.detail || '';
+  const reference = value as Record<string, unknown>;
+  return {
+    memory_id: String(reference.memory_id ?? ''),
+    source_id: String(reference.source_id ?? ''),
+    date_time: String(reference.date_time ?? ''),
+    text: String(reference.text ?? ''),
+  };
 }
 
-function observingRatio(detail?: string | null): number | null | undefined {
-  if (!detail) {
-    return undefined;
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(detail);
-  } catch {
-    return undefined;
-  }
-  if (!parsed || typeof parsed !== 'object') {
-    return undefined;
-  }
-  const record = parsed as Record<string, unknown>;
-  const extractions = Array.isArray(record.extractions) ? record.extractions : [];
-  const contextRefs = Array.isArray(record.contextRefs) ? record.contextRefs : [];
-  if (contextRefs.length === 0) {
-    return null;
-  }
-  return extractions.length / contextRefs.length;
-}
-
-async function directSessionReferences(
-  memoryId: string,
-  turnMap: Map<string, ManifestTurn[]>,
-): Promise<BridgeReference[]> {
-  if (memoryId.startsWith('observation:')) {
-    const evidenceIds = await resolveEvidenceIds(memoryId, turnMap);
-    return directSessionReferencesFromIds(evidenceIds, turnMap);
-  }
-  if (memoryId.startsWith('extraction:')) {
-    const rendered = await coreClient.memories.get(memoryId);
-    const references = renderedReferences(rendered);
-    return directSessionReferencesFromIds(references, turnMap);
-  }
-  if (!memoryId.startsWith('session:')) {
-    return [];
-  }
-  const observing = await coreClient.sessions.get(memoryId);
-  if (!observing) {
-    return [];
-  }
-
-  return directSessionReferencesFromIds(observing.references, turnMap);
-}
-
-async function directSessionReferencesFromIds(
-  references: string[],
-  turnMap: Map<string, ManifestTurn[]>,
-): Promise<BridgeReference[]> {
-  const rows: BridgeReference[] = [];
-  for (const reference of references) {
-    const manifestTurns = turnMap.get(reference) ?? manifestTurnsBySourceId(turnMap, reference);
-    if (manifestTurns.length === 0) {
-      continue;
-    }
-    for (const manifestTurn of manifestTurns) {
-      const turn = await coreClient.turns.get(manifestTurn.turn_id);
-      rows.push({
-        memory_id: manifestTurn.turn_id,
-        source_id: manifestTurn.source_id,
-        date_time: manifestTurn.date_time,
-        text: renderReferenceText(turn),
-      });
-    }
-  }
-  return rows;
-}
-
-async function resolveRecalledEvidenceIds(
-  references: string[],
-  turnMap: Map<string, ManifestTurn[]>,
-): Promise<string[]> {
-  const sourceIds: string[] = [];
-  for (const reference of references) {
-    const direct = turnMap.get(reference) ?? [];
-    if (direct.length > 0) {
-      for (const sourceId of direct.map((turn) => turn.source_id)) {
-        if (!sourceIds.includes(sourceId)) {
-          sourceIds.push(sourceId);
-        }
-      }
-      continue;
-    }
-    if (manifestHasSourceId(turnMap, reference) && !sourceIds.includes(reference)) {
-      sourceIds.push(reference);
-      continue;
-    }
-    for (const sourceId of await resolveEvidenceIds(reference, turnMap)) {
-      if (!sourceIds.includes(sourceId)) {
-        sourceIds.push(sourceId);
-      }
-    }
-  }
-  return sourceIds;
-}
-
-function manifestTurnsBySourceId(
-  turnMap: Map<string, ManifestTurn[]>,
-  sourceId: string,
-): ManifestTurn[] {
-  const matches: ManifestTurn[] = [];
-  for (const turns of turnMap.values()) {
-    for (const turn of turns) {
-      if (turn.source_id === sourceId) {
-        matches.push(turn);
-      }
-    }
-  }
-  return matches;
-}
-
-function manifestHasSourceId(turnMap: Map<string, ManifestTurn[]>, sourceId: string): boolean {
-  return manifestTurnsBySourceId(turnMap, sourceId).length > 0;
-}
-
-function renderReferenceText(turn: Turn | null): string {
-  if (!turn) {
-    return '';
-  }
-  const prompt = turn.prompt?.trim();
-  const response = turn.response?.trim();
-  if (prompt && response) {
-    return `${prompt}\nResponse: ${response}`;
-  }
-  return prompt || response || '';
-}
-
-async function addTurnAndFind(content: TurnContent): Promise<Turn> {
-  await coreClient.addMessage(content);
-  const turns = await coreClient.turns.list({
-    mode: { type: 'recency', limit: 20 },
-    agent: content.agent,
-    sessionId: content.sessionId,
-  });
-  const match = turns.find((turn) => (
-    turn.prompt === content.prompt
-    && turn.response === content.response
-  ));
-  if (!match) {
-    throw new Error(
-      `failed to resolve imported LoCoMo turn for ${content.agent} in ${content.sessionId}`
-    );
-  }
-  return match;
-}
-
-async function resolveEvidenceIds(
-  memoryId: string,
-  turnMap: Map<string, ManifestTurn[]>,
-  seen = new Set<string>(),
-): Promise<string[]> {
-  if (seen.has(memoryId)) {
-    return [];
-  }
-  seen.add(memoryId);
-
-  const direct = turnMap.get(memoryId) ?? [];
-  if (direct.length > 0) {
-    return direct.map((turn) => turn.source_id);
-  }
-
-  if (memoryId.startsWith('extraction:')) {
-    const rendered = await coreClient.memories.get(memoryId);
-    const sourceIds: string[] = [];
-    for (const reference of renderedReferences(rendered)) {
-      for (const sourceId of await resolveEvidenceReference(reference, turnMap, seen)) {
-        if (!sourceIds.includes(sourceId)) {
-          sourceIds.push(sourceId);
-        }
-      }
-    }
-    return sourceIds;
-  }
-
-  if (memoryId.startsWith('observation:')) {
-    const rendered = await coreClient.memories.get(memoryId);
-    const sourceIds: string[] = [];
-    for (const reference of renderedReferences(rendered)) {
-      for (const sourceId of await resolveEvidenceReference(reference, turnMap, seen)) {
-        if (!sourceIds.includes(sourceId)) {
-          sourceIds.push(sourceId);
-        }
-      }
-    }
-    return sourceIds;
-  }
-
-  if (!memoryId.startsWith('session:')) {
-    return [];
-  }
-
-  const observing = await coreClient.sessions.get(memoryId);
-  if (!observing) {
-    return [];
-  }
-
-  const sourceIds: string[] = [];
-  for (const reference of observing.references) {
-    for (const sourceId of await resolveEvidenceReference(reference, turnMap, seen)) {
-      if (!sourceIds.includes(sourceId)) {
-        sourceIds.push(sourceId);
-      }
-    }
-  }
-  return sourceIds;
-}
-
-async function resolveEvidenceReference(
-  reference: string,
-  turnMap: Map<string, ManifestTurn[]>,
-  seen: Set<string>,
-): Promise<string[]> {
-  if (!reference) {
-    return [];
-  }
-  return resolveEvidenceIds(reference, turnMap, seen);
-}
-
-function renderedReferences(rendered: RenderedMemory | null): string[] {
-  const detail = rendered?.detail;
-  if (!detail) {
-    return [];
-  }
-  return detail
-    .split('\n')
-    .map((line) => line.trim())
-    .filter((line) => line.startsWith('- '))
-    .map((line) => line.slice(2).trim())
-    .filter(Boolean);
+function sidecarBaseUrl(): string {
+  return (process.env.MUNINN_SIDECAR_BASE_URL || 'http://127.0.0.1:8080').replace(/\/+$/, '');
 }
 
 export function resolveEvidenceIdsFromGraph(
@@ -925,6 +873,17 @@ async function writeManifest(home: string, manifest: ImportManifest): Promise<vo
 async function readManifest(home: string): Promise<ImportManifest> {
   const raw = await readFile(manifestPath(home), 'utf8');
   return JSON.parse(raw) as ImportManifest;
+}
+
+function filterManifestBySample(manifest: ImportManifest, sampleId?: string): ImportManifest {
+  if (!sampleId) {
+    return manifest;
+  }
+  return {
+    ...manifest,
+    sample_id: sampleId,
+    turns: manifest.turns.filter((turn) => turn.sample_id === sampleId),
+  };
 }
 
 function manifestTurnMap(manifest: ImportManifest): Map<string, ManifestTurn[]> {

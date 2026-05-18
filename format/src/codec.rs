@@ -709,7 +709,6 @@ pub(crate) fn observations_to_record_batch(rows: &[Observation]) -> Result<Recor
     let ids = StringArray::from_iter_values(rows.iter().map(|row| row.id.as_str()));
     let observing_path = StringArray::from_iter_values(rows.iter().map(|row| row.observing_path.as_str()));
     let text = StringArray::from_iter_values(rows.iter().map(|row| row.text.as_str()));
-    let search_text = StringArray::from_iter_values(rows.iter().map(|row| row.text.as_str()));
     let vector = build_float32_fixed_size_list_array(
         rows.iter().map(|row| row.vector.as_slice()),
         dimensions,
@@ -731,7 +730,6 @@ pub(crate) fn observations_to_record_batch(rows: &[Observation]) -> Result<Recor
             Arc::new(ids),
             Arc::new(observing_path),
             Arc::new(text),
-            Arc::new(search_text),
             Arc::new(vector),
             Arc::new(extraction_refs),
             Arc::new(created_at),
@@ -770,19 +768,19 @@ pub(crate) fn record_batch_to_observations(batch: &RecordBatch) -> Result<Vec<Ob
         .as_any()
         .downcast_ref::<StringArray>()
         .unwrap();
-    let vector = batch.column(4);
+    let vector = batch.column(3);
     let extraction_refs = batch
-        .column(5)
+        .column(4)
         .as_any()
         .downcast_ref::<ListArray>()
         .unwrap();
     let created_at = batch
-        .column(6)
+        .column(5)
         .as_any()
         .downcast_ref::<TimestampMicrosecondArray>()
         .unwrap();
     let updated_at = batch
-        .column(7)
+        .column(6)
         .as_any()
         .downcast_ref::<TimestampMicrosecondArray>()
         .unwrap();

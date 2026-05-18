@@ -1,4 +1,4 @@
-import { addMessage } from '@muninn/core';
+import { addMessage, turns } from '@muninn/core';
 import { invalidateSessionTreeCache } from '@muninn/board/server';
 import { Hono } from 'hono';
 import type {
@@ -59,6 +59,7 @@ function mapCoreWriteError(error: unknown): { status: number; body: ErrorRespons
 
   if (
     lowered.includes('invalid')
+    || lowered.includes('database must')
     || lowered.includes('turn must include')
     || lowered.includes('turn session does not match')
   ) {
@@ -136,7 +137,7 @@ memoryWriter.post('/api/v1/turn/capture', async (c) => {
   }
 
   try {
-    await addMessage(body.turn);
+    await addMessage(body.turn, body.database);
   } catch (error) {
     const mapped = mapCoreWriteError(error);
     return c.json(mapped.body, mapped.status as 400 | 500);
@@ -145,3 +146,53 @@ memoryWriter.post('/api/v1/turn/capture', async (c) => {
   invalidateSessionTreeCache();
   return c.body(null, 204);
 });
+
+memoryWriter.post('/api/v1/benchmark/locomo/turn/capture', async (c) => {
+  let body: CaptureTurnRequest;
+  try {
+    body = await c.req.json<CaptureTurnRequest>();
+  } catch {
+    return c.json(errorResponse('invalidRequest', 'Invalid JSON body'), 400);
+  }
+
+  const validationError = validateTurn(body.turn);
+  if (validationError) {
+    return c.json(errorResponse('invalidRequest', validationError), 400);
+  }
+  if (!body.turn) {
+    return c.json(errorResponse('invalidRequest', 'turn is required'), 400);
+  }
+
+  try {
+    await addMessage(body.turn, body.database);
+    const written = await findWrittenTurn(body.turn, body.database);
+    if (!written) {
+      return c.json(errorResponse('internalError', 'failed to resolve captured turn'), 500);
+    }
+    invalidateSessionTreeCache();
+    return c.json({
+      turn: written,
+      requestId: generateRequestId(),
+    });
+  } catch (error) {
+    const mapped = mapCoreWriteError(error);
+    if (mapped.status === 500) {
+      const message = error instanceof Error ? error.message : String(error);
+      return c.json(errorResponse('internalError', message), 500);
+    }
+    return c.json(mapped.body, mapped.status as 400 | 500);
+  }
+});
+
+async function findWrittenTurn(turn: TurnContent, database?: string) {
+  const recent = await turns.list({
+    mode: { type: 'recency', limit: 20 },
+    agent: turn.agent,
+    sessionId: turn.sessionId,
+    database,
+  });
+  return recent.find((candidate) => (
+    candidate.prompt === turn.prompt
+    && candidate.response === turn.response
+  )) ?? null;
+}

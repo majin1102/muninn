@@ -2,11 +2,12 @@ import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 
-import { loadMuninnConfig, resolveMuninnHome, resolveStorageTarget } from './config.js';
+import { loadMuninnConfig, resolveDatabaseHome, resolveDatabaseName, resolveStorageTarget } from './config.js';
 import type {
   SessionSnapshot,
   SessionFragment,
 } from './extractor/types.js';
+import type { Extraction } from './native.js';
 
 export type RecentTurn = {
   turnId: string;
@@ -41,10 +42,15 @@ export type ExtractorCheckpoint = {
   recentSessions: RecentSessionCheckpoint[];
   threads: ThreadRef[];
   runs: ObservingRun[];
+  pendingExtractionChanges: QueuedExtractionChange[];
 };
 
+export type QueuedExtractionChange =
+  | { type: 'upsert'; extraction: Extraction }
+  | { type: 'delete'; extraction: Extraction };
+
 export type CheckpointContent = {
-  schemaVersion: 5;
+  schemaVersion: 6;
   extractor: ExtractorCheckpoint;
   observer: ObserverCheckpoint;
 };
@@ -118,9 +124,15 @@ export type ObserverRun = {
 
 export type ObserverCheckpoint = {
   baseline: {
-    extraction: number;
     observationContext: number;
     observation: number;
+  };
+  observeQueue: {
+    anchors: Array<{
+      key: string;
+      anchor: string;
+      extractionChanges: QueuedExtractionChange[];
+    }>;
   };
   runs: ObserverRun[];
 };
@@ -130,7 +142,7 @@ export function parseCheckpointFile(raw: string): CheckpointFile {
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
     throw new Error('checkpoint must be a JSON object');
   }
-  if (parsed.schemaVersion !== 5) {
+  if (parsed.schemaVersion !== 6) {
     throw new Error(`unsupported checkpoint schemaVersion: ${String(parsed.schemaVersion)}`);
   }
   const extractor = parseExtractorSection(parsed.extractor);
@@ -142,7 +154,7 @@ export function parseCheckpointFile(raw: string): CheckpointFile {
     throw new Error('checkpoint observer section is invalid');
   }
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     writtenAt: typeof parsed.writtenAt === 'string' ? parsed.writtenAt : new Date(0).toISOString(),
     writerPid: typeof parsed.writerPid === 'number' ? parsed.writerPid : 0,
     extractor,
@@ -150,9 +162,9 @@ export function parseCheckpointFile(raw: string): CheckpointFile {
   };
 }
 
-export async function readCheckpointFile(): Promise<CheckpointFile | null> {
+export async function readCheckpointFile(database?: string | null): Promise<CheckpointFile | null> {
   try {
-    const raw = await readFile(resolveCheckpointPath(), 'utf8');
+    const raw = await readFile(resolveCheckpointPath(database), 'utf8');
     return parseCheckpointFile(raw);
   } catch (error) {
     if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') {
@@ -175,7 +187,8 @@ function parseExtractorSection(value: unknown): ExtractorCheckpoint | null {
   const recentSessions = parseRecentSessions(value.recentSessions);
   const threads = parseThreads(value.threads);
   const runs = parseObservingRuns(value.runs ?? []);
-  if (!baseline || typeof nextEpoch !== 'number' || !recentSessions || !threads || !runs) {
+  const pendingExtractionChanges = parseQueuedExtractionChanges(value.pendingExtractionChanges);
+  if (!baseline || typeof nextEpoch !== 'number' || !recentSessions || !threads || !runs || !pendingExtractionChanges) {
     return null;
   }
   const committedEpoch = value.committedEpoch;
@@ -189,6 +202,7 @@ function parseExtractorSection(value: unknown): ExtractorCheckpoint | null {
     recentSessions,
     threads,
     runs,
+    pendingExtractionChanges,
   };
 }
 
@@ -218,10 +232,11 @@ function parseObserverSection(value: unknown): ObserverCheckpoint | null {
   }
   const baseline = parseObserverBaseline(value.baseline);
   const runs = parseObserverRuns(value.runs ?? []);
-  if (!baseline || !runs) {
+  const observeQueue = parseObserveQueue(value.observeQueue);
+  if (!baseline || !runs || !observeQueue) {
     return null;
   }
-  return { baseline, runs };
+  return { baseline, observeQueue, runs };
 }
 
 function parseObserverBaseline(value: unknown): ObserverCheckpoint['baseline'] | null {
@@ -229,16 +244,94 @@ function parseObserverBaseline(value: unknown): ObserverCheckpoint['baseline'] |
     return null;
   }
   if (
-    typeof value.extraction !== 'number'
-    || typeof value.observationContext !== 'number'
+    typeof value.observationContext !== 'number'
     || typeof value.observation !== 'number'
   ) {
     return null;
   }
   return {
-    extraction: value.extraction,
     observationContext: value.observationContext,
     observation: value.observation,
+  };
+}
+
+function parseObserveQueue(value: unknown): ObserverCheckpoint['observeQueue'] | null {
+  if (!isObjectRecord(value) || !Array.isArray(value.anchors)) {
+    return null;
+  }
+  const anchors: ObserverCheckpoint['observeQueue']['anchors'] = [];
+  for (const bucket of value.anchors) {
+    if (
+      !isObjectRecord(bucket)
+      || typeof bucket.key !== 'string'
+      || typeof bucket.anchor !== 'string'
+    ) {
+      return null;
+    }
+    const extractionChanges = parseQueuedExtractionChanges(bucket.extractionChanges);
+    if (!extractionChanges) {
+      return null;
+    }
+    anchors.push({
+      key: bucket.key,
+      anchor: bucket.anchor,
+      extractionChanges,
+    });
+  }
+  return { anchors };
+}
+
+function parseQueuedExtractionChanges(value: unknown): QueuedExtractionChange[] | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  const changes: QueuedExtractionChange[] = [];
+  for (const entry of value) {
+    if (!isObjectRecord(entry) || (entry.type !== 'upsert' && entry.type !== 'delete')) {
+      return null;
+    }
+    const extraction = parseStoredExtraction(entry.extraction);
+    if (!extraction) {
+      return null;
+    }
+    changes.push({ type: entry.type, extraction });
+  }
+  return changes;
+}
+
+function parseStoredExtraction(value: unknown): Extraction | null {
+  if (!isObjectRecord(value)) {
+    return null;
+  }
+  if (
+    typeof value.id !== 'string'
+    || typeof value.text !== 'string'
+    || (value.context != null && typeof value.context !== 'string')
+    || !isStringArray(value.anchors)
+    || !isNumberArray(value.vector)
+    || typeof value.importance !== 'number'
+    || typeof value.category !== 'string'
+    || !isStringArray(value.turnRefs)
+    || !isStringArray(value.observationIds)
+    || !isStringArray(value.observedRootAnchors)
+    || typeof value.createdAt !== 'string'
+    || typeof value.updatedAt !== 'string'
+  ) {
+    return null;
+  }
+  return {
+    id: value.id,
+    text: value.text,
+    context: value.context ?? null,
+    anchors: [...value.anchors],
+    vector: [...value.vector],
+    importance: value.importance,
+    category: value.category,
+    turnRefs: [...value.turnRefs],
+    observationIds: [...value.observationIds],
+    observedRootAnchors: [...value.observedRootAnchors],
+    createdAt: value.createdAt,
+    updatedAt: value.updatedAt,
   };
 }
 
@@ -555,10 +648,18 @@ function parseObserverRunErrors(value: unknown): ObserverRun['errors'] | null {
 }
 
 function parseStringArray(value: unknown): string[] | null {
-  if (!Array.isArray(value) || value.some((item) => typeof item !== 'string')) {
+  if (!isStringArray(value)) {
     return null;
   }
   return [...value];
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === 'string');
+}
+
+function isNumberArray(value: unknown): value is number[] {
+  return Array.isArray(value) && value.every((item) => typeof item === 'number');
 }
 
 function isRunStatus(value: unknown): value is ObservingRunStatus {
@@ -587,22 +688,20 @@ function isObjectRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
-export function resolveCheckpointPath(): string {
-  const home = resolveMuninnHome();
+export function resolveCheckpointPath(database?: string | null): string {
+  const databaseName = resolveDatabaseName(database);
+  const home = resolveDatabaseHome(databaseName);
   const hash = createHash('sha256')
-    .update(storageScopeKey())
+    .update(storageScopeKey(databaseName))
     .digest('hex')
     .slice(0, 16);
   return path.join(home, 'checkpoints', `${hash}.json`);
 }
 
-function storageScopeKey(): string {
+function storageScopeKey(database: string): string {
   const config = loadMuninnConfig();
-  const storage = config ? resolveStorageTarget(config) : null;
+  const storage = resolveStorageTarget(config ?? {}, database);
   const extractor = config?.extractor?.name ?? '';
-  if (!storage) {
-    return `local:${resolveMuninnHome()}#extractor=${extractor}`;
-  }
   const options = storage.storageOptions
     ? Object.entries(storage.storageOptions)
       .sort(([left], [right]) => left.localeCompare(right))

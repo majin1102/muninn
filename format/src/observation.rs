@@ -18,7 +18,7 @@ use super::codec::{observations_to_reader, record_batch_to_observations};
 use crate::extraction::RecallMode;
 use crate::maintenance::{
     OBSERVATION_SEARCH_TEXT_COLUMN, cleanup_dataset, compact_dataset, ensure_observation_fts_index,
-    ensure_semantic_vector_index,
+    ensure_observation_id_index, ensure_semantic_vector_index, optimize_observation,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -71,6 +71,13 @@ impl ObservationTable {
         cleanup_dataset(self.access.try_open().await?, floor_version).await
     }
 
+    pub async fn optimize(&self, merge_count: usize) -> Result<bool> {
+        let Some(mut dataset) = self.access.try_open().await? else {
+            return Ok(false);
+        };
+        optimize_observation(&mut dataset, merge_count).await
+    }
+
     pub async fn describe(&self) -> Result<Option<TableDescription>> {
         let Some(dataset) = self.access.try_open().await? else {
             return Ok(None);
@@ -84,10 +91,11 @@ impl ObservationTable {
         };
         let vector_created = ensure_semantic_vector_index(&mut dataset, target_partition_size).await?;
         let fts_created = ensure_observation_fts_index(&mut dataset).await?;
-        Ok(vector_created || fts_created)
+        let id_created = ensure_observation_id_index(&mut dataset).await?;
+        Ok(vector_created || fts_created || id_created)
     }
 
-    pub async fn load_by_ids(&self, ids: &[String]) -> Result<Vec<Observation>> {
+    pub async fn get(&self, ids: &[String]) -> Result<Vec<Observation>> {
         if ids.is_empty() {
             return Ok(Vec::new());
         }
@@ -108,7 +116,12 @@ impl ObservationTable {
         if batch.num_rows() == 0 {
             return Ok(Vec::new());
         }
-        record_batch_to_observations(&batch)
+        let rows = record_batch_to_observations(&batch)?;
+        let mut by_id = rows
+            .into_iter()
+            .map(|row| (row.id.clone(), row))
+            .collect::<HashMap<_, _>>();
+        Ok(ids.iter().filter_map(|id| by_id.remove(id)).collect())
     }
 
     pub async fn upsert(&self, rows: Vec<Observation>) -> Result<()> {
@@ -199,7 +212,7 @@ impl ObservationTable {
                     return Ok(Vec::new());
                 }
                 let ids = batch_ids(&batch)?;
-                return self.load_by_ids_preserving_order(&ids).await;
+                return self.get(&ids).await;
             }
         }
         fallback_full_text(&dataset, normalized_query, limit).await
@@ -218,15 +231,6 @@ impl ObservationTable {
         let vector_rows = self.nearest(query_vector, candidate_limit).await?;
         let fts_rows = self.full_text(query, candidate_limit).await?;
         Ok(merge_ranked(vector_rows, fts_rows, limit))
-    }
-
-    async fn load_by_ids_preserving_order(&self, ids: &[String]) -> Result<Vec<Observation>> {
-        let rows = self.load_by_ids(ids).await?;
-        let mut by_id = rows
-            .into_iter()
-            .map(|row| (row.id.clone(), row))
-            .collect::<HashMap<_, _>>();
-        Ok(ids.iter().filter_map(|id| by_id.remove(id)).collect())
     }
 
 }
@@ -430,13 +434,34 @@ mod tests {
             }])
             .await
             .unwrap();
+        table
+            .upsert(vec![Observation {
+                id: "two".to_string(),
+                observing_path: "Melanie".to_string(),
+                text: "third".to_string(),
+                vector: vec![0.0, 0.0, 0.0, 1.0],
+                extraction_refs: vec!["extraction:c".to_string()],
+                created_at: now,
+                updated_at: now,
+            }])
+            .await
+            .unwrap();
 
-        let rows = table.load_by_ids(&["one".to_string()]).await.unwrap();
+        let rows = table.get(&["one".to_string()]).await.unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].text, "second");
         assert_eq!(rows[0].extraction_refs, vec!["extraction:b"]);
 
+        let rows = table
+            .get(&["two".to_string(), "missing".to_string(), "one".to_string()])
+            .await
+            .unwrap();
+        assert_eq!(
+            rows.iter().map(|row| row.id.as_str()).collect::<Vec<_>>(),
+            vec!["two", "one"],
+        );
+
         assert_eq!(table.delete(vec!["one".to_string()]).await.unwrap(), 1);
-        assert!(table.load_by_ids(&["one".to_string()]).await.unwrap().is_empty());
+        assert!(table.get(&["one".to_string()]).await.unwrap().is_empty());
     }
 }

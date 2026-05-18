@@ -111,7 +111,7 @@ struct ExtractionSearchParams {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct ExtractionLoadByIdsParams {
+struct ExtractionGetParams {
     ids: Vec<String>,
 }
 
@@ -119,6 +119,12 @@ struct ExtractionLoadByIdsParams {
 #[serde(rename_all = "camelCase")]
 struct ExtractionListParams {
     limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ExtractionDeltaParams {
+    baseline_version: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -147,7 +153,7 @@ struct ObservationContextListParams {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct ObservationContextLoadByIdsParams {
+struct ObservationContextGetParams {
     ids: Vec<String>,
 }
 
@@ -180,7 +186,7 @@ struct ObservationSearchParams {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct ObservationLoadByIdsParams {
+struct ObservationGetParams {
     ids: Vec<String>,
 }
 
@@ -480,11 +486,11 @@ impl CoreBinding {
         )
     }
 
-    #[napi(js_name = "extractionLoadByIds")]
-    pub async fn extraction_load_by_ids(&self, params: Value) -> NapiResult<Value> {
-        let params = parse_params::<ExtractionLoadByIdsParams>(params)?;
+    #[napi(js_name = "extractionGet")]
+    pub async fn extraction_get(&self, params: Value) -> NapiResult<Value> {
+        let params = parse_params::<ExtractionGetParams>(params)?;
         let resources = self.resources().await?;
-        into_napi_value(resources.extraction_table.load_by_ids(&params.ids).await)
+        into_napi_value(resources.extraction_table.get(&params.ids).await)
     }
 
     #[napi(js_name = "extractionList")]
@@ -492,6 +498,13 @@ impl CoreBinding {
         let params = parse_params::<ExtractionListParams>(params)?;
         let resources = self.resources().await?;
         into_napi_value(resources.extraction_table.list(params.limit).await)
+    }
+
+    #[napi(js_name = "extractionDelta")]
+    pub async fn extraction_delta(&self, params: Value) -> NapiResult<Value> {
+        let params = parse_params::<ExtractionDeltaParams>(params)?;
+        let resources = self.resources().await?;
+        into_napi_value(resources.extraction_table.delta(params.baseline_version).await)
     }
 
     #[napi(js_name = "extractionUpsert")]
@@ -610,11 +623,11 @@ impl CoreBinding {
         )
     }
 
-    #[napi(js_name = "observationContextLoadByIds")]
-    pub async fn observation_context_load_by_ids(&self, params: Value) -> NapiResult<Value> {
-        let params = parse_params::<ObservationContextLoadByIdsParams>(params)?;
+    #[napi(js_name = "observationContextGet")]
+    pub async fn observation_context_get(&self, params: Value) -> NapiResult<Value> {
+        let params = parse_params::<ObservationContextGetParams>(params)?;
         let resources = self.resources().await?;
-        into_napi_value(resources.observation_context_table.load_by_ids(&params.ids).await)
+        into_napi_value(resources.observation_context_table.get(&params.ids).await)
     }
 
     #[napi(js_name = "observationContextDelete")]
@@ -634,6 +647,29 @@ impl CoreBinding {
     pub async fn observation_context_table_stats(&self) -> NapiResult<Value> {
         let resources = self.resources().await?;
         into_napi_value(resources.observation_context_table.stats().await)
+    }
+
+    #[napi(js_name = "observationContextEnsureIdIndex")]
+    pub async fn observation_context_ensure_id_index(&self) -> NapiResult<Value> {
+        let resources = self.resources().await?;
+        let created = resources
+            .observation_context_table
+            .ensure_id_index()
+            .await
+            .map_err(to_napi_error)?;
+        to_napi_value(CreatedResult { created })
+    }
+
+    #[napi(js_name = "observationContextOptimize")]
+    pub async fn observation_context_optimize(&self, params: Value) -> NapiResult<Value> {
+        let params = parse_params::<OptimizeParams>(params)?;
+        let resources = self.resources().await?;
+        let changed = resources
+            .observation_context_table
+            .optimize(params.merge_count)
+            .await
+            .map_err(to_napi_error)?;
+        to_napi_value(ChangedResult { changed })
     }
 
     #[napi(js_name = "observationUpsert")]
@@ -669,11 +705,11 @@ impl CoreBinding {
         )
     }
 
-    #[napi(js_name = "observationLoadByIds")]
-    pub async fn observation_load_by_ids(&self, params: Value) -> NapiResult<Value> {
-        let params = parse_params::<ObservationLoadByIdsParams>(params)?;
+    #[napi(js_name = "observationGet")]
+    pub async fn observation_get(&self, params: Value) -> NapiResult<Value> {
+        let params = parse_params::<ObservationGetParams>(params)?;
         let resources = self.resources().await?;
-        into_napi_value(resources.observation_table.load_by_ids(&params.ids).await)
+        into_napi_value(resources.observation_table.get(&params.ids).await)
     }
 
     #[napi(js_name = "observationTableStats")]
@@ -681,11 +717,68 @@ impl CoreBinding {
         let resources = self.resources().await?;
         into_napi_value(resources.observation_table.stats().await)
     }
+
+    #[napi(js_name = "observationEnsureVectorIndex")]
+    pub async fn observation_ensure_vector_index(&self, params: Value) -> NapiResult<Value> {
+        let params = parse_params::<TargetPartitionSizeParams>(params)?;
+        let resources = self.resources().await?;
+        let created = resources
+            .observation_table
+            .ensure_vector_index(params.target_partition_size)
+            .await
+            .map_err(to_napi_error)?;
+        to_napi_value(CreatedResult { created })
+    }
+
+    #[napi(js_name = "observationCompact")]
+    pub async fn observation_compact(&self) -> NapiResult<Value> {
+        let resources = self.resources().await?;
+        let changed = resources
+            .observation_table
+            .compact()
+            .await
+            .map_err(to_napi_error)?;
+        to_napi_value(ChangedResult { changed })
+    }
+
+    #[napi(js_name = "observationCleanup")]
+    pub async fn observation_cleanup(&self, params: Value) -> NapiResult<Value> {
+        let params = parse_params::<CleanupParams>(params)?;
+        let resources = self.resources().await?;
+        let changed = resources
+            .observation_table
+            .cleanup(params.floor_version)
+            .await
+            .map_err(to_napi_error)?;
+        to_napi_value(ChangedResult { changed })
+    }
+
+    #[napi(js_name = "observationOptimize")]
+    pub async fn observation_optimize(&self, params: Value) -> NapiResult<Value> {
+        let params = parse_params::<OptimizeParams>(params)?;
+        let resources = self.resources().await?;
+        let changed = resources
+            .observation_table
+            .optimize(params.merge_count)
+            .await
+            .map_err(to_napi_error)?;
+        to_napi_value(ChangedResult { changed })
+    }
 }
 
 #[napi(js_name = "createCoreBinding")]
-pub fn create_core_binding() -> NapiResult<CoreBinding> {
-    let table_options = TableOptions::load().map_err(to_napi_error)?;
+pub fn create_core_binding(params: Option<Value>) -> NapiResult<CoreBinding> {
+    let table_options = params
+        .map(parse_params::<Option<StorageTargetParams>>)
+        .transpose()?
+        .flatten()
+        .map(|params| TableOptions::from_uri(params.uri, params.storage_options))
+        .transpose()
+        .map_err(to_napi_error)?;
+    let table_options = match table_options {
+        Some(table_options) => table_options,
+        None => TableOptions::load().map_err(to_napi_error)?,
+    };
     let turn_table = TurnTable::new(table_options.clone());
     let session_table = SessionTable::new(table_options.clone());
     let extraction_table = ExtractionTable::new(table_options.clone());

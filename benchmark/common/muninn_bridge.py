@@ -72,6 +72,7 @@ class MuninnBridge:
         budget: int = 0,
         query_limit: int | None = None,
         skip_watermark: bool = False,
+        sample_id: str | None = None,
     ) -> list[RecallHit]:
         kwargs = {
             "query": query,
@@ -79,6 +80,8 @@ class MuninnBridge:
             "muninn_home": str(muninn_home),
             "recall_mode": recall_mode,
         }
+        if sample_id:
+            kwargs["sample_id"] = sample_id
         if budget > 0:
             kwargs["budget"] = str(budget)
             if query_limit is not None:
@@ -108,6 +111,7 @@ class MuninnBridge:
         budget: int = 0,
         query_limit: int | None = None,
         skip_watermark: bool = False,
+        sample_id: str | None = None,
     ) -> dict[str, list[RecallHit]]:
         with tempfile.NamedTemporaryFile(
             "w",
@@ -124,6 +128,8 @@ class MuninnBridge:
                 "muninn_home": str(muninn_home),
                 "recall_mode": recall_mode,
             }
+            if sample_id:
+                kwargs["sample_id"] = sample_id
             if budget > 0:
                 kwargs["budget"] = str(budget)
                 if query_limit is not None:
@@ -154,13 +160,71 @@ class MuninnBridge:
         args = [node_binary(), str(BRIDGE_DIST), command]
         for key, value in kwargs.items():
             args.extend([f"--{key.replace('_', '-')}", value])
-        completed = self._run_process(args)
+        completed = self._run_process(args, check=False)
         try:
-            return json.loads(completed.stdout)
+            envelope = json.loads(completed.stdout)
         except json.JSONDecodeError as error:
-            raise BridgeError(f"invalid JSON from bridge: {error}") from error
+            raise BridgeError(
+                "invalid JSON from bridge: "
+                f"{error}\ncommand: {format_command(completed.args)}"
+                f"\nreturncode: {completed.returncode}"
+                f"\nstdout tail:\n{tail_text(completed.stdout)}"
+                f"\nstderr tail:\n{tail_text(completed.stderr)}"
+            ) from error
 
-    def _run_process(self, args: list[str]) -> subprocess.CompletedProcess[str]:
+        if not isinstance(envelope, dict) or "ok" not in envelope:
+            raise BridgeError(
+                "invalid bridge envelope: expected object with ok field"
+                f"\ncommand: {format_command(completed.args)}"
+                f"\nstdout tail:\n{tail_text(completed.stdout)}"
+                f"\nstderr tail:\n{tail_text(completed.stderr)}"
+            )
+
+        if envelope.get("ok") is True:
+            if completed.returncode != 0:
+                raise BridgeError(
+                    "bridge returned ok=true with non-zero exit code"
+                    f" ({completed.returncode})\ncommand: {format_command(completed.args)}"
+                    f"\nstderr tail:\n{tail_text(completed.stderr)}"
+                )
+            result = envelope.get("result")
+            if not isinstance(result, dict):
+                raise BridgeError(
+                    "invalid bridge envelope: result must be an object"
+                    f"\ncommand: {format_command(completed.args)}"
+                    f"\nstdout tail:\n{tail_text(completed.stdout)}"
+                )
+            return result
+
+        if envelope.get("ok") is False:
+            error_payload = envelope.get("error")
+            if isinstance(error_payload, dict):
+                message = str(error_payload.get("message") or "unknown bridge error")
+                stack = error_payload.get("stack")
+            else:
+                message = "unknown bridge error"
+                stack = None
+            stack_text = f"\nstack:\n{stack}" if isinstance(stack, str) and stack else ""
+            raise BridgeError(
+                f"bridge command failed: {message}"
+                f"\ncommand: {format_command(completed.args)}"
+                f"\nreturncode: {completed.returncode}"
+                f"{stack_text}"
+                f"\nstderr tail:\n{tail_text(completed.stderr)}"
+            )
+
+        raise BridgeError(
+            "invalid bridge envelope: ok must be true or false"
+            f"\ncommand: {format_command(completed.args)}"
+            f"\nstdout tail:\n{tail_text(completed.stdout)}"
+        )
+
+    def _run_process(
+        self,
+        args: list[str],
+        *,
+        check: bool = True,
+    ) -> subprocess.CompletedProcess[str]:
         process = subprocess.Popen(
             args,
             cwd=self.repo_root,
@@ -207,7 +271,7 @@ class MuninnBridge:
             stdout=b"".join(stdout_chunks).decode("utf-8", errors="replace"),
             stderr=b"".join(stderr_chunks).decode("utf-8", errors="replace"),
         )
-        if completed.returncode != 0:
+        if check and completed.returncode != 0:
             raise BridgeError(
                 f"bridge command failed ({completed.returncode}): "
                 f"{' '.join(args)}\nstdout:\n{completed.stdout}\nstderr:\n{completed.stderr}"
@@ -224,3 +288,15 @@ class MuninnBridge:
 def node_binary() -> str:
     value = os.environ.get(NODE_BINARY_ENV, "").strip()
     return value or "node"
+
+
+def format_command(args: Any) -> str:
+    if isinstance(args, (list, tuple)):
+        return " ".join(str(value) for value in args)
+    return str(args)
+
+
+def tail_text(value: str | None, limit: int = 4000) -> str:
+    if not value:
+        return ""
+    return value[-limit:]

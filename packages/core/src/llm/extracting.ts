@@ -1,7 +1,8 @@
-import { appendFile } from 'node:fs/promises';
+import { appendFile, mkdir } from 'node:fs/promises';
+import path from 'node:path';
 
 import type { Turn } from '../client.js';
-import { getExtractorLlmConfig } from '../config.js';
+import { getExtractorLlmConfig, resolveDatabaseLogPath, resolveDatabaseName } from '../config.js';
 import type { Memories } from '../memories/memories.js';
 import { renderRenderedMemoryMarkdown } from '../memories/rendered.js';
 import type {
@@ -36,6 +37,7 @@ type ToolModel = (
 type ObserveThreadDeps = {
   memories?: Pick<Memories, 'get'>;
   model?: ToolModel;
+  database?: string;
 };
 
 export async function routeObservingThreads(
@@ -170,6 +172,7 @@ export async function observeThread(
   );
   const basePrompt = renderPromptTemplate(template.userTemplate, { input_json: inputJson });
   const trace = createObserveTrace(input);
+  const database = resolveDatabaseName(deps.database);
 
   let lastError = 'extraction update returned no output';
   for (let attempt = 1; attempt <= config.maxAttempts; attempt += 1) {
@@ -211,6 +214,7 @@ export async function observeThread(
       const result = validateObserveResult(raw, input);
       await writeObserveTrace({
         ...trace,
+        database,
         attempt,
         durationMs,
         finalText: raw,
@@ -221,6 +225,7 @@ export async function observeThread(
       lastError = String(error);
       await writeObserveTrace({
         ...trace,
+        database,
         attempt,
         durationMs,
         rawText: raw,
@@ -526,6 +531,7 @@ function renderObserveTurnText(turn: { prompt?: string | null; response?: string
 }
 
 async function writeObserveTrace(event: {
+  database?: string;
   input: unknown;
   attempt: number;
   durationMs: number;
@@ -536,10 +542,9 @@ async function writeObserveTrace(event: {
   validationError?: string;
   extractions: Extraction[];
 }): Promise<void> {
-  const file = process.env.MUNINN_THREAD_OBSERVING_TRACE_FILE;
-  if (!file) {
-    return;
-  }
+  const file = process.env.MUNINN_THREAD_OBSERVING_TRACE_FILE
+    ?? resolveDatabaseLogPath(event.database, 'extractor-trace.jsonl');
+  await mkdir(path.dirname(file), { recursive: true });
   await appendFile(file, `${JSON.stringify(event)}\n`, 'utf8');
 }
 

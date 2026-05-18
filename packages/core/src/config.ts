@@ -4,6 +4,7 @@ import path from 'node:path';
 import type { StorageTarget, TableDescription } from './native.js';
 
 const CONFIG_FILE_NAME = 'muninn.json';
+const DEFAULT_DATABASE = 'main';
 const DEFAULT_SUMMARY_THRESHOLD = 500;
 const DEFAULT_TITLE_MAX_CHARS = 100;
 const DEFAULT_EXTRACTOR_MAX_ATTEMPTS = 3;
@@ -19,7 +20,8 @@ const DEFAULT_WATCHDOG_TARGET_PARTITION_SIZE = 1_024;
 const DEFAULT_WATCHDOG_OPTIMIZE_MERGE_COUNT = 4;
 const DEFAULT_EXTRACTION_DIMENSIONS = 8;
 const DEFAULT_RECALL_MODE = 'hybrid';
-const DEFAULT_OBSERVER_ANCHOR_THRESHOLD = 5;
+const DEFAULT_OBSERVER_ANCHOR_THRESHOLD = 8;
+const DEFAULT_OBSERVER_ANCHOR_BATCH_SIZE = 16;
 const DEFAULT_OBSERVER_CONTENT_BUDGET_CHARS = 24_000;
 
 export type RecallMode = 'vector' | 'fts' | 'hybrid';
@@ -54,6 +56,7 @@ type ObserverConfigRecord = {
   llm: string;
   maxAttempts?: number;
   anchorThreshold?: number;
+  anchorBatchSize?: number;
   contentBudgetChars?: number;
 };
 
@@ -124,6 +127,7 @@ export type RecallConfig = {
 
 export type ObserverRuntimeConfig = {
   anchorThreshold: number;
+  anchorBatchSize: number;
   contentBudgetChars: number;
 };
 
@@ -152,6 +156,25 @@ export function resolveMuninnHome(): string {
 
 export function resolveMuninnConfigPath(): string {
   return path.join(resolveMuninnHome(), CONFIG_FILE_NAME);
+}
+
+export function resolveDatabaseName(database?: string | null): string {
+  const value = database?.trim() || DEFAULT_DATABASE;
+  if (!/^[A-Za-z0-9._-]+$/.test(value) || value === '.' || value === '..') {
+    throw new Error('database must be a safe path segment using letters, numbers, ".", "_", or "-"');
+  }
+  return value;
+}
+
+export function resolveDatabaseHome(database?: string | null): string {
+  return path.join(resolveMuninnHome(), resolveDatabaseName(database));
+}
+
+export function resolveDatabaseLogPath(
+  database: string | null | undefined,
+  fileName: string,
+): string {
+  return path.join(resolveDatabaseHome(database), 'logs', fileName);
 }
 
 export function loadMuninnConfig(): MuninnConfigRecord | null {
@@ -244,6 +267,7 @@ export function getObserverRuntimeConfigFromConfigForTests(config: MuninnConfigR
 function getObserverRuntimeConfigFromConfig(config: MuninnConfigRecord | null): ObserverRuntimeConfig {
   return {
     anchorThreshold: config?.observer?.anchorThreshold ?? DEFAULT_OBSERVER_ANCHOR_THRESHOLD,
+    anchorBatchSize: config?.observer?.anchorBatchSize ?? DEFAULT_OBSERVER_ANCHOR_BATCH_SIZE,
     contentBudgetChars: config?.observer?.contentBudgetChars ?? DEFAULT_OBSERVER_CONTENT_BUDGET_CHARS,
   };
 }
@@ -295,15 +319,21 @@ export function validateMuninnConfigInput(content: string): MuninnConfigRecord {
   return config;
 }
 
-export function resolveStorageTarget(config: MuninnConfigRecord): StorageTarget | null {
+export function resolveStorageTarget(
+  config: MuninnConfigRecord,
+  database?: string | null,
+): StorageTarget {
+  const databaseName = resolveDatabaseName(database);
   const storage = config.storage;
   if (storage?.uri) {
     return {
-      uri: storage.uri as string,
+      uri: appendDatabaseToStorageUri(storage.uri as string, databaseName),
       storageOptions: storage.storageOptions as Record<string, string> | undefined,
     };
   }
-  return null;
+  return {
+    uri: localStorageUri(resolveDatabaseHome(databaseName)),
+  };
 }
 
 export async function validateMuninnConfigStorage(
@@ -464,6 +494,7 @@ function validateObserverConfig(observer: unknown): void {
   requireNonEmptyString(config.llm, 'observer.llm');
   validateOptionalPositiveInteger(config.maxAttempts, 'observer.maxAttempts');
   validateOptionalPositiveInteger(config.anchorThreshold, 'observer.anchorThreshold');
+  validateOptionalPositiveInteger(config.anchorBatchSize, 'observer.anchorBatchSize');
   validateOptionalPositiveInteger(config.contentBudgetChars, 'observer.contentBudgetChars');
 }
 
@@ -511,6 +542,14 @@ export function parseRecallMode(value: unknown): RecallMode {
     return value;
   }
   throw new Error('extraction.recallMode must be one of: vector, fts, hybrid');
+}
+
+function appendDatabaseToStorageUri(uri: string, database: string): string {
+  return `${uri.replace(/\/+$/, '')}/${database}`;
+}
+
+function localStorageUri(directory: string): string {
+  return `file-object-store://${path.resolve(directory)}`;
 }
 
 function effectiveEmbeddingDimensions(config: MuninnConfigRecord | null): number {

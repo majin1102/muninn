@@ -102,6 +102,7 @@ async function main() {
       description: 'Recall memories based on a query',
       inputSchema: z.object({
         query: z.string().describe('Search query'),
+        database: z.string().optional().describe('Muninn database name; defaults to main'),
         limit: z.number().int().positive().optional().describe('Maximum number of results'),
         budget: z.number().int().nonnegative().optional().describe('Character budget for recalled memory context; 0 disables recall composition'),
         queryLimit: z.number().int().positive().optional().describe('Candidate count used before recall composition'),
@@ -123,6 +124,7 @@ async function main() {
       description: 'List recent memories',
       inputSchema: z.object({
         mode: z.literal('recency').default('recency').describe('List mode'),
+        database: z.string().optional().describe('Muninn database name; defaults to main'),
         limit: z.number().int().positive().optional().describe('Maximum number of results'),
         thinkingRatio: z.number().min(0).max(1).optional().describe('Ratio of thinking memories'),
       }),
@@ -140,6 +142,7 @@ async function main() {
     {
       description: 'Get the surrounding timeline for a memory',
       inputSchema: z.object({
+        database: z.string().optional().describe('Muninn database name; defaults to main'),
         memoryId: z.string().describe('Memory ID'),
         beforeLimit: z.number().int().nonnegative().optional().describe('Number of items before the anchor'),
         afterLimit: z.number().int().nonnegative().optional().describe('Number of items after the anchor'),
@@ -158,6 +161,7 @@ async function main() {
     {
       description: 'Get the full detail for a memory',
       inputSchema: z.object({
+        database: z.string().optional().describe('Muninn database name; defaults to main'),
         memoryId: z.string().describe('Memory ID'),
       }),
     },

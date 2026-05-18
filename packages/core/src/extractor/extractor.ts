@@ -1,6 +1,7 @@
 import {
   type ExtractorCheckpoint,
   type ObservingRun,
+  type QueuedExtractionChange,
   type ThreadRef,
 } from '../checkpoint.js';
 import type { CheckpointLock } from '../backend.js';
@@ -21,6 +22,8 @@ import {
 } from './thread.js';
 import type { ObservingThread } from './types.js';
 import { buildExtraction, buildTouchedIndex, observeEpoch } from './update.js';
+import { resolveDatabaseName } from '../config.js';
+import { writeMuninnLog } from '../logging.js';
 
 const BASE_RETRY_DELAY_MS = 100;
 const MAX_RETRY_DELAY_MS = 2_000;
@@ -31,6 +34,7 @@ export type ExtractorCheckpointState = {
   nextEpoch: number;
   threads: ThreadRef[];
   runs: ObservingRun[];
+  pendingExtractionChanges: QueuedExtractionChange[];
 };
 
 const noopCheckpointLock: CheckpointLock = {
@@ -49,6 +53,7 @@ export class Extractor {
   private publishingEpochs: OpenEpoch[] = [];
   private threads: ObservingThread[] = [];
   private nextIndexRetryAt?: number;
+  private pendingExtractionChanges: QueuedExtractionChange[] = [];
   private shuttingDown = false;
   private bootstrapped = false;
   private bootstrapPromise: Promise<void> | null = null;
@@ -69,8 +74,10 @@ export class Extractor {
     private readonly client: NativeTables,
     private readonly checkpoint: ExtractorCheckpoint | null = null,
     private readonly checkpointLock: CheckpointLock = noopCheckpointLock,
-    private readonly onExtractionCommitted: (() => void) | null = null,
+    private readonly onExtractionCommitted: ((changes: QueuedExtractionChange[]) => void) | null = null,
+    database: string = 'main',
   ) {
+    this.database = resolveDatabaseName(database);
     const config = getExtractorLlmConfig();
     if (!config) {
       throw new Error('extractor is required.');
@@ -79,8 +86,11 @@ export class Extractor {
     this.activeWindowDays = config.activeWindowDays;
     this.epochTurns = config.epochTurns;
     this.epochWindowMs = config.epochWindowMs;
+    this.pendingExtractionChanges = checkpoint?.pendingExtractionChanges.map(cloneQueuedExtractionChange) ?? [];
     this.checkpointRuns = checkpoint?.runs.filter((run) => run.status === 'running').map(cloneObservingRun) ?? [];
   }
+
+  private readonly database: string;
 
   async ensureBootstrapped(): Promise<void> {
     if (this.bootstrapped) {
@@ -169,6 +179,7 @@ export class Extractor {
       nextEpoch: this.checkpointNextEpoch,
       threads: this.checkpointThreads.map((thread) => ({ ...thread })),
       runs: this.checkpointRuns.map(cloneObservingRun),
+      pendingExtractionChanges: this.pendingExtractionChanges.map(cloneQueuedExtractionChange),
     };
   }
 
@@ -227,6 +238,7 @@ export class Extractor {
         recentSessions: [],
         threads: [],
         runs: [],
+        pendingExtractionChanges: [],
       }, snapshots, new Map(turns.map((turn) => [turn.turnId, turn])));
       if (fallback) {
         this.threads = fallback.threads;
@@ -275,6 +287,8 @@ export class Extractor {
     }
     this.refreshCheckpointSnapshot();
     this.bootstrapped = true;
+    this.handoffPendingExtractionChanges();
+    this.refreshCheckpointSnapshot();
     this.start();
     this.notifyChange();
   }
@@ -323,7 +337,9 @@ export class Extractor {
         if (this.shuttingDown || isAbortError(error)) {
           break;
         }
-        console.error(`[muninn:extractor] epoch processing failed: ${String(error)}`);
+        const message = String(error);
+        console.error(`[muninn:extractor] epoch processing failed: ${message}`);
+        await writeMuninnLog(this.database, 'error', 'extractor', 'epoch_processing_failed', { message });
         await sleep(retryDelayMs);
         retryDelayMs = Math.min(retryDelayMs * 2, MAX_RETRY_DELAY_MS);
       }
@@ -344,10 +360,13 @@ export class Extractor {
         threads,
         sealedEpoch: this.currentEpoch!,
         signal: this.shutdownController.signal,
+        database: this.database,
       });
       this.threads = result.threads;
       try {
-        await this.buildCurrentEpochIndex(result.touchedIds);
+        const extractionChanges = await this.buildCurrentEpochIndex(result.touchedIds);
+        this.mergePendingExtractionChanges(extractionChanges);
+        this.handoffPendingExtractionChanges();
         if (!this.hasPendingExtraction()) {
           this.nextIndexRetryAt = undefined;
         }
@@ -355,18 +374,19 @@ export class Extractor {
         if (this.shuttingDown || isAbortError(error)) {
           throw error;
         }
-        console.error(`[muninn:extractor] extraction index build failed: ${String(error)}`);
+        const message = String(error);
+        console.error(`[muninn:extractor] extraction index build failed: ${message}`);
+        await writeMuninnLog(this.database, 'error', 'extractor', 'index_build_failed', { message });
         this.nextIndexRetryAt = Date.now() + INDEX_RETRY_DELAY_MS;
       }
       this.committedEpoch = this.currentEpoch?.epoch;
       this.currentEpoch = null;
       this.refreshCheckpointSnapshot();
       this.notifyChange();
-      this.onExtractionCommitted?.();
     });
   }
 
-  private buildCurrentEpochIndex(touchedIds: Set<string>): Promise<void> {
+  private buildCurrentEpochIndex(touchedIds: Set<string>): Promise<QueuedExtractionChange[]> {
     return buildTouchedIndex(
       this.client,
       this.threads,
@@ -434,7 +454,12 @@ export class Extractor {
         this.notifyChange();
       } catch (error) {
         rejectSealed(error);
-          console.error(`[muninn:extractor] failed to publish epoch ${openEpoch.epoch}: ${String(error)}`);
+          const message = String(error);
+          console.error(`[muninn:extractor] failed to publish epoch ${openEpoch.epoch}: ${message}`);
+          void writeMuninnLog(this.database, 'error', 'extractor', 'publish_epoch_failed', {
+            epoch: openEpoch.epoch,
+            message,
+          });
       } finally {
         const index = this.publishingEpochs.indexOf(openEpoch);
         if (index >= 0) {
@@ -464,7 +489,9 @@ export class Extractor {
   private async retryExtraction(): Promise<void> {
     try {
       await this.checkpointLock.shared(async () => {
-        await buildExtraction(this.client, this.threads, this.shutdownController.signal);
+        const extractionChanges = await buildExtraction(this.client, this.threads, this.shutdownController.signal);
+        this.mergePendingExtractionChanges(extractionChanges);
+        this.handoffPendingExtractionChanges();
         this.refreshCheckpointSnapshot();
         this.nextIndexRetryAt = undefined;
       });
@@ -472,7 +499,9 @@ export class Extractor {
       if (this.shuttingDown || isAbortError(error)) {
         throw error;
       }
-      console.error(`[muninn:extractor] extraction index retry failed: ${String(error)}`);
+      const message = String(error);
+      console.error(`[muninn:extractor] extraction index retry failed: ${message}`);
+      await writeMuninnLog(this.database, 'error', 'extractor', 'index_retry_failed', { message });
       this.nextIndexRetryAt = Date.now() + INDEX_RETRY_DELAY_MS;
     } finally {
       if (!this.hasPendingExtraction()) {
@@ -480,6 +509,26 @@ export class Extractor {
       }
       this.notifyChange();
     }
+  }
+
+  private mergePendingExtractionChanges(changes: QueuedExtractionChange[] | undefined): void {
+    for (const change of changes ?? []) {
+      const index = this.pendingExtractionChanges.findIndex((pending) => pending.extraction.id === change.extraction.id);
+      if (index < 0) {
+        this.pendingExtractionChanges.push(cloneQueuedExtractionChange(change));
+      } else {
+        this.pendingExtractionChanges[index] = cloneQueuedExtractionChange(change);
+      }
+    }
+  }
+
+  private handoffPendingExtractionChanges(): void {
+    if (this.pendingExtractionChanges.length === 0) {
+      return;
+    }
+    const changes = this.pendingExtractionChanges.map(cloneQueuedExtractionChange);
+    this.onExtractionCommitted?.(changes);
+    this.pendingExtractionChanges = [];
   }
 
   private exportCheckpointThreads(): ThreadRef[] {
@@ -773,6 +822,20 @@ function cloneObservingRun(run: ObservingRun): ObservingRun {
     },
     traceRefs: [...run.traceRefs],
     errors: run.errors.map((error) => ({ ...error })),
+  };
+}
+
+function cloneQueuedExtractionChange(change: QueuedExtractionChange): QueuedExtractionChange {
+  return {
+    type: change.type,
+    extraction: {
+      ...change.extraction,
+      anchors: [...change.extraction.anchors],
+      vector: [...change.extraction.vector],
+      turnRefs: [...change.extraction.turnRefs],
+      observationIds: [...change.extraction.observationIds],
+      observedRootAnchors: [...change.extraction.observedRootAnchors],
+    },
   };
 }
 

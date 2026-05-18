@@ -159,7 +159,6 @@ pub fn observation_schema(dimensions: usize) -> Schema {
         Field::new("id", DataType::Utf8, false).with_metadata(id_metadata),
         Field::new("observing_path", DataType::Utf8, false),
         Field::new("text", DataType::Utf8, false),
-        Field::new("search_text", DataType::Utf8, false),
         Field::new(
             "vector",
             DataType::FixedSizeList(
@@ -230,7 +229,7 @@ mod tests {
         assert!(schema.field_with_name("id").is_ok());
         assert!(schema.field_with_name("observing_path").is_ok());
         assert!(schema.field_with_name("text").is_ok());
-        assert!(schema.field_with_name("search_text").is_ok());
+        assert!(schema.field_with_name("search_text").is_err());
         assert!(schema.field_with_name("vector").is_ok());
         assert!(schema.field_with_name("extraction_refs").is_ok());
         assert!(schema.field_with_name("created_at").is_ok());

@@ -13,6 +13,6 @@ export async function getExtraction(
   memoryId: string,
 ): Promise<Extraction | null> {
   const id = parseExtractionMemoryId(memoryId);
-  const rows = await client.extractionTable.loadByIds({ ids: [id] });
+  const rows = await client.extractionTable.get({ ids: [id] });
   return rows[0] ?? null;
 }

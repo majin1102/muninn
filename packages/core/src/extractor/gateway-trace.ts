@@ -1,4 +1,5 @@
-import { appendFile } from 'node:fs/promises';
+import { appendFile, mkdir } from 'node:fs/promises';
+import path from 'node:path';
 
 import type { SessionFragment } from './types.js';
 
@@ -11,6 +12,7 @@ export async function writeGatewayTrace(event: {
   if (!file) {
     return;
   }
+  await mkdir(path.dirname(file), { recursive: true });
   const line = `${JSON.stringify({
     observingEpoch: event.observingEpoch,
     ...(event.durationMs === undefined ? {} : { durationMs: event.durationMs }),

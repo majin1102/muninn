@@ -1,4 +1,5 @@
-import { appendFile } from 'node:fs/promises';
+import { appendFile, mkdir } from 'node:fs/promises';
+import path from 'node:path';
 
 import { getExtractorLlmConfig } from '../config.js';
 import { loadPromptTemplate, renderPromptTemplate } from '../llm/prompt-loader.js';
@@ -272,6 +273,7 @@ async function writeThreadPreparationTrace(event: {
   if (!file) {
     return;
   }
+  await mkdir(path.dirname(file), { recursive: true });
   await appendFile(file, `${JSON.stringify(event)}\n`, 'utf8');
 }
 

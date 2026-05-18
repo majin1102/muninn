@@ -53,10 +53,14 @@ export async function generateText(
   if (config.provider === 'mock') {
     return generateMockText(request);
   }
-  if (config.provider === 'openai-codex') {
-    return generateOpenAiCodexText(config, request);
+  try {
+    if (config.provider === 'openai-codex') {
+      return await generateOpenAiCodexText(config, request);
+    }
+    return await generateOpenAiText(config, request);
+  } catch (error) {
+    throw wrapProviderError(`${task} llm request`, config, error);
   }
-  return generateOpenAiText(config, request);
 }
 
 export async function generateWithTools(
@@ -74,10 +78,26 @@ export async function generateWithTools(
   if (config.provider === 'mock') {
     return { type: 'final', text: generateMockText({ system: '', prompt: lastUserMessage(request.messages) }) };
   }
-  if (config.provider === 'openai-codex') {
-    return generateOpenAiCodexWithTools(config, request);
+  try {
+    if (config.provider === 'openai-codex') {
+      return await generateOpenAiCodexWithTools(config, request);
+    }
+    return await generateOpenAiWithTools(config, request);
+  } catch (error) {
+    throw wrapProviderError(`${task} llm tool request`, config, error);
   }
-  return generateOpenAiWithTools(config, request);
+}
+
+function wrapProviderError(operation: string, config: TextProviderConfig, cause: unknown): Error {
+  const message = cause instanceof Error ? cause.message : String(cause);
+  const details = [
+    `provider=${config.provider}`,
+    config.model ? `model=${config.model}` : null,
+    config.baseUrl ? `baseUrl=${config.baseUrl}` : null,
+  ].filter(Boolean).join(' ');
+  const error = new Error(`${operation} failed (${details}): ${message}`);
+  (error as Error & { cause?: unknown }).cause = cause;
+  return error;
 }
 
 function generateMockText(request: LlmTextRequest): string {
@@ -102,13 +122,21 @@ function generateMockText(request: LlmTextRequest): string {
       refs,
     });
   }
-  if (request.system.includes('observer that rewrites an observing document')) {
+  if (
+    request.system.includes('observer that rewrites an observing document')
+    || request.system.includes('observer that rewrites a cross-session curated observation document')
+    || request.system.includes('observer that rewrites part of a cross-session observation document')
+  ) {
     const ref = request.prompt.match(/^\s*-\s+([A-Za-z0-9:_-]+)/m)?.[1] ?? 'mock-extraction';
     const entity = extractLabeledValue(request.prompt, 'Entity anchor:') || 'Mock entity';
     return [
       `# ${entity}`,
       '',
-      `## What is remembered about ${entity}? <!-- refs: [${ref}] -->`,
+      `## What is remembered about ${entity}?`,
+      '',
+      `${entity} has curated memory from the provided extraction.`,
+      '',
+      `### What evidence supports ${entity}? <!-- refs: [${ref}] -->`,
       '',
       `${entity} has curated memory from the provided extraction.`,
     ].join('\n');

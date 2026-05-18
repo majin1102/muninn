@@ -112,7 +112,7 @@ function defaultConfigContent(): string {
     '    "name": "default-observer",',
     '    "llm": "default_observer_llm",',
     '    "maxAttempts": 3,',
-    '    "anchorThreshold": 5',
+    '    "anchorThreshold": 8',
     '  },',
     '  "llm": {',
     '    "default_extractor_llm": {',

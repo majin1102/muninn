@@ -1,5 +1,6 @@
 import {
   __testing as nativeTesting,
+  createNativeTables,
   describeExtractionForStorage,
   getNativeTables,
   shutdownNativeTablesForTests,
@@ -7,6 +8,7 @@ import {
 } from './native.js';
 import {
   loadMuninnConfig,
+  resolveDatabaseName,
   resolveStorageTarget,
   getEmbeddingConfig,
   getExtractorLlmConfig,
@@ -29,6 +31,8 @@ import { Observer } from './observer/observer.js';
 import { SessionRegistry } from './turn/registry.js';
 import { readTurn } from './turn/types.js';
 import { Watchdog } from './watchdog.js';
+import { TableMutationLocks, lockNativeTables } from './table-locks.js';
+import { writeMuninnLog } from './logging.js';
 import type { Artifact, ToolCall, TurnContent } from '@muninn/types';
 
 export interface Turn {
@@ -85,6 +89,9 @@ export interface MemoryWatermark {
   extractingEpoch?: number;
   committedEpoch?: number;
   observerPending?: boolean;
+  observerQueuedCount?: number;
+  observerReadyCount?: number;
+  observerReadyBucketCount?: number;
 }
 
 export type ListModeInput =
@@ -175,9 +182,9 @@ class AsyncCheckpointLock implements CheckpointLock {
   }
 }
 
-let singletonBackend: MuninnBackend | null = null;
-let singletonBackendPromise: Promise<MuninnBackend> | null = null;
-let bootstrapPromise: Promise<void> | null = null;
+const backendCache = new Map<string, MuninnBackend>();
+const backendPromises = new Map<string, Promise<MuninnBackend>>();
+const bootstrapPromises = new Map<string, Promise<void>>();
 
 export class MuninnBackend {
   readonly memories: Memories;
@@ -186,9 +193,11 @@ export class MuninnBackend {
   private observer: Observer | null = null;
   private sessionRegistry: SessionRegistry | null = null;
   private watchdog: Watchdog | null = null;
+  private watchdogClient: NativeTables | null = null;
 
-  constructor(
+  private constructor(
     private readonly client: NativeTables,
+    private readonly database: string,
     private readonly checkpoint: CheckpointFile | null = null,
   ) {
     this.memories = new Memories(client);
@@ -199,9 +208,11 @@ export class MuninnBackend {
       : null;
   }
 
-  static async create(client: NativeTables): Promise<MuninnBackend> {
-    const checkpoint = await readCheckpointFile();
-    const backend = new MuninnBackend(client, checkpoint);
+  static async create(client: NativeTables, database?: string | null): Promise<MuninnBackend> {
+    const databaseName = resolveDatabaseName(database);
+    const checkpoint = await readCheckpointFile(databaseName);
+    const tableLocks = new TableMutationLocks();
+    const backend = new MuninnBackend(lockNativeTables(client, tableLocks), databaseName, checkpoint);
     await backend.restoreCheckpointSessions();
     const watchdogConfig = getWatchdogConfig();
     if (watchdogConfig.enabled) {
@@ -212,16 +223,26 @@ export class MuninnBackend {
           observer: checkpoint.observer,
         })
         : null;
+      const watchdogClient = lockNativeTables(
+        await createNativeTables(resolveStorageTarget(loadMuninnConfig() ?? {}, databaseName)),
+        tableLocks,
+      );
+      backend.watchdogClient = watchdogClient;
       backend.watchdog = new Watchdog(
-        client,
+        watchdogClient,
         watchdogConfig,
         backend,
         lastCheckpointJson,
         backend.checkpointLock,
+        databaseName,
       );
       backend.watchdog.start();
     }
     return backend;
+  }
+
+  static createForTests(client: NativeTables, checkpoint: CheckpointFile | null = null): MuninnBackend {
+    return new MuninnBackend(lockNativeTables(client, new TableMutationLocks()), 'main', checkpoint);
   }
 
   async accept(turnContent: TurnContent): Promise<void> {
@@ -235,8 +256,8 @@ export class MuninnBackend {
 
   async memoryWatermark(): Promise<MemoryWatermark> {
     return this.checkpointLock.shared(async () => {
-      const extractor = await this.ensureExtractor();
       const observer = await this.ensureObserver();
+      const extractor = await this.ensureExtractor();
       const extractorWatermark = await extractor.watermark();
       const observerWatermark = await observer.watermark();
       return {
@@ -244,9 +265,35 @@ export class MuninnBackend {
         pendingTurnIds: extractorWatermark.pendingTurnIds,
         extractingEpoch: extractorWatermark.extractingEpoch,
         committedEpoch: extractorWatermark.committedEpoch,
-        observerPending: !observerWatermark.resolved,
+        observerPending: observerWatermark.observerPending,
+        observerQueuedCount: observerWatermark.observerQueuedCount,
+        observerReadyCount: observerWatermark.observerReadyCount,
+        observerReadyBucketCount: observerWatermark.observerReadyBucketCount,
       };
     });
+  }
+
+  async memoryFinalize(): Promise<MemoryWatermark> {
+    const { observer, extractor } = await this.checkpointLock.shared(async () => {
+      const observer = await this.ensureObserver();
+      const extractor = await this.ensureExtractor();
+      return { observer, extractor };
+    });
+    await extractor.flushPending();
+    const extractorWatermark = await extractor.watermark();
+    const observerWatermark = await observer.finalize();
+    const watermark = {
+      resolved: extractorWatermark.resolved && observerWatermark.resolved,
+      pendingTurnIds: extractorWatermark.pendingTurnIds,
+      extractingEpoch: extractorWatermark.extractingEpoch,
+      committedEpoch: extractorWatermark.committedEpoch,
+      observerPending: observerWatermark.observerPending,
+      observerQueuedCount: observerWatermark.observerQueuedCount,
+      observerReadyCount: observerWatermark.observerReadyCount,
+      observerReadyBucketCount: observerWatermark.observerReadyBucketCount,
+    };
+    await this.watchdog?.flushCheckpoint();
+    return watermark;
   }
 
   async recallMemories(
@@ -254,6 +301,13 @@ export class MuninnBackend {
     limit?: number,
     options?: { mode?: RecallMode; budget?: number; queryLimit?: number },
   ): Promise<RecallHit[]> {
+    await writeMuninnLog(this.database, 'info', 'recall', 'query', {
+      query,
+      limit,
+      mode: options?.mode,
+      budget: options?.budget,
+      queryLimit: options?.queryLimit,
+    });
     return this.memories.recall(query, limit, options);
   }
 
@@ -266,11 +320,10 @@ export class MuninnBackend {
       if (!extractor || !extractorCheckpoint || !observer || !observerCheckpoint) {
         return null;
       }
-      const [turnStats, sessionStats, extractionStats, observationContextStats, observationStats] = await Promise.all([
+      const [turnStats, sessionStats, extractionStats, observationStats] = await Promise.all([
         this.client.turnTable.stats(),
         this.client.sessionTable.stats(),
         this.client.extractionTable.stats(),
-        this.client.observationContextTable.stats(),
         this.client.observationTable.stats(),
       ]);
       const extractorSection: ExtractorCheckpoint = {
@@ -285,17 +338,15 @@ export class MuninnBackend {
         recentSessions: this.sessionRegistry?.exportRecentSessions() ?? [],
         threads: extractorCheckpoint.threads,
         runs: extractorCheckpoint.runs,
+        pendingExtractionChanges: extractorCheckpoint.pendingExtractionChanges,
       };
       const observerSection: ObserverCheckpoint = {
-        baseline: {
-          extraction: extractionStats?.version ?? 0,
-          observationContext: observationContextStats?.version ?? 0,
-          observation: observationStats?.version ?? 0,
-        },
+        baseline: observerCheckpoint.baseline,
+        observeQueue: observerCheckpoint.observeQueue,
         runs: observerCheckpoint.runs,
       };
       return {
-        schemaVersion: 5,
+        schemaVersion: 6,
         extractor: extractorSection,
         observer: observerSection,
       };
@@ -312,7 +363,11 @@ export class MuninnBackend {
     if (this.watchdog) {
       await this.watchdog.stop({ flushCheckpoint: true });
     }
+    if (this.watchdogClient) {
+      await this.watchdogClient.close();
+    }
     this.watchdog = null;
+    this.watchdogClient = null;
     this.extractor = null;
     this.observer = null;
     this.sessionRegistry = null;
@@ -321,7 +376,18 @@ export class MuninnBackend {
   private async ensureExtractor(): Promise<Extractor> {
     if (!this.extractor) {
       const checkpoint = this.checkpoint?.extractor ?? null;
-      this.extractor = new Extractor(this.client, checkpoint, this.checkpointLock, () => this.observer?.notify());
+      this.extractor = new Extractor(
+        this.client,
+        checkpoint,
+        this.checkpointLock,
+        (changes) => {
+          if (changes.length > 0) {
+            this.observer?.enqueue(changes);
+          }
+          this.observer?.notify();
+        },
+        this.database,
+      );
     }
     await this.extractor.ensureBootstrapped();
     return this.extractor;
@@ -330,7 +396,7 @@ export class MuninnBackend {
   private async ensureObserver(): Promise<Observer> {
     if (!this.observer) {
       const checkpoint = this.checkpoint?.observer ?? null;
-      this.observer = new Observer(this.client, checkpoint, this.checkpointLock);
+      this.observer = new Observer(this.client, checkpoint, this.checkpointLock, this.database);
     }
     this.observer.start();
     return this.observer;
@@ -371,15 +437,17 @@ export class MuninnBackend {
   }
 }
 
-async function ensureBootstrapped() {
-  const tables = await getNativeTables();
-  if (!bootstrapPromise) {
-    bootstrapPromise = bootstrap(tables).catch((error) => {
-      bootstrapPromise = null;
+async function ensureBootstrapped(database?: string | null) {
+  const databaseName = resolveDatabaseName(database);
+  const tables = await getNativeTables(resolveStorageTarget(loadMuninnConfig() ?? {}, databaseName));
+  if (!bootstrapPromises.has(databaseName)) {
+    const promise = bootstrap(tables).catch((error) => {
+      bootstrapPromises.delete(databaseName);
       throw error;
     });
+    bootstrapPromises.set(databaseName, promise);
   }
-  await bootstrapPromise;
+  await bootstrapPromises.get(databaseName);
   return tables;
 }
 
@@ -390,27 +458,37 @@ async function bootstrap(tables: Awaited<ReturnType<typeof getNativeTables>>): P
   }
 }
 
-export async function getBackend(): Promise<MuninnBackend> {
-  if (singletonBackend) {
-    return singletonBackend;
+export async function getBackend(database?: string | null): Promise<MuninnBackend> {
+  const databaseName = resolveDatabaseName(database);
+  const cached = backendCache.get(databaseName);
+  if (cached) {
+    return cached;
   }
-  if (!singletonBackendPromise) {
-    singletonBackendPromise = ensureBootstrapped()
-      .then((tables) => MuninnBackend.create(tables))
+  const pending = backendPromises.get(databaseName);
+  if (pending) {
+    return pending;
+  }
+  const promise = ensureBootstrapped(databaseName)
+      .then((tables) => MuninnBackend.create(tables, databaseName))
       .then((backend) => {
-        singletonBackend = backend;
+        backendCache.set(databaseName, backend);
         return backend;
       })
       .catch((error) => {
-        singletonBackendPromise = null;
+        backendPromises.delete(databaseName);
         throw error;
       });
-  }
-  return singletonBackendPromise;
+  backendPromises.set(databaseName, promise);
+  return promise;
 }
 
-export async function addMessage(turnContent: TurnContent): Promise<void> {
-  await (await getBackend()).accept(turnContent);
+export async function addMessage(turnContent: TurnContent, database?: string | null): Promise<void> {
+  const databaseName = resolveDatabaseName(database);
+  await writeMuninnLog(databaseName, 'info', 'sidecar', 'turn_capture', {
+    sessionId: turnContent.sessionId,
+    agent: turnContent.agent,
+  });
+  await (await getBackend(databaseName)).accept(turnContent);
 }
 
 export async function validateSettings(content: string): Promise<void> {
@@ -421,74 +499,114 @@ export async function validateSettings(content: string): Promise<void> {
 }
 
 export const turns = {
-  async get(memoryId: string): Promise<Turn | null> {
-    return (await getBackend()).memories.getTurn(memoryId);
+  async get(memoryId: string, database?: string | null): Promise<Turn | null> {
+    const databaseName = resolveDatabaseName(database);
+    await writeMuninnLog(databaseName, 'info', 'detail', 'turn_get', { memoryId });
+    return (await getBackend(databaseName)).memories.getTurn(memoryId);
   },
 
   async list(params: {
     mode: ListModeInput;
     agent?: string;
     sessionId?: string;
+    database?: string | null;
   }): Promise<Turn[]> {
-    return (await getBackend()).memories.listTurns(params);
+    const databaseName = resolveDatabaseName(params.database);
+    await writeMuninnLog(databaseName, 'info', 'list', 'turn_list', {
+      mode: params.mode.type,
+      limit: 'limit' in params.mode ? params.mode.limit : undefined,
+      agent: params.agent,
+      sessionId: params.sessionId,
+    });
+    return (await getBackend(databaseName)).memories.listTurns(params);
   },
 };
 
 export const sessions = {
-  async get(memoryId: string): Promise<SessionSnapshot | null> {
-    return (await getBackend()).memories.getSession(memoryId);
+  async get(memoryId: string, database?: string | null): Promise<SessionSnapshot | null> {
+    const databaseName = resolveDatabaseName(database);
+    await writeMuninnLog(databaseName, 'info', 'detail', 'session_get', { memoryId });
+    return (await getBackend(databaseName)).memories.getSession(memoryId);
   },
 
   async list(params: {
     mode: ListModeInput;
     observer?: string;
+    database?: string | null;
   }): Promise<SessionSnapshot[]> {
-    return (await getBackend()).memories.listSessions(params);
+    const databaseName = resolveDatabaseName(params.database);
+    await writeMuninnLog(databaseName, 'info', 'list', 'session_list', {
+      mode: params.mode.type,
+      limit: 'limit' in params.mode ? params.mode.limit : undefined,
+      observer: params.observer,
+    });
+    return (await getBackend(databaseName)).memories.listSessions(params);
   },
 };
 
 export const memories = {
-  async get(memoryId: string): Promise<RenderedMemory | null> {
-    return (await getBackend()).memories.get(memoryId);
+  async get(memoryId: string, database?: string | null): Promise<RenderedMemory | null> {
+    const databaseName = resolveDatabaseName(database);
+    await writeMuninnLog(databaseName, 'info', 'detail', 'memory_get', { memoryId });
+    return (await getBackend(databaseName)).memories.get(memoryId);
   },
 
   async list(params: {
     mode: ListModeInput;
+    database?: string | null;
   }): Promise<RenderedMemory[]> {
-    return (await getBackend()).memories.list(params);
+    const databaseName = resolveDatabaseName(params.database);
+    await writeMuninnLog(databaseName, 'info', 'list', 'memory_list', {
+      mode: params.mode.type,
+      limit: 'limit' in params.mode ? params.mode.limit : undefined,
+    });
+    return (await getBackend(databaseName)).memories.list(params);
   },
 
   async timeline(params: {
     memoryId: string;
     beforeLimit?: number;
     afterLimit?: number;
+    database?: string | null;
   }): Promise<RenderedMemory[]> {
-    return (await getBackend()).memories.timeline(params);
+    const databaseName = resolveDatabaseName(params.database);
+    await writeMuninnLog(databaseName, 'info', 'timeline', 'memory_timeline', {
+      memoryId: params.memoryId,
+      beforeLimit: params.beforeLimit,
+      afterLimit: params.afterLimit,
+    });
+    return (await getBackend(databaseName)).memories.timeline(params);
   },
 
   async recall(
     query: string,
     limit?: number,
-    options?: { mode?: RecallMode; budget?: number; queryLimit?: number },
+    options?: { mode?: RecallMode; budget?: number; queryLimit?: number; database?: string | null },
   ): Promise<RecallHit[]> {
-    return (await getBackend()).recallMemories(query, limit, options);
+    return (await getBackend(options?.database)).recallMemories(query, limit, options);
   },
 };
 
 export const observer = {
-  async watermark(): Promise<MemoryWatermark> {
-    return (await getBackend()).memoryWatermark();
+  async watermark(database?: string | null): Promise<MemoryWatermark> {
+    return (await getBackend(database)).memoryWatermark();
+  },
+  async finalize(database?: string | null): Promise<MemoryWatermark> {
+    return (await getBackend(database)).memoryFinalize();
   },
 };
 
 export async function shutdownCoreForTests(): Promise<void> {
-  const backend = singletonBackend ?? (singletonBackendPromise ? await singletonBackendPromise : null);
-  if (backend) {
+  const backends = [
+    ...backendCache.values(),
+    ...await Promise.all([...backendPromises.values()].map((promise) => promise.catch(() => null))),
+  ].filter((backend): backend is MuninnBackend => Boolean(backend));
+  for (const backend of backends) {
     await backend.shutdown();
   }
-  singletonBackend = null;
-  singletonBackendPromise = null;
-  bootstrapPromise = null;
+  backendCache.clear();
+  backendPromises.clear();
+  bootstrapPromises.clear();
   await shutdownNativeTablesForTests();
 }
 

@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { getEmbeddingConfig } from '../config.js';
 import { embedText } from '../llm/embedding-provider.js';
 import type { NativeTables, Extraction as StoredExtraction } from '../native.js';
+import type { QueuedExtractionChange } from '../checkpoint.js';
 import type {
   Extraction,
   ExtractionCategory,
@@ -128,11 +129,11 @@ export async function applyExtractionTableChanges(
   snapshot: SnapshotContent,
   _memoryId: string,
   signal?: AbortSignal,
-): Promise<void> {
+): Promise<QueuedExtractionChange[]> {
   throwIfAborted(signal);
   const changes = snapshot.extractionChanges ?? [];
   if (changes.length === 0) {
-    return;
+    return [];
   }
 
   const sourceIds = new Set<string>();
@@ -161,19 +162,26 @@ export async function applyExtractionTableChanges(
   }
 
   const existingRows = sourceIds.size > 0
-    ? await client.extractionTable.loadByIds({ ids: [...sourceIds] })
+    ? await client.extractionTable.get({ ids: [...sourceIds] })
     : [];
   const existingById = new Map(existingRows.map((row) => [row.id, row]));
+  const queued: QueuedExtractionChange[] = [];
 
   if (deletedIds.size > 0) {
     await client.extractionTable.delete({ ids: [...deletedIds] });
+    for (const id of deletedIds) {
+      const existing = existingById.get(id);
+      if (existing) {
+        queued.push({ type: 'delete', extraction: existing });
+      }
+    }
   }
 
   if (upsertIds.size === 0) {
-    return;
+    return queued;
   }
 
-  const storedUpserts = await client.extractionTable.loadByIds({ ids: [...upsertIds] });
+  const storedUpserts = await client.extractionTable.get({ ids: [...upsertIds] });
   const storedById = new Map(storedUpserts.map((row) => [row.id, row]));
   const extractionsById = new Map(
     snapshot.extractions
@@ -220,7 +228,9 @@ export async function applyExtractionTableChanges(
 
   if (rows.length > 0) {
     await client.extractionTable.upsert({ rows });
+    queued.push(...rows.map((row) => ({ type: 'upsert' as const, extraction: row })));
   }
+  return queued;
 }
 
 function normalizeChanges(

@@ -66,6 +66,14 @@ async function captureTurnAndGetTurn(turn) {
   return { turnId: match.memoryId };
 }
 
+async function benchmarkCaptureTurn(turn) {
+  return app.request('/api/v1/benchmark/locomo/turn/capture', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ turn }),
+  });
+}
+
 async function writeMuninnConfig(configPath, {
   turnProvider,
   observerProvider = 'mock',
@@ -444,6 +452,54 @@ test('list and timeline cover the written flow, and recall returns indexed memor
   assert.equal(recallResponse.status, 200);
   const recalled = await json(recallResponse);
   assert.ok(recalled.memoryHits.length > 0);
+});
+
+test('benchmark locomo capture returns turn id and recall returns evidence details', async (t) => {
+  const { dir, homeDir, configPath } = await makeDatasetUri();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+
+  process.env.MUNINN_HOME = homeDir;
+  await writeMuninnConfig(configPath);
+
+  const captureResponse = await benchmarkCaptureTurn(makeTurnContent({
+    sessionId: 'locomo:sample-a:session_1',
+    prompt: 'alpha adoption agency prompt',
+    response: 'alpha adoption agency response',
+  }));
+  assert.equal(captureResponse.status, 200);
+  const captured = await json(captureResponse);
+  assert.match(captured.turn.turnId, /^turn:/);
+
+  const manifest = {
+    sample_id: 'sample-a',
+    turns: [{
+      turn_id: captured.turn.turnId,
+      source_id: 'D1:1',
+      sample_id: 'sample-a',
+      session_id: 'locomo:sample-a:session_1',
+      date_time: '1:56 pm on 8 May, 2023',
+      import_order: 0,
+    }],
+  };
+  const finalizeResponse = await app.request('/api/v1/memory/finalize', { method: 'POST' });
+  assert.equal(finalizeResponse.status, 200);
+  const recallResponse = await app.request('/api/v1/benchmark/locomo/recall', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      query: 'adoption agency',
+      limit: 2,
+      recallMode: 'hybrid',
+      manifest,
+    }),
+  });
+  assert.equal(recallResponse.status, 200);
+  const recalled = await json(recallResponse);
+  assert.ok(recalled.hits.length > 0);
+  assert.equal(typeof recalled.hits[0].memory_id, 'string');
+  assert.deepEqual(recalled.hits[0].evidence_ids, ['D1:1']);
+  assert.match(recalled.hits[0].detail, /adoption agency/);
+  assert.equal(Array.isArray(recalled.hits[0].references), true);
 });
 
 test('timeline stays scoped to the full session key when agents share a sessionId', async (t) => {

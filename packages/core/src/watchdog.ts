@@ -8,11 +8,12 @@ import {
   resolveCheckpointPath,
   serializeCheckpointFile,
 } from './checkpoint.js';
-import { resolveMuninnHome, type WatchdogConfig } from './config.js';
+import { resolveDatabaseLogPath, resolveDatabaseName, type WatchdogConfig } from './config.js';
+import { writeMuninnLog } from './logging.js';
 import type { CheckpointLock, MuninnBackend } from './backend.js';
 import type { NativeTables, TableStats } from './native.js';
 
-type DatasetName = 'turn' | 'session' | 'extraction';
+type DatasetName = 'turn' | 'session' | 'extraction' | 'observationContext' | 'observation';
 type WatchdogLevel = 'info' | 'error';
 type WatchdogEvent =
   | 'failed'
@@ -24,6 +25,7 @@ type WatchdogEvent =
 type WatchdogLogRecord = {
   ts: string;
   level: WatchdogLevel;
+  database: string;
   dataset: DatasetName;
   event: WatchdogEvent;
   version: number | null;
@@ -39,7 +41,7 @@ type DatasetState = {
 };
 
 const WATCHDOG_LOG_FILE_NAME = 'watchdog.jsonl';
-const DATASETS: DatasetName[] = ['turn', 'session', 'extraction'];
+const DATASETS: DatasetName[] = ['turn', 'session', 'extraction', 'observationContext', 'observation'];
 const noopCheckpointLock: CheckpointLock = {
   shared: async (operation) => operation(),
   exclusive: async (operation) => operation(),
@@ -49,6 +51,7 @@ export class Watchdog {
   private timer: NodeJS.Timeout | null = null;
   private stopped = false;
   private inFlight: Promise<void> | null = null;
+  private checkpointFlush: Promise<void> | null = null;
   private lastCheckpointJson: string | null = null;
   private checkpointStateLoaded = false;
   private readonly state = new Map<DatasetName, DatasetState>(
@@ -69,9 +72,13 @@ export class Watchdog {
     },
     lastCheckpointJson: string | null = null,
     private readonly checkpointLock: CheckpointLock = noopCheckpointLock,
+    database: string = 'main',
   ) {
     this.lastCheckpointJson = lastCheckpointJson;
+    this.database = resolveDatabaseName(database);
   }
+
+  private readonly database: string;
 
   start(): void {
     this.stopped = false;
@@ -119,9 +126,13 @@ export class Watchdog {
       return;
     }
     this.inFlight = (async () => {
-      await this.maintainTurns();
-      await this.maintainSessions();
-      await this.maintainExtraction();
+      await Promise.all([
+        this.maintainTurns(),
+        this.maintainSessions(),
+        this.maintainExtraction(),
+        this.maintainObservationContext(),
+        this.maintainObservation(),
+      ]);
       await this.flushCheckpoint();
     })()
       .finally(() => {
@@ -130,7 +141,19 @@ export class Watchdog {
     await this.inFlight;
   }
 
-  private async flushCheckpoint(): Promise<void> {
+  async flushCheckpoint(): Promise<void> {
+    if (this.checkpointFlush) {
+      await this.checkpointFlush;
+      return;
+    }
+    this.checkpointFlush = this.flushCheckpointNow()
+      .finally(() => {
+        this.checkpointFlush = null;
+      });
+    await this.checkpointFlush;
+  }
+
+  private async flushCheckpointNow(): Promise<void> {
     try {
       await this.ensureCheckpointStateLoaded();
       const exported = await this.backend.exportCheckpoint();
@@ -141,7 +164,6 @@ export class Watchdog {
       if (checkpointJson === this.lastCheckpointJson) {
         try {
           await access(this.checkpointPath());
-          await this.cleanupCheckpointFloors();
           return;
         } catch (error) {
           if (!(error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT')) {
@@ -160,19 +182,21 @@ export class Watchdog {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.error(`[muninn:watchdog] checkpoint flush failed: ${message}`);
+      await writeMuninnLog(this.database, 'error', 'watchdog', 'checkpoint_flush_failed', {
+        message,
+      });
       return;
     }
-    await this.cleanupCheckpointFloors();
   }
 
   private checkpointPath(): string {
-    return resolveCheckpointPath();
+    return resolveCheckpointPath(this.database);
   }
 
   private async writeCheckpointAtomically(content: string): Promise<void> {
     const targetPath = this.checkpointPath();
     const directory = path.dirname(targetPath);
-    const tmpPath = `${targetPath}.tmp`;
+    const tmpPath = `${targetPath}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`;
     await mkdir(directory, { recursive: true });
     await writeFile(tmpPath, content, 'utf8');
     await rename(tmpPath, targetPath);
@@ -293,6 +317,104 @@ export class Watchdog {
     }));
   }
 
+  private async maintainObservation(): Promise<void> {
+    if (!this.binding.observationTable?.ensureVectorIndex) {
+      return;
+    }
+    await this.checkpointLock.shared(() => this.runDatasetMaintenance('observation', async (setVersion) => {
+      const ensured = await this.binding.observationTable.ensureVectorIndex({
+        targetPartitionSize: this.config.extraction.targetPartitionSize,
+      });
+      const stats = await this.binding.observationTable.stats();
+      if (!stats) {
+        this.resetState('observation');
+        return;
+      }
+
+      setVersion(stats.version);
+      const unchanged = this.versionUnchanged('observation', stats);
+      this.updateSeenState('observation', stats);
+
+      if (!ensured.created && unchanged) {
+        return;
+      }
+
+      let compactResult: { changed: boolean } | null = null;
+      if (stats.fragmentCount >= this.config.compactMinFragments) {
+        compactResult = await this.binding.observationTable.compact();
+      }
+      const optimizeResult = await this.binding.observationTable.optimize({
+        mergeCount: this.config.extraction.optimizeMergeCount,
+      });
+      const finalStats = await this.binding.observationTable.stats() ?? stats;
+      this.updateMaintainedState('observation', finalStats);
+
+      if (ensured.created) {
+        await this.logInfo('observation', 'index_created', finalStats.version, {
+          targetPartitionSize: this.config.extraction.targetPartitionSize,
+          fragmentCount: finalStats.fragmentCount,
+          rowCount: finalStats.rowCount,
+        });
+      }
+      if (compactResult) {
+        await this.logInfo('observation', 'compacted', finalStats.version, {
+          changed: compactResult.changed,
+          fragmentCount: finalStats.fragmentCount,
+          rowCount: finalStats.rowCount,
+        });
+      }
+      await this.logInfo('observation', 'optimized', finalStats.version, {
+        changed: optimizeResult.changed,
+        mergeCount: this.config.extraction.optimizeMergeCount,
+        fragmentCount: finalStats.fragmentCount,
+        rowCount: finalStats.rowCount,
+        indexCreated: ensured.created,
+      });
+    }));
+  }
+
+  private async maintainObservationContext(): Promise<void> {
+    if (!this.binding.observationContextTable?.ensureIdIndex) {
+      return;
+    }
+    await this.checkpointLock.shared(() => this.runDatasetMaintenance('observationContext', async (setVersion) => {
+      const ensured = await this.binding.observationContextTable.ensureIdIndex();
+      const stats = await this.binding.observationContextTable.stats();
+      if (!stats) {
+        this.resetState('observationContext');
+        return;
+      }
+
+      setVersion(stats.version);
+      const unchanged = this.versionUnchanged('observationContext', stats);
+      this.updateSeenState('observationContext', stats);
+
+      if (!ensured.created && unchanged) {
+        return;
+      }
+
+      const optimizeResult = await this.binding.observationContextTable.optimize({
+        mergeCount: this.config.extraction.optimizeMergeCount,
+      });
+      const finalStats = await this.binding.observationContextTable.stats() ?? stats;
+      this.updateMaintainedState('observationContext', finalStats);
+
+      if (ensured.created) {
+        await this.logInfo('observationContext', 'index_created', finalStats.version, {
+          fragmentCount: finalStats.fragmentCount,
+          rowCount: finalStats.rowCount,
+        });
+      }
+      await this.logInfo('observationContext', 'optimized', finalStats.version, {
+        changed: optimizeResult.changed,
+        mergeCount: this.config.extraction.optimizeMergeCount,
+        fragmentCount: finalStats.fragmentCount,
+        rowCount: finalStats.rowCount,
+        indexCreated: ensured.created,
+      });
+    }));
+  }
+
   private async runDatasetMaintenance(
     dataset: DatasetName,
     work: (setVersion: (version: number) => void) => Promise<void>,
@@ -302,12 +424,17 @@ export class Watchdog {
       await work((nextVersion) => {
         version = nextVersion;
       });
+      await this.cleanupDatasetFloor(dataset);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       await this.logError(dataset, 'failed', version, {
         errorMessage: message,
       });
       console.error(`[muninn:watchdog] ${dataset} maintenance failed: ${message}`);
+      await writeMuninnLog(this.database, 'error', 'watchdog', 'maintenance_failed', {
+        dataset,
+        message,
+      });
     }
   }
 
@@ -353,7 +480,7 @@ export class Watchdog {
       return;
     }
     this.checkpointStateLoaded = true;
-    const checkpoint = await readCheckpointFile();
+    const checkpoint = await readCheckpointFile(this.database);
     if (!checkpoint) {
       return;
     }
@@ -378,36 +505,38 @@ export class Watchdog {
     }
   }
 
-  private async cleanupCheckpointFloors(): Promise<void> {
-    await Promise.all(DATASETS.map(async (dataset) => {
-      const state = this.state.get(dataset);
-      const floorVersion = state?.checkpointFloorVersion ?? null;
-      if (floorVersion == null || state?.lastCleanedFloorVersion === floorVersion) {
-        return;
+  private async cleanupDatasetFloor(dataset: DatasetName): Promise<void> {
+    const state = this.state.get(dataset);
+    const floorVersion = state?.checkpointFloorVersion ?? null;
+    if (floorVersion == null || state?.lastCleanedFloorVersion === floorVersion) {
+      return;
+    }
+    try {
+      const result = await this.cleanupDataset(dataset, floorVersion);
+      const current = this.state.get(dataset);
+      this.state.set(dataset, {
+        lastSeenVersion: current?.lastSeenVersion ?? null,
+        lastMaintainedVersion: current?.lastMaintainedVersion ?? null,
+        lastFragmentCount: current?.lastFragmentCount ?? null,
+        checkpointFloorVersion: current?.checkpointFloorVersion ?? null,
+        lastCleanedFloorVersion: floorVersion,
+      });
+      if (result.changed) {
+        await this.logInfo(dataset, 'cleaned', floorVersion, { floorVersion });
       }
-      try {
-        const result = await this.cleanupDataset(dataset, floorVersion);
-        const current = this.state.get(dataset);
-        this.state.set(dataset, {
-          lastSeenVersion: current?.lastSeenVersion ?? null,
-          lastMaintainedVersion: current?.lastMaintainedVersion ?? null,
-          lastFragmentCount: current?.lastFragmentCount ?? null,
-          checkpointFloorVersion: current?.checkpointFloorVersion ?? null,
-          lastCleanedFloorVersion: floorVersion,
-        });
-        if (result.changed) {
-          await this.logInfo(dataset, 'cleaned', floorVersion, { floorVersion });
-        }
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        await this.logError(dataset, 'failed', floorVersion, {
-          errorMessage: message,
-          phase: 'cleanup',
-          floorVersion,
-        });
-        console.error(`[muninn:watchdog] ${dataset} cleanup failed: ${message}`);
-      }
-    }));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await this.logError(dataset, 'failed', floorVersion, {
+        errorMessage: message,
+        phase: 'cleanup',
+        floorVersion,
+      });
+      console.error(`[muninn:watchdog] ${dataset} cleanup failed: ${message}`);
+      await writeMuninnLog(this.database, 'error', 'watchdog', 'cleanup_failed', {
+        dataset,
+        message,
+      });
+    }
   }
 
   private cleanupDataset(dataset: DatasetName, floorVersion: number): Promise<{ changed: boolean }> {
@@ -418,6 +547,10 @@ export class Watchdog {
         return this.binding.sessionTable.cleanup?.({ floorVersion }) ?? Promise.resolve({ changed: false });
       case 'extraction':
         return this.binding.extractionTable.cleanup?.({ floorVersion }) ?? Promise.resolve({ changed: false });
+      case 'observationContext':
+        return Promise.resolve({ changed: false });
+      case 'observation':
+        return this.binding.observationTable?.cleanup?.({ floorVersion }) ?? Promise.resolve({ changed: false });
     }
   }
 
@@ -430,6 +563,7 @@ export class Watchdog {
     await this.appendLog({
       ts: new Date().toISOString(),
       level: 'info',
+      database: this.database,
       dataset,
       event,
       version,
@@ -446,6 +580,7 @@ export class Watchdog {
     await this.appendLog({
       ts: new Date().toISOString(),
       level: 'error',
+      database: this.database,
       dataset,
       event,
       version,
@@ -454,7 +589,7 @@ export class Watchdog {
   }
 
   private async appendLog(record: WatchdogLogRecord): Promise<void> {
-    const logPath = path.join(resolveMuninnHome(), WATCHDOG_LOG_FILE_NAME);
+    const logPath = resolveDatabaseLogPath(this.database, WATCHDOG_LOG_FILE_NAME);
     try {
       await mkdir(path.dirname(logPath), { recursive: true });
       await appendFile(logPath, `${JSON.stringify(record)}\n`, 'utf8');
@@ -470,5 +605,7 @@ function checkpointFloors(checkpoint: CheckpointContent | CheckpointFile): Recor
     turn: checkpoint.extractor.baseline.turn,
     session: checkpoint.extractor.baseline.session,
     extraction: checkpoint.extractor.baseline.extraction,
+    observationContext: checkpoint.observer.baseline.observationContext,
+    observation: checkpoint.extractor.baseline.observation,
   };
 }

@@ -5,16 +5,18 @@ import path from 'node:path';
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 
 import core from '../dist/index.js';
-import { getNativeTables } from '../dist/native.js';
-import { getObserverLlmConfig } from '../dist/config.js';
+import native from '../dist/native.js';
+import { getExtractorLlmConfig } from '../dist/config.js';
 import { MuninnBackend } from '../dist/backend.js';
 import { resolveCheckpointPath } from '../dist/checkpoint.js';
+
+const { createNativeTables, getNativeTables } = native;
 
 const {
   addMessage,
   memories,
   observer,
-    turns,
+  turns,
   shutdownCoreForTests,
   validateSettings,
 } = core;
@@ -137,9 +139,9 @@ async function writeMuninnConfig(configPath, {
     llm.test_turn_llm = { provider: turnProvider };
   }
   if (observerProvider) {
-    root.observer = {
-      name: 'test-observer',
-      llm: 'test_observer_llm',
+    root.extractor = {
+      name: 'test-extractor',
+      llm: 'test_extractor_llm',
       maxAttempts: 3,
       ...(activeWindowDays === undefined ? {} : { activeWindowDays }),
       ...(continuityHints === undefined ? {} : { continuityHints }),
@@ -147,6 +149,12 @@ async function writeMuninnConfig(configPath, {
       ...(omitEpochSealSettings || epochWindowMs === undefined ? {} : { epochWindowMs }),
       ...(domainPrompt === undefined ? {} : { domainPrompt }),
     };
+    root.observer = {
+      name: 'test-observer',
+      llm: 'test_observer_llm',
+      maxAttempts: 3,
+    };
+    llm.test_extractor_llm = { provider: observerProvider };
     llm.test_observer_llm = { provider: observerProvider };
   }
   if (Object.keys(llm).length > 0) {
@@ -178,19 +186,19 @@ test.after(async () => {
   delete process.env.MUNINN_HOME;
 });
 
-test('observer config defaults activeWindowDays, continuityHints, and epoch seal settings', async (t) => {
+test('extractor config defaults activeWindowDays, continuityHints, and epoch seal settings', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(cleanupDataset(dir));
 
   process.env.MUNINN_HOME = homeDir;
   await writeMuninnConfig(configPath, { observerProvider: 'mock', omitEpochSealSettings: true });
 
-  let observerConfig = getObserverLlmConfig();
-  assert.ok(observerConfig);
-  assert.equal(observerConfig.activeWindowDays, 7);
-  assert.equal(observerConfig.continuityHints, 1);
-  assert.equal(observerConfig.epochTurns, 3);
-  assert.equal(observerConfig.epochWindowMs, 10_000);
+  let extractorConfig = getExtractorLlmConfig();
+  assert.ok(extractorConfig);
+  assert.equal(extractorConfig.activeWindowDays, 7);
+  assert.equal(extractorConfig.continuityHints, 1);
+  assert.equal(extractorConfig.epochTurns, 3);
+  assert.equal(extractorConfig.epochWindowMs, 10_000);
 
   await writeMuninnConfig(configPath, {
     observerProvider: 'mock',
@@ -199,24 +207,24 @@ test('observer config defaults activeWindowDays, continuityHints, and epoch seal
     epochTurns: 5,
     epochWindowMs: 2_500,
   });
-  observerConfig = getObserverLlmConfig();
-  assert.ok(observerConfig);
-  assert.equal(observerConfig.activeWindowDays, 14);
-  assert.equal(observerConfig.continuityHints, 3);
-  assert.equal(observerConfig.epochTurns, 5);
-  assert.equal(observerConfig.epochWindowMs, 2_500);
+  extractorConfig = getExtractorLlmConfig();
+  assert.ok(extractorConfig);
+  assert.equal(extractorConfig.activeWindowDays, 14);
+  assert.equal(extractorConfig.continuityHints, 3);
+  assert.equal(extractorConfig.epochTurns, 5);
+  assert.equal(extractorConfig.epochWindowMs, 2_500);
 });
 
-test('observer config accepts an optional domain prompt name', async (t) => {
+test('extractor config accepts an optional domain prompt name', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(cleanupDataset(dir));
 
   process.env.MUNINN_HOME = homeDir;
   await writeMuninnConfig(configPath, { observerProvider: 'mock', domainPrompt: 'chat' });
 
-  const observerConfig = getObserverLlmConfig();
-  assert.ok(observerConfig);
-  assert.equal(observerConfig.domainPrompt, 'chat');
+  const extractorConfig = getExtractorLlmConfig();
+  assert.ok(extractorConfig);
+  assert.equal(extractorConfig.domainPrompt, 'chat');
 });
 
 test('addMessage and turns.get roundtrip through the native binding', async (t) => {
@@ -594,12 +602,20 @@ test('validateSettings rejects extraction index dimension changes that mismatch 
 
   await assert.rejects(
     () => validateSettings(JSON.stringify({
+      extractor: {
+        name: 'test-extractor',
+        llm: 'test_extractor_llm',
+        maxAttempts: 3,
+      },
       observer: {
         name: 'test-observer',
         llm: 'test_observer_llm',
         maxAttempts: 3,
       },
       llm: {
+        test_extractor_llm: {
+          provider: 'mock',
+        },
         test_observer_llm: {
           provider: 'mock',
         },
@@ -630,7 +646,7 @@ test('validateSettings reports invalid JSON before native storage initialization
   );
 });
 
-test('validateSettings rejects invalid observer.activeWindowDays', async (t) => {
+test('validateSettings rejects invalid extractor.activeWindowDays', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(cleanupDataset(dir));
 
@@ -640,12 +656,19 @@ test('validateSettings rejects invalid observer.activeWindowDays', async (t) => 
 
   await assert.rejects(
     () => validateSettings(JSON.stringify({
-      observer: {
-        name: 'test-observer',
-        llm: 'test_observer_llm',
+      extractor: {
+        name: 'test-extractor',
+        llm: 'test_extractor_llm',
         activeWindowDays: 0,
       },
+      observer: {
+        name: 'test-observer',
+        llm: 'test_observer_llm',
+      },
       llm: {
+        test_extractor_llm: {
+          provider: 'mock',
+        },
         test_observer_llm: {
           provider: 'mock',
         },
@@ -658,11 +681,11 @@ test('validateSettings rejects invalid observer.activeWindowDays', async (t) => 
         defaultImportance: 0.7,
       },
     }, null, 2)),
-    /observer\.activeWindowDays must be a positive integer/i,
+    /extractor\.activeWindowDays must be a positive integer/i,
   );
 });
 
-test('validateSettings rejects invalid observer.continuityHints', async (t) => {
+test('validateSettings rejects invalid extractor.continuityHints', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(cleanupDataset(dir));
 
@@ -672,12 +695,19 @@ test('validateSettings rejects invalid observer.continuityHints', async (t) => {
 
   await assert.rejects(
     () => validateSettings(JSON.stringify({
+      extractor: {
+        name: 'test-extractor',
+        llm: 'test_extractor_llm',
+        continuityHints: 0,
+      },
       observer: {
         name: 'test-observer',
         llm: 'test_observer_llm',
-        continuityHints: 0,
       },
       llm: {
+        test_extractor_llm: {
+          provider: 'mock',
+        },
         test_observer_llm: {
           provider: 'mock',
         },
@@ -690,11 +720,11 @@ test('validateSettings rejects invalid observer.continuityHints', async (t) => {
         defaultImportance: 0.7,
       },
     }, null, 2)),
-    /observer\.continuityHints must be a positive integer/i,
+    /extractor\.continuityHints must be a positive integer/i,
   );
 });
 
-test('validateSettings rejects invalid observer epoch seal settings', async (t) => {
+test('validateSettings rejects invalid extractor epoch seal settings', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(cleanupDataset(dir));
 
@@ -710,12 +740,19 @@ test('validateSettings rejects invalid observer epoch seal settings', async (t) 
   ]) {
     await assert.rejects(
       () => validateSettings(JSON.stringify({
+        extractor: {
+          name: 'test-extractor',
+          llm: 'test_extractor_llm',
+          [key]: value,
+        },
         observer: {
           name: 'test-observer',
           llm: 'test_observer_llm',
-          [key]: value,
         },
         llm: {
+          test_extractor_llm: {
+            provider: 'mock',
+          },
           test_observer_llm: {
             provider: 'mock',
           },
@@ -728,12 +765,12 @@ test('validateSettings rejects invalid observer epoch seal settings', async (t) 
           defaultImportance: 0.7,
         },
       }, null, 2)),
-      new RegExp(`observer\\.${key} must be a positive integer`, 'i'),
+      new RegExp(`extractor\\.${key} must be a positive integer`, 'i'),
     );
   }
 });
 
-test('validateSettings rejects unknown observer.domainPrompt', async (t) => {
+test('validateSettings rejects unknown extractor.domainPrompt', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(cleanupDataset(dir));
 
@@ -743,12 +780,19 @@ test('validateSettings rejects unknown observer.domainPrompt', async (t) => {
 
   await assert.rejects(
     () => validateSettings(JSON.stringify({
+      extractor: {
+        name: 'test-extractor',
+        llm: 'test_extractor_llm',
+        domainPrompt: 'unknown',
+      },
       observer: {
         name: 'test-observer',
         llm: 'test_observer_llm',
-        domainPrompt: 'unknown',
       },
       llm: {
+        test_extractor_llm: {
+          provider: 'mock',
+        },
         test_observer_llm: {
           provider: 'mock',
         },
@@ -761,7 +805,7 @@ test('validateSettings rejects unknown observer.domainPrompt', async (t) => {
         defaultImportance: 0.7,
       },
     }, null, 2)),
-    /observer\.domainPrompt must be one of: chat/i,
+    /extractor\.domainPrompt must be one of: chat/i,
   );
 });
 
@@ -773,7 +817,14 @@ test('validateSettings rejects missing observer config', async (t) => {
 
   await assert.rejects(
     () => validateSettings(JSON.stringify({
+      extractor: {
+        name: 'test-extractor',
+        llm: 'test_extractor_llm',
+      },
       llm: {
+        test_extractor_llm: {
+          provider: 'mock',
+        },
         test_observer_llm: {
           provider: 'mock',
         },
@@ -798,6 +849,10 @@ test('validateSettings rejects missing llm config', async (t) => {
 
   await assert.rejects(
     () => validateSettings(JSON.stringify({
+      extractor: {
+        name: 'test-extractor',
+        llm: 'test_extractor_llm',
+      },
       observer: {
         name: 'test-observer',
         llm: 'test_observer_llm',
@@ -822,11 +877,18 @@ test('validateSettings rejects missing extraction config', async (t) => {
 
   await assert.rejects(
     () => validateSettings(JSON.stringify({
+      extractor: {
+        name: 'test-extractor',
+        llm: 'test_extractor_llm',
+      },
       observer: {
         name: 'test-observer',
         llm: 'test_observer_llm',
       },
       llm: {
+        test_extractor_llm: {
+          provider: 'mock',
+        },
         test_observer_llm: {
           provider: 'mock',
         },
@@ -844,11 +906,18 @@ test('validateSettings rejects missing extraction.embedding config', async (t) =
 
   await assert.rejects(
     () => validateSettings(JSON.stringify({
+      extractor: {
+        name: 'test-extractor',
+        llm: 'test_extractor_llm',
+      },
       observer: {
         name: 'test-observer',
         llm: 'test_observer_llm',
       },
       llm: {
+        test_extractor_llm: {
+          provider: 'mock',
+        },
         test_observer_llm: {
           provider: 'mock',
         },
@@ -869,11 +938,18 @@ test('validateSettings accepts omitted extraction dimensions when the default ru
 
   await assert.doesNotReject(
     () => validateSettings(JSON.stringify({
+      extractor: {
+        name: 'test-extractor',
+        llm: 'test_extractor_llm',
+      },
       observer: {
         name: 'test-observer',
         llm: 'test_observer_llm',
       },
       llm: {
+        test_extractor_llm: {
+          provider: 'mock',
+        },
         test_observer_llm: {
           provider: 'mock',
         },
@@ -906,12 +982,20 @@ test('validateSettings rejects omitted extraction dimensions for an existing non
 
   await assert.rejects(
     () => validateSettings(JSON.stringify({
+      extractor: {
+        name: 'test-extractor',
+        llm: 'test_extractor_llm',
+        maxAttempts: 3,
+      },
       observer: {
         name: 'test-observer',
         llm: 'test_observer_llm',
         maxAttempts: 3,
       },
       llm: {
+        test_extractor_llm: {
+          provider: 'mock',
+        },
         test_observer_llm: {
           provider: 'mock',
         },
@@ -953,10 +1037,17 @@ test('validateSettings rejects observer config without observer.llm', async (t) 
 
   await assert.rejects(
     () => validateSettings(JSON.stringify({
+      extractor: {
+        name: 'test-extractor',
+        llm: 'test_extractor_llm',
+      },
       observer: {
         name: 'test-observer',
       },
       llm: {
+        test_extractor_llm: {
+          provider: 'mock',
+        },
         test_observer_llm: {
           provider: 'mock',
         },
@@ -977,16 +1068,21 @@ test('validateSettings rejects referenced llm entries without provider', async (
       turn: {
         llm: 'test_turn_llm',
       },
+      extractor: {
+        name: 'test-extractor',
+        llm: 'test_extractor_llm',
+      },
       observer: {
         name: 'test-observer',
         llm: 'test_observer_llm',
       },
       llm: {
         test_turn_llm: {},
+        test_extractor_llm: {},
         test_observer_llm: {},
       },
     }, null, 2)),
-    /llm\.(test_turn_llm|test_observer_llm)\.provider must be a non-empty string/i,
+    /llm\.(test_turn_llm|test_extractor_llm|test_observer_llm)\.provider must be a non-empty string/i,
   );
 });
 
@@ -1001,6 +1097,10 @@ test('validateSettings rejects openai turn llm without apiKey', async (t) => {
       turn: {
         llm: 'test_turn_llm',
       },
+      extractor: {
+        name: 'test-extractor',
+        llm: 'test_extractor_llm',
+      },
       observer: {
         name: 'test-observer',
         llm: 'test_observer_llm',
@@ -1008,6 +1108,9 @@ test('validateSettings rejects openai turn llm without apiKey', async (t) => {
       llm: {
         test_turn_llm: {
           provider: 'openai',
+        },
+        test_extractor_llm: {
+          provider: 'mock',
         },
         test_observer_llm: {
           provider: 'mock',
@@ -1032,11 +1135,18 @@ test('validateSettings rejects openai observer llm without apiKey', async (t) =>
 
   await assert.rejects(
     () => validateSettings(JSON.stringify({
+      extractor: {
+        name: 'test-extractor',
+        llm: 'test_extractor_llm',
+      },
       observer: {
         name: 'test-observer',
         llm: 'test_observer_llm',
       },
       llm: {
+        test_extractor_llm: {
+          provider: 'mock',
+        },
         test_observer_llm: {
           provider: 'openai',
         },
@@ -1060,11 +1170,18 @@ test('validateSettings rejects openai extraction embeddings without apiKey', asy
 
   await assert.rejects(
     () => validateSettings(JSON.stringify({
+      extractor: {
+        name: 'test-extractor',
+        llm: 'test_extractor_llm',
+      },
       observer: {
         name: 'test-observer',
         llm: 'test_observer_llm',
       },
       llm: {
+        test_extractor_llm: {
+          provider: 'mock',
+        },
         test_observer_llm: {
           provider: 'mock',
         },
@@ -1087,11 +1204,18 @@ test('validateSettings does not create the default storage root while checking s
   process.env.MUNINN_HOME = homeDir;
 
   await assert.doesNotReject(() => validateSettings(JSON.stringify({
+    extractor: {
+      name: 'test-extractor',
+      llm: 'test_extractor_llm',
+    },
     observer: {
       name: 'test-observer',
       llm: 'test_observer_llm',
     },
     llm: {
+      test_extractor_llm: {
+        provider: 'mock',
+      },
       test_observer_llm: {
         provider: 'mock',
       },
@@ -1126,11 +1250,15 @@ test('validateSettings rejects extraction dimension changes when the table exist
       text: 'extraction text',
       context: null,
       anchors: [],
+      turnRefs: ['turn:1'],
+      observationIds: [],
+      observedRootAnchors: [],
       vector: [0.1, 0.2, 0.3, 0.4],
       importance: 0.7,
       category: 'fact',
       references: ['turn:1'],
       createdAt: '2024-01-01T00:00:00Z',
+      updatedAt: '2024-01-01T00:00:00Z',
     }],
   });
   await binding.extractionTable.delete({ ids: ['mem-1'] });
@@ -1141,12 +1269,20 @@ test('validateSettings rejects extraction dimension changes when the table exist
 
   await assert.rejects(
     () => validateSettings(JSON.stringify({
+      extractor: {
+        name: 'test-extractor',
+        llm: 'test_extractor_llm',
+        maxAttempts: 3,
+      },
       observer: {
         name: 'test-observer',
         llm: 'test_observer_llm',
         maxAttempts: 3,
       },
       llm: {
+        test_extractor_llm: {
+          provider: 'mock',
+        },
         test_observer_llm: {
           provider: 'mock',
         },
@@ -1196,12 +1332,20 @@ test('validateSettings checks the pending storage target instead of the current 
       storage: {
         uri: toFileStoreUri(storageB),
       },
+      extractor: {
+        name: 'test-extractor',
+        llm: 'test_extractor_llm',
+        maxAttempts: 3,
+      },
       observer: {
         name: 'test-observer',
         llm: 'test_observer_llm',
         maxAttempts: 3,
       },
       llm: {
+        test_extractor_llm: {
+          provider: 'mock',
+        },
         test_observer_llm: {
           provider: 'mock',
         },
@@ -1232,11 +1376,18 @@ test('validateSettings is not blocked by the current config storage when the pen
     storage: {
       uri: toFileStoreUri(storageB),
     },
+    extractor: {
+      name: 'test-extractor',
+      llm: 'test_extractor_llm',
+    },
     observer: {
       name: 'test-observer',
       llm: 'test_observer_llm',
     },
     llm: {
+      test_extractor_llm: {
+        provider: 'mock',
+      },
       test_observer_llm: {
         provider: 'mock',
       },
@@ -1259,6 +1410,22 @@ test('getNativeTables initializes the native tables only once under concurrent a
 
   const [first, second] = await Promise.all([getNativeTables(), getNativeTables()]);
   assert.strictEqual(first, second);
+});
+
+test('createNativeTables returns an independent native table binding', async (t) => {
+  const { dir, homeDir } = await makeDatasetUri();
+  t.after(cleanupDataset(dir));
+
+  process.env.MUNINN_HOME = homeDir;
+
+  const singleton = await getNativeTables();
+  const standalone = await createNativeTables();
+  t.after(async () => standalone.close());
+
+  assert.notStrictEqual(standalone, singleton);
+  assert.notStrictEqual(standalone.turnTable, singleton.turnTable);
+  assert.notStrictEqual(standalone.extractionTable, singleton.extractionTable);
+  assert.notStrictEqual(standalone.observationTable, singleton.observationTable);
 });
 
 test('observer.watermark reports pending turns until the observer flush completes', async (t) => {
@@ -1298,7 +1465,7 @@ test('addMessage summarizes response turns when a summary provider is configured
   t.after(cleanupDataset(dir));
 
   process.env.MUNINN_HOME = homeDir;
-    await writeMuninnConfig(configPath, { turnProvider: 'mock' });
+  await writeMuninnConfig(configPath, { turnProvider: 'mock' });
 
   const created = await writeTurnAndGet({
     sessionId: 'group-a',
@@ -1402,11 +1569,15 @@ test('recall returns extraction memory ids and detail renders references', async
       text: 'Caroline joined an LGBTQ support group in May 2023.',
       context: null,
       anchors: [],
+      turnRefs: ['turn:1'],
+      observationIds: [],
+      observedRootAnchors: [],
       vector: [1, 0, 0, 0],
       importance: 1,
       category: 'fact',
       references: ['turn:1'],
       createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
     }],
   });
 
