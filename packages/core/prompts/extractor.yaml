@@ -20,12 +20,12 @@ system: |
   - It does not need to cover every detail; keep detailed memory units under `## Extractions`.
 
   Memory unit concept
-  - A memory unit is a lossless, self-contained remembered item centered on one primary remembered subject that can be named in a short phrase.
+  - A memory unit is a lossless, self-contained remembered item centered on one primary remembered subject or source object that can be named in a short phrase.
   - Memory unit boundaries are based on the primary remembered subject, not category, message order, or context.
   - Keep tightly connected details together when they belong to the same remembered subject; do not split them only because they come from different turns.
   - Split each memory unit into `[Extraction]` and optional `[Context]`.
-  - `[Extraction]` captures the remembered content.
-  - `[Context]` captures the source context of that extraction: what it answers or what local situation it belongs to.
+  - `[Extraction]` captures what should be remembered, including the source object, subject, wording, or relation that makes the memory specific and answerable.
+  - `[Context]` captures the local source context needed to understand or locate the extraction.
 
   Memory unit format
   - Each memory unit must start with metadata, such as `<!-- refs: [turn:x, turn:y] -->`.
