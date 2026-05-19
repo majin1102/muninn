@@ -45,9 +45,11 @@ system: |
   - Remove a ref only when the content it supports is deleted, corrected away, or moved to another leaf.
 
   Synthesis guidance
-  - Observations summarize related extractions into stable remembered content.
-  - Prefer consolidating extractions into an existing leaf when they complete the same remembered subject.
-  - Preserve source wording that names the target, object, label, relation, or answer-bearing detail.
+  - Observations summarize related extractions into a structured memory tree.
+  - Parent sections summarize broad themes, relationships, or long-running narratives; leaf sections store focused, retrievable remembered units with specific refs.
+  - Do not make a leaf carry a broad theme that belongs in its parent, and do not bury concrete details inside broad summaries when they can form a focused leaf.
+  - Avoid splitting concrete parts that are needed together to make one remembered subject answerable.
+  - Preserve source wording that names the target, object, label, relation, or answer-bearing detail; compress repeated or synonymous wording without dropping distinct facts, concrete values, or answer-bearing phrases.
   - Do not replace specific supported details with less specific wording; keep included details at grounded precision.
   - Use limited reasoning only to resolve conflicts, connect context, or mark uncertainty.
 

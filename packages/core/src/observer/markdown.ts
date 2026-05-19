@@ -174,7 +174,66 @@ function resolveRef(ref: string, validRefs: Set<string>): string {
   if (matches.length > 1) {
     throw new Error(`observer referenced ambiguous extraction id prefix: ${ref}`);
   }
+  const nearMatches = nearExtractionRefMatches(ref, validRefs);
+  if (nearMatches.length === 1) {
+    return nearMatches[0]!;
+  }
+  if (nearMatches.length > 1) {
+    throw new Error(`observer referenced ambiguous extraction id near-match: ${ref}`);
+  }
   throw new Error(`observer referenced unknown extraction id: ${ref}`);
+}
+
+function nearExtractionRefMatches(ref: string, validRefs: Set<string>): string[] {
+  if (!/^[0-9a-f]{12,}$/i.test(ref)) {
+    return [];
+  }
+  return [...validRefs].filter((validRef) => {
+    if (!/^[0-9a-f]{12,}$/i.test(validRef)) {
+      return false;
+    }
+    const sharedPrefix = commonPrefixLength(ref, validRef);
+    if (sharedPrefix < Math.min(16, validRef.length - 2, ref.length - 2)) {
+      return false;
+    }
+    return editDistanceAtMost(ref, validRef, 2);
+  });
+}
+
+function commonPrefixLength(left: string, right: string): number {
+  const max = Math.min(left.length, right.length);
+  for (let index = 0; index < max; index += 1) {
+    if (left[index] !== right[index]) {
+      return index;
+    }
+  }
+  return max;
+}
+
+function editDistanceAtMost(left: string, right: string, limit: number): boolean {
+  if (Math.abs(left.length - right.length) > limit) {
+    return false;
+  }
+  let previous = Array.from({ length: right.length + 1 }, (_, index) => index);
+  for (let i = 1; i <= left.length; i += 1) {
+    const current = [i];
+    let rowMin = current[0]!;
+    for (let j = 1; j <= right.length; j += 1) {
+      const cost = left[i - 1] === right[j - 1] ? 0 : 1;
+      const value = Math.min(
+        previous[j]! + 1,
+        current[j - 1]! + 1,
+        previous[j - 1]! + cost,
+      );
+      current[j] = value;
+      rowMin = Math.min(rowMin, value);
+    }
+    if (rowMin > limit) {
+      return false;
+    }
+    previous = current;
+  }
+  return previous[right.length]! <= limit;
 }
 
 function validateTree(sections: DraftSection[], validRefs: Set<string>): void {

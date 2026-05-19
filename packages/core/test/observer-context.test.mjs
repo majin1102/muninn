@@ -19,6 +19,18 @@ Caroline researched adoption agencies.
   assert.equal(parsed.sections[0].children[0].body, 'Caroline researched adoption agencies.');
 });
 
+test('observer document parser normalizes a unique near-match extraction ref typo', () => {
+  const validRef = '8ef63e6640c91a206097e95a';
+  const parsed = parseObserverDocument(`# Caroline
+
+## Plans <!-- id: ${ID} -->
+### Summer plans <!-- refs: [8ef63e6640c91a206097e95b4] -->
+Caroline researched adoption agencies.
+`, new Set([validRef]));
+
+  assert.deepEqual(parsed.sections[0].children[0].refs, [validRef]);
+});
+
 test('observer document parser rejects refs on non-leaf sections', () => {
   assert.throws(() => parseObserverDocument(`# Caroline
 

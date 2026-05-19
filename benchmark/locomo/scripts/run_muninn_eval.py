@@ -151,7 +151,7 @@ def check_preflight(config: BuildConfig) -> None:
 
 
 def prepare_data_file(config: BuildConfig, paths: RunPaths) -> Path:
-    if len(config.target.sample_ids) <= 1:
+    if not config.target.sample_ids:
         return config.target.data_file
 
     source = json.loads(abs_path(config.target.data_file).read_text(encoding="utf8"))

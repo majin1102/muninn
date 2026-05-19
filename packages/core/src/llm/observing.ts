@@ -218,7 +218,7 @@ async function runToolLoop(params: {
     }>;
   }) => Promise<void> | void;
 }): Promise<string> {
-  const maxSteps = params.maxSteps ?? 3;
+  const maxSteps = params.maxSteps ?? 6;
   const messages = [...params.messages];
   for (let step = 0; step < maxSteps; step += 1) {
     throwIfAborted(params.signal);
@@ -244,7 +244,14 @@ async function runToolLoop(params: {
         throw new Error(`unknown tool: ${call.name}`);
       }
       throwIfAborted(params.signal);
-      const toolResult = await handler(call.arguments, call);
+      let toolResult: unknown;
+      try {
+        toolResult = await handler(call.arguments, call);
+      } catch (error) {
+        toolResult = {
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
       toolResults.push({
         id: call.id,
         name: call.name,

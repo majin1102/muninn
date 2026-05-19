@@ -97,10 +97,14 @@ test('thread observing prompt organizes entity extractions by questions', () => 
   assert.match(prompt.system, /add refs only for extraction content retained in the leaf/);
   assert.match(prompt.system, /Remove a ref only when the content it supports is deleted, corrected away, or moved to another leaf/);
   assert.match(prompt.system, /Synthesis guidance/);
-  assert.match(prompt.system, /summarize related extractions into stable remembered content/);
-  assert.match(prompt.system, /Prefer consolidating extractions into an existing leaf when they complete the same remembered subject/);
-  assert.match(prompt.system, /stable remembered content/);
+  assert.match(prompt.system, /summarize related extractions into a structured memory tree/);
+  assert.match(prompt.system, /Parent sections summarize broad themes, relationships, or long-running narratives/);
+  assert.match(prompt.system, /leaf sections store focused, retrievable remembered units with specific refs/);
+  assert.match(prompt.system, /Do not make a leaf carry a broad theme that belongs in its parent/);
+  assert.match(prompt.system, /do not bury concrete details inside broad summaries when they can form a focused leaf/);
+  assert.match(prompt.system, /Avoid splitting concrete parts that are needed together to make one remembered subject answerable/);
   assert.match(prompt.system, /Preserve source wording that names the target, object, label, relation, or answer-bearing detail/);
+  assert.match(prompt.system, /compress repeated or synonymous wording without dropping distinct facts, concrete values, or answer-bearing phrases/);
   assert.match(prompt.system, /Do not replace specific supported details with less specific wording/);
   assert.match(prompt.system, /grounded precision/);
   assert.match(prompt.system, /Use limited reasoning only to resolve conflicts, connect context, or mark uncertainty/);

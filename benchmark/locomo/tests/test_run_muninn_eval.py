@@ -196,6 +196,43 @@ class RunMuninnEvalTests(unittest.TestCase):
 
         self.assertEqual([sample["sample_id"] for sample in data], ["conv-26", "conv-30"])
 
+    def test_prepare_data_file_writes_single_sample_subset(self) -> None:
+        config = BuildConfig(
+            target=resolve_target("conv-26"),
+            top_k=8,
+            budget=0,
+            query_limit=8,
+            recall_mode="hybrid",
+            watermark_timeout_ms=7200000,
+            answerer="llm",
+            keep_home=True,
+            run_name="test-single-subset",
+        )
+        paths = build_paths(config)
+
+        data_file = prepare_data_file(config, paths)
+        data = json.loads((Path.cwd() / data_file).read_text(encoding="utf8"))
+
+        self.assertEqual([sample["sample_id"] for sample in data], ["conv-26"])
+
+    def test_prepare_data_file_keeps_unfiltered_target_file(self) -> None:
+        config = BuildConfig(
+            target=resolve_target("full"),
+            top_k=8,
+            budget=0,
+            query_limit=8,
+            recall_mode="hybrid",
+            watermark_timeout_ms=7200000,
+            answerer="llm",
+            keep_home=True,
+            run_name="test-full",
+        )
+        paths = build_paths(config)
+
+        data_file = prepare_data_file(config, paths)
+
+        self.assertEqual(data_file, config.target.data_file)
+
 
 if __name__ == "__main__":
     unittest.main()

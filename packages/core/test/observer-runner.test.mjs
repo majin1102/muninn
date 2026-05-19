@@ -925,6 +925,147 @@ Caroline attended an LGBTQ support group.`,
   assert.equal(result.sections[0].refs.includes('ext-a'), true);
 });
 
+test('observeAnchor allows more than three get_observation tool steps by default', async (t) => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'muninn-observer-tool-steps-'));
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+
+  const homeDir = path.join(dir, 'home');
+  await writeFile(path.join(dir, 'muninn.json'), JSON.stringify(mockConfig(), null, 2));
+  await mkdir(homeDir, { recursive: true });
+  await copyFile(path.join(dir, 'muninn.json'), path.join(homeDir, 'muninn.json'));
+
+  const previousHome = process.env.MUNINN_HOME;
+  process.env.MUNINN_HOME = homeDir;
+  t.after(() => {
+    if (previousHome === undefined) {
+      delete process.env.MUNINN_HOME;
+    } else {
+      process.env.MUNINN_HOME = previousHome;
+    }
+  });
+
+  let calls = 0;
+  const result = await observeAnchor({
+    entityAnchor: 'Caroline',
+    outline: '# Caroline\n- ### Support group <!-- id: 11111111-1111-4111-8111-111111111111; leaf -->',
+    rewriteContent: '',
+    extractions: [{
+      id: 'ext-a',
+      status: 'new',
+      text: 'Caroline attended an LGBTQ support group.',
+      context: null,
+      anchors: ['Entity: Caroline'],
+      turnRefs: ['turn:1'],
+    }],
+    getObservation: (id) => `# Caroline
+
+### Support group <!-- id: ${id}; refs: [ext-old] -->
+
+Caroline previously attended a support group.`,
+    validRefs: ['ext-old'],
+    maxAttempts: 1,
+    model: async () => {
+      calls += 1;
+      if (calls <= 4) {
+        return {
+          type: 'tool_calls',
+          toolCalls: [{
+            id: `call-${calls}`,
+            name: 'get_observation',
+            arguments: { id: '11111111-1111-4111-8111-111111111111' },
+          }],
+        };
+      }
+      return {
+        type: 'final',
+        text: `# Caroline
+
+## Support <!-- id: 11111111-1111-4111-8111-111111111111; refs: [ext-old, ext-a] -->
+
+Caroline attended an LGBTQ support group.`,
+      };
+    },
+  });
+
+  assert.equal(calls, 5);
+  assert.equal(result.sections[0].refs.includes('ext-a'), true);
+});
+
+test('observeAnchor recovers when get_observation is called with an unavailable id', async (t) => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'muninn-observer-tool-error-'));
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+
+  const homeDir = path.join(dir, 'home');
+  await writeFile(path.join(dir, 'muninn.json'), JSON.stringify(mockConfig(), null, 2));
+  await mkdir(homeDir, { recursive: true });
+  await copyFile(path.join(dir, 'muninn.json'), path.join(homeDir, 'muninn.json'));
+
+  const previousHome = process.env.MUNINN_HOME;
+  process.env.MUNINN_HOME = homeDir;
+  t.after(() => {
+    if (previousHome === undefined) {
+      delete process.env.MUNINN_HOME;
+    } else {
+      process.env.MUNINN_HOME = previousHome;
+    }
+  });
+
+  let calls = 0;
+  let sawToolError = false;
+  const result = await observeAnchor({
+    entityAnchor: 'Caroline',
+    outline: '# Caroline\n- ### Support group <!-- id: 11111111-1111-4111-8111-111111111111; leaf -->',
+    rewriteContent: '',
+    extractions: [{
+      id: 'ext-a',
+      status: 'new',
+      text: 'Caroline attended an LGBTQ support group.',
+      context: null,
+      anchors: ['Entity: Caroline'],
+      turnRefs: ['turn:1'],
+    }],
+    getObservation: (id) => {
+      if (id !== '11111111-1111-4111-8111-111111111111') {
+        throw new Error(`get_observation id is not visible in the outline: ${id}`);
+      }
+      return `# Caroline
+
+### Support group <!-- id: ${id}; refs: [ext-old] -->
+
+Caroline previously attended a support group.`;
+    },
+    validRefs: ['ext-old'],
+    maxAttempts: 1,
+    model: async (_purpose, input) => {
+      calls += 1;
+      if (calls === 1) {
+        return {
+          type: 'tool_calls',
+          toolCalls: [{
+            id: 'call-invalid',
+            name: 'get_observation',
+            arguments: { id: 'not-visible' },
+          }],
+        };
+      }
+      sawToolError = input.messages.some((message) =>
+        message.role === 'tool' && String(message.content).includes('not visible in the outline'));
+      return {
+        type: 'final',
+        text: `# Caroline
+
+## Support <!-- id: 11111111-1111-4111-8111-111111111111; refs: [ext-old, ext-a] -->
+
+Caroline attended an LGBTQ support group.`,
+      };
+    },
+  });
+
+  assert.equal(calls, 2);
+  assert.equal(sawToolError, true);
+  assert.equal(result.sections[0].refs.includes('ext-a'), true);
+});
+
 function makeClient({ extractions, contexts = [], observations = [], extractionVersion = 1 }) {
   const writes = {
     observationContexts: [],
