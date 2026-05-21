@@ -25,6 +25,8 @@ export class Observer {
   private loopPromise: Promise<void> | null = null;
   private running = false;
   private shuttingDown = false;
+  private drainRequested = false;
+  private lastError: { message: string } | null = null;
   private baseline: ObserverCheckpoint['baseline'];
   private observeQueue: ObserveQueue;
 
@@ -64,48 +66,43 @@ export class Observer {
 
   enqueue(changes: QueuedExtractionChange[]): void {
     this.observeQueue = enqueueChanges(this.observeQueue, changes);
+    this.lastError = null;
     this.wake();
   }
 
   async watermark(): Promise<MemoryWatermark> {
-    const stats = queueStats(this.observeQueue, this.anchorThreshold);
-    const pending = this.running || stats.readyCount > 0;
+    const pendingExtractionIds = pendingQueueExtractionIds(this.observeQueue);
+    const phase = this.lastError
+      ? 'error'
+      : this.drainRequested
+        ? 'draining'
+        : this.running
+          ? 'running'
+          : pendingExtractionIds.length > 0
+            ? 'pending'
+            : 'idle';
     return {
-      resolved: !pending,
-      pendingTurnIds: [],
-      observerPending: pending,
-      observerQueuedCount: stats.queuedCount,
-      observerReadyCount: stats.readyCount,
-      observerReadyBucketCount: stats.readyBucketCount,
+      pending: {
+        turns: [],
+        extractions: pendingExtractionIds,
+      },
+      phases: {
+        extractor: 'idle',
+        observer: phase,
+      },
+      ...(this.lastError
+        ? { error: { phase: 'observer' as const, message: this.lastError.message } }
+        : {}),
     };
   }
 
   async finalize(): Promise<MemoryWatermark> {
-    while (!this.shuttingDown) {
-      const stats = queueStats(this.observeQueue, Number.POSITIVE_INFINITY);
-      const pending = stats.queuedCount > 0 || this.running;
-      if (!pending) {
-        return {
-          resolved: true,
-          pendingTurnIds: [],
-          observerPending: false,
-          observerQueuedCount: 0,
-          observerReadyCount: 0,
-          observerReadyBucketCount: 0,
-        };
-      }
-      if (this.running) {
-        await sleep(50);
-        continue;
-      }
-      await this.runOnce(true);
+    if (!this.shuttingDown) {
+      this.drainRequested = true;
+      this.lastError = null;
+      this.wake();
     }
-    return {
-      resolved: false,
-      pendingTurnIds: [],
-      observerPending: true,
-      observerQueuedCount: queueStats(this.observeQueue, this.anchorThreshold).queuedCount,
-    };
+    return this.watermark();
   }
 
   exportCheckpoint(): ObserverCheckpoint {
@@ -132,14 +129,17 @@ export class Observer {
         const batch = readyBucket(this.observeQueue, {
           threshold: this.anchorThreshold,
           batchSize: this.anchorBatchSize,
-          finalize: false,
+          finalize: this.drainRequested,
         });
         if (!batch) {
+          if (this.drainRequested && queueStats(this.observeQueue, Number.POSITIVE_INFINITY).queuedCount === 0) {
+            this.drainRequested = false;
+          }
           await this.waitForChange(IDLE_POLL_MS);
           retryDelayMs = BASE_RETRY_DELAY_MS;
           continue;
         }
-        await this.runOnce(false);
+        await this.runOnce(this.drainRequested);
         retryDelayMs = BASE_RETRY_DELAY_MS;
       } catch (error) {
         this.running = false;
@@ -147,6 +147,7 @@ export class Observer {
           break;
         }
         const message = String(error);
+        this.lastError = { message };
         console.error(`[muninn:observer] observer run failed: ${message}`);
         await writeMuninnLog(this.database, 'error', 'observer', 'run_failed', { message });
         await sleep(retryDelayMs);
@@ -176,11 +177,15 @@ export class Observer {
           database: this.database,
         });
       });
+      this.lastError = null;
       this.observeQueue = ackBucket(
         this.observeQueue,
         batch.key,
         batch.extractionChanges.map((change) => change.extraction.id),
       );
+      if (finalize && pendingQueueExtractionIds(this.observeQueue).length === 0) {
+        this.drainRequested = false;
+      }
     } finally {
       this.running = false;
       this.wake();
@@ -213,6 +218,21 @@ export class Observer {
     this.changeWaiters.clear();
   }
 
+}
+
+function pendingQueueExtractionIds(queue: ObserveQueue): string[] {
+  const seen = new Set<string>();
+  const ids: string[] = [];
+  for (const bucket of queue.anchors) {
+    for (const change of bucket.extractionChanges) {
+      if (seen.has(change.extraction.id)) {
+        continue;
+      }
+      seen.add(change.extraction.id);
+      ids.push(change.extraction.id);
+    }
+  }
+  return ids;
 }
 
 function sleep(delayMs: number): Promise<void> {

@@ -312,7 +312,7 @@ function parseStoredExtraction(value: unknown): Extraction | null {
     || typeof value.importance !== 'number'
     || typeof value.category !== 'string'
     || !isStringArray(value.turnRefs)
-    || !isStringArray(value.observationIds)
+    || !isStringArray(value.observationPaths)
     || !isStringArray(value.observedRootAnchors)
     || typeof value.createdAt !== 'string'
     || typeof value.updatedAt !== 'string'
@@ -328,7 +328,7 @@ function parseStoredExtraction(value: unknown): Extraction | null {
     importance: value.importance,
     category: value.category,
     turnRefs: [...value.turnRefs],
-    observationIds: [...value.observationIds],
+    observationPaths: [...value.observationPaths],
     observedRootAnchors: [...value.observedRootAnchors],
     createdAt: value.createdAt,
     updatedAt: value.updatedAt,

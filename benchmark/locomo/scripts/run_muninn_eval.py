@@ -19,11 +19,19 @@ from urllib.request import urlopen
 
 
 ROOT = Path(__file__).resolve().parents[3]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from benchmark.locomo.slice import build_slice
+
 OUT_DIR = ROOT / "benchmark" / "locomo" / "out"
 RUNS_DIR = ROOT / "benchmark" / "locomo" / ".runs"
 DEFAULT_FULL_DATA = ROOT / "benchmark" / "locomo" / ".cache" / "data" / "locomo10.json"
-THREE_SMALL_DATA = ROOT / "benchmark" / "locomo" / ".cache" / "data" / "locomo-three-small-shared.json"
 CONV_26_SESSIONS_1_2_DATA = ROOT / "benchmark" / "locomo" / ".cache" / "data" / "conv-26-sessions-1-2-current.json"
+THREE_SMALL_SESSIONS = {
+    "conv-26": 2,
+    "conv-30": 2,
+}
 
 MATCHED_PROCESS_MARKERS = (
     "benchmark/locomo/run.py",
@@ -107,7 +115,7 @@ def abs_path(path: Path) -> Path:
 def resolve_target(value: str) -> Target:
     target = value.strip()
     if target == "three-small":
-        return Target(target, rel(THREE_SMALL_DATA), [])
+        return Target(target, rel(DEFAULT_FULL_DATA), [])
     if target == "conv-26":
         return Target(target, rel(DEFAULT_FULL_DATA), ["conv-26"])
     if target == "conv-26-sessions-1-2":
@@ -151,6 +159,8 @@ def check_preflight(config: BuildConfig) -> None:
 
 
 def prepare_data_file(config: BuildConfig, paths: RunPaths) -> Path:
+    if config.target.name == "three-small":
+        return prepare_three_small_data(config, paths)
     if not config.target.sample_ids:
         return config.target.data_file
 
@@ -168,6 +178,17 @@ def prepare_data_file(config: BuildConfig, paths: RunPaths) -> Path:
     data_file = abs_path(paths.data_file)
     data_file.parent.mkdir(parents=True, exist_ok=True)
     data_file.write_text(json.dumps(selected, indent=2, ensure_ascii=False) + "\n", encoding="utf8")
+    return paths.data_file
+
+
+def prepare_three_small_data(config: BuildConfig, paths: RunPaths) -> Path:
+    data_file = abs_path(paths.data_file)
+    data_file.parent.mkdir(parents=True, exist_ok=True)
+    samples = [
+        build_slice(abs_path(config.target.data_file), sample_id, max_session).sample
+        for sample_id, max_session in THREE_SMALL_SESSIONS.items()
+    ]
+    data_file.write_text(json.dumps(samples, indent=2, ensure_ascii=False) + "\n", encoding="utf8")
     return paths.data_file
 
 
@@ -327,9 +348,7 @@ def extract_stats(result_file: Path, openviking_file: Path, honcho_file: Path) -
     return {
         "qa_count": f1_stats.get("qa_count", 0),
         "average_f1": f1_stats.get("average_f1", 0.0),
-        "average_recall": f1_stats.get("average_recall", 0.0),
         "category_f1": f1_stats.get("category_f1", {}),
-        "category_recall": f1_stats.get("category_recall", {}),
         "openviking_accuracy": (openviking.get("accuracy") or {}).get("accuracy"),
         "honcho_accuracy": (honcho.get("accuracy") or {}).get("accuracy"),
     }
@@ -411,12 +430,11 @@ def build_badcases_report(
         sample_id = str(sample.get("sample_id") or "")
         for index, qa in enumerate(sample.get("qa") or []):
             f1 = float(qa.get(f"{model_key}_f1") or 0.0)
-            recall = float(qa.get(f"{model_key}_recall") or 0.0)
             ov = openviking_by_key.get((sample_id, index))
             hc = honcho_by_key.get((sample_id, index))
             ov_bad = ov is not None and ov.get("result") != "CORRECT"
             hc_bad = hc is not None and not bool(hc.get("passed"))
-            if f1 >= 1.0 and recall >= 1.0 and not ov_bad and not hc_bad:
+            if f1 >= 1.0 and not ov_bad and not hc_bad:
                 continue
             lines.extend([
                 f"## {sample_id} Q{index}",
@@ -426,7 +444,6 @@ def build_badcases_report(
                 f"- Gold: {qa.get('answer')}",
                 f"- Prediction: {qa.get(f'{model_key}_prediction')}",
                 f"- F1: {f1:.4f}",
-                f"- Recall: {recall:.4f}",
             ])
             if ov is not None:
                 lines.append(f"- OpenViking: {ov.get('result')} - {ov.get('reasoning')}")
@@ -436,10 +453,10 @@ def build_badcases_report(
             hits = qa.get(f"{model_key}_hits") or []
             for hit_index, hit in enumerate(hits[:5], start=1):
                 detail = str(hit.get("detail") or hit.get("matched_text") or "").replace("\n", " ")
-                lines.append(f"- Hit {hit_index}: {hit.get('memory_id')} | {detail[:300]} | evidence={hit.get('evidence_ids')}")
+                lines.append(f"- Hit {hit_index}: {hit.get('memory_id')} | {detail[:300]}")
             lines.append("")
     if len(lines) == 2:
-        lines.append("No bad cases detected by F1, recall, OpenViking, or Honcho.")
+        lines.append("No bad cases detected by F1, OpenViking, or Honcho.")
     return "\n".join(lines).rstrip() + "\n"
 
 

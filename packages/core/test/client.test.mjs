@@ -44,14 +44,23 @@ function cleanupDataset(dir) {
 
 async function waitForObserverResolved({ timeoutMs = 2_000, intervalMs = 20 } = {}) {
   const deadline = Date.now() + timeoutMs;
+  await observer.finalize();
   while (Date.now() < deadline) {
     const watermark = await observer.watermark();
-    if (watermark.resolved) {
+    if (memoryWatermarkResolved(watermark)) {
       return;
     }
     await new Promise((resolve) => setTimeout(resolve, intervalMs));
   }
   throw new Error('timed out waiting for observer watermark');
+}
+
+function memoryWatermarkResolved(watermark) {
+  return watermark.pending.turns.length === 0
+    && watermark.pending.extractions.length === 0
+    && watermark.phases.extractor === 'idle'
+    && watermark.phases.observer === 'idle'
+    && !watermark.error;
 }
 
 function makePendingTurn({
@@ -392,7 +401,7 @@ test('pure read APIs work without observer bootstrap config', async (t) => {
 
   for (let attempt = 0; attempt < 50; attempt += 1) {
     const watermark = await observer.watermark();
-    if (watermark.resolved) {
+    if (memoryWatermarkResolved(watermark)) {
       break;
     }
     await new Promise((resolve) => setTimeout(resolve, 20));
@@ -1251,7 +1260,7 @@ test('validateSettings rejects extraction dimension changes when the table exist
       context: null,
       anchors: [],
       turnRefs: ['turn:1'],
-      observationIds: [],
+      observationPaths: [],
       observedRootAnchors: [],
       vector: [0.1, 0.2, 0.3, 0.4],
       importance: 0.7,
@@ -1442,22 +1451,25 @@ test('observer.watermark reports pending turns until the observer flush complete
     response: 'observer pending response',
   });
 
+  const current = await observer.watermark();
+  assert.equal(memoryWatermarkResolved(current), false);
+  assert.ok(
+    current.pending.turns.length === 0
+    || (current.pending.turns.length === 1 && current.pending.turns[0] === created.turnId),
+  );
+
+  await observer.finalize();
   let resolved = null;
   for (let attempt = 0; attempt < 50; attempt += 1) {
     resolved = await observer.watermark();
-    if (!resolved.resolved) {
-      assert.ok(
-        resolved.pendingTurnIds.length === 0
-        || (resolved.pendingTurnIds.length === 1 && resolved.pendingTurnIds[0] === created.turnId),
-      );
-    } else {
+    if (memoryWatermarkResolved(resolved)) {
       break;
     }
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
   assert.ok(resolved);
-  assert.equal(resolved.resolved, true);
-  assert.deepEqual(resolved.pendingTurnIds, []);
+  assert.equal(memoryWatermarkResolved(resolved), true);
+  assert.deepEqual(resolved.pending.turns, []);
 });
 
 test('addMessage summarizes response turns when a summary provider is configured', async (t) => {
@@ -1570,7 +1582,7 @@ test('recall returns extraction memory ids and detail renders references', async
       context: null,
       anchors: [],
       turnRefs: ['turn:1'],
-      observationIds: [],
+      observationPaths: [],
       observedRootAnchors: [],
       vector: [1, 0, 0, 0],
       importance: 1,

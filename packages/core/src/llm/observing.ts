@@ -28,10 +28,10 @@ export type ObserverExtractionInput = {
 export type ObserveAnchorInput = {
   entityAnchor: string;
   outline: string;
-  rewriteContent: string;
+  observedDocument: string;
   extractions: ObserverExtractionInput[];
   validRefs?: string[];
-  getObservation?: (id: string) => Promise<string> | string;
+  getObservation?: (paths: string[]) => Promise<string> | string;
   maxAttempts?: number;
   database?: string;
   signal?: AbortSignal;
@@ -47,16 +47,16 @@ export async function observeAnchor(input: ObserveAnchorInput): Promise<ParsedOb
   const template = loadPromptTemplate('thread_observing');
   const database = resolveDatabaseName(input.database);
   const contentBudgetChars = getObserverRuntimeConfig().contentBudgetChars;
-  const rewriteContent = trimContent(input.rewriteContent, contentBudgetChars);
+  const observedDocument = trimContent(input.observedDocument, contentBudgetChars);
   const prompt = renderPromptTemplate(template.userTemplate, {
     entity_anchor: input.entityAnchor,
     outline: input.outline.trim() || '(none)',
-    rewrite_content: rewriteContent.trim() || '(none)',
+    observed_document: observedDocument.trim() || '(none)',
     extractions: renderExtractions(input.extractions),
   });
   const validRefs = new Set([
     ...(input.validRefs ?? []),
-    ...extractRefs(input.rewriteContent),
+    ...extractRefs(input.observedDocument),
     ...input.extractions.map((extraction) => extraction.id),
   ]);
   const attempts = input.maxAttempts ?? 2;
@@ -64,7 +64,7 @@ export async function observeAnchor(input: ObserveAnchorInput): Promise<ParsedOb
     input: {
       entityAnchor: input.entityAnchor,
       outline: input.outline,
-      rewriteContent,
+      observedDocument,
       extractions: input.extractions,
       contentBudgetChars,
     },
@@ -139,7 +139,7 @@ async function generateObserverText(params: {
   signal?: AbortSignal;
   entityAnchor: string;
   extractionCount: number;
-  getObservation?: (id: string) => Promise<string> | string;
+  getObservation?: (paths: string[]) => Promise<string> | string;
   model?: ToolModel;
   onToolResults?: (event: {
     toolCalls: LlmToolCall[];
@@ -159,6 +159,8 @@ async function generateObserverText(params: {
         signal: params.signal,
       });
     }
+    let getObservationCalls = 0;
+    const maxGetObservationCalls = 3;
     return await runToolLoop({
       messages: [
         { role: 'system', content: params.system },
@@ -167,11 +169,19 @@ async function generateObserverText(params: {
       tools: [getObservationSpec()],
       toolHandlers: {
         get_observation: async (args) => {
-          const id = typeof args.id === 'string' ? args.id.trim() : '';
-          if (!id) {
-            throw new Error('get_observation requires id');
+          getObservationCalls += 1;
+          if (getObservationCalls > maxGetObservationCalls) {
+            const error = new Error(`get_observation exceeded max calls=${maxGetObservationCalls}`);
+            (error as Error & { fatalToolError?: boolean }).fatalToolError = true;
+            throw error;
           }
-          return { id, content: await params.getObservation!(id) };
+          const paths = Array.isArray(args.paths)
+            ? args.paths.map((path) => typeof path === 'string' ? path.trim() : '').filter(Boolean)
+            : [];
+          if (paths.length === 0) {
+            throw new Error('get_observation requires paths');
+          }
+          return { paths, content: await params.getObservation!(paths) };
         },
       },
       model: params.model ?? generateWithTools,
@@ -248,6 +258,9 @@ async function runToolLoop(params: {
       try {
         toolResult = await handler(call.arguments, call);
       } catch (error) {
+        if (error instanceof Error && (error as Error & { fatalToolError?: boolean }).fatalToolError) {
+          throw error;
+        }
         toolResult = {
           error: error instanceof Error ? error.message : String(error),
         };
@@ -273,17 +286,18 @@ async function runToolLoop(params: {
 function getObservationSpec(): LlmTool {
   return {
     name: 'get_observation',
-    description: 'Get the root-to-node path and the complete subtree under that node; sibling branches outside that path/subtree are not returned.',
+    description: 'Get root-to-node paths and complete subtrees for observation paths visible in the outline.',
     parameters: {
       type: 'object',
       additionalProperties: false,
       properties: {
-        id: {
-          type: 'string',
-          description: 'An observation context node id visible in the observation outline.',
+        paths: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Observation paths visible in the observation outline.',
         },
       },
-      required: ['id'],
+      required: ['paths'],
     },
   };
 }
@@ -300,7 +314,7 @@ function trimContent(content: string, maxChars: number): string {
 }
 
 function extractRefs(content: string): string[] {
-  return [...content.matchAll(/refs:\s*\[([^\]]+)\]/g)]
+  return [...content.matchAll(/\[([^\]]+)\]/g)]
     .flatMap((match) => (match[1] ?? '').split(',').map((ref) => ref.trim()).filter(Boolean));
 }
 

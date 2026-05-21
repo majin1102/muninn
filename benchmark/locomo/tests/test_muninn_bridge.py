@@ -94,7 +94,7 @@ class MuninnBridgeTests(unittest.TestCase):
         self.assertEqual(completed.stdout.strip(), "partial done")
         self.assertIn("warn", completed.stderr)
 
-    def test_recall_batch_parses_evidence_ids(self) -> None:
+    def test_recall_batch_parses_body_only_hits(self) -> None:
         bridge = MuninnBridge()
         bridge.ensure_built = MagicMock()
         bridge._run_json = MagicMock(
@@ -103,7 +103,6 @@ class MuninnBridgeTests(unittest.TestCase):
                     "0:0": [
                         {
                             "memory_id": "turn:1",
-                            "evidence_ids": ["D1:1", "D1:2"],
                             "detail": "memory",
                             "observationRatio": 0.5,
                         }
@@ -118,7 +117,7 @@ class MuninnBridgeTests(unittest.TestCase):
         )
 
         self.assertEqual(results["0:0"][0].memory_id, "turn:1")
-        self.assertEqual(results["0:0"][0].evidence_ids, ["D1:1", "D1:2"])
+        self.assertEqual(results["0:0"][0].detail, "memory")
         self.assertEqual(results["0:0"][0].observation_ratio, 0.5)
 
     def test_recall_batch_passes_budget_and_query_limit(self) -> None:

@@ -83,15 +83,21 @@ export interface RecallHit {
 
 export type RecallMode = 'vector' | 'fts' | 'hybrid';
 
+export type MemoryWatermarkPhase = 'idle' | 'pending' | 'running' | 'draining' | 'error';
+
 export interface MemoryWatermark {
-  resolved: boolean;
-  pendingTurnIds: string[];
-  extractingEpoch?: number;
-  committedEpoch?: number;
-  observerPending?: boolean;
-  observerQueuedCount?: number;
-  observerReadyCount?: number;
-  observerReadyBucketCount?: number;
+  pending: {
+    turns: string[];
+    extractions: string[];
+  };
+  phases: {
+    extractor: MemoryWatermarkPhase;
+    observer: MemoryWatermarkPhase;
+  };
+  error?: {
+    phase: 'extractor' | 'observer';
+    message: string;
+  };
 }
 
 export type ListModeInput =
@@ -103,6 +109,13 @@ export type { TurnContent } from '@muninn/types';
 export interface CheckpointLock {
   shared<T>(operation: () => Promise<T> | T): Promise<T>;
   exclusive<T>(operation: () => Promise<T> | T): Promise<T>;
+}
+
+function sleep(delayMs: number): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, delayMs);
+    (timer as { unref?: () => void }).unref?.();
+  });
 }
 
 class AsyncCheckpointLock implements CheckpointLock {
@@ -182,6 +195,23 @@ class AsyncCheckpointLock implements CheckpointLock {
   }
 }
 
+function combineWatermarks(
+  extractorWatermark: MemoryWatermark,
+  observerWatermark: MemoryWatermark,
+): MemoryWatermark {
+  return {
+    pending: {
+      turns: extractorWatermark.pending.turns,
+      extractions: observerWatermark.pending.extractions,
+    },
+    phases: {
+      extractor: extractorWatermark.phases.extractor,
+      observer: observerWatermark.phases.observer,
+    },
+    error: extractorWatermark.error ?? observerWatermark.error,
+  };
+}
+
 const backendCache = new Map<string, MuninnBackend>();
 const backendPromises = new Map<string, Promise<MuninnBackend>>();
 const bootstrapPromises = new Map<string, Promise<void>>();
@@ -194,6 +224,7 @@ export class MuninnBackend {
   private sessionRegistry: SessionRegistry | null = null;
   private watchdog: Watchdog | null = null;
   private watchdogClient: NativeTables | null = null;
+  private finalizeDrainPromise: Promise<void> | null = null;
 
   private constructor(
     private readonly client: NativeTables,
@@ -260,16 +291,7 @@ export class MuninnBackend {
       const extractor = await this.ensureExtractor();
       const extractorWatermark = await extractor.watermark();
       const observerWatermark = await observer.watermark();
-      return {
-        resolved: extractorWatermark.resolved && observerWatermark.resolved,
-        pendingTurnIds: extractorWatermark.pendingTurnIds,
-        extractingEpoch: extractorWatermark.extractingEpoch,
-        committedEpoch: extractorWatermark.committedEpoch,
-        observerPending: observerWatermark.observerPending,
-        observerQueuedCount: observerWatermark.observerQueuedCount,
-        observerReadyCount: observerWatermark.observerReadyCount,
-        observerReadyBucketCount: observerWatermark.observerReadyBucketCount,
-      };
+      return combineWatermarks(extractorWatermark, observerWatermark);
     });
   }
 
@@ -279,20 +301,10 @@ export class MuninnBackend {
       const extractor = await this.ensureExtractor();
       return { observer, extractor };
     });
-    await extractor.flushPending();
-    const extractorWatermark = await extractor.watermark();
+    const extractorWatermark = await extractor.finalize();
     const observerWatermark = await observer.finalize();
-    const watermark = {
-      resolved: extractorWatermark.resolved && observerWatermark.resolved,
-      pendingTurnIds: extractorWatermark.pendingTurnIds,
-      extractingEpoch: extractorWatermark.extractingEpoch,
-      committedEpoch: extractorWatermark.committedEpoch,
-      observerPending: observerWatermark.observerPending,
-      observerQueuedCount: observerWatermark.observerQueuedCount,
-      observerReadyCount: observerWatermark.observerReadyCount,
-      observerReadyBucketCount: observerWatermark.observerReadyBucketCount,
-    };
-    await this.watchdog?.flushCheckpoint();
+    this.scheduleFinalizeDrain(extractor, observer);
+    const watermark = combineWatermarks(extractorWatermark, observerWatermark);
     return watermark;
   }
 
@@ -370,7 +382,34 @@ export class MuninnBackend {
     this.watchdogClient = null;
     this.extractor = null;
     this.observer = null;
+    this.finalizeDrainPromise = null;
     this.sessionRegistry = null;
+  }
+
+  private scheduleFinalizeDrain(extractor: Extractor, observer: Observer): void {
+    if (this.finalizeDrainPromise) {
+      return;
+    }
+    this.finalizeDrainPromise = this.runFinalizeDrain(extractor, observer)
+      .catch(async (error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        await writeMuninnLog(this.database, 'error', 'sidecar', 'memory_finalize_drain_failed', { message });
+      })
+      .finally(() => {
+        this.finalizeDrainPromise = null;
+      });
+  }
+
+  private async runFinalizeDrain(extractor: Extractor, observer: Observer): Promise<void> {
+    while (this.extractor === extractor && this.observer === observer) {
+      const watermark = await extractor.watermark();
+      if (watermark.pending.turns.length === 0 && watermark.phases.extractor === 'idle') {
+        await observer.finalize();
+        await this.watchdog?.flushCheckpoint();
+        return;
+      }
+      await sleep(20);
+    }
   }
 
   private async ensureExtractor(): Promise<Extractor> {

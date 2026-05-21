@@ -18,7 +18,6 @@ class ScoringTests(unittest.TestCase):
     def test_build_prediction_prefers_date_for_category_two(self) -> None:
         hit = RecallHit(
             memory_id="turn:1",
-            evidence_ids=["D1:3"],
             detail="Caroline attended a support group on 8 May 2023.",
         )
         self.assertEqual(
@@ -152,7 +151,6 @@ class ScoringTests(unittest.TestCase):
         hits = [
             RecallHit(
                 memory_id="turn:1",
-                evidence_ids=["D1:3", "D1:4"],
                 detail="Caroline went to the support group on 8 May 2023.",
             )
         ]
@@ -160,15 +158,15 @@ class ScoringTests(unittest.TestCase):
         apply_predictions(qas, {0: hits}, "muninn_top_5_prediction")
 
         self.assertEqual(qas[0]["muninn_top_5_prediction"], "8 May 2023")
-        self.assertEqual(qas[0]["muninn_top_5_prediction_context"], ["D1:3", "D1:4"])
+        self.assertEqual(qas[0]["muninn_top_5_prediction_context"], [])
         self.assertEqual(qas[0]["muninn_top_5_hits"][0]["memory_id"], "turn:1")
         self.assertEqual(qas[0]["muninn_top_5_hits"][0]["detail"], "Caroline went to the support group on 8 May 2023.")
-        self.assertEqual(qas[0]["muninn_top_5_hits"][0]["evidence_ids"], ["D1:3", "D1:4"])
         self.assertNotIn("title", qas[0]["muninn_top_5_hits"][0])
         self.assertNotIn("summary", qas[0]["muninn_top_5_hits"][0])
         self.assertNotIn("date_time", qas[0]["muninn_top_5_hits"][0])
         self.assertIn("matched_text", qas[0]["muninn_top_5_hits"][0])
-        self.assertIn("references", qas[0]["muninn_top_5_hits"][0])
+        self.assertNotIn("evidence_ids", qas[0]["muninn_top_5_hits"][0])
+        self.assertNotIn("references", qas[0]["muninn_top_5_hits"][0])
 
     def test_summary_contexts_are_scored_more_strictly_than_session_hits(self) -> None:
         scores, recall = evaluate_question_answering(
@@ -215,14 +213,13 @@ class ScoringTests(unittest.TestCase):
         self.assertEqual(stats["model_key"], "muninn_top_5")
         self.assertEqual(stats["qa_count"], 2)
         self.assertAlmostEqual(stats["average_f1"], 1.0)
-        self.assertAlmostEqual(stats["average_recall"], 0.5)
+        self.assertNotIn("average_recall", stats)
+        self.assertNotIn("category_recall", stats)
 
         report = build_error_report(samples, "muninn_top_5")
         self.assertEqual(report["model_key"], "muninn_top_5")
         self.assertEqual(report["qa_count"], 2)
-        self.assertEqual(len(report["top_recall_misses"]), 1)
-        self.assertEqual(report["top_recall_misses"][0]["sample_id"], "sample-1")
-        self.assertEqual(report["top_extraction_misses"], [])
+        self.assertEqual(report["top_answer_misses"], [])
 
         adversarial_samples = [
             {

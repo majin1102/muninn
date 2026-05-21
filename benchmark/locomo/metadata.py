@@ -19,7 +19,6 @@ def build_run_metadata(
     completed_at: str,
     mode: str = "diagnostic",
     answerer: str = "llm",
-    expand_references: bool = False,
     recall_mode: str = "hybrid",
 ) -> dict[str, Any]:
     config_path = active_config_path()
@@ -44,7 +43,6 @@ def build_run_metadata(
         "top_k": top_k,
         "mode": mode,
         "answerer": answerer,
-        "expand_references": expand_references,
         "recall_mode": recall_mode,
         "started_at": started_at,
         "completed_at": completed_at,

@@ -76,7 +76,13 @@ export async function generateWithTools(
     return null;
   }
   if (config.provider === 'mock') {
-    return { type: 'final', text: generateMockText({ system: '', prompt: lastUserMessage(request.messages) }) };
+    return {
+      type: 'final',
+      text: generateMockText({
+        system: systemMessages(request.messages),
+        prompt: lastUserMessage(request.messages),
+      }),
+    };
   }
   try {
     if (config.provider === 'openai-codex') {
@@ -126,6 +132,9 @@ function generateMockText(request: LlmTextRequest): string {
     request.system.includes('observer that rewrites an observing document')
     || request.system.includes('observer that rewrites a cross-session curated observation document')
     || request.system.includes('observer that rewrites part of a cross-session observation document')
+    || request.system.includes('observer that maintains parts of a cross-session observation document')
+    || request.system.includes('observer that rewrites a subtree of a cross-session observation document')
+    || request.system.includes('observer that maintains parts of a cross-session observation tree')
   ) {
     const ref = request.prompt.match(/^\s*-\s+([A-Za-z0-9:_-]+)/m)?.[1] ?? 'mock-extraction';
     const entity = extractLabeledValue(request.prompt, 'Entity anchor:') || 'Mock entity';
@@ -136,9 +145,11 @@ function generateMockText(request: LlmTextRequest): string {
       '',
       `${entity} has curated memory from the provided extraction.`,
       '',
-      `### What evidence supports ${entity}? <!-- refs: [${ref}] -->`,
-      '',
+      `### What evidence supports ${entity}?`,
       `${entity} has curated memory from the provided extraction.`,
+      '',
+      'Source extractions:',
+      `- [${ref}]`,
     ].join('\n');
   }
   if (request.system.includes('extractor that rewrites one session extraction document')) {
@@ -707,6 +718,13 @@ function lastUserMessage(messages: LlmToolMessage[]): string {
     }
   }
   return '';
+}
+
+function systemMessages(messages: LlmToolMessage[]): string {
+  return messages
+    .filter((message) => message.role === 'system')
+    .map((message) => message.content)
+    .join('\n\n');
 }
 
 function throwIfAborted(signal?: AbortSignal): void {

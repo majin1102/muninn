@@ -44,7 +44,7 @@ export type Extraction = {
   importance: number;
   category: string;
   turnRefs: string[];
-  observationIds: string[];
+  observationPaths: string[];
   observedRootAnchors: string[];
   createdAt: string;
   updatedAt: string;
@@ -56,6 +56,8 @@ export type ObservationContext = {
   parentId?: string | null;
   position: number;
   content: string;
+  sourceRefs: string[];
+  expandRefs: string[];
   observer: string;
   createdAt: string;
   updatedAt: string;

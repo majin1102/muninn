@@ -15,14 +15,18 @@ export interface ErrorResponse {
 }
 
 export interface MemoryWatermark {
-  resolved: boolean;
-  pendingTurnIds: string[];
-  extractingEpoch?: number;
-  committedEpoch?: number;
-  observerPending?: boolean;
-  observerQueuedCount?: number;
-  observerReadyCount?: number;
-  observerReadyBucketCount?: number;
+  pending: {
+    turns: string[];
+    extractions: string[];
+  };
+  phases: {
+    extractor: 'idle' | 'pending' | 'running' | 'draining' | 'error';
+    observer: 'idle' | 'pending' | 'running' | 'draining' | 'error';
+  };
+  error?: {
+    phase: 'extractor' | 'observer';
+    message: string;
+  };
 }
 
 export interface MemoryWatermarkResponse extends MemoryWatermark {

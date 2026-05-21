@@ -39,7 +39,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--home-dir", default=None, type=Path)
     parser.add_argument("--mode", choices=["diagnostic", "benchmark"], default="diagnostic")
     parser.add_argument("--answerer", choices=["llm", "heuristic"], default="llm")
-    parser.add_argument("--expand-references", action="store_true")
     return parser.parse_args(argv)
 
 
@@ -77,7 +76,6 @@ def main() -> None:
         sample_filter=args.sample_id,
         mode=args.mode,
         answerer=args.answerer,
-        expand_references=args.expand_references,
     )
 
     model_key = build_model_key(args.top_k, args.recall_mode, args.budget, args.query_limit)
@@ -182,7 +180,6 @@ def main() -> None:
                     completed_at=utc_now(),
                     mode=args.mode,
                     answerer=args.answerer,
-                    expand_references=args.expand_references,
                     recall_mode=args.recall_mode,
                 ),
             ),
@@ -438,7 +435,6 @@ def run_qa_unit(
                 heuristic_key=heuristic_key,
                 answerer=args.answerer,
                 answerer_config=load_answerer_config(home_dir.path) if args.answerer == "llm" else None,
-                expand_references=args.expand_references,
                 reporter=reporter,
                 sample_id=sample_id,
             ),
@@ -446,7 +442,6 @@ def run_qa_unit(
             qa_count=len(qas),
             top_k=args.top_k,
             answerer=args.answerer,
-            expand_references=args.expand_references,
         )
         reporter.emit(
             "unit_complete",
@@ -658,7 +653,6 @@ def apply_predictions(
     heuristic_key: str | None = None,
     answerer: str = "heuristic",
     answerer_config: dict[str, Any] | None = None,
-    expand_references: bool = False,
     reporter: ProgressReporter | None = None,
     sample_id: str | None = None,
 ) -> None:
@@ -681,7 +675,6 @@ def apply_predictions(
             question=question,
             category=category,
             hits=hits,
-            expand_references=expand_references,
         )
         qa[heuristic_key] = heuristic_prediction
         qa[f"{hit_key_prefix}_answer_context"] = answer_context
@@ -707,23 +700,13 @@ def apply_predictions(
             qa[f"{hit_key_prefix}_memory_clarity_reason"] = ""
         else:
             raise ValueError(f"unsupported answerer: {answerer}")
-        context_ids: list[str] = []
-        seen: set[str] = set()
-        for hit in hits:
-            for evidence_id in hit.evidence_ids:
-                if evidence_id in seen:
-                    continue
-                seen.add(evidence_id)
-                context_ids.append(evidence_id)
-        qa[f"{prediction_key}_context"] = context_ids
+        qa[f"{prediction_key}_context"] = []
         qa[f"{hit_key_prefix}_hits"] = [
             {
                 "memory_id": hit.memory_id,
                 "matched_text": hit.matched_text,
                 "detail": hit.detail,
                 "observationRatio": hit.observation_ratio,
-                "evidence_ids": hit.evidence_ids,
-                "references": hit.references,
             }
             for hit in hits
         ]

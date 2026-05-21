@@ -33,33 +33,22 @@ class AnsweringTests(unittest.TestCase):
     def test_answer_context_uses_original_locomo_rag_context_shape(self) -> None:
         hit = RecallHit(
             memory_id="turn:3",
-            evidence_ids=["D1:3"],
             detail=(
                 "OBSERVATION: Caroline attended an LGBTQ support group on 7 May 2023.\n"
                 "CONTEXT: Caroline mentioned it after Melanie asked about her week."
             ),
             matched_text="Caroline attended an LGBTQ support group on 7 May 2023.",
-            references=[
-                {
-                    "memory_id": "turn:9",
-                    "source_id": "D1:3",
-                    "date_time": "1:56 pm on 8 May, 2023",
-                    "text": 'Caroline said: "I went to the LGBTQ support group yesterday."',
-                }
-            ],
         )
 
         context = build_answer_context(
             question="When did Caroline go to the support group?",
             category=2,
             hits=[hit],
-            expand_references=False,
         )
 
         self.assertEqual(
             context,
             (
-                "1:56 pm on 8 May, 2023: "
                 "Caroline attended an LGBTQ support group on 7 May 2023. "
                 "Caroline mentioned it after Melanie asked about her week."
             ),
@@ -80,24 +69,14 @@ class AnsweringTests(unittest.TestCase):
     def test_answer_context_does_not_expand_direct_references(self) -> None:
         hit = RecallHit(
             memory_id="turn:3",
-            evidence_ids=["D1:3"],
             detail="Caroline attended an LGBTQ support group on 7 May 2023.",
             matched_text="Caroline attended an LGBTQ support group on 7 May 2023.",
-            references=[
-                {
-                    "memory_id": "turn:9",
-                    "source_id": "D1:3",
-                    "date_time": "1:56 pm on 8 May, 2023",
-                    "text": "Caroline: I went to the LGBTQ support group yesterday.",
-                }
-            ],
         )
 
         context = build_answer_context(
             question="When did Caroline go to the support group?",
             category=2,
             hits=[hit],
-            expand_references=True,
         )
 
         self.assertIn("Caroline attended an LGBTQ support group on 7 May 2023.", context)
@@ -120,7 +99,6 @@ class AnsweringTests(unittest.TestCase):
                 {
                     "memory_id": "turn:3",
                     "matched_text": "Caroline attended an LGBTQ support group on 7 May 2023.",
-                    "evidence_ids": ["D1:3"],
                     "detail": "Caroline attended an LGBTQ support group on 7 May 2023.",
                 }
             ],
@@ -144,7 +122,7 @@ class AnsweringTests(unittest.TestCase):
         self.assertEqual(trace["memory_clarity_score"], 8)
         self.assertEqual(trace["memory_clarity_reason"], "The memory states the exact date.")
         self.assertEqual(trace["f1"], round(scored.f1, 4))
-        self.assertEqual(trace["recall"], 1.0)
+        self.assertNotIn("recall", trace)
 
     def test_load_answerer_config_uses_observer_llm_and_redacts_nothing_in_memory(self) -> None:
         with TemporaryDirectory() as tmpdir:

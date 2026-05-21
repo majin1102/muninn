@@ -71,7 +71,7 @@ export async function commitExtractions(
       importance: embeddingConfig.defaultImportance,
       category: extractionCategory(input.category),
       turnRefs: [...new Set(input.references.map((reference) => reference.trim()).filter(Boolean))],
-      observationIds: [],
+      observationPaths: [],
       observedRootAnchors: [],
       createdAt: now,
       updatedAt: now,

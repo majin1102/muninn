@@ -22,7 +22,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--home", required=True, type=Path)
     parser.add_argument("--out-file", required=True, type=Path)
     parser.add_argument("--top-k", default=3, type=int)
-    parser.add_argument("--expand-references", action="store_true")
     return parser.parse_args(argv)
 
 
@@ -33,7 +32,6 @@ def main() -> None:
         trace=trace,
         home=args.home,
         top_k=args.top_k,
-        expand_references=args.expand_references,
     )
     write_results(args.out_file, result["samples"], result["stats"])
     write_report(args.out_file, result["report"])
@@ -45,7 +43,6 @@ def reanswer_trace(
     trace: dict[str, Any],
     home: Path,
     top_k: int,
-    expand_references: bool,
 ) -> dict[str, Any]:
     model_key = build_model_key(top_k)
     prediction_key = f"{model_key}_prediction"
@@ -66,7 +63,6 @@ def reanswer_trace(
             heuristic_key=heuristic_key,
             answerer="llm",
             answerer_config=answerer_config,
-            expand_references=expand_references,
         )
 
     stats = build_stats(samples, model_key)
@@ -105,10 +101,8 @@ def qa_from_trace(row: dict[str, Any]) -> dict[str, Any]:
 def hit_from_trace(row: dict[str, Any]) -> RecallHit:
     return RecallHit(
         memory_id=str(row.get("memory_id", "")),
-        evidence_ids=[str(value) for value in row.get("evidence_ids", [])],
         detail=row.get("detail"),
         matched_text=str(row.get("matched_text") or ""),
-        references=row.get("references") or [],
     )
 
 

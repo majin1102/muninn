@@ -25,15 +25,9 @@ class BridgeError(RuntimeError):
 @dataclass
 class RecallHit:
     memory_id: str
-    evidence_ids: list[str]
     detail: str | None
     matched_text: str = ""
-    references: list[dict[str, Any]] | None = None
     observation_ratio: float | None = None
-
-    def __post_init__(self) -> None:
-        if self.references is None:
-            self.references = []
 
 
 class MuninnBridge:
@@ -94,10 +88,8 @@ class MuninnBridge:
             hits.append(
                 RecallHit(
                     memory_id=item["memory_id"],
-                    evidence_ids=[str(value) for value in item.get("evidence_ids", [])],
                     detail=item.get("detail"),
                     matched_text=item.get("matched_text") or "",
-                    references=item.get("references") or [],
                     observation_ratio=item.get("observationRatio"),
                 )
             )
@@ -145,10 +137,8 @@ class MuninnBridge:
             results[key] = [
                 RecallHit(
                     memory_id=item["memory_id"],
-                    evidence_ids=[str(value) for value in item.get("evidence_ids", [])],
                     detail=item.get("detail"),
                     matched_text=item.get("matched_text") or "",
-                    references=item.get("references") or [],
                     observation_ratio=item.get("observationRatio"),
                 )
                 for item in items

@@ -45,7 +45,6 @@ class RunTests(unittest.TestCase):
         self.assertEqual(args.budget, 400)
         self.assertEqual(args.query_limit, 8)
         self.assertEqual(args.recall_mode, "hybrid")
-        self.assertFalse(args.expand_references)
 
     def test_parse_args_accepts_benchmark_heuristic_flow(self) -> None:
         args = parse_args(
@@ -58,13 +57,11 @@ class RunTests(unittest.TestCase):
                 "benchmark",
                 "--answerer",
                 "heuristic",
-                "--expand-references",
             ]
         )
 
         self.assertEqual(args.mode, "benchmark")
         self.assertEqual(args.answerer, "heuristic")
-        self.assertTrue(args.expand_references)
 
     def test_run_home_name_uses_sample_for_single_and_out_file_for_multiple(self) -> None:
         self.assertEqual(
@@ -182,8 +179,6 @@ class RunTests(unittest.TestCase):
                 "muninn_top_5_hits": [{
                     "memory_id": "turn:1",
                     "matched_text": "Caroline is interested in counseling.",
-                    "evidence_ids": ["D1:11"],
-                    "references": [],
                 }],
             }],
         }

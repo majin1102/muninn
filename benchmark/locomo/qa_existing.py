@@ -44,7 +44,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--query-limit", default=8, type=int)
     parser.add_argument("--limit-questions", default=None, type=int)
     parser.add_argument("--answerer", choices=["llm", "heuristic"], default="llm")
-    parser.add_argument("--expand-references", action="store_true")
     return parser.parse_args(argv)
 
 
@@ -82,7 +81,6 @@ def main() -> None:
             recall_mode=args.recall_mode,
             limit_questions=args.limit_questions,
             answerer=args.answerer,
-            expand_references=args.expand_references,
         )
         for sample in selected:
             sample_result, gateway_routes = run_sample(
@@ -183,7 +181,6 @@ def run_sample(
             heuristic_key=heuristic_key,
             answerer=args.answerer,
             answerer_config=answerer_config,
-            expand_references=args.expand_references,
             reporter=reporter,
             sample_id=sample_id,
         )
@@ -210,7 +207,6 @@ def answer_one(
     heuristic_key: str,
     answerer: str,
     answerer_config: dict[str, Any] | None,
-    expand_references: bool,
     reporter: ProgressReporter,
     sample_id: str,
 ) -> None:
@@ -236,7 +232,6 @@ def answer_one(
         question=question,
         category=category,
         hits=hits,
-        expand_references=expand_references,
     )
     qa[heuristic_key] = heuristic_prediction
     qa[f"{hit_key_prefix}_answer_context"] = answer_context
@@ -279,9 +274,7 @@ def answer_one(
         gold_answer=qa.get("answer"),
         prediction=scored.prediction,
         f1=round(scored.f1, 4),
-        recall=round(scored.recall, 4),
         evidence=scored.evidence,
-        contexts=scored.contexts,
         memory_clarity_score=qa.get(f"{hit_key_prefix}_memory_clarity_score"),
         memory_clarity_reason=qa.get(f"{hit_key_prefix}_memory_clarity_reason"),
         top_hits=render_top_hits(hits),
@@ -300,15 +293,8 @@ def answer_one(
 
 
 def context_ids(hits: list[RecallHit]) -> list[str]:
-    output: list[str] = []
-    seen: set[str] = set()
-    for hit in hits:
-        for evidence_id in hit.evidence_ids:
-            if evidence_id in seen:
-                continue
-            seen.add(evidence_id)
-            output.append(evidence_id)
-    return output
+    _ = hits
+    return []
 
 
 def serialize_hits(hits: list[RecallHit]) -> list[dict[str, Any]]:
@@ -318,8 +304,6 @@ def serialize_hits(hits: list[RecallHit]) -> list[dict[str, Any]]:
             "matched_text": hit.matched_text,
             "detail": hit.detail,
             "observationRatio": hit.observation_ratio,
-            "evidence_ids": hit.evidence_ids,
-            "references": hit.references,
         }
         for hit in hits
     ]
@@ -329,7 +313,6 @@ def render_top_hits(hits: list[RecallHit], limit: int = 3) -> list[dict[str, Any
     return [
         {
             "memory_id": hit.memory_id,
-            "evidence_ids": hit.evidence_ids,
             "matched_text": hit.detail or hit.matched_text or "",
         }
         for hit in hits[:limit]
@@ -351,16 +334,15 @@ def print_qa_block(
         "\n".join(
             [
                 "",
-                f"[locomo-qa] {sample_id} {qa_index + 1}/{qa_count} f1={scored.f1:.4f} recall={scored.recall:.4f} clarity={clarity}",
+                f"[locomo-qa] {sample_id} {qa_index + 1}/{qa_count} f1={scored.f1:.4f} clarity={clarity}",
                 f"Q: {scored.question}",
                 f"Gold: {gold_answer}",
                 f"Answer: {scored.prediction}",
                 f"Evidence: {', '.join(scored.evidence) if scored.evidence else '(none)'}",
-                f"Contexts: {', '.join(scored.contexts) if scored.contexts else '(none)'}",
                 f"Clarity reason: {clarity_reason or ''}",
                 "Top hits:",
                 *[
-                    f"  - {hit.memory_id} evidence={hit.evidence_ids} text={(hit.detail or hit.matched_text or '')[:240]}"
+                    f"  - {hit.memory_id} text={(hit.detail or hit.matched_text or '')[:240]}"
                     for hit in hits[:3]
                 ],
             ]

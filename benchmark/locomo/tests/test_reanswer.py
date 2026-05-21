@@ -25,9 +25,7 @@ class ReanswerTests(unittest.TestCase):
                                 {
                                     "memory_id": "turn:5",
                                     "matched_text": "Caroline found the support group personally meaningful.",
-                                    "evidence_ids": ["D1:5"],
                                     "detail": "Caroline found the support group personally meaningful.",
-                                    "references": [],
                                 }
                             ],
                         }
@@ -49,12 +47,11 @@ class ReanswerTests(unittest.TestCase):
                 trace=trace,
                 home=home,
                 top_k=5,
-                expand_references=False,
             )
 
         qa = result["samples"][0]["qa"][0]
         self.assertEqual(qa["muninn_hybrid_top_5_prediction"], "Mock answer")
-        self.assertEqual(qa["muninn_hybrid_top_5_prediction_context"], ["D1:5"])
+        self.assertEqual(qa["muninn_hybrid_top_5_prediction_context"], [])
         self.assertEqual(qa["muninn_hybrid_top_5_hits"][0]["matched_text"], "Caroline found the support group personally meaningful.")
         self.assertEqual(result["stats"]["qa_count"], 1)
         self.assertEqual(result["trace"]["samples"][0]["qa"][0]["prediction"], "Mock answer")

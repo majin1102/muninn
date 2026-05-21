@@ -65,6 +65,7 @@ export async function recallMemories(
   const filteredObservationRows = leafObservationIds
     ? observationRows.filter((row) => leafObservationIds.has(row.id))
     : observationRows;
+  const observationRefs = await loadObservationContextRefs(client, filteredObservationRows.map((row) => row.id));
   const extractionDetails = await loadExtractionDetails(
     client,
     filteredObservationRows.flatMap((row) => row.extractionRefs),
@@ -73,7 +74,7 @@ export async function recallMemories(
     route: 'curated',
     memoryId: `observation:${row.id}`,
     text: renderObservationHit(row.text, row.extractionRefs, extractionDetails),
-    references: row.extractionRefs,
+    references: observationRefs.get(row.id) ?? row.extractionRefs,
   }));
   const rawHits: RouteHit[] = extractionRows.map((row) => ({
     route: 'raw',
@@ -98,7 +99,7 @@ export async function recallMemories(
         return {
           memoryId: hit.memoryId,
           content: curatedTextById.get(hit.memoryId) ?? row.text,
-          refs: row.extractionRefs,
+          refs: hit.references ?? [],
         };
       }
       const row = extractionById.get(hit.memoryId);
@@ -125,7 +126,7 @@ export async function recallMemories(
     return [{
       memoryId: 'recalled:memory',
       text: recalled.content,
-      references: uniqueRefs(candidates.flatMap((candidate) => candidate.refs)),
+      references: uniqueRefs(candidates.flatMap((candidate) => candidate.refs ?? [])),
     }];
   }
   return merged.slice(0, limit).map(({ route: _route, ...hit }) => hit);
@@ -152,14 +153,33 @@ async function loadExtractionDetails(
   return new Map(rows.map((row) => [row.id, row]));
 }
 
+async function loadObservationContextRefs(
+  client: NativeTables,
+  ids: string[],
+): Promise<Map<string, string[]>> {
+  const uniqueIds = uniqueRefs(ids);
+  if (uniqueIds.length === 0 || typeof client.observationContextTable?.get !== 'function') {
+    return new Map();
+  }
+  const rows = await client.observationContextTable.get({ ids: uniqueIds });
+  return new Map(rows.map((row) => [
+    row.id,
+    uniqueRefs(row.sourceRefs ?? []),
+  ]));
+}
+
 function renderObservationHit(
   text: string,
   refs: string[],
   details: Map<string, ExtractionDetail>,
 ): string {
-  const lines = [`OBSERVATION: ${text}`];
+  const replaced = replaceSourcePlaceholders(text, details);
+  const lines = [`OBSERVATION: ${replaced.text}`];
   for (const ref of refs) {
     const id = extractionRowId(ref);
+    if (id && replaced.embeddedRefs.has(id)) {
+      continue;
+    }
     const detail = id ? details.get(id) : undefined;
     if (!detail) {
       continue;
@@ -171,6 +191,59 @@ function renderObservationHit(
     lines.push(`EXTRACTION: ${detail.text}`);
   }
   return lines.join('\n');
+}
+
+function replaceSourcePlaceholders(
+  text: string,
+  details: Map<string, ExtractionDetail>,
+): { text: string; embeddedRefs: Set<string> } {
+  const lines = text.split('\n');
+  const sourceIndex = lines.findIndex((line) => /^Source extractions:\s*$/i.test(line.trim()));
+  if (sourceIndex < 0) {
+    return { text, embeddedRefs: new Set() };
+  }
+  const embeddedRefs = new Set<string>();
+  const replaced = lines.map((line, index) => (
+    index > sourceIndex ? replaceSourceLine(line, details, embeddedRefs) : line
+  )).join('\n');
+  return { text: replaced, embeddedRefs };
+}
+
+function replaceSourceLine(
+  line: string,
+  details: Map<string, ExtractionDetail>,
+  embeddedRefs: Set<string>,
+): string {
+  return line.replace(
+    /^(\s*-\s*)\[([^\]]+)\](?:[^\S\r\n]+(.*\S))?\s*$/,
+    (original, prefix: string, rawRefs: string, rewritten?: string) => {
+      if (rewritten?.trim()) {
+        return `${prefix}${rewritten.trim()}`;
+      }
+      const refs = rawRefs.split(',').map((ref) => ref.trim()).filter(Boolean);
+      if (refs.length !== 1) {
+        return original;
+      }
+      const id = extractionRowId(refs[0]!);
+      const detail = id ? details.get(id) : undefined;
+      if (!id || !detail) {
+        return original;
+      }
+      embeddedRefs.add(id);
+      const sourceContext = detail.context?.trim();
+      const continuationPrefix = prefix.replace(/-\s*$/, '  ');
+      if (sourceContext) {
+        return `${prefix}context: ${formatInlineBlock(sourceContext, continuationPrefix)}\n${continuationPrefix}extraction: ${formatInlineBlock(detail.text, continuationPrefix)}`;
+      }
+      return `${prefix}extraction: ${formatInlineBlock(detail.text, continuationPrefix)}`;
+    },
+  );
+}
+
+function formatInlineBlock(text: string, prefix: string): string {
+  return text.trim().split('\n').map((line, index) => (
+    index === 0 ? line.trim() : `${prefix}${line.trim()}`
+  )).join('\n');
 }
 
 async function loadLeafObservationIds(client: NativeTables): Promise<Set<string> | null> {
@@ -194,8 +267,8 @@ function curatedQuota(limit: number): number {
   return Math.ceil(limit * 0.7);
 }
 
-function coveredExtractionIds(hits: RouteHit[]): Set<string> {
-  const covered = new Set<string>();
+function sourceExtractionIds(hits: RouteHit[]): Set<string> {
+  const sources = new Set<string>();
   for (const hit of hits) {
     if (hit.route !== 'curated') {
       continue;
@@ -203,11 +276,11 @@ function coveredExtractionIds(hits: RouteHit[]): Set<string> {
     for (const ref of hit.references ?? []) {
       const id = extractionMemoryId(ref);
       if (id) {
-        covered.add(id);
+        sources.add(id);
       }
     }
   }
-  return covered;
+  return sources;
 }
 
 function extractionRowId(ref: string): string | null {
@@ -228,8 +301,8 @@ function mergeRoutes(curated: RouteHit[], raw: RouteHit[], limit: number): Route
     return [];
   }
   const firstCurated = curated.slice(0, curatedQuota(limit));
-  const covered = coveredExtractionIds(firstCurated);
-  const rawFallback = raw.filter((hit) => !covered.has(hit.memoryId));
+  const sourceIds = sourceExtractionIds(firstCurated);
+  const rawFallback = raw.filter((hit) => !sourceIds.has(hit.memoryId));
   const rawQuota = limit - firstCurated.length;
   const selected = firstCurated.concat(rawFallback.slice(0, rawQuota));
   if (selected.length >= limit) {

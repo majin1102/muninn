@@ -72,6 +72,16 @@ pub fn observation_context_schema() -> Schema {
         Field::new("position", DataType::Int64, false),
         Field::new("content", DataType::Utf8, false),
         Field::new(
+            "source_refs",
+            DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+            false,
+        ),
+        Field::new(
+            "expand_refs",
+            DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+            false,
+        ),
+        Field::new(
             "created_at",
             DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
             false,
@@ -122,7 +132,7 @@ pub fn extraction_schema(dimensions: usize) -> Schema {
             false,
         ),
         Field::new(
-            "observation_ids",
+            "observation_paths",
             DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
             false,
         ),
@@ -201,7 +211,7 @@ mod tests {
         assert!(schema.field_with_name("importance").is_ok());
         assert!(schema.field_with_name("category").is_ok());
         assert!(schema.field_with_name("turn_refs").is_ok());
-        assert!(schema.field_with_name("observation_ids").is_ok());
+        assert!(schema.field_with_name("observation_paths").is_ok());
         assert!(schema.field_with_name("observed_root_anchors").is_ok());
         assert!(schema.field_with_name("created_at").is_ok());
         assert!(schema.field_with_name("updated_at").is_ok());

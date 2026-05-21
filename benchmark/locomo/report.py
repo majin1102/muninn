@@ -18,8 +18,7 @@ def build_error_report(
     return {
         "model_key": model_key,
         "qa_count": len(rows),
-        "top_recall_misses": _top_recall_misses(rows),
-        "top_extraction_misses": _top_extraction_misses(rows),
+        "top_answer_misses": _top_answer_misses(rows),
         "top_adversarial_conflicts": _top_adversarial_conflicts(rows),
     }
 
@@ -49,9 +48,7 @@ def _score_rows(
                     "category": scored.category,
                     "prediction": scored.prediction,
                     "f1": round(scored.f1, 4),
-                    "recall": round(scored.recall, 4),
                     "evidence": scored.evidence,
-                    "contexts": scored.contexts,
                     "adversarial_answer": scored.adversarial_answer,
                     "adversarial_match": scored.adversarial_match,
                 }
@@ -59,33 +56,15 @@ def _score_rows(
     return rows
 
 
-def _top_recall_misses(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _top_answer_misses(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     misses = [
         row
         for row in rows
-        if row["evidence"] and row["recall"] < 1.0
-    ]
-    misses.sort(
-        key=lambda row: (
-            row["recall"],
-            row["f1"],
-            row["sample_id"],
-            row["qa_index"],
-        )
-    )
-    return misses[:MAX_EXAMPLES]
-
-
-def _top_extraction_misses(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    misses = [
-        row
-        for row in rows
-        if row["evidence"] and row["recall"] >= 0.999 and row["f1"] < 1.0
+        if row["f1"] < 1.0
     ]
     misses.sort(
         key=lambda row: (
             row["f1"],
-            -row["recall"],
             row["sample_id"],
             row["qa_index"],
         )
@@ -101,7 +80,6 @@ def _top_adversarial_conflicts(rows: list[dict[str, Any]]) -> list[dict[str, Any
     ]
     conflicts.sort(
         key=lambda row: (
-            row["recall"],
             row["f1"],
             row["sample_id"],
             row["qa_index"],

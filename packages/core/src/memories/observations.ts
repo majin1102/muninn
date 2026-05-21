@@ -1,8 +1,12 @@
 import type { NativeTables, Observation } from '../native.js';
 
 export function parseObservationMemoryId(memoryId: string): string {
-  const [layer, id, extra] = memoryId.split(':');
-  if (layer !== 'observation' || !id || extra !== undefined) {
+  const prefix = 'observation:';
+  if (!memoryId.startsWith(prefix)) {
+    throw new Error(`invalid observation memory id: ${memoryId}`);
+  }
+  const id = memoryId.slice(prefix.length);
+  if (!id) {
     throw new Error(`invalid observation memory id: ${memoryId}`);
   }
   return id;

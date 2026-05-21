@@ -32,6 +32,14 @@ async function json(response) {
   return response.json();
 }
 
+function memoryWatermarkResolved(watermark) {
+  return watermark.pending.turns.length === 0
+    && watermark.pending.extractions.length === 0
+    && watermark.phases.extractor === 'idle'
+    && watermark.phases.observer === 'idle'
+    && !watermark.error;
+}
+
 function makeTurnContent(overrides = {}) {
   return {
     sessionId: 'group-a',
@@ -454,7 +462,7 @@ test('list and timeline cover the written flow, and recall returns indexed memor
   assert.ok(recalled.memoryHits.length > 0);
 });
 
-test('benchmark locomo capture returns turn id and recall returns evidence details', async (t) => {
+test('benchmark locomo capture returns turn id and recall returns body-only hits', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(async () => rm(dir, { recursive: true, force: true }));
 
@@ -497,9 +505,9 @@ test('benchmark locomo capture returns turn id and recall returns evidence detai
   const recalled = await json(recallResponse);
   assert.ok(recalled.hits.length > 0);
   assert.equal(typeof recalled.hits[0].memory_id, 'string');
-  assert.deepEqual(recalled.hits[0].evidence_ids, ['D1:1']);
   assert.match(recalled.hits[0].detail, /adoption agency/);
-  assert.equal(Array.isArray(recalled.hits[0].references), true);
+  assert.equal('evidence_ids' in recalled.hits[0], false);
+  assert.equal('references' in recalled.hits[0], false);
 });
 
 test('timeline stays scoped to the full session key when agents share a sessionId', async (t) => {
@@ -636,25 +644,27 @@ test('observer watermark reports pending turns until the observer flush complete
   const currentResponse = await app.request('/api/v1/memory/watermark');
   assert.equal(currentResponse.status, 200);
   const currentBody = await json(currentResponse);
-  assert.equal(currentBody.resolved, false);
-  assert.deepEqual(currentBody.pendingTurnIds, [written.turnId]);
+  assert.equal(memoryWatermarkResolved(currentBody), false);
+  assert.deepEqual(currentBody.pending.turns, [written.turnId]);
 
   process.env.MUNINN_OBSERVER_POLL_MS = '1';
   await shutdownCoreForTests();
+  const finalizeResponse = await app.request('/api/v1/memory/finalize', { method: 'POST' });
+  assert.equal(finalizeResponse.status, 200);
 
   let resolvedBody = null;
   for (let attempt = 0; attempt < 50; attempt += 1) {
     const resolvedResponse = await app.request('/api/v1/memory/watermark');
     assert.equal(resolvedResponse.status, 200);
     resolvedBody = await json(resolvedResponse);
-    if (resolvedBody.resolved) {
+    if (memoryWatermarkResolved(resolvedBody)) {
       break;
     }
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
   assert.ok(resolvedBody);
-  assert.equal(resolvedBody.resolved, true);
-  assert.deepEqual(resolvedBody.pendingTurnIds, []);
+  assert.equal(memoryWatermarkResolved(resolvedBody), true);
+  assert.deepEqual(resolvedBody.pending.turns, []);
 });
 
 test('detail returns notFound for missing memoryId', async () => {

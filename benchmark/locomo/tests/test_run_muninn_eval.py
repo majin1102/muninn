@@ -22,7 +22,7 @@ from benchmark.locomo.scripts.run_muninn_eval import (
 
 class RunMuninnEvalTests(unittest.TestCase):
     def test_resolve_known_targets(self) -> None:
-        self.assertEqual(resolve_target("three-small").data_file, Path("benchmark/locomo/.cache/data/locomo-three-small-shared.json"))
+        self.assertEqual(resolve_target("three-small").data_file, Path("benchmark/locomo/.cache/data/locomo10.json"))
         self.assertEqual(resolve_target("conv-26").sample_ids, ["conv-26"])
         self.assertEqual(resolve_target("conv-26-sessions-1-2").data_file, Path("benchmark/locomo/.cache/data/conv-26-sessions-1-2-current.json"))
         self.assertEqual(resolve_target("full").data_file, Path("benchmark/locomo/.cache/data/locomo10.json"))
@@ -36,7 +36,7 @@ class RunMuninnEvalTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unsupported target"):
             resolve_target("custom")
 
-    def test_extract_stats_reads_f1_recall_and_judges(self) -> None:
+    def test_extract_stats_reads_f1_and_judges(self) -> None:
         with TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             result = root / "result.real.json"
@@ -47,6 +47,7 @@ class RunMuninnEvalTests(unittest.TestCase):
                 "qa_count": 2,
                 "average_f1": 0.5,
                 "average_recall": 0.75,
+                "category_recall": {"1": 0.5},
             }), encoding="utf8")
             openviking.write_text(json.dumps({"accuracy": {"correct": 1, "total": 2, "accuracy": 0.5}}), encoding="utf8")
             honcho.write_text(json.dumps({"accuracy": {"passed": 2, "total": 2, "accuracy": 1.0}}), encoding="utf8")
@@ -55,7 +56,8 @@ class RunMuninnEvalTests(unittest.TestCase):
 
         self.assertEqual(stats["qa_count"], 2)
         self.assertEqual(stats["average_f1"], 0.5)
-        self.assertEqual(stats["average_recall"], 0.75)
+        self.assertNotIn("average_recall", stats)
+        self.assertNotIn("category_recall", stats)
         self.assertEqual(stats["openviking_accuracy"], 0.5)
         self.assertEqual(stats["honcho_accuracy"], 1.0)
 
@@ -110,7 +112,6 @@ class RunMuninnEvalTests(unittest.TestCase):
                 "muninn_hybrid_top_8_hits": [{
                     "memory_id": "observation:1",
                     "detail": "Alice discussed career options.",
-                    "evidence_ids": ["D1:1"],
                 }],
             }],
         }]
@@ -119,7 +120,27 @@ class RunMuninnEvalTests(unittest.TestCase):
         self.assertIn("What did Alice research?", report)
         self.assertIn("Gold: adoption agencies", report)
         self.assertIn("Prediction: career options", report)
+        self.assertNotIn("Recall:", report)
         self.assertIn("observation:1", report)
+
+    def test_build_badcases_report_ignores_recall_only_misses(self) -> None:
+        samples = [{
+            "sample_id": "conv-a",
+            "qa": [{
+                "question": "What did Alice research?",
+                "answer": "adoption agencies",
+                "category": 4,
+                "muninn_hybrid_top_8_prediction": "adoption agencies",
+                "muninn_hybrid_top_8_f1": 1.0,
+                "muninn_hybrid_top_8_recall": 0.0,
+                "muninn_hybrid_top_8_hits": [],
+            }],
+        }]
+
+        report = build_badcases_report(samples, "muninn_hybrid_top_8", {}, {})
+
+        self.assertIn("No bad cases detected by F1, OpenViking, or Honcho.", report)
+        self.assertNotIn("What did Alice research?", report)
 
     def test_build_run_command_includes_single_sample_and_timeout(self) -> None:
         config = BuildConfig(
@@ -232,6 +253,30 @@ class RunMuninnEvalTests(unittest.TestCase):
         data_file = prepare_data_file(config, paths)
 
         self.assertEqual(data_file, config.target.data_file)
+
+    def test_prepare_data_file_builds_three_small_session_slices(self) -> None:
+        config = BuildConfig(
+            target=resolve_target("three-small"),
+            top_k=8,
+            budget=0,
+            query_limit=8,
+            recall_mode="hybrid",
+            watermark_timeout_ms=7200000,
+            answerer="llm",
+            keep_home=True,
+            run_name="test-three-small",
+        )
+        paths = build_paths(config)
+
+        data_file = prepare_data_file(config, paths)
+        data = json.loads((Path.cwd() / data_file).read_text(encoding="utf8"))
+
+        self.assertEqual([sample["sample_id"] for sample in data], ["conv-26", "conv-30"])
+        self.assertEqual([len(sample["qa"]) for sample in data], [20, 22])
+        self.assertEqual(
+            [sorted(key for key, value in sample["conversation"].items() if key.startswith("session_") and isinstance(value, list)) for sample in data],
+            [["session_1", "session_2"], ["session_1", "session_2"]],
+        )
 
 
 if __name__ == "__main__":

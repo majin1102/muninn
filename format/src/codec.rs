@@ -434,6 +434,8 @@ pub(crate) fn observation_contexts_to_record_batch(
     let parent_id = StringArray::from(rows.iter().map(|row| row.parent_id.as_deref()).collect::<Vec<_>>());
     let position = Int64Array::from_iter_values(rows.iter().map(|row| row.position));
     let content = StringArray::from_iter_values(rows.iter().map(|row| row.content.as_str()));
+    let source_refs = build_string_list_array(rows.iter().map(|row| Some(&row.source_refs)));
+    let expand_refs = build_string_list_array(rows.iter().map(|row| Some(&row.expand_refs)));
     let created_at = TimestampMicrosecondArray::from_iter_values(
         rows.iter().map(|row| row.created_at.timestamp_micros()),
     )
@@ -452,6 +454,8 @@ pub(crate) fn observation_contexts_to_record_batch(
             Arc::new(parent_id),
             Arc::new(position),
             Arc::new(content),
+            Arc::new(source_refs),
+            Arc::new(expand_refs),
             Arc::new(created_at),
             Arc::new(updated_at),
             Arc::new(observer),
@@ -498,18 +502,28 @@ pub(crate) fn record_batch_to_observation_contexts(batch: &RecordBatch) -> Resul
         .as_any()
         .downcast_ref::<StringArray>()
         .unwrap();
-    let created_at = batch
+    let source_refs = batch
         .column(5)
+        .as_any()
+        .downcast_ref::<ListArray>()
+        .unwrap();
+    let expand_refs = batch
+        .column(6)
+        .as_any()
+        .downcast_ref::<ListArray>()
+        .unwrap();
+    let created_at = batch
+        .column(7)
         .as_any()
         .downcast_ref::<TimestampMicrosecondArray>()
         .unwrap();
     let updated_at = batch
-        .column(6)
+        .column(8)
         .as_any()
         .downcast_ref::<TimestampMicrosecondArray>()
         .unwrap();
     let observer = batch
-        .column(7)
+        .column(9)
         .as_any()
         .downcast_ref::<StringArray>()
         .unwrap();
@@ -522,6 +536,8 @@ pub(crate) fn record_batch_to_observation_contexts(batch: &RecordBatch) -> Resul
                 parent_id: (!parent_id.is_null(index)).then(|| parent_id.value(index).to_string()),
                 position: position.value(index),
                 content: content.value(index).to_string(),
+                source_refs: optional_string_list(source_refs, index).unwrap_or_default(),
+                expand_refs: optional_string_list(expand_refs, index).unwrap_or_default(),
                 created_at: Utc
                     .timestamp_micros(created_at.value(index))
                     .single()
@@ -563,7 +579,7 @@ pub(crate) fn extractions_to_record_batch(rows: &[Extraction]) -> Result<RecordB
     let importance = Float32Array::from_iter_values(rows.iter().map(|row| row.importance));
     let category = StringArray::from_iter_values(rows.iter().map(|row| row.category.as_str()));
     let turn_refs = build_string_list_array(rows.iter().map(|row| Some(&row.turn_refs)));
-    let observation_ids = build_string_list_array(rows.iter().map(|row| Some(&row.observation_ids)));
+    let observation_paths = build_string_list_array(rows.iter().map(|row| Some(&row.observation_paths)));
     let observed_root_anchors = build_string_list_array(
         rows.iter().map(|row| Some(&row.observed_root_anchors)),
     );
@@ -588,7 +604,7 @@ pub(crate) fn extractions_to_record_batch(rows: &[Extraction]) -> Result<RecordB
             Arc::new(importance),
             Arc::new(category),
             Arc::new(turn_refs),
-            Arc::new(observation_ids),
+            Arc::new(observation_paths),
             Arc::new(observed_root_anchors),
             Arc::new(created_at),
             Arc::new(updated_at),
@@ -647,7 +663,7 @@ pub(crate) fn record_batch_to_extractions(batch: &RecordBatch) -> Result<Vec<Ext
         .as_any()
         .downcast_ref::<ListArray>()
         .unwrap();
-    let observation_ids = batch
+    let observation_paths = batch
         .column(9)
         .as_any()
         .downcast_ref::<ListArray>()
@@ -689,7 +705,7 @@ pub(crate) fn record_batch_to_extractions(batch: &RecordBatch) -> Result<Vec<Ext
                 importance: importance.value(index),
                 category: category.value(index).to_string(),
                 turn_refs: optional_string_list(turn_refs, index).unwrap_or_default(),
-                observation_ids: optional_string_list(observation_ids, index).unwrap_or_default(),
+                observation_paths: optional_string_list(observation_paths, index).unwrap_or_default(),
                 observed_root_anchors: optional_string_list(observed_root_anchors, index).unwrap_or_default(),
                 created_at: Utc
                     .timestamp_micros(created_at.value(index))

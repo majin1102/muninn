@@ -120,14 +120,18 @@ async function mockWatermarkSidecar(t, responses) {
   const previousBaseUrl = process.env.MUNINN_SIDECAR_BASE_URL;
   process.env.MUNINN_SIDECAR_BASE_URL = baseUrl;
   const calls = [];
-  const server = http.createServer((request, response) => {
+  const server = http.createServer(async (request, response) => {
     calls.push({ url: `${baseUrl}${request.url}`, method: request.method ?? 'GET' });
     const next = responses.shift() ?? {
-      resolved: false,
-      pendingTurnIds: ['turn:1'],
+      pending: { turns: ['turn:1'], extractions: [] },
+      phases: { extractor: 'pending', observer: 'idle' },
     };
+    if (next.delayMs) {
+      await new Promise((resolve) => setTimeout(resolve, next.delayMs));
+    }
+    const payload = next.payload ?? next;
     response.writeHead(200, { 'content-type': 'application/json' });
-    response.end(JSON.stringify(next));
+    response.end(JSON.stringify(payload));
   });
   await new Promise((resolve, reject) => {
     server.listen(port, '127.0.0.1', resolve);
@@ -259,7 +263,7 @@ test('import writes an external manifest aligned to locomo sessions', async (t) 
   assert.doesNotMatch(firstTurn.response, /import placeholder/);
 });
 
-test('recall returns evidence ids without leaking benchmark artifacts into muninn rows', async (t) => {
+test('recall returns body-only hits without leaking benchmark artifacts into muninn rows', async (t) => {
   const home = await mkdtemp(path.join(os.tmpdir(), 'muninn-locomo-recall-'));
   t.after(async () => rm(home, { recursive: true, force: true }));
   t.after(() => {
@@ -285,18 +289,19 @@ test('recall returns evidence ids without leaking benchmark artifacts into munin
     'muninn-home': home,
   });
 
-  const supportHit = recalled.hits.find((hit) => hit.evidence_ids.includes('D1:1'));
+  const supportHit = recalled.hits.find((hit) => /support group/i.test(hit.detail ?? hit.matched_text ?? ''));
   assert.ok(supportHit);
   assert.equal('date_time' in supportHit, false);
   assert.equal('title' in supportHit, false);
   assert.equal('summary' in supportHit, false);
+  assert.equal('evidence_ids' in supportHit, false);
+  assert.equal('references' in supportHit, false);
   assert.equal(typeof supportHit.matched_text, 'string');
   assert.ok(supportHit.matched_text.trim());
   assert.match(supportHit.detail, /^(EXTRACTION|OBSERVATION): /);
   assert.match(supportHit.detail, new RegExp(escapeRegExp(supportHit.matched_text)));
   assert.doesNotMatch(supportHit.matched_text, /Recorded/);
   assert.equal(supportHit.observationRatio ?? null, null);
-  assert.ok(supportHit.references.some((reference) => /Caroline said:/.test(reference.text)));
   assert.ok(!('source_id' in recalled.hits[0]));
 
   const gatewayTracePath = path.join(home, 'locomo-gateway-trace.jsonl');
@@ -443,7 +448,7 @@ test('bridge emits JSON error envelope for command failures', async () => {
 
 test('waitForImportWatermark times out with pending turn ids when observer does not flush in time', async (t) => {
   await mockWatermarkSidecar(t, [
-    { resolved: false, pendingTurnIds: ['turn:1'] },
+    { pending: { turns: ['turn:1'], extractions: [] }, phases: { extractor: 'pending', observer: 'idle' } },
   ]);
   const bridgeModule = await import(bridgePath);
 
@@ -452,7 +457,7 @@ test('waitForImportWatermark times out with pending turn ids when observer does 
       pollMs: 10,
       timeoutMs: 50,
     }),
-    /memory watermark timeout.*pending turn ids/i,
+    /memory watermark timeout.*pending/i,
   );
 });
 
@@ -475,7 +480,7 @@ test('import only fails fast when extraction config is missing', async (t) => {
 
 test('waitForImportWatermark emits a delayed unresolved-watermark warning', async (t) => {
   await mockWatermarkSidecar(t, [
-    { resolved: false, pendingTurnIds: ['turn:1'], extractingEpoch: 1, committedEpoch: 0 },
+    { pending: { turns: ['turn:1'], extractions: [] }, phases: { extractor: 'pending', observer: 'idle' } },
   ]);
   const bridgeModule = await import(bridgePath);
   const originalError = console.error;
@@ -491,7 +496,7 @@ test('waitForImportWatermark emits a delayed unresolved-watermark warning', asyn
         timeoutMs: 60,
         warningDelayMs: 0,
       }),
-      /memory watermark timeout.*pending turn ids/i,
+      /memory watermark timeout.*pending/i,
     );
   } finally {
     console.error = originalError;
@@ -500,9 +505,32 @@ test('waitForImportWatermark emits a delayed unresolved-watermark warning', asyn
   assert.ok(messages.some((message) => /no memory progress detected/i.test(message)));
 });
 
+test('waitForImportWatermark returns after async finalize resolves immediately', async (t) => {
+  await mockWatermarkSidecar(t, [
+    { delayMs: 30, payload: { pending: { turns: [], extractions: [] }, phases: { extractor: 'idle', observer: 'idle' } } },
+  ]);
+  const bridgeModule = await import(`${bridgePath}?finalize-progress=${Date.now()}`);
+  const originalError = console.error;
+  const messages = [];
+  console.error = (...args) => {
+    messages.push(args.join(' '));
+  };
+
+  try {
+    await bridgeModule.waitForImportWatermark(watermarkManifest(), {
+      pollMs: 5,
+      timeoutMs: 200,
+    });
+  } finally {
+    console.error = originalError;
+  }
+
+  assert.ok(messages.some((message) => /finalized memory/i.test(message)));
+});
+
 test('waitForImportWatermark reads timeout and warning defaults from env', async (t) => {
   await mockWatermarkSidecar(t, [
-    { resolved: false, pendingTurnIds: ['turn:1'] },
+    { pending: { turns: ['turn:1'], extractions: [] }, phases: { extractor: 'pending', observer: 'idle' } },
   ]);
   t.after(() => {
     delete process.env.MUNINN_LOCOMO_WATERMARK_TIMEOUT_MS;
@@ -514,7 +542,7 @@ test('waitForImportWatermark reads timeout and warning defaults from env', async
 
   await assert.rejects(
     () => bridgeModule.waitForImportWatermark(watermarkManifest(), { pollMs: 10 }),
-    /memory watermark timeout.*pending turn ids/i,
+    /memory watermark timeout.*pending/i,
   );
 });
 
@@ -526,9 +554,8 @@ test('waitForImportWatermark default timeout is thirty minutes', async () => {
 
 test('waitForImportWatermark calls the configured persistent sidecar', async (t) => {
   const calls = await mockWatermarkSidecar(t, [{
-    resolved: true,
-    pendingTurnIds: [],
-    observerPending: false,
+    pending: { turns: [], extractions: [] },
+    phases: { extractor: 'idle', observer: 'idle' },
   }]);
 
   const bridgeModule = await import(`${bridgePath}?persistent-sidecar=${Date.now()}`);
@@ -555,7 +582,7 @@ test('waitForImportWatermark does not depend on repo-root cwd', async (t) => {
     process.chdir(originalCwd);
   });
   await mockWatermarkSidecar(t, [
-    { resolved: false, pendingTurnIds: ['turn:1'] },
+    { pending: { turns: ['turn:1'], extractions: [] }, phases: { extractor: 'pending', observer: 'idle' } },
   ]);
   process.chdir(path.join(repoRoot, 'benchmark/locomo'));
   const bridgeModule = await import(bridgePath);
@@ -565,6 +592,6 @@ test('waitForImportWatermark does not depend on repo-root cwd', async (t) => {
       pollMs: 10,
       timeoutMs: 50,
     }),
-    /memory watermark timeout.*pending turn ids/i,
+    /memory watermark timeout.*pending/i,
   );
 });

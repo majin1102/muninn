@@ -219,7 +219,7 @@ export async function applyExtractionTableChanges(
       importance: existing?.importance ?? embeddingConfig.defaultImportance,
       category: semanticCategory(extraction.category),
       turnRefs: references,
-      observationIds: existing?.observationIds ?? [],
+      observationPaths: existing?.observationPaths ?? [],
       observedRootAnchors: existing?.observedRootAnchors ?? [],
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,

@@ -131,16 +131,16 @@ test('runObserver finalizes pending extractions below threshold', async () => {
         sections: [{
           level: 2,
           heading: 'Who is Caroline?',
-          id: undefined,
-          refs: [],
-          delete: false,
+          observingPath: 'Caroline / Who is Caroline?',
+          sourceRefs: [],
+          expandRefs: [],
           body: '',
           children: input.extractions.map((extraction) => ({
             level: 3,
             heading: extraction.id,
-            id: undefined,
-            refs: [extraction.id],
-            delete: false,
+            observingPath: `Caroline / Who is Caroline? / ${extraction.id}`,
+            sourceRefs: [extraction.id],
+            expandRefs: [],
             body: '',
             children: [],
           })),
@@ -163,7 +163,7 @@ test('runObserver renders existing leaf refs from observation rows', async () =>
   const client = makeClient({
     contexts: [
       {
-        id: 'parent-1',
+        id: 'Caroline / Who is Caroline?',
         observingPath: 'Caroline / Who is Caroline?',
         parentId: null,
         position: 0,
@@ -173,9 +173,9 @@ test('runObserver renders existing leaf refs from observation rows', async () =>
         updatedAt: '2024-01-01T00:00:00Z',
       },
       {
-        id: 'leaf-1',
+        id: 'Caroline / Who is Caroline? / Support group',
         observingPath: 'Caroline / Who is Caroline? / Support group',
-        parentId: 'parent-1',
+        parentId: 'Caroline / Who is Caroline?',
         position: 0,
         content: 'Caroline attended a support group.',
         observer: 'test-observer',
@@ -184,7 +184,7 @@ test('runObserver renders existing leaf refs from observation rows', async () =>
       },
     ],
     observations: [{
-      id: 'leaf-1',
+      id: 'Caroline / Who is Caroline? / Support group',
       observingPath: 'Caroline / Who is Caroline? / Support group',
       text: 'Caroline attended a support group.',
       vector: [],
@@ -192,7 +192,7 @@ test('runObserver renders existing leaf refs from observation rows', async () =>
       createdAt: '2024-01-01T00:00:00Z',
       updatedAt: '2024-01-01T00:00:00Z',
     }],
-    extractions: [{ ...makeExtractions(1)[0], observationIds: ['leaf-1'] }],
+    extractions: [{ ...makeExtractions(1)[0], observationPaths: ['Caroline / Who is Caroline? / Support group'] }],
   });
 
   await runObserver({
@@ -208,16 +208,16 @@ test('runObserver renders existing leaf refs from observation rows', async () =>
         sections: [{
           level: 2,
           heading: 'Who is Caroline?',
-          id: 'parent-1',
-          refs: [],
-          delete: false,
+          observingPath: 'Caroline / Who is Caroline?',
+          sourceRefs: [],
+          expandRefs: [],
           body: '',
           children: [{
             level: 3,
             heading: 'Support group',
-            id: 'leaf-1',
-            refs: ['extraction:old'],
-            delete: false,
+            observingPath: 'Caroline / Who is Caroline? / Support group',
+            sourceRefs: ['extraction:old'],
+            expandRefs: [],
             body: '',
             children: [],
           }],
@@ -226,8 +226,9 @@ test('runObserver renders existing leaf refs from observation rows', async () =>
     },
   });
 
-  assert.match(observedInput.outline, /Support group <!-- id: leaf-1; leaf -->/);
-  assert.match(observedInput.rewriteContent, /Support group <!-- id: leaf-1; refs: \[extraction:old\] -->/);
+  assert.match(observedInput.outline, /leaf: Caroline \/ Who is Caroline\? \/ Support group/);
+  assert.match(observedInput.observedDocument, /### Support group <!-- path: Caroline \/ Who is Caroline\? \/ Support group -->/);
+  assert.match(observedInput.observedDocument, /Source extractions:\n- \[extraction:old\]/);
 });
 
 test('runObserver removes changed extraction refs from existing leaf hints', async () => {
@@ -235,7 +236,7 @@ test('runObserver removes changed extraction refs from existing leaf hints', asy
   const client = makeClient({
     contexts: [
       {
-        id: 'parent-1',
+        id: 'Caroline / Who is Caroline?',
         observingPath: 'Caroline / Who is Caroline?',
         parentId: null,
         position: 0,
@@ -245,9 +246,9 @@ test('runObserver removes changed extraction refs from existing leaf hints', asy
         updatedAt: '2024-01-01T00:00:00Z',
       },
       {
-        id: 'leaf-1',
+        id: 'Caroline / Who is Caroline? / Support group',
         observingPath: 'Caroline / Who is Caroline? / Support group',
-        parentId: 'parent-1',
+        parentId: 'Caroline / Who is Caroline?',
         position: 0,
         content: 'Caroline attended a support group.',
         observer: 'test-observer',
@@ -256,7 +257,7 @@ test('runObserver removes changed extraction refs from existing leaf hints', asy
       },
     ],
     observations: [{
-      id: 'leaf-1',
+      id: 'Caroline / Who is Caroline? / Support group',
       observingPath: 'Caroline / Who is Caroline? / Support group',
       text: 'Caroline attended a support group.',
       vector: [],
@@ -264,7 +265,7 @@ test('runObserver removes changed extraction refs from existing leaf hints', asy
       createdAt: '2024-01-01T00:00:00Z',
       updatedAt: '2024-01-01T00:00:00Z',
     }],
-    extractions: [{ ...makeExtractions(1)[0], observationIds: ['leaf-1'] }],
+    extractions: [{ ...makeExtractions(1)[0], observationPaths: ['Caroline / Who is Caroline? / Support group'] }],
   });
 
   await runObserver({
@@ -280,16 +281,16 @@ test('runObserver removes changed extraction refs from existing leaf hints', asy
         sections: [{
           level: 2,
           heading: 'Who is Caroline?',
-          id: 'parent-1',
-          refs: [],
-          delete: false,
+          observingPath: 'Caroline / Who is Caroline?',
+          sourceRefs: [],
+          expandRefs: [],
           body: '',
           children: [{
             level: 3,
             heading: 'Support group',
-            id: 'leaf-1',
-            refs: ['extraction:old', input.extractions[0].id],
-            delete: false,
+            observingPath: 'Caroline / Who is Caroline? / Support group',
+            sourceRefs: ['extraction:old', input.extractions[0].id],
+            expandRefs: [],
             body: '',
             children: [],
           }],
@@ -298,8 +299,9 @@ test('runObserver removes changed extraction refs from existing leaf hints', asy
     },
   });
 
-  assert.match(observedInput.rewriteContent, /Support group <!-- id: leaf-1; refs: \[extraction:old\] -->/);
-  assert.doesNotMatch(observedInput.rewriteContent, /refs: \[extraction:old, pending-1\]/);
+  assert.match(observedInput.observedDocument, /Support group <!-- path: Caroline \/ Who is Caroline\? \/ Support group -->/);
+  assert.match(observedInput.observedDocument, /Source extractions:\n- \[extraction:old\]/);
+  assert.doesNotMatch(observedInput.observedDocument, /- \[extraction:old, pending-1\]/);
   assert.deepEqual(observedInput.extractions.map((extraction) => extraction.id), ['pending-1']);
 });
 
@@ -308,13 +310,13 @@ test('runObserver sends full outline but only linked rewrite content', async () 
   const client = makeClient({
     contexts: existingCarolineContexts(),
     observations: [
-      observationRow('support-leaf', 'Caroline / Support / Support group', ['pending-1']),
-      observationRow('painting-leaf', 'Caroline / Art / Painting', ['extraction:painting']),
+      observationRow('Caroline / Support / Support group', 'Caroline / Support / Support group', ['pending-1']),
+      observationRow('Caroline / Art / Painting', 'Caroline / Art / Painting', ['extraction:painting']),
     ],
     extractions: [
       {
         ...extractionRow('pending-1', ['Entity: Caroline'], 'Caroline updated support group details.'),
-        observationIds: ['support-leaf'],
+        observationPaths: ['Caroline / Support / Support group'],
       },
     ],
   });
@@ -332,16 +334,16 @@ test('runObserver sends full outline but only linked rewrite content', async () 
         sections: [{
           level: 2,
           heading: 'Support',
-          id: 'support-parent',
-          refs: [],
-          delete: false,
+          observingPath: 'Caroline / Support',
+          sourceRefs: [],
+          expandRefs: [],
           body: '',
           children: [{
             level: 3,
             heading: 'Support group',
-            id: 'support-leaf',
-            refs: ['pending-1'],
-            delete: false,
+            observingPath: 'Caroline / Support / Support group',
+            sourceRefs: ['pending-1'],
+            expandRefs: [],
             body: '',
             children: [],
           }],
@@ -350,10 +352,11 @@ test('runObserver sends full outline but only linked rewrite content', async () 
     },
   });
 
-  assert.match(observedInput.outline, /Support group <!-- id: support-leaf; leaf -->/);
-  assert.match(observedInput.outline, /Painting <!-- id: painting-leaf; leaf -->/);
-  assert.match(observedInput.rewriteContent, /Support group <!-- id: support-leaf/);
-  assert.doesNotMatch(observedInput.rewriteContent, /Painting <!-- id: painting-leaf/);
+  assert.match(observedInput.outline, /leaf: Caroline \/ Support \/ Support group/);
+  assert.match(observedInput.outline, /leaf: Caroline \/ Art \/ Painting/);
+  assert.match(observedInput.observedDocument, /Support group/);
+  assert.match(observedInput.observedDocument, /Painting <!-- path: Caroline \/ Art \/ Painting -->/);
+  assert.doesNotMatch(observedInput.observedDocument, /Caroline painted a landscape/);
   assert.deepEqual(observedInput.extractions.map((extraction) => extraction.status), ['changed']);
 });
 
@@ -367,7 +370,7 @@ test('runObserver preserves sibling branches outside returned subtree', async ()
     extractions: [
       {
         ...extractionRow('pending-1', ['Entity: Caroline'], 'Caroline updated support group details.'),
-        observationIds: ['support-leaf'],
+        observationPaths: ['Caroline / Support / Support group'],
       },
     ],
   });
@@ -383,16 +386,17 @@ test('runObserver preserves sibling branches outside returned subtree', async ()
       sections: [{
         level: 2,
         heading: 'Support',
-        id: 'support-parent',
-        refs: [],
-        delete: false,
+        observingPath: 'Caroline / Support',
+        sourceRefs: [],
+        expandRefs: [],
         body: '',
+        rewritten: true,
         children: [{
           level: 3,
           heading: 'Support group',
-          id: 'support-leaf',
-          refs: ['pending-1'],
-          delete: false,
+          observingPath: 'Caroline / Support / Support group',
+          sourceRefs: ['pending-1'],
+          expandRefs: [],
           body: '',
           children: [],
         }],
@@ -400,138 +404,34 @@ test('runObserver preserves sibling branches outside returned subtree', async ()
     }),
   });
 
-  assert.equal(client.writes.deletedObservationIds.includes('painting-leaf'), false);
-  assert.equal(client.writes.observationContexts.some((row) => row.id === 'painting-leaf'), false);
+  assert.equal(client.writes.deletedObservationIds.includes('Caroline / Art / Painting'), false);
+  assert.equal(client.writes.observationContexts.some((row) => row.id === 'Caroline / Art / Painting'), false);
 });
 
-test('runObserver get_observation returns selected subtree without siblings', async () => {
-  let toolContent = '';
-  const client = makeClient({
-    contexts: existingCarolineContexts(),
-    observations: [
-      observationRow('support-leaf', 'Caroline / Support / Support group', ['extraction:support']),
-      observationRow('painting-leaf', 'Caroline / Art / Painting', ['extraction:painting']),
-    ],
-    extractions: makeExtractions(1),
-  });
-
-  await runObserver({
-    client,
-    observerName: 'test-observer',
-    baselineVersion: 0,
-    anchorThreshold: 5,
-    finalize: true,
-    observeAnchorImpl: async (input) => {
-      toolContent = await input.getObservation('painting-leaf');
-      return {
-        title: 'Caroline',
-        sections: [{
-          level: 2,
-          heading: 'Art',
-          id: 'painting-parent',
-          refs: [],
-          delete: false,
-          body: '',
-          children: [{
-            level: 3,
-            heading: 'Painting',
-            id: 'painting-leaf',
-            refs: ['extraction:painting', input.extractions[0].id],
-            delete: false,
-            body: '',
-            children: [],
-          }],
-        }],
-      };
-    },
-  });
-
-  assert.match(toolContent, /# Caroline/);
-  assert.match(toolContent, /## Art <!-- id: painting-parent -->/);
-  assert.match(toolContent, /### Painting <!-- id: painting-leaf; refs: \[extraction:painting\] -->/);
-  assert.doesNotMatch(toolContent, /Support group/);
-});
-
-test('runObserver get_observation returns non-leaf subtree without sibling branches', async () => {
-  let toolContent = '';
+test('runObserver deletes omitted descendants inside a returned subtree scope', async () => {
+  const siblingPath = 'Caroline / Support / Family';
   const client = makeClient({
     contexts: [
       ...existingCarolineContexts(),
       {
-        id: 'music-leaf',
-        observingPath: 'Caroline / Art / Music',
-        parentId: 'painting-parent',
+        id: siblingPath,
+        observingPath: siblingPath,
+        parentId: 'Caroline / Support',
         position: 1,
-        content: 'Caroline plays piano.',
+        content: 'Caroline has family support.',
         observer: 'test-observer',
         createdAt: '2024-01-01T00:00:00Z',
         updatedAt: '2024-01-01T00:00:00Z',
       },
     ],
     observations: [
-      observationRow('support-leaf', 'Caroline / Support / Support group', ['extraction:support']),
-      observationRow('painting-leaf', 'Caroline / Art / Painting', ['extraction:painting']),
-      observationRow('music-leaf', 'Caroline / Art / Music', ['extraction:music']),
-    ],
-    extractions: makeExtractions(1),
-  });
-
-  await runObserver({
-    client,
-    observerName: 'test-observer',
-    baselineVersion: 0,
-    anchorThreshold: 5,
-    finalize: true,
-    observeAnchorImpl: async (input) => {
-      toolContent = await input.getObservation('painting-parent');
-      return {
-        title: 'Caroline',
-        sections: [{
-          level: 2,
-          heading: 'Art',
-          id: 'painting-parent',
-          refs: [],
-          delete: false,
-          body: 'Art overview.',
-          children: [{
-            level: 3,
-            heading: 'Painting',
-            id: 'painting-leaf',
-            refs: ['extraction:painting'],
-            delete: false,
-            body: '',
-            children: [],
-          }, {
-            level: 3,
-            heading: 'Music',
-            id: 'music-leaf',
-            refs: ['extraction:music'],
-            delete: false,
-            body: '',
-            children: [],
-          }],
-        }],
-      };
-    },
-  });
-
-  assert.match(toolContent, /# Caroline/);
-  assert.match(toolContent, /## Art <!-- id: painting-parent -->/);
-  assert.match(toolContent, /### Painting <!-- id: painting-leaf; refs: \[extraction:painting\] -->/);
-  assert.match(toolContent, /### Music <!-- id: music-leaf; refs: \[extraction:music\] -->/);
-  assert.doesNotMatch(toolContent, /Support group/);
-});
-
-test('runObserver applies a rootless leaf rewrite to its existing parent', async () => {
-  const client = makeClient({
-    contexts: existingCarolineContexts(),
-    observations: [
-      observationRow('support-leaf', 'Caroline / Support / Support group', ['pending-1']),
+      observationRow('Caroline / Support / Support group', 'Caroline / Support / Support group', ['pending-1']),
+      observationRow(siblingPath, siblingPath, ['extraction:family']),
     ],
     extractions: [
       {
         ...extractionRow('pending-1', ['Entity: Caroline'], 'Caroline updated support group details.'),
-        observationIds: ['support-leaf'],
+        observationPaths: ['Caroline / Support / Support group'],
       },
     ],
   });
@@ -545,22 +445,470 @@ test('runObserver applies a rootless leaf rewrite to its existing parent', async
     observeAnchorImpl: async () => ({
       title: 'Caroline',
       sections: [{
-        level: 3,
-        heading: 'Support group',
-        id: 'support-leaf',
-        refs: ['pending-1'],
-        delete: false,
+        level: 2,
+        heading: 'Support',
+        observingPath: 'Caroline / Support',
+        sourceRefs: [],
+        expandRefs: [],
         body: '',
+        rewritten: true,
+        children: [{
+          level: 3,
+          heading: 'Support group',
+          observingPath: 'Caroline / Support / Support group',
+          sourceRefs: ['pending-1'],
+          expandRefs: [],
+          body: '',
+          children: [],
+        }],
+      }],
+    }),
+  });
+
+  assert.equal(client.writes.deletedContextIds.includes(siblingPath), true);
+  assert.equal(client.writes.deletedObservationIds.includes(siblingPath), true);
+});
+
+test('runObserver keeps heading-only existing descendants under a rewritten parent', async () => {
+  const siblingPath = 'Caroline / Support / Family';
+  const client = makeClient({
+    contexts: [
+      ...existingCarolineContexts(),
+      {
+        id: siblingPath,
+        observingPath: siblingPath,
+        parentId: 'Caroline / Support',
+        position: 1,
+        content: 'Caroline has family support.',
+        observer: 'test-observer',
+        createdAt: '2024-01-01T00:00:00Z',
+        updatedAt: '2024-01-01T00:00:00Z',
+      },
+    ],
+    observations: [
+      observationRow('Caroline / Support / Support group', 'Caroline / Support / Support group', ['pending-1']),
+      observationRow(siblingPath, siblingPath, ['extraction:family']),
+    ],
+    extractions: [
+      {
+        ...extractionRow('pending-1', ['Entity: Caroline'], 'Caroline updated support group details.'),
+        observationPaths: ['Caroline / Support / Support group'],
+      },
+    ],
+  });
+
+  await runObserver({
+    client,
+    observerName: 'test-observer',
+    baselineVersion: 0,
+    anchorThreshold: 5,
+    finalize: true,
+    observeAnchorImpl: async () => ({
+      title: 'Caroline',
+      sections: [{
+        level: 2,
+        heading: 'Support',
+        observingPath: 'Caroline / Support',
+        sourceRefs: [],
+        expandRefs: [],
+        body: '',
+        rewritten: true,
+        children: [{
+          level: 3,
+          heading: 'Support group',
+          observingPath: 'Caroline / Support / Support group',
+          sourceRefs: ['pending-1'],
+          expandRefs: [],
+          body: '',
+          rewritten: true,
+          children: [],
+        }, {
+          level: 3,
+          heading: 'Family',
+          observingPath: siblingPath,
+          sourceRefs: [],
+          expandRefs: [],
+          body: '',
+          rewritten: false,
+          children: [],
+        }],
+      }],
+    }),
+  });
+
+  assert.equal(client.writes.deletedContextIds.includes(siblingPath), false);
+  assert.equal(client.writes.deletedObservationIds.includes(siblingPath), false);
+  assert.equal(client.writes.observationContexts.some((row) => row.id === siblingPath), false);
+});
+
+test('runObserver clears stale leaf content when a heading-only leaf is promoted to parent', async () => {
+  const familyPath = 'Caroline / Support / Family';
+  const parentsPath = 'Caroline / Support / Family / Parents';
+  const client = makeClient({
+    contexts: [
+      ...existingCarolineContexts(),
+      {
+        id: familyPath,
+        observingPath: familyPath,
+        parentId: 'Caroline / Support',
+        position: 1,
+        content: 'Caroline has family support.',
+        sourceRefs: ['extraction:family-old'],
+        expandRefs: [],
+        observer: 'test-observer',
+        createdAt: '2024-01-01T00:00:00Z',
+        updatedAt: '2024-01-01T00:00:00Z',
+      },
+    ],
+    observations: [
+      observationRow(familyPath, familyPath, ['extraction:family-old']),
+    ],
+    extractions: [
+      {
+        ...extractionRow('pending-1', ['Entity: Caroline'], 'Caroline said her parents support her.'),
+        observationPaths: [familyPath],
+      },
+    ],
+  });
+
+  await runObserver({
+    client,
+    observerName: 'test-observer',
+    baselineVersion: 0,
+    anchorThreshold: 5,
+    finalize: true,
+    observeAnchorImpl: async () => ({
+      title: 'Caroline',
+      sections: [{
+        level: 2,
+        heading: 'Support',
+        observingPath: 'Caroline / Support',
+        sourceRefs: [],
+        expandRefs: [],
+        body: '',
+        rewritten: true,
+        children: [{
+          level: 3,
+          heading: 'Family',
+          observingPath: familyPath,
+          sourceRefs: [],
+          expandRefs: [],
+          body: '',
+          rewritten: false,
+          children: [{
+            level: 4,
+            heading: 'Parents',
+            observingPath: parentsPath,
+            sourceRefs: ['pending-1'],
+            expandRefs: [],
+            body: '',
+            rewritten: true,
+            children: [],
+          }],
+        }],
+      }],
+    }),
+  });
+
+  const promoted = client.writes.observationContexts.find((row) => row.id === familyPath);
+  assert.equal(promoted?.content, '');
+  assert.deepEqual(promoted?.sourceRefs, []);
+  assert.deepEqual(promoted?.expandRefs, []);
+  assert.equal(client.writes.deletedObservationIds.includes(familyPath), true);
+  assert.equal(client.writes.deletedContextIds.includes(familyPath), false);
+});
+
+test('runObserver rejects heading-only new leaves', async () => {
+  const client = makeClient({
+    contexts: existingCarolineContexts(),
+    observations: [
+      observationRow('Caroline / Support / Support group', 'Caroline / Support / Support group', ['pending-1']),
+    ],
+    extractions: [
+      {
+        ...extractionRow('pending-1', ['Entity: Caroline'], 'Caroline updated support group details.'),
+        observationPaths: ['Caroline / Support / Support group'],
+      },
+    ],
+  });
+
+  await assert.rejects(() => runObserver({
+    client,
+    observerName: 'test-observer',
+    baselineVersion: 0,
+    anchorThreshold: 5,
+    finalize: true,
+    observeAnchorImpl: async () => ({
+      title: 'Caroline',
+      sections: [{
+        level: 2,
+        heading: 'Support',
+        observingPath: 'Caroline / Support',
+        sourceRefs: [],
+        expandRefs: [],
+        body: 'Updated support overview.',
+        rewritten: true,
+        children: [{
+          level: 3,
+          heading: 'New empty leaf',
+          observingPath: 'Caroline / Support / New empty leaf',
+          sourceRefs: [],
+          expandRefs: [],
+          body: '',
+          rewritten: false,
+          children: [],
+        }],
+      }],
+    }),
+  }), /heading-only observer section does not exist/i);
+});
+
+test('runObserver deletes a linked leaf omitted from the returned rewrite scope', async () => {
+  const client = makeClient({
+    contexts: existingCarolineContexts(),
+    observations: [
+      observationRow('Caroline / Support / Support group', 'Caroline / Support / Support group', ['pending-1']),
+    ],
+    extractions: [
+      {
+        ...extractionRow('pending-1', ['Entity: Caroline'], 'Caroline updated support group details.'),
+        observationPaths: ['Caroline / Support / Support group'],
+      },
+    ],
+  });
+
+  await runObserver({
+    client,
+    observerName: 'test-observer',
+    baselineVersion: 0,
+    anchorThreshold: 5,
+    finalize: true,
+    observeAnchorImpl: async () => ({
+      title: 'Caroline',
+      sections: [{
+        level: 2,
+        heading: 'Support',
+        observingPath: 'Caroline / Support',
+        sourceRefs: [],
+        expandRefs: [],
+        body: '',
+        rewritten: true,
         children: [],
       }],
     }),
   });
 
-  assert.equal(client.writes.observationContexts[0].parentId, 'support-parent');
-  assert.equal(client.writes.observationContexts[0].observingPath, 'Caroline / Support / Support group');
+  assert.equal(client.writes.deletedContextIds.includes('Caroline / Support / Support group'), true);
+  assert.equal(client.writes.deletedObservationIds.includes('Caroline / Support / Support group'), true);
 });
 
-test('observeAnchor accepts rootless leaf markdown for exact leaf rewrites', async (t) => {
+test('runObserver does not upsert deleted extraction changes when updating links', async () => {
+  const deletedExtraction = {
+    ...extractionRow('pending-1', ['Entity: Caroline'], 'Caroline removed old support group details.'),
+    observationPaths: ['Caroline / Support / Support group'],
+  };
+  const client = makeClient({
+    contexts: existingCarolineContexts(),
+    observations: [
+      observationRow('Caroline / Support / Support group', 'Caroline / Support / Support group', ['pending-1']),
+    ],
+    extractions: [],
+  });
+
+  await runObserver({
+    client,
+    observerName: 'test-observer',
+    anchor: 'Caroline',
+    extractionChanges: [{ type: 'delete', extraction: deletedExtraction }],
+    observeAnchorImpl: async () => ({
+      title: 'Caroline',
+      sections: [{
+        level: 2,
+        heading: 'Support',
+        observingPath: 'Caroline / Support',
+        sourceRefs: [],
+        expandRefs: [],
+        body: '',
+        rewritten: true,
+        children: [],
+      }],
+    }),
+  });
+
+  assert.equal(client.writes.deletedContextIds.includes('Caroline / Support / Support group'), true);
+  assert.equal(client.writes.deletedObservationIds.includes('Caroline / Support / Support group'), true);
+  assert.deepEqual(client.writes.extractions, []);
+});
+
+test('runObserver get_observation returns selected subtree without siblings', async () => {
+  let toolContent = '';
+  const client = makeClient({
+    contexts: existingCarolineContexts(),
+    observations: [
+      observationRow('Caroline / Support / Support group', 'Caroline / Support / Support group', ['extraction:support']),
+      observationRow('Caroline / Art / Painting', 'Caroline / Art / Painting', ['extraction:painting']),
+    ],
+    extractions: makeExtractions(1),
+  });
+
+  await runObserver({
+    client,
+    observerName: 'test-observer',
+    baselineVersion: 0,
+    anchorThreshold: 5,
+    finalize: true,
+    observeAnchorImpl: async (input) => {
+      toolContent = await input.getObservation(['Caroline / Art / Painting']);
+      return {
+        title: 'Caroline',
+        sections: [{
+          level: 2,
+          heading: 'Art',
+          observingPath: 'Caroline / Art',
+          sourceRefs: [],
+          expandRefs: [],
+          body: '',
+          children: [{
+            level: 3,
+            heading: 'Painting',
+            observingPath: 'Caroline / Art / Painting',
+            sourceRefs: ['extraction:painting', input.extractions[0].id],
+            expandRefs: [],
+            body: '',
+            children: [],
+          }],
+        }],
+      };
+    },
+  });
+
+  assert.match(toolContent, /# Caroline/);
+  assert.match(toolContent, /## Art/);
+  assert.match(toolContent, /### Painting <!-- path: Caroline \/ Art \/ Painting -->/);
+  assert.match(toolContent, /Source extractions:\n- \[extraction:painting\]/);
+  assert.doesNotMatch(toolContent, /Support group/);
+});
+
+test('runObserver get_observation returns non-leaf subtree without sibling branches', async () => {
+  let toolContent = '';
+  const client = makeClient({
+    contexts: [
+      ...existingCarolineContexts(),
+      {
+        id: 'Caroline / Art / Music',
+        observingPath: 'Caroline / Art / Music',
+        parentId: 'Caroline / Art',
+        position: 1,
+        content: 'Caroline plays piano.',
+        observer: 'test-observer',
+        createdAt: '2024-01-01T00:00:00Z',
+        updatedAt: '2024-01-01T00:00:00Z',
+      },
+    ],
+    observations: [
+      observationRow('Caroline / Support / Support group', 'Caroline / Support / Support group', ['extraction:support']),
+      observationRow('Caroline / Art / Painting', 'Caroline / Art / Painting', ['extraction:painting']),
+      observationRow('Caroline / Art / Music', 'Caroline / Art / Music', ['extraction:music']),
+    ],
+    extractions: makeExtractions(1),
+  });
+
+  await runObserver({
+    client,
+    observerName: 'test-observer',
+    baselineVersion: 0,
+    anchorThreshold: 5,
+    finalize: true,
+    observeAnchorImpl: async (input) => {
+      toolContent = await input.getObservation(['Caroline / Art']);
+      return {
+        title: 'Caroline',
+        sections: [{
+          level: 2,
+          heading: 'Art',
+          observingPath: 'Caroline / Art',
+          sourceRefs: [],
+          expandRefs: [],
+          body: 'Art overview.',
+          children: [{
+            level: 3,
+            heading: 'Painting',
+            observingPath: 'Caroline / Art / Painting',
+            sourceRefs: ['extraction:painting'],
+            expandRefs: [],
+            body: '',
+            children: [],
+          }, {
+            level: 3,
+            heading: 'Music',
+            observingPath: 'Caroline / Art / Music',
+            sourceRefs: ['extraction:music'],
+            expandRefs: [],
+            body: '',
+            children: [],
+          }],
+        }],
+      };
+    },
+  });
+
+  assert.match(toolContent, /# Caroline/);
+  assert.match(toolContent, /## Art/);
+  assert.match(toolContent, /### Painting <!-- path: Caroline \/ Art \/ Painting -->/);
+  assert.match(toolContent, /Source extractions:\n- \[extraction:painting\]/);
+  assert.match(toolContent, /### Music <!-- path: Caroline \/ Art \/ Music -->/);
+  assert.match(toolContent, /Source extractions:\n- \[extraction:music\]/);
+  assert.doesNotMatch(toolContent, /Support group/);
+});
+
+test('runObserver applies a rootless leaf rewrite to its existing parent', async () => {
+  const client = makeClient({
+    contexts: existingCarolineContexts(),
+    observations: [
+      observationRow('support-leaf', 'Caroline / Support / Support group', ['pending-1']),
+    ],
+    extractions: [
+      {
+        ...extractionRow('pending-1', ['Entity: Caroline'], 'Caroline updated support group details.'),
+        observationPaths: ['Caroline / Support / Support group'],
+      },
+    ],
+  });
+
+  await runObserver({
+    client,
+    observerName: 'test-observer',
+    baselineVersion: 0,
+    anchorThreshold: 5,
+    finalize: true,
+    observeAnchorImpl: async () => ({
+      title: 'Caroline',
+      sections: [{
+        level: 2,
+        heading: 'Support',
+        observingPath: 'Caroline / Support',
+        sourceRefs: [],
+        expandRefs: [],
+        body: '',
+        children: [{
+          level: 3,
+          heading: 'Support group',
+          observingPath: 'Caroline / Support / Support group',
+          sourceRefs: ['pending-1'],
+          expandRefs: [],
+          body: '',
+          children: [],
+        }],
+      }],
+    }),
+  });
+
+  const leaf = client.writes.observationContexts.find((row) => row.observingPath === 'Caroline / Support / Support group');
+  assert.equal(leaf?.parentId, 'Caroline / Support');
+  assert.equal(leaf?.observingPath, 'Caroline / Support / Support group');
+});
+
+test('observeAnchor accepts path-based subtree markdown', async (t) => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'muninn-observer-rootless-'));
   t.after(async () => rm(dir, { recursive: true, force: true }));
 
@@ -582,7 +930,7 @@ test('observeAnchor accepts rootless leaf markdown for exact leaf rewrites', asy
   const result = await observeAnchor({
     entityAnchor: 'Caroline',
     outline: '# Caroline',
-    rewriteContent: '',
+    observedDocument: '',
     extractions: [{
       id: 'ext-a',
       status: 'changed',
@@ -595,15 +943,20 @@ test('observeAnchor accepts rootless leaf markdown for exact leaf rewrites', asy
     maxAttempts: 1,
     model: async () => ({
       type: 'final',
-      text: `### Support group <!-- id: 11111111-1111-4111-8111-111111111111; refs: [ext-a] -->
+      text: `## Support
 
-Caroline updated support details.`,
+### Support group
+Caroline updated support details.
+
+Source extractions:
+- [ext-a]`,
     }),
   });
 
   assert.equal(result.title, 'Caroline');
-  assert.equal(result.sections[0].level, 3);
-  assert.equal(result.sections[0].heading, 'Support group');
+  assert.equal(result.sections[0].level, 2);
+  assert.equal(result.sections[0].observingPath, 'Caroline / Support');
+  assert.equal(result.sections[0].children[0].observingPath, 'Caroline / Support / Support group');
 });
 
 test('runObserver upserts each observation id once', async (t) => {
@@ -640,16 +993,16 @@ test('runObserver upserts each observation id once', async (t) => {
       sections: [{
         level: 2,
         heading: 'Who is Caroline?',
-        id: undefined,
-        refs: [],
-        delete: false,
+        observingPath: 'Caroline / Who is Caroline?',
+        sourceRefs: [],
+        expandRefs: [],
         body: 'Caroline overview.',
         children: [{
           level: 3,
           heading: 'Support group',
-          id: undefined,
-          refs: [input.extractions[0].id],
-          delete: false,
+          observingPath: 'Caroline / Who is Caroline? / Support group',
+          sourceRefs: [input.extractions[0].id],
+          expandRefs: [],
           body: 'Caroline attended a support group.',
           children: [],
         }],
@@ -659,6 +1012,272 @@ test('runObserver upserts each observation id once', async (t) => {
 
   const ids = client.writes.observations.map((row) => row.id);
   assert.equal(ids.length, new Set(ids).size);
+});
+
+test('runObserver indexes only expandable refs while linking all source refs', async (t) => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'muninn-observer-source-refs-'));
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+
+  const homeDir = path.join(dir, 'home');
+  await writeFile(path.join(dir, 'muninn.json'), JSON.stringify(mockConfig(), null, 2));
+  await mkdir(homeDir, { recursive: true });
+  await copyFile(path.join(dir, 'muninn.json'), path.join(homeDir, 'muninn.json'));
+
+  const previousHome = process.env.MUNINN_HOME;
+  process.env.MUNINN_HOME = homeDir;
+  t.after(() => {
+    if (previousHome === undefined) {
+      delete process.env.MUNINN_HOME;
+    } else {
+      process.env.MUNINN_HOME = previousHome;
+    }
+  });
+
+  const client = makeClient({
+    extractions: makeExtractions(2),
+  });
+
+  await runObserver({
+    client,
+    observerName: 'test-observer',
+    baselineVersion: 0,
+    anchorThreshold: 5,
+    finalize: true,
+    observeAnchorImpl: async (input) => ({
+      title: 'Caroline',
+      sections: [{
+        level: 2,
+        heading: 'Who is Caroline?',
+        observingPath: 'Caroline / Who is Caroline?',
+        sourceRefs: [],
+        expandRefs: [],
+        body: 'Caroline overview.',
+        children: [{
+          level: 3,
+          heading: 'Support group',
+          observingPath: 'Caroline / Who is Caroline? / Support group',
+          sourceRefs: [input.extractions[0].id, input.extractions[1].id],
+          expandRefs: [input.extractions[1].id],
+          body: 'Caroline attended a support group.',
+          children: [],
+        }],
+      }],
+    }),
+  });
+
+  assert.equal(client.writes.observations.length, 1);
+  assert.deepEqual(client.writes.observations[0].extractionRefs, ['pending-2']);
+  const leafId = client.writes.observations[0].id;
+  assert.deepEqual(
+    client.writes.extractions.map((row) => [row.id, row.observationPaths]),
+    [['pending-1', [leafId]], ['pending-2', [leafId]]],
+  );
+});
+
+test('runObserver skips extraction path upsert when observation paths are unchanged', async (t) => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'muninn-observer-path-noop-'));
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+
+  const homeDir = path.join(dir, 'home');
+  await writeFile(path.join(dir, 'muninn.json'), JSON.stringify(mockConfig(), null, 2));
+  await mkdir(homeDir, { recursive: true });
+  await copyFile(path.join(dir, 'muninn.json'), path.join(homeDir, 'muninn.json'));
+
+  const previousHome = process.env.MUNINN_HOME;
+  process.env.MUNINN_HOME = homeDir;
+  t.after(() => {
+    if (previousHome === undefined) {
+      delete process.env.MUNINN_HOME;
+    } else {
+      process.env.MUNINN_HOME = previousHome;
+    }
+  });
+
+  const pathId = 'Caroline / Who is Caroline? / Support group';
+  const client = makeClient({
+    contexts: [{
+      id: pathId,
+      observingPath: pathId,
+      parentId: 'Caroline / Who is Caroline?',
+      position: 0,
+      content: 'Caroline attended a support group.',
+      sourceRefs: ['pending-1'],
+      expandRefs: [],
+      observer: 'test-observer',
+      createdAt: '2024-01-01T00:00:00Z',
+      updatedAt: '2024-01-01T00:00:00Z',
+    }],
+    extractions: [{
+      ...makeExtractions(1)[0],
+      observationPaths: [pathId],
+    }],
+  });
+
+  await runObserver({
+    client,
+    observerName: 'test-observer',
+    baselineVersion: 0,
+    anchorThreshold: 5,
+    finalize: true,
+    observeAnchorImpl: async (input) => ({
+      title: 'Caroline',
+      sections: [{
+        level: 2,
+        heading: 'Who is Caroline?',
+        observingPath: 'Caroline / Who is Caroline?',
+        sourceRefs: [],
+        expandRefs: [],
+        body: '',
+        children: [{
+          level: 3,
+          heading: 'Support group',
+          observingPath: pathId,
+          sourceRefs: [input.extractions[0].id],
+          expandRefs: [],
+          body: 'Caroline attended a support group.',
+          children: [],
+        }],
+      }],
+    }),
+  });
+
+  assert.deepEqual(client.writes.extractions, []);
+});
+
+test('runObserver updates stored extraction links when old refs move to a new leaf', async (t) => {
+  await useMockHome(t, 'muninn-observer-link-move-');
+  const oldPath = 'Caroline / Support / Support group';
+  const newPath = 'Caroline / Support / Community support';
+  const oldExtraction = {
+    ...extractionRow('extraction:old', ['Entity: Caroline'], 'Caroline previously attended a support group.'),
+    observationPaths: [oldPath],
+  };
+  const pendingExtraction = {
+    ...extractionRow('pending-1', ['Entity: Caroline'], 'Caroline joined a broader community support circle.'),
+    observationPaths: [oldPath],
+  };
+  const client = makeClient({
+    contexts: [{
+      id: 'Caroline / Support',
+      observingPath: 'Caroline / Support',
+      parentId: null,
+      position: 0,
+      content: '',
+      observer: 'test-observer',
+      createdAt: '2024-01-01T00:00:00Z',
+      updatedAt: '2024-01-01T00:00:00Z',
+    }, {
+      id: oldPath,
+      observingPath: oldPath,
+      parentId: 'Caroline / Support',
+      position: 0,
+      content: 'Caroline previously attended a support group.',
+      sourceRefs: ['extraction:old'],
+      expandRefs: [],
+      observer: 'test-observer',
+      createdAt: '2024-01-01T00:00:00Z',
+      updatedAt: '2024-01-01T00:00:00Z',
+    }],
+    extractions: [oldExtraction, pendingExtraction],
+  });
+
+  await runObserver({
+    client,
+    observerName: 'test-observer',
+    anchor: 'Caroline',
+    extractionChanges: [{ type: 'upsert', extraction: pendingExtraction }],
+    observeAnchorImpl: async () => ({
+      title: 'Caroline',
+      sections: [{
+        level: 2,
+        heading: 'Support',
+        observingPath: 'Caroline / Support',
+        sourceRefs: [],
+        expandRefs: [],
+        body: 'Caroline has community support.',
+        rewritten: true,
+        children: [{
+          level: 3,
+          heading: 'Community support',
+          observingPath: newPath,
+          sourceRefs: ['extraction:old', 'pending-1'],
+          expandRefs: [],
+          body: 'Caroline moved from a prior support group into broader community support.',
+          rewritten: true,
+          children: [],
+        }],
+      }],
+    }),
+  });
+
+  assert.equal(client.writes.deletedContextIds.includes(oldPath), true);
+  assert.deepEqual(
+    client.writes.extractions.map((row) => [row.id, row.observationPaths]).sort(),
+    [['extraction:old', [newPath]], ['pending-1', [newPath]]],
+  );
+});
+
+test('runObserver clears stored extraction links when old refs are removed from rewritten scope', async (t) => {
+  await useMockHome(t, 'muninn-observer-link-remove-');
+  const oldPath = 'Caroline / Support / Support group';
+  const oldExtraction = {
+    ...extractionRow('extraction:old', ['Entity: Caroline'], 'Caroline previously attended a support group.'),
+    observationPaths: [oldPath],
+  };
+  const pendingExtraction = {
+    ...extractionRow('pending-1', ['Entity: Caroline'], 'Caroline removed outdated support details.'),
+    observationPaths: [oldPath],
+  };
+  const client = makeClient({
+    contexts: [{
+      id: 'Caroline / Support',
+      observingPath: 'Caroline / Support',
+      parentId: null,
+      position: 0,
+      content: '',
+      observer: 'test-observer',
+      createdAt: '2024-01-01T00:00:00Z',
+      updatedAt: '2024-01-01T00:00:00Z',
+    }, {
+      id: oldPath,
+      observingPath: oldPath,
+      parentId: 'Caroline / Support',
+      position: 0,
+      content: 'Caroline previously attended a support group.',
+      sourceRefs: ['extraction:old'],
+      expandRefs: [],
+      observer: 'test-observer',
+      createdAt: '2024-01-01T00:00:00Z',
+      updatedAt: '2024-01-01T00:00:00Z',
+    }],
+    extractions: [oldExtraction, pendingExtraction],
+  });
+
+  await runObserver({
+    client,
+    observerName: 'test-observer',
+    anchor: 'Caroline',
+    extractionChanges: [{ type: 'upsert', extraction: pendingExtraction }],
+    observeAnchorImpl: async () => ({
+      title: 'Caroline',
+      sections: [{
+        level: 2,
+        heading: 'Support',
+        observingPath: 'Caroline / Support',
+        sourceRefs: [],
+        expandRefs: [],
+        body: 'Caroline support details were updated.',
+        rewritten: true,
+        children: [],
+      }],
+    }),
+  });
+
+  assert.equal(client.writes.deletedContextIds.includes(oldPath), true);
+  assert.deepEqual(
+    client.writes.extractions.map((row) => [row.id, row.observationPaths]).sort(),
+    [['extraction:old', []], ['pending-1', []]],
+  );
 });
 
 test('runObserver stores only current section content in observation text', async (t) => {
@@ -695,16 +1314,16 @@ test('runObserver stores only current section content in observation text', asyn
       sections: [{
         level: 2,
         heading: 'Who is Caroline?',
-        id: undefined,
-        refs: [],
-        delete: false,
+        observingPath: 'Caroline / Who is Caroline?',
+        sourceRefs: [],
+        expandRefs: [],
         body: 'Parent overview should not enter leaf observation text.',
         children: [{
           level: 3,
           heading: 'Support group',
-          id: undefined,
-          refs: [input.extractions[0].id],
-          delete: false,
+          observingPath: 'Caroline / Who is Caroline? / Support group',
+          sourceRefs: [input.extractions[0].id],
+          expandRefs: [],
           body: 'Caroline attended a support group.',
           children: [],
         }],
@@ -739,7 +1358,7 @@ test('runObserver deletes stale non-leaf observation rows', async (t) => {
 
   const client = makeClient({
     contexts: [{
-      id: 'parent-1',
+      id: 'Caroline / Who is Caroline?',
       observingPath: 'Caroline / Who is Caroline?',
       parentId: null,
       position: 0,
@@ -749,7 +1368,7 @@ test('runObserver deletes stale non-leaf observation rows', async (t) => {
       updatedAt: '2024-01-01T00:00:00Z',
     }],
     observations: [{
-      id: 'parent-1',
+      id: 'Caroline / Who is Caroline?',
       observingPath: 'Caroline / Who is Caroline?',
       text: 'Who is Caroline?\n\nParent overview.',
       vector: [],
@@ -771,16 +1390,16 @@ test('runObserver deletes stale non-leaf observation rows', async (t) => {
       sections: [{
         level: 2,
         heading: 'Who is Caroline?',
-        id: 'parent-1',
-        refs: [],
-        delete: false,
+        observingPath: 'Caroline / Who is Caroline?',
+        sourceRefs: [],
+        expandRefs: [],
         body: 'Parent overview.',
         children: [{
           level: 3,
           heading: 'Support group',
-          id: undefined,
-          refs: [input.extractions[0].id],
-          delete: false,
+          observingPath: 'Caroline / Who is Caroline? / Support group',
+          sourceRefs: [input.extractions[0].id],
+          expandRefs: [],
           body: 'Caroline attended a support group.',
           children: [],
         }],
@@ -788,7 +1407,7 @@ test('runObserver deletes stale non-leaf observation rows', async (t) => {
     }),
   });
 
-  assert.deepEqual(client.writes.deletedObservationIds, ['parent-1']);
+  assert.deepEqual(client.writes.deletedObservationIds, ['Caroline / Who is Caroline?']);
 });
 
 test('getObserverWorkStatus reports no work when extraction baseline is current', async () => {
@@ -833,7 +1452,7 @@ test('observeAnchor writes observer trace with input, prompt, and parsed documen
   const result = await observeAnchor({
     entityAnchor: 'Caroline',
     outline: '# Caroline\n\n(empty)',
-    rewriteContent: '',
+    observedDocument: '',
     extractions: [{
       id: 'ext-a',
       status: 'new',
@@ -848,13 +1467,13 @@ test('observeAnchor writes observer trace with input, prompt, and parsed documen
   assert.equal(result.title, 'Mock entity');
   const trace = JSON.parse(await readFile(tracePath, 'utf8'));
   assert.equal(trace.input.entityAnchor, 'Caroline');
-  assert.match(trace.prompt.system, /observer that rewrites part of a cross-session observation document/);
-  assert.match(trace.prompt.user, /Observation outline:/);
-  assert.match(trace.prompt.user, /Rewrite content:/);
+  assert.match(trace.prompt.system, /observer that maintains parts of a cross-session observation tree/);
+  assert.match(trace.prompt.system, /get_observation\(paths\)/);
+  assert.match(trace.prompt.user, /Observed document:/);
   assert.match(trace.prompt.user, /Extraction units:/);
   assert.match(trace.finalText, /# Mock entity/);
   assert.equal(trace.document.title, 'Mock entity');
-  assert.equal(trace.document.sections[0].children[0].refs[0], 'ext-a');
+  assert.equal(trace.document.sections[0].children[0].sourceRefs[0], 'ext-a');
 });
 
 test('observeAnchor exposes get_observation tool without memory-get', async (t) => {
@@ -880,8 +1499,8 @@ test('observeAnchor exposes get_observation tool without memory-get', async (t) 
   let calls = 0;
   const result = await observeAnchor({
     entityAnchor: 'Caroline',
-    outline: '# Caroline\n- ### Support group <!-- id: 11111111-1111-4111-8111-111111111111; leaf -->',
-    rewriteContent: '',
+    outline: '# Caroline\n- leaf: Caroline / Support / Support group',
+    observedDocument: '',
     extractions: [{
       id: 'ext-a',
       status: 'new',
@@ -890,11 +1509,15 @@ test('observeAnchor exposes get_observation tool without memory-get', async (t) 
       anchors: ['Entity: Caroline'],
       turnRefs: ['turn:1'],
     }],
-    getObservation: (id) => `# Caroline
+    getObservation: (paths) => `# Caroline
 
-### Support group <!-- id: ${id}; refs: [ext-old] -->
+## Support
 
-Caroline previously attended a support group.`,
+### Support group
+Caroline previously attended a support group.
+
+Source extractions:
+- [ext-old]`,
     validRefs: ['ext-old'],
     maxAttempts: 1,
     model: async (_task, request) => {
@@ -906,7 +1529,7 @@ Caroline previously attended a support group.`,
           toolCalls: [{
             id: 'call-1',
             name: 'get_observation',
-            arguments: { id: '11111111-1111-4111-8111-111111111111' },
+            arguments: { paths: ['Caroline / Support / Support group'] },
           }],
         };
       }
@@ -914,18 +1537,23 @@ Caroline previously attended a support group.`,
         type: 'final',
         text: `# Caroline
 
-## Support <!-- id: 11111111-1111-4111-8111-111111111111; refs: [ext-old, ext-a] -->
+## Support
 
-Caroline attended an LGBTQ support group.`,
+### Support group
+Caroline attended an LGBTQ support group.
+
+Source extractions:
+- [ext-old]
+- [ext-a]`,
       };
     },
   });
 
   assert.deepEqual([...new Set(toolNames)], ['get_observation']);
-  assert.equal(result.sections[0].refs.includes('ext-a'), true);
+  assert.equal(result.sections[0].children[0].sourceRefs.includes('ext-a'), true);
 });
 
-test('observeAnchor allows more than three get_observation tool steps by default', async (t) => {
+test('observeAnchor rejects more than two get_observation calls', async (t) => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'muninn-observer-tool-steps-'));
   t.after(async () => rm(dir, { recursive: true, force: true }));
 
@@ -945,10 +1573,10 @@ test('observeAnchor allows more than three get_observation tool steps by default
   });
 
   let calls = 0;
-  const result = await observeAnchor({
+  await assert.rejects(() => observeAnchor({
     entityAnchor: 'Caroline',
-    outline: '# Caroline\n- ### Support group <!-- id: 11111111-1111-4111-8111-111111111111; leaf -->',
-    rewriteContent: '',
+    outline: '# Caroline\n- leaf: Caroline / Support / Support group',
+    observedDocument: '',
     extractions: [{
       id: 'ext-a',
       status: 'new',
@@ -957,11 +1585,15 @@ test('observeAnchor allows more than three get_observation tool steps by default
       anchors: ['Entity: Caroline'],
       turnRefs: ['turn:1'],
     }],
-    getObservation: (id) => `# Caroline
+    getObservation: () => `# Caroline
 
-### Support group <!-- id: ${id}; refs: [ext-old] -->
+## Support
 
-Caroline previously attended a support group.`,
+### Support group
+Caroline previously attended a support group.
+
+Source extractions:
+- [ext-old]`,
     validRefs: ['ext-old'],
     maxAttempts: 1,
     model: async () => {
@@ -972,7 +1604,7 @@ Caroline previously attended a support group.`,
           toolCalls: [{
             id: `call-${calls}`,
             name: 'get_observation',
-            arguments: { id: '11111111-1111-4111-8111-111111111111' },
+            arguments: { paths: ['Caroline / Support / Support group'] },
           }],
         };
       }
@@ -980,15 +1612,19 @@ Caroline previously attended a support group.`,
         type: 'final',
         text: `# Caroline
 
-## Support <!-- id: 11111111-1111-4111-8111-111111111111; refs: [ext-old, ext-a] -->
+## Support
 
-Caroline attended an LGBTQ support group.`,
+### Support group
+Caroline attended an LGBTQ support group.
+
+Source extractions:
+- [ext-old]
+- [ext-a]`,
       };
     },
-  });
+  }), /get_observation exceeded max calls=3/);
 
-  assert.equal(calls, 5);
-  assert.equal(result.sections[0].refs.includes('ext-a'), true);
+  assert.equal(calls, 4);
 });
 
 test('observeAnchor recovers when get_observation is called with an unavailable id', async (t) => {
@@ -1014,8 +1650,8 @@ test('observeAnchor recovers when get_observation is called with an unavailable 
   let sawToolError = false;
   const result = await observeAnchor({
     entityAnchor: 'Caroline',
-    outline: '# Caroline\n- ### Support group <!-- id: 11111111-1111-4111-8111-111111111111; leaf -->',
-    rewriteContent: '',
+    outline: '# Caroline\n- leaf: Caroline / Support / Support group',
+    observedDocument: '',
     extractions: [{
       id: 'ext-a',
       status: 'new',
@@ -1024,15 +1660,19 @@ test('observeAnchor recovers when get_observation is called with an unavailable 
       anchors: ['Entity: Caroline'],
       turnRefs: ['turn:1'],
     }],
-    getObservation: (id) => {
-      if (id !== '11111111-1111-4111-8111-111111111111') {
-        throw new Error(`get_observation id is not visible in the outline: ${id}`);
+    getObservation: (paths) => {
+      if (paths[0] !== 'Caroline / Support / Support group') {
+        throw new Error(`get_observation path is not visible in the outline: ${paths[0]}`);
       }
       return `# Caroline
 
-### Support group <!-- id: ${id}; refs: [ext-old] -->
+## Support
 
-Caroline previously attended a support group.`;
+### Support group
+Caroline previously attended a support group.
+
+Source extractions:
+- [ext-old]`;
     },
     validRefs: ['ext-old'],
     maxAttempts: 1,
@@ -1044,7 +1684,7 @@ Caroline previously attended a support group.`;
           toolCalls: [{
             id: 'call-invalid',
             name: 'get_observation',
-            arguments: { id: 'not-visible' },
+            arguments: { paths: ['not-visible'] },
           }],
         };
       }
@@ -1054,23 +1694,37 @@ Caroline previously attended a support group.`;
         type: 'final',
         text: `# Caroline
 
-## Support <!-- id: 11111111-1111-4111-8111-111111111111; refs: [ext-old, ext-a] -->
+## Support
 
-Caroline attended an LGBTQ support group.`,
+### Support group
+Caroline attended an LGBTQ support group.
+
+Source extractions:
+- [ext-old]
+- [ext-a]`,
       };
     },
   });
 
   assert.equal(calls, 2);
   assert.equal(sawToolError, true);
-  assert.equal(result.sections[0].refs.includes('ext-a'), true);
+  assert.equal(result.sections[0].children[0].sourceRefs.includes('ext-a'), true);
 });
 
 function makeClient({ extractions, contexts = [], observations = [], extractionVersion = 1 }) {
+  const normalizedContexts = contexts.map((context) => {
+    const observation = observations.find((row) => row.id === context.id);
+    return {
+      sourceRefs: observation?.extractionRefs ?? [],
+      expandRefs: [],
+      ...context,
+    };
+  });
   const writes = {
     observationContexts: [],
     observations: [],
     extractions: [],
+    deletedContextIds: [],
     deletedObservationIds: [],
   };
   return {
@@ -1081,6 +1735,7 @@ function makeClient({ extractions, contexts = [], observations = [], extractionV
         fragmentCount: 1,
         rowCount: extractions.length,
       }),
+      get: async ({ ids }) => extractions.filter((row) => ids.includes(row.id)),
       delta: async ({ baselineVersion }) => (
         baselineVersion < extractionVersion ? extractions : []
       ),
@@ -1089,11 +1744,15 @@ function makeClient({ extractions, contexts = [], observations = [], extractionV
       },
     },
     observationContextTable: {
-      list: async () => contexts,
+      list: async () => normalizedContexts,
+      get: async ({ ids }) => normalizedContexts.filter((row) => ids.includes(row.id)),
       upsert: async ({ rows }) => {
         writes.observationContexts.push(...rows);
       },
-      delete: async () => ({ deleted: 0 }),
+      delete: async ({ ids }) => {
+        writes.deletedContextIds.push(...ids);
+        return { deleted: ids.length };
+      },
     },
     observationTable: {
       get: async ({ ids }) => observations.filter((row) => ids.includes(row.id)),
@@ -1108,6 +1767,26 @@ function makeClient({ extractions, contexts = [], observations = [], extractionV
   };
 }
 
+async function useMockHome(t, prefix) {
+  const dir = await mkdtemp(path.join(os.tmpdir(), prefix));
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+
+  const homeDir = path.join(dir, 'home');
+  await writeFile(path.join(dir, 'muninn.json'), JSON.stringify(mockConfig(), null, 2));
+  await mkdir(homeDir, { recursive: true });
+  await copyFile(path.join(dir, 'muninn.json'), path.join(homeDir, 'muninn.json'));
+
+  const previousHome = process.env.MUNINN_HOME;
+  process.env.MUNINN_HOME = homeDir;
+  t.after(() => {
+    if (previousHome === undefined) {
+      delete process.env.MUNINN_HOME;
+    } else {
+      process.env.MUNINN_HOME = previousHome;
+    }
+  });
+}
+
 function extractionRow(id, anchors, text) {
   return {
     id,
@@ -1118,7 +1797,7 @@ function extractionRow(id, anchors, text) {
     importance: 0.5,
     category: 'Fact',
     turnRefs: ['turn:1'],
-    observationIds: [],
+    observationPaths: [],
     observedRootAnchors: [],
     createdAt: '2026-05-17T00:00:00.000Z',
     updatedAt: '2026-05-17T00:00:00.000Z',
@@ -1134,7 +1813,7 @@ function makeExtractions(count, options = {}) {
     context: null,
     anchors,
     turnRefs: [`turn:${offset + index + 1}`],
-    observationIds: [],
+    observationPaths: [],
     observedRootAnchors: options.observed ? ['Caroline'] : [],
   }));
 }
@@ -1142,7 +1821,7 @@ function makeExtractions(count, options = {}) {
 function existingCarolineContexts() {
   return [
     {
-      id: 'support-parent',
+      id: 'Caroline / Support',
       observingPath: 'Caroline / Support',
       parentId: null,
       position: 0,
@@ -1152,9 +1831,9 @@ function existingCarolineContexts() {
       updatedAt: '2024-01-01T00:00:00Z',
     },
     {
-      id: 'support-leaf',
+      id: 'Caroline / Support / Support group',
       observingPath: 'Caroline / Support / Support group',
-      parentId: 'support-parent',
+      parentId: 'Caroline / Support',
       position: 0,
       content: 'Caroline attended a support group.',
       observer: 'test-observer',
@@ -1162,7 +1841,7 @@ function existingCarolineContexts() {
       updatedAt: '2024-01-01T00:00:00Z',
     },
     {
-      id: 'painting-parent',
+      id: 'Caroline / Art',
       observingPath: 'Caroline / Art',
       parentId: null,
       position: 1,
@@ -1172,9 +1851,9 @@ function existingCarolineContexts() {
       updatedAt: '2024-01-01T00:00:00Z',
     },
     {
-      id: 'painting-leaf',
+      id: 'Caroline / Art / Painting',
       observingPath: 'Caroline / Art / Painting',
-      parentId: 'painting-parent',
+      parentId: 'Caroline / Art',
       position: 0,
       content: 'Caroline painted a landscape.',
       observer: 'test-observer',

@@ -134,12 +134,10 @@ For each `sample_id`, the runner:
 4. runs batch recall through Muninn
 5. renders recalled hits into a QA prompt
 6. writes one benchmark prediction per question
-7. scores answer F1 and hidden recall
+7. scores answer F1 and judge pass rates
 
-Hidden recall is computed inside the harness by resolving recalled `memory_id`s
-back to imported turn ids and then to LoCoMo evidence ids. Those ids are not
-shown to the prediction logic; the bridge only returns them to the harness as hidden
-`evidence_ids`.
+Recall hits are rendered as memory text only. Source references are not returned
+through the LoCoMo recall interface or used as a scoring metric.
 
 ## Output Files
 

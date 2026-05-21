@@ -59,17 +59,8 @@ export type ImportManifest = {
 type BridgeHit = {
   memory_id: string;
   matched_text: string;
-  evidence_ids: string[];
   detail?: string;
   observationRatio?: number | null;
-  references: BridgeReference[];
-};
-
-type BridgeReference = {
-  memory_id: string;
-  source_id: string;
-  date_time: string;
-  text: string;
 };
 
 type TurnContent = {
@@ -346,51 +337,60 @@ export async function waitForImportWatermark(
     ?? envPositiveInt('MUNINN_LOCOMO_WATERMARK_WARNING_DELAY_MS', WATERMARK_WARNING_DELAY_MS);
   const startedAt = Date.now();
   let pendingTurnIds: string[] = [];
+  let pendingExtractionIds: string[] = [];
   let stalledWarningEmitted = false;
+  const database = options?.database ?? manifest.sample_id;
   const finalized = await withTransientRetry(
-    () => fetchMemoryFinalize(options?.database ?? manifest.sample_id),
+    () => fetchMemoryFinalize(database),
     {
       attempts: envPositiveInt('MUNINN_LOCOMO_WATERMARK_ATTEMPTS', RECALL_ATTEMPTS),
       delayMs: envPositiveInt('MUNINN_LOCOMO_WATERMARK_RETRY_DELAY_MS', RECALL_RETRY_DELAY_MS),
       label: 'memory finalize',
     },
   );
-  pendingTurnIds = finalized.pendingTurnIds;
-  if (finalized.resolved) {
+  pendingTurnIds = finalized.pending.turns;
+  pendingExtractionIds = finalized.pending.extractions;
+  if (finalized.error) {
+    throw new Error(`memory ${finalized.error.phase} error: ${finalized.error.message}`);
+  }
+  if (memoryWatermarkResolved(finalized)) {
     console.error(
-      `[locomo] finalized memory database=${options?.database ?? manifest.sample_id} for ${targetTurnId}: observerPending=${finalized.observerPending ? 'true' : 'false'}`
+      `[locomo] finalized memory database=${database} for ${targetTurnId}`
     );
     return;
   }
 
   while (Date.now() - startedAt <= timeoutMs) {
-    const watermark = await fetchMemoryWatermark(options?.database ?? manifest.sample_id);
-    pendingTurnIds = watermark.pendingTurnIds;
-    const preview = pendingTurnIds.slice(0, 5).join(', ') || '(none)';
+    const watermark = await fetchMemoryWatermark(database);
+    pendingTurnIds = watermark.pending.turns;
+    pendingExtractionIds = watermark.pending.extractions;
+    if (watermark.error) {
+      throw new Error(`memory ${watermark.error.phase} error: ${watermark.error.message}`);
+    }
+    const turnPreview = pendingTurnIds.slice(0, 5).join(', ') || '(none)';
+    const extractionPreview = pendingExtractionIds.slice(0, 5).join(', ') || '(none)';
     console.error(
-      `[locomo] waiting for ${targetTurnId}: ${pendingTurnIds.length} pending (${preview})`
+      `[locomo] waiting for ${targetTurnId}: turns=${pendingTurnIds.length} (${turnPreview}) extractions=${pendingExtractionIds.length} (${extractionPreview}) phases=${watermark.phases.extractor}/${watermark.phases.observer}`
     );
-    if (watermark.resolved) {
+    if (memoryWatermarkResolved(watermark)) {
       return;
     }
     if (
       !stalledWarningEmitted
       && Date.now() - startedAt >= warningDelayMs
-      && pendingTurnIds.length > 0
+      && (pendingTurnIds.length > 0 || pendingExtractionIds.length > 0)
     ) {
       stalledWarningEmitted = true;
       console.error(
-        `[locomo] warning: no memory progress detected after ${warningDelayMs}ms; pending turn ids: ${preview}; extractingEpoch=${formatEpoch(watermark.extractingEpoch)} committedEpoch=${formatEpoch(watermark.committedEpoch)} observerPending=${watermark.observerPending ? 'true' : 'false'}`
+        `[locomo] warning: no memory progress detected after ${warningDelayMs}ms; pending turns=${turnPreview}; pending extractions=${extractionPreview}; phases=${watermark.phases.extractor}/${watermark.phases.observer}`
       );
     }
     await sleep(pollMs);
   }
 
-  const pendingText = pendingTurnIds.length > 0
-    ? pendingTurnIds.join(', ')
-    : '(none)';
+  const pendingText = `turns=${pendingTurnIds.length > 0 ? pendingTurnIds.join(', ') : '(none)'}; extractions=${pendingExtractionIds.length > 0 ? pendingExtractionIds.join(', ') : '(none)'}`;
   throw new Error(
-    `memory watermark timeout for ${targetTurnId}; pending turn ids: ${pendingText}`
+    `memory watermark timeout for ${targetTurnId}; pending: ${pendingText}`
   );
 }
 
@@ -453,11 +453,18 @@ async function parseMemoryWatermarkPayload(
 ) {
   const payload = rawPayload as {
     errorMessage?: string;
-    resolved?: boolean;
-    pendingTurnIds?: unknown[];
-    extractingEpoch?: number;
-    committedEpoch?: number;
-    observerPending?: boolean;
+    pending?: {
+      turns?: unknown[];
+      extractions?: unknown[];
+    };
+    phases?: {
+      extractor?: unknown;
+      observer?: unknown;
+    };
+    error?: {
+      phase?: unknown;
+      message?: unknown;
+    };
   };
   if (!ok) {
     const detail = typeof payload?.errorMessage === 'string'
@@ -466,15 +473,43 @@ async function parseMemoryWatermarkPayload(
     const message = `sidecar ${label} request failed with status ${status}: ${detail}`;
     throw new Error(message);
   }
+  const extractorPhase = parseWatermarkPhase(payload.phases?.extractor, 'extractor');
+  const observerPhase = parseWatermarkPhase(payload.phases?.observer, 'observer');
   return {
-    resolved: payload.resolved === true,
-    pendingTurnIds: Array.isArray(payload.pendingTurnIds)
-      ? payload.pendingTurnIds.map((value) => String(value))
-      : [],
-    extractingEpoch: typeof payload.extractingEpoch === 'number' ? payload.extractingEpoch : undefined,
-    committedEpoch: typeof payload.committedEpoch === 'number' ? payload.committedEpoch : undefined,
-    observerPending: payload.observerPending === true,
+    pending: {
+      turns: Array.isArray(payload.pending?.turns)
+        ? payload.pending.turns.map((value) => String(value))
+        : [],
+      extractions: Array.isArray(payload.pending?.extractions)
+        ? payload.pending.extractions.map((value) => String(value))
+        : [],
+    },
+    phases: {
+      extractor: extractorPhase,
+      observer: observerPhase,
+    },
+    ...(payload.error && typeof payload.error.message === 'string' && (payload.error.phase === 'extractor' || payload.error.phase === 'observer')
+      ? { error: { phase: payload.error.phase, message: payload.error.message } }
+      : {}),
   };
+}
+
+function parseWatermarkPhase(value: unknown, component: 'extractor' | 'observer') {
+  const allowed = component === 'observer'
+    ? ['idle', 'pending', 'running', 'draining', 'error']
+    : ['idle', 'pending', 'running', 'error'];
+  if (typeof value === 'string' && allowed.includes(value)) {
+    return value;
+  }
+  throw new Error(`sidecar watermark response had invalid ${component} phase: ${String(value)}`);
+}
+
+function memoryWatermarkResolved(watermark: Awaited<ReturnType<typeof fetchMemoryWatermark>>): boolean {
+  return watermark.pending.turns.length === 0
+    && watermark.pending.extractions.length === 0
+    && watermark.phases.extractor === 'idle'
+    && watermark.phases.observer === 'idle'
+    && !watermark.error;
 }
 
 async function recallHits(
@@ -606,25 +641,10 @@ function parseBridgeHit(value: unknown): BridgeHit {
   return {
     memory_id: String(hit.memory_id ?? ''),
     matched_text: String(hit.matched_text ?? ''),
-    evidence_ids: Array.isArray(hit.evidence_ids) ? hit.evidence_ids.map((item) => String(item)) : [],
     detail: typeof hit.detail === 'string' ? hit.detail : undefined,
     observationRatio: typeof hit.observationRatio === 'number' || hit.observationRatio === null
       ? hit.observationRatio
       : undefined,
-    references: Array.isArray(hit.references) ? hit.references.map(parseBridgeReference) : [],
-  };
-}
-
-function parseBridgeReference(value: unknown): BridgeReference {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    return { memory_id: '', source_id: '', date_time: '', text: '' };
-  }
-  const reference = value as Record<string, unknown>;
-  return {
-    memory_id: String(reference.memory_id ?? ''),
-    source_id: String(reference.source_id ?? ''),
-    date_time: String(reference.date_time ?? ''),
-    text: String(reference.text ?? ''),
   };
 }
 
@@ -1010,10 +1030,6 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
   });
-}
-
-function formatEpoch(value: number | undefined): string {
-  return value === undefined ? 'none' : String(value);
 }
 
 const isDirectExecution =

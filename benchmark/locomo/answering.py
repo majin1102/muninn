@@ -28,7 +28,6 @@ def build_answer_context(
     question: str,
     category: int,
     hits: list[RecallHit],
-    expand_references: bool,
 ) -> str:
     if not hits:
         return ""
@@ -41,8 +40,7 @@ def render_locomo_context_line(hit: RecallHit) -> str:
     text = normalize_recall_text(hit.detail or hit.matched_text or "")
     if not text:
         return ""
-    date_time = hit_date_time(hit)
-    return f"{date_time}: {text}" if date_time else text
+    return text
 
 
 def normalize_recall_text(text: str) -> str:
@@ -56,18 +54,6 @@ def normalize_recall_text(text: str) -> str:
         if stripped:
             parts.append(stripped)
     return " ".join(parts)
-
-
-def hit_date_time(hit: RecallHit) -> str:
-    date_times: list[str] = []
-    seen: set[str] = set()
-    for reference in hit.references or []:
-        value = str(reference.get("date_time") or "").strip()
-        if not value or value in seen:
-            continue
-        seen.add(value)
-        date_times.append(value)
-    return " | ".join(date_times)
 
 
 def build_qa_trace(
@@ -104,7 +90,6 @@ def build_qa_trace(
         "memory_clarity_reason": qa.get(f"{prediction_key.removesuffix('_prediction')}_memory_clarity_reason"),
         "answer_elapsed_s": qa.get(f"{prediction_key.removesuffix('_prediction')}_answer_elapsed_s"),
         "f1": round(scored.f1, 4),
-        "recall": round(scored.recall, 4),
         "adversarial_answer": scored.adversarial_answer,
         "adversarial_match": scored.adversarial_match,
     }

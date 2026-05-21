@@ -150,11 +150,20 @@ export class Extractor {
     const pendingTurnIds = [...pendingById.values()]
       .sort(compareTurns)
       .map((turn) => turn.turnId);
+    const phase = this.currentEpoch || this.hasPendingExtraction()
+      ? 'running'
+      : pendingTurnIds.length > 0
+        ? 'pending'
+        : 'idle';
     return {
-      resolved: pendingTurnIds.length === 0 && !this.hasPendingExtraction() && !this.currentEpoch,
-      pendingTurnIds,
-      extractingEpoch: this.currentEpoch?.epoch,
-      committedEpoch: this.committedEpoch,
+      pending: {
+        turns: pendingTurnIds,
+        extractions: [],
+      },
+      phases: {
+        extractor: phase,
+        observer: 'idle',
+      },
     };
   }
 
@@ -210,6 +219,13 @@ export class Extractor {
       }
       await this.waitForChange(version);
     }
+  }
+
+  async finalize(): Promise<MemoryWatermark> {
+    await this.ensureBootstrapped();
+    this.sealOpenEpoch(this.openEpoch, true);
+    this.notifyChange();
+    return this.watermark();
   }
 
   private async bootstrapInternal(): Promise<void> {
@@ -833,7 +849,7 @@ function cloneQueuedExtractionChange(change: QueuedExtractionChange): QueuedExtr
       anchors: [...change.extraction.anchors],
       vector: [...change.extraction.vector],
       turnRefs: [...change.extraction.turnRefs],
-      observationIds: [...change.extraction.observationIds],
+      observationPaths: [...change.extraction.observationPaths],
       observedRootAnchors: [...change.extraction.observedRootAnchors],
     },
   };

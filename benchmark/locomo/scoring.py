@@ -177,26 +177,18 @@ def summarize_question_answering(
 ) -> dict[str, Any]:
     rows = score_qas(qas, prediction_key)
     category_scores: dict[str, list[float]] = defaultdict(list)
-    category_recall: dict[str, list[float]] = defaultdict(list)
     for row, qa in zip(rows, qas):
         category = str(qa["category"])
         category_scores[category].append(row.f1)
-        category_recall[category].append(row.recall)
 
     scores = [row.f1 for row in rows]
-    recall = [row.recall for row in rows]
     return {
         "model_key": model_key,
         "qa_count": len(rows),
         "average_f1": round(sum(scores) / len(scores), 4) if scores else 0.0,
-        "average_recall": round(sum(recall) / len(recall), 4) if recall else 0.0,
         "category_f1": {
             category: round(sum(values) / len(values), 4)
             for category, values in sorted(category_scores.items())
-        },
-        "category_recall": {
-            category: round(sum(values) / len(values), 4)
-            for category, values in sorted(category_recall.items())
         },
     }
 
