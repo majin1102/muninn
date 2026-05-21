@@ -1,7 +1,7 @@
-import type { Extraction, ExtractionCategory } from './types.js';
+import type { Extraction } from './types.js';
 
 type ThreadMemoryAnchor = {
-  name: Extract<ExtractionCategory, 'Entity' | 'Fact' | 'Decision' | 'Preference'>;
+  name: 'Entity';
   phrase: string;
 };
 
@@ -94,7 +94,6 @@ export function parseThreadMemoryUnits(
       text,
       context: normalizeText(body.context ?? '') || null,
       anchors: renderThreadMemoryAnchors(body.anchors),
-      category: body.anchors[0].name,
       references: metadata.references,
     });
   }
@@ -124,11 +123,11 @@ function headingIndexes(lines: string[], level: number, label: string | null): n
 
 function parseThreadMemoryBody(lines: string[]): { anchors: ThreadMemoryAnchor[]; context?: string; extraction: string } {
   const content = lines.join('\n').trim();
-  const extractionMatch = content.match(/(?:^|\n)\s*\[Extraction\]\s*([\s\S]*?)(?=\n\s*\[Context\]|\n\s*\[Extraction\]|\s*$)/);
+  const extractionMatch = content.match(/(?:^|\n)\s*\[Extraction\]\s*([\s\S]*?)(?=\n\s*\[[A-Za-z]+\]|\s*$)/);
   if (!extractionMatch) {
     return { anchors: parseThreadMemoryAnchors(lines), extraction: '' };
   }
-  const contextMatch = content.match(/(?:^|\n)\s*\[Context\]\s*([\s\S]*?)(?=\n\s*\[Extraction\]|\n\s*\[Context\]|\s*$)/);
+  const contextMatch = content.match(/(?:^|\n)\s*\[Context\]\s*([\s\S]*?)(?=\n\s*\[[A-Za-z]+\]|\s*$)/);
   return {
     anchors: parseThreadMemoryAnchors(lines),
     context: contextMatch?.[1],
@@ -181,20 +180,20 @@ function parseThreadMemoryAnchors(lines: string[]): ThreadMemoryAnchor[] {
     if (label === 'Context' || label === 'Extraction') {
       continue;
     }
-    anchors.push({
-      name: normalizeThreadMemoryAnchorName(label),
-      phrase: normalizeText(match[2] ?? ''),
-    });
+    if (label !== 'Entity') {
+      throw new Error(`invalid thread memory anchor: ${label}`);
+    }
+    anchors.push(parseThreadMemoryEntity(match[2] ?? ''));
   }
 
   if (anchors.length === 0) {
-    throw new Error('threadMemory unit must include at least one anchor');
+    throw new Error('threadMemory unit must include [Entity]');
   }
-  if (anchors.length > 3) {
-    throw new Error('threadMemory unit cannot include more than three anchors');
+  if (anchors.length > 1) {
+    throw new Error('threadMemory unit must include exactly one [Entity]');
   }
   for (const anchor of anchors) {
-    validateThreadMemoryAnchorPhrase(anchor.phrase);
+    validateThreadMemoryEntity(anchor.phrase);
   }
   return anchors;
 }
@@ -203,23 +202,21 @@ function renderThreadMemoryAnchors(anchors: ThreadMemoryAnchor[]): string[] {
   return anchors.map((anchor) => `${anchor.name}: ${anchor.phrase}`);
 }
 
-function normalizeThreadMemoryAnchorName(value: string): ThreadMemoryAnchor['name'] {
-  const text = value.trim();
-  if (
-    text !== 'Preference'
-    && text !== 'Fact'
-    && text !== 'Decision'
-    && text !== 'Entity'
-  ) {
-    throw new Error(`invalid thread memory anchor: ${value}`);
+function parseThreadMemoryEntity(value: string): ThreadMemoryAnchor {
+  if (value.includes(',')) {
+    throw new Error('threadMemory [Entity] must name exactly one main person');
   }
-  return text;
+  const phrase = normalizeText(value);
+  if (!phrase) {
+    throw new Error('threadMemory unit must include [Entity]');
+  }
+  return { name: 'Entity' as const, phrase };
 }
 
-function validateThreadMemoryAnchorPhrase(value: string): void {
+function validateThreadMemoryEntity(value: string): void {
   const words = value.split(/\s+/).filter(Boolean);
   if (words.length < 1 || words.length > 5) {
-    throw new Error('threadMemory anchor phrase must contain 1-5 words');
+    throw new Error('threadMemory entity phrase must contain 1-5 words');
   }
 }
 

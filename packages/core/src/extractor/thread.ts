@@ -71,7 +71,6 @@ export function cloneObservingThread(thread: ObservingThread): ObservingThread {
         text: extraction.text,
         context: extraction.context ?? null,
         anchors: [...(extraction.anchors ?? [])],
-        category: extraction.category,
         references: [...(extraction.references ?? [])],
         updatedMemory: extraction.updatedMemory ?? null,
       })),

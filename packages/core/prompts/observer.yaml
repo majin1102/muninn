@@ -15,19 +15,19 @@ system: |
 
   Section, leaf, and source budget
   - Use headings up to `####` only; do not create `#####` or deeper headings
-  - A leaf should be a readable, recall-ready mini-document, usually 100-500 words with 1-5 source extractions
-  - Exceed the leaf budget only when sources are near-duplicates or inseparable; otherwise split into narrower sibling leaves, or promote a broad scope into child leaves when nested structure is clearer
-  - The observation body is synthesized memory, not repeated extraction content; keep exact dates, places, names, source objects, and concrete labels in the body when they define the remembered fact, and use `Source extractions:` for source-level detail below it
-  - Use Markdown paragraphs, bullets, or compact lists when they make the content clearer
-  - Within the leaf budget, keep details together when they share one focused subject and form a coherent section in the memory document
+  - Keep the whole leaf under 1000 words and within 5 source extractions; exceed these only when splitting would break an inseparable memory or lose recall-critical meaning
+  - When splitting, create narrower sibling leaves by content or subject, or promote the broad scope into child leaves when nested structure is clearer
+  - Name sections by remembered content, not by date, session, turn order, or catch-up structure
+  - Group extractions into one leaf only when they would naturally be read together as one coherent memory section; do not group by date, session, speaker pair, or broad topic alone
 
   Observation rewrite rules
   - Call `get_observation(paths)` at most 3 times per observation job when related content may be missing; batch related paths in each call and copy path strings exactly from heading `path:` comments
-  - Rewrite in the tree's natural semantic structure, keeping source extraction ids with the leaf content they support
-  - Every rewritten leaf must include `Source extractions:` after the observation body
-  - Single-source bullet format is exactly `- [extraction_id]`; no text may follow it
-  - Use a multi-source bullet only when multiple source extractions are merged into one shared source note, such as near-duplicates, overlapping details, or conflict-resolved evidence
-  - Multi-source bullet format is `- [extraction_id1, extraction_id2] rewritten source content`; content is required and must preserve source-level detail and wording because those original extractions will not be expanded during recall
+  - A rewritten leaf contains a synthesis paragraph followed by extraction-linked bullets
+  - The synthesis paragraph summarizes how the linked extractions fit together; it should not replace their source facts
+  - Lines starting with `-` are reserved for extraction-linked bullets; write all other leaf text as paragraphs
+  - Each bullet uses `- [extraction_id] rewritten remembered content` for one source extraction; preserve the source extraction's answerable content at its original precision, keeping only the context needed to understand it and removing only filler or repeated wording
+  - When rewriting a leaf, resolve conflicts, corrections, repetitions, and complementary details across extractions; do not mechanically rewrite each extraction or leave contradictory duplicates side by side
+  - Keep extraction ids in the leaf text for duplicate filtering; recall uses the leaf content as written
 
   Overall output format
   - Output Markdown only
@@ -41,15 +41,10 @@ system: |
   # Atlas
   ## Product Direction
   ### Onboarding metric focus
-  Atlas shifted toward onboarding metrics after the team compared activation and retention work. The change narrowed the project to the first-run experience and gave the team a clearer way to evaluate whether new users were reaching the product's core value.
+  Atlas narrowed its product direction from a broad activation-versus-retention discussion into an onboarding-focused first-run experience plan.
 
-  Source extractions:
-  - [ext-uuid1, ext-uuid2] The team compared activation and retention work, then narrowed Atlas to onboarding metrics and first-run experience.
-  - [ext-uuid3]
-
-  Writing style
-  - Write from an observer view, not as a transcript; remove transcript scaffolding and repeated wording
-
+  - [ext-uuid1] The team compared activation and retention as possible product priorities for Atlas.
+  - [ext-uuid2] Atlas chose to focus on onboarding metrics and first-run product value after the comparison.
 user_template: |
   Observed document:
   {{observed_document}}

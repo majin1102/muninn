@@ -6,7 +6,6 @@ import type { NativeTables, Extraction as StoredExtraction } from '../native.js'
 import type { QueuedExtractionChange } from '../checkpoint.js';
 import type {
   Extraction,
-  ExtractionCategory,
   ExtractionChange,
   ObserveResult,
   SnapshotContent,
@@ -42,7 +41,6 @@ export function applyExtractionChanges(
     const generatedId = addedExtractionId({
       type: 'add',
       text: normalized.text,
-      category: normalized.category,
       references: normalized.references,
       reason: 'state rewrite added extraction',
     });
@@ -73,7 +71,6 @@ export function applyExtractionChanges(
         text: nextExtraction.text,
         context: nextExtraction.context ?? null,
         anchors: nextExtraction.anchors ?? [],
-        category: nextExtraction.category,
         references: nextExtraction.references,
         reason: 'state rewrite added extraction',
       });
@@ -84,14 +81,12 @@ export function applyExtractionChanges(
       existing.text !== nextExtraction.text
       || (existing.context ?? null) !== (nextExtraction.context ?? null)
       || !sameStringSet(existing.anchors ?? [], nextExtraction.anchors ?? [])
-      || existing.category !== nextExtraction.category
       || !sameStringSet(existing.references, nextExtraction.references)
     ) {
       changes.push({
         type: 'update',
         extractionId: id,
         text: nextExtraction.text,
-        category: nextExtraction.category,
         references: nextExtraction.references,
         context: nextExtraction.context ?? null,
         anchors: nextExtraction.anchors ?? [],
@@ -118,7 +113,6 @@ export function applyExtractionChanges(
 
 function extractionUnitKey(extraction: Extraction): string {
   return [
-    extraction.category,
     [...(extraction.anchors ?? [])].sort().join('\u0001'),
     [...(extraction.references ?? [])].sort().join('\u0001'),
   ].join('\u0002');
@@ -217,7 +211,6 @@ export async function applyExtractionTableChanges(
       anchors: extraction.anchors ?? [],
       vector: await embedText(embeddingText(extraction), signal),
       importance: existing?.importance ?? embeddingConfig.defaultImportance,
-      category: semanticCategory(extraction.category),
       turnRefs: references,
       observationPaths: existing?.observationPaths ?? [],
       observedRootAnchors: existing?.observedRootAnchors ?? [],
@@ -259,7 +252,6 @@ function normalizeChanges(
         type: 'add',
         text,
         ...(change.context ? { context: normalizeText(change.context) } : {}),
-        category: normalizeCategory(change.category),
         references,
         reason,
       };
@@ -281,7 +273,6 @@ function normalizeChanges(
         extractionIds,
         text,
         ...(change.context ? { context: normalizeText(change.context) } : {}),
-        category: normalizeCategory(change.category),
         reason,
       };
     }
@@ -297,7 +288,6 @@ function normalizeChanges(
         extractionId,
         text,
         ...(change.context ? { context: normalizeText(change.context) } : {}),
-        ...(change.category ? { category: normalizeCategory(change.category) } : {}),
         ...(Array.isArray(change.references) ? { references: normalizeIds(change.references) } : {}),
         reason,
       };
@@ -353,7 +343,6 @@ function addedExtractionId(change: Extract<ExtractionChange, { type: 'add' }>): 
   return stableExtractionId({
     type: change.type,
     text: change.text,
-    category: change.category,
     references: [...change.references].sort(),
   });
 }
@@ -363,7 +352,6 @@ function mergedExtractionId(change: Extract<ExtractionChange, { type: 'merge' }>
     type: change.type,
     extractionIds: [...change.extractionIds].sort(),
     text: change.text,
-    category: change.category,
   });
 }
 
@@ -391,7 +379,6 @@ function cloneExtraction(
     text,
     context: normalizeText(extraction.context ?? '') || null,
     anchors: normalizeAnchors(extraction.anchors ?? []),
-    category: normalizeCategory(extraction.category),
     references,
     updatedMemory: extraction.updatedMemory?.trim() || null,
   };
@@ -411,38 +398,6 @@ function normalizeIds(ids: string[]): string[] {
 
 function normalizeAnchors(anchors: string[]): string[] {
   return [...new Set((anchors ?? []).map((anchor) => normalizeText(anchor)).filter(Boolean))];
-}
-
-function normalizeCategory(category: ExtractionCategory): ExtractionCategory {
-  if ([
-    'Preference',
-    'Fact',
-    'Decision',
-    'Entity',
-    'Concept',
-    'Other',
-  ].includes(category)) {
-    return category;
-  }
-  throw new Error(`invalid extraction category: ${category}`);
-}
-
-function semanticCategory(category: Extraction['category']): string {
-  switch (category) {
-    case 'Preference':
-      return 'preference';
-    case 'Fact':
-      return 'fact';
-    case 'Decision':
-      return 'decision';
-    case 'Entity':
-      return 'entity';
-    case 'Concept':
-    case 'Other':
-      return 'other';
-    default:
-      return 'other';
-  }
 }
 
 function normalizeText(value: string): string {

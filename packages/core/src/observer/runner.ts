@@ -143,11 +143,12 @@ async function runQueuedObserver(params: {
   const tree = contextsForAnchor(allContexts, params.anchor);
   const currentObservationRefs = stripChangedExtractionRefs(refHintsById(tree.rows), changedExtractions);
   const rewriteScope = buildRewriteScope(tree, changedExtractions);
+  const extractions = upsertExtractions.map(toObserverExtractionInput);
   const result = await (params.observeAnchorImpl ?? observeAnchor)({
     entityAnchor: params.anchor,
     outline: renderOutline(params.anchor, tree.rootRows),
     observedDocument: renderObservedDocument(params.anchor, tree.rows, rewriteScope.paths, currentObservationRefs),
-    extractions: upsertExtractions.map(toObserverExtractionInput),
+    extractions,
     validRefs: [...currentObservationRefs.values()].flatMap(allRefs),
     getObservation: createGetObservationTool(params.anchor, tree, currentObservationRefs),
     signal: params.signal,
@@ -387,7 +388,7 @@ function protectedKeepRoots(sections: ParsedObserverSection[]): ParsedObserverSe
 }
 
 function sectionIsRewritten(section: ParsedObserverSection): boolean {
-  return section.rewritten ?? Boolean(section.body.trim() || section.sourceRefs.length > 0);
+  return section.rewritten ?? Boolean(section.body.trim());
 }
 
 function hasRewrittenDescendant(section: ParsedObserverSection): boolean {
@@ -465,14 +466,14 @@ async function buildObservationRows(
     if (!node.content.trim()) {
       continue;
     }
-    const expandRefs = unique(node.expandRefs ?? []);
+    const sourceRefs = unique(node.sourceRefs ?? []);
     const text = leafObservationText(node);
     rows.push({
       id: node.id,
       observingPath: node.observingPath,
       text,
       vector: await embedText(text, signal),
-      extractionRefs: expandRefs,
+      extractionRefs: sourceRefs,
       createdAt: existing.get(node.id)?.createdAt ?? now,
       updatedAt: now,
     });
@@ -736,9 +737,6 @@ function renderContextRow(
   if (selected && row.content.trim()) {
     lines.push('', row.content.trim());
   }
-  if (selected && !hasChildren) {
-    lines.push(...renderSourceExtractionLines(refs, row.content));
-  }
   return lines.join('\n').trim();
 }
 
@@ -773,17 +771,6 @@ function allNodeRefs(node: Pick<NextNode, 'sourceRefs'>): string[] {
 
 function emptyRefs(): RefHints {
   return { sourceRefs: [], expandRefs: [] };
-}
-
-function renderRefsHint(_refs: RefHints): string {
-  return '';
-}
-
-function renderSourceExtractionLines(refs: RefHints, content: string): string[] {
-  if (/^Source extractions:\s*$/im.test(content)) {
-    return [];
-  }
-  return ['', 'Source extractions:', ...allRefs(refs).map((ref) => `- [${ref}]`)];
 }
 
 function unique(values: string[]): string[] {

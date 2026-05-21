@@ -2,10 +2,12 @@ import type { ParsedObserverDocument, ParsedObserverSection } from './types.js';
 
 type DraftSection = ParsedObserverSection & {
   parent?: DraftSection;
-  declaredSources?: boolean;
 };
 
-export function parseObserverDocument(raw: string, validRefs: Set<string>): ParsedObserverDocument {
+export function parseObserverDocument(
+  raw: string,
+  validRefs: Set<string>,
+): ParsedObserverDocument {
   return parseObserverMarkdown(raw, validRefs, {});
 }
 
@@ -117,7 +119,6 @@ function parseSections(
       rewritten: false,
       children: [],
       parent,
-      declaredSources: hint.declaredSources,
     };
     if (parent) {
       parent.children.push(section);
@@ -128,7 +129,7 @@ function parseSections(
   }
 
   trimBodies(roots);
-  parseSourceExtractionSections(roots, validRefs);
+  parseExtractionLinkedBullets(roots, validRefs);
   markRewritten(roots);
   return roots;
 }
@@ -136,16 +137,14 @@ function parseSections(
 function parseHint(
   value: string,
   validRefs: Set<string>,
-): { sourceRefs: string[]; expandRefs: string[]; declaredSources: boolean } {
+): { sourceRefs: string[]; expandRefs: string[] } {
   const hint = value.trim();
   const result: {
     sourceRefs: string[];
     expandRefs: string[];
-    declaredSources: boolean;
   } = {
     sourceRefs: [],
     expandRefs: [],
-    declaredSources: false,
   };
   if (!hint) {
     return result;
@@ -255,14 +254,8 @@ function validateTree(sections: DraftSection[], validRefs: Set<string>): void {
       if (!section.rewritten) {
         continue;
       }
-      if (!section.declaredSources) {
-        throw new Error(`leaf observer section must include Source extractions: ${section.heading}`);
-      }
       if (sectionRefs.length === 0) {
-        throw new Error(`leaf observer section source extraction ids cannot be empty: ${section.heading}`);
-      }
-      if (!clean(section.body)) {
-        throw new Error(`rewritten leaf observer section cannot be empty: ${section.heading}`);
+        throw new Error(`leaf observer section must include extraction-linked bullets: ${section.heading}`);
       }
     }
     for (const ref of sectionRefs) {
@@ -285,7 +278,10 @@ function trimBodies(sections: DraftSection[]): void {
   }
 }
 
-function parseSourceExtractionSections(sections: DraftSection[], validRefs: Set<string>): void {
+function parseExtractionLinkedBullets(
+  sections: DraftSection[],
+  validRefs: Set<string>,
+): void {
   for (const section of walk(sections)) {
     if (!clean(section.body)) {
       continue;
@@ -293,50 +289,39 @@ function parseSourceExtractionSections(sections: DraftSection[], validRefs: Set<
     if (/<!--[\s\S]*?-->/i.test(section.body)) {
       throw new Error(`observer section body cannot contain HTML comments: ${section.heading}`);
     }
+    if (/^Source extractions:\s*$/im.test(section.body)) {
+      throw new Error(`observer leaf must use extraction-linked bullets, not Source extractions: ${section.heading}`);
+    }
     const lines = section.body.split(/\r?\n/);
-    const sourceIndex = lines.findIndex((line) => /^Source extractions:\s*$/i.test(line.trim()));
-    if (sourceIndex < 0) {
-      continue;
-    }
-    const before = lines.slice(0, sourceIndex).join('\n').trim();
-    if (!before) {
-      throw new Error(`rewritten leaf observer section cannot be empty: ${section.heading}`);
-    }
-    const sourceLines = lines.slice(sourceIndex + 1).filter((line) => line.trim());
-    if (sourceLines.length === 0) {
-      throw new Error(`Source extractions cannot be empty: ${section.heading}`);
-    }
-    const normalizedSourceLines: string[] = [];
-    for (const line of sourceLines) {
-      const match = line.match(/^\s*-\s*(\[[^\]]+\])\s*(.*)$/);
+    const normalizedLines: string[] = [];
+    for (const line of lines) {
+      if (!line.trim().startsWith('-')) {
+        normalizedLines.push(line);
+        continue;
+      }
+      const match = line.match(/^\s*-\s*(\[[^\]]+\])(?:\s+(.*\S))?\s*$/);
       if (!match) {
-        throw new Error(`Source extractions must use "- [extraction-id]": ${section.heading}`);
+        throw new Error(`extraction-linked bullets must use "- [extraction-id] rewritten content": ${section.heading}`);
       }
-      const refs = parseRefs(match[1]!, validRefs, 'source extraction');
-      const rewritten = (match[2] ?? '').trim();
-      if (rewritten && refs.length === 1) {
-        throw new Error(`single Source extraction bullets must not rewrite source content: ${section.heading}`);
+      const refs = parseRefs(match[1]!, validRefs, 'extraction-linked bullet');
+      if (refs.length !== 1) {
+        throw new Error(`extraction-linked bullets must reference exactly one extraction id: ${section.heading}`);
       }
-      if (!rewritten && refs.length !== 1) {
-        throw new Error(`placeholder Source extraction bullets must contain exactly one id: ${section.heading}`);
+      const content = clean(match[2] ?? '');
+      if (!content) {
+        throw new Error(`extraction-linked bullets must include rewritten remembered content: ${section.heading}`);
       }
-      if (rewritten) {
-        section.sourceRefs = unique([...section.sourceRefs, ...refs]);
-        normalizedSourceLines.push(`- [${refs.join(', ')}] ${rewritten}`);
-      } else {
-        section.sourceRefs = unique([...section.sourceRefs, refs[0]!]);
-        section.expandRefs = unique([...section.expandRefs, refs[0]!]);
-        normalizedSourceLines.push(`- [${refs[0]}]`);
-      }
+      section.sourceRefs = unique([...section.sourceRefs, refs[0]!]);
+      normalizedLines.push(`- [${refs[0]}] ${content}`);
     }
-    section.declaredSources = true;
-    section.body = `${before}\n\nSource extractions:\n${normalizedSourceLines.join('\n')}`.trim();
+    section.expandRefs = [];
+    section.body = normalizedLines.join('\n').trim();
   }
 }
 
 function markRewritten(sections: DraftSection[]): void {
   for (const section of walk(sections)) {
-    section.rewritten = Boolean(clean(section.body) || section.declaredSources);
+    section.rewritten = Boolean(clean(section.body));
   }
 }
 

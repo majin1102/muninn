@@ -66,15 +66,11 @@ export async function recallMemories(
     ? observationRows.filter((row) => leafObservationIds.has(row.id))
     : observationRows;
   const observationRefs = await loadObservationContextRefs(client, filteredObservationRows.map((row) => row.id));
-  const extractionDetails = await loadExtractionDetails(
-    client,
-    filteredObservationRows.flatMap((row) => row.extractionRefs),
-  );
   const curatedHits: RouteHit[] = filteredObservationRows.map((row) => ({
     route: 'curated',
     memoryId: `observation:${row.id}`,
-    text: renderObservationHit(row.text, row.extractionRefs, extractionDetails),
-    references: observationRefs.get(row.id) ?? row.extractionRefs,
+    text: `OBSERVATION: ${row.text}`,
+    references: observationRefs.get(row.id)?.sourceRefs ?? row.extractionRefs,
   }));
   const rawHits: RouteHit[] = extractionRows.map((row) => ({
     route: 'raw',
@@ -134,29 +130,15 @@ export async function recallMemories(
 
 export type { RecallMode };
 
-type ExtractionDetail = {
-  id: string;
-  text: string;
-  context?: string | null;
-  anchors?: string[];
+type ObservationRefs = {
+  sourceRefs: string[];
+  expandRefs: string[];
 };
-
-async function loadExtractionDetails(
-  client: NativeTables,
-  refs: string[],
-): Promise<Map<string, ExtractionDetail>> {
-  const ids = uniqueRefs(refs.map((ref) => extractionRowId(ref)).filter((id): id is string => Boolean(id)));
-  if (ids.length === 0 || typeof client.extractionTable.get !== 'function') {
-    return new Map();
-  }
-  const rows = await client.extractionTable.get({ ids });
-  return new Map(rows.map((row) => [row.id, row]));
-}
 
 async function loadObservationContextRefs(
   client: NativeTables,
   ids: string[],
-): Promise<Map<string, string[]>> {
+): Promise<Map<string, ObservationRefs>> {
   const uniqueIds = uniqueRefs(ids);
   if (uniqueIds.length === 0 || typeof client.observationContextTable?.get !== 'function') {
     return new Map();
@@ -164,86 +146,11 @@ async function loadObservationContextRefs(
   const rows = await client.observationContextTable.get({ ids: uniqueIds });
   return new Map(rows.map((row) => [
     row.id,
-    uniqueRefs(row.sourceRefs ?? []),
-  ]));
-}
-
-function renderObservationHit(
-  text: string,
-  refs: string[],
-  details: Map<string, ExtractionDetail>,
-): string {
-  const replaced = replaceSourcePlaceholders(text, details);
-  const lines = [`OBSERVATION: ${replaced.text}`];
-  for (const ref of refs) {
-    const id = extractionRowId(ref);
-    if (id && replaced.embeddedRefs.has(id)) {
-      continue;
-    }
-    const detail = id ? details.get(id) : undefined;
-    if (!detail) {
-      continue;
-    }
-    const sourceContext = detail.context?.trim();
-    if (sourceContext) {
-      lines.push(`CONTEXT: ${sourceContext}`);
-    }
-    lines.push(`EXTRACTION: ${detail.text}`);
-  }
-  return lines.join('\n');
-}
-
-function replaceSourcePlaceholders(
-  text: string,
-  details: Map<string, ExtractionDetail>,
-): { text: string; embeddedRefs: Set<string> } {
-  const lines = text.split('\n');
-  const sourceIndex = lines.findIndex((line) => /^Source extractions:\s*$/i.test(line.trim()));
-  if (sourceIndex < 0) {
-    return { text, embeddedRefs: new Set() };
-  }
-  const embeddedRefs = new Set<string>();
-  const replaced = lines.map((line, index) => (
-    index > sourceIndex ? replaceSourceLine(line, details, embeddedRefs) : line
-  )).join('\n');
-  return { text: replaced, embeddedRefs };
-}
-
-function replaceSourceLine(
-  line: string,
-  details: Map<string, ExtractionDetail>,
-  embeddedRefs: Set<string>,
-): string {
-  return line.replace(
-    /^(\s*-\s*)\[([^\]]+)\](?:[^\S\r\n]+(.*\S))?\s*$/,
-    (original, prefix: string, rawRefs: string, rewritten?: string) => {
-      if (rewritten?.trim()) {
-        return `${prefix}${rewritten.trim()}`;
-      }
-      const refs = rawRefs.split(',').map((ref) => ref.trim()).filter(Boolean);
-      if (refs.length !== 1) {
-        return original;
-      }
-      const id = extractionRowId(refs[0]!);
-      const detail = id ? details.get(id) : undefined;
-      if (!id || !detail) {
-        return original;
-      }
-      embeddedRefs.add(id);
-      const sourceContext = detail.context?.trim();
-      const continuationPrefix = prefix.replace(/-\s*$/, '  ');
-      if (sourceContext) {
-        return `${prefix}context: ${formatInlineBlock(sourceContext, continuationPrefix)}\n${continuationPrefix}extraction: ${formatInlineBlock(detail.text, continuationPrefix)}`;
-      }
-      return `${prefix}extraction: ${formatInlineBlock(detail.text, continuationPrefix)}`;
+    {
+      sourceRefs: uniqueRefs(row.sourceRefs ?? []),
+      expandRefs: uniqueRefs(row.expandRefs ?? []),
     },
-  );
-}
-
-function formatInlineBlock(text: string, prefix: string): string {
-  return text.trim().split('\n').map((line, index) => (
-    index === 0 ? line.trim() : `${prefix}${line.trim()}`
-  )).join('\n');
+  ]));
 }
 
 async function loadLeafObservationIds(client: NativeTables): Promise<Set<string> | null> {

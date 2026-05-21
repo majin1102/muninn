@@ -577,7 +577,6 @@ pub(crate) fn extractions_to_record_batch(rows: &[Extraction]) -> Result<RecordB
     )
     .map_err(|error| Error::invalid_input(format!("invalid extraction vector: {error}")))?;
     let importance = Float32Array::from_iter_values(rows.iter().map(|row| row.importance));
-    let category = StringArray::from_iter_values(rows.iter().map(|row| row.category.as_str()));
     let turn_refs = build_string_list_array(rows.iter().map(|row| Some(&row.turn_refs)));
     let observation_paths = build_string_list_array(rows.iter().map(|row| Some(&row.observation_paths)));
     let observed_root_anchors = build_string_list_array(
@@ -602,7 +601,6 @@ pub(crate) fn extractions_to_record_batch(rows: &[Extraction]) -> Result<RecordB
             Arc::new(search_text),
             Arc::new(vector),
             Arc::new(importance),
-            Arc::new(category),
             Arc::new(turn_refs),
             Arc::new(observation_paths),
             Arc::new(observed_root_anchors),
@@ -653,33 +651,28 @@ pub(crate) fn record_batch_to_extractions(batch: &RecordBatch) -> Result<Vec<Ext
         .as_any()
         .downcast_ref::<Float32Array>()
         .unwrap();
-    let category = batch
-        .column(7)
-        .as_any()
-        .downcast_ref::<StringArray>()
-        .unwrap();
     let turn_refs = batch
-        .column(8)
+        .column(7)
         .as_any()
         .downcast_ref::<ListArray>()
         .unwrap();
     let observation_paths = batch
-        .column(9)
+        .column(8)
         .as_any()
         .downcast_ref::<ListArray>()
         .unwrap();
     let observed_root_anchors = batch
-        .column(10)
+        .column(9)
         .as_any()
         .downcast_ref::<ListArray>()
         .unwrap();
     let created_at = batch
-        .column(11)
+        .column(10)
         .as_any()
         .downcast_ref::<TimestampMicrosecondArray>()
         .unwrap();
     let updated_at = batch
-        .column(12)
+        .column(11)
         .as_any()
         .downcast_ref::<TimestampMicrosecondArray>()
         .unwrap();
@@ -703,7 +696,6 @@ pub(crate) fn record_batch_to_extractions(batch: &RecordBatch) -> Result<Vec<Ext
                 anchors: optional_string_list(anchors, index).unwrap_or_default(),
                 vector,
                 importance: importance.value(index),
-                category: category.value(index).to_string(),
                 turn_refs: optional_string_list(turn_refs, index).unwrap_or_default(),
                 observation_paths: optional_string_list(observation_paths, index).unwrap_or_default(),
                 observed_root_anchors: optional_string_list(observed_root_anchors, index).unwrap_or_default(),

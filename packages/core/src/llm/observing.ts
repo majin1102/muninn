@@ -314,8 +314,10 @@ function trimContent(content: string, maxChars: number): string {
 }
 
 function extractRefs(content: string): string[] {
-  return [...content.matchAll(/\[([^\]]+)\]/g)]
-    .flatMap((match) => (match[1] ?? '').split(',').map((ref) => ref.trim()).filter(Boolean));
+  return content.split(/\r?\n/).flatMap((line) => {
+    const match = line.match(/^\s*-\s*\[([^\],]+)\]\s+\S/);
+    return match?.[1]?.trim() ? [match[1].trim()] : [];
+  });
 }
 
 function validRefsForContent(value: unknown, refs: Set<string>): void {

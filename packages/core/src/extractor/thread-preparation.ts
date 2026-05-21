@@ -406,7 +406,6 @@ function toPromptInput(input: ThreadPreparationInput): Record<string, unknown> {
       id: extraction.id,
       memoryId: `extraction:${extraction.id}`,
       text: extraction.text,
-      category: extraction.category,
       references: extraction.turnRefs,
     })),
     activeThreads: input.activeThreads,

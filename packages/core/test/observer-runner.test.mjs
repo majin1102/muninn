@@ -112,7 +112,8 @@ test('runObserver skips until anchor threshold is reached', async () => {
   assert.deepEqual(result, { observed: 0, skipped: 1, baselineVersion: 0 });
 });
 
-test('runObserver finalizes pending extractions below threshold', async () => {
+test('runObserver finalizes pending extractions below threshold', async (t) => {
+  await useMockHome(t, 'muninn-observer-finalize-');
   let observedInput = null;
   const client = makeClient({
     extractions: makeExtractions(4),
@@ -141,7 +142,7 @@ test('runObserver finalizes pending extractions below threshold', async () => {
             observingPath: `Caroline / Who is Caroline? / ${extraction.id}`,
             sourceRefs: [extraction.id],
             expandRefs: [],
-            body: '',
+            body: `Caroline has pending memory ${extraction.id}.\n\n- [${extraction.id}] ${extraction.text}`,
             children: [],
           })),
         }],
@@ -228,7 +229,8 @@ test('runObserver renders existing leaf refs from observation rows', async () =>
 
   assert.match(observedInput.outline, /leaf: Caroline \/ Who is Caroline\? \/ Support group/);
   assert.match(observedInput.observedDocument, /### Support group <!-- path: Caroline \/ Who is Caroline\? \/ Support group -->/);
-  assert.match(observedInput.observedDocument, /Source extractions:\n- \[extraction:old\]/);
+  assert.match(observedInput.observedDocument, /Caroline attended a support group/);
+  assert.doesNotMatch(observedInput.observedDocument, /Source extractions:/);
 });
 
 test('runObserver removes changed extraction refs from existing leaf hints', async () => {
@@ -300,8 +302,8 @@ test('runObserver removes changed extraction refs from existing leaf hints', asy
   });
 
   assert.match(observedInput.observedDocument, /Support group <!-- path: Caroline \/ Who is Caroline\? \/ Support group -->/);
-  assert.match(observedInput.observedDocument, /Source extractions:\n- \[extraction:old\]/);
-  assert.doesNotMatch(observedInput.observedDocument, /- \[extraction:old, pending-1\]/);
+  assert.match(observedInput.observedDocument, /Caroline attended a support group/);
+  assert.doesNotMatch(observedInput.observedDocument, /pending-1/);
   assert.deepEqual(observedInput.extractions.map((extraction) => extraction.id), ['pending-1']);
 });
 
@@ -360,7 +362,8 @@ test('runObserver sends full outline but only linked rewrite content', async () 
   assert.deepEqual(observedInput.extractions.map((extraction) => extraction.status), ['changed']);
 });
 
-test('runObserver preserves sibling branches outside returned subtree', async () => {
+test('runObserver preserves sibling branches outside returned subtree', async (t) => {
+  await useMockHome(t, 'muninn-observer-preserve-sibling-');
   const client = makeClient({
     contexts: existingCarolineContexts(),
     observations: [
@@ -397,7 +400,7 @@ test('runObserver preserves sibling branches outside returned subtree', async ()
           observingPath: 'Caroline / Support / Support group',
           sourceRefs: ['pending-1'],
           expandRefs: [],
-          body: '',
+          body: 'Caroline updated support group details.\n\n- [pending-1] Caroline updated support group details.',
           children: [],
         }],
       }],
@@ -408,7 +411,8 @@ test('runObserver preserves sibling branches outside returned subtree', async ()
   assert.equal(client.writes.observationContexts.some((row) => row.id === 'Caroline / Art / Painting'), false);
 });
 
-test('runObserver deletes omitted descendants inside a returned subtree scope', async () => {
+test('runObserver deletes omitted descendants inside a returned subtree scope', async (t) => {
+  await useMockHome(t, 'muninn-observer-delete-descendants-');
   const siblingPath = 'Caroline / Support / Family';
   const client = makeClient({
     contexts: [
@@ -458,7 +462,7 @@ test('runObserver deletes omitted descendants inside a returned subtree scope', 
           observingPath: 'Caroline / Support / Support group',
           sourceRefs: ['pending-1'],
           expandRefs: [],
-          body: '',
+          body: 'Caroline updated support group details.\n\n- [pending-1] Caroline updated support group details.',
           children: [],
         }],
       }],
@@ -785,7 +789,8 @@ test('runObserver get_observation returns selected subtree without siblings', as
   assert.match(toolContent, /# Caroline/);
   assert.match(toolContent, /## Art/);
   assert.match(toolContent, /### Painting <!-- path: Caroline \/ Art \/ Painting -->/);
-  assert.match(toolContent, /Source extractions:\n- \[extraction:painting\]/);
+  assert.match(toolContent, /Caroline painted a landscape/);
+  assert.doesNotMatch(toolContent, /Source extractions:/);
   assert.doesNotMatch(toolContent, /Support group/);
 });
 
@@ -855,13 +860,15 @@ test('runObserver get_observation returns non-leaf subtree without sibling branc
   assert.match(toolContent, /# Caroline/);
   assert.match(toolContent, /## Art/);
   assert.match(toolContent, /### Painting <!-- path: Caroline \/ Art \/ Painting -->/);
-  assert.match(toolContent, /Source extractions:\n- \[extraction:painting\]/);
+  assert.match(toolContent, /Caroline painted a landscape/);
   assert.match(toolContent, /### Music <!-- path: Caroline \/ Art \/ Music -->/);
-  assert.match(toolContent, /Source extractions:\n- \[extraction:music\]/);
+  assert.match(toolContent, /Caroline plays piano/);
+  assert.doesNotMatch(toolContent, /Source extractions:/);
   assert.doesNotMatch(toolContent, /Support group/);
 });
 
-test('runObserver applies a rootless leaf rewrite to its existing parent', async () => {
+test('runObserver applies a rootless leaf rewrite to its existing parent', async (t) => {
+  await useMockHome(t, 'muninn-observer-rootless-leaf-');
   const client = makeClient({
     contexts: existingCarolineContexts(),
     observations: [
@@ -896,7 +903,7 @@ test('runObserver applies a rootless leaf rewrite to its existing parent', async
           observingPath: 'Caroline / Support / Support group',
           sourceRefs: ['pending-1'],
           expandRefs: [],
-          body: '',
+          body: 'Caroline updated support group details.\n\n- [pending-1] Caroline updated support group details.',
           children: [],
         }],
       }],
@@ -934,6 +941,7 @@ test('observeAnchor accepts path-based subtree markdown', async (t) => {
     extractions: [{
       id: 'ext-a',
       status: 'changed',
+      title: 'caroline support detail update summary',
       text: 'Caroline updated support details.',
       context: null,
       anchors: ['Entity: Caroline'],
@@ -948,8 +956,7 @@ test('observeAnchor accepts path-based subtree markdown', async (t) => {
 ### Support group
 Caroline updated support details.
 
-Source extractions:
-- [ext-a]`,
+- [ext-a] Caroline updated support details.`,
     }),
   });
 
@@ -1014,7 +1021,7 @@ test('runObserver upserts each observation id once', async (t) => {
   assert.equal(ids.length, new Set(ids).size);
 });
 
-test('runObserver indexes only expandable refs while linking all source refs', async (t) => {
+test('runObserver indexes and links extraction-linked refs', async (t) => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'muninn-observer-source-refs-'));
   t.after(async () => rm(dir, { recursive: true, force: true }));
 
@@ -1057,8 +1064,8 @@ test('runObserver indexes only expandable refs while linking all source refs', a
           heading: 'Support group',
           observingPath: 'Caroline / Who is Caroline? / Support group',
           sourceRefs: [input.extractions[0].id, input.extractions[1].id],
-          expandRefs: [input.extractions[1].id],
-          body: 'Caroline attended a support group.',
+          expandRefs: [],
+          body: `Caroline attended a support group.\n\n- [${input.extractions[0].id}] Caroline started attending a support group.\n- [${input.extractions[1].id}] Caroline updated details about the support group.`,
           children: [],
         }],
       }],
@@ -1066,12 +1073,120 @@ test('runObserver indexes only expandable refs while linking all source refs', a
   });
 
   assert.equal(client.writes.observations.length, 1);
-  assert.deepEqual(client.writes.observations[0].extractionRefs, ['pending-2']);
+  assert.deepEqual(client.writes.observations[0].extractionRefs, ['pending-1', 'pending-2']);
   const leafId = client.writes.observations[0].id;
   assert.deepEqual(
     client.writes.extractions.map((row) => [row.id, row.observationPaths]),
     [['pending-1', [leafId]], ['pending-2', [leafId]]],
   );
+});
+
+test('runObserver indexes rewritten leaves with extraction-linked bullets', async (t) => {
+  await useMockHome(t, 'muninn-observer-linked-bullets-');
+  const client = makeClient({
+    extractions: makeExtractions(1),
+  });
+
+  await runObserver({
+    client,
+    observerName: 'test-observer',
+    baselineVersion: 0,
+    anchorThreshold: 5,
+    finalize: true,
+    observeAnchorImpl: async (input) => ({
+      title: 'Caroline',
+      sections: [{
+        level: 2,
+        heading: 'Plans',
+        observingPath: 'Caroline / Plans',
+        sourceRefs: [],
+        expandRefs: [],
+        body: '',
+        children: [{
+          level: 3,
+          heading: 'Support group',
+          observingPath: 'Caroline / Plans / Support group',
+          sourceRefs: [input.extractions[0].id],
+          expandRefs: [],
+          body: `Caroline attended a support group.\n\n- [${input.extractions[0].id}] Caroline started attending a support group.`,
+          children: [],
+        }],
+      }],
+    }),
+  });
+
+  const leaf = client.writes.observationContexts.find((row) => row.observingPath === 'Caroline / Plans / Support group');
+  assert.match(leaf?.content ?? '', /- \[pending-1\] Caroline started attending a support group/);
+  assert.equal(client.writes.observations.length, 1);
+  assert.deepEqual(client.writes.observations[0].extractionRefs, ['pending-1']);
+  assert.deepEqual(client.writes.extractions.map((row) => [row.id, row.observationPaths]), [
+    ['pending-1', ['Caroline / Plans / Support group']],
+  ]);
+});
+
+test('runObserver updates stale observation index when a leaf is rewritten', async (t) => {
+  await useMockHome(t, 'muninn-observer-linked-update-');
+  const leafPath = 'Caroline / Plans / Support group';
+  const extraction = {
+    ...makeExtractions(1)[0],
+    observationPaths: [leafPath],
+  };
+  const client = makeClient({
+    contexts: [{
+      id: 'Caroline / Plans',
+      observingPath: 'Caroline / Plans',
+      parentId: null,
+      position: 0,
+      content: '',
+      observer: 'test-observer',
+      createdAt: '2024-01-01T00:00:00Z',
+      updatedAt: '2024-01-01T00:00:00Z',
+    }, {
+      id: leafPath,
+      observingPath: leafPath,
+      parentId: 'Caroline / Plans',
+      position: 0,
+      content: 'Caroline attended a support group.',
+      sourceRefs: ['pending-1'],
+      expandRefs: [],
+      observer: 'test-observer',
+      createdAt: '2024-01-01T00:00:00Z',
+      updatedAt: '2024-01-01T00:00:00Z',
+    }],
+    observations: [observationRow(leafPath, leafPath, ['pending-1'])],
+    extractions: [extraction],
+  });
+
+  await runObserver({
+    client,
+    observerName: 'test-observer',
+    anchor: 'Caroline',
+    extractionChanges: [{ type: 'upsert', extraction }],
+    observeAnchorImpl: async (input) => ({
+      title: 'Caroline',
+      sections: [{
+        level: 2,
+        heading: 'Plans',
+        observingPath: 'Caroline / Plans',
+        sourceRefs: [],
+        expandRefs: [],
+        body: '',
+        children: [{
+          level: 3,
+          heading: 'Support group',
+          observingPath: leafPath,
+          sourceRefs: [input.extractions[0].id],
+          expandRefs: [],
+          body: `Caroline attended a support group.\n\n- [${input.extractions[0].id}] Caroline kept attending a support group.`,
+          children: [],
+        }],
+      }],
+    }),
+  });
+
+  assert.equal(client.writes.observations.length, 1);
+  assert.deepEqual(client.writes.observations[0].extractionRefs, ['pending-1']);
+  assert.equal(client.writes.deletedObservationIds.includes(leafPath), false);
 });
 
 test('runObserver skips extraction path upsert when observation paths are unchanged', async (t) => {
@@ -1456,6 +1571,7 @@ test('observeAnchor writes observer trace with input, prompt, and parsed documen
     extractions: [{
       id: 'ext-a',
       status: 'new',
+      title: 'caroline support group attendance detail',
       text: 'Caroline attended an LGBTQ support group.',
       context: 'Caroline discussed support.',
       anchors: ['Entity: Caroline'],
@@ -1504,6 +1620,7 @@ test('observeAnchor exposes get_observation tool without memory-get', async (t) 
     extractions: [{
       id: 'ext-a',
       status: 'new',
+      title: 'caroline support group attendance detail',
       text: 'Caroline attended an LGBTQ support group.',
       context: null,
       anchors: ['Entity: Caroline'],
@@ -1516,8 +1633,7 @@ test('observeAnchor exposes get_observation tool without memory-get', async (t) 
 ### Support group
 Caroline previously attended a support group.
 
-Source extractions:
-- [ext-old]`,
+- [ext-old] Caroline previously attended a support group.`,
     validRefs: ['ext-old'],
     maxAttempts: 1,
     model: async (_task, request) => {
@@ -1542,15 +1658,51 @@ Source extractions:
 ### Support group
 Caroline attended an LGBTQ support group.
 
-Source extractions:
-- [ext-old]
-- [ext-a]`,
+- [ext-old] Caroline previously attended a support group.
+- [ext-a] Caroline attended an LGBTQ support group.`,
       };
     },
   });
 
   assert.deepEqual([...new Set(toolNames)], ['get_observation']);
   assert.equal(result.sections[0].children[0].sourceRefs.includes('ext-a'), true);
+});
+
+test('observeAnchor only accepts refs from extraction-linked bullet lines', async (t) => {
+  await useMockHome(t, 'muninn-observer-ref-extract-');
+
+  await assert.rejects(() => observeAnchor({
+    entityAnchor: 'Caroline',
+    outline: '# Caroline\n- leaf: Caroline / Support / Support group',
+    observedDocument: `# Caroline
+
+## Support
+### Support group
+Caroline used a [priority] label in ordinary prose.
+
+- [ext-old] Caroline previously attended a support group.`,
+    extractions: [{
+      id: 'ext-a',
+      status: 'new',
+      text: 'Caroline attended an LGBTQ support group.',
+      context: null,
+      anchors: ['Entity: Caroline'],
+      turnRefs: ['turn:1'],
+    }],
+    getObservation: () => '# Caroline',
+    validRefs: ['ext-old'],
+    maxAttempts: 1,
+    model: async () => ({
+      type: 'final',
+      text: `# Caroline
+
+## Support
+### Support group
+Caroline used a priority label.
+
+- [priority] This should not become a valid extraction ref.`,
+    }),
+  }), /unknown extraction id: priority/);
 });
 
 test('observeAnchor rejects more than two get_observation calls', async (t) => {
@@ -1580,6 +1732,7 @@ test('observeAnchor rejects more than two get_observation calls', async (t) => {
     extractions: [{
       id: 'ext-a',
       status: 'new',
+      title: 'caroline support group attendance detail',
       text: 'Caroline attended an LGBTQ support group.',
       context: null,
       anchors: ['Entity: Caroline'],
@@ -1592,8 +1745,7 @@ test('observeAnchor rejects more than two get_observation calls', async (t) => {
 ### Support group
 Caroline previously attended a support group.
 
-Source extractions:
-- [ext-old]`,
+- [ext-old] Caroline previously attended a support group.`,
     validRefs: ['ext-old'],
     maxAttempts: 1,
     model: async () => {
@@ -1617,9 +1769,8 @@ Source extractions:
 ### Support group
 Caroline attended an LGBTQ support group.
 
-Source extractions:
-- [ext-old]
-- [ext-a]`,
+- [ext-old] Caroline previously attended a support group.
+- [ext-a] Caroline attended an LGBTQ support group.`,
       };
     },
   }), /get_observation exceeded max calls=3/);
@@ -1655,6 +1806,7 @@ test('observeAnchor recovers when get_observation is called with an unavailable 
     extractions: [{
       id: 'ext-a',
       status: 'new',
+      title: 'caroline support group attendance detail',
       text: 'Caroline attended an LGBTQ support group.',
       context: null,
       anchors: ['Entity: Caroline'],
@@ -1671,8 +1823,7 @@ test('observeAnchor recovers when get_observation is called with an unavailable 
 ### Support group
 Caroline previously attended a support group.
 
-Source extractions:
-- [ext-old]`;
+- [ext-old] Caroline previously attended a support group.`;
     },
     validRefs: ['ext-old'],
     maxAttempts: 1,
@@ -1699,9 +1850,8 @@ Source extractions:
 ### Support group
 Caroline attended an LGBTQ support group.
 
-Source extractions:
-- [ext-old]
-- [ext-a]`,
+- [ext-old] Caroline previously attended a support group.
+- [ext-a] Caroline attended an LGBTQ support group.`,
       };
     },
   });
@@ -1795,7 +1945,6 @@ function extractionRow(id, anchors, text) {
     anchors,
     vector: [0.1, 0.2],
     importance: 0.5,
-    category: 'Fact',
     turnRefs: ['turn:1'],
     observationPaths: [],
     observedRootAnchors: [],

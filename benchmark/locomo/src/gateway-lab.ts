@@ -5,7 +5,7 @@ type LabThread = {
   kind: 'session' | 'subject';
   title: string;
   summary: string;
-  extractions: Array<{ id?: string | null; text: string; category: string; references: string[] }>;
+  extractions: Array<{ id?: string | null; text: string; references: string[] }>;
   contextRefs: Array<{ turnId: string; summary: string }>;
   openQuestions: string[];
   nextSteps: string[];
@@ -19,7 +19,7 @@ type LabTurn = {
 type LabObservingContent = {
   title: string;
   summary: string;
-  extractions: Array<{ id?: string | null; text: string; category: string; references: string[] }>;
+  extractions: Array<{ id?: string | null; text: string; references: string[] }>;
   openQuestions: string[];
   nextSteps: string[];
 };
@@ -34,7 +34,7 @@ type LabSessionFragment = {
 type LabObserveResult = {
   title: string;
   threadMemory: string;
-  extractions: Array<{ id?: string | null; text: string; category: string; references: string[] }>;
+  extractions: Array<{ id?: string | null; text: string; references: string[] }>;
   openQuestions: string[];
   nextSteps: string[];
   contextRefs: Array<{ turnId: string; summary: string }>;
@@ -208,7 +208,6 @@ function applyObserveResult(thread: LabThread, result: LabObserveResult): void {
   thread.extractions = result.extractions.map((extraction, index) => ({
     id: extraction.id ?? `lab-extraction-${index + 1}`,
     text: extraction.text,
-    category: extraction.category,
     references: extraction.references,
   }));
   thread.contextRefs = mergeContextRefs(thread.contextRefs, result.contextRefs);

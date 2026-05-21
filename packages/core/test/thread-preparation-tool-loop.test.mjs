@@ -243,11 +243,15 @@ function storedExtraction(id, text = `${id} text`) {
   return {
     id,
     text,
+    context: null,
+    anchors: [],
     vector: [1, 0, 0, 0],
     importance: 1,
-    category: 'Fact',
-    references: ['turn:1'],
+    turnRefs: ['turn:1'],
+    observationPaths: [],
+    observedRootAnchors: [],
     createdAt: '2024-01-01T00:00:00Z',
+    updatedAt: '2024-01-01T00:00:00Z',
   };
 }
 
@@ -268,6 +272,10 @@ async function writeObserverConfig(configPath) {
       llm: 'observer_llm',
       maxAttempts: 3,
       activeWindowDays: 3650,
+    },
+    extractor: {
+      name: 'test-extractor',
+      llm: 'observer_llm',
     },
     llm: {
       observer_llm: {

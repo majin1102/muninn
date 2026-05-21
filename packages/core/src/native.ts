@@ -42,7 +42,6 @@ export type Extraction = {
   anchors: string[];
   vector: number[];
   importance: number;
-  category: string;
   turnRefs: string[];
   observationPaths: string[];
   observedRootAnchors: string[];

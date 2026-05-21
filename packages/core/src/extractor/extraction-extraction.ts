@@ -7,16 +7,7 @@ import { embedText } from '../llm/embedding-provider.js';
 import { generateText } from '../llm/provider.js';
 import { loadPromptTemplate, renderPromptTemplate } from '../llm/prompt-loader.js';
 import type { NativeTables, Extraction as StoredExtraction } from '../native.js';
-import type { ExtractionCategory, ExtractionInput } from './types.js';
-
-const CATEGORIES = new Set<ExtractionCategory>([
-  'Preference',
-  'Fact',
-  'Decision',
-  'Entity',
-  'Concept',
-  'Other',
-]);
+import type { ExtractionInput } from './types.js';
 
 export type ExtractionExtractionResult = {
   extractions: ExtractionInput[];
@@ -69,7 +60,6 @@ export async function commitExtractions(
       anchors: [],
       vector: await embedText(text, signal),
       importance: embeddingConfig.defaultImportance,
-      category: extractionCategory(input.category),
       turnRefs: [...new Set(input.references.map((reference) => reference.trim()).filter(Boolean))],
       observationPaths: [],
       observedRootAnchors: [],
@@ -94,7 +84,6 @@ function buildMockExtraction(turns: Turn[]): ExtractionExtractionResult {
     if (text) {
       extractions.push({
         text,
-        category: 'Fact',
         references: [turn.turnId],
       });
     }
@@ -134,9 +123,6 @@ function validateExtractionInput(input: ExtractionInput): ExtractionInput {
   if (!text) {
     throw new Error('extraction.text must be a non-empty string');
   }
-  if (!CATEGORIES.has(input.category)) {
-    throw new Error(`invalid extraction category: ${String(input.category)}`);
-  }
   if (!Array.isArray(input.references)) {
     throw new Error('extraction.references must be an array');
   }
@@ -148,7 +134,6 @@ function validateExtractionInput(input: ExtractionInput): ExtractionInput {
   }
   return {
     text,
-    category: input.category,
     references,
   };
 }
@@ -173,24 +158,6 @@ function toExtractionContextTurn(turn: NonNullable<Turn['recentContext']>[number
     ...(turn.prompt ? { prompt: turn.prompt } : {}),
     ...(turn.response ? { response: turn.response } : {}),
   };
-}
-
-function extractionCategory(category: ExtractionCategory): string {
-  switch (category) {
-    case 'Preference':
-      return 'preference';
-    case 'Fact':
-      return 'fact';
-    case 'Decision':
-      return 'decision';
-    case 'Entity':
-      return 'entity';
-    case 'Concept':
-    case 'Other':
-      return 'other';
-    default:
-      return 'other';
-  }
 }
 
 function parseJson<T>(raw: string): T {

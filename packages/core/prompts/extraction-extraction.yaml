@@ -16,7 +16,6 @@ user_template: |
     "extractions": [
       {
         "text": "self-contained extraction",
-        "category": "Fact",
         "references": ["session:1"]
       }
     ]

@@ -1,11 +1,8 @@
-export type ExtractionCategory = 'Preference' | 'Fact' | 'Decision' | 'Entity' | 'Concept' | 'Other';
-
 export type Extraction = {
   id?: string | null;
   text: string;
   context?: string | null;
   anchors?: string[];
-  category: ExtractionCategory;
   references: string[];
   updatedMemory?: string | null;
 };
@@ -14,7 +11,6 @@ export type ExtractionInput = {
   text: string;
   context?: string | null;
   anchors?: string[];
-  category: ExtractionCategory;
   references: string[];
 };
 
@@ -29,7 +25,6 @@ export type ExtractionChange =
     text: string;
     context?: string | null;
     anchors?: string[];
-    category: ExtractionCategory;
     references: string[];
     reason: string;
   }
@@ -39,7 +34,6 @@ export type ExtractionChange =
     text: string;
     context?: string | null;
     anchors?: string[];
-    category: ExtractionCategory;
     reason: string;
   }
   | {
@@ -48,7 +42,6 @@ export type ExtractionChange =
     text: string;
     context?: string | null;
     anchors?: string[];
-    category?: ExtractionCategory;
     references?: string[];
     reason: string;
   }

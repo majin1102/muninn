@@ -310,7 +310,6 @@ function parseStoredExtraction(value: unknown): Extraction | null {
     || !isStringArray(value.anchors)
     || !isNumberArray(value.vector)
     || typeof value.importance !== 'number'
-    || typeof value.category !== 'string'
     || !isStringArray(value.turnRefs)
     || !isStringArray(value.observationPaths)
     || !isStringArray(value.observedRootAnchors)
@@ -326,7 +325,6 @@ function parseStoredExtraction(value: unknown): Extraction | null {
     anchors: [...value.anchors],
     vector: [...value.vector],
     importance: value.importance,
-    category: value.category,
     turnRefs: [...value.turnRefs],
     observationPaths: [...value.observationPaths],
     observedRootAnchors: [...value.observedRootAnchors],
