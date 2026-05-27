@@ -1124,6 +1124,44 @@ test('runObserver indexes rewritten leaves with extraction-linked bullets', asyn
   ]);
 });
 
+test('runObserver materializes bare extraction-linked bullets before persistence', async (t) => {
+  await useMockHome(t, 'muninn-observer-materialized-bare-bullet-');
+  const [extraction] = makeExtractions(1);
+  extraction.context = 'Melanie asked Caroline about summer plans.';
+  extraction.text = 'Caroline researched adoption agencies for children who need loving homes.';
+  const client = makeClient({
+    extractions: [extraction],
+  });
+
+  await runObserver({
+    client,
+    observerName: 'test-observer',
+    baselineVersion: 0,
+    anchorThreshold: 5,
+    finalize: true,
+    observeAnchorImpl: async (input) => ({
+      title: 'Caroline',
+      sections: [{
+        level: 2,
+        heading: 'Plans',
+        observingPath: 'Caroline / Plans',
+        sourceRefs: [input.extractions[0].id],
+        expandRefs: [input.extractions[0].id],
+        body: `Caroline tracked summer planning.\n\n- [${input.extractions[0].id}]`,
+        children: [],
+      }],
+    }),
+  });
+
+  const context = client.writes.observationContexts.find((row) => row.observingPath === 'Caroline / Plans');
+  const observation = client.writes.observations.find((row) => row.id === 'Caroline / Plans');
+  assert.match(context?.content ?? '', /- \[pending-1\] Context: Melanie asked Caroline about summer plans\./);
+  assert.match(context?.content ?? '', /Extraction: Caroline researched adoption agencies for children who need loving homes\./);
+  assert.match(observation?.text ?? '', /- \[pending-1\] Context: Melanie asked Caroline about summer plans\./);
+  assert.deepEqual(context?.sourceRefs, ['pending-1']);
+  assert.deepEqual(context?.expandRefs, []);
+});
+
 test('runObserver updates stale observation index when a leaf is rewritten', async (t) => {
   await useMockHome(t, 'muninn-observer-linked-update-');
   const leafPath = 'Caroline / Plans / Support group';

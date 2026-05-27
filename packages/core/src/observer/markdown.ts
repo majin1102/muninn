@@ -301,20 +301,22 @@ function parseExtractionLinkedBullets(
       }
       const match = line.match(/^\s*-\s*(\[[^\]]+\])(?:\s+(.*\S))?\s*$/);
       if (!match) {
-        throw new Error(`extraction-linked bullets must use "- [extraction-id] rewritten content": ${section.heading}`);
+        throw new Error(`extraction-linked bullets must use "- [extraction-id]", "- [extraction-id] rewritten content", or "- [id1, id2] resolved content": ${section.heading}`);
       }
       const refs = parseRefs(match[1]!, validRefs, 'extraction-linked bullet');
-      if (refs.length !== 1) {
-        throw new Error(`extraction-linked bullets must reference exactly one extraction id: ${section.heading}`);
-      }
       const content = clean(match[2] ?? '');
-      if (!content) {
-        throw new Error(`extraction-linked bullets must include rewritten remembered content: ${section.heading}`);
+      if (refs.length > 1 && !content) {
+        throw new Error(`multi-id extraction-linked bullets must include resolved content: ${section.heading}`);
       }
-      section.sourceRefs = unique([...section.sourceRefs, refs[0]!]);
-      normalizedLines.push(`- [${refs[0]}] ${content}`);
+      section.sourceRefs = unique([...section.sourceRefs, ...refs]);
+      if (refs.length === 1 && !content) {
+        section.expandRefs = unique([...section.expandRefs, refs[0]!]);
+        normalizedLines.push(`- [${refs[0]}]`);
+        continue;
+      }
+      normalizedLines.push(`- [${refs.join(', ')}] ${content}`);
     }
-    section.expandRefs = [];
+    section.expandRefs = unique(section.expandRefs);
     section.body = normalizedLines.join('\n').trim();
   }
 }

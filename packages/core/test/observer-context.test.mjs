@@ -25,6 +25,24 @@ Caroline compared adoption options and narrowed the plan around inclusive agency
   assert.equal(leaf.rewritten, true);
 });
 
+test('observer document parser accepts bare, rewritten, and resolved extraction bullets', () => {
+  const parsed = parseObserverDocument(`# Caroline
+
+## Plans
+Caroline organized adoption planning memories.
+
+- [ext-1]
+- [ext-2] Caroline clarified the adoption agency choice.
+- [ext-3, ext-4] Caroline resolved overlapping adoption agency notes into one remembered plan.
+`, new Set(['ext-1', 'ext-2', 'ext-3', 'ext-4']));
+
+  const leaf = parsed.sections[0];
+  assert.deepEqual(leaf.sourceRefs, ['ext-1', 'ext-2', 'ext-3', 'ext-4']);
+  assert.deepEqual(leaf.expandRefs, ['ext-1']);
+  assert.match(leaf.body, /^- \[ext-1\]$/m);
+  assert.match(leaf.body, /- \[ext-3, ext-4\] Caroline resolved overlapping adoption agency notes/);
+});
+
 test('observer document parser accepts heading-only keep markers', () => {
   const parsed = parseObserverDocument(`# Caroline
 
@@ -84,22 +102,14 @@ Source extractions:
 `, new Set(['ext-1'])), /not Source extractions/i);
 });
 
-test('observer document parser rejects multi-id and empty extraction-linked bullets', () => {
+test('observer document parser rejects empty multi-id extraction-linked bullets', () => {
   assert.throws(() => parseObserverDocument(`# Caroline
 
 ## Plans
 Caroline researched adoption agencies.
 
-- [ext-1, ext-2] Caroline compared adoption agency options.
-`, new Set(['ext-1', 'ext-2'])), /exactly one extraction id/i);
-
-  assert.throws(() => parseObserverDocument(`# Caroline
-
-## Plans
-Caroline researched adoption agencies.
-
-- [ext-1]
-`, new Set(['ext-1'])), /must include rewritten remembered content/i);
+- [ext-1, ext-2]
+`, new Set(['ext-1', 'ext-2'])), /multi-id extraction-linked bullets must include resolved content/i);
 });
 
 test('observer document parser accepts leaf sections without ids', () => {

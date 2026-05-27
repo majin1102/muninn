@@ -42,6 +42,8 @@ system: |
   Rules
   - Write from an observer view, not as a transcript; keep the full remembered meaning. For example, write “Maya liked the revised design,” not “Maya said she liked the revised design.”
   - Keep the original meaning specific: do not change who or what the memory is about, what happened, or how it was described.
+  - Create memory units for reusable remembered content: facts, preferences, decisions, plans, constraints, state changes, relationships, important feedback, unresolved findings, or working context.
+  - Skip greetings, closings, filler, and turn-management text unless they carry remembered content.
   - One new turn may affect multiple memory units: different parts may be remembered separately, and the same context may be added to more than one unit only when it supports each unit's extraction.
   - Update existing memory units first when new turn content directly develops the unit's primary subject or adds useful context without breaking its boundaries. Shared people, time, mood, or conversation adjacency alone is not enough.
   - Add a new memory unit when new turn content should be remembered but does not fit an existing unit as an update.

@@ -275,9 +275,10 @@ async function applyDocument(params: {
   signal?: AbortSignal;
 }): Promise<void> {
   const now = new Date().toISOString();
-  validateHeadingOnlySections(params.result.sections, params.tree.byPath);
+  const result = await materializeBareSourceBullets(params.client, params.result, params.linkExtractions);
+  validateHeadingOnlySections(result.sections, params.tree.byPath);
   const next = flattenNodes(buildNodes({
-    sections: params.result.sections,
+    sections: result.sections,
     parentId: null,
     parentPath: params.anchor,
     existing: params.tree.byPath,
@@ -286,7 +287,7 @@ async function applyDocument(params: {
   }));
   const nodesToWrite = next.filter((node) => shouldUpsertNode(node, params.tree.byPath));
   const returnedPaths = new Set(next.map((node) => node.observingPath));
-  const writablePaths = writableScopePaths(params.tree.rows, params.result.sections);
+  const writablePaths = writableScopePaths(params.tree.rows, result.sections);
   const deletedContextIds = deletedPaths(writablePaths, returnedPaths);
   const deletedObservationIds = unique([
     ...deletedContextIds,
@@ -328,6 +329,97 @@ async function applyDocument(params: {
     nodes: next,
     now,
   });
+}
+
+async function materializeBareSourceBullets(
+  client: NativeTables,
+  result: ParsedObserverDocument,
+  inputExtractions: Extraction[],
+): Promise<ParsedObserverDocument> {
+  const expandRefs = unique(walkSections(result.sections).flatMap((section) => section.expandRefs ?? []));
+  if (expandRefs.length === 0) {
+    return result;
+  }
+  const extractionByRef = await loadMaterializedExtractions(client, inputExtractions, expandRefs);
+  return {
+    ...result,
+    sections: result.sections.map((section) => materializeSection(section, extractionByRef)),
+  };
+}
+
+async function loadMaterializedExtractions(
+  client: NativeTables,
+  inputExtractions: Extraction[],
+  refs: string[],
+): Promise<Map<string, Extraction>> {
+  const extractionByRef = new Map<string, Extraction>();
+  for (const extraction of inputExtractions) {
+    for (const ref of extractionRefVariants(extraction)) {
+      extractionByRef.set(ref, extraction);
+    }
+  }
+  const missingIds = unique(refs.filter((ref) => !extractionByRef.has(ref)).map(extractionRowId));
+  if (missingIds.length > 0) {
+    const rows = await client.extractionTable.get({ ids: missingIds });
+    for (const row of rows) {
+      for (const ref of extractionRefVariants(row)) {
+        extractionByRef.set(ref, row);
+      }
+    }
+  }
+  for (const ref of refs) {
+    if (!extractionByRef.has(ref)) {
+      throw new Error(`cannot materialize observer source ref without extraction row: ${ref}`);
+    }
+  }
+  return extractionByRef;
+}
+
+function materializeSection(
+  section: ParsedObserverSection,
+  extractionByRef: Map<string, Extraction>,
+): ParsedObserverSection {
+  const expandRefs = new Set(section.expandRefs ?? []);
+  const body = expandRefs.size > 0
+    ? section.body.split(/\r?\n/).map((line) => {
+        const match = line.match(/^(\s*)-\s*\[([^\]]+)\]\s*$/);
+        if (!match) {
+          return line;
+        }
+        const ref = match[2]!.trim();
+        if (!expandRefs.has(ref)) {
+          return line;
+        }
+        const extraction = extractionByRef.get(ref);
+        if (!extraction) {
+          throw new Error(`cannot materialize observer source ref without extraction row: ${ref}`);
+        }
+        return `${match[1]}- [${ref}] ${materializedExtractionText(extraction)}`;
+      }).join('\n').trim()
+    : section.body;
+  return {
+    ...section,
+    body,
+    expandRefs: [],
+    children: section.children.map((child) => materializeSection(child, extractionByRef)),
+  };
+}
+
+function materializedExtractionText(extraction: Extraction): string {
+  const parts = [];
+  const context = inlineText(extraction.context ?? '');
+  if (context) {
+    parts.push(`Context: ${context}`);
+  }
+  const text = inlineText(extraction.text);
+  if (text) {
+    parts.push(`Extraction: ${text}`);
+  }
+  return parts.join(' ');
+}
+
+function inlineText(value: string): string {
+  return value.split(/\s+/).join(' ').trim();
 }
 
 function writableScopePaths(
@@ -567,6 +659,10 @@ function extractionRefVariants(extraction: Extraction): string[] {
   return extraction.id.startsWith('extraction:')
     ? [extraction.id, extraction.id.slice('extraction:'.length)]
     : [extraction.id, `extraction:${extraction.id}`];
+}
+
+function extractionRowId(ref: string): string {
+  return ref.startsWith('extraction:') ? ref.slice('extraction:'.length) : ref;
 }
 
 function renderTree(

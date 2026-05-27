@@ -82,6 +82,7 @@ test('thread observing prompt organizes entity extractions by questions', () => 
   assert.match(prompt.system, /Section, leaf, and source budget/);
   assert.match(prompt.system, /Use headings up to `####` only/);
   assert.match(prompt.system, /Keep the whole leaf under 1000 words and within 5 source extractions/);
+  assert.match(prompt.system, /Keep the synthesis paragraph under 300 words/);
   assert.match(prompt.system, /exceed these only when splitting would break an inseparable memory/);
   assert.match(prompt.system, /Name sections by remembered content, not by date, session, turn order, or catch-up structure/);
   assert.match(prompt.system, /Group extractions into one leaf only when they would naturally be read together as one coherent memory section/);
@@ -95,12 +96,14 @@ test('thread observing prompt organizes entity extractions by questions', () => 
   assert.match(prompt.system, /synthesis paragraph summarizes how the linked extractions fit together/);
   assert.match(prompt.system, /should not replace their source facts/);
   assert.match(prompt.system, /Lines starting with `-` are reserved for extraction-linked bullets/);
-  assert.match(prompt.system, /Each bullet uses `- \[extraction_id\] rewritten remembered content` for one source extraction/);
+  assert.match(prompt.system, /Use `- \[extraction_id\]` by default/);
+  assert.match(prompt.system, /materialize the original Context and Extraction during persistence/);
+  assert.match(prompt.system, /Use `- \[extraction_id\] rewritten content` only when one source needs/);
+  assert.match(prompt.system, /Use `- \[extraction_id1, extraction_id2\] resolved content` only when multiple sources/);
   assert.match(prompt.system, /preserve the source extraction's answerable content at its original precision/);
+  assert.match(prompt.system, /persisted observations are materialized before recall/);
   assert.doesNotMatch(prompt.system, /dates, concrete identifiers, relations, source objects, causal links, and answer-bearing wording/);
-  assert.match(prompt.system, /resolve conflicts, corrections, repetitions, and complementary details/);
   assert.match(prompt.system, /Keep extraction ids in the leaf text for duplicate filtering/);
-  assert.match(prompt.system, /recall uses the leaf content as written/);
   assert.doesNotMatch(prompt.system, /Source extractions:/);
   assert.doesNotMatch(prompt.system, /source note/);
   assert.doesNotMatch(prompt.system, /original extraction expansion/);
@@ -197,6 +200,8 @@ test('thread observing prompt uses generic recall-ready memory guidance', () => 
   assert.match(system, /including the original remembered object/);
   assert.match(system, /facts, descriptions, and causal relationships/);
   assert.match(system, /\[Context\]` briefly locates the source context needed to understand the extraction/);
+  assert.match(system, /Create memory units for reusable remembered content: facts, preferences, decisions, plans, constraints, state changes, relationships, important feedback, unresolved findings, or working context/);
+  assert.match(system, /Skip greetings, closings, filler, and turn-management text unless they carry remembered content/);
   assert.doesNotMatch(system, /what it answers/);
   assert.doesNotMatch(system, /why it was mentioned/);
   assert.doesNotMatch(system, /what local situation it belongs to/);
