@@ -9,15 +9,24 @@
     }
   },
   "scripts": {
-    "build": "pnpm --filter @muninn/types build && tsc && tsc -p tsconfig.server.json && cp src/index.html dist/index.html && cp src/styles.css dist/styles.css && mkdir -p dist/assets && cp -R src/assets/. dist/assets/",
+    "build": "pnpm --filter @muninn/types build && tsc -p tsconfig.json --noEmit && vite build && tsc -p tsconfig.server.json && mkdir -p dist/assets && cp -R src/assets/. dist/assets/",
     "dev": "tsc --watch"
   },
   "dependencies": {
     "@muninn/core": "workspace:*",
     "@muninn/types": "workspace:*",
-    "hono": "^4.0.0"
+    "@vitejs/plugin-react": "^5.0.0",
+    "hono": "^4.0.0",
+    "lucide-react": "^0.468.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "react-markdown": "^10.0.0",
+    "remark-gfm": "^4.0.0",
+    "vite": "^6.0.0"
   },
   "devDependencies": {
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
     "@types/node": "^20.0.0",
     "typescript": "^5.0.0"
   }
