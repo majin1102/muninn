@@ -139,6 +139,12 @@ async function makeConfigHome() {
 async function writeObserverConfig(configPath) {
   await mkdir(path.dirname(configPath), { recursive: true });
   await writeFile(configPath, `${JSON.stringify({
+    extractor: {
+      name: 'test-extractor',
+      llm: 'extractor_llm',
+      maxAttempts: 3,
+      activeWindowDays: 3650,
+    },
     observer: {
       name: 'test-observer',
       llm: 'observer_llm',
@@ -146,6 +152,12 @@ async function writeObserverConfig(configPath) {
       activeWindowDays: 3650,
     },
     llm: {
+      extractor_llm: {
+        provider: 'openai',
+        api: 'openai-completions',
+        apiKey: 'test-key',
+        baseUrl: 'https://example.test/api',
+      },
       observer_llm: {
         provider: 'openai',
         api: 'openai-completions',

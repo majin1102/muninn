@@ -163,8 +163,7 @@ function generateMockText(request: LlmTextRequest): string {
       '## Extractions',
       `<!-- refs: [${ref}] -->`,
       '[Entity] Mock entity',
-      '[Fact] mock extraction',
-      '[Extraction] Mock extraction from the provided turn.',
+      `[Extraction] ${excerpt(seed)}`,
     ].join('\n');
   }
   if (request.system.includes('"memory_delta"')) {

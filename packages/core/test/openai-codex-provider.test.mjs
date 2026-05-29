@@ -18,12 +18,23 @@ function makeJwt(exp) {
 
 function makeConfig({ provider = 'openai-codex', model, baseUrl } = {}) {
   return {
+    extractor: {
+      name: 'test-extractor',
+      llm: 'extractor_llm',
+      maxAttempts: 3,
+      activeWindowDays: 3650,
+    },
     observer: {
       name: 'test-observer',
       llm: 'observer_llm',
       maxAttempts: 3,
     },
     llm: {
+      extractor_llm: {
+        provider,
+        ...(model ? { model } : {}),
+        ...(baseUrl ? { baseUrl } : {}),
+      },
       observer_llm: {
         provider,
         ...(model ? { model } : {}),

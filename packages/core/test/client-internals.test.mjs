@@ -4001,7 +4001,7 @@ test('extraction review validation rejects unknown removals', async () => {
 });
 
 test('thread preparation validation rejects duplicate extraction coverage', async () => {
-  const { __testing: preparationTesting } = await import('../dist/observer/thread-preparation.js');
+  const { __testing: preparationTesting } = await import('../dist/extractor/thread-preparation.js');
   const input = {
     reviewedExtractions: [storedExtraction('obs-1'), storedExtraction('obs-2')],
     activeThreads: [{ threadId: 'thread-1', title: 'Thread one' }],
@@ -4020,7 +4020,7 @@ test('thread preparation validation rejects duplicate extraction coverage', asyn
 });
 
 test('thread preparation validation rejects single-extraction new threads', async () => {
-  const { __testing: preparationTesting } = await import('../dist/observer/thread-preparation.js');
+  const { __testing: preparationTesting } = await import('../dist/extractor/thread-preparation.js');
   const input = {
     reviewedExtractions: [storedExtraction('obs-1')],
     activeThreads: [],
@@ -4039,7 +4039,7 @@ test('thread preparation validation rejects single-extraction new threads', asyn
 });
 
 test('thread preparation validation rejects unknown target threads', async () => {
-  const { __testing: preparationTesting } = await import('../dist/observer/thread-preparation.js');
+  const { __testing: preparationTesting } = await import('../dist/extractor/thread-preparation.js');
   const input = {
     reviewedExtractions: [storedExtraction('obs-1')],
     activeThreads: [{ threadId: 'thread-1', title: 'Thread one' }],
@@ -4064,7 +4064,7 @@ test('thread preparation model validation failure falls back to unthreaded extra
   process.env.MUNINN_HOME = homeDir;
   await writeOpenAiObserverConfig(configPath);
 
-  const { __testing: preparationTesting } = await import('../dist/observer/thread-preparation.js');
+  const { __testing: preparationTesting } = await import('../dist/extractor/thread-preparation.js');
   const input = {
     reviewedExtractions: [storedExtraction('obs-1'), storedExtraction('obs-2')],
     activeThreads: [],

@@ -55,6 +55,20 @@ async function waitForObserverResolved({ timeoutMs = 2_000, intervalMs = 20 } = 
   throw new Error('timed out waiting for observer watermark');
 }
 
+async function waitForFile(filePath, { timeoutMs = 2_000, intervalMs = 20 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  let lastError;
+  while (Date.now() < deadline) {
+    try {
+      return await readFile(filePath, 'utf8');
+    } catch (error) {
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    }
+  }
+  throw lastError ?? new Error(`timed out waiting for ${filePath}`);
+}
+
 function memoryWatermarkResolved(watermark) {
   return watermark.pending.turns.length === 0
     && watermark.pending.extractions.length === 0
@@ -119,6 +133,17 @@ async function writeTurnAndGet(turn) {
 
 function toFileStoreUri(dir) {
   return `file-object-store://${path.resolve(dir)}`;
+}
+
+function defaultStorageTarget(homeDir) {
+  return { uri: toFileStoreUri(path.join(homeDir, 'main')) };
+}
+
+function firstExtractionRef(hits) {
+  return hits
+    .flatMap((hit) => hit.references ?? [])
+    .map((ref) => ref.startsWith('extraction:') ? ref.slice('extraction:'.length) : ref)
+    .find((ref) => ref && !ref.startsWith('turn:') && !ref.startsWith('session:'));
 }
 
 async function writeMuninnConfig(configPath, {
@@ -570,13 +595,13 @@ test('cold start does not wait for the first watchdog interval before serving wr
     response: 'cold-start response',
     summary: 'cold-start summary',
   });
+  const watchdogLogPath = path.join(homeDir, 'main', 'logs', 'watchdog.jsonl');
   await assert.rejects(
-    () => readFile(path.join(homeDir, 'watchdog.jsonl'), 'utf8'),
+    () => readFile(watchdogLogPath, 'utf8'),
     /ENOENT/,
   );
 
-  await new Promise((resolve) => setTimeout(resolve, 350));
-  const logContent = await readFile(path.join(homeDir, 'watchdog.jsonl'), 'utf8');
+  const logContent = await waitForFile(watchdogLogPath);
   assert.match(logContent, /"dataset":"turn"/);
 });
 
@@ -1248,7 +1273,7 @@ test('validateSettings rejects extraction dimension changes when the table exist
   process.env.MUNINN_HOME = homeDir;
   await writeMuninnConfig(configPath, { observerProvider: 'mock' });
 
-  const binding = await getNativeTables();
+  const binding = await getNativeTables(defaultStorageTarget(homeDir));
   assert.ok(typeof binding.turnTable.describe === 'function');
   assert.ok(typeof binding.sessionTable.describe === 'function');
   assert.ok(typeof binding.extractionTable.describe === 'function');
@@ -1528,7 +1553,11 @@ test('observer writes atomic extractions before observing snapshots', async (t) 
   await waitForObserverResolved();
 
   const hits = await memories.recall('counseling programs', 5);
-  assert.ok(hits.some((hit) => hit.memoryId.startsWith('extraction:')));
+  const extractionRef = firstExtractionRef(hits);
+  assert.ok(extractionRef);
+  const extraction = await memories.get(`extraction:${extractionRef}`);
+  assert.ok(extraction);
+  assert.match(extraction.summary ?? extraction.title ?? '', /counseling/i);
 });
 
 test('rendered memory binding returns unified turn and extraction reads', async (t) => {
@@ -1558,13 +1587,12 @@ test('rendered memory binding returns unified turn and extraction reads', async 
   assert.match(turnDetail.summary ?? turnDetail.detail ?? '', /rendered prompt|rendered response/);
 
   const recalled = await memories.recall('rendered', 10);
-  const extraction = recalled.find((memory) => memory.memoryId.startsWith('extraction:'));
+  const extractionRef = firstExtractionRef(recalled);
+  assert.ok(extractionRef);
+  const extraction = await memories.get(`extraction:${extractionRef}`);
   assert.ok(extraction);
-
-  const extractionDetail = await memories.get(extraction.memoryId);
-  assert.ok(extractionDetail);
-  assert.equal(extractionDetail.memoryId, extraction.memoryId);
-  assert.match(extractionDetail.summary ?? extractionDetail.title ?? '', /rendered prompt|rendered response/);
+  assert.equal(extraction.memoryId, `extraction:${extractionRef}`);
+  assert.match(extraction.summary ?? extraction.title ?? '', /rendered prompt|rendered response/);
 });
 
 test('recall returns extraction memory ids and detail renders references', async (t) => {
@@ -1574,7 +1602,7 @@ test('recall returns extraction memory ids and detail renders references', async
   process.env.MUNINN_HOME = homeDir;
   await writeMuninnConfig(configPath, { observerProvider: 'mock' });
 
-  const binding = await getNativeTables();
+  const binding = await getNativeTables(defaultStorageTarget(homeDir));
   await binding.extractionTable.upsert({
     rows: [{
       id: 'obs-1',

@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 
-import * as threadPreparationModule from '../dist/observer/thread-preparation.js';
+import * as threadPreparationModule from '../dist/extractor/thread-preparation.js';
 
 const { __testing } = threadPreparationModule;
 
@@ -263,13 +263,22 @@ async function makeConfigHome() {
 async function writeObserverConfig(configPath) {
   await mkdir(path.dirname(configPath), { recursive: true });
   await writeFile(configPath, `${JSON.stringify({
+    extractor: {
+      name: 'test-extractor',
+      llm: 'extractor_llm',
+      maxAttempts: 3,
+      activeWindowDays: 3650,
+    },
     observer: {
       name: 'test-observer',
       llm: 'observer_llm',
       maxAttempts: 3,
-      activeWindowDays: 3650,
     },
     llm: {
+      extractor_llm: {
+        provider: 'openai',
+        apiKey: 'test-key',
+      },
       observer_llm: {
         provider: 'openai',
         apiKey: 'test-key',

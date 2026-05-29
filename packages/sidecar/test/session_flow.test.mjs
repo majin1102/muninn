@@ -28,6 +28,10 @@ function toFileStoreUri(dir) {
   return `file-object-store://${path.resolve(dir)}`;
 }
 
+function defaultStorageTarget(homeDir) {
+  return { uri: toFileStoreUri(path.join(homeDir, 'main')) };
+}
+
 async function json(response) {
   return response.json();
 }
@@ -38,6 +42,22 @@ function memoryWatermarkResolved(watermark) {
     && watermark.phases.extractor === 'idle'
     && watermark.phases.observer === 'idle'
     && !watermark.error;
+}
+
+async function waitForWatermarkResolved() {
+  let resolvedBody = null;
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    const response = await app.request('/api/v1/memory/watermark');
+    assert.equal(response.status, 200);
+    resolvedBody = await json(response);
+    if (memoryWatermarkResolved(resolvedBody)) {
+      return resolvedBody;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  assert.ok(resolvedBody);
+  assert.equal(memoryWatermarkResolved(resolvedBody), true);
+  return resolvedBody;
 }
 
 function makeTurnContent(overrides = {}) {
@@ -302,7 +322,7 @@ test('openclaw hook capture persists artifacts through sidecar and native readba
   ));
   assert.ok(match);
 
-  const tables = await getNativeTables();
+  const tables = await getNativeTables(defaultStorageTarget(homeDir));
   const persisted = await tables.turnTable.getTurn(match.memoryId);
   assert.ok(persisted);
   assert.deepEqual(persisted.toolCalls, [{
@@ -491,6 +511,7 @@ test('benchmark locomo capture returns turn id and recall returns body-only hits
   };
   const finalizeResponse = await app.request('/api/v1/memory/finalize', { method: 'POST' });
   assert.equal(finalizeResponse.status, 200);
+  await waitForWatermarkResolved();
   const recallResponse = await app.request('/api/v1/benchmark/locomo/recall', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -652,18 +673,7 @@ test('observer watermark reports pending turns until the observer flush complete
   const finalizeResponse = await app.request('/api/v1/memory/finalize', { method: 'POST' });
   assert.equal(finalizeResponse.status, 200);
 
-  let resolvedBody = null;
-  for (let attempt = 0; attempt < 50; attempt += 1) {
-    const resolvedResponse = await app.request('/api/v1/memory/watermark');
-    assert.equal(resolvedResponse.status, 200);
-    resolvedBody = await json(resolvedResponse);
-    if (memoryWatermarkResolved(resolvedBody)) {
-      break;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  }
-  assert.ok(resolvedBody);
-  assert.equal(memoryWatermarkResolved(resolvedBody), true);
+  const resolvedBody = await waitForWatermarkResolved();
   assert.deepEqual(resolvedBody.pending.turns, []);
 });
 
