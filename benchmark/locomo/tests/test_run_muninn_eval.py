@@ -65,7 +65,7 @@ class RunMuninnEvalTests(unittest.TestCase):
         self.assertEqual(classify_failure("TypeError: fetch failed", ""), "transient_external")
         self.assertEqual(classify_failure("[muninn:observer] observer run failed: bad", ""), "muninn_internal")
         self.assertEqual(classify_failure("RowAddrTreeMap::from_sorted_iter called with non-sorted input", ""), "muninn_internal")
-        self.assertEqual(classify_failure("", "waiting for turn:17: 40 pending"), "watermark_pending")
+        self.assertEqual(classify_failure("", "waiting for turn:17: turns=1 (turn:8) extractions=2 (ext:1, ext:2)"), "watermark_pending")
         self.assertEqual(classify_failure("", "phase_start phase=recall_batch"), "qa_batch_stuck")
         self.assertEqual(classify_failure("[openviking_judge] 10/40", ""), "judge_stuck")
         self.assertEqual(classify_failure("FileNotFoundError: muninn.json", ""), "missing_data_or_config")
@@ -97,6 +97,14 @@ class RunMuninnEvalTests(unittest.TestCase):
 
     def test_parse_pending_count(self) -> None:
         self.assertEqual(parse_pending_count("[locomo] waiting for turn:17: 32 pending (turn:8)"), 32)
+        self.assertEqual(
+            parse_pending_count("[locomo] waiting for turn:17: turns=1 (turn:8) extractions=2 (ext:1, ext:2) phases=idle/draining"),
+            3,
+        )
+        self.assertEqual(
+            parse_pending_count("[locomo] waiting for turn:17: turns=0 ((none)) extractions=4 (ext:1, ext:2, ext:3, ext:4) phases=idle/draining"),
+            4,
+        )
         self.assertIsNone(parse_pending_count("[locomo] qa_progress sample_id=conv-26 completed=1/20"))
 
     def test_build_badcases_report_includes_low_f1_rows(self) -> None:

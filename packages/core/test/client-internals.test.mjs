@@ -3907,7 +3907,7 @@ test('extraction state rewrite rejects unknown and duplicate ids', () => {
 });
 
 test('extraction extraction validation rejects invalid category', async () => {
-  const { __testing: extractionTesting } = await import('../dist/observer/extraction-extraction.js');
+  const { __testing: extractionTesting } = await import('../dist/extractor/extraction-extraction.js');
   assert.throws(
     () => extractionTesting.validateExtraction({
       extractions: [{ text: 'Caroline joined a support group.', category: 'Goal', references: ['turn:1'] }],
@@ -3917,7 +3917,7 @@ test('extraction extraction validation rejects invalid category', async () => {
 });
 
 test('extraction extraction validation rejects empty text', async () => {
-  const { __testing: extractionTesting } = await import('../dist/observer/extraction-extraction.js');
+  const { __testing: extractionTesting } = await import('../dist/extractor/extraction-extraction.js');
   assert.throws(
     () => extractionTesting.validateExtraction({
       extractions: [{ text: ' ', category: 'Fact', references: ['turn:1'] }],
@@ -3927,7 +3927,7 @@ test('extraction extraction validation rejects empty text', async () => {
 });
 
 test('extraction extraction validation rejects missing references', async () => {
-  const { __testing: extractionTesting } = await import('../dist/observer/extraction-extraction.js');
+  const { __testing: extractionTesting } = await import('../dist/extractor/extraction-extraction.js');
   assert.throws(
     () => extractionTesting.validateExtraction({
       extractions: [{ text: 'Caroline joined a support group.', category: 'Fact', references: [] }],
@@ -3937,7 +3937,7 @@ test('extraction extraction validation rejects missing references', async () => 
 });
 
 test('extraction extraction prompt can include a domain prompt supplement', async () => {
-  const { __testing: extractionTesting } = await import('../dist/observer/extraction-extraction.js');
+  const { __testing: extractionTesting } = await import('../dist/extractor/extraction-extraction.js');
   const rendered = extractionTesting.renderExtractionPrompt({
     inputJson: JSON.stringify({ turns: [] }),
     domainPrompt: 'Category guide:\n- `Fact`: concrete answerable detail.',
@@ -3950,7 +3950,7 @@ test('extraction extraction prompt can include a domain prompt supplement', asyn
 });
 
 test('extraction extraction input includes recent context turns', async () => {
-  const { __testing: extractionTesting } = await import('../dist/observer/extraction-extraction.js');
+  const { __testing: extractionTesting } = await import('../dist/extractor/extraction-extraction.js');
   const turn = extractionTesting.toExtractionTurn({
     turnId: 'turn:4',
     createdAt: '2026-01-01T00:00:04.000Z',
@@ -3973,7 +3973,7 @@ test('extraction extraction input includes recent context turns', async () => {
 });
 
 test('extraction review validation requires every new extraction to be reviewed', async () => {
-  const { __testing: reviewTesting } = await import('../dist/observer/extraction-review.js');
+  const { __testing: reviewTesting } = await import('../dist/extractor/extraction-review.js');
   assert.throws(
     () => reviewTesting.validateReview({
       newExtractions: [storedExtraction('obs-1')],
@@ -3987,7 +3987,7 @@ test('extraction review validation requires every new extraction to be reviewed'
 });
 
 test('extraction review validation rejects unknown removals', async () => {
-  const { __testing: reviewTesting } = await import('../dist/observer/extraction-review.js');
+  const { __testing: reviewTesting } = await import('../dist/extractor/extraction-review.js');
   assert.throws(
     () => reviewTesting.validateReview({
       newExtractions: [storedExtraction('obs-1')],

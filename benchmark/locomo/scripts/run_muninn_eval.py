@@ -39,7 +39,8 @@ MATCHED_PROCESS_MARKERS = (
     "benchmark/locomo/scripts/openviking_judge.py",
     "benchmark/locomo/scripts/honcho_judge.py",
 )
-PENDING_RE = re.compile(r"waiting for .*?: (\d+) pending")
+LEGACY_PENDING_RE = re.compile(r"waiting for .*?: (\d+) pending")
+WATERMARK_PENDING_RE = re.compile(r"waiting for .*?: turns=(\d+) .*?extractions=(\d+) ")
 
 
 @dataclass(frozen=True)
@@ -392,7 +393,7 @@ def classify_failure(stderr: str, progress: str) -> str:
         return "transient_external"
     if "filenotfounderror" in combined or "muninn.json" in combined or "data file" in combined:
         return "missing_data_or_config"
-    if "waiting for" in combined and "pending" in combined:
+    if parse_pending_count(combined) is not None:
         return "watermark_pending"
     if "phase_start phase=recall_batch" in combined and "qa_progress" not in combined:
         return "qa_batch_stuck"
@@ -660,10 +661,13 @@ def run_command(
 
 
 def parse_pending_count(line: str) -> int | None:
-    match = PENDING_RE.search(line)
-    if not match:
-        return None
-    return int(match.group(1))
+    match = WATERMARK_PENDING_RE.search(line)
+    if match:
+        return int(match.group(1)) + int(match.group(2))
+    match = LEGACY_PENDING_RE.search(line)
+    if match:
+        return int(match.group(1))
+    return None
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
