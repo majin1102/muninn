@@ -517,8 +517,8 @@ function renderTopbar(): string {
   return `
     <header class="topbar">
       <div class="brand-block">
-        <div class="brand-mark">M</div>
-        <h1 class="topbar-title">Muninn Board</h1>
+        <img class="brand-logo" src="./assets/muninn-logo.png" alt="" aria-hidden="true" />
+        <h1 class="topbar-title">Muninn</h1>
       </div>
       <div class="topbar-actions">
         <div class="mode-toggle" role="group" aria-label="Data mode">

@@ -1,17 +1,19 @@
 :root {
   color-scheme: light;
-  --bg: #f7f8fa;
+  --bg: #f4f4f5;
   --panel: #ffffff;
-  --panel-muted: #fbfcfd;
-  --topbar: #eef1f4;
-  --line: #dde3ea;
-  --line-strong: #cdd5df;
-  --ink: #1e2937;
-  --muted: #677386;
-  --accent: #245e9c;
-  --accent-soft: #edf4fb;
-  --danger: #a94141;
-  --shadow: 0 8px 18px rgba(15, 23, 42, 0.04);
+  --panel-muted: #fafafa;
+  --topbar: #fafafa;
+  --line: #e4e4e7;
+  --line-strong: #d4d4d8;
+  --ink: #09090b;
+  --muted: #71717a;
+  --muted-strong: #52525b;
+  --accent: #18181b;
+  --accent-soft: #f4f4f5;
+  --danger: #b91c1c;
+  --radius: 10px;
+  --shadow: none;
 }
 
 * {
@@ -39,6 +41,7 @@ button {
 .shell {
   min-height: 100vh;
   padding: 0;
+  background: var(--bg);
 }
 
 .topbar {
@@ -46,8 +49,8 @@ button {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  min-height: 58px;
-  padding: 10px 16px;
+  min-height: 56px;
+  padding: 10px 14px;
   border-bottom: 1px solid var(--line);
   background: var(--topbar);
 }
@@ -56,20 +59,14 @@ button {
   display: flex;
   align-items: center;
   gap: 10px;
+  min-width: 0;
 }
 
-.brand-mark {
+.brand-logo {
   width: 34px;
   height: 34px;
-  display: grid;
-  place-items: center;
   flex: 0 0 auto;
-  border-radius: 8px;
-  background: linear-gradient(135deg, #21456d, #3d7bc5);
-  color: #fff;
-  font-weight: 700;
-  font-size: 13px;
-  letter-spacing: 0.08em;
+  object-fit: contain;
 }
 
 .eyebrow {
@@ -82,15 +79,16 @@ button {
 
 .topbar-title {
   margin: 0;
-  font-size: 20px;
-  font-weight: 600;
-  line-height: 1.1;
+  color: var(--ink);
+  font-size: 15px;
+  font-weight: 650;
+  line-height: 1;
 }
 
 .topbar-actions {
   display: flex;
   align-items: center;
-  gap: 18px;
+  gap: 12px;
   flex-wrap: wrap;
 }
 
@@ -105,12 +103,12 @@ button {
   border: 0;
   background: transparent;
   box-shadow: none;
-  color: #334155;
+  color: var(--muted-strong);
   text-decoration: none;
   font-size: 13px;
   line-height: 1;
   white-space: nowrap;
-  transition: color 120ms ease, opacity 120ms ease, transform 120ms ease;
+  transition: color 120ms ease, opacity 120ms ease;
 }
 
 .topbar-text-action {
@@ -125,48 +123,43 @@ button {
 .topbar-text-action:hover,
 .topbar-version:hover,
 .github-link:hover {
-  color: var(--accent);
+  color: var(--ink);
 }
 
 .topbar-version {
   min-width: max-content;
-  font-size: 13px;
 }
 
 .mode-toggle {
   display: inline-flex;
   padding: 3px;
   border: 1px solid var(--line);
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.75);
+  border-radius: 10px;
+  background: var(--panel);
 }
 
 .mode-toggle-button {
-  min-height: 26px;
-  padding: 0 11px;
+  min-height: 24px;
+  padding: 0 10px;
   border: 0;
-  border-radius: 9px;
+  border-radius: 7px;
   background: transparent;
   cursor: pointer;
-  font-size: 13px;
-  color: #334155;
+  color: var(--muted-strong);
+  font-size: 12px;
   transition: background-color 120ms ease, color 120ms ease;
 }
 
 .mode-toggle-button:not(.mode-toggle-button-active):hover {
-  background: #edf2f7;
+  background: var(--accent-soft);
   color: var(--ink);
 }
 
-.mode-toggle-button-active {
-  background: var(--accent);
-  color: #fff;
-}
-
+.mode-toggle-button-active,
 .mode-toggle-button-active:hover,
 .mode-toggle-button-active:focus-visible {
   background: var(--accent);
-  color: #fff;
+  color: #ffffff;
 }
 
 .topbar-link,
