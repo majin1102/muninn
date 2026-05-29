@@ -806,6 +806,10 @@ function transcriptMessages(markdown: string): TranscriptMessage[] | null {
   const messages: TranscriptMessage[] = [];
 
   for (const block of blocks) {
+    if (/^#\s+/.test(block) && !/^##\s+/.test(block)) {
+      continue;
+    }
+
     const match = block.match(/^##\s+(User|Assistant|Agent)\b[^\n]*\n([\s\S]*)$/i);
     if (!match) {
       return null;
@@ -822,12 +826,44 @@ function transcriptMessages(markdown: string): TranscriptMessage[] | null {
   return messages.length > 0 ? messages : null;
 }
 
+function turnSectionMessages(markdown: string): TranscriptMessage[] | null {
+  const sections = new Map<string, string>();
+  const matches = markdown.matchAll(/^##\s+(.+?)\s*\n([\s\S]*?)(?=^##\s+|\s*$)/gm);
+
+  for (const match of matches) {
+    sections.set(match[1].trim().toLowerCase(), match[2].trim());
+  }
+
+  const prompt = sections.get('prompt');
+  const response = sections.get('response');
+  if (!prompt && !response) {
+    return null;
+  }
+
+  const messages: TranscriptMessage[] = [];
+  if (prompt) {
+    messages.push({
+      role: 'user',
+      label: 'User',
+      body: prompt,
+    });
+  }
+  if (response) {
+    messages.push({
+      role: 'agent',
+      label: 'Agent',
+      body: response,
+    });
+  }
+  return messages;
+}
+
 function shouldRenderTranscript(document: MemoryDocument): boolean {
   return state.route.mode === 'session' && document.kind === 'turn';
 }
 
 function renderTranscript(document: MemoryDocument): string {
-  const messages = transcriptMessages(document.markdown);
+  const messages = transcriptMessages(document.markdown) ?? turnSectionMessages(document.markdown);
   if (!messages) {
     return `<article class="markdown-doc">${renderMarkdown(document.markdown)}</article>`;
   }

@@ -1142,6 +1142,85 @@ button {
   font-size: 13px;
 }
 
+.extraction-block {
+  display: grid;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+}
+
+.extraction-block-active {
+  border-color: var(--line-strong);
+  background: var(--panel);
+}
+
+.extraction-open {
+  width: 100%;
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted-strong);
+  text-align: left;
+  cursor: pointer;
+}
+
+.extraction-open:hover {
+  background: var(--accent-soft);
+  color: var(--ink);
+}
+
+.extraction-date {
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.extraction-open h3 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 650;
+  line-height: 1.35;
+}
+
+.extraction-open p {
+  margin: 0;
+  color: var(--muted-strong);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.extraction-actions {
+  padding: 0 10px;
+}
+
+.extraction-toggle {
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--muted-strong);
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.extraction-toggle:hover {
+  border-color: var(--line-strong);
+  color: var(--ink);
+}
+
+.extraction-references {
+  display: grid;
+  gap: 2px;
+  padding: 8px 0 0 8px;
+  border-top: 1px solid var(--line);
+}
+
 .document-layout {
   display: grid;
   gap: 12px;
