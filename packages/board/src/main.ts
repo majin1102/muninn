@@ -791,6 +791,62 @@ function renderSnapshotBlock(snapshot: ObservingCard): string {
   `;
 }
 
+type TranscriptMessage = {
+  role: 'user' | 'agent';
+  label: string;
+  body: string;
+};
+
+function transcriptMessages(markdown: string): TranscriptMessage[] | null {
+  const blocks = markdown
+    .split(/\n(?=##\s+)/)
+    .map((block) => block.trim())
+    .filter(Boolean);
+
+  const messages: TranscriptMessage[] = [];
+
+  for (const block of blocks) {
+    const match = block.match(/^##\s+(User|Assistant|Agent)\b[^\n]*\n([\s\S]*)$/i);
+    if (!match) {
+      return null;
+    }
+
+    const rawRole = match[1].toLowerCase();
+    messages.push({
+      role: rawRole === 'user' ? 'user' : 'agent',
+      label: match[1],
+      body: match[2].trim(),
+    });
+  }
+
+  return messages.length > 0 ? messages : null;
+}
+
+function shouldRenderTranscript(document: MemoryDocument): boolean {
+  return state.route.mode === 'session' && document.kind === 'turn';
+}
+
+function renderTranscript(document: MemoryDocument): string {
+  const messages = transcriptMessages(document.markdown);
+  if (!messages) {
+    return `<article class="markdown-doc">${renderMarkdown(document.markdown)}</article>`;
+  }
+
+  return `
+    <article class="transcript-doc">
+      ${messages.map((message) => `
+        <section class="chat-row chat-row-${message.role}">
+          <div class="chat-avatar" aria-hidden="true">${message.role === 'user' ? 'U' : 'A'}</div>
+          <div class="chat-message">
+            <div class="chat-meta">${escapeHtml(message.label)}</div>
+            <div class="chat-bubble">${renderMarkdown(message.body)}</div>
+          </div>
+        </section>
+      `).join('')}
+    </article>
+  `;
+}
+
 function renderRightPane(): string {
   if (state.loadingDocument) {
     return '<div class="detail-empty">Loading document...</div>';
@@ -826,9 +882,9 @@ function renderRightPane(): string {
             </button>
           </div>
         </header>
-        <article class="markdown-doc">
-          ${renderMarkdown(state.document.markdown)}
-        </article>
+        ${shouldRenderTranscript(state.document)
+          ? renderTranscript(state.document)
+          : `<article class="markdown-doc">${renderMarkdown(state.document.markdown)}</article>`}
       </section>
     </div>
   `;
