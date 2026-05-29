@@ -9,11 +9,17 @@ type PromptTemplate = {
 const promptCache = new Map<string, PromptTemplate>();
 const PROMPT_FILE_NAMES = {
   turn: 'turn',
-  observing: 'observing',
-  observing_gateway: 'observing-gateway',
+  chat: 'chat',
+  thread_observing: 'observer',
+  thread_extracting: 'extractor',
+  extracting_gateway: 'extracting-gateway',
+  extraction_extraction: 'extraction-extraction',
+  extraction_review: 'extraction-review',
+  thread_preparation: 'thread-preparation',
+  memory_recaller: 'memory-recaller',
 } as const;
 
-export function loadPromptTemplate(name: 'turn' | 'observing' | 'observing_gateway'): PromptTemplate {
+export function loadPromptTemplate(name: keyof typeof PROMPT_FILE_NAMES): PromptTemplate {
   const cached = promptCache.get(name);
   if (cached) {
     return cached;

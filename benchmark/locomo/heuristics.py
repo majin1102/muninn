@@ -42,7 +42,11 @@ STOPWORDS = {
     "why",
 }
 
-DATE_PATTERN = re.compile(r"\b\d{1,2}:\d{2}\s*[ap]m on \d{1,2}\s+[A-Za-z]+,\s+\d{4}\b", re.IGNORECASE)
+DATE_PATTERN = re.compile(
+    r"\b(?:\d{1,2}:\d{2}\s*[ap]m on\s+)?\d{1,2}\s+[A-Za-z]+,?\s+\d{4}\b"
+    r"|\b\d{4}-\d{2}-\d{2}\b",
+    re.IGNORECASE,
+)
 SENTENCE_SPLIT = re.compile(r"[\n.!?;]+")
 PHRASE_SPLIT = re.compile(r"[,/]")
 
@@ -79,30 +83,12 @@ def build_prediction(question: str, category: int, hits: list[RecallHit]) -> str
 
 
 def build_query_candidates(question: str) -> list[str]:
-    raw_tokens = re.findall(r"[A-Za-z0-9']+", question)
-    significant = [token.lower() for token in raw_tokens if token.lower() not in STOPWORDS]
-    candidates: list[str] = []
-
-    max_window = min(3, len(significant))
-    for window in range(max_window, 0, -1):
-        for index in range(0, len(significant) - window + 1):
-            phrase = " ".join(significant[index:index + window]).strip()
-            if len(phrase) >= 4:
-                candidates.append(phrase)
-
-    full_question = question.strip().rstrip("?")
-    if full_question:
-        candidates.append(full_question)
-
-    return dedupe_preserving_order(candidates)
+    return [question]
 
 
 def best_date_answer(question: str, hits: list[RecallHit]) -> str | None:
     _ = question
     for hit in hits:
-        candidate = extract_date(hit.date_time)
-        if candidate:
-            return candidate
         match = DATE_PATTERN.search(best_context_text(hit))
         if match:
             return extract_date(match.group(0))
@@ -110,6 +96,24 @@ def best_date_answer(question: str, hits: list[RecallHit]) -> str | None:
 
 
 def extract_date(value: str) -> str | None:
+    iso = re.search(r"\b(\d{4})-(\d{2})-(\d{2})\b", value)
+    if iso:
+        year, month, day = iso.groups()
+        month_name = [
+            "January",
+            "February",
+            "March",
+            "April",
+            "May",
+            "June",
+            "July",
+            "August",
+            "September",
+            "October",
+            "November",
+            "December",
+        ][int(month) - 1]
+        return f"{int(day)} {month_name} {year}"
     match = re.search(r"(\d{1,2})\s+([A-Za-z]+),?\s+(\d{4})", value)
     if not match:
         return None
@@ -131,7 +135,7 @@ def ranked_candidates(question: str, hits: list[RecallHit]) -> list[tuple[str, f
 
 def candidate_fragments(hit: RecallHit) -> list[str]:
     fragments = []
-    for raw in filter(None, [hit.summary, hit.detail]):
+    for raw in filter(None, [hit.matched_text, hit.detail]):
         for sentence in SENTENCE_SPLIT.split(raw):
             sentence = sentence.strip()
             if not sentence:
@@ -141,8 +145,6 @@ def candidate_fragments(hit: RecallHit) -> list[str]:
                 phrase = phrase.strip()
                 if len(phrase) >= 3:
                     fragments.append(phrase)
-    if hit.date_time:
-        fragments.append(hit.date_time)
     return dedupe_preserving_order(fragments)
 
 
@@ -164,7 +166,7 @@ def query_tokens(text: str) -> list[str]:
 
 
 def best_context_text(hit: RecallHit) -> str:
-    return hit.summary or hit.detail or hit.title or ""
+    return hit.matched_text or hit.detail or ""
 
 
 def clean_answer(text: str) -> str:

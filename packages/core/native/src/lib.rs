@@ -3,8 +3,9 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use muninn_format::{
-    MemoryId, MemoryLayer, ObservingSnapshot, ObservingTable, SemanticIndexRow,
-    SemanticIndexTable, SessionTable, SessionTurn, TableOptions, data_root,
+    Extraction, ExtractionTable, MemoryId, MemoryLayer, Observation, ObservationContext,
+    ObservationContextTable, ObservationTable, RecallMode, SessionSnapshot, SessionTable,
+    TableOptions, Turn, TurnTable, data_root,
 };
 use napi::{Error, Result as NapiResult};
 use napi_derive::napi;
@@ -14,9 +15,11 @@ use tokio::sync::Mutex;
 
 #[derive(Clone)]
 struct CoreResources {
+    observation_context_table: ObservationContextTable,
     session_table: SessionTable,
-    observing_table: ObservingTable,
-    semantic_index_table: SemanticIndexTable,
+    turn_table: TurnTable,
+    extraction_table: ExtractionTable,
+    observation_table: ObservationTable,
 }
 
 struct CoreState {
@@ -32,7 +35,7 @@ enum ListModeInput {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct SessionListTurnsParams {
+struct TurnListParams {
     mode: ListModeInput,
     agent: Option<String>,
     session_id: Option<String>,
@@ -40,7 +43,7 @@ struct SessionListTurnsParams {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct SessionTimelineTurnsParams {
+struct TurnTimelineParams {
     memory_id: String,
     before_limit: Option<usize>,
     after_limit: Option<usize>,
@@ -48,7 +51,7 @@ struct SessionTimelineTurnsParams {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct SessionLoadTurnsAfterEpochParams {
+struct TurnLoadAfterEpochParams {
     observer: String,
     committed_epoch: Option<u64>,
 }
@@ -68,50 +71,122 @@ struct CleanupParams {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct SessionUpsertParams {
-    turns: Vec<SessionTurn>,
+struct TurnInsertParams {
+    turns: Vec<Turn>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct SessionDeleteTurnsParams {
+struct TurnDeleteParams {
     turn_ids: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct ObservingListSnapshotsParams {
+struct SessionListSnapshotsParams {
     observer: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct ObservingUpsertParams {
-    snapshots: Vec<ObservingSnapshot>,
+struct SessionInsertParams {
+    snapshots: Vec<SessionSnapshot>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct SemanticNearestParams {
+struct ExtractionNearestParams {
     vector: Vec<f32>,
     limit: usize,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct SemanticLoadByIdsParams {
+struct ExtractionSearchParams {
+    query: String,
+    vector: Vec<f32>,
+    limit: usize,
+    mode: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ExtractionGetParams {
     ids: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct SemanticUpsertParams {
-    rows: Vec<SemanticIndexRow>,
+struct ExtractionListParams {
+    limit: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct SemanticDeleteParams {
+struct ExtractionDeltaParams {
+    baseline_version: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ExtractionUpsertParams {
+    rows: Vec<Extraction>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ExtractionDeleteParams {
+    ids: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ObservationContextUpsertParams {
+    rows: Vec<ObservationContext>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ObservationContextListParams {
+    observer: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ObservationContextGetParams {
+    ids: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ObservationContextDeleteParams {
+    ids: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ObservationUpsertParams {
+    rows: Vec<Observation>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ObservationDeleteParams {
+    ids: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ObservationSearchParams {
+    query: String,
+    vector: Vec<f32>,
+    limit: usize,
+    mode: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ObservationGetParams {
     ids: Vec<String>,
 }
 
@@ -172,27 +247,27 @@ impl CoreBinding {
         Ok(())
     }
 
-    #[napi(js_name = "sessionGetTurn")]
-    pub async fn session_get_turn(&self, turn_id: String) -> NapiResult<Value> {
+    #[napi(js_name = "turnGet")]
+    pub async fn turn_get(&self, turn_id: String) -> NapiResult<Value> {
         let resources = self.resources().await?;
-        let memory_id = parse_memory_id(&turn_id, MemoryLayer::Session)?;
-        into_napi_value(resources.session_table.get_turn(memory_id.memory_point()).await)
+        let memory_id = parse_memory_id(&turn_id, MemoryLayer::Turn)?;
+        into_napi_value(resources.turn_table.get_turn(memory_id.memory_point()).await)
     }
 
-    #[napi(js_name = "sessionListTurns")]
-    pub async fn session_list_turns(&self, params: Value) -> NapiResult<Value> {
-        let params = parse_params::<SessionListTurnsParams>(params)?;
+    #[napi(js_name = "turnList")]
+    pub async fn turn_list(&self, params: Value) -> NapiResult<Value> {
+        let params = parse_params::<TurnListParams>(params)?;
         let resources = self.resources().await?;
         let turns = match params.mode {
             ListModeInput::Recency { limit } => {
                 resources
-                    .session_table
+                    .turn_table
                     .list_recent_turns(params.agent, params.session_id, limit)
                     .await
             }
             ListModeInput::Page { offset, limit } => {
                 resources
-                    .session_table
+                    .turn_table
                     .list_turns(params.agent, params.session_id, offset, limit)
                     .await
             }
@@ -200,14 +275,14 @@ impl CoreBinding {
         into_napi_value(turns)
     }
 
-    #[napi(js_name = "sessionTimelineTurns")]
-    pub async fn session_timeline_turns(&self, params: Value) -> NapiResult<Value> {
-        let params = parse_params::<SessionTimelineTurnsParams>(params)?;
+    #[napi(js_name = "turnTimeline")]
+    pub async fn turn_timeline(&self, params: Value) -> NapiResult<Value> {
+        let params = parse_params::<TurnTimelineParams>(params)?;
         let resources = self.resources().await?;
-        let memory_id = parse_memory_id(&params.memory_id, MemoryLayer::Session)?;
+        let memory_id = parse_memory_id(&params.memory_id, MemoryLayer::Turn)?;
         into_napi_value(
             resources
-            .session_table
+            .turn_table
             .timeline_turns(
                 memory_id,
                 params.before_limit.unwrap_or(3),
@@ -217,16 +292,113 @@ impl CoreBinding {
         )
     }
 
-    #[napi(js_name = "sessionLoadTurnsAfterEpoch")]
-    pub async fn session_load_turns_after_epoch(&self, params: Value) -> NapiResult<Value> {
-        let params = parse_params::<SessionLoadTurnsAfterEpochParams>(params)?;
+    #[napi(js_name = "turnLoadAfterEpoch")]
+    pub async fn turn_load_after_epoch(&self, params: Value) -> NapiResult<Value> {
+        let params = parse_params::<TurnLoadAfterEpochParams>(params)?;
         let resources = self.resources().await?;
         into_napi_value(
             resources
-                .session_table
+                .turn_table
                 .turns_after_epoch(&params.observer, params.committed_epoch)
                 .await,
         )
+    }
+
+    #[napi(js_name = "turnDelta")]
+    pub async fn turn_delta(&self, params: Value) -> NapiResult<Value> {
+        let params = parse_params::<TableDeltaParams>(params)?;
+        let resources = self.resources().await?;
+        into_napi_value(
+            resources
+                .turn_table
+                .delta(&params.observer, params.baseline_version)
+                .await,
+        )
+    }
+
+    #[napi(js_name = "turnInsert")]
+    pub async fn turn_insert(&self, params: Value) -> NapiResult<Value> {
+        let params = parse_params::<TurnInsertParams>(params)?;
+        let resources = self.resources().await?;
+        let mut turns = params.turns;
+        resources
+            .turn_table
+            .insert(&mut turns)
+            .await
+            .map_err(to_napi_error)?;
+        to_napi_value(turns)
+    }
+
+    #[napi(js_name = "turnDelete")]
+    pub async fn turn_delete(&self, params: Value) -> NapiResult<Value> {
+        let params = parse_params::<TurnDeleteParams>(params)?;
+        let resources = self.resources().await?;
+        let turn_ids = params
+            .turn_ids
+            .iter()
+            .map(|turn_id| parse_memory_id(turn_id, MemoryLayer::Turn))
+            .collect::<NapiResult<Vec<_>>>()?;
+        let deleted = resources
+            .turn_table
+            .delete(turn_ids)
+            .await
+            .map_err(to_napi_error)?;
+        to_napi_value(DeletedCount { deleted })
+    }
+
+    #[napi(js_name = "turnTableStats")]
+    pub async fn turn_table_stats(&self) -> NapiResult<Value> {
+        let resources = self.resources().await?;
+        into_napi_value(resources.turn_table.stats().await)
+    }
+
+    #[napi(js_name = "turnCompact")]
+    pub async fn turn_compact(&self) -> NapiResult<Value> {
+        let resources = self.resources().await?;
+        let changed = resources
+            .turn_table
+            .compact()
+            .await
+            .map_err(to_napi_error)?;
+        to_napi_value(ChangedResult { changed })
+    }
+
+    #[napi(js_name = "turnCleanup")]
+    pub async fn turn_cleanup(&self, params: Value) -> NapiResult<Value> {
+        let params = parse_params::<CleanupParams>(params)?;
+        let resources = self.resources().await?;
+        let changed = resources
+            .turn_table
+            .cleanup(params.floor_version)
+            .await
+            .map_err(to_napi_error)?;
+        to_napi_value(ChangedResult { changed })
+    }
+
+    #[napi(js_name = "describeTurnTable")]
+    pub async fn describe_turn_table(&self) -> NapiResult<Value> {
+        let resources = self.resources().await?;
+        into_napi_value(resources.turn_table.describe().await)
+    }
+
+    #[napi(js_name = "sessionGetSnapshot")]
+    pub async fn session_get_snapshot(&self, snapshot_id: String) -> NapiResult<Value> {
+        let resources = self.resources().await?;
+        let memory_id = parse_memory_id(&snapshot_id, MemoryLayer::Session)?;
+        into_napi_value(resources.session_table.get(memory_id.memory_point()).await)
+    }
+
+    #[napi(js_name = "sessionListSnapshots")]
+    pub async fn session_list_snapshots(&self, params: Value) -> NapiResult<Value> {
+        let params = parse_params::<SessionListSnapshotsParams>(params)?;
+        let resources = self.resources().await?;
+        into_napi_value(resources.session_table.list(params.observer.as_deref()).await)
+    }
+
+    #[napi(js_name = "sessionSnapshots")]
+    pub async fn session_snapshots(&self, session_id: String) -> NapiResult<Value> {
+        let resources = self.resources().await?;
+        into_napi_value(resources.session_table.load_thread_snapshots(&session_id).await)
     }
 
     #[napi(js_name = "sessionDelta")]
@@ -243,32 +415,15 @@ impl CoreBinding {
 
     #[napi(js_name = "sessionInsert")]
     pub async fn session_insert(&self, params: Value) -> NapiResult<Value> {
-        let params = parse_params::<SessionUpsertParams>(params)?;
+        let params = parse_params::<SessionInsertParams>(params)?;
         let resources = self.resources().await?;
-        let mut turns = params.turns;
+        let mut snapshots = params.snapshots;
         resources
             .session_table
-            .insert(&mut turns)
+            .insert(&mut snapshots)
             .await
             .map_err(to_napi_error)?;
-        to_napi_value(turns)
-    }
-
-    #[napi(js_name = "sessionDeleteTurns")]
-    pub async fn session_delete_turns(&self, params: Value) -> NapiResult<Value> {
-        let params = parse_params::<SessionDeleteTurnsParams>(params)?;
-        let resources = self.resources().await?;
-        let turn_ids = params
-            .turn_ids
-            .iter()
-            .map(|turn_id| parse_memory_id(turn_id, MemoryLayer::Session))
-            .collect::<NapiResult<Vec<_>>>()?;
-        let deleted = resources
-            .session_table
-            .delete(turn_ids)
-            .await
-            .map_err(to_napi_error)?;
-        to_napi_value(DeletedCount { deleted })
+        to_napi_value(snapshots)
     }
 
     #[napi(js_name = "sessionTableStats")]
@@ -306,218 +461,344 @@ impl CoreBinding {
         into_napi_value(resources.session_table.describe().await)
     }
 
-    #[napi(js_name = "observingGetSnapshot")]
-    pub async fn observing_get_snapshot(&self, snapshot_id: String) -> NapiResult<Value> {
-        let resources = self.resources().await?;
-        let memory_id = parse_memory_id(&snapshot_id, MemoryLayer::Observing)?;
-        into_napi_value(resources.observing_table.get(memory_id.memory_point()).await)
-    }
-
-    #[napi(js_name = "observingListSnapshots")]
-    pub async fn observing_list_snapshots(&self, params: Value) -> NapiResult<Value> {
-        let params = parse_params::<ObservingListSnapshotsParams>(params)?;
-        let resources = self.resources().await?;
-        into_napi_value(resources.observing_table.list(params.observer.as_deref()).await)
-    }
-
-    #[napi(js_name = "observingThreadSnapshots")]
-    pub async fn observing_thread_snapshots(&self, observing_id: String) -> NapiResult<Value> {
-        let resources = self.resources().await?;
-        into_napi_value(resources.observing_table.load_thread_snapshots(&observing_id).await)
-    }
-
-    #[napi(js_name = "observingDelta")]
-    pub async fn observing_delta(&self, params: Value) -> NapiResult<Value> {
-        let params = parse_params::<TableDeltaParams>(params)?;
+    #[napi(js_name = "extractionNearest")]
+    pub async fn extraction_nearest(&self, params: Value) -> NapiResult<Value> {
+        let params = parse_params::<ExtractionNearestParams>(params)?;
         let resources = self.resources().await?;
         into_napi_value(
             resources
-                .observing_table
-                .delta(&params.observer, params.baseline_version)
-                .await,
-        )
-    }
-
-    #[napi(js_name = "observingInsert")]
-    pub async fn observing_insert(&self, params: Value) -> NapiResult<Value> {
-        let params = parse_params::<ObservingUpsertParams>(params)?;
-        let resources = self.resources().await?;
-        let mut snapshots = params.snapshots;
-        resources
-            .observing_table
-            .insert(&mut snapshots)
-            .await
-            .map_err(to_napi_error)?;
-        to_napi_value(snapshots)
-    }
-
-    #[napi(js_name = "observingTableStats")]
-    pub async fn observing_table_stats(&self) -> NapiResult<Value> {
-        let resources = self.resources().await?;
-        into_napi_value(resources.observing_table.stats().await)
-    }
-
-    #[napi(js_name = "observingCompact")]
-    pub async fn observing_compact(&self) -> NapiResult<Value> {
-        let resources = self.resources().await?;
-        let changed = resources
-            .observing_table
-            .compact()
-            .await
-            .map_err(to_napi_error)?;
-        to_napi_value(ChangedResult { changed })
-    }
-
-    #[napi(js_name = "observingCleanup")]
-    pub async fn observing_cleanup(&self, params: Value) -> NapiResult<Value> {
-        let params = parse_params::<CleanupParams>(params)?;
-        let resources = self.resources().await?;
-        let changed = resources
-            .observing_table
-            .cleanup(params.floor_version)
-            .await
-            .map_err(to_napi_error)?;
-        to_napi_value(ChangedResult { changed })
-    }
-
-    #[napi(js_name = "describeObservingTable")]
-    pub async fn describe_observing_table(&self) -> NapiResult<Value> {
-        let resources = self.resources().await?;
-        into_napi_value(resources.observing_table.describe().await)
-    }
-
-    #[napi(js_name = "semanticNearest")]
-    pub async fn semantic_nearest(&self, params: Value) -> NapiResult<Value> {
-        let params = parse_params::<SemanticNearestParams>(params)?;
-        let resources = self.resources().await?;
-        into_napi_value(
-            resources
-                .semantic_index_table
+                .extraction_table
                 .nearest(&params.vector, params.limit)
                 .await,
         )
     }
 
-    #[napi(js_name = "semanticLoadByIds")]
-    pub async fn semantic_load_by_ids(&self, params: Value) -> NapiResult<Value> {
-        let params = parse_params::<SemanticLoadByIdsParams>(params)?;
+    #[napi(js_name = "extractionSearch")]
+    pub async fn extraction_search(&self, params: Value) -> NapiResult<Value> {
+        let params = parse_params::<ExtractionSearchParams>(params)?;
         let resources = self.resources().await?;
-        into_napi_value(resources.semantic_index_table.load_by_ids(&params.ids).await)
+        let mode = parse_recall_mode(&params.mode)?;
+        into_napi_value(
+            resources
+                .extraction_table
+                .search(&params.query, &params.vector, params.limit, mode)
+                .await,
+        )
     }
 
-    #[napi(js_name = "semanticUpsert")]
-    pub async fn semantic_upsert(&self, params: Value) -> NapiResult<()> {
-        let params = parse_params::<SemanticUpsertParams>(params)?;
+    #[napi(js_name = "extractionGet")]
+    pub async fn extraction_get(&self, params: Value) -> NapiResult<Value> {
+        let params = parse_params::<ExtractionGetParams>(params)?;
+        let resources = self.resources().await?;
+        into_napi_value(resources.extraction_table.get(&params.ids).await)
+    }
+
+    #[napi(js_name = "extractionList")]
+    pub async fn extraction_list(&self, params: Value) -> NapiResult<Value> {
+        let params = parse_params::<ExtractionListParams>(params)?;
+        let resources = self.resources().await?;
+        into_napi_value(resources.extraction_table.list(params.limit).await)
+    }
+
+    #[napi(js_name = "extractionDelta")]
+    pub async fn extraction_delta(&self, params: Value) -> NapiResult<Value> {
+        let params = parse_params::<ExtractionDeltaParams>(params)?;
+        let resources = self.resources().await?;
+        into_napi_value(resources.extraction_table.delta(params.baseline_version).await)
+    }
+
+    #[napi(js_name = "extractionUpsert")]
+    pub async fn extraction_upsert(&self, params: Value) -> NapiResult<()> {
+        let params = parse_params::<ExtractionUpsertParams>(params)?;
         let resources = self.resources().await?;
         resources
-            .semantic_index_table
+            .extraction_table
             .upsert(params.rows)
             .await
             .map_err(to_napi_error)
     }
 
-    #[napi(js_name = "semanticDelete")]
-    pub async fn semantic_delete(&self, params: Value) -> NapiResult<Value> {
-        let params = parse_params::<SemanticDeleteParams>(params)?;
+    #[napi(js_name = "extractionDelete")]
+    pub async fn extraction_delete(&self, params: Value) -> NapiResult<Value> {
+        let params = parse_params::<ExtractionDeleteParams>(params)?;
         let resources = self.resources().await?;
         let deleted = resources
-            .semantic_index_table
+            .extraction_table
             .delete(params.ids)
             .await
             .map_err(to_napi_error)?;
         to_napi_value(DeletedCount { deleted })
     }
 
-    #[napi(js_name = "semanticValidateDimensions")]
-    pub async fn semantic_validate_dimensions(&self, params: Value) -> NapiResult<()> {
+    #[napi(js_name = "extractionValidateDimensions")]
+    pub async fn extraction_validate_dimensions(&self, params: Value) -> NapiResult<()> {
         let params = parse_params::<ExpectedDimensionsParams>(params)?;
         let resources = self.resources().await?;
         resources
-            .semantic_index_table
+            .extraction_table
             .validate_dimensions(params.expected)
             .await
             .map_err(to_napi_error)
     }
 
-    #[napi(js_name = "semanticTableStats")]
-    pub async fn semantic_table_stats(&self) -> NapiResult<Value> {
+    #[napi(js_name = "extractionTableStats")]
+    pub async fn extraction_table_stats(&self) -> NapiResult<Value> {
         let resources = self.resources().await?;
-        into_napi_value(resources.semantic_index_table.stats().await)
+        into_napi_value(resources.extraction_table.stats().await)
     }
 
-    #[napi(js_name = "semanticEnsureVectorIndex")]
-    pub async fn semantic_ensure_vector_index(&self, params: Value) -> NapiResult<Value> {
+    #[napi(js_name = "extractionEnsureVectorIndex")]
+    pub async fn extraction_ensure_vector_index(&self, params: Value) -> NapiResult<Value> {
         let params = parse_params::<TargetPartitionSizeParams>(params)?;
         let resources = self.resources().await?;
         let created = resources
-            .semantic_index_table
+            .extraction_table
             .ensure_vector_index(params.target_partition_size)
             .await
             .map_err(to_napi_error)?;
         to_napi_value(CreatedResult { created })
     }
 
-    #[napi(js_name = "semanticCompact")]
-    pub async fn semantic_compact(&self) -> NapiResult<Value> {
+    #[napi(js_name = "extractionCompact")]
+    pub async fn extraction_compact(&self) -> NapiResult<Value> {
         let resources = self.resources().await?;
         let changed = resources
-            .semantic_index_table
+            .extraction_table
             .compact()
             .await
             .map_err(to_napi_error)?;
         to_napi_value(ChangedResult { changed })
     }
 
-    #[napi(js_name = "semanticCleanup")]
-    pub async fn semantic_cleanup(&self, params: Value) -> NapiResult<Value> {
+    #[napi(js_name = "extractionCleanup")]
+    pub async fn extraction_cleanup(&self, params: Value) -> NapiResult<Value> {
         let params = parse_params::<CleanupParams>(params)?;
         let resources = self.resources().await?;
         let changed = resources
-            .semantic_index_table
+            .extraction_table
             .cleanup(params.floor_version)
             .await
             .map_err(to_napi_error)?;
         to_napi_value(ChangedResult { changed })
     }
 
-    #[napi(js_name = "semanticOptimize")]
-    pub async fn semantic_optimize(&self, params: Value) -> NapiResult<Value> {
+    #[napi(js_name = "extractionOptimize")]
+    pub async fn extraction_optimize(&self, params: Value) -> NapiResult<Value> {
         let params = parse_params::<OptimizeParams>(params)?;
         let resources = self.resources().await?;
         let changed = resources
-            .semantic_index_table
+            .extraction_table
             .optimize(params.merge_count)
             .await
             .map_err(to_napi_error)?;
         to_napi_value(ChangedResult { changed })
     }
 
-    #[napi(js_name = "describeSemanticIndexTable")]
-    pub async fn describe_semantic_index_table(&self) -> NapiResult<Value> {
+    #[napi(js_name = "describeExtractionTable")]
+    pub async fn describe_extraction_table(&self) -> NapiResult<Value> {
         let resources = self.resources().await?;
-        into_napi_value(resources.semantic_index_table.describe().await)
+        into_napi_value(resources.extraction_table.describe().await)
+    }
+
+    #[napi(js_name = "observationContextUpsert")]
+    pub async fn observation_context_upsert(&self, params: Value) -> NapiResult<()> {
+        let params = parse_params::<ObservationContextUpsertParams>(params)?;
+        let resources = self.resources().await?;
+        resources
+            .observation_context_table
+            .upsert(params.rows)
+            .await
+            .map_err(to_napi_error)
+    }
+
+    #[napi(js_name = "observationContextList")]
+    pub async fn observation_context_list(&self, params: Value) -> NapiResult<Value> {
+        let params = parse_params::<ObservationContextListParams>(params)?;
+        let resources = self.resources().await?;
+        into_napi_value(
+            resources
+                .observation_context_table
+                .list(params.observer.as_deref())
+                .await,
+        )
+    }
+
+    #[napi(js_name = "observationContextGet")]
+    pub async fn observation_context_get(&self, params: Value) -> NapiResult<Value> {
+        let params = parse_params::<ObservationContextGetParams>(params)?;
+        let resources = self.resources().await?;
+        into_napi_value(resources.observation_context_table.get(&params.ids).await)
+    }
+
+    #[napi(js_name = "observationContextDelete")]
+    pub async fn observation_context_delete(&self, params: Value) -> NapiResult<Value> {
+        let params = parse_params::<ObservationContextDeleteParams>(params)?;
+        let resources = self.resources().await?;
+        into_napi_value(
+            resources
+                .observation_context_table
+                .delete(params.ids)
+                .await
+                .map(|deleted| DeletedCount { deleted }),
+        )
+    }
+
+    #[napi(js_name = "observationContextTableStats")]
+    pub async fn observation_context_table_stats(&self) -> NapiResult<Value> {
+        let resources = self.resources().await?;
+        into_napi_value(resources.observation_context_table.stats().await)
+    }
+
+    #[napi(js_name = "observationContextEnsureIdIndex")]
+    pub async fn observation_context_ensure_id_index(&self) -> NapiResult<Value> {
+        let resources = self.resources().await?;
+        let created = resources
+            .observation_context_table
+            .ensure_id_index()
+            .await
+            .map_err(to_napi_error)?;
+        to_napi_value(CreatedResult { created })
+    }
+
+    #[napi(js_name = "observationContextOptimize")]
+    pub async fn observation_context_optimize(&self, params: Value) -> NapiResult<Value> {
+        let params = parse_params::<OptimizeParams>(params)?;
+        let resources = self.resources().await?;
+        let changed = resources
+            .observation_context_table
+            .optimize(params.merge_count)
+            .await
+            .map_err(to_napi_error)?;
+        to_napi_value(ChangedResult { changed })
+    }
+
+    #[napi(js_name = "observationUpsert")]
+    pub async fn observation_upsert(&self, params: Value) -> NapiResult<()> {
+        let params = parse_params::<ObservationUpsertParams>(params)?;
+        let resources = self.resources().await?;
+        resources.observation_table.upsert(params.rows).await.map_err(to_napi_error)
+    }
+
+    #[napi(js_name = "observationDelete")]
+    pub async fn observation_delete(&self, params: Value) -> NapiResult<Value> {
+        let params = parse_params::<ObservationDeleteParams>(params)?;
+        let resources = self.resources().await?;
+        into_napi_value(
+            resources
+                .observation_table
+                .delete(params.ids)
+                .await
+                .map(|deleted| DeletedCount { deleted }),
+        )
+    }
+
+    #[napi(js_name = "observationSearch")]
+    pub async fn observation_search(&self, params: Value) -> NapiResult<Value> {
+        let params = parse_params::<ObservationSearchParams>(params)?;
+        let resources = self.resources().await?;
+        let mode = parse_recall_mode(&params.mode)?;
+        into_napi_value(
+            resources
+                .observation_table
+                .search(&params.query, &params.vector, params.limit, mode)
+                .await,
+        )
+    }
+
+    #[napi(js_name = "observationGet")]
+    pub async fn observation_get(&self, params: Value) -> NapiResult<Value> {
+        let params = parse_params::<ObservationGetParams>(params)?;
+        let resources = self.resources().await?;
+        into_napi_value(resources.observation_table.get(&params.ids).await)
+    }
+
+    #[napi(js_name = "observationTableStats")]
+    pub async fn observation_table_stats(&self) -> NapiResult<Value> {
+        let resources = self.resources().await?;
+        into_napi_value(resources.observation_table.stats().await)
+    }
+
+    #[napi(js_name = "observationEnsureVectorIndex")]
+    pub async fn observation_ensure_vector_index(&self, params: Value) -> NapiResult<Value> {
+        let params = parse_params::<TargetPartitionSizeParams>(params)?;
+        let resources = self.resources().await?;
+        let created = resources
+            .observation_table
+            .ensure_vector_index(params.target_partition_size)
+            .await
+            .map_err(to_napi_error)?;
+        to_napi_value(CreatedResult { created })
+    }
+
+    #[napi(js_name = "observationCompact")]
+    pub async fn observation_compact(&self) -> NapiResult<Value> {
+        let resources = self.resources().await?;
+        let changed = resources
+            .observation_table
+            .compact()
+            .await
+            .map_err(to_napi_error)?;
+        to_napi_value(ChangedResult { changed })
+    }
+
+    #[napi(js_name = "observationCleanup")]
+    pub async fn observation_cleanup(&self, params: Value) -> NapiResult<Value> {
+        let params = parse_params::<CleanupParams>(params)?;
+        let resources = self.resources().await?;
+        let changed = resources
+            .observation_table
+            .cleanup(params.floor_version)
+            .await
+            .map_err(to_napi_error)?;
+        to_napi_value(ChangedResult { changed })
+    }
+
+    #[napi(js_name = "observationOptimize")]
+    pub async fn observation_optimize(&self, params: Value) -> NapiResult<Value> {
+        let params = parse_params::<OptimizeParams>(params)?;
+        let resources = self.resources().await?;
+        let changed = resources
+            .observation_table
+            .optimize(params.merge_count)
+            .await
+            .map_err(to_napi_error)?;
+        to_napi_value(ChangedResult { changed })
     }
 }
 
 #[napi(js_name = "createCoreBinding")]
-pub fn create_core_binding() -> NapiResult<CoreBinding> {
-    let table_options = TableOptions::load().map_err(to_napi_error)?;
+pub fn create_core_binding(params: Option<Value>) -> NapiResult<CoreBinding> {
+    let table_options = params
+        .map(parse_params::<Option<StorageTargetParams>>)
+        .transpose()?
+        .flatten()
+        .map(|params| TableOptions::from_uri(params.uri, params.storage_options))
+        .transpose()
+        .map_err(to_napi_error)?;
+    let table_options = match table_options {
+        Some(table_options) => table_options,
+        None => TableOptions::load().map_err(to_napi_error)?,
+    };
+    let turn_table = TurnTable::new(table_options.clone());
     let session_table = SessionTable::new(table_options.clone());
-    let observing_table = ObservingTable::new(table_options.clone());
-    let semantic_index_table = SemanticIndexTable::new(table_options);
+    let extraction_table = ExtractionTable::new(table_options.clone());
+    let observation_context_table = ObservationContextTable::new(table_options.clone());
+    let observation_table = ObservationTable::new(table_options);
     Ok(CoreBinding {
         inner: Arc::new(CoreState {
             resources: Mutex::new(Some(CoreResources {
+                observation_context_table,
+                turn_table,
                 session_table,
-                observing_table,
-                semantic_index_table,
+                extraction_table,
+                observation_table,
             })),
         }),
     })
 }
 
-#[napi(js_name = "describeSemanticIndexForStorage")]
-pub async fn describe_semantic_index_for_storage(params: Value) -> NapiResult<Value> {
+#[napi(js_name = "describeExtractionForStorage")]
+pub async fn describe_extraction_for_storage(params: Value) -> NapiResult<Value> {
     let table_options = parse_params::<Option<StorageTargetParams>>(params)?
         .map(|params| TableOptions::from_uri(params.uri, params.storage_options))
         .transpose()
@@ -527,7 +808,7 @@ pub async fn describe_semantic_index_for_storage(params: Value) -> NapiResult<Va
         None => TableOptions::local_read_only(data_root().map_err(to_napi_error)?)
             .map_err(to_napi_error)?,
     };
-    into_napi_value(SemanticIndexTable::new(table_options).describe().await)
+    into_napi_value(ExtractionTable::new(table_options).describe().await)
 }
 
 impl CoreBinding {
@@ -547,13 +828,25 @@ fn parse_memory_id(raw: &str, expected_layer: MemoryLayer) -> NapiResult<MemoryI
         return Err(Error::from_reason(format!(
             "invalid params: expected {} memory id, got {}",
             match expected_layer {
+                MemoryLayer::Observe => "observe",
+                MemoryLayer::Turn => "turn",
                 MemoryLayer::Session => "session",
-                MemoryLayer::Observing => "observing",
             },
             memory_id.memory_layer()
         )));
     }
     Ok(memory_id)
+}
+
+fn parse_recall_mode(raw: &str) -> NapiResult<RecallMode> {
+    match raw {
+        "vector" => Ok(RecallMode::Vector),
+        "fts" => Ok(RecallMode::Fts),
+        "hybrid" => Ok(RecallMode::Hybrid),
+        other => Err(Error::from_reason(format!(
+            "invalid params: unsupported recall mode {other}"
+        ))),
+    }
 }
 
 fn to_napi_error(error: impl ToString) -> Error {

@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import io
 import os
+import subprocess
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -93,7 +94,7 @@ class MuninnBridgeTests(unittest.TestCase):
         self.assertEqual(completed.stdout.strip(), "partial done")
         self.assertIn("warn", completed.stderr)
 
-    def test_recall_batch_parses_evidence_ids(self) -> None:
+    def test_recall_batch_parses_body_only_hits(self) -> None:
         bridge = MuninnBridge()
         bridge.ensure_built = MagicMock()
         bridge._run_json = MagicMock(
@@ -101,12 +102,9 @@ class MuninnBridgeTests(unittest.TestCase):
                 "results": {
                     "0:0": [
                         {
-                            "memory_id": "observing:1",
-                            "evidence_ids": ["D1:1", "D1:2"],
-                            "date_time": "1:56 pm on 8 May, 2023",
-                            "title": "title",
-                            "summary": "summary",
-                            "detail": "detail",
+                            "memory_id": "turn:1",
+                            "detail": "memory",
+                            "observationRatio": 0.5,
                         }
                     ]
                 }
@@ -118,8 +116,107 @@ class MuninnBridgeTests(unittest.TestCase):
             Path("/tmp/muninn-home"),
         )
 
-        self.assertEqual(results["0:0"][0].memory_id, "observing:1")
-        self.assertEqual(results["0:0"][0].evidence_ids, ["D1:1", "D1:2"])
+        self.assertEqual(results["0:0"][0].memory_id, "turn:1")
+        self.assertEqual(results["0:0"][0].detail, "memory")
+        self.assertEqual(results["0:0"][0].observation_ratio, 0.5)
+
+    def test_recall_batch_passes_budget_and_query_limit(self) -> None:
+        bridge = MuninnBridge()
+        bridge.ensure_built = MagicMock()
+        bridge._run_json = MagicMock(return_value={"results": {"0:0": []}})
+
+        bridge.recall_batch(
+            [{"key": "0:0", "query": "summer plans", "limit": 5}],
+            Path("/tmp/muninn-home"),
+            recall_mode="hybrid",
+            budget=220,
+            query_limit=20,
+            skip_watermark=True,
+            sample_id="conv-26",
+        )
+
+        _, kwargs = bridge._run_json.call_args
+        self.assertEqual(kwargs["budget"], "220")
+        self.assertEqual(kwargs["query_limit"], "20")
+        self.assertEqual(kwargs["skip_watermark"], "1")
+        self.assertEqual(kwargs["sample_id"], "conv-26")
+
+    def test_run_json_uses_configured_node_binary(self) -> None:
+        bridge = MuninnBridge()
+        bridge.ensure_built = MagicMock()
+        bridge._run_process = MagicMock(
+            return_value=subprocess.CompletedProcess(
+                args=["/custom/node", "bridge.js", "reset-home"],
+                returncode=0,
+                stdout='{"ok": true, "result": {"ok": true}}',
+                stderr="",
+            )
+        )
+
+        previous = os.environ.get("MUNINN_NODE_BINARY")
+        os.environ["MUNINN_NODE_BINARY"] = "/custom/node"
+        try:
+            bridge._run_json("reset-home", muninn_home="/tmp/muninn-home")
+        finally:
+            if previous is None:
+                os.environ.pop("MUNINN_NODE_BINARY", None)
+            else:
+                os.environ["MUNINN_NODE_BINARY"] = previous
+
+        args = bridge._run_process.call_args.args[0]
+        self.assertEqual(args[0], "/custom/node")
+
+    def test_run_json_unwraps_success_envelope(self) -> None:
+        bridge = MuninnBridge()
+        bridge.ensure_built = MagicMock()
+        bridge._run_process = MagicMock(
+            return_value=subprocess.CompletedProcess(
+                args=["node", "bridge.js", "recall"],
+                returncode=0,
+                stdout='{"ok": true, "result": {"hits": []}}',
+                stderr="",
+            )
+        )
+
+        self.assertEqual(bridge._run_json("recall", muninn_home="/tmp/home"), {"hits": []})
+
+    def test_run_json_reports_bridge_error_envelope(self) -> None:
+        bridge = MuninnBridge()
+        bridge.ensure_built = MagicMock()
+        bridge._run_process = MagicMock(
+            return_value=subprocess.CompletedProcess(
+                args=["node", "bridge.js", "recall-batch"],
+                returncode=1,
+                stdout=(
+                    '{"ok": false, "error": {'
+                    '"message": "recall query failed", '
+                    '"stack": "Error: recall query failed\\n    at recallBatch"}}'
+                ),
+                stderr="stderr details",
+            )
+        )
+
+        with self.assertRaisesRegex(Exception, "recall query failed"):
+            bridge._run_json("recall-batch", muninn_home="/tmp/home")
+
+    def test_run_json_reports_invalid_json_with_process_context(self) -> None:
+        bridge = MuninnBridge()
+        bridge.ensure_built = MagicMock()
+        bridge._run_process = MagicMock(
+            return_value=subprocess.CompletedProcess(
+                args=["node", "bridge.js", "recall-batch"],
+                returncode=0,
+                stdout="",
+                stderr="native failure details",
+            )
+        )
+
+        with self.assertRaisesRegex(Exception, "invalid JSON from bridge") as caught:
+            bridge._run_json("recall-batch", muninn_home="/tmp/home")
+
+        message = str(caught.exception)
+        self.assertIn("returncode: 0", message)
+        self.assertIn("stderr tail:\nnative failure details", message)
 
 
 if __name__ == "__main__":

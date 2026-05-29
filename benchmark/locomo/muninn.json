@@ -1,10 +1,16 @@
 {
-  "observer": {
-    "name": "locomo-observer",
+  "extractor": {
+    "name": "locomo-extractor",
+    "domainPrompt": "chat",
     "maxAttempts": 3
   },
+  "observer": {
+    "name": "locomo-observer",
+    "maxAttempts": 3,
+    "anchorThreshold": 5
+  },
   "llm": {},
-  "semanticIndex": {
+  "extraction": {
     "defaultImportance": 0.7
   }
 }

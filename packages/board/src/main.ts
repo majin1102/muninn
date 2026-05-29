@@ -45,7 +45,7 @@ type ObservingCard = {
 
 type MemoryDocument = {
   memoryId: string;
-  kind: 'session' | 'observing';
+  kind: 'turn' | 'session';
   title: string;
   markdown: string;
   agent?: string;
@@ -68,7 +68,7 @@ type SessionTurnsResponse = {
 };
 
 type ObservingListResponse = {
-  observations: ObservingCard[];
+  extractions: ObservingCard[];
 };
 
 type MemoryDocumentResponse = {
@@ -344,7 +344,7 @@ async function ensureObservings() {
       state.observings = await getDemoObservings();
     } else {
       const response = await fetchJson<ObservingListResponse>('/api/v1/ui/observing');
-      state.observings = response.observations;
+      state.observings = response.extractions;
     }
     state.paneError = null;
   } catch (error) {
@@ -586,7 +586,7 @@ function renderSettingsModal(): string {
 }
 
 function renderModeSwitcher(): string {
-  const currentLabel = state.route.mode === 'session' ? 'Session' : 'Observing';
+  const currentLabel = state.route.mode === 'session' ? 'Session' : 'Snapshots';
   const chevron = state.modeMenuOpen ? '▾' : '▾';
   return `
     <div class="left-pane-header" data-mode-menu-root>
@@ -611,7 +611,7 @@ function renderModeSwitcher(): string {
 }
 
 function renderModeMenuItem(mode: Mode): string {
-  const label = mode === 'session' ? 'Session' : 'Observing';
+  const label = mode === 'session' ? 'Session' : 'Snapshots';
   return `
     <button
       class="mode-menu-item ${state.route.mode === mode ? 'mode-menu-item-active' : ''}"
@@ -737,43 +737,43 @@ function renderObservingPane(): string {
   if (state.observings.length === 0) {
     return `
       <div class="pane-message">
-        Observing read model is not available yet.
+        Session snapshot read model is not available yet.
         <span class="pane-subtle">${usesDemoData(state.dataMode)
-          ? 'Tree and Card should always show sample observings here.'
+          ? 'Tree and Card should always show sample snapshots here.'
           : 'This pane is ready, but the sidecar currently returns an empty list.'}</span>
       </div>
     `;
   }
 
-  return state.observings.map((observing) => renderObservingBlock(observing)).join('');
+  return state.observings.map((snapshot) => renderSnapshotBlock(snapshot)).join('');
 }
 
-function renderObservingBlock(observing: ObservingCard): string {
-  const expanded = state.expandedObservings.has(observing.memoryId);
-  const selected = state.route.memoryId === observing.memoryId;
+function renderSnapshotBlock(snapshot: ObservingCard): string {
+  const expanded = state.expandedObservings.has(snapshot.memoryId);
+  const selected = state.route.memoryId === snapshot.memoryId;
 
   return `
-    <article class="observation-block ${selected ? 'observation-block-active' : ''}">
+    <article class="extraction-block ${selected ? 'extraction-block-active' : ''}">
       <button
-        class="observation-open"
+        class="extraction-open"
         data-action="open-memory"
-        data-memory-id="${escapeAttr(observing.memoryId)}"
+        data-memory-id="${escapeAttr(snapshot.memoryId)}"
       >
-        <div class="observation-date">${escapeHtml(formatTimestamp(observing.updatedAt))}</div>
-        <h3>${escapeHtml(observing.title)}</h3>
-        <p>${escapeHtml(expanded ? observing.summary : truncate(observing.summary, 180))}</p>
+        <div class="extraction-date">${escapeHtml(formatTimestamp(snapshot.updatedAt))}</div>
+        <h3>${escapeHtml(snapshot.title)}</h3>
+        <p>${escapeHtml(expanded ? snapshot.summary : truncate(snapshot.summary, 180))}</p>
       </button>
-      <div class="observation-actions">
+      <div class="extraction-actions">
         <button
-          class="observation-toggle"
-          data-action="toggle-observation"
-          data-memory-id="${escapeAttr(observing.memoryId)}"
+          class="extraction-toggle"
+          data-action="toggle-extraction"
+          data-memory-id="${escapeAttr(snapshot.memoryId)}"
         >${expanded ? 'Collapse' : 'Expand'}</button>
       </div>
       ${expanded ? `
-        <div class="observation-references">
-          ${observing.references.length > 0 ? `
-            ${observing.references.map((reference) => `
+        <div class="extraction-references">
+          ${snapshot.references.length > 0 ? `
+            ${snapshot.references.map((reference) => `
               <button
                 class="timeline-item"
                 data-action="open-memory"
@@ -804,7 +804,7 @@ function renderRightPane(): string {
     return `
       <div class="detail-empty">
         <h2>No memory selected</h2>
-        <p>Choose a session memory or observing memory from the left pane to inspect its document.</p>
+        <p>Choose a turn or session snapshot from the left pane to inspect its document.</p>
       </div>
     `;
   }
@@ -1016,7 +1016,7 @@ function bindViewEvents() {
     });
   });
 
-  document.querySelectorAll<HTMLElement>('[data-action="toggle-observation"]').forEach((element) => {
+  document.querySelectorAll<HTMLElement>('[data-action="toggle-extraction"]').forEach((element) => {
     element.addEventListener('click', () => {
       const memoryId = element.dataset.memoryId;
       if (!memoryId) {

@@ -2,7 +2,12 @@ import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 
-import { loadMuninnConfig, resolveMuninnHome, resolveStorageTarget } from './config.js';
+import { loadMuninnConfig, resolveDatabaseHome, resolveDatabaseName, resolveStorageTarget } from './config.js';
+import type {
+  SessionSnapshot,
+  SessionFragment,
+} from './extractor/types.js';
+import type { Extraction } from './native.js';
 
 export type RecentTurn = {
   turnId: string;
@@ -18,27 +23,35 @@ export type RecentSessionCheckpoint = {
 };
 
 export type ThreadRef = {
-  observingId: string;
+  sessionId: string;
   latestSnapshotId: string;
   latestSnapshotSequence: number;
   indexedSnapshotSequence?: number | null;
   updatedAt: string;
 };
 
-export type ObserverCheckpoint = {
+export type ExtractorCheckpoint = {
   baseline: {
     turn: number;
-    observing: number;
-    semanticIndex: number;
+    session: number;
+    extraction: number;
+    observation: number;
   };
   committedEpoch?: number;
   nextEpoch: number;
   recentSessions: RecentSessionCheckpoint[];
   threads: ThreadRef[];
+  runs: ObservingRun[];
+  pendingExtractionChanges: QueuedExtractionChange[];
 };
 
+export type QueuedExtractionChange =
+  | { type: 'upsert'; extraction: Extraction }
+  | { type: 'delete'; extraction: Extraction };
+
 export type CheckpointContent = {
-  schemaVersion: 3;
+  schemaVersion: 6;
+  extractor: ExtractorCheckpoint;
   observer: ObserverCheckpoint;
 };
 
@@ -47,29 +60,111 @@ export type CheckpointFile = CheckpointContent & {
   writerPid: number;
 };
 
+export type ObservingRunStatus = 'running' | 'completed' | 'failed';
+
+export type ObservingRunStage =
+  | 'fittingThreads'
+  | 'committingExtractions'
+  | 'observingThreads'
+  | 'committingSnapshots'
+  | 'indexingSnapshots'
+  | 'completed';
+
+export type ObservingRunError = {
+  stage: string;
+  message: string;
+  at: string;
+};
+
+export type ObservingRun = {
+  observer: string;
+  epoch: number;
+  status: ObservingRunStatus;
+  stage: ObservingRunStage;
+  inputTurnIds: string[];
+  pending?: {
+    sessionFragments?: SessionFragment[];
+    snapshotResults?: SessionSnapshot[];
+  };
+  committed: {
+    extractionIds: string[];
+    snapshotIds: string[];
+  };
+  traceRefs: string[];
+  errors: ObservingRunError[];
+};
+
+export type ObserverRunStage =
+  | 'selectingExtractions'
+  | 'generatingObservation'
+  | 'committingSnapshot'
+  | 'committingObservations'
+  | 'completed'
+  | 'failed';
+
+export type ObserverRun = {
+  runId: string;
+  observeId: string;
+  anchor: string;
+  stage: ObserverRunStage;
+  pendingExtractionIds: string[];
+  generatedContent?: string;
+  parsedObservationDrafts?: Array<{
+    id: string;
+    text: string;
+    references: string[];
+  }>;
+  committedSnapshotId?: string;
+  committedObservationIds?: string[];
+  errors: Array<{
+    message: string;
+    stage: string;
+  }>;
+};
+
+export type ObserverCheckpoint = {
+  baseline: {
+    observationContext: number;
+    observation: number;
+  };
+  observeQueue: {
+    anchors: Array<{
+      key: string;
+      anchor: string;
+      extractionChanges: QueuedExtractionChange[];
+    }>;
+  };
+  runs: ObserverRun[];
+};
+
 export function parseCheckpointFile(raw: string): CheckpointFile {
   const parsed = JSON.parse(raw) as Partial<CheckpointFile>;
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
     throw new Error('checkpoint must be a JSON object');
   }
-  if (parsed.schemaVersion !== 3) {
+  if (parsed.schemaVersion !== 6) {
     throw new Error(`unsupported checkpoint schemaVersion: ${String(parsed.schemaVersion)}`);
   }
+  const extractor = parseExtractorSection(parsed.extractor);
   const observer = parseObserverSection(parsed.observer);
+  if (!extractor) {
+    throw new Error('checkpoint extractor section is invalid');
+  }
   if (!observer) {
     throw new Error('checkpoint observer section is invalid');
   }
   return {
-    schemaVersion: 3,
+    schemaVersion: 6,
     writtenAt: typeof parsed.writtenAt === 'string' ? parsed.writtenAt : new Date(0).toISOString(),
     writerPid: typeof parsed.writerPid === 'number' ? parsed.writerPid : 0,
+    extractor,
     observer,
   };
 }
 
-export async function readCheckpointFile(): Promise<CheckpointFile | null> {
+export async function readCheckpointFile(database?: string | null): Promise<CheckpointFile | null> {
   try {
-    const raw = await readFile(resolveCheckpointPath(), 'utf8');
+    const raw = await readFile(resolveCheckpointPath(database), 'utf8');
     return parseCheckpointFile(raw);
   } catch (error) {
     if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') {
@@ -83,15 +178,17 @@ export function serializeCheckpointFile(file: CheckpointFile): string {
   return `${JSON.stringify(file, null, 2)}\n`;
 }
 
-function parseObserverSection(value: unknown): ObserverCheckpoint | null {
+function parseExtractorSection(value: unknown): ExtractorCheckpoint | null {
   if (!isObjectRecord(value)) {
     return null;
   }
-  const baseline = parseBaseline(value.baseline);
+  const baseline = parseExtractorBaseline(value.baseline);
   const nextEpoch = value.nextEpoch;
   const recentSessions = parseRecentSessions(value.recentSessions);
   const threads = parseThreads(value.threads);
-  if (!baseline || typeof nextEpoch !== 'number' || !recentSessions || !threads) {
+  const runs = parseObservingRuns(value.runs ?? []);
+  const pendingExtractionChanges = parseQueuedExtractionChanges(value.pendingExtractionChanges);
+  if (!baseline || typeof nextEpoch !== 'number' || !recentSessions || !threads || !runs || !pendingExtractionChanges) {
     return null;
   }
   const committedEpoch = value.committedEpoch;
@@ -104,24 +201,137 @@ function parseObserverSection(value: unknown): ObserverCheckpoint | null {
     nextEpoch,
     recentSessions,
     threads,
+    runs,
+    pendingExtractionChanges,
   };
 }
 
-function parseBaseline(value: unknown): ObserverCheckpoint['baseline'] | null {
+function parseExtractorBaseline(value: unknown): ExtractorCheckpoint['baseline'] | null {
   if (!isObjectRecord(value)) {
     return null;
   }
   if (
     typeof value.turn !== 'number'
-    || typeof value.observing !== 'number'
-    || typeof value.semanticIndex !== 'number'
+    || typeof value.session !== 'number'
+    || typeof value.extraction !== 'number'
+    || (value.observation != null && typeof value.observation !== 'number')
   ) {
     return null;
   }
   return {
     turn: value.turn,
-    observing: value.observing,
-    semanticIndex: value.semanticIndex,
+    session: value.session,
+    extraction: value.extraction,
+    observation: value.observation ?? 0,
+  };
+}
+
+function parseObserverSection(value: unknown): ObserverCheckpoint | null {
+  if (!isObjectRecord(value)) {
+    return null;
+  }
+  const baseline = parseObserverBaseline(value.baseline);
+  const runs = parseObserverRuns(value.runs ?? []);
+  const observeQueue = parseObserveQueue(value.observeQueue);
+  if (!baseline || !runs || !observeQueue) {
+    return null;
+  }
+  return { baseline, observeQueue, runs };
+}
+
+function parseObserverBaseline(value: unknown): ObserverCheckpoint['baseline'] | null {
+  if (!isObjectRecord(value)) {
+    return null;
+  }
+  if (
+    typeof value.observationContext !== 'number'
+    || typeof value.observation !== 'number'
+  ) {
+    return null;
+  }
+  return {
+    observationContext: value.observationContext,
+    observation: value.observation,
+  };
+}
+
+function parseObserveQueue(value: unknown): ObserverCheckpoint['observeQueue'] | null {
+  if (!isObjectRecord(value) || !Array.isArray(value.anchors)) {
+    return null;
+  }
+  const anchors: ObserverCheckpoint['observeQueue']['anchors'] = [];
+  for (const bucket of value.anchors) {
+    if (
+      !isObjectRecord(bucket)
+      || typeof bucket.key !== 'string'
+      || typeof bucket.anchor !== 'string'
+    ) {
+      return null;
+    }
+    const extractionChanges = parseQueuedExtractionChanges(bucket.extractionChanges);
+    if (!extractionChanges) {
+      return null;
+    }
+    anchors.push({
+      key: bucket.key,
+      anchor: bucket.anchor,
+      extractionChanges,
+    });
+  }
+  return { anchors };
+}
+
+function parseQueuedExtractionChanges(value: unknown): QueuedExtractionChange[] | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  const changes: QueuedExtractionChange[] = [];
+  for (const entry of value) {
+    if (!isObjectRecord(entry) || (entry.type !== 'upsert' && entry.type !== 'delete')) {
+      return null;
+    }
+    const extraction = parseStoredExtraction(entry.extraction);
+    if (!extraction) {
+      return null;
+    }
+    changes.push({ type: entry.type, extraction });
+  }
+  return changes;
+}
+
+function parseStoredExtraction(value: unknown): Extraction | null {
+  if (!isObjectRecord(value)) {
+    return null;
+  }
+  if (
+    typeof value.id !== 'string'
+    || typeof value.text !== 'string'
+    || (value.context != null && typeof value.context !== 'string')
+    || !isStringArray(value.anchors)
+    || !isNumberArray(value.vector)
+    || typeof value.importance !== 'number'
+    || typeof value.category !== 'string'
+    || !isStringArray(value.turnRefs)
+    || !isStringArray(value.observationPaths)
+    || !isStringArray(value.observedRootAnchors)
+    || typeof value.createdAt !== 'string'
+    || typeof value.updatedAt !== 'string'
+  ) {
+    return null;
+  }
+  return {
+    id: value.id,
+    text: value.text,
+    context: value.context ?? null,
+    anchors: [...value.anchors],
+    vector: [...value.vector],
+    importance: value.importance,
+    category: value.category,
+    turnRefs: [...value.turnRefs],
+    observationPaths: [...value.observationPaths],
+    observedRootAnchors: [...value.observedRootAnchors],
+    createdAt: value.createdAt,
+    updatedAt: value.updatedAt,
   };
 }
 
@@ -198,7 +408,7 @@ function parseThreads(value: unknown): ThreadRef[] | null {
       return null;
     }
     if (
-      typeof thread.observingId !== 'string'
+      typeof thread.sessionId !== 'string'
       || typeof thread.latestSnapshotId !== 'string'
       || typeof thread.latestSnapshotSequence !== 'number'
       || typeof thread.updatedAt !== 'string'
@@ -210,7 +420,7 @@ function parseThreads(value: unknown): ThreadRef[] | null {
       return null;
     }
     threads.push({
-      observingId: thread.observingId,
+      sessionId: thread.sessionId,
       latestSnapshotId: thread.latestSnapshotId,
       latestSnapshotSequence: thread.latestSnapshotSequence,
       indexedSnapshotSequence: thread.indexedSnapshotSequence ?? null,
@@ -220,31 +430,283 @@ function parseThreads(value: unknown): ThreadRef[] | null {
   return threads;
 }
 
+function parseObservingRuns(value: unknown): ObservingRun[] | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  const runs: ObservingRun[] = [];
+  for (const run of value) {
+    const parsed = parseObservingRun(run);
+    if (!parsed) {
+      return null;
+    }
+    runs.push(parsed);
+  }
+  return runs;
+}
+
+function parseObservingRun(value: unknown): ObservingRun | null {
+  if (!isObjectRecord(value)) {
+    return null;
+  }
+  if (
+    typeof value.observer !== 'string'
+    || typeof value.epoch !== 'number'
+    || !isRunStatus(value.status)
+    || !isRunStage(value.stage)
+  ) {
+    return null;
+  }
+  const inputTurnIds = parseStringArray(value.inputTurnIds);
+  const committed = parseRunCommitted(value.committed);
+  const traceRefs = parseStringArray(value.traceRefs);
+  const errors = parseRunErrors(value.errors);
+  if (!inputTurnIds || !committed || !traceRefs || !errors) {
+    return null;
+  }
+  const pending = value.pending == null ? undefined : parseRunPending(value.pending);
+  if (value.pending != null && !pending) {
+    return null;
+  }
+  return {
+    observer: value.observer,
+    epoch: value.epoch,
+    status: value.status,
+    stage: value.stage,
+    inputTurnIds,
+    ...(pending ? { pending } : {}),
+    committed,
+    traceRefs,
+    errors,
+  };
+}
+
+function parseRunCommitted(value: unknown): ObservingRun['committed'] | null {
+  if (!isObjectRecord(value)) {
+    return null;
+  }
+  const extractionIds = parseStringArray(value.extractionIds);
+  const snapshotIds = parseStringArray(value.snapshotIds);
+  if (!extractionIds || !snapshotIds) {
+    return null;
+  }
+  return { extractionIds, snapshotIds };
+}
+
+function parseRunPending(value: unknown): NonNullable<ObservingRun['pending']> | null {
+  if (!isObjectRecord(value)) {
+    return null;
+  }
+  const pending: NonNullable<ObservingRun['pending']> = {};
+  if (value.sessionFragments != null) {
+    if (!Array.isArray(value.sessionFragments)) {
+      return null;
+    }
+    pending.sessionFragments = value.sessionFragments as SessionFragment[];
+  }
+  if (value.snapshotResults != null) {
+    if (!Array.isArray(value.snapshotResults)) {
+      return null;
+    }
+    pending.snapshotResults = value.snapshotResults as SessionSnapshot[];
+  }
+  return pending;
+}
+
+function parseRunErrors(value: unknown): ObservingRunError[] | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  const errors: ObservingRunError[] = [];
+  for (const error of value) {
+    if (
+      !isObjectRecord(error)
+      || typeof error.stage !== 'string'
+      || typeof error.message !== 'string'
+      || typeof error.at !== 'string'
+    ) {
+      return null;
+    }
+    errors.push({
+      stage: error.stage,
+      message: error.message,
+      at: error.at,
+    });
+  }
+  return errors;
+}
+
+function parseObserverRuns(value: unknown): ObserverRun[] | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  const runs: ObserverRun[] = [];
+  for (const run of value) {
+    const parsed = parseObserverRun(run);
+    if (!parsed) {
+      return null;
+    }
+    runs.push(parsed);
+  }
+  return runs;
+}
+
+function parseObserverRun(value: unknown): ObserverRun | null {
+  if (!isObjectRecord(value)) {
+    return null;
+  }
+  if (
+    typeof value.runId !== 'string'
+    || typeof value.observeId !== 'string'
+    || typeof value.anchor !== 'string'
+    || !isObserverRunStage(value.stage)
+  ) {
+    return null;
+  }
+  const pendingExtractionIds = parseStringArray(value.pendingExtractionIds);
+  const errors = parseObserverRunErrors(value.errors);
+  if (!pendingExtractionIds || !errors) {
+    return null;
+  }
+  const parsedObservationDrafts = value.parsedObservationDrafts == null
+    ? undefined
+    : parseObservationDrafts(value.parsedObservationDrafts);
+  if (value.parsedObservationDrafts != null && !parsedObservationDrafts) {
+    return null;
+  }
+  const committedObservationIds = value.committedObservationIds == null
+    ? undefined
+    : parseStringArray(value.committedObservationIds);
+  if (value.committedObservationIds != null && !committedObservationIds) {
+    return null;
+  }
+  if (
+    (value.generatedContent != null && typeof value.generatedContent !== 'string')
+    || (value.committedSnapshotId != null && typeof value.committedSnapshotId !== 'string')
+  ) {
+    return null;
+  }
+  return {
+    runId: value.runId,
+    observeId: value.observeId,
+    anchor: value.anchor,
+    stage: value.stage,
+    pendingExtractionIds,
+    ...(value.generatedContent == null ? {} : { generatedContent: value.generatedContent }),
+    ...(parsedObservationDrafts ? { parsedObservationDrafts } : {}),
+    ...(value.committedSnapshotId == null ? {} : { committedSnapshotId: value.committedSnapshotId }),
+    ...(committedObservationIds ? { committedObservationIds } : {}),
+    errors,
+  };
+}
+
+function parseObservationDrafts(value: unknown): NonNullable<ObserverRun['parsedObservationDrafts']> | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  const drafts: NonNullable<ObserverRun['parsedObservationDrafts']> = [];
+  for (const draft of value) {
+    if (
+      !isObjectRecord(draft)
+      || typeof draft.id !== 'string'
+      || typeof draft.text !== 'string'
+    ) {
+      return null;
+    }
+    const references = parseStringArray(draft.references);
+    if (!references) {
+      return null;
+    }
+    drafts.push({
+      id: draft.id,
+      text: draft.text,
+      references,
+    });
+  }
+  return drafts;
+}
+
+function parseObserverRunErrors(value: unknown): ObserverRun['errors'] | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  const errors: ObserverRun['errors'] = [];
+  for (const error of value) {
+    if (
+      !isObjectRecord(error)
+      || typeof error.stage !== 'string'
+      || typeof error.message !== 'string'
+    ) {
+      return null;
+    }
+    errors.push({
+      stage: error.stage,
+      message: error.message,
+    });
+  }
+  return errors;
+}
+
+function parseStringArray(value: unknown): string[] | null {
+  if (!isStringArray(value)) {
+    return null;
+  }
+  return [...value];
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === 'string');
+}
+
+function isNumberArray(value: unknown): value is number[] {
+  return Array.isArray(value) && value.every((item) => typeof item === 'number');
+}
+
+function isRunStatus(value: unknown): value is ObservingRunStatus {
+  return value === 'running' || value === 'completed' || value === 'failed';
+}
+
+function isRunStage(value: unknown): value is ObservingRunStage {
+  return value === 'fittingThreads'
+    || value === 'committingExtractions'
+    || value === 'observingThreads'
+    || value === 'committingSnapshots'
+    || value === 'indexingSnapshots'
+    || value === 'completed';
+}
+
+function isObserverRunStage(value: unknown): value is ObserverRunStage {
+  return value === 'selectingExtractions'
+    || value === 'generatingObservation'
+    || value === 'committingSnapshot'
+    || value === 'committingObservations'
+    || value === 'completed'
+    || value === 'failed';
+}
+
 function isObjectRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
-export function resolveCheckpointPath(): string {
-  const home = resolveMuninnHome();
+export function resolveCheckpointPath(database?: string | null): string {
+  const databaseName = resolveDatabaseName(database);
+  const home = resolveDatabaseHome(databaseName);
   const hash = createHash('sha256')
-    .update(storageScopeKey())
+    .update(storageScopeKey(databaseName))
     .digest('hex')
     .slice(0, 16);
   return path.join(home, 'checkpoints', `${hash}.json`);
 }
 
-function storageScopeKey(): string {
+function storageScopeKey(database: string): string {
   const config = loadMuninnConfig();
-  const storage = config ? resolveStorageTarget(config) : null;
-  const observer = config?.observer?.name ?? '';
-  if (!storage) {
-    return `local:${resolveMuninnHome()}#observer=${observer}`;
-  }
+  const storage = resolveStorageTarget(config ?? {}, database);
+  const extractor = config?.extractor?.name ?? '';
   const options = storage.storageOptions
     ? Object.entries(storage.storageOptions)
       .sort(([left], [right]) => left.localeCompare(right))
       .map(([key, value]) => `${key}=${value}`)
       .join('&')
     : '';
-  return `${storage.uri}#${options}#observer=${observer}`;
+  return `${storage.uri}#${options}#extractor=${extractor}`;
 }

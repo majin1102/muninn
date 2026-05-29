@@ -28,9 +28,9 @@ pub fn turn_schema() -> Schema {
     ])
 }
 
-pub fn observing_schema() -> Schema {
+pub fn session_schema() -> Schema {
     Schema::new(vec![
-        Field::new("observing_id", DataType::Utf8, false),
+        Field::new("session_id", DataType::Utf8, false),
         Field::new("snapshot_sequence", DataType::Int64, false),
         Field::new(
             "created_at",
@@ -54,7 +54,7 @@ pub fn observing_schema() -> Schema {
     ])
 }
 
-pub fn semantic_index_schema(dimensions: usize) -> Schema {
+pub fn observation_context_schema() -> Schema {
     let mut id_metadata = HashMap::new();
     id_metadata.insert(
         "lance-schema:unenforced-primary-key".to_string(),
@@ -67,8 +67,55 @@ pub fn semantic_index_schema(dimensions: usize) -> Schema {
 
     Schema::new(vec![
         Field::new("id", DataType::Utf8, false).with_metadata(id_metadata),
-        Field::new("memory_id", DataType::Utf8, false),
+        Field::new("observing_path", DataType::Utf8, false),
+        Field::new("parent_id", DataType::Utf8, true),
+        Field::new("position", DataType::Int64, false),
+        Field::new("content", DataType::Utf8, false),
+        Field::new(
+            "source_refs",
+            DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+            false,
+        ),
+        Field::new(
+            "expand_refs",
+            DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+            false,
+        ),
+        Field::new(
+            "created_at",
+            DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+            false,
+        ),
+        Field::new(
+            "updated_at",
+            DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+            false,
+        ),
+        Field::new("observer", DataType::Utf8, false),
+    ])
+}
+
+pub fn extraction_schema(dimensions: usize) -> Schema {
+    let mut id_metadata = HashMap::new();
+    id_metadata.insert(
+        "lance-schema:unenforced-primary-key".to_string(),
+        "true".to_string(),
+    );
+    id_metadata.insert(
+        "lance-schema:unenforced-primary-key:position".to_string(),
+        "1".to_string(),
+    );
+
+    Schema::new(vec![
+        Field::new("id", DataType::Utf8, false).with_metadata(id_metadata),
         Field::new("text", DataType::Utf8, false),
+        Field::new("context", DataType::Utf8, true),
+        Field::new(
+            "anchors",
+            DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+            false,
+        ),
+        Field::new("search_text", DataType::Utf8, false),
         Field::new(
             "vector",
             DataType::FixedSizeList(
@@ -80,9 +127,124 @@ pub fn semantic_index_schema(dimensions: usize) -> Schema {
         Field::new("importance", DataType::Float32, false),
         Field::new("category", DataType::Utf8, false),
         Field::new(
+            "turn_refs",
+            DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+            false,
+        ),
+        Field::new(
+            "observation_paths",
+            DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+            false,
+        ),
+        Field::new(
+            "observed_root_anchors",
+            DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+            false,
+        ),
+        Field::new(
             "created_at",
             DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
             false,
         ),
+        Field::new(
+            "updated_at",
+            DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+            false,
+        ),
     ])
+}
+
+pub fn observation_schema(dimensions: usize) -> Schema {
+    let mut id_metadata = HashMap::new();
+    id_metadata.insert(
+        "lance-schema:unenforced-primary-key".to_string(),
+        "true".to_string(),
+    );
+    id_metadata.insert(
+        "lance-schema:unenforced-primary-key:position".to_string(),
+        "1".to_string(),
+    );
+
+    Schema::new(vec![
+        Field::new("id", DataType::Utf8, false).with_metadata(id_metadata),
+        Field::new("observing_path", DataType::Utf8, false),
+        Field::new("text", DataType::Utf8, false),
+        Field::new(
+            "vector",
+            DataType::FixedSizeList(
+                Arc::new(Field::new("item", DataType::Float32, true)),
+                dimensions as i32,
+            ),
+            false,
+        ),
+        Field::new(
+            "extraction_refs",
+            DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+            false,
+        ),
+        Field::new(
+            "created_at",
+            DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+            false,
+        ),
+        Field::new(
+            "updated_at",
+            DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+            false,
+        ),
+    ])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extraction_schema_has_refs_and_no_memory_id() {
+        let schema = extraction_schema(3);
+        assert!(schema.field_with_name("id").is_ok());
+        assert!(schema.field_with_name("text").is_ok());
+        assert!(schema.field_with_name("context").is_ok());
+        assert!(schema.field_with_name("anchors").is_ok());
+        assert!(schema.field_with_name("search_text").is_ok());
+        assert!(schema.field_with_name("vector").is_ok());
+        assert!(schema.field_with_name("importance").is_ok());
+        assert!(schema.field_with_name("category").is_ok());
+        assert!(schema.field_with_name("turn_refs").is_ok());
+        assert!(schema.field_with_name("observation_paths").is_ok());
+        assert!(schema.field_with_name("observed_root_anchors").is_ok());
+        assert!(schema.field_with_name("created_at").is_ok());
+        assert!(schema.field_with_name("updated_at").is_ok());
+        assert!(schema.field_with_name("memory_id").is_err());
+    }
+
+    #[test]
+    fn observation_context_schema_has_expected_fields() {
+        let schema = observation_context_schema();
+        assert!(schema.field_with_name("id").is_ok());
+        assert!(schema.field_with_name("observing_path").is_ok());
+        assert!(schema.field_with_name("parent_id").is_ok());
+        assert!(schema.field_with_name("position").is_ok());
+        assert!(schema.field_with_name("content").is_ok());
+        assert!(schema.field_with_name("created_at").is_ok());
+        assert!(schema.field_with_name("updated_at").is_ok());
+        assert!(schema.field_with_name("observer").is_ok());
+        assert!(schema.field_with_name("summary").is_err());
+        assert!(schema.field_with_name("snapshot_sequence").is_err());
+    }
+
+    #[test]
+    fn observation_schema_is_thin_index_row() {
+        let schema = observation_schema(3);
+        assert!(schema.field_with_name("id").is_ok());
+        assert!(schema.field_with_name("observing_path").is_ok());
+        assert!(schema.field_with_name("text").is_ok());
+        assert!(schema.field_with_name("search_text").is_err());
+        assert!(schema.field_with_name("vector").is_ok());
+        assert!(schema.field_with_name("extraction_refs").is_ok());
+        assert!(schema.field_with_name("created_at").is_ok());
+        assert!(schema.field_with_name("updated_at").is_ok());
+        assert!(schema.field_with_name("anchor").is_err());
+        assert!(schema.field_with_name("context").is_err());
+    }
 }

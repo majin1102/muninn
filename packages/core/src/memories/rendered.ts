@@ -1,7 +1,14 @@
-import type { ObservingSnapshot, RenderedMemory, SessionTurn } from '../client.js';
+import type { SessionSnapshot, RenderedMemory, Turn } from '../client.js';
+import type { Extraction, Observation } from '../native.js';
 
-export function inferRenderedMemoryKind(memoryId: string): 'session' | 'observing' {
-  return memoryId.startsWith('observing:') ? 'observing' : 'session';
+export function inferRenderedMemoryKind(memoryId: string): 'turn' | 'session' | 'extraction' {
+  if (memoryId.startsWith('turn:')) {
+    return 'turn';
+  }
+  if (memoryId.startsWith('extraction:')) {
+    return 'extraction';
+  }
+  return 'session';
 }
 
 export function fallbackRenderedMemoryTitle(memory: RenderedMemory): string {
@@ -24,10 +31,10 @@ export function renderRenderedMemoryMarkdown(memory: RenderedMemory): string {
   return sections.join('\n');
 }
 
-export function renderSessionTurn(memory: SessionTurn): RenderedMemory | null {
+export function renderTurn(memory: Turn): RenderedMemory | null {
   const title = trimText(memory.title);
   const summary = trimText(memory.summary);
-  const detail = renderSessionTurnDetail(memory);
+  const detail = renderTurnDetail(memory);
   if (!title && !summary && !detail) {
     return null;
   }
@@ -41,7 +48,7 @@ export function renderSessionTurn(memory: SessionTurn): RenderedMemory | null {
   };
 }
 
-export function renderObservingSnapshot(memory: ObservingSnapshot): RenderedMemory | null {
+export function renderSessionSnapshot(memory: SessionSnapshot): RenderedMemory | null {
   const title = trimText(memory.title);
   const summary = trimText(memory.summary);
   const detail = trimText(memory.content);
@@ -58,7 +65,46 @@ export function renderObservingSnapshot(memory: ObservingSnapshot): RenderedMemo
   };
 }
 
-export function renderSessionTurnDetail(turn: SessionTurn): string | undefined {
+export function renderExtraction(memory: Extraction): RenderedMemory {
+  const anchors = (memory.anchors ?? []).length > 0
+    ? `Anchors:\n${memory.anchors.map((anchor) => `- ${anchor}`).join('\n')}`
+    : undefined;
+  const context = trimText(memory.context)
+    ? `Context:\n${memory.context!.trim()}`
+    : undefined;
+  const references = memory.turnRefs.length > 0
+    ? `References:\n${memory.turnRefs.map((ref) => `- ${ref}`).join('\n')}`
+    : undefined;
+  const detail = [anchors, context, references].filter(Boolean).join('\n\n') || undefined;
+  return {
+    memoryId: `extraction:${memory.id}`,
+    title: memory.text,
+    summary: memory.text,
+    detail,
+    createdAt: memory.createdAt,
+    updatedAt: memory.createdAt,
+  };
+}
+
+export function renderObservation(memory: Observation): RenderedMemory {
+  const references = memory.extractionRefs.length > 0
+    ? `References:\n${memory.extractionRefs.map((ref) => `- ${renderExtractionRef(ref)}`).join('\n')}`
+    : undefined;
+  return {
+    memoryId: `observation:${memory.id}`,
+    title: memory.text,
+    summary: memory.text,
+    detail: references,
+    createdAt: memory.createdAt,
+    updatedAt: memory.updatedAt,
+  };
+}
+
+function renderExtractionRef(ref: string): string {
+  return ref.startsWith('extraction:') ? ref : `extraction:${ref}`;
+}
+
+export function renderTurnDetail(turn: Turn): string | undefined {
   const lines: string[] = [];
   if (trimText(turn.prompt)) {
     lines.push(`Prompt: ${turn.prompt!.trim()}`);

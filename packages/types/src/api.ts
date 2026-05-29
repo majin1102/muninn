@@ -14,36 +14,51 @@ export interface ErrorResponse {
   requestId: string;
 }
 
-export interface ObserverWatermark {
-  resolved: boolean;
-  pendingTurnIds: string[];
-  observingEpoch?: number;
-  committedEpoch?: number;
+export interface MemoryWatermark {
+  pending: {
+    turns: string[];
+    extractions: string[];
+  };
+  phases: {
+    extractor: 'idle' | 'pending' | 'running' | 'draining' | 'error';
+    observer: 'idle' | 'pending' | 'running' | 'draining' | 'error';
+  };
+  error?: {
+    phase: 'extractor' | 'observer';
+    message: string;
+  };
 }
 
-export interface ObserverWatermarkResponse extends ObserverWatermark {
+export interface MemoryWatermarkResponse extends MemoryWatermark {
   requestId: string;
 }
 
 export interface RecallRequest {
   query: string;
+  database?: string;
   limit?: number;
+  budget?: number;
+  queryLimit?: number;
   thinkingRatio?: number;
+  recallMode?: 'vector' | 'fts' | 'hybrid';
 }
 
 export interface ListRequest {
   mode: 'recency';
+  database?: string;
   limit?: number;
   thinkingRatio?: number;
 }
 
 export interface GetTimelineRequest {
+  database?: string;
   memoryId: string;
   beforeLimit?: number;
   afterLimit?: number;
 }
 
 export interface GetDetailRequest {
+  database?: string;
   memoryId: string;
 }
 
@@ -69,6 +84,7 @@ export interface TurnContent {
 }
 
 export interface CaptureTurnRequest {
+  database?: string;
   turn: TurnContent;
 }
 
@@ -109,7 +125,7 @@ export interface SessionTurnsResponse {
 
 export interface MemoryDocument {
   memoryId: string;
-  kind: 'session' | 'observing';
+  kind: 'turn' | 'session' | 'extraction';
   title: string;
   markdown: string;
   agent?: string;
@@ -138,7 +154,7 @@ export interface ObservingCard {
 }
 
 export interface ObservingListResponse {
-  observations: ObservingCard[];
+  extractions: ObservingCard[];
   requestId: string;
 }
 

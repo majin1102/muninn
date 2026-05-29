@@ -5,17 +5,18 @@ import path from 'node:path';
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 
 import core from '../dist/index.js';
-import { getNativeTables } from '../dist/native.js';
-import { getObserverLlmConfig } from '../dist/config.js';
+import native from '../dist/native.js';
+import { getExtractorLlmConfig } from '../dist/config.js';
 import { MuninnBackend } from '../dist/backend.js';
 import { resolveCheckpointPath } from '../dist/checkpoint.js';
+
+const { createNativeTables, getNativeTables } = native;
 
 const {
   addMessage,
   memories,
   observer,
-  observings,
-  sessions,
+  turns,
   shutdownCoreForTests,
   validateSettings,
 } = core;
@@ -41,7 +42,42 @@ function cleanupDataset(dir) {
   };
 }
 
-function makePendingSessionTurn({
+async function waitForObserverResolved({ timeoutMs = 2_000, intervalMs = 20 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  await observer.finalize();
+  while (Date.now() < deadline) {
+    const watermark = await observer.watermark();
+    if (memoryWatermarkResolved(watermark)) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  throw new Error('timed out waiting for observer watermark');
+}
+
+async function waitForFile(filePath, { timeoutMs = 2_000, intervalMs = 20 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  let lastError;
+  while (Date.now() < deadline) {
+    try {
+      return await readFile(filePath, 'utf8');
+    } catch (error) {
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    }
+  }
+  throw lastError ?? new Error(`timed out waiting for ${filePath}`);
+}
+
+function memoryWatermarkResolved(watermark) {
+  return watermark.pending.turns.length === 0
+    && watermark.pending.extractions.length === 0
+    && watermark.phases.extractor === 'idle'
+    && watermark.phases.observer === 'idle'
+    && !watermark.error;
+}
+
+function makePendingTurn({
   sessionId,
   agent,
   observer,
@@ -50,7 +86,7 @@ function makePendingSessionTurn({
 }) {
   const now = new Date().toISOString();
   return {
-    turnId: 'session:18446744073709551615',
+    turnId: 'turn:18446744073709551615',
     createdAt: now,
     updatedAt: now,
     session_id: sessionId ?? null,
@@ -82,7 +118,7 @@ function normalizeTestSessionId(sessionId) {
 
 async function writeTurnAndGet(turn) {
   await addMessage(turn);
-  const listed = await sessions.list({
+  const listed = await turns.list({
     mode: { type: 'recency', limit: 20 },
     agent: turn.agent,
     sessionId: normalizeTestSessionId(turn.sessionId),
@@ -99,6 +135,17 @@ function toFileStoreUri(dir) {
   return `file-object-store://${path.resolve(dir)}`;
 }
 
+function defaultStorageTarget(homeDir) {
+  return { uri: toFileStoreUri(path.join(homeDir, 'main')) };
+}
+
+function firstExtractionRef(hits) {
+  return hits
+    .flatMap((hit) => hit.references ?? [])
+    .map((ref) => ref.startsWith('extraction:') ? ref.slice('extraction:'.length) : ref)
+    .find((ref) => ref && !ref.startsWith('turn:') && !ref.startsWith('session:'));
+}
+
 async function writeMuninnConfig(configPath, {
   turnProvider,
   observerProvider = 'mock',
@@ -107,6 +154,11 @@ async function writeMuninnConfig(configPath, {
   storageOptions,
   watchdog,
   activeWindowDays,
+  continuityHints,
+  epochTurns = 1,
+  epochWindowMs,
+  omitEpochSealSettings = false,
+  domainPrompt,
 } = {}) {
   const root = {};
   const llm = {};
@@ -121,19 +173,29 @@ async function writeMuninnConfig(configPath, {
     llm.test_turn_llm = { provider: turnProvider };
   }
   if (observerProvider) {
+    root.extractor = {
+      name: 'test-extractor',
+      llm: 'test_extractor_llm',
+      maxAttempts: 3,
+      ...(activeWindowDays === undefined ? {} : { activeWindowDays }),
+      ...(continuityHints === undefined ? {} : { continuityHints }),
+      ...(omitEpochSealSettings || epochTurns === undefined ? {} : { epochTurns }),
+      ...(omitEpochSealSettings || epochWindowMs === undefined ? {} : { epochWindowMs }),
+      ...(domainPrompt === undefined ? {} : { domainPrompt }),
+    };
     root.observer = {
       name: 'test-observer',
       llm: 'test_observer_llm',
       maxAttempts: 3,
-      ...(activeWindowDays === undefined ? {} : { activeWindowDays }),
     };
+    llm.test_extractor_llm = { provider: observerProvider };
     llm.test_observer_llm = { provider: observerProvider };
   }
   if (Object.keys(llm).length > 0) {
     root.llm = llm;
   }
   if (observerProvider) {
-    root.semanticIndex = {
+    root.extraction = {
       embedding: {
         provider: 'mock',
         dimensions: semanticDimensions,
@@ -158,24 +220,48 @@ test.after(async () => {
   delete process.env.MUNINN_HOME;
 });
 
-test('observer config defaults activeWindowDays to 7 and accepts explicit overrides', async (t) => {
+test('extractor config defaults activeWindowDays, continuityHints, and epoch seal settings', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(cleanupDataset(dir));
 
   process.env.MUNINN_HOME = homeDir;
-  await writeMuninnConfig(configPath, { observerProvider: 'mock' });
+  await writeMuninnConfig(configPath, { observerProvider: 'mock', omitEpochSealSettings: true });
 
-  let observerConfig = getObserverLlmConfig();
-  assert.ok(observerConfig);
-  assert.equal(observerConfig.activeWindowDays, 7);
+  let extractorConfig = getExtractorLlmConfig();
+  assert.ok(extractorConfig);
+  assert.equal(extractorConfig.activeWindowDays, 7);
+  assert.equal(extractorConfig.continuityHints, 1);
+  assert.equal(extractorConfig.epochTurns, 3);
+  assert.equal(extractorConfig.epochWindowMs, 10_000);
 
-  await writeMuninnConfig(configPath, { observerProvider: 'mock', activeWindowDays: 14 });
-  observerConfig = getObserverLlmConfig();
-  assert.ok(observerConfig);
-  assert.equal(observerConfig.activeWindowDays, 14);
+  await writeMuninnConfig(configPath, {
+    observerProvider: 'mock',
+    activeWindowDays: 14,
+    continuityHints: 3,
+    epochTurns: 5,
+    epochWindowMs: 2_500,
+  });
+  extractorConfig = getExtractorLlmConfig();
+  assert.ok(extractorConfig);
+  assert.equal(extractorConfig.activeWindowDays, 14);
+  assert.equal(extractorConfig.continuityHints, 3);
+  assert.equal(extractorConfig.epochTurns, 5);
+  assert.equal(extractorConfig.epochWindowMs, 2_500);
 });
 
-test('addMessage and sessions.get roundtrip through the native binding', async (t) => {
+test('extractor config accepts an optional domain prompt name', async (t) => {
+  const { dir, homeDir, configPath } = await makeDatasetUri();
+  t.after(cleanupDataset(dir));
+
+  process.env.MUNINN_HOME = homeDir;
+  await writeMuninnConfig(configPath, { observerProvider: 'mock', domainPrompt: 'chat' });
+
+  const extractorConfig = getExtractorLlmConfig();
+  assert.ok(extractorConfig);
+  assert.equal(extractorConfig.domainPrompt, 'chat');
+});
+
+test('addMessage and turns.get roundtrip through the native binding', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(cleanupDataset(dir));
 
@@ -190,7 +276,7 @@ test('addMessage and sessions.get roundtrip through the native binding', async (
   assert.ok(typeof created.turnId === 'string');
   assert.equal(created.sessionId, 'group-a');
 
-  const detail = await sessions.get(created.turnId);
+  const detail = await turns.get(created.turnId);
   assert.ok(detail);
   assert.equal(detail.turnId, created.turnId);
   assert.equal(detail.sessionId, 'group-a');
@@ -221,11 +307,11 @@ test('addMessage normalizes sessionId whitespace through the native binding', as
   assert.equal(second.sessionId, 'group-a');
   assert.notEqual(second.turnId, first.turnId);
 
-  const detail = await sessions.get(first.turnId);
+  const detail = await turns.get(first.turnId);
   assert.ok(detail);
   assert.equal(detail.sessionId, 'group-a');
 
-  const listed = await sessions.list({
+  const listed = await turns.list({
     mode: { type: 'recency', limit: 10 },
     sessionId: ' group-a ',
   });
@@ -289,7 +375,7 @@ test('addMessage dedupes identical prompt and response within the same session',
   assert.equal(second.turnId, first.turnId);
 });
 
-test('sessions.list returns the recent window in chronological order, and memories.timeline covers the happy path', async (t) => {
+test('turns.list returns the recent window in chronological order, and memories.timeline covers the happy path', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(cleanupDataset(dir));
 
@@ -311,7 +397,7 @@ test('sessions.list returns the recent window in chronological order, and memori
     response: 'other response',
   }));
 
-  const listed = await sessions.list({ mode: { type: 'recency', limit: 2 } });
+  const listed = await turns.list({ mode: { type: 'recency', limit: 2 } });
   assert.equal(listed.length, 2);
   assert.equal(listed[0].turnId, second.turnId);
   assert.equal(listed[1].sessionId, 'group-b');
@@ -340,32 +426,29 @@ test('pure read APIs work without observer bootstrap config', async (t) => {
 
   for (let attempt = 0; attempt < 50; attempt += 1) {
     const watermark = await observer.watermark();
-    if (watermark.resolved) {
+    if (memoryWatermarkResolved(watermark)) {
       break;
     }
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
 
-  const observingListBefore = await observings.list({ mode: { type: 'recency', limit: 10 } });
-  assert.ok(observingListBefore.length > 0);
-  const observingId = observingListBefore[0].snapshotId;
+  const hitsBefore = await memories.recall('bootstrap-free prompt', 1);
+  assert.ok(hitsBefore[0]?.memoryId.startsWith('extraction:'));
+  const extractionId = hitsBefore[0].memoryId;
 
   await shutdownCoreForTests();
   await writeFile(configPath, '{}\n', 'utf8');
 
-  const sessionDetail = await sessions.get(created.turnId);
+  const sessionDetail = await turns.get(created.turnId);
   assert.ok(sessionDetail);
   assert.equal(sessionDetail.turnId, created.turnId);
 
-  const sessionList = await sessions.list({ mode: { type: 'recency', limit: 10 } });
+  const sessionList = await turns.list({ mode: { type: 'recency', limit: 10 } });
   assert.ok(sessionList.some((turn) => turn.turnId === created.turnId));
 
-  const observingDetail = await observings.get(observingId);
-  assert.ok(observingDetail);
-  assert.equal(observingDetail.snapshotId, observingId);
-
-  const observingList = await observings.list({ mode: { type: 'recency', limit: 10 } });
-  assert.ok(observingList.some((snapshot) => snapshot.snapshotId === observingId));
+  const extractionDetail = await memories.get(extractionId);
+  assert.ok(extractionDetail);
+  assert.equal(extractionDetail.memoryId, extractionId);
 
   const renderedDetail = await memories.get(created.turnId);
   assert.ok(renderedDetail);
@@ -390,12 +473,12 @@ test('invalid memory ids reject through the native binding', async (t) => {
   await writeMuninnConfig(configPath);
 
   await assert.rejects(
-    () => sessions.get('bad-memory-id'),
+    () => turns.get('bad-memory-id'),
     /invalid/i,
   );
 
   await assert.rejects(
-    () => sessions.get('thinking:42'),
+    () => turns.get('thinking:42'),
     /invalid/i,
   );
 });
@@ -418,7 +501,7 @@ test('shutdownCoreForTests allows the native binding to restart cleanly', async 
     prompt: 'second prompt',
     response: 'second response',
   }));
-  const listed = await sessions.list({ mode: { type: 'recency', limit: 10 } });
+  const listed = await turns.list({ mode: { type: 'recency', limit: 10 } });
   const first = listed.find((turn) => turn.prompt === 'first prompt' && turn.response === 'first response');
   const second = listed.find((turn) => turn.prompt === 'second prompt' && turn.response === 'second response');
   assert.ok(first);
@@ -426,7 +509,7 @@ test('shutdownCoreForTests allows the native binding to restart cleanly', async 
   assert.ok(second.turnId);
   assert.notEqual(second.turnId, first.turnId);
 
-  const detail = await sessions.get(first.turnId);
+  const detail = await turns.get(first.turnId);
   assert.ok(detail);
   assert.equal(detail.prompt, 'first prompt');
 });
@@ -444,7 +527,7 @@ test('checkpoint restore keeps recent turn dedupe within the same observer', asy
       prompt: 'same prompt',
       response: 'same response',
     }));
-    const first = (await firstBackend.memories.listSessions({ mode: { type: 'recency', limit: 1 } }))[0];
+    const first = (await firstBackend.memories.listTurns({ mode: { type: 'recency', limit: 1 } }))[0];
     assert.ok(first);
     await firstBackend.accept(makeTurnContent({
       prompt: 'before checkpoint',
@@ -475,7 +558,7 @@ test('checkpoint restore keeps recent turn dedupe within the same observer', asy
         prompt: 'same prompt',
         response: 'same response',
       }));
-      const listed = await secondBackend.memories.listSessions({ mode: { type: 'recency', limit: 10 } });
+      const listed = await secondBackend.memories.listTurns({ mode: { type: 'recency', limit: 10 } });
       assert.equal(listed.filter((turn) => turn.prompt === 'same prompt' && turn.response === 'same response').length, 1);
       assert.equal(listed.filter((turn) => turn.prompt === 'after checkpoint' && turn.response === 'after checkpoint response').length, 1);
       assert.equal(listed[0].turnId, first.turnId);
@@ -498,7 +581,7 @@ test('cold start does not wait for the first watchdog interval before serving wr
       enabled: true,
       intervalMs: 250,
       compactMinFragments: 1,
-      semanticIndex: {
+      extraction: {
         targetPartitionSize: 16,
         optimizeMergeCount: 2,
       },
@@ -512,14 +595,14 @@ test('cold start does not wait for the first watchdog interval before serving wr
     response: 'cold-start response',
     summary: 'cold-start summary',
   });
+  const watchdogLogPath = path.join(homeDir, 'main', 'logs', 'watchdog.jsonl');
   await assert.rejects(
-    () => readFile(path.join(homeDir, 'watchdog.jsonl'), 'utf8'),
+    () => readFile(watchdogLogPath, 'utf8'),
     /ENOENT/,
   );
 
-  await new Promise((resolve) => setTimeout(resolve, 350));
-  const logContent = await readFile(path.join(homeDir, 'watchdog.jsonl'), 'utf8');
-  assert.match(logContent, /"dataset":"semanticIndex"/);
+  const logContent = await waitForFile(watchdogLogPath);
+  assert.match(logContent, /"dataset":"turn"/);
 });
 
 test('addMessage rejects empty message payloads through the native binding', async (t) => {
@@ -535,7 +618,7 @@ test('addMessage rejects empty message payloads through the native binding', asy
   );
 });
 
-test('validateSettings rejects semantic index dimension changes that mismatch existing data', async (t) => {
+test('validateSettings rejects extraction index dimension changes that mismatch existing data', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(cleanupDataset(dir));
 
@@ -545,25 +628,33 @@ test('validateSettings rejects semantic index dimension changes that mismatch ex
   await addMessage({
     sessionId: 'group-a',
     agent: 'agent-a',
-    prompt: 'semantic prompt',
-    response: 'semantic response',
-    summary: 'semantic summary',
+    prompt: 'extraction prompt',
+    response: 'extraction response',
+    summary: 'extraction summary',
   });
   await new Promise((resolve) => setTimeout(resolve, 50));
 
   await assert.rejects(
     () => validateSettings(JSON.stringify({
+      extractor: {
+        name: 'test-extractor',
+        llm: 'test_extractor_llm',
+        maxAttempts: 3,
+      },
       observer: {
         name: 'test-observer',
         llm: 'test_observer_llm',
         maxAttempts: 3,
       },
       llm: {
+        test_extractor_llm: {
+          provider: 'mock',
+        },
         test_observer_llm: {
           provider: 'mock',
         },
       },
-      semanticIndex: {
+      extraction: {
         embedding: {
           provider: 'mock',
           dimensions: 8,
@@ -571,7 +662,7 @@ test('validateSettings rejects semantic index dimension changes that mismatch ex
         defaultImportance: 0.7,
       },
     }, null, 2)),
-    /semantic_index dimension mismatch/i,
+    /extraction dimension mismatch/i,
   );
 });
 
@@ -589,7 +680,7 @@ test('validateSettings reports invalid JSON before native storage initialization
   );
 });
 
-test('validateSettings rejects invalid observer.activeWindowDays', async (t) => {
+test('validateSettings rejects invalid extractor.activeWindowDays', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(cleanupDataset(dir));
 
@@ -599,17 +690,24 @@ test('validateSettings rejects invalid observer.activeWindowDays', async (t) => 
 
   await assert.rejects(
     () => validateSettings(JSON.stringify({
+      extractor: {
+        name: 'test-extractor',
+        llm: 'test_extractor_llm',
+        activeWindowDays: 0,
+      },
       observer: {
         name: 'test-observer',
         llm: 'test_observer_llm',
-        activeWindowDays: 0,
       },
       llm: {
+        test_extractor_llm: {
+          provider: 'mock',
+        },
         test_observer_llm: {
           provider: 'mock',
         },
       },
-      semanticIndex: {
+      extraction: {
         embedding: {
           provider: 'mock',
           dimensions: 8,
@@ -617,7 +715,131 @@ test('validateSettings rejects invalid observer.activeWindowDays', async (t) => 
         defaultImportance: 0.7,
       },
     }, null, 2)),
-    /observer\.activeWindowDays must be a positive integer/i,
+    /extractor\.activeWindowDays must be a positive integer/i,
+  );
+});
+
+test('validateSettings rejects invalid extractor.continuityHints', async (t) => {
+  const { dir, homeDir, configPath } = await makeDatasetUri();
+  t.after(cleanupDataset(dir));
+
+  process.env.MUNINN_HOME = homeDir;
+  await mkdir(path.dirname(configPath), { recursive: true });
+  await writeFile(configPath, '{\n  "storage": {\n    "uri": ""\n  }\n}\n', 'utf8');
+
+  await assert.rejects(
+    () => validateSettings(JSON.stringify({
+      extractor: {
+        name: 'test-extractor',
+        llm: 'test_extractor_llm',
+        continuityHints: 0,
+      },
+      observer: {
+        name: 'test-observer',
+        llm: 'test_observer_llm',
+      },
+      llm: {
+        test_extractor_llm: {
+          provider: 'mock',
+        },
+        test_observer_llm: {
+          provider: 'mock',
+        },
+      },
+      extraction: {
+        embedding: {
+          provider: 'mock',
+          dimensions: 8,
+        },
+        defaultImportance: 0.7,
+      },
+    }, null, 2)),
+    /extractor\.continuityHints must be a positive integer/i,
+  );
+});
+
+test('validateSettings rejects invalid extractor epoch seal settings', async (t) => {
+  const { dir, homeDir, configPath } = await makeDatasetUri();
+  t.after(cleanupDataset(dir));
+
+  process.env.MUNINN_HOME = homeDir;
+  await mkdir(path.dirname(configPath), { recursive: true });
+  await writeFile(configPath, '{\n  "storage": {\n    "uri": ""\n  }\n}\n', 'utf8');
+
+  for (const [key, value] of [
+    ['epochTurns', 0],
+    ['epochWindowMs', 0],
+    ['epochTurns', 1.5],
+    ['epochWindowMs', 1.5],
+  ]) {
+    await assert.rejects(
+      () => validateSettings(JSON.stringify({
+        extractor: {
+          name: 'test-extractor',
+          llm: 'test_extractor_llm',
+          [key]: value,
+        },
+        observer: {
+          name: 'test-observer',
+          llm: 'test_observer_llm',
+        },
+        llm: {
+          test_extractor_llm: {
+            provider: 'mock',
+          },
+          test_observer_llm: {
+            provider: 'mock',
+          },
+        },
+        extraction: {
+          embedding: {
+            provider: 'mock',
+            dimensions: 8,
+          },
+          defaultImportance: 0.7,
+        },
+      }, null, 2)),
+      new RegExp(`extractor\\.${key} must be a positive integer`, 'i'),
+    );
+  }
+});
+
+test('validateSettings rejects unknown extractor.domainPrompt', async (t) => {
+  const { dir, homeDir, configPath } = await makeDatasetUri();
+  t.after(cleanupDataset(dir));
+
+  process.env.MUNINN_HOME = homeDir;
+  await mkdir(path.dirname(configPath), { recursive: true });
+  await writeFile(configPath, '{\n  "storage": {\n    "uri": ""\n  }\n}\n', 'utf8');
+
+  await assert.rejects(
+    () => validateSettings(JSON.stringify({
+      extractor: {
+        name: 'test-extractor',
+        llm: 'test_extractor_llm',
+        domainPrompt: 'unknown',
+      },
+      observer: {
+        name: 'test-observer',
+        llm: 'test_observer_llm',
+      },
+      llm: {
+        test_extractor_llm: {
+          provider: 'mock',
+        },
+        test_observer_llm: {
+          provider: 'mock',
+        },
+      },
+      extraction: {
+        embedding: {
+          provider: 'mock',
+          dimensions: 8,
+        },
+        defaultImportance: 0.7,
+      },
+    }, null, 2)),
+    /extractor\.domainPrompt must be one of: chat/i,
   );
 });
 
@@ -629,12 +851,19 @@ test('validateSettings rejects missing observer config', async (t) => {
 
   await assert.rejects(
     () => validateSettings(JSON.stringify({
+      extractor: {
+        name: 'test-extractor',
+        llm: 'test_extractor_llm',
+      },
       llm: {
+        test_extractor_llm: {
+          provider: 'mock',
+        },
         test_observer_llm: {
           provider: 'mock',
         },
       },
-      semanticIndex: {
+      extraction: {
         embedding: {
           provider: 'mock',
           dimensions: 8,
@@ -654,11 +883,15 @@ test('validateSettings rejects missing llm config', async (t) => {
 
   await assert.rejects(
     () => validateSettings(JSON.stringify({
+      extractor: {
+        name: 'test-extractor',
+        llm: 'test_extractor_llm',
+      },
       observer: {
         name: 'test-observer',
         llm: 'test_observer_llm',
       },
-      semanticIndex: {
+      extraction: {
         embedding: {
           provider: 'mock',
           dimensions: 8,
@@ -670,7 +903,7 @@ test('validateSettings rejects missing llm config', async (t) => {
   );
 });
 
-test('validateSettings rejects missing semanticIndex config', async (t) => {
+test('validateSettings rejects missing extraction config', async (t) => {
   const { dir, homeDir } = await makeDatasetUri();
   t.after(cleanupDataset(dir));
 
@@ -678,21 +911,28 @@ test('validateSettings rejects missing semanticIndex config', async (t) => {
 
   await assert.rejects(
     () => validateSettings(JSON.stringify({
+      extractor: {
+        name: 'test-extractor',
+        llm: 'test_extractor_llm',
+      },
       observer: {
         name: 'test-observer',
         llm: 'test_observer_llm',
       },
       llm: {
+        test_extractor_llm: {
+          provider: 'mock',
+        },
         test_observer_llm: {
           provider: 'mock',
         },
       },
     }, null, 2)),
-    /semanticIndex is required/i,
+    /extraction is required/i,
   );
 });
 
-test('validateSettings rejects missing semanticIndex.embedding config', async (t) => {
+test('validateSettings rejects missing extraction.embedding config', async (t) => {
   const { dir, homeDir } = await makeDatasetUri();
   t.after(cleanupDataset(dir));
 
@@ -700,24 +940,31 @@ test('validateSettings rejects missing semanticIndex.embedding config', async (t
 
   await assert.rejects(
     () => validateSettings(JSON.stringify({
+      extractor: {
+        name: 'test-extractor',
+        llm: 'test_extractor_llm',
+      },
       observer: {
         name: 'test-observer',
         llm: 'test_observer_llm',
       },
       llm: {
+        test_extractor_llm: {
+          provider: 'mock',
+        },
         test_observer_llm: {
           provider: 'mock',
         },
       },
-      semanticIndex: {
+      extraction: {
         defaultImportance: 0.5,
       },
     }, null, 2)),
-    /semanticIndex\.embedding is required/i,
+    /extraction\.embedding is required/i,
   );
 });
 
-test('validateSettings accepts omitted semantic dimensions when the default runtime dimensions apply', async (t) => {
+test('validateSettings accepts omitted extraction dimensions when the default runtime dimensions apply', async (t) => {
   const { dir, homeDir } = await makeDatasetUri();
   t.after(cleanupDataset(dir));
 
@@ -725,16 +972,23 @@ test('validateSettings accepts omitted semantic dimensions when the default runt
 
   await assert.doesNotReject(
     () => validateSettings(JSON.stringify({
+      extractor: {
+        name: 'test-extractor',
+        llm: 'test_extractor_llm',
+      },
       observer: {
         name: 'test-observer',
         llm: 'test_observer_llm',
       },
       llm: {
+        test_extractor_llm: {
+          provider: 'mock',
+        },
         test_observer_llm: {
           provider: 'mock',
         },
       },
-      semanticIndex: {
+      extraction: {
         embedding: {
           provider: 'mock',
         },
@@ -744,7 +998,7 @@ test('validateSettings accepts omitted semantic dimensions when the default runt
   );
 });
 
-test('validateSettings rejects omitted semantic dimensions for an existing non-default table', async (t) => {
+test('validateSettings rejects omitted extraction dimensions for an existing non-default table', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(cleanupDataset(dir));
 
@@ -754,36 +1008,44 @@ test('validateSettings rejects omitted semantic dimensions for an existing non-d
   await addMessage({
     sessionId: 'group-a',
     agent: 'agent-a',
-    prompt: 'semantic prompt',
-    response: 'semantic response',
-    summary: 'semantic summary',
+    prompt: 'extraction prompt',
+    response: 'extraction response',
+    summary: 'extraction summary',
   });
   await new Promise((resolve) => setTimeout(resolve, 50));
 
   await assert.rejects(
     () => validateSettings(JSON.stringify({
+      extractor: {
+        name: 'test-extractor',
+        llm: 'test_extractor_llm',
+        maxAttempts: 3,
+      },
       observer: {
         name: 'test-observer',
         llm: 'test_observer_llm',
         maxAttempts: 3,
       },
       llm: {
+        test_extractor_llm: {
+          provider: 'mock',
+        },
         test_observer_llm: {
           provider: 'mock',
         },
       },
-      semanticIndex: {
+      extraction: {
         embedding: {
           provider: 'mock',
         },
         defaultImportance: 0.5,
       },
     }, null, 2)),
-    /semantic_index dimension mismatch/i,
+    /extraction dimension mismatch/i,
   );
 });
 
-test('validateSettings rejects semanticIndex.embedding.provider when it is empty', async (t) => {
+test('validateSettings rejects extraction.embedding.provider when it is empty', async (t) => {
   const { dir, homeDir } = await makeDatasetUri();
   t.after(cleanupDataset(dir));
 
@@ -791,13 +1053,13 @@ test('validateSettings rejects semanticIndex.embedding.provider when it is empty
 
   await assert.rejects(
     () => validateSettings(JSON.stringify({
-      semanticIndex: {
+      extraction: {
         embedding: {
           provider: '',
         },
       },
     }, null, 2)),
-    /semanticIndex\.embedding\.provider must be a non-empty string/i,
+    /extraction\.embedding\.provider must be a non-empty string/i,
   );
 });
 
@@ -809,10 +1071,17 @@ test('validateSettings rejects observer config without observer.llm', async (t) 
 
   await assert.rejects(
     () => validateSettings(JSON.stringify({
+      extractor: {
+        name: 'test-extractor',
+        llm: 'test_extractor_llm',
+      },
       observer: {
         name: 'test-observer',
       },
       llm: {
+        test_extractor_llm: {
+          provider: 'mock',
+        },
         test_observer_llm: {
           provider: 'mock',
         },
@@ -833,16 +1102,21 @@ test('validateSettings rejects referenced llm entries without provider', async (
       turn: {
         llm: 'test_turn_llm',
       },
+      extractor: {
+        name: 'test-extractor',
+        llm: 'test_extractor_llm',
+      },
       observer: {
         name: 'test-observer',
         llm: 'test_observer_llm',
       },
       llm: {
         test_turn_llm: {},
+        test_extractor_llm: {},
         test_observer_llm: {},
       },
     }, null, 2)),
-    /llm\.(test_turn_llm|test_observer_llm)\.provider must be a non-empty string/i,
+    /llm\.(test_turn_llm|test_extractor_llm|test_observer_llm)\.provider must be a non-empty string/i,
   );
 });
 
@@ -857,6 +1131,10 @@ test('validateSettings rejects openai turn llm without apiKey', async (t) => {
       turn: {
         llm: 'test_turn_llm',
       },
+      extractor: {
+        name: 'test-extractor',
+        llm: 'test_extractor_llm',
+      },
       observer: {
         name: 'test-observer',
         llm: 'test_observer_llm',
@@ -865,11 +1143,14 @@ test('validateSettings rejects openai turn llm without apiKey', async (t) => {
         test_turn_llm: {
           provider: 'openai',
         },
+        test_extractor_llm: {
+          provider: 'mock',
+        },
         test_observer_llm: {
           provider: 'mock',
         },
       },
-      semanticIndex: {
+      extraction: {
         embedding: {
           provider: 'mock',
           dimensions: 8,
@@ -888,16 +1169,23 @@ test('validateSettings rejects openai observer llm without apiKey', async (t) =>
 
   await assert.rejects(
     () => validateSettings(JSON.stringify({
+      extractor: {
+        name: 'test-extractor',
+        llm: 'test_extractor_llm',
+      },
       observer: {
         name: 'test-observer',
         llm: 'test_observer_llm',
       },
       llm: {
+        test_extractor_llm: {
+          provider: 'mock',
+        },
         test_observer_llm: {
           provider: 'openai',
         },
       },
-      semanticIndex: {
+      extraction: {
         embedding: {
           provider: 'mock',
           dimensions: 8,
@@ -908,7 +1196,7 @@ test('validateSettings rejects openai observer llm without apiKey', async (t) =>
   );
 });
 
-test('validateSettings rejects openai semantic embeddings without apiKey', async (t) => {
+test('validateSettings rejects openai extraction embeddings without apiKey', async (t) => {
   const { dir, homeDir } = await makeDatasetUri();
   t.after(cleanupDataset(dir));
 
@@ -916,23 +1204,30 @@ test('validateSettings rejects openai semantic embeddings without apiKey', async
 
   await assert.rejects(
     () => validateSettings(JSON.stringify({
+      extractor: {
+        name: 'test-extractor',
+        llm: 'test_extractor_llm',
+      },
       observer: {
         name: 'test-observer',
         llm: 'test_observer_llm',
       },
       llm: {
+        test_extractor_llm: {
+          provider: 'mock',
+        },
         test_observer_llm: {
           provider: 'mock',
         },
       },
-      semanticIndex: {
+      extraction: {
         embedding: {
           provider: 'openai',
           dimensions: 8,
         },
       },
     }, null, 2)),
-    /semanticIndex\.embedding\.apiKey must be a non-empty string/i,
+    /extraction\.embedding\.apiKey must be a non-empty string/i,
   );
 });
 
@@ -943,16 +1238,23 @@ test('validateSettings does not create the default storage root while checking s
   process.env.MUNINN_HOME = homeDir;
 
   await assert.doesNotReject(() => validateSettings(JSON.stringify({
+    extractor: {
+      name: 'test-extractor',
+      llm: 'test_extractor_llm',
+    },
     observer: {
       name: 'test-observer',
       llm: 'test_observer_llm',
     },
     llm: {
+      test_extractor_llm: {
+        provider: 'mock',
+      },
       test_observer_llm: {
         provider: 'mock',
       },
     },
-    semanticIndex: {
+    extraction: {
       embedding: {
         provider: 'mock',
         dimensions: 8,
@@ -964,48 +1266,62 @@ test('validateSettings does not create the default storage root while checking s
   await assert.rejects(() => access(homeDir));
 });
 
-test('validateSettings rejects semantic index dimension changes when the table exists but is empty', async (t) => {
+test('validateSettings rejects extraction dimension changes when the table exists but is empty', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(cleanupDataset(dir));
 
   process.env.MUNINN_HOME = homeDir;
   await writeMuninnConfig(configPath, { observerProvider: 'mock' });
 
-  const binding = await getNativeTables();
+  const binding = await getNativeTables(defaultStorageTarget(homeDir));
+  assert.ok(typeof binding.turnTable.describe === 'function');
   assert.ok(typeof binding.sessionTable.describe === 'function');
-  assert.ok(typeof binding.observingTable.describe === 'function');
-  assert.ok(typeof binding.semanticIndexTable.describe === 'function');
+  assert.ok(typeof binding.extractionTable.describe === 'function');
 
-  await binding.semanticIndexTable.upsert({
+  await binding.extractionTable.upsert({
     rows: [{
       id: 'mem-1',
-      memoryId: 'observing:1',
-      text: 'semantic text',
+      text: 'extraction text',
+      context: null,
+      anchors: [],
+      turnRefs: ['turn:1'],
+      observationPaths: [],
+      observedRootAnchors: [],
       vector: [0.1, 0.2, 0.3, 0.4],
       importance: 0.7,
       category: 'fact',
+      references: ['turn:1'],
       createdAt: '2024-01-01T00:00:00Z',
+      updatedAt: '2024-01-01T00:00:00Z',
     }],
   });
-  await binding.semanticIndexTable.delete({ ids: ['mem-1'] });
+  await binding.extractionTable.delete({ ids: ['mem-1'] });
 
-  const description = await binding.semanticIndexTable.describe();
+  const description = await binding.extractionTable.describe();
   assert.ok(description);
   assert.equal(description.dimensions?.vector, 4);
 
   await assert.rejects(
     () => validateSettings(JSON.stringify({
+      extractor: {
+        name: 'test-extractor',
+        llm: 'test_extractor_llm',
+        maxAttempts: 3,
+      },
       observer: {
         name: 'test-observer',
         llm: 'test_observer_llm',
         maxAttempts: 3,
       },
       llm: {
+        test_extractor_llm: {
+          provider: 'mock',
+        },
         test_observer_llm: {
           provider: 'mock',
         },
       },
-      semanticIndex: {
+      extraction: {
         embedding: {
           provider: 'mock',
           dimensions: 8,
@@ -1013,7 +1329,7 @@ test('validateSettings rejects semantic index dimension changes when the table e
         defaultImportance: 0.7,
       },
     }, null, 2)),
-    /semantic_index dimension mismatch/i,
+    /extraction dimension mismatch/i,
   );
 });
 
@@ -1050,17 +1366,25 @@ test('validateSettings checks the pending storage target instead of the current 
       storage: {
         uri: toFileStoreUri(storageB),
       },
+      extractor: {
+        name: 'test-extractor',
+        llm: 'test_extractor_llm',
+        maxAttempts: 3,
+      },
       observer: {
         name: 'test-observer',
         llm: 'test_observer_llm',
         maxAttempts: 3,
       },
       llm: {
+        test_extractor_llm: {
+          provider: 'mock',
+        },
         test_observer_llm: {
           provider: 'mock',
         },
       },
-      semanticIndex: {
+      extraction: {
         embedding: {
           provider: 'mock',
           dimensions: 8,
@@ -1068,7 +1392,7 @@ test('validateSettings checks the pending storage target instead of the current 
         defaultImportance: 0.7,
       },
     }, null, 2)),
-    /semantic_index dimension mismatch/i,
+    /extraction dimension mismatch/i,
   );
 });
 
@@ -1086,16 +1410,23 @@ test('validateSettings is not blocked by the current config storage when the pen
     storage: {
       uri: toFileStoreUri(storageB),
     },
+    extractor: {
+      name: 'test-extractor',
+      llm: 'test_extractor_llm',
+    },
     observer: {
       name: 'test-observer',
       llm: 'test_observer_llm',
     },
     llm: {
+      test_extractor_llm: {
+        provider: 'mock',
+      },
       test_observer_llm: {
         provider: 'mock',
       },
     },
-    semanticIndex: {
+    extraction: {
       embedding: {
         provider: 'mock',
         dimensions: 8,
@@ -1115,6 +1446,22 @@ test('getNativeTables initializes the native tables only once under concurrent a
   assert.strictEqual(first, second);
 });
 
+test('createNativeTables returns an independent native table binding', async (t) => {
+  const { dir, homeDir } = await makeDatasetUri();
+  t.after(cleanupDataset(dir));
+
+  process.env.MUNINN_HOME = homeDir;
+
+  const singleton = await getNativeTables();
+  const standalone = await createNativeTables();
+  t.after(async () => standalone.close());
+
+  assert.notStrictEqual(standalone, singleton);
+  assert.notStrictEqual(standalone.turnTable, singleton.turnTable);
+  assert.notStrictEqual(standalone.extractionTable, singleton.extractionTable);
+  assert.notStrictEqual(standalone.observationTable, singleton.observationTable);
+});
+
 test('observer.watermark reports pending turns until the observer flush completes', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(cleanupDataset(dir));
@@ -1129,22 +1476,25 @@ test('observer.watermark reports pending turns until the observer flush complete
     response: 'observer pending response',
   });
 
+  const current = await observer.watermark();
+  assert.equal(memoryWatermarkResolved(current), false);
+  assert.ok(
+    current.pending.turns.length === 0
+    || (current.pending.turns.length === 1 && current.pending.turns[0] === created.turnId),
+  );
+
+  await observer.finalize();
   let resolved = null;
   for (let attempt = 0; attempt < 50; attempt += 1) {
     resolved = await observer.watermark();
-    if (!resolved.resolved) {
-      assert.ok(
-        resolved.pendingTurnIds.length === 0
-        || (resolved.pendingTurnIds.length === 1 && resolved.pendingTurnIds[0] === created.turnId),
-      );
-    } else {
+    if (memoryWatermarkResolved(resolved)) {
       break;
     }
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
   assert.ok(resolved);
-  assert.equal(resolved.resolved, true);
-  assert.deepEqual(resolved.pendingTurnIds, []);
+  assert.equal(memoryWatermarkResolved(resolved), true);
+  assert.deepEqual(resolved.pending.turns, []);
 });
 
 test('addMessage summarizes response turns when a summary provider is configured', async (t) => {
@@ -1152,7 +1502,7 @@ test('addMessage summarizes response turns when a summary provider is configured
   t.after(cleanupDataset(dir));
 
   process.env.MUNINN_HOME = homeDir;
-    await writeMuninnConfig(configPath, { turnProvider: 'mock' });
+  await writeMuninnConfig(configPath, { turnProvider: 'mock' });
 
   const created = await writeTurnAndGet({
     sessionId: 'group-a',
@@ -1161,7 +1511,7 @@ test('addMessage summarizes response turns when a summary provider is configured
     response: 'response body',
   });
 
-  const detail = await sessions.get(created.turnId);
+  const detail = await turns.get(created.turnId);
   assert.ok(detail);
   assert.equal(detail.title, 'summarize this');
   assert.equal(detail.summary, 'summarize this\n\nresponse body');
@@ -1180,13 +1530,37 @@ test('addMessage persists response turns when the summarizer is not configured',
     response: 'response body',
   }));
 
-  const detail = await sessions.get(created.turnId);
+  const detail = await turns.get(created.turnId);
   assert.ok(detail);
   assert.equal(detail.response, 'response body');
   assert.equal(detail.summary, 'response prompt\n\nresponse body');
 });
 
-test('rendered memory binding returns unified turn and observing reads', async (t) => {
+test('observer writes atomic extractions before observing snapshots', async (t) => {
+  const { dir, homeDir, configPath } = await makeDatasetUri();
+  t.after(cleanupDataset(dir));
+
+  process.env.MUNINN_HOME = homeDir;
+  await writeMuninnConfig(configPath, { turnProvider: 'mock', observerProvider: 'mock' });
+
+  await writeTurnAndGet({
+    sessionId: 'group-a',
+    agent: 'agent-a',
+    prompt: 'Caroline is thinking about counseling.',
+    response: 'Caroline will research counseling programs.',
+  });
+
+  await waitForObserverResolved();
+
+  const hits = await memories.recall('counseling programs', 5);
+  const extractionRef = firstExtractionRef(hits);
+  assert.ok(extractionRef);
+  const extraction = await memories.get(`extraction:${extractionRef}`);
+  assert.ok(extraction);
+  assert.match(extraction.summary ?? extraction.title ?? '', /counseling/i);
+});
+
+test('rendered memory binding returns unified turn and extraction reads', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(cleanupDataset(dir));
 
@@ -1200,14 +1574,10 @@ test('rendered memory binding returns unified turn and observing reads', async (
     response: 'rendered response',
   });
 
-  await new Promise((resolve) => setTimeout(resolve, 50));
+  await waitForObserverResolved();
 
   const listed = await memories.list({ mode: { type: 'recency', limit: 10 } });
   assert.ok(listed.some((memory) => memory.memoryId === turn.turnId));
-  const observing = listed.find((memory) => memory.memoryId.startsWith('observing:'));
-  assert.ok(observing);
-  assert.ok(observing.title);
-  assert.ok(observing.summary || observing.detail);
 
   const turnDetail = await memories.get(turn.turnId);
   assert.ok(turnDetail);
@@ -1216,20 +1586,47 @@ test('rendered memory binding returns unified turn and observing reads', async (
   assert.ok(turnDetail.updatedAt);
   assert.match(turnDetail.summary ?? turnDetail.detail ?? '', /rendered prompt|rendered response/);
 
-  const observingDetail = await memories.get(observing.memoryId);
-  assert.ok(observingDetail);
-  assert.equal(observingDetail.memoryId, observing.memoryId);
-
-  const observingTimeline = await memories.timeline({
-    memoryId: observing.memoryId,
-    beforeLimit: 1,
-    afterLimit: 1,
-  });
-  assert.ok(observingTimeline.length >= 1);
-  assert.equal(observingTimeline[0].memoryId, observing.memoryId);
-
   const recalled = await memories.recall('rendered', 10);
-  assert.ok(recalled.some((memory) => memory.memoryId.startsWith('observing:')));
+  const extractionRef = firstExtractionRef(recalled);
+  assert.ok(extractionRef);
+  const extraction = await memories.get(`extraction:${extractionRef}`);
+  assert.ok(extraction);
+  assert.equal(extraction.memoryId, `extraction:${extractionRef}`);
+  assert.match(extraction.summary ?? extraction.title ?? '', /rendered prompt|rendered response/);
+});
+
+test('recall returns extraction memory ids and detail renders references', async (t) => {
+  const { dir, homeDir, configPath } = await makeDatasetUri();
+  t.after(cleanupDataset(dir));
+
+  process.env.MUNINN_HOME = homeDir;
+  await writeMuninnConfig(configPath, { observerProvider: 'mock' });
+
+  const binding = await getNativeTables(defaultStorageTarget(homeDir));
+  await binding.extractionTable.upsert({
+    rows: [{
+      id: 'obs-1',
+      text: 'Caroline joined an LGBTQ support group in May 2023.',
+      context: null,
+      anchors: [],
+      turnRefs: ['turn:1'],
+      observationPaths: [],
+      observedRootAnchors: [],
+      vector: [1, 0, 0, 0],
+      importance: 1,
+      category: 'fact',
+      references: ['turn:1'],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    }],
+  });
+
+  const hits = await memories.recall('support group', 1);
+  assert.equal(hits[0].memoryId, 'extraction:obs-1');
+  const detail = await memories.get('extraction:obs-1');
+  assert.ok(detail);
+  assert.equal(detail.memoryId, 'extraction:obs-1');
+  assert.match(detail.detail ?? '', /turn:1/);
 });
 
 test('rendered memory page mode paginates after combining session and observing results', async (t) => {

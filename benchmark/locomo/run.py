@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import copy
 import json
+import os
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -15,22 +16,30 @@ if __package__ is None or __package__ == "":
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from benchmark.common.muninn_bridge import MuninnBridge, RecallHit
+from benchmark.locomo.answering import build_answer_context, build_qa_trace, load_answerer_config, run_llm_answerer
 from benchmark.locomo.dataset import iter_target_samples, load_samples
 from benchmark.locomo.heuristics import build_prediction, build_query_candidates
+from benchmark.locomo.metadata import build_run_metadata, write_run_metadata
 from benchmark.locomo.report import build_error_report, write_report
 from benchmark.locomo.scoring import build_stats, write_results
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-file", required=True, type=Path)
     parser.add_argument("--out-file", required=True, type=Path)
     parser.add_argument("--progress-file", default=None, type=Path)
-    parser.add_argument("--top-k", default=5, type=int)
+    parser.add_argument("--top-k", default=3, type=int)
+    parser.add_argument("--recall-mode", choices=["vector", "fts", "hybrid"], default="hybrid")
+    parser.add_argument("--budget", default=400, type=int)
+    parser.add_argument("--query-limit", default=8, type=int)
     parser.add_argument("--sample-id", default=None)
     parser.add_argument("--limit-questions", default=None, type=int)
     parser.add_argument("--keep-home", action="store_true")
-    return parser.parse_args()
+    parser.add_argument("--home-dir", default=None, type=Path)
+    parser.add_argument("--mode", choices=["diagnostic", "benchmark"], default="diagnostic")
+    parser.add_argument("--answerer", choices=["llm", "heuristic"], default="llm")
+    return parser.parse_args(argv)
 
 
 def main() -> None:
@@ -50,6 +59,7 @@ def main() -> None:
     reporter.start()
 
     run_started_at = monotonic()
+    run_started_timestamp = utc_now()
     reporter.emit(
         "run_start",
         data_file=args.data_file,
@@ -57,58 +67,82 @@ def main() -> None:
         progress_file=args.progress_file,
         sample_count=len(selected),
         top_k=args.top_k,
+        top_k_ignored=args.budget > 0,
+        budget=args.budget,
+        query_limit=args.query_limit,
+        recall_mode=args.recall_mode,
         keep_home=args.keep_home,
         limit_questions=args.limit_questions,
         sample_filter=args.sample_id,
+        mode=args.mode,
+        answerer=args.answerer,
     )
 
-    model_key = build_model_key(args.top_k)
+    model_key = build_model_key(args.top_k, args.recall_mode, args.budget, args.query_limit)
     try:
+        home_dir = prepare_home(
+            bridge,
+            run_home_name(selected, args.out_file),
+            args.keep_home,
+            home_dir=args.home_dir,
+            prepared=os.environ.get("MUNINN_LOCOMO_HOME_PREPARED") == "1",
+        )
         results = []
-        for sample in selected:
-            sample_started_at = monotonic()
-            sample_result = {
-                "sample_id": sample["sample_id"],
-                "qa": copy.deepcopy(sample["qa"]),
-            }
-            qas = sample_result["qa"]
-            if args.limit_questions is not None:
-                qas = qas[: args.limit_questions]
-                sample_result["qa"] = qas
-
-            reporter.emit(
-                "sample_start",
-                sample_id=sample["sample_id"],
-                qa_count=len(qas),
-            )
-
-            try:
-                run_unit(
+        gateway_routes_by_sample: dict[str, dict[str, list[dict[str, Any]]]] = {}
+        manifests: list[dict[str, Any]] = []
+        try:
+            for sample in selected:
+                sample_result = prepare_sample_result(sample, args.limit_questions)
+                results.append(sample_result)
+                manifests.append(import_unit(
                     bridge,
                     args,
                     reporter,
                     sample,
-                    qas,
-                    model_key,
-                )
-            except Exception as exc:
+                    sample_result["qa"],
+                    home_dir,
+                ))
+            write_combined_manifest(home_dir.path, merge_import_manifests(manifests))
+
+            for sample, sample_result in zip(selected, results, strict=True):
+                sample_started_at = monotonic()
+                qas = sample_result["qa"]
                 reporter.emit(
-                    "sample_failed",
+                    "sample_start",
+                    sample_id=sample["sample_id"],
+                    qa_count=len(qas),
+                )
+
+                try:
+                    gateway_routes_by_sample[sample["sample_id"]] = run_qa_unit(
+                        bridge,
+                        args,
+                        reporter,
+                        sample,
+                        qas,
+                        model_key,
+                        home_dir,
+                    )
+                except Exception as exc:
+                    reporter.emit(
+                        "sample_failed",
+                        sample_id=sample["sample_id"],
+                        qa_count=len(qas),
+                        elapsed_s=round(monotonic() - sample_started_at, 4),
+                        error_type=type(exc).__name__,
+                        error=str(exc),
+                    )
+                    raise
+
+                reporter.emit(
+                    "sample_complete",
                     sample_id=sample["sample_id"],
                     qa_count=len(qas),
                     elapsed_s=round(monotonic() - sample_started_at, 4),
-                    error_type=type(exc).__name__,
-                    error=str(exc),
                 )
-                raise
-
-            results.append(sample_result)
-            reporter.emit(
-                "sample_complete",
-                sample_id=sample["sample_id"],
-                qa_count=len(qas),
-                elapsed_s=round(monotonic() - sample_started_at, 4),
-            )
+        finally:
+            if home_dir.tmpdir is not None:
+                home_dir.tmpdir.cleanup()
 
         stats = run_phase(
             reporter,
@@ -131,6 +165,34 @@ def main() -> None:
             "write_report",
             lambda: write_report(args.out_file, report),
             out_file=args.out_file.with_name(f"{args.out_file.stem}_report.json"),
+        )
+        run_phase(
+            reporter,
+            "write_metadata",
+            lambda: write_run_metadata(
+                args.out_file,
+                build_run_metadata(
+                    run_name=args.out_file.stem,
+                    data_file=args.data_file,
+                    out_file=args.out_file,
+                    top_k=args.top_k,
+                    started_at=run_started_timestamp,
+                    completed_at=utc_now(),
+                    mode=args.mode,
+                    answerer=args.answerer,
+                    recall_mode=args.recall_mode,
+                ),
+            ),
+            out_file=args.out_file.with_name(f"{args.out_file.stem}_metadata.json"),
+        )
+        run_phase(
+            reporter,
+            "write_trace",
+            lambda: write_trace(
+                args.out_file,
+                build_trace(results, model_key, gateway_routes_by_sample),
+            ),
+            out_file=args.out_file.with_name(f"{args.out_file.stem}_trace.json"),
         )
         reporter.emit(
             "run_complete",
@@ -166,8 +228,14 @@ def ensure_selected_samples(
     )
 
 
-def build_model_key(top_k: int) -> str:
-    return f"muninn_top_{top_k}"
+def build_model_key(top_k: int, recall_mode: str = "hybrid", budget: int = 0, query_limit: int = 8) -> str:
+    if budget > 0:
+        return f"muninn_{recall_mode}_encoded_budget_{budget}_query_{query_limit}"
+    return f"muninn_{recall_mode}_top_{top_k}"
+
+
+def utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 @dataclass
@@ -213,31 +281,117 @@ class ProgressReporter:
 
 def prepare_home(
     bridge: MuninnBridge,
-    sample_id: str,
+    name: str,
     keep_home: bool,
+    home_dir: Path | None = None,
+    prepared: bool = False,
 ) -> ManagedHome:
-    if keep_home:
-        path = ManagedHome(Path("benchmark") / "locomo" / ".runs" / sample_id)
+    if home_dir is not None:
+        path = ManagedHome(home_dir)
+    elif keep_home:
+        path = ManagedHome(Path("benchmark") / "locomo" / ".runs" / name)
     else:
-        tmpdir = TemporaryDirectory(prefix=f"muninn-locomo-{sample_id}-")
+        tmpdir = TemporaryDirectory(prefix=f"muninn-locomo-{name}-")
         path = ManagedHome(Path(tmpdir.name), tmpdir=tmpdir)
-    bridge.reset_home(path.path)
+    if not prepared:
+        bridge.reset_home(path.path)
     return path
 
 
-def run_unit(
+def run_home_name(samples: list[dict[str, Any]], out_file: Path) -> str:
+    if len(samples) == 1:
+        return str(samples[0]["sample_id"])
+    return out_file.stem
+
+
+def prepare_sample_result(sample: dict[str, Any], limit_questions: int | None) -> dict[str, Any]:
+    sample_result = {
+        "sample_id": sample["sample_id"],
+        "qa": copy.deepcopy(sample["qa"]),
+    }
+    if limit_questions is not None:
+        sample_result["qa"] = sample_result["qa"][:limit_questions]
+    return sample_result
+
+
+def import_unit(
+    bridge: MuninnBridge,
+    args: argparse.Namespace,
+    reporter: ProgressReporter,
+    sample: dict[str, object],
+    qas: list[dict[str, object]],
+    home_dir: ManagedHome,
+) -> dict[str, Any]:
+    stage_started_at = monotonic()
+    sample_id = str(sample["sample_id"])
+    query_count = count_query_candidates(qas)
+    import_sample = build_import_sample(sample, qas)
+    import_data_file = write_import_sample(home_dir.path, import_sample)
+
+    reporter.emit(
+        "import_unit_start",
+        sample_id=sample_id,
+        qa_count=len(qas),
+        query_candidate_count=query_count,
+        home_dir=home_dir.path,
+        import_turn_count=count_dialogs(import_sample),
+    )
+
+    try:
+        import_result = run_phase(
+            reporter,
+            "import_sample",
+            lambda: bridge.import_sample(
+                import_data_file,
+                sample_id,
+                home_dir.path,
+            ),
+            sample_id=sample_id,
+            qa_count=len(qas),
+            query_candidate_count=query_count,
+            home_dir=home_dir.path,
+            import_data_file=import_data_file,
+            import_turn_count=count_dialogs(import_sample),
+        )
+        manifest_path = import_result.get("manifest_path") if isinstance(import_result, dict) else None
+        if not isinstance(manifest_path, str):
+            raise ValueError("import_sample did not return manifest_path")
+        reporter.emit(
+            "import_unit_complete",
+            sample_id=sample_id,
+            qa_count=len(qas),
+            query_candidate_count=query_count,
+            elapsed_s=round(monotonic() - stage_started_at, 4),
+        )
+        return read_import_manifest(Path(manifest_path))
+    except Exception as exc:
+        reporter.emit(
+            "import_unit_failed",
+            sample_id=sample_id,
+            qa_count=len(qas),
+            query_candidate_count=query_count,
+            elapsed_s=round(monotonic() - stage_started_at, 4),
+            home_dir=home_dir.path,
+            error_type=type(exc).__name__,
+            error=str(exc),
+        )
+        raise
+
+
+def run_qa_unit(
     bridge: MuninnBridge,
     args: argparse.Namespace,
     reporter: ProgressReporter,
     sample: dict[str, object],
     qas: list[dict[str, object]],
     model_key: str,
-) -> None:
+    home_dir: ManagedHome,
+) -> dict[str, list[dict[str, Any]]]:
     stage_started_at = monotonic()
     sample_id = str(sample["sample_id"])
     prediction_key = f"{model_key}_prediction"
+    heuristic_key = f"{model_key}_heuristic_prediction"
     query_count = count_query_candidates(qas)
-    home_dir = prepare_home(bridge, sample_id, args.keep_home)
 
     reporter.emit(
         "unit_start",
@@ -248,19 +402,6 @@ def run_unit(
     )
 
     try:
-        run_phase(
-            reporter,
-            "import_sample",
-            lambda: bridge.import_sample(
-                args.data_file,
-                sample_id,
-                home_dir.path,
-            ),
-            sample_id=sample_id,
-            qa_count=len(qas),
-            query_candidate_count=query_count,
-            home_dir=home_dir.path,
-        )
         batch_hits = run_phase(
             reporter,
             "recall_batch",
@@ -269,20 +410,38 @@ def run_unit(
                 qas,
                 args.top_k,
                 home_dir.path,
+                args.recall_mode,
+                args.budget,
+                args.query_limit,
+                True,
+                sample_id=sample_id,
             ),
             sample_id=sample_id,
             qa_count=len(qas),
             query_candidate_count=query_count,
             top_k=args.top_k,
+            budget=args.budget,
+            query_limit=args.query_limit,
+            recall_mode=args.recall_mode,
             home_dir=home_dir.path,
         )
         run_phase(
             reporter,
             "build_predictions",
-            lambda: apply_predictions(qas, batch_hits, prediction_key),
+            lambda: apply_predictions(
+                qas,
+                batch_hits,
+                prediction_key,
+                heuristic_key=heuristic_key,
+                answerer=args.answerer,
+                answerer_config=load_answerer_config(home_dir.path) if args.answerer == "llm" else None,
+                reporter=reporter,
+                sample_id=sample_id,
+            ),
             sample_id=sample_id,
             qa_count=len(qas),
             top_k=args.top_k,
+            answerer=args.answerer,
         )
         reporter.emit(
             "unit_complete",
@@ -291,6 +450,7 @@ def run_unit(
             query_candidate_count=query_count,
             elapsed_s=round(monotonic() - stage_started_at, 4),
         )
+        return load_gateway_routes(home_dir.path / sample_id / "logs" / "locomo-gateway-trace.jsonl")
     except Exception as exc:
         reporter.emit(
             "unit_failed",
@@ -303,9 +463,157 @@ def run_unit(
             error=str(exc),
         )
         raise
-    finally:
-        if home_dir.tmpdir is not None:
-            home_dir.tmpdir.cleanup()
+
+
+def build_import_sample(
+    sample: dict[str, object],
+    qas: list[dict[str, object]],
+) -> dict[str, object]:
+    conversation = sample.get("conversation")
+    if not isinstance(conversation, dict):
+        raise ValueError("LoCoMo sample is missing conversation")
+
+    max_session = max_evidence_session(qas)
+    if max_session is None:
+        return {
+            **sample,
+            "qa": qas,
+        }
+
+    retained_conversation: dict[str, object] = {}
+    for key in ("speaker_a", "speaker_b"):
+        if key in conversation:
+            retained_conversation[key] = conversation[key]
+
+    retained_sessions: list[int] = []
+    retained_dialog_ids: set[str] = set()
+    for session_no in range(1, max_session + 1):
+        session_key = f"session_{session_no}"
+        date_key = f"session_{session_no}_date_time"
+        dialogs = conversation.get(session_key)
+        if not isinstance(dialogs, list):
+            continue
+        retained_sessions.append(session_no)
+        retained_conversation[session_key] = dialogs
+        if date_key in conversation:
+            retained_conversation[date_key] = conversation[date_key]
+        for dialog in dialogs:
+            if isinstance(dialog, dict) and dialog.get("dia_id"):
+                retained_dialog_ids.add(str(dialog["dia_id"]))
+
+    return {
+        "sample_id": sample["sample_id"],
+        "conversation": retained_conversation,
+        "qa": [
+            qa
+            for qa in qas
+            if qa_evidence_contained(qa, retained_dialog_ids)
+        ],
+        **optional_session_maps(sample, retained_sessions),
+    }
+
+
+def write_import_sample(home_dir: Path, sample: dict[str, object]) -> Path:
+    sample_id = str(sample.get("sample_id", "sample"))
+    path = home_dir / f"locomo-import-{sample_id}.json"
+    path.write_text(f"{json.dumps([sample], indent=2)}\n", encoding="utf8")
+    return path
+
+
+def read_import_manifest(path: Path) -> dict[str, Any]:
+    return json.loads(path.read_text(encoding="utf8"))
+
+
+def write_combined_manifest(home_dir: Path, manifest: dict[str, Any]) -> Path:
+    path = home_dir / "locomo-manifest.json"
+    path.write_text(f"{json.dumps(manifest, indent=2)}\n", encoding="utf8")
+    return path
+
+
+def merge_import_manifests(manifests: list[dict[str, Any]]) -> dict[str, Any]:
+    if not manifests:
+        return {"sample_id": "", "turns": []}
+    sample_ids = [str(manifest.get("sample_id", "")) for manifest in manifests]
+    turns = [
+        turn
+        for manifest in manifests
+        for turn in manifest.get("turns", [])
+        if isinstance(turn, dict)
+    ]
+    return {
+        "sample_id": "+".join(sample_ids),
+        "baseline_extracting_epoch": manifests[0].get("baseline_extracting_epoch"),
+        "baseline_committed_epoch": manifests[0].get("baseline_committed_epoch"),
+        "turns": turns,
+    }
+
+
+def max_evidence_session(qas: list[dict[str, object]]) -> int | None:
+    max_session: int | None = None
+    for qa in qas:
+        evidence = qa.get("evidence")
+        if not isinstance(evidence, list):
+            continue
+        for item in evidence:
+            session_no = parse_dialog_session(str(item))
+            if session_no is None:
+                continue
+            max_session = session_no if max_session is None else max(max_session, session_no)
+    return max_session
+
+
+def parse_dialog_session(dialog_id: str) -> int | None:
+    if not dialog_id.startswith("D"):
+        return None
+    prefix = dialog_id.split(":", 1)[0]
+    try:
+        return int(prefix[1:])
+    except ValueError:
+        return None
+
+
+def qa_evidence_contained(qa: dict[str, object], retained_ids: set[str]) -> bool:
+    evidence = qa.get("evidence")
+    return (
+        isinstance(evidence, list)
+        and bool(evidence)
+        and all(str(item) in retained_ids for item in evidence)
+    )
+
+
+def optional_session_maps(
+    sample: dict[str, object],
+    retained_sessions: list[int],
+) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key in ("observation", "session_summary"):
+        value = sample.get(key)
+        session_map = slice_session_map(value, retained_sessions)
+        if session_map:
+            result[key] = session_map
+    return result
+
+
+def slice_session_map(value: object, retained_sessions: list[int]) -> dict[str, object]:
+    if not isinstance(value, dict):
+        return {}
+    prefixes = tuple(f"session_{session_no}_" for session_no in retained_sessions)
+    return {
+        str(key): item
+        for key, item in value.items()
+        if str(key).startswith(prefixes)
+    }
+
+
+def count_dialogs(sample: dict[str, object]) -> int:
+    conversation = sample.get("conversation")
+    if not isinstance(conversation, dict):
+        return 0
+    return sum(
+        len(value)
+        for key, value in conversation.items()
+        if key.startswith("session_") and isinstance(value, list)
+    )
 
 
 def run_phase(
@@ -341,19 +649,126 @@ def apply_predictions(
     qas: list[dict[str, object]],
     batch_hits: dict[int, list[RecallHit]],
     prediction_key: str,
+    *,
+    heuristic_key: str | None = None,
+    answerer: str = "heuristic",
+    answerer_config: dict[str, Any] | None = None,
+    reporter: ProgressReporter | None = None,
+    sample_id: str | None = None,
 ) -> None:
+    hit_key_prefix = prediction_key.removesuffix("_prediction")
+    heuristic_key = heuristic_key or f"{hit_key_prefix}_heuristic_prediction"
     for qa_index, qa in enumerate(qas):
+        if reporter is not None and (qa_index == 0 or (qa_index + 1) % 10 == 0 or qa_index + 1 == len(qas)):
+            reporter.emit(
+                "answer_progress",
+                sample_id=sample_id,
+                qa_index=qa_index + 1,
+                qa_count=len(qas),
+                answerer=answerer,
+            )
         hits = batch_hits[qa_index]
-        qa[prediction_key] = build_prediction(str(qa["question"]), int(qa["category"]), hits)
-        context_ids: list[str] = []
-        seen: set[str] = set()
-        for hit in hits:
-            for evidence_id in hit.evidence_ids:
-                if evidence_id in seen:
-                    continue
-                seen.add(evidence_id)
-                context_ids.append(evidence_id)
-        qa[f"{prediction_key}_context"] = context_ids
+        question = str(qa["question"])
+        category = int(qa["category"])
+        heuristic_prediction = build_prediction(question, category, hits)
+        answer_context = build_answer_context(
+            question=question,
+            category=category,
+            hits=hits,
+        )
+        qa[heuristic_key] = heuristic_prediction
+        qa[f"{hit_key_prefix}_answer_context"] = answer_context
+        if answerer == "llm":
+            if answerer_config is None:
+                raise ValueError("LLM answerer requires answerer_config")
+            answer_started_at = monotonic()
+            answer_result = run_llm_answerer(
+                question=question,
+                category=category,
+                answer_context=answer_context,
+                config=answerer_config,
+                adversarial_answer=qa.get("adversarial_answer") if isinstance(qa.get("adversarial_answer"), str) else None,
+            )
+            qa[f"{hit_key_prefix}_answer_elapsed_s"] = round(monotonic() - answer_started_at, 4)
+            qa[prediction_key] = answer_result["answer"]
+            qa[f"{hit_key_prefix}_memory_clarity_score"] = answer_result.get("memory_clarity_score")
+            qa[f"{hit_key_prefix}_memory_clarity_reason"] = answer_result.get("memory_clarity_reason")
+        elif answerer == "heuristic":
+            qa[prediction_key] = heuristic_prediction
+            qa[f"{hit_key_prefix}_answer_elapsed_s"] = 0
+            qa[f"{hit_key_prefix}_memory_clarity_score"] = None
+            qa[f"{hit_key_prefix}_memory_clarity_reason"] = ""
+        else:
+            raise ValueError(f"unsupported answerer: {answerer}")
+        qa[f"{prediction_key}_context"] = []
+        qa[f"{hit_key_prefix}_hits"] = [
+            {
+                "memory_id": hit.memory_id,
+                "matched_text": hit.matched_text,
+                "detail": hit.detail,
+                "observationRatio": hit.observation_ratio,
+            }
+            for hit in hits
+        ]
+
+
+def build_trace(
+    samples: list[dict[str, Any]],
+    model_key: str,
+    gateway_routes_by_sample: dict[str, dict[str, list[dict[str, Any]]]] | None = None,
+) -> dict[str, Any]:
+    prediction_key = f"{model_key}_prediction"
+    heuristic_key = f"{model_key}_heuristic_prediction"
+    trace_samples = []
+    for sample in samples:
+        sample_id = str(sample.get("sample_id", ""))
+        rows = []
+        for qa_index, qa in enumerate(sample.get("qa", [])):
+            if prediction_key not in qa:
+                continue
+            rows.append(
+                build_qa_trace(
+                    sample_id=sample_id,
+                    qa_index=qa_index,
+                    qa=qa,
+                    query_candidates=build_query_candidates(str(qa.get("question", ""))),
+                    prediction_key=prediction_key,
+                    heuristic_key=heuristic_key,
+                    gateway_routes=(gateway_routes_by_sample or {}).get(sample_id),
+                )
+            )
+        trace_samples.append({"sample_id": sample_id, "qa": rows})
+    return {"model_key": model_key, "samples": trace_samples}
+
+
+def load_gateway_routes(path: Path | None) -> dict[str, list[dict[str, Any]]]:
+    if path is None or not path.exists():
+        return {}
+    routes: dict[str, list[dict[str, Any]]] = {}
+    for line in path.read_text(encoding="utf8").splitlines():
+        if not line.strip():
+            continue
+        event = json.loads(line)
+        for route in event.get("sessionFragments", []):
+            route_key = route.get("threadId")
+            if not route_key:
+                continue
+            routes.setdefault(str(route_key), []).append(
+                {
+                    "threadId": route.get("threadId"),
+                    "turnIds": route.get("turnIds") or [],
+                    "content": route.get("content"),
+                    "reason": route.get("reason"),
+                }
+            )
+    return routes
+
+
+def write_trace(out_file: Path, trace: dict[str, Any]) -> Path:
+    trace_file = out_file.with_name(f"{out_file.stem}_trace.json")
+    trace_file.parent.mkdir(parents=True, exist_ok=True)
+    trace_file.write_text(f"{json.dumps(trace, indent=2)}\n", encoding="utf8")
+    return trace_file
 
 
 def collect_batch_hits(
@@ -361,6 +776,11 @@ def collect_batch_hits(
     qas: list[dict[str, object]],
     top_k: int,
     home_dir: Path,
+    recall_mode: str = "hybrid",
+    budget: int = 0,
+    query_limit: int = 8,
+    skip_watermark: bool = False,
+    sample_id: str | None = None,
 ) -> dict[int, list[RecallHit]]:
     queries = []
     ordered_candidates: dict[int, list[str]] = {}
@@ -373,7 +793,15 @@ def collect_batch_hits(
             queries.append({"key": key, "query": query, "limit": top_k})
         ordered_candidates[index] = candidate_keys
 
-    batch_results = bridge.recall_batch(queries, home_dir)
+    batch_results = bridge.recall_batch(
+        queries,
+        home_dir,
+        recall_mode,
+        budget=budget,
+        query_limit=query_limit,
+        skip_watermark=skip_watermark,
+        sample_id=sample_id,
+    )
     merged_results: dict[int, list[RecallHit]] = {}
     for qa_index, candidate_keys in ordered_candidates.items():
         hits: list[RecallHit] = []
@@ -384,9 +812,9 @@ def collect_batch_hits(
                     continue
                 seen_memory_ids.add(hit.memory_id)
                 hits.append(hit)
-                if len(hits) >= top_k:
+                if budget > 0 or len(hits) >= top_k:
                     break
-            if len(hits) >= top_k:
+            if budget > 0 or len(hits) >= top_k:
                 break
         merged_results[qa_index] = hits
     return merged_results

@@ -7,6 +7,7 @@ from tempfile import TemporaryDirectory
 from benchmark.common.muninn_bridge import RecallHit
 from benchmark.locomo.heuristics import build_prediction, build_query_candidates, extract_date
 from benchmark.locomo.report import build_error_report, write_report
+from benchmark.locomo.run import apply_predictions
 from benchmark.locomo.scoring import build_stats, evaluate_question_answering, f1_score, write_results
 
 
@@ -16,12 +17,8 @@ class ScoringTests(unittest.TestCase):
 
     def test_build_prediction_prefers_date_for_category_two(self) -> None:
         hit = RecallHit(
-            memory_id="observing:1",
-            evidence_ids=["D1:3"],
-            date_time="1:56 pm on 8 May, 2023",
-            title="LOCOMO dialog D1:3",
-            summary="Caroline attended a support group recently.",
-            detail="Response: 1:56 pm on 8 May, 2023",
+            memory_id="turn:1",
+            detail="Caroline attended a support group on 8 May 2023.",
         )
         self.assertEqual(
             build_prediction("When did Caroline go to the support group?", 2, [hit]),
@@ -44,7 +41,32 @@ class ScoringTests(unittest.TestCase):
         self.assertEqual(scores, [1.0])
         self.assertEqual(recall, [0.0])
 
-    def test_category_five_fails_when_context_hits_evidence_even_with_negative_answer(self) -> None:
+    def test_category_five_accepts_locomo_choice_a_as_negative_answer(self) -> None:
+        scores, recall = evaluate_question_answering(
+            [
+                {
+                    "category": 5,
+                    "question": "What did Caroline realize after the race?",
+                    "adversarial_answer": "self-care is important",
+                    "evidence": ["D2:3"],
+                    "muninn_top_5_prediction": "a",
+                    "muninn_top_5_prediction_context": ["D2:3"],
+                },
+                {
+                    "category": 5,
+                    "question": "What did Caroline realize after the race?",
+                    "adversarial_answer": "self-care is important",
+                    "evidence": ["D2:3"],
+                    "muninn_top_5_prediction": "(a)",
+                    "muninn_top_5_prediction_context": ["D2:3"],
+                },
+            ],
+            "muninn_top_5_prediction",
+        )
+        self.assertEqual(scores, [1.0, 1.0])
+        self.assertEqual(recall, [1.0, 1.0])
+
+    def test_category_five_allows_negative_answer_when_context_hits_adversarial_evidence(self) -> None:
         scores, recall = evaluate_question_answering(
             [
                 {
@@ -57,7 +79,7 @@ class ScoringTests(unittest.TestCase):
             ],
             "muninn_top_5_prediction",
         )
-        self.assertEqual(scores, [0.0])
+        self.assertEqual(scores, [1.0])
         self.assertEqual(recall, [1.0])
 
     def test_category_five_penalizes_adversarial_answer_matches(self) -> None:
@@ -112,11 +134,39 @@ class ScoringTests(unittest.TestCase):
         self.assertEqual(scores, [1.0])
         self.assertEqual(recall, [2 / 3])
 
-    def test_query_builder_emits_searchable_phrases(self) -> None:
-        self.assertIn(
-            "support group",
-            build_query_candidates("What support group did Caroline join?"),
-        )
+    def test_query_builder_passes_the_original_question_through(self) -> None:
+        question = "What support group did Caroline join?"
+
+        self.assertEqual(build_query_candidates(question), [question])
+
+    def test_apply_predictions_records_top_hit_diagnostics(self) -> None:
+        qas = [
+            {
+                "question": "When did Caroline go to the support group?",
+                "category": 2,
+                "answer": "8 May 2023",
+                "evidence": ["D1:3"],
+            }
+        ]
+        hits = [
+            RecallHit(
+                memory_id="turn:1",
+                detail="Caroline went to the support group on 8 May 2023.",
+            )
+        ]
+
+        apply_predictions(qas, {0: hits}, "muninn_top_5_prediction")
+
+        self.assertEqual(qas[0]["muninn_top_5_prediction"], "8 May 2023")
+        self.assertEqual(qas[0]["muninn_top_5_prediction_context"], [])
+        self.assertEqual(qas[0]["muninn_top_5_hits"][0]["memory_id"], "turn:1")
+        self.assertEqual(qas[0]["muninn_top_5_hits"][0]["detail"], "Caroline went to the support group on 8 May 2023.")
+        self.assertNotIn("title", qas[0]["muninn_top_5_hits"][0])
+        self.assertNotIn("summary", qas[0]["muninn_top_5_hits"][0])
+        self.assertNotIn("date_time", qas[0]["muninn_top_5_hits"][0])
+        self.assertIn("matched_text", qas[0]["muninn_top_5_hits"][0])
+        self.assertNotIn("evidence_ids", qas[0]["muninn_top_5_hits"][0])
+        self.assertNotIn("references", qas[0]["muninn_top_5_hits"][0])
 
     def test_summary_contexts_are_scored_more_strictly_than_session_hits(self) -> None:
         scores, recall = evaluate_question_answering(
@@ -163,14 +213,13 @@ class ScoringTests(unittest.TestCase):
         self.assertEqual(stats["model_key"], "muninn_top_5")
         self.assertEqual(stats["qa_count"], 2)
         self.assertAlmostEqual(stats["average_f1"], 1.0)
-        self.assertAlmostEqual(stats["average_recall"], 0.5)
+        self.assertNotIn("average_recall", stats)
+        self.assertNotIn("category_recall", stats)
 
         report = build_error_report(samples, "muninn_top_5")
         self.assertEqual(report["model_key"], "muninn_top_5")
         self.assertEqual(report["qa_count"], 2)
-        self.assertEqual(len(report["top_recall_misses"]), 1)
-        self.assertEqual(report["top_recall_misses"][0]["sample_id"], "sample-1")
-        self.assertEqual(report["top_extraction_misses"], [])
+        self.assertEqual(report["top_answer_misses"], [])
 
         adversarial_samples = [
             {

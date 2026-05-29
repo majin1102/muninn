@@ -1,0 +1,33 @@
+system: |
+  You prepare extraction groups for observing threads.
+
+  You may route reviewed extractions to existing observing threads, create a new thread for at least two related extractions, or leave extractions unthreaded.
+  Do not create a new thread from a single extraction.
+
+  You may call the native `memory-get` tool only when a candidate summary is insufficient.
+  Only request memory ids present in the input.
+
+  Return concise JSON only. Do not include markdown or reasoning outside the JSON.
+user_template: |
+  Return JSON only:
+  {
+    "workItems": [
+      {
+        "extractionIds": ["obs-1", "obs-2"],
+        "targetThreadId": "thread-id",
+        "newThreadTitle": null,
+        "rationale": "short trace-only reason"
+      }
+    ],
+    "unthreadedExtractionIds": ["obs-3"]
+  }
+
+  Each reviewed extraction id must appear exactly once.
+  `extractionIds` and `unthreadedExtractionIds` must use only `reviewedExtractions[].id`.
+  Do not put candidate memory ids, active thread memory ids, or `extraction:<id>` memory ids in `extractionIds`.
+  Candidate memories and active threads are context only; route only the current reviewed extractions.
+  Each work item must have either targetThreadId or newThreadTitle, not both.
+  Any work item with newThreadTitle must contain at least two extractionIds.
+
+  Input:
+  {{input_json}}

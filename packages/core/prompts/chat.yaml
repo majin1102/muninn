@@ -1,0 +1,35 @@
+system: |
+  Chat domain guidance.
+
+  Use this guidance as a supplement when observing chat-style conversation evidence.
+
+  Observing thread definition
+  - In chat, a subject observing thread tracks one coherent subject that can develop over time.
+  - A subject may be a person's plan, preference, decision, state, relationship, project, artifact, recurring activity, concept, or workflow.
+  - It is narrower than the whole conversation and more stable than a single message.
+  - Route a new span to a subject thread only when it updates, answers, clarifies, corrects, supports, or directly continues that subject.
+  - Otherwise route it to the session thread.
+
+  Same vs separate routing
+  - Keep spans with a subject thread when they complete or refine that subject.
+  - Route spans to the session thread when they introduce a different subject, do not clearly fit an existing subject thread, or need later derivation.
+  - Do not route to a subject thread only because spans are adjacent, in the same batch, or mention the same people.
+
+  Chat memory categories
+  - Use categories only to organize threadMemory.
+  - First write the memory content, then choose one or more categories.
+  - Store useful conclusions, answers, states, plans, preferences, or reusable facts, not conversation acts.
+  - Fold chat evidence into the relevant existing context when it answers, explains, completes, or supports that context.
+  - Keep separate contexts only when they remain self-contained and can be recalled, updated, or contradicted independently.
+
+  - `Fact`: concrete information that happened, exists, was described, or is true in this context.
+  - `Decision`: a clear choice, plan, commitment, or next direction.
+  - `Preference`: a stable or recurring like, dislike, habit, value, constraint, style, or interest.
+  - `Entity`: stable attributes of a person, object, place, organization, or named thing.
+  - `Concept`: reusable idea, principle, lesson, pattern, or abstraction that is explicit, non-trivial, and useful beyond the current conversation.
+  - `Other`: useful memory that does not fit above.
+
+  Category guidance
+  - When chat memory contains a time expression, normalize it to absolute time using grounded context anchors when possible.
+user_template: |
+  {{input_json}}

@@ -79,6 +79,20 @@ pnpm --filter @muninn/benchmark-locomo test
 Direct `python3 benchmark/locomo/run.py ...` runs also auto-build the bridge and
 export the bundled Muninn daemon when needed.
 
+By default the benchmark uses recalled memory composition with `--budget 400`,
+`--query-limit 8`, and `--recall-mode hybrid`. Set `--budget 0` to use raw
+top-k recall hits.
+
+For budget-only tuning against an existing imported run, use:
+
+```bash
+python3 benchmark/locomo/scripts/qa_budget_grid.py \
+  --data-file benchmark/locomo/.cache/data/locomo10.json \
+  --sample-id conv-26 \
+  --budgets 220,300,400,500 \
+  --query-limit 8
+```
+
 ## Run
 
 ### Full run
@@ -87,7 +101,7 @@ export the bundled Muninn daemon when needed.
 python3 benchmark/locomo/run.py \
   --data-file ../locomo/data/locomo10.json \
   --out-file benchmark/locomo/out/locomo10_results.json \
-  --top-k 5
+  --top-k 3
 ```
 
 ### Single sample
@@ -97,7 +111,7 @@ python3 benchmark/locomo/run.py \
   --data-file ../locomo/data/locomo10.json \
   --out-file benchmark/locomo/out/sample_results.json \
   --sample-id <sample_id> \
-  --top-k 5
+  --top-k 3
 ```
 
 ### Limit the QA count for debugging
@@ -107,7 +121,7 @@ python3 benchmark/locomo/run.py \
   --data-file ../locomo/data/locomo10.json \
   --out-file benchmark/locomo/out/debug_results.json \
   --limit-questions 20 \
-  --top-k 5
+  --top-k 3
 ```
 
 ## Runtime Behavior
@@ -120,12 +134,10 @@ For each `sample_id`, the runner:
 4. runs batch recall through Muninn
 5. renders recalled hits into a QA prompt
 6. writes one benchmark prediction per question
-7. scores answer F1 and hidden recall
+7. scores answer F1 and judge pass rates
 
-Hidden recall is computed inside the harness by resolving recalled `memory_id`s
-back to imported turn ids and then to LoCoMo evidence ids. Those ids are not
-shown to the prediction logic; the bridge only returns them to the harness as hidden
-`evidence_ids`.
+Recall hits are rendered as memory text only. Source references are not returned
+through the LoCoMo recall interface or used as a scoring metric.
 
 ## Output Files
 

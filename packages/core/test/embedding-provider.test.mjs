@@ -30,16 +30,24 @@ async function withConfig(t, config) {
 
 function makeConfig(embedding) {
   return {
+    extractor: {
+      name: 'default-extractor',
+      llm: 'extractor_llm',
+      maxAttempts: 3,
+    },
     observer: {
       name: 'default-observer',
       llm: 'observer_llm',
     },
     llm: {
+      extractor_llm: {
+        provider: 'mock',
+      },
       observer_llm: {
         provider: 'mock',
       },
     },
-    semanticIndex: {
+    extraction: {
       embedding,
       defaultImportance: 0.7,
     },

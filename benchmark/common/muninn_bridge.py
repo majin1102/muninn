@@ -15,6 +15,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 BRIDGE_PACKAGE_NAME = "@muninn/benchmark-locomo"
 BRIDGE_DIST = REPO_ROOT / "benchmark" / "locomo" / "dist" / "bridge.js"
 BOOTSTRAP_SCRIPT = REPO_ROOT / "benchmark" / "locomo" / "scripts" / "bootstrap.sh"
+NODE_BINARY_ENV = "MUNINN_NODE_BINARY"
 
 
 class BridgeError(RuntimeError):
@@ -24,11 +25,9 @@ class BridgeError(RuntimeError):
 @dataclass
 class RecallHit:
     memory_id: str
-    evidence_ids: list[str]
-    date_time: str
-    title: str | None
-    summary: str | None
     detail: str | None
+    matched_text: str = ""
+    observation_ratio: float | None = None
 
 
 class MuninnBridge:
@@ -63,23 +62,35 @@ class MuninnBridge:
         query: str,
         limit: int,
         muninn_home: Path,
+        recall_mode: str = "hybrid",
+        budget: int = 0,
+        query_limit: int | None = None,
+        skip_watermark: bool = False,
+        sample_id: str | None = None,
     ) -> list[RecallHit]:
-        payload = self._run_json(
-            "recall",
-            query=query,
-            limit=str(limit),
-            muninn_home=str(muninn_home),
-        )
+        kwargs = {
+            "query": query,
+            "limit": str(limit),
+            "muninn_home": str(muninn_home),
+            "recall_mode": recall_mode,
+        }
+        if sample_id:
+            kwargs["sample_id"] = sample_id
+        if budget > 0:
+            kwargs["budget"] = str(budget)
+            if query_limit is not None:
+                kwargs["query_limit"] = str(query_limit)
+        if skip_watermark:
+            kwargs["skip_watermark"] = "1"
+        payload = self._run_json("recall", **kwargs)
         hits = []
         for item in payload["hits"]:
             hits.append(
                 RecallHit(
                     memory_id=item["memory_id"],
-                    evidence_ids=[str(value) for value in item.get("evidence_ids", [])],
-                    date_time=item.get("date_time") or "",
-                    title=item.get("title"),
-                    summary=item.get("summary"),
                     detail=item.get("detail"),
+                    matched_text=item.get("matched_text") or "",
+                    observation_ratio=item.get("observationRatio"),
                 )
             )
         return hits
@@ -88,6 +99,11 @@ class MuninnBridge:
         self,
         queries: list[dict[str, Any]],
         muninn_home: Path,
+        recall_mode: str = "hybrid",
+        budget: int = 0,
+        query_limit: int | None = None,
+        skip_watermark: bool = False,
+        sample_id: str | None = None,
     ) -> dict[str, list[RecallHit]]:
         with tempfile.NamedTemporaryFile(
             "w",
@@ -99,11 +115,20 @@ class MuninnBridge:
             query_file = Path(handle.name)
 
         try:
-            payload = self._run_json(
-                "recall-batch",
-                queries_file=str(query_file),
-                muninn_home=str(muninn_home),
-            )
+            kwargs = {
+                "queries_file": str(query_file),
+                "muninn_home": str(muninn_home),
+                "recall_mode": recall_mode,
+            }
+            if sample_id:
+                kwargs["sample_id"] = sample_id
+            if budget > 0:
+                kwargs["budget"] = str(budget)
+                if query_limit is not None:
+                    kwargs["query_limit"] = str(query_limit)
+            if skip_watermark:
+                kwargs["skip_watermark"] = "1"
+            payload = self._run_json("recall-batch", **kwargs)
         finally:
             query_file.unlink(missing_ok=True)
 
@@ -112,11 +137,9 @@ class MuninnBridge:
             results[key] = [
                 RecallHit(
                     memory_id=item["memory_id"],
-                    evidence_ids=[str(value) for value in item.get("evidence_ids", [])],
-                    date_time=item.get("date_time") or "",
-                    title=item.get("title"),
-                    summary=item.get("summary"),
                     detail=item.get("detail"),
+                    matched_text=item.get("matched_text") or "",
+                    observation_ratio=item.get("observationRatio"),
                 )
                 for item in items
             ]
@@ -124,16 +147,74 @@ class MuninnBridge:
 
     def _run_json(self, command: str, **kwargs: str) -> dict[str, Any]:
         self.ensure_built()
-        args = ["node", str(BRIDGE_DIST), command]
+        args = [node_binary(), str(BRIDGE_DIST), command]
         for key, value in kwargs.items():
             args.extend([f"--{key.replace('_', '-')}", value])
-        completed = self._run_process(args)
+        completed = self._run_process(args, check=False)
         try:
-            return json.loads(completed.stdout)
+            envelope = json.loads(completed.stdout)
         except json.JSONDecodeError as error:
-            raise BridgeError(f"invalid JSON from bridge: {error}") from error
+            raise BridgeError(
+                "invalid JSON from bridge: "
+                f"{error}\ncommand: {format_command(completed.args)}"
+                f"\nreturncode: {completed.returncode}"
+                f"\nstdout tail:\n{tail_text(completed.stdout)}"
+                f"\nstderr tail:\n{tail_text(completed.stderr)}"
+            ) from error
 
-    def _run_process(self, args: list[str]) -> subprocess.CompletedProcess[str]:
+        if not isinstance(envelope, dict) or "ok" not in envelope:
+            raise BridgeError(
+                "invalid bridge envelope: expected object with ok field"
+                f"\ncommand: {format_command(completed.args)}"
+                f"\nstdout tail:\n{tail_text(completed.stdout)}"
+                f"\nstderr tail:\n{tail_text(completed.stderr)}"
+            )
+
+        if envelope.get("ok") is True:
+            if completed.returncode != 0:
+                raise BridgeError(
+                    "bridge returned ok=true with non-zero exit code"
+                    f" ({completed.returncode})\ncommand: {format_command(completed.args)}"
+                    f"\nstderr tail:\n{tail_text(completed.stderr)}"
+                )
+            result = envelope.get("result")
+            if not isinstance(result, dict):
+                raise BridgeError(
+                    "invalid bridge envelope: result must be an object"
+                    f"\ncommand: {format_command(completed.args)}"
+                    f"\nstdout tail:\n{tail_text(completed.stdout)}"
+                )
+            return result
+
+        if envelope.get("ok") is False:
+            error_payload = envelope.get("error")
+            if isinstance(error_payload, dict):
+                message = str(error_payload.get("message") or "unknown bridge error")
+                stack = error_payload.get("stack")
+            else:
+                message = "unknown bridge error"
+                stack = None
+            stack_text = f"\nstack:\n{stack}" if isinstance(stack, str) and stack else ""
+            raise BridgeError(
+                f"bridge command failed: {message}"
+                f"\ncommand: {format_command(completed.args)}"
+                f"\nreturncode: {completed.returncode}"
+                f"{stack_text}"
+                f"\nstderr tail:\n{tail_text(completed.stderr)}"
+            )
+
+        raise BridgeError(
+            "invalid bridge envelope: ok must be true or false"
+            f"\ncommand: {format_command(completed.args)}"
+            f"\nstdout tail:\n{tail_text(completed.stdout)}"
+        )
+
+    def _run_process(
+        self,
+        args: list[str],
+        *,
+        check: bool = True,
+    ) -> subprocess.CompletedProcess[str]:
         process = subprocess.Popen(
             args,
             cwd=self.repo_root,
@@ -180,7 +261,7 @@ class MuninnBridge:
             stdout=b"".join(stdout_chunks).decode("utf-8", errors="replace"),
             stderr=b"".join(stderr_chunks).decode("utf-8", errors="replace"),
         )
-        if completed.returncode != 0:
+        if check and completed.returncode != 0:
             raise BridgeError(
                 f"bridge command failed ({completed.returncode}): "
                 f"{' '.join(args)}\nstdout:\n{completed.stdout}\nstderr:\n{completed.stderr}"
@@ -192,3 +273,20 @@ class MuninnBridge:
         if "PATH" not in env or not env["PATH"].strip():
             env["PATH"] = "/usr/bin:/bin:/usr/sbin:/sbin"
         return env
+
+
+def node_binary() -> str:
+    value = os.environ.get(NODE_BINARY_ENV, "").strip()
+    return value or "node"
+
+
+def format_command(args: Any) -> str:
+    if isinstance(args, (list, tuple)):
+        return " ".join(str(value) for value in args)
+    return str(args)
+
+
+def tail_text(value: str | None, limit: int = 4000) -> str:
+    if not value:
+        return ""
+    return value[-limit:]

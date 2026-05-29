@@ -5,8 +5,8 @@ import path from 'node:path';
 import {
   validateSettings,
   memories,
-  observings,
   sessions,
+  turns,
 } from '@muninn/core';
 import { Hono } from 'hono';
 import type {
@@ -30,8 +30,8 @@ const packageDir = path.resolve(__dirname, '..');
 
 export const boardApp = new Hono();
 
-let sessionTreeCache: Awaited<ReturnType<typeof sessions.list>> | null = null;
-let sessionTreeLoading: Promise<Awaited<ReturnType<typeof sessions.list>>> | null = null;
+let sessionTreeCache: Awaited<ReturnType<typeof turns.list>> | null = null;
+let sessionTreeLoading: Promise<Awaited<ReturnType<typeof turns.list>>> | null = null;
 let sessionTreeLoadCount = 0;
 let sessionTreeCacheGeneration = 0;
 
@@ -102,18 +102,27 @@ function resolveBoardDistPath(): string {
 function defaultConfigContent(): string {
   return [
     '{',
+    '  "extractor": {',
+    '    "name": "default-extractor",',
+    '    "llm": "default_extractor_llm",',
+    '    "maxAttempts": 3,',
+    '    "activeWindowDays": 7',
+    '  },',
     '  "observer": {',
     '    "name": "default-observer",',
     '    "llm": "default_observer_llm",',
     '    "maxAttempts": 3,',
-    '    "activeWindowDays": 7',
+    '    "anchorThreshold": 8',
     '  },',
     '  "llm": {',
+    '    "default_extractor_llm": {',
+    '      "provider": "mock"',
+    '    },',
     '    "default_observer_llm": {',
     '      "provider": "mock"',
     '    }',
     '  },',
-    '  "semanticIndex": {',
+    '  "extraction": {',
     '    "embedding": {',
     '      "provider": "mock",',
     '      "dimensions": 8',
@@ -124,7 +133,7 @@ function defaultConfigContent(): string {
     '    "enabled": true,',
     '    "intervalMs": 60000,',
     '    "compactMinFragments": 8,',
-    '    "semanticIndex": {',
+    '    "extraction": {',
     '      "targetPartitionSize": 1024,',
     '      "optimizeMergeCount": 4',
     '    }',
@@ -134,7 +143,7 @@ function defaultConfigContent(): string {
   ].join('\n');
 }
 
-type BoardSessionTurn = Awaited<ReturnType<typeof sessions.list>>[number];
+type BoardSessionTurn = Awaited<ReturnType<typeof turns.list>>[number];
 
 function normalizeText(value: string | undefined | null): string | undefined {
   if (typeof value !== 'string') {
@@ -196,14 +205,14 @@ export function getSessionTreeLoadCountForTests() {
   return sessionTreeLoadCount;
 }
 
-async function loadAllSessionTurns(): Promise<Awaited<ReturnType<typeof sessions.list>>> {
+async function loadAllSessionTurns(): Promise<Awaited<ReturnType<typeof turns.list>>> {
   if (sessionTreeCache) {
     return sessionTreeCache;
   }
 
   if (!sessionTreeLoading) {
     const loadGeneration = sessionTreeCacheGeneration;
-    const loadingPromise = sessions
+    const loadingPromise = turns
       .list({
         mode: { type: 'page', offset: 0, limit: SESSION_TREE_PAGE_LIMIT },
       })
@@ -257,8 +266,8 @@ async function loadSessionTurnPreviewsPage(params: {
 async function loadObservingReferences(references: string[]): Promise<MemoryReference[]> {
   const resolved = await Promise.all(
     references.map(async (memoryId) => {
-      if (memoryId.startsWith('session:')) {
-        const turn = await sessions.get(memoryId);
+      if (memoryId.startsWith('turn:')) {
+        const turn = await turns.get(memoryId);
         if (!turn || !hasSummary(turn)) {
           return null;
         }
@@ -269,15 +278,15 @@ async function loadObservingReferences(references: string[]): Promise<MemoryRefe
         };
       }
 
-      if (memoryId.startsWith('observing:')) {
-        const observing = await observings.get(memoryId);
-        if (!observing) {
+      if (memoryId.startsWith('session:')) {
+        const session = await sessions.get(memoryId);
+        if (!session) {
           return null;
         }
         return {
           memoryId,
-          timestamp: observing.updatedAt,
-          summary: observing.summary,
+          timestamp: session.updatedAt,
+          summary: session.summary,
         };
       }
 
@@ -451,10 +460,10 @@ boardApp.get('/api/v1/ui/memories/:memoryId/document', async (c) => {
 boardApp.get('/api/v1/ui/observing', async (c) => {
   console.log('[BOARD_UI_OBSERVING]');
 
-  const rows = await observings.list({
+  const rows = await sessions.list({
     mode: { type: 'recency', limit: 50 },
   });
-  const observationCards = await Promise.all(
+  const extractionCards = await Promise.all(
     rows
       .slice()
       .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
@@ -468,7 +477,7 @@ boardApp.get('/api/v1/ui/observing', async (c) => {
   );
 
   const response: ObservingListResponse = {
-    observations: observationCards,
+    extractions: extractionCards,
     requestId: generateRequestId(),
   };
 
