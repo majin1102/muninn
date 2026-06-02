@@ -41,6 +41,9 @@ experiment/
 *.tsbuildinfo
 
 Cargo.lock
+/muninn.json
+/tmp/
 .muninn/
 .munnai/
 .claude/settings.local.json
+.superpowers/

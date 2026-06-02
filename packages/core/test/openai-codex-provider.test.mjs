@@ -20,31 +20,34 @@ function makeConfig({ provider = 'openai-codex', model, baseUrl } = {}) {
   return {
     extractor: {
       name: 'test-extractor',
-      llm: 'extractor_llm',
+      llmProvider: 'extractor_llm',
+      embeddingProvider: 'default',
       maxAttempts: 3,
       activeWindowDays: 3650,
     },
     observer: {
       name: 'test-observer',
-      llm: 'observer_llm',
+      llmProvider: 'observer_llm',
       maxAttempts: 3,
     },
-    llm: {
-      extractor_llm: {
-        provider,
-        ...(model ? { model } : {}),
-        ...(baseUrl ? { baseUrl } : {}),
+    providers: {
+      llm: {
+        extractor_llm: {
+          type: provider,
+          ...(model ? { model } : {}),
+          ...(baseUrl ? { baseUrl } : {}),
+        },
+        observer_llm: {
+          type: provider,
+          ...(model ? { model } : {}),
+          ...(baseUrl ? { baseUrl } : {}),
+        },
       },
-      observer_llm: {
-        provider,
-        ...(model ? { model } : {}),
-        ...(baseUrl ? { baseUrl } : {}),
-      },
-    },
-    extraction: {
       embedding: {
-        provider: 'mock',
-        dimensions: 4,
+        default: {
+          type: 'mock',
+          dimensions: 4,
+        },
       },
     },
   };
@@ -97,7 +100,7 @@ test('validateMuninnConfigInput accepts openai-codex llm without apiKey', () => 
 
 test('validateMuninnConfigInput keeps openai-codex out of embedding providers', () => {
   const config = makeConfig();
-  config.extraction.embedding.provider = 'openai-codex';
+  config.providers.embedding.default.type = 'openai-codex';
 
   assert.throws(
     () => validateMuninnConfigInput(JSON.stringify(config)),

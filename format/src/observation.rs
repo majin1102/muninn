@@ -394,13 +394,20 @@ mod tests {
         std::fs::write(
             home.join("muninn.json"),
             serde_json::json!({
-                "observer": { "name": "default-observer", "llm": "mock" },
-                "llm": { "mock": { "provider": "mock" } },
-                "extraction": {
+                "observer": { "name": "default-observer", "llmProvider": "mock" },
+                "providers": {
+                    "llm": { "mock": { "type": "mock" } },
                     "embedding": {
-                        "provider": "mock",
-                        "dimensions": 4
+                        "default": {
+                            "type": "mock",
+                            "dimensions": 4
+                        }
                     }
+                },
+                "extractor": {
+                    "name": "default-extractor",
+                    "llmProvider": "mock",
+                    "embeddingProvider": "default"
                 }
             })
             .to_string(),

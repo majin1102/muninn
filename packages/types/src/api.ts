@@ -101,6 +101,7 @@ export interface SessionAgentsResponse {
 export interface SessionNode {
   sessionKey: string;
   displaySessionId: string;
+  createdAt: string;
   latestUpdatedAt: string;
 }
 
@@ -161,5 +162,6 @@ export interface ObservingListResponse {
 export interface SettingsConfigResponse {
   pathLabel: string;
   content: string;
+  validationError?: string;
   requestId: string;
 }

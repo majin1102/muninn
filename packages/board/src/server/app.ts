@@ -40,6 +40,7 @@ const MIME_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
+  '.png': 'image/png',
   '.svg': 'image/svg+xml',
 };
 
@@ -102,34 +103,34 @@ function resolveBoardDistPath(): string {
 function defaultConfigContent(): string {
   return [
     '{',
-    '  "extractor": {',
-    '    "name": "default-extractor",',
-    '    "llm": "default_extractor_llm",',
-    '    "maxAttempts": 3,',
-    '    "activeWindowDays": 7',
+    '  "providers": {',
+    '    "llm": {',
+    '      "default": {',
+    '        "type": "mock"',
+    '      }',
+    '    },',
+    '    "embedding": {',
+    '      "default": {',
+    '        "type": "mock",',
+    '        "dimensions": 8',
+    '      }',
+    '    }',
     '  },',
+  '  "extractor": {',
+  '    "name": "default-extractor",',
+  '    "llmProvider": "default",',
+  '    "embeddingProvider": "default",',
+  '    "recallMode": "hybrid",',
+  '    "maxAttempts": 3,',
+  '    "activeWindowDays": 7',
+  '  },',
     '  "observer": {',
     '    "name": "default-observer",',
-    '    "llm": "default_observer_llm",',
+    '    "llmProvider": "default",',
     '    "maxAttempts": 3,',
     '    "anchorThreshold": 8',
     '  },',
-    '  "llm": {',
-    '    "default_extractor_llm": {',
-    '      "provider": "mock"',
-    '    },',
-    '    "default_observer_llm": {',
-    '      "provider": "mock"',
-    '    }',
-    '  },',
-    '  "extraction": {',
-    '    "embedding": {',
-    '      "provider": "mock",',
-    '      "dimensions": 8',
-    '    },',
-    '    "defaultImportance": 0.7',
-    '  },',
-    '  "watchdog": {',
+  '  "watchdog": {',
     '    "enabled": true,',
     '    "intervalMs": 60000,',
     '    "compactMinFragments": 8,',
@@ -369,16 +370,25 @@ boardApp.get('/api/v1/ui/session/agents/:agent/sessions', async (c) => {
   const turns = (await loadAllSessionTurns())
     .filter((turn) => turn.agent === agent)
     .filter(hasSummary);
-  const grouped = new Map<string, { latestUpdatedAt: string; displaySessionId: string }>();
+  const grouped = new Map<string, { createdAt: string; latestUpdatedAt: string; displaySessionId: string }>();
 
   for (const turn of turns) {
     const sessionNode = resolveSessionNode(turn);
-    const latest = grouped.get(sessionNode.sessionKey);
-    if (!latest || turn.updatedAt > latest.latestUpdatedAt) {
+    const current = grouped.get(sessionNode.sessionKey);
+    if (!current) {
       grouped.set(sessionNode.sessionKey, {
+        createdAt: turn.createdAt,
         latestUpdatedAt: turn.updatedAt,
         displaySessionId: sessionNode.displaySessionId,
       });
+      continue;
+    }
+    if (turn.createdAt < current.createdAt) {
+      current.createdAt = turn.createdAt;
+    }
+    if (turn.updatedAt > current.latestUpdatedAt) {
+      current.latestUpdatedAt = turn.updatedAt;
+      current.displaySessionId = sessionNode.displaySessionId;
     }
   }
 
@@ -386,6 +396,7 @@ boardApp.get('/api/v1/ui/session/agents/:agent/sessions', async (c) => {
     .map(([sessionKey, sessionNode]) => ({
       sessionKey,
       displaySessionId: sessionNode.displaySessionId,
+      createdAt: sessionNode.createdAt,
       latestUpdatedAt: sessionNode.latestUpdatedAt,
     }))
     .sort((left, right) => right.latestUpdatedAt.localeCompare(left.latestUpdatedAt));
@@ -497,9 +508,17 @@ boardApp.get('/api/v1/ui/settings/config', async (c) => {
     }
   }
 
+  let validationError: string | undefined;
+  try {
+    await validateSettings(content);
+  } catch (error) {
+    validationError = error instanceof Error ? error.message : String(error);
+  }
+
   const response: SettingsConfigResponse = {
     pathLabel: configPath,
     content,
+    validationError,
     requestId: generateRequestId(),
   };
 

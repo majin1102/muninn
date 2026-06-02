@@ -702,7 +702,22 @@ test('runObserver deletes a linked leaf omitted from the returned rewrite scope'
   assert.equal(client.writes.deletedObservationIds.includes('Caroline / Support / Support group'), true);
 });
 
-test('runObserver does not upsert deleted extraction changes when updating links', async () => {
+test('runObserver does not upsert deleted extraction changes when updating links', async (t) => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'muninn-observer-runner-'));
+  const homeDir = path.join(dir, 'muninn');
+  await mkdir(homeDir, { recursive: true });
+  await writeFile(path.join(homeDir, 'muninn.json'), JSON.stringify(mockConfig(), null, 2));
+  const previousHome = process.env.MUNINN_HOME;
+  process.env.MUNINN_HOME = homeDir;
+  t.after(async () => {
+    if (previousHome === undefined) {
+      delete process.env.MUNINN_HOME;
+    } else {
+      process.env.MUNINN_HOME = previousHome;
+    }
+    await rm(dir, { recursive: true, force: true });
+  });
+
   const deletedExtraction = {
     ...extractionRow('pending-1', ['Entity: Caroline'], 'Caroline removed old support group details.'),
     observationPaths: ['Caroline / Support / Support group'],
@@ -1879,21 +1894,24 @@ function mockConfig() {
   return {
     extractor: {
       name: 'test-extractor',
-      llm: 'default',
+      llmProvider: 'default',
+      embeddingProvider: 'default',
     },
     observer: {
       name: 'test-observer',
-      llm: 'default',
+      llmProvider: 'default',
     },
-    llm: {
-      default: {
-        provider: 'mock',
+    providers: {
+      llm: {
+        default: {
+          type: 'mock',
+        },
       },
-    },
-    extraction: {
       embedding: {
-        provider: 'mock',
-        dimensions: 8,
+        default: {
+          type: 'mock',
+          dimensions: 8,
+        },
       },
     },
   };

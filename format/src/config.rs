@@ -43,11 +43,20 @@ pub struct StorageConfig {
 #[cfg_attr(test, allow(dead_code))]
 struct MuninnConfig {
     storage: Option<StorageFileConfig>,
+    extractor: Option<ExtractorFileConfig>,
     #[cfg(test)]
     observer: Option<ObserverFileConfig>,
-    extraction: Option<ExtractionFileConfig>,
+    providers: Option<ProvidersFileConfig>,
+    extraction: Option<serde_json::Value>,
     #[serde(rename = "semanticIndex")]
     semantic_index: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ExtractorFileConfig {
+    embedding_provider: Option<String>,
+    default_importance: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -68,10 +77,8 @@ struct ObserverFileConfig {
 #[derive(Debug, Clone, Deserialize)]
 #[cfg_attr(not(test), allow(dead_code))]
 #[serde(rename_all = "camelCase")]
-struct ExtractionFileConfig {
-    embedding: EmbeddingFileConfig,
-    #[cfg(test)]
-    default_importance: Option<f32>,
+struct ProvidersFileConfig {
+    embedding: Option<HashMap<String, EmbeddingFileConfig>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -79,7 +86,8 @@ struct ExtractionFileConfig {
 #[serde(rename_all = "camelCase")]
 struct EmbeddingFileConfig {
     #[cfg(test)]
-    provider: String,
+    #[serde(rename = "type")]
+    provider_type: String,
     #[cfg(test)]
     model: Option<String>,
     #[cfg(test)]
@@ -103,73 +111,51 @@ pub fn current_storage_config() -> Result<Option<StorageConfig>> {
 }
 
 pub fn extraction_config() -> Result<EmbeddingConfig> {
-    let file_config = load_muninn_config()?.and_then(|config| config.extraction);
+    let parsed = load_muninn_config()?;
+    let embedding = resolve_embedding_provider(parsed.as_ref())?;
     Ok(EmbeddingConfig {
         #[cfg(test)]
-        provider: file_config
+        provider: embedding
             .as_ref()
-            .map(|config| config.embedding.provider.clone())
+            .map(|config| config.provider_type.clone())
             .unwrap_or_else(|| "mock".to_string()),
         #[cfg(test)]
-        model: file_config
-            .as_ref()
-            .and_then(|config| config.embedding.model.clone()),
+        model: embedding.as_ref().and_then(|config| config.model.clone()),
         #[cfg(test)]
-        api_key: file_config
-            .as_ref()
-            .and_then(|config| config.embedding.api_key.clone()),
+        api_key: embedding.as_ref().and_then(|config| config.api_key.clone()),
         #[cfg(test)]
-        base_url: file_config
+        base_url: embedding.as_ref().and_then(|config| config.base_url.clone()),
+        dimensions: embedding
             .as_ref()
-            .and_then(|config| config.embedding.base_url.clone()),
-        dimensions: file_config
-            .as_ref()
-            .and_then(|config| config.embedding.dimensions)
+            .and_then(|config| config.dimensions)
             .unwrap_or(DEFAULT_EXTRACTION_DIMENSIONS),
         #[cfg(test)]
-        default_importance: file_config
-            .as_ref()
-            .and_then(|config| config.default_importance)
-            .unwrap_or(DEFAULT_EXTRACTION_IMPORTANCE),
+        default_importance: DEFAULT_EXTRACTION_IMPORTANCE,
     })
 }
 
 #[cfg(test)]
 pub fn extraction_config_from_raw(raw: &str) -> Result<EmbeddingConfig> {
     let parsed = parse_muninn_config(raw, "provided Muninn config")?;
+    let embedding = resolve_embedding_provider(Some(&parsed))?;
     Ok(EmbeddingConfig {
         #[cfg(test)]
-        provider: parsed
-            .extraction
+        provider: embedding
             .as_ref()
-            .map(|config| config.embedding.provider.clone())
+            .map(|config| config.provider_type.clone())
             .unwrap_or_else(|| "mock".to_string()),
         #[cfg(test)]
-        model: parsed
-            .extraction
-            .as_ref()
-            .and_then(|config| config.embedding.model.clone()),
+        model: embedding.as_ref().and_then(|config| config.model.clone()),
         #[cfg(test)]
-        api_key: parsed
-            .extraction
-            .as_ref()
-            .and_then(|config| config.embedding.api_key.clone()),
+        api_key: embedding.as_ref().and_then(|config| config.api_key.clone()),
         #[cfg(test)]
-        base_url: parsed
-            .extraction
+        base_url: embedding.as_ref().and_then(|config| config.base_url.clone()),
+        dimensions: embedding
             .as_ref()
-            .and_then(|config| config.embedding.base_url.clone()),
-        dimensions: parsed
-            .extraction
-            .as_ref()
-            .and_then(|config| config.embedding.dimensions)
+            .and_then(|config| config.dimensions)
             .unwrap_or(DEFAULT_EXTRACTION_DIMENSIONS),
         #[cfg(test)]
-        default_importance: parsed
-            .extraction
-            .as_ref()
-            .and_then(|config| config.default_importance)
-            .unwrap_or(DEFAULT_EXTRACTION_IMPORTANCE),
+        default_importance: DEFAULT_EXTRACTION_IMPORTANCE,
     })
 }
 
@@ -207,10 +193,50 @@ fn parse_muninn_config(raw: &str, source: &str) -> Result<MuninnConfig> {
         .map_err(|error| Error::invalid_input(format!("invalid Muninn config {source}: {error}")))?;
     if parsed.semantic_index.is_some() {
         return Err(Error::invalid_input(
-            "semanticIndex is no longer supported; use extraction instead.",
+            "semanticIndex is no longer supported; use extractor.embeddingProvider instead.",
+        ));
+    }
+    if parsed.extraction.is_some() {
+        return Err(Error::invalid_input(
+            "extraction is no longer supported; use extractor.embeddingProvider and extractor.recallMode instead.",
+        ));
+    }
+    if parsed
+        .extractor
+        .as_ref()
+        .and_then(|extractor| extractor.default_importance.as_ref())
+        .is_some()
+    {
+        return Err(Error::invalid_input(
+            "extractor.defaultImportance is not supported; Muninn uses an internal default importance.",
         ));
     }
     Ok(parsed)
+}
+
+fn resolve_embedding_provider(config: Option<&MuninnConfig>) -> Result<Option<EmbeddingFileConfig>> {
+    let Some(config) = config else {
+        return Ok(None);
+    };
+    let Some(provider_name) = config
+        .extractor
+        .as_ref()
+        .and_then(|extractor| extractor.embedding_provider.as_deref())
+    else {
+        return Ok(None);
+    };
+    let provider = config
+        .providers
+        .as_ref()
+        .and_then(|providers| providers.embedding.as_ref())
+        .and_then(|embeddings| embeddings.get(provider_name))
+        .cloned()
+        .ok_or_else(|| {
+            Error::invalid_input(format!(
+                "extractor.embeddingProvider references missing providers.embedding.{provider_name}."
+            ))
+        })?;
+    Ok(Some(provider))
 }
 
 #[cfg(test)]
@@ -268,13 +294,21 @@ pub(crate) fn write_test_muninn_config(
 
     if let Some(provider) = extraction_provider {
         root.insert(
-            "extraction".to_string(),
+            "providers".to_string(),
             json!({
                 "embedding": {
-                    "provider": provider,
-                    "dimensions": 4
-                },
-                "defaultImportance": 0.7
+                    "default": {
+                        "type": provider,
+                        "dimensions": 4
+                    }
+                }
+            }),
+        );
+        root.insert(
+            "extractor".to_string(),
+            json!({
+                "name": "test-extractor",
+                "embeddingProvider": "default"
             }),
         );
     }
@@ -311,5 +345,55 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.to_string().contains("semanticIndex"));
+    }
+
+    #[test]
+    fn extraction_config_resolves_extractor_embedding_provider() {
+        let config = extraction_config_from_raw(
+            r#"{
+  "extractor": {
+    "embeddingProvider": "large"
+  },
+  "providers": {
+    "embedding": {
+      "large": {
+        "type": "mock",
+        "dimensions": 16
+      }
+    }
+  }
+}"#,
+        )
+        .unwrap();
+        assert_eq!(config.provider, "mock");
+        assert_eq!(config.dimensions, 16);
+        assert_eq!(config.default_importance, 0.7);
+    }
+
+    #[test]
+    fn extraction_config_rejects_top_level_extraction() {
+        let error = extraction_config_from_raw(
+            r#"{
+  "extraction": {
+    "embeddingProvider": "default"
+  }
+}"#,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("extraction is no longer supported"));
+    }
+
+    #[test]
+    fn extraction_config_rejects_extractor_default_importance() {
+        let error = extraction_config_from_raw(
+            r#"{
+  "extractor": {
+    "embeddingProvider": "default",
+    "defaultImportance": 0.7
+  }
+}"#,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("extractor.defaultImportance"));
     }
 }
