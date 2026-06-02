@@ -146,19 +146,31 @@ export function SettingsPage({ client }: SettingsPageProps) {
     setMode(nextMode);
   }
 
+  const schemaMismatch = status === 'invalid' && draft === null;
   const inlineStatus = inlineStatusLabel(status);
 
   return (
     <section className={`settings-page settings-page-${mode}`}>
       <div className="settings-mode-tabs" role="tablist" aria-label="Settings editor mode">
-        <button className={mode === 'visual' ? 'settings-mode-tab settings-mode-tab-active' : 'settings-mode-tab'} type="button" onClick={() => selectMode('visual')}>
+        <button
+          className={mode === 'visual' ? 'settings-mode-tab settings-mode-tab-active' : 'settings-mode-tab'}
+          type="button"
+          disabled={schemaMismatch}
+          aria-disabled={schemaMismatch}
+          onClick={() => selectMode('visual')}
+        >
           Visual
         </button>
         <button className={mode === 'json' ? 'settings-mode-tab settings-mode-tab-active' : 'settings-mode-tab'} type="button" onClick={() => selectMode('json')}>
           Json
         </button>
       </div>
-      {mode === 'visual' ? (
+      {schemaMismatch ? (
+        <div className="settings-readonly-tip settings-schema-tip">
+          <CircleAlert aria-hidden="true" />
+          <span>Current settings schema does not match. Use Json to update muninn.json.</span>
+        </div>
+      ) : mode === 'visual' ? (
         <div className="settings-readonly-tip">
           <CircleAlert aria-hidden="true" />
           <span>Visual mode is read-only. Use Json to edit and save muninn.json.</span>
@@ -185,8 +197,6 @@ export function SettingsPage({ client }: SettingsPageProps) {
       {mode === 'visual' ? (
         draft ? (
           <VisualSettings draft={draft} pathLabel={pathLabel} />
-        ) : status === 'invalid' ? (
-          <div className="empty-state">Current muninn.json is invalid. Use Json to fix it.</div>
         ) : null
       ) : (
         <div className="settings-json-panel">

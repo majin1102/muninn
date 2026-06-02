@@ -1487,6 +1487,15 @@ svg {
   font-weight: 600;
 }
 
+.settings-mode-tab:disabled {
+  color: #b8b8b8;
+  cursor: default;
+}
+
+.settings-mode-tab:disabled:hover {
+  background: transparent;
+}
+
 .settings-unavailable {
   display: grid;
   gap: 4px;
