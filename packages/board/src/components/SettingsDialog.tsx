@@ -5,7 +5,6 @@ import {
   getSettingValue,
   parseSettingsDraft,
   parseSettingsJsonText,
-  sampleSettingsDraft,
   settingsDraftToJson,
   type JsonObject,
   type MuninnSettingsDraft,
@@ -78,10 +77,9 @@ export function SettingsPage({ client }: SettingsPageProps) {
         if (cancelled) {
           return;
         }
-        const fallback = sampleSettingsDraft();
-        setDraft(fallback);
-        setJsonText(settingsDraftToJson(fallback));
-        setPathLabel('demo muninn.json');
+        setDraft(null);
+        setJsonText('');
+        setPathLabel('');
         setStatus('unavailable');
         setStatusMessage(asErrorMessage(loadError));
       });
@@ -148,7 +146,6 @@ export function SettingsPage({ client }: SettingsPageProps) {
     setMode(nextMode);
   }
 
-  const readyDraft = draft ?? sampleSettingsDraft();
   const inlineStatus = inlineStatusLabel(status);
 
   return (
@@ -186,7 +183,11 @@ export function SettingsPage({ client }: SettingsPageProps) {
       ) : null}
 
       {mode === 'visual' ? (
-        <VisualSettings draft={readyDraft} pathLabel={pathLabel} />
+        draft ? (
+          <VisualSettings draft={draft} pathLabel={pathLabel} />
+        ) : status === 'invalid' ? (
+          <div className="empty-state">Current muninn.json is invalid. Use Json to fix it.</div>
+        ) : null
       ) : (
         <div className="settings-json-panel">
           <textarea
