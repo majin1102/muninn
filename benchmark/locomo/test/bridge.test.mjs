@@ -252,6 +252,7 @@ test('import writes an external manifest aligned to locomo sessions', async (t) 
     mode: { type: 'recency', limit: 10 },
     sessionId: 'locomo:sample-a:session_1',
     agent: 'Caroline',
+    database: 'sample-a',
   });
   const firstTurn = importedTurns.find((turn) => turn.turnId === manifest.turns[0].turn_id);
   assert.ok(firstTurn);
