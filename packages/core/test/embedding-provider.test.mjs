@@ -32,24 +32,30 @@ function makeConfig(embedding) {
   return {
     extractor: {
       name: 'default-extractor',
-      llm: 'extractor_llm',
+      llmProvider: 'extractor_llm',
+      embeddingProvider: 'default',
       maxAttempts: 3,
     },
     observer: {
       name: 'default-observer',
-      llm: 'observer_llm',
+      llmProvider: 'observer_llm',
     },
-    llm: {
-      extractor_llm: {
-        provider: 'mock',
+    providers: {
+      llm: {
+        extractor_llm: {
+          type: 'mock',
+        },
+        observer_llm: {
+          type: 'mock',
+        },
       },
-      observer_llm: {
-        provider: 'mock',
+      embedding: {
+        default: {
+          ...embedding,
+          type: embedding.provider,
+          provider: undefined,
+        },
       },
-    },
-    extraction: {
-      embedding,
-      defaultImportance: 0.7,
     },
   };
 }

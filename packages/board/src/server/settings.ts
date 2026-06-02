@@ -11,6 +11,12 @@ export function validateSettingsJson(text: string): void {
   }
 
   const root = parsed as Record<string, unknown>;
+  if (root.llm !== undefined) {
+    throw new Error('llm is no longer supported; use providers.llm instead.');
+  }
+  if (root.extraction !== undefined) {
+    throw new Error('extraction is no longer supported; use extractor.embeddingProvider and extractor.recallMode instead.');
+  }
   const storage = root.storage;
   if (storage !== undefined) {
     if (!storage || typeof storage !== 'object' || Array.isArray(storage)) {
@@ -45,8 +51,11 @@ export function validateSettingsJson(text: string): void {
     }
 
     const config = turn as Record<string, unknown>;
-    if (config.llm !== undefined && typeof config.llm !== 'string') {
-      throw new Error('turn.llm must be a string.');
+    if (config.llm !== undefined) {
+      throw new Error('turn.llm is no longer supported; use turn.llmProvider instead.');
+    }
+    if (config.llmProvider !== undefined && typeof config.llmProvider !== 'string') {
+      throw new Error('turn.llmProvider must be a string.');
     }
     for (const key of ['llmSummaryThresholdChars', 'titleMaxChars']) {
       const value = config[key];
@@ -63,83 +72,119 @@ export function validateSettingsJson(text: string): void {
     }
 
     const config = observer as Record<string, unknown>;
-    for (const key of ['name', 'llm']) {
+    if (config.llm !== undefined) {
+      throw new Error('observer.llm is no longer supported; use observer.llmProvider instead.');
+    }
+    for (const key of ['name', 'llmProvider']) {
       const value = config[key];
       if (value !== undefined && typeof value !== 'string') {
         throw new Error(`observer.${key} must be a string.`);
       }
     }
-    const maxAttempts = config.maxAttempts;
-    if (
-      maxAttempts !== undefined &&
-      (!Number.isInteger(maxAttempts) || (maxAttempts as number) <= 0)
-    ) {
-      throw new Error('observer.maxAttempts must be a positive integer.');
-    }
-    const activeWindowDays = config.activeWindowDays;
-    if (
-      activeWindowDays !== undefined &&
-      (!Number.isInteger(activeWindowDays) || (activeWindowDays as number) <= 0)
-    ) {
-      throw new Error('observer.activeWindowDays must be a positive integer.');
+    for (const key of ['maxAttempts', 'activeWindowDays', 'anchorThreshold', 'anchorBatchSize', 'contentBudgetChars']) {
+      const value = config[key];
+      if (value !== undefined && (!Number.isInteger(value) || (value as number) <= 0)) {
+        throw new Error(`observer.${key} must be a positive integer.`);
+      }
     }
   }
 
-  const llm = root.llm;
-  if (llm !== undefined) {
-    if (!llm || typeof llm !== 'object' || Array.isArray(llm)) {
-      throw new Error('llm must be an object if provided.');
+  const extractor = root.extractor;
+  if (extractor !== undefined) {
+    if (!extractor || typeof extractor !== 'object' || Array.isArray(extractor)) {
+      throw new Error('extractor must be an object if provided.');
     }
 
-    for (const [name, section] of Object.entries(llm as Record<string, unknown>)) {
-      if (!section || typeof section !== 'object' || Array.isArray(section)) {
-        throw new Error(`llm.${name} must be an object.`);
+    const config = extractor as Record<string, unknown>;
+    if (config.llm !== undefined) {
+      throw new Error('extractor.llm is no longer supported; use extractor.llmProvider instead.');
+    }
+    if (config.defaultImportance !== undefined) {
+      throw new Error('extractor.defaultImportance is not supported; Muninn uses an internal default importance.');
+    }
+    for (const key of ['name', 'llmProvider', 'embeddingProvider']) {
+      const value = config[key];
+      if (value !== undefined && typeof value !== 'string') {
+        throw new Error(`extractor.${key} must be a string.`);
       }
+    }
+    if (config.recallMode !== undefined && !['vector', 'fts', 'hybrid'].includes(String(config.recallMode))) {
+      throw new Error('extractor.recallMode must be one of: vector, fts, hybrid.');
+    }
+    for (const key of ['maxAttempts', 'activeWindowDays', 'continuityHints', 'epochTurns', 'epochWindowMs']) {
+      const value = config[key];
+      if (value !== undefined && (!Number.isInteger(value) || (value as number) <= 0)) {
+        throw new Error(`extractor.${key} must be a positive integer.`);
+      }
+    }
+  }
 
-      const config = section as Record<string, unknown>;
-      for (const key of ['provider', 'model', 'api', 'apiKey', 'baseUrl']) {
-        const value = config[key];
-        if (value !== undefined && typeof value !== 'string') {
-          throw new Error(`llm.${name}.${key} must be a string.`);
+  const providers = root.providers;
+  if (providers !== undefined) {
+    if (!providers || typeof providers !== 'object' || Array.isArray(providers)) {
+      throw new Error('providers must be an object if provided.');
+    }
+    const config = providers as Record<string, unknown>;
+    const llm = config.llm;
+    if (llm !== undefined) {
+      if (!llm || typeof llm !== 'object' || Array.isArray(llm)) {
+        throw new Error('providers.llm must be an object if provided.');
+      }
+      for (const [name, section] of Object.entries(llm as Record<string, unknown>)) {
+        if (!section || typeof section !== 'object' || Array.isArray(section)) {
+          throw new Error(`providers.llm.${name} must be an object.`);
+        }
+
+        const providerConfig = section as Record<string, unknown>;
+        if (typeof providerConfig.type !== 'string' || providerConfig.type.trim() === '') {
+          throw new Error(`providers.llm.${name}.type must be a non-empty string.`);
+        }
+        for (const key of ['type', 'model', 'api', 'apiKey', 'baseUrl']) {
+          const value = providerConfig[key];
+          if (value !== undefined && typeof value !== 'string') {
+            throw new Error(`providers.llm.${name}.${key} must be a string.`);
+          }
+        }
+        if (providerConfig.type === 'openai' && (typeof providerConfig.apiKey !== 'string' || providerConfig.apiKey.trim() === '')) {
+          throw new Error(`providers.llm.${name}.apiKey must be a non-empty string.`);
         }
       }
     }
-  }
-
-  const semanticIndex = root.semanticIndex;
-  if (semanticIndex !== undefined) {
-    if (!semanticIndex || typeof semanticIndex !== 'object' || Array.isArray(semanticIndex)) {
-      throw new Error('semanticIndex must be an object if provided.');
-    }
-
-    const config = semanticIndex as Record<string, unknown>;
     const embedding = config.embedding;
     if (embedding !== undefined) {
       if (!embedding || typeof embedding !== 'object' || Array.isArray(embedding)) {
-        throw new Error('semanticIndex.embedding must be an object if provided.');
+        throw new Error('providers.embedding must be an object if provided.');
       }
+      for (const [name, section] of Object.entries(embedding as Record<string, unknown>)) {
+        if (!section || typeof section !== 'object' || Array.isArray(section)) {
+          throw new Error(`providers.embedding.${name} must be an object.`);
+        }
 
-      const embeddingConfig = embedding as Record<string, unknown>;
-      for (const key of ['provider', 'model', 'apiKey', 'baseUrl']) {
-        const value = embeddingConfig[key];
-        if (value !== undefined && typeof value !== 'string') {
-          throw new Error(`semanticIndex.embedding.${key} must be a string.`);
+        const providerConfig = section as Record<string, unknown>;
+        if (typeof providerConfig.type !== 'string' || providerConfig.type.trim() === '') {
+          throw new Error(`providers.embedding.${name}.type must be a non-empty string.`);
+        }
+        for (const key of ['type', 'model', 'apiKey', 'baseUrl']) {
+          const value = providerConfig[key];
+          if (value !== undefined && typeof value !== 'string') {
+            throw new Error(`providers.embedding.${name}.${key} must be a string.`);
+          }
+        }
+        if (providerConfig.type === 'openai' && (typeof providerConfig.apiKey !== 'string' || providerConfig.apiKey.trim() === '')) {
+          throw new Error(`providers.embedding.${name}.apiKey must be a non-empty string.`);
+        }
+        if (
+          providerConfig.dimensions !== undefined &&
+          (!Number.isInteger(providerConfig.dimensions) || (providerConfig.dimensions as number) <= 0)
+        ) {
+          throw new Error(`providers.embedding.${name}.dimensions must be a positive integer.`);
         }
       }
-      if (
-        embeddingConfig.dimensions !== undefined &&
-        (!Number.isInteger(embeddingConfig.dimensions) || (embeddingConfig.dimensions as number) <= 0)
-      ) {
-        throw new Error('semanticIndex.embedding.dimensions must be a positive integer.');
-      }
     }
+  }
 
-    if (
-      config.defaultImportance !== undefined &&
-      (typeof config.defaultImportance !== 'number' || Number.isNaN(config.defaultImportance))
-    ) {
-      throw new Error('semanticIndex.defaultImportance must be a number.');
-    }
+  if (root.semanticIndex !== undefined) {
+    throw new Error('semanticIndex is no longer supported; use extractor.embeddingProvider instead.');
   }
 
   const watchdog = root.watchdog;
@@ -159,21 +204,21 @@ export function validateSettingsJson(text: string): void {
       }
     }
 
-    const semanticIndexConfig = config.semanticIndex;
-    if (semanticIndexConfig !== undefined) {
+    const extractionConfig = config.extraction;
+    if (extractionConfig !== undefined) {
       if (
-        !semanticIndexConfig ||
-        typeof semanticIndexConfig !== 'object' ||
-        Array.isArray(semanticIndexConfig)
+        !extractionConfig ||
+        typeof extractionConfig !== 'object' ||
+        Array.isArray(extractionConfig)
       ) {
-        throw new Error('watchdog.semanticIndex must be an object if provided.');
+        throw new Error('watchdog.extraction must be an object if provided.');
       }
 
-      const nested = semanticIndexConfig as Record<string, unknown>;
+      const nested = extractionConfig as Record<string, unknown>;
       for (const key of ['targetPartitionSize', 'optimizeMergeCount']) {
         const value = nested[key];
         if (value !== undefined && (!Number.isInteger(value) || (value as number) <= 0)) {
-          throw new Error(`watchdog.semanticIndex.${key} must be a positive integer.`);
+          throw new Error(`watchdog.extraction.${key} must be a positive integer.`);
         }
       }
     }

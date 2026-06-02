@@ -161,7 +161,7 @@ async function writeMuninnConfig(configPath, {
   domainPrompt,
 } = {}) {
   const root = {};
-  const llm = {};
+  const providers = { llm: {}, embedding: {} };
   if (storageUri) {
     root.storage = { uri: storageUri };
     if (storageOptions) {
@@ -169,13 +169,14 @@ async function writeMuninnConfig(configPath, {
     }
   }
   if (turnProvider) {
-    root.turn = { llm: 'test_turn_llm' };
-    llm.test_turn_llm = { provider: turnProvider };
+    root.turn = { llmProvider: 'test_turn_llm' };
+    providers.llm.test_turn_llm = { type: turnProvider };
   }
   if (observerProvider) {
     root.extractor = {
       name: 'test-extractor',
-      llm: 'test_extractor_llm',
+      llmProvider: 'test_extractor_llm',
+      embeddingProvider: 'default',
       maxAttempts: 3,
       ...(activeWindowDays === undefined ? {} : { activeWindowDays }),
       ...(continuityHints === undefined ? {} : { continuityHints }),
@@ -185,22 +186,19 @@ async function writeMuninnConfig(configPath, {
     };
     root.observer = {
       name: 'test-observer',
-      llm: 'test_observer_llm',
+      llmProvider: 'test_observer_llm',
       maxAttempts: 3,
     };
-    llm.test_extractor_llm = { provider: observerProvider };
-    llm.test_observer_llm = { provider: observerProvider };
+    providers.llm.test_extractor_llm = { type: observerProvider };
+    providers.llm.test_observer_llm = { type: observerProvider };
   }
-  if (Object.keys(llm).length > 0) {
-    root.llm = llm;
+  if (Object.keys(providers.llm).length > 0 || Object.keys(providers.embedding).length > 0) {
+    root.providers = providers;
   }
   if (observerProvider) {
-    root.extraction = {
-      embedding: {
-        provider: 'mock',
-        dimensions: semanticDimensions,
-      },
-      defaultImportance: 0.7,
+    providers.embedding.default = {
+      type: 'mock',
+      dimensions: semanticDimensions,
     };
   }
   if (watchdog) {
@@ -208,6 +206,48 @@ async function writeMuninnConfig(configPath, {
   }
   await mkdir(path.dirname(configPath), { recursive: true });
   await writeFile(configPath, `${JSON.stringify(root, null, 2)}\n`, 'utf8');
+}
+
+function validSettings(overrides = {}) {
+  const config = {
+    providers: {
+      llm: {
+        test_extractor_llm: { type: 'mock' },
+        test_observer_llm: { type: 'mock' },
+      },
+      embedding: {
+        default: {
+          type: 'mock',
+          dimensions: 8,
+        },
+      },
+    },
+    extractor: {
+      name: 'test-extractor',
+      llmProvider: 'test_extractor_llm',
+      embeddingProvider: 'default',
+    },
+    observer: {
+      name: 'test-observer',
+      llmProvider: 'test_observer_llm',
+    },
+  };
+  return mergeSettings(config, overrides);
+}
+
+function mergeSettings(target, overrides) {
+  for (const [key, value] of Object.entries(overrides)) {
+    if (isPlainObject(value) && isPlainObject(target[key])) {
+      mergeSettings(target[key], value);
+    } else {
+      target[key] = value;
+    }
+  }
+  return target;
+}
+
+function isPlainObject(value) {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 test.beforeEach(async () => {
@@ -635,33 +675,11 @@ test('validateSettings rejects extraction index dimension changes that mismatch 
   await new Promise((resolve) => setTimeout(resolve, 50));
 
   await assert.rejects(
-    () => validateSettings(JSON.stringify({
-      extractor: {
-        name: 'test-extractor',
-        llm: 'test_extractor_llm',
-        maxAttempts: 3,
-      },
-      observer: {
-        name: 'test-observer',
-        llm: 'test_observer_llm',
-        maxAttempts: 3,
-      },
-      llm: {
-        test_extractor_llm: {
-          provider: 'mock',
-        },
-        test_observer_llm: {
-          provider: 'mock',
-        },
-      },
-      extraction: {
-        embedding: {
-          provider: 'mock',
-          dimensions: 8,
-        },
-        defaultImportance: 0.7,
-      },
-    }, null, 2)),
+    () => validateSettings(JSON.stringify(validSettings({
+      extractor: { maxAttempts: 3 },
+      observer: { maxAttempts: 3 },
+      providers: { embedding: { default: { dimensions: 8 } } },
+    }), null, 2)),
     /extraction dimension mismatch/i,
   );
 });
@@ -689,32 +707,9 @@ test('validateSettings rejects invalid extractor.activeWindowDays', async (t) =>
   await writeFile(configPath, '{\n  "storage": {\n    "uri": ""\n  }\n}\n', 'utf8');
 
   await assert.rejects(
-    () => validateSettings(JSON.stringify({
-      extractor: {
-        name: 'test-extractor',
-        llm: 'test_extractor_llm',
-        activeWindowDays: 0,
-      },
-      observer: {
-        name: 'test-observer',
-        llm: 'test_observer_llm',
-      },
-      llm: {
-        test_extractor_llm: {
-          provider: 'mock',
-        },
-        test_observer_llm: {
-          provider: 'mock',
-        },
-      },
-      extraction: {
-        embedding: {
-          provider: 'mock',
-          dimensions: 8,
-        },
-        defaultImportance: 0.7,
-      },
-    }, null, 2)),
+    () => validateSettings(JSON.stringify(validSettings({
+      extractor: { activeWindowDays: 0 },
+    }), null, 2)),
     /extractor\.activeWindowDays must be a positive integer/i,
   );
 });
@@ -728,32 +723,9 @@ test('validateSettings rejects invalid extractor.continuityHints', async (t) => 
   await writeFile(configPath, '{\n  "storage": {\n    "uri": ""\n  }\n}\n', 'utf8');
 
   await assert.rejects(
-    () => validateSettings(JSON.stringify({
-      extractor: {
-        name: 'test-extractor',
-        llm: 'test_extractor_llm',
-        continuityHints: 0,
-      },
-      observer: {
-        name: 'test-observer',
-        llm: 'test_observer_llm',
-      },
-      llm: {
-        test_extractor_llm: {
-          provider: 'mock',
-        },
-        test_observer_llm: {
-          provider: 'mock',
-        },
-      },
-      extraction: {
-        embedding: {
-          provider: 'mock',
-          dimensions: 8,
-        },
-        defaultImportance: 0.7,
-      },
-    }, null, 2)),
+    () => validateSettings(JSON.stringify(validSettings({
+      extractor: { continuityHints: 0 },
+    }), null, 2)),
     /extractor\.continuityHints must be a positive integer/i,
   );
 });
@@ -773,32 +745,9 @@ test('validateSettings rejects invalid extractor epoch seal settings', async (t)
     ['epochWindowMs', 1.5],
   ]) {
     await assert.rejects(
-      () => validateSettings(JSON.stringify({
-        extractor: {
-          name: 'test-extractor',
-          llm: 'test_extractor_llm',
-          [key]: value,
-        },
-        observer: {
-          name: 'test-observer',
-          llm: 'test_observer_llm',
-        },
-        llm: {
-          test_extractor_llm: {
-            provider: 'mock',
-          },
-          test_observer_llm: {
-            provider: 'mock',
-          },
-        },
-        extraction: {
-          embedding: {
-            provider: 'mock',
-            dimensions: 8,
-          },
-          defaultImportance: 0.7,
-        },
-      }, null, 2)),
+      () => validateSettings(JSON.stringify(validSettings({
+        extractor: { [key]: value },
+      }), null, 2)),
       new RegExp(`extractor\\.${key} must be a positive integer`, 'i'),
     );
   }
@@ -813,32 +762,9 @@ test('validateSettings rejects unknown extractor.domainPrompt', async (t) => {
   await writeFile(configPath, '{\n  "storage": {\n    "uri": ""\n  }\n}\n', 'utf8');
 
   await assert.rejects(
-    () => validateSettings(JSON.stringify({
-      extractor: {
-        name: 'test-extractor',
-        llm: 'test_extractor_llm',
-        domainPrompt: 'unknown',
-      },
-      observer: {
-        name: 'test-observer',
-        llm: 'test_observer_llm',
-      },
-      llm: {
-        test_extractor_llm: {
-          provider: 'mock',
-        },
-        test_observer_llm: {
-          provider: 'mock',
-        },
-      },
-      extraction: {
-        embedding: {
-          provider: 'mock',
-          dimensions: 8,
-        },
-        defaultImportance: 0.7,
-      },
-    }, null, 2)),
+    () => validateSettings(JSON.stringify(validSettings({
+      extractor: { domainPrompt: 'unknown' },
+    }), null, 2)),
     /extractor\.domainPrompt must be one of: chat/i,
   );
 });
@@ -850,32 +776,66 @@ test('validateSettings rejects missing observer config', async (t) => {
   process.env.MUNINN_HOME = homeDir;
 
   await assert.rejects(
-    () => validateSettings(JSON.stringify({
-      extractor: {
-        name: 'test-extractor',
-        llm: 'test_extractor_llm',
-      },
-      llm: {
-        test_extractor_llm: {
-          provider: 'mock',
-        },
-        test_observer_llm: {
-          provider: 'mock',
-        },
-      },
-      extraction: {
-        embedding: {
-          provider: 'mock',
-          dimensions: 8,
-        },
-        defaultImportance: 0.5,
-      },
-    }, null, 2)),
+    () => validateSettings(JSON.stringify(validSettings({
+      observer: undefined,
+    }), null, 2)),
     /observer is required/i,
   );
 });
 
-test('validateSettings rejects missing llm config', async (t) => {
+test('validateSettings rejects missing providers config', async (t) => {
+  const { dir, homeDir } = await makeDatasetUri();
+  t.after(cleanupDataset(dir));
+
+  process.env.MUNINN_HOME = homeDir;
+
+  await assert.rejects(
+    () => validateSettings(JSON.stringify(validSettings({
+      providers: undefined,
+    }), null, 2)),
+    /providers is required/i,
+  );
+});
+
+test('validateSettings accepts provider registry references', async (t) => {
+  const { dir, homeDir } = await makeDatasetUri();
+  t.after(cleanupDataset(dir));
+
+  process.env.MUNINN_HOME = homeDir;
+
+  await assert.doesNotReject(
+    () => validateSettings(JSON.stringify({
+      providers: {
+        llm: {
+          default: {
+            type: 'mock',
+          },
+        },
+        embedding: {
+          default: {
+            type: 'mock',
+            dimensions: 8,
+          },
+        },
+      },
+      turn: {
+        llmProvider: 'default',
+      },
+      extractor: {
+        name: 'test-extractor',
+        llmProvider: 'default',
+        embeddingProvider: 'default',
+        recallMode: 'hybrid',
+      },
+      observer: {
+        name: 'test-observer',
+        llmProvider: 'default',
+      },
+    }, null, 2)),
+  );
+});
+
+test('validateSettings rejects legacy provider shape', async (t) => {
   const { dir, homeDir } = await makeDatasetUri();
   t.after(cleanupDataset(dir));
 
@@ -890,77 +850,71 @@ test('validateSettings rejects missing llm config', async (t) => {
       observer: {
         name: 'test-observer',
         llm: 'test_observer_llm',
+      },
+      llm: {
+        test_extractor_llm: {
+          provider: 'mock',
+        },
+        test_observer_llm: {
+          provider: 'mock',
+        },
       },
       extraction: {
         embedding: {
           provider: 'mock',
           dimensions: 8,
         },
-        defaultImportance: 0.5,
       },
     }, null, 2)),
-    /llm is required/i,
+    /llm is no longer supported|extractor\.llm is no longer supported|extraction is no longer supported/i,
   );
 });
 
-test('validateSettings rejects missing extraction config', async (t) => {
+test('validateSettings rejects top-level extraction config', async (t) => {
   const { dir, homeDir } = await makeDatasetUri();
   t.after(cleanupDataset(dir));
 
   process.env.MUNINN_HOME = homeDir;
 
   await assert.rejects(
-    () => validateSettings(JSON.stringify({
-      extractor: {
-        name: 'test-extractor',
-        llm: 'test_extractor_llm',
-      },
-      observer: {
-        name: 'test-observer',
-        llm: 'test_observer_llm',
-      },
-      llm: {
-        test_extractor_llm: {
-          provider: 'mock',
-        },
-        test_observer_llm: {
-          provider: 'mock',
-        },
-      },
-    }, null, 2)),
-    /extraction is required/i,
-  );
-});
-
-test('validateSettings rejects missing extraction.embedding config', async (t) => {
-  const { dir, homeDir } = await makeDatasetUri();
-  t.after(cleanupDataset(dir));
-
-  process.env.MUNINN_HOME = homeDir;
-
-  await assert.rejects(
-    () => validateSettings(JSON.stringify({
-      extractor: {
-        name: 'test-extractor',
-        llm: 'test_extractor_llm',
-      },
-      observer: {
-        name: 'test-observer',
-        llm: 'test_observer_llm',
-      },
-      llm: {
-        test_extractor_llm: {
-          provider: 'mock',
-        },
-        test_observer_llm: {
-          provider: 'mock',
-        },
-      },
+    () => validateSettings(JSON.stringify(validSettings({
       extraction: {
+        embeddingProvider: 'default',
+      },
+    }), null, 2)),
+    /extraction is no longer supported/i,
+  );
+});
+
+test('validateSettings rejects missing extractor.embeddingProvider config', async (t) => {
+  const { dir, homeDir } = await makeDatasetUri();
+  t.after(cleanupDataset(dir));
+
+  process.env.MUNINN_HOME = homeDir;
+
+  await assert.rejects(
+    () => validateSettings(JSON.stringify(validSettings({
+      extractor: {
+        embeddingProvider: undefined,
+      },
+    }), null, 2)),
+    /extractor\.embeddingProvider must be a non-empty string/i,
+  );
+});
+
+test('validateSettings rejects extractor.defaultImportance config', async (t) => {
+  const { dir, homeDir } = await makeDatasetUri();
+  t.after(cleanupDataset(dir));
+
+  process.env.MUNINN_HOME = homeDir;
+
+  await assert.rejects(
+    () => validateSettings(JSON.stringify(validSettings({
+      extractor: {
         defaultImportance: 0.5,
       },
-    }, null, 2)),
-    /extraction\.embedding is required/i,
+    }), null, 2)),
+    /extractor\.defaultImportance is not supported/i,
   );
 });
 
@@ -971,30 +925,9 @@ test('validateSettings accepts omitted extraction dimensions when the default ru
   process.env.MUNINN_HOME = homeDir;
 
   await assert.doesNotReject(
-    () => validateSettings(JSON.stringify({
-      extractor: {
-        name: 'test-extractor',
-        llm: 'test_extractor_llm',
-      },
-      observer: {
-        name: 'test-observer',
-        llm: 'test_observer_llm',
-      },
-      llm: {
-        test_extractor_llm: {
-          provider: 'mock',
-        },
-        test_observer_llm: {
-          provider: 'mock',
-        },
-      },
-      extraction: {
-        embedding: {
-          provider: 'mock',
-        },
-        defaultImportance: 0.5,
-      },
-    }, null, 2)),
+    () => validateSettings(JSON.stringify(validSettings({
+      providers: { embedding: { default: { dimensions: undefined } } },
+    }), null, 2)),
   );
 });
 
@@ -1015,108 +948,70 @@ test('validateSettings rejects omitted extraction dimensions for an existing non
   await new Promise((resolve) => setTimeout(resolve, 50));
 
   await assert.rejects(
-    () => validateSettings(JSON.stringify({
-      extractor: {
-        name: 'test-extractor',
-        llm: 'test_extractor_llm',
-        maxAttempts: 3,
-      },
-      observer: {
-        name: 'test-observer',
-        llm: 'test_observer_llm',
-        maxAttempts: 3,
-      },
-      llm: {
-        test_extractor_llm: {
-          provider: 'mock',
-        },
-        test_observer_llm: {
-          provider: 'mock',
-        },
-      },
-      extraction: {
-        embedding: {
-          provider: 'mock',
-        },
-        defaultImportance: 0.5,
-      },
-    }, null, 2)),
+    () => validateSettings(JSON.stringify(validSettings({
+      extractor: { maxAttempts: 3 },
+      observer: { maxAttempts: 3 },
+      providers: { embedding: { default: { dimensions: undefined } } },
+    }), null, 2)),
     /extraction dimension mismatch/i,
   );
 });
 
-test('validateSettings rejects extraction.embedding.provider when it is empty', async (t) => {
+test('validateSettings rejects providers.embedding type when it is empty', async (t) => {
   const { dir, homeDir } = await makeDatasetUri();
   t.after(cleanupDataset(dir));
 
   process.env.MUNINN_HOME = homeDir;
 
   await assert.rejects(
-    () => validateSettings(JSON.stringify({
-      extraction: {
+    () => validateSettings(JSON.stringify(validSettings({
+      providers: {
         embedding: {
-          provider: '',
+          default: {
+            type: '',
+          },
         },
       },
-    }, null, 2)),
-    /extraction\.embedding\.provider must be a non-empty string/i,
+    }), null, 2)),
+    /providers\.embedding\.default\.type must be a non-empty string/i,
   );
 });
 
-test('validateSettings rejects observer config without observer.llm', async (t) => {
+test('validateSettings rejects observer config without observer.llmProvider', async (t) => {
   const { dir, homeDir } = await makeDatasetUri();
   t.after(cleanupDataset(dir));
 
   process.env.MUNINN_HOME = homeDir;
 
   await assert.rejects(
-    () => validateSettings(JSON.stringify({
-      extractor: {
-        name: 'test-extractor',
-        llm: 'test_extractor_llm',
-      },
+    () => validateSettings(JSON.stringify(validSettings({
       observer: {
         name: 'test-observer',
+        llmProvider: undefined,
       },
-      llm: {
-        test_extractor_llm: {
-          provider: 'mock',
-        },
-        test_observer_llm: {
-          provider: 'mock',
-        },
-      },
-    }, null, 2)),
-    /observer\.llm must be a non-empty string/i,
+    }), null, 2)),
+    /observer\.llmProvider must be a non-empty string/i,
   );
 });
 
-test('validateSettings rejects referenced llm entries without provider', async (t) => {
+test('validateSettings rejects referenced llm entries without type', async (t) => {
   const { dir, homeDir } = await makeDatasetUri();
   t.after(cleanupDataset(dir));
 
   process.env.MUNINN_HOME = homeDir;
 
   await assert.rejects(
-    () => validateSettings(JSON.stringify({
-      turn: {
-        llm: 'test_turn_llm',
+    () => validateSettings(JSON.stringify(validSettings({
+      turn: { llmProvider: 'test_turn_llm' },
+      providers: {
+        llm: {
+          test_turn_llm: {},
+          test_extractor_llm: {},
+          test_observer_llm: {},
+        },
       },
-      extractor: {
-        name: 'test-extractor',
-        llm: 'test_extractor_llm',
-      },
-      observer: {
-        name: 'test-observer',
-        llm: 'test_observer_llm',
-      },
-      llm: {
-        test_turn_llm: {},
-        test_extractor_llm: {},
-        test_observer_llm: {},
-      },
-    }, null, 2)),
-    /llm\.(test_turn_llm|test_extractor_llm|test_observer_llm)\.provider must be a non-empty string/i,
+    }), null, 2)),
+    /providers\.llm\.(test_turn_llm|test_extractor_llm|test_observer_llm)\.type must be a non-empty string/i,
   );
 });
 
@@ -1127,37 +1022,15 @@ test('validateSettings rejects openai turn llm without apiKey', async (t) => {
   process.env.MUNINN_HOME = homeDir;
 
   await assert.rejects(
-    () => validateSettings(JSON.stringify({
-      turn: {
-        llm: 'test_turn_llm',
-      },
-      extractor: {
-        name: 'test-extractor',
-        llm: 'test_extractor_llm',
-      },
-      observer: {
-        name: 'test-observer',
-        llm: 'test_observer_llm',
-      },
-      llm: {
-        test_turn_llm: {
-          provider: 'openai',
-        },
-        test_extractor_llm: {
-          provider: 'mock',
-        },
-        test_observer_llm: {
-          provider: 'mock',
+    () => validateSettings(JSON.stringify(validSettings({
+      turn: { llmProvider: 'test_turn_llm' },
+      providers: {
+        llm: {
+          test_turn_llm: { type: 'openai' },
         },
       },
-      extraction: {
-        embedding: {
-          provider: 'mock',
-          dimensions: 8,
-        },
-      },
-    }, null, 2)),
-    /llm\.test_turn_llm\.apiKey must be a non-empty string/i,
+    }), null, 2)),
+    /providers\.llm\.test_turn_llm\.apiKey must be a non-empty string/i,
   );
 });
 
@@ -1168,31 +1041,14 @@ test('validateSettings rejects openai observer llm without apiKey', async (t) =>
   process.env.MUNINN_HOME = homeDir;
 
   await assert.rejects(
-    () => validateSettings(JSON.stringify({
-      extractor: {
-        name: 'test-extractor',
-        llm: 'test_extractor_llm',
-      },
-      observer: {
-        name: 'test-observer',
-        llm: 'test_observer_llm',
-      },
-      llm: {
-        test_extractor_llm: {
-          provider: 'mock',
-        },
-        test_observer_llm: {
-          provider: 'openai',
+    () => validateSettings(JSON.stringify(validSettings({
+      providers: {
+        llm: {
+          test_observer_llm: { type: 'openai' },
         },
       },
-      extraction: {
-        embedding: {
-          provider: 'mock',
-          dimensions: 8,
-        },
-      },
-    }, null, 2)),
-    /llm\.test_observer_llm\.apiKey must be a non-empty string/i,
+    }), null, 2)),
+    /providers\.llm\.test_observer_llm\.apiKey must be a non-empty string/i,
   );
 });
 
@@ -1203,31 +1059,17 @@ test('validateSettings rejects openai extraction embeddings without apiKey', asy
   process.env.MUNINN_HOME = homeDir;
 
   await assert.rejects(
-    () => validateSettings(JSON.stringify({
-      extractor: {
-        name: 'test-extractor',
-        llm: 'test_extractor_llm',
-      },
-      observer: {
-        name: 'test-observer',
-        llm: 'test_observer_llm',
-      },
-      llm: {
-        test_extractor_llm: {
-          provider: 'mock',
-        },
-        test_observer_llm: {
-          provider: 'mock',
-        },
-      },
-      extraction: {
+    () => validateSettings(JSON.stringify(validSettings({
+      providers: {
         embedding: {
-          provider: 'openai',
-          dimensions: 8,
+          default: {
+            type: 'openai',
+            dimensions: 8,
+          },
         },
       },
-    }, null, 2)),
-    /extraction\.embedding\.apiKey must be a non-empty string/i,
+    }), null, 2)),
+    /providers\.embedding\.default\.apiKey must be a non-empty string/i,
   );
 });
 
@@ -1237,31 +1079,7 @@ test('validateSettings does not create the default storage root while checking s
 
   process.env.MUNINN_HOME = homeDir;
 
-  await assert.doesNotReject(() => validateSettings(JSON.stringify({
-    extractor: {
-      name: 'test-extractor',
-      llm: 'test_extractor_llm',
-    },
-    observer: {
-      name: 'test-observer',
-      llm: 'test_observer_llm',
-    },
-    llm: {
-      test_extractor_llm: {
-        provider: 'mock',
-      },
-      test_observer_llm: {
-        provider: 'mock',
-      },
-    },
-    extraction: {
-      embedding: {
-        provider: 'mock',
-        dimensions: 8,
-      },
-      defaultImportance: 0.5,
-    },
-  }, null, 2)));
+  await assert.doesNotReject(() => validateSettings(JSON.stringify(validSettings(), null, 2)));
 
   await assert.rejects(() => access(homeDir));
 });
@@ -1302,33 +1120,11 @@ test('validateSettings rejects extraction dimension changes when the table exist
   assert.equal(description.dimensions?.vector, 4);
 
   await assert.rejects(
-    () => validateSettings(JSON.stringify({
-      extractor: {
-        name: 'test-extractor',
-        llm: 'test_extractor_llm',
-        maxAttempts: 3,
-      },
-      observer: {
-        name: 'test-observer',
-        llm: 'test_observer_llm',
-        maxAttempts: 3,
-      },
-      llm: {
-        test_extractor_llm: {
-          provider: 'mock',
-        },
-        test_observer_llm: {
-          provider: 'mock',
-        },
-      },
-      extraction: {
-        embedding: {
-          provider: 'mock',
-          dimensions: 8,
-        },
-        defaultImportance: 0.7,
-      },
-    }, null, 2)),
+    () => validateSettings(JSON.stringify(validSettings({
+      extractor: { maxAttempts: 3 },
+      observer: { maxAttempts: 3 },
+      providers: { embedding: { default: { dimensions: 8 } } },
+    }), null, 2)),
     /extraction dimension mismatch/i,
   );
 });
@@ -1362,36 +1158,14 @@ test('validateSettings checks the pending storage target instead of the current 
   });
 
   await assert.rejects(
-    () => validateSettings(JSON.stringify({
+    () => validateSettings(JSON.stringify(validSettings({
       storage: {
         uri: toFileStoreUri(storageB),
       },
-      extractor: {
-        name: 'test-extractor',
-        llm: 'test_extractor_llm',
-        maxAttempts: 3,
-      },
-      observer: {
-        name: 'test-observer',
-        llm: 'test_observer_llm',
-        maxAttempts: 3,
-      },
-      llm: {
-        test_extractor_llm: {
-          provider: 'mock',
-        },
-        test_observer_llm: {
-          provider: 'mock',
-        },
-      },
-      extraction: {
-        embedding: {
-          provider: 'mock',
-          dimensions: 8,
-        },
-        defaultImportance: 0.7,
-      },
-    }, null, 2)),
+      extractor: { maxAttempts: 3 },
+      observer: { maxAttempts: 3 },
+      providers: { embedding: { default: { dimensions: 8 } } },
+    }), null, 2)),
     /extraction dimension mismatch/i,
   );
 });
@@ -1406,34 +1180,11 @@ test('validateSettings is not blocked by the current config storage when the pen
   await mkdir(path.dirname(configPath), { recursive: true });
   await writeFile(configPath, '{\n  "storage": {\n    "uri": ""\n  }\n}\n', 'utf8');
 
-  await assert.doesNotReject(() => validateSettings(JSON.stringify({
+  await assert.doesNotReject(() => validateSettings(JSON.stringify(validSettings({
     storage: {
       uri: toFileStoreUri(storageB),
     },
-    extractor: {
-      name: 'test-extractor',
-      llm: 'test_extractor_llm',
-    },
-    observer: {
-      name: 'test-observer',
-      llm: 'test_observer_llm',
-    },
-    llm: {
-      test_extractor_llm: {
-        provider: 'mock',
-      },
-      test_observer_llm: {
-        provider: 'mock',
-      },
-    },
-    extraction: {
-      embedding: {
-        provider: 'mock',
-        dimensions: 8,
-      },
-      defaultImportance: 0.7,
-    },
-  }, null, 2)));
+  }), null, 2)));
 });
 
 test('getNativeTables initializes the native tables only once under concurrent access', async (t) => {

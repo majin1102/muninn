@@ -78,7 +78,7 @@ impl ExtractionTable {
         let actual_dimensions = extraction_vector_dimensions(&dataset)?;
         if actual_dimensions != expected_dimensions {
             return Err(Error::invalid_input(format!(
-                "extraction dimension mismatch: muninn.json expects {expected_dimensions}, but the existing extraction table stores {actual_dimensions}; update extraction.embedding.dimensions or rebuild the extraction table"
+                "extraction dimension mismatch: muninn.json expects {expected_dimensions}, but the existing extraction table stores {actual_dimensions}; update providers.embedding.<name>.dimensions or rebuild the extraction table"
             )));
         }
         Ok(())

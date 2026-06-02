@@ -265,31 +265,33 @@ async function writeObserverConfig(configPath) {
   await writeFile(configPath, `${JSON.stringify({
     extractor: {
       name: 'test-extractor',
-      llm: 'extractor_llm',
+      llmProvider: 'extractor_llm',
+      embeddingProvider: 'default',
       maxAttempts: 3,
       activeWindowDays: 3650,
     },
     observer: {
       name: 'test-observer',
-      llm: 'observer_llm',
+      llmProvider: 'observer_llm',
       maxAttempts: 3,
     },
-    llm: {
-      extractor_llm: {
-        provider: 'openai',
-        apiKey: 'test-key',
+    providers: {
+      llm: {
+        extractor_llm: {
+          type: 'openai',
+          apiKey: 'test-key',
+        },
+        observer_llm: {
+          type: 'openai',
+          apiKey: 'test-key',
+        },
       },
-      observer_llm: {
-        provider: 'openai',
-        apiKey: 'test-key',
-      },
-    },
-    extraction: {
       embedding: {
-        provider: 'mock',
-        dimensions: 4,
+        default: {
+          type: 'mock',
+          dimensions: 4,
+        },
       },
-      defaultImportance: 0.7,
     },
   }, null, 2)}\n`, 'utf8');
 }

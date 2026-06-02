@@ -34,6 +34,7 @@ const { __testing: observingGatewayTesting } = observingGatewayModule;
 const { createObservingThread, getPendingIndex, getPendingIndexUpTo, loadThreads, toSessionSnapshot } = threadModule;
 const { addMessage, observer: observerApi, shutdownCoreForTests } = core;
 const CHECKPOINT_SCHEMA_VERSION = 6;
+let defaultConfigDir = null;
 
 function createCheckpointBackend(exported = null) {
   return {
@@ -114,7 +115,8 @@ async function writeObserverConfig(configPath, {
   await writeFile(configPath, `${JSON.stringify({
     extractor: {
       name,
-      llm: 'extractor_llm',
+      llmProvider: 'extractor_llm',
+      embeddingProvider: 'default',
       maxAttempts: 3,
       activeWindowDays,
       ...(epochTurns === undefined ? {} : { epochTurns }),
@@ -122,24 +124,25 @@ async function writeObserverConfig(configPath, {
     },
     observer: {
       name: 'default-observer',
-      llm: 'observer_llm',
+      llmProvider: 'observer_llm',
       maxAttempts: 3,
       anchorThreshold: 5,
     },
-    llm: {
-      extractor_llm: {
-        provider: 'mock',
+    providers: {
+      llm: {
+        extractor_llm: {
+          type: 'mock',
+        },
+        observer_llm: {
+          type: 'mock',
+        },
       },
-      observer_llm: {
-        provider: 'mock',
-      },
-    },
-    extraction: {
       embedding: {
-        provider: 'mock',
-        dimensions: 8,
+        default: {
+          type: 'mock',
+          dimensions: 8,
+        },
       },
-      defaultImportance: 0.7,
     },
   }, null, 2)}\n`, 'utf8');
 }
@@ -148,39 +151,41 @@ async function writeOpenAiObserverConfig(configPath) {
   await mkdir(path.dirname(configPath), { recursive: true });
   await writeFile(configPath, `${JSON.stringify({
     turn: {
-      llm: 'turn_llm',
+      llmProvider: 'turn_llm',
     },
     extractor: {
       name: 'default-observer',
-      llm: 'extractor_llm',
+      llmProvider: 'extractor_llm',
+      embeddingProvider: 'default',
       maxAttempts: 3,
       activeWindowDays: 3650,
     },
     observer: {
       name: 'default-observer',
-      llm: 'observer_llm',
+      llmProvider: 'observer_llm',
       maxAttempts: 3,
       anchorThreshold: 5,
     },
-    llm: {
-      turn_llm: {
-        provider: 'mock',
+    providers: {
+      llm: {
+        turn_llm: {
+          type: 'mock',
+        },
+        extractor_llm: {
+          type: 'openai',
+          apiKey: 'test-key',
+        },
+        observer_llm: {
+          type: 'openai',
+          apiKey: 'test-key',
+        },
       },
-      extractor_llm: {
-        provider: 'openai',
-        apiKey: 'test-key',
-      },
-      observer_llm: {
-        provider: 'openai',
-        apiKey: 'test-key',
-      },
-    },
-    extraction: {
       embedding: {
-        provider: 'mock',
-        dimensions: 8,
+        default: {
+          type: 'mock',
+          dimensions: 8,
+        },
       },
-      defaultImportance: 0.7,
     },
   }, null, 2)}\n`, 'utf8');
 }
@@ -188,21 +193,30 @@ async function writeOpenAiObserverConfig(configPath) {
 test('config reads extraction embedding config and rejects semanticIndex', async () => {
   assert.doesNotThrow(() => validateMuninnConfigInput(JSON.stringify({
     storage: { uri: 'file:///tmp/muninn-test' },
-    extractor: { name: 'default-extractor', llm: 'extractor_llm' },
-    observer: { name: 'default-observer', llm: 'observer_llm' },
-    llm: {
-      extractor_llm: { provider: 'mock' },
-      observer_llm: { provider: 'mock' },
+    extractor: { name: 'default-extractor', llmProvider: 'extractor_llm', embeddingProvider: 'default' },
+    observer: { name: 'default-observer', llmProvider: 'observer_llm' },
+    providers: {
+      llm: {
+        extractor_llm: { type: 'mock' },
+        observer_llm: { type: 'mock' },
+      },
+      embedding: {
+        default: { type: 'mock' },
+      },
     },
-    extraction: { embedding: { provider: 'mock' } },
   })));
   assert.throws(() => validateMuninnConfigInput(JSON.stringify({
     storage: { uri: 'file:///tmp/muninn-test' },
-    extractor: { name: 'default-extractor', llm: 'extractor_llm' },
-    observer: { name: 'default-observer', llm: 'observer_llm' },
-    llm: {
-      extractor_llm: { provider: 'mock' },
-      observer_llm: { provider: 'mock' },
+    extractor: { name: 'default-extractor', llmProvider: 'extractor_llm', embeddingProvider: 'default' },
+    observer: { name: 'default-observer', llmProvider: 'observer_llm' },
+    providers: {
+      llm: {
+        extractor_llm: { type: 'mock' },
+        observer_llm: { type: 'mock' },
+      },
+      embedding: {
+        default: { type: 'mock' },
+      },
     },
     semanticIndex: { embedding: { provider: 'mock' } },
   })), /semanticIndex/);
@@ -211,18 +225,22 @@ test('config reads extraction embedding config and rejects semanticIndex', async
 test('observer anchor threshold defaults to eight and validates positive integer', () => {
   const config = {
     storage: { uri: 'file:///tmp/muninn-test' },
-    extractor: { name: 'default-extractor', llm: 'extractor_llm' },
-    observer: { name: 'default-observer', llm: 'observer_llm' },
-    llm: {
-      extractor_llm: { provider: 'mock' },
-      observer_llm: { provider: 'mock' },
+    extractor: { name: 'default-extractor', llmProvider: 'extractor_llm', embeddingProvider: 'default' },
+    observer: { name: 'default-observer', llmProvider: 'observer_llm' },
+    providers: {
+      llm: {
+        extractor_llm: { type: 'mock' },
+        observer_llm: { type: 'mock' },
+      },
+      embedding: {
+        default: { type: 'mock' },
+      },
     },
-    extraction: { embedding: { provider: 'mock' } },
   };
   assert.equal(getObserverRuntimeConfigFromConfigForTests(config).anchorThreshold, 8);
   assert.throws(() => validateMuninnConfigInput(JSON.stringify({
     ...config,
-    observer: { name: 'default-observer', llm: 'observer_llm', anchorThreshold: 0 },
+    observer: { name: 'default-observer', llmProvider: 'observer_llm', anchorThreshold: 0 },
   })), /observer\.anchorThreshold must be a positive integer/);
 });
 
@@ -756,6 +774,19 @@ function createWatchdogConfig(overrides = {}) {
 
 test.beforeEach(async () => {
   await __testing.shutdownCoreForTests();
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'muninn-core-internals-default-'));
+  defaultConfigDir = dir;
+  const homeDir = path.join(dir, 'muninn');
+  await writeObserverConfig(path.join(homeDir, 'muninn.json'));
+  process.env.MUNINN_HOME = homeDir;
+});
+
+test.afterEach(async () => {
+  await __testing.shutdownCoreForTests();
+  if (defaultConfigDir) {
+    await rm(defaultConfigDir, { recursive: true, force: true });
+    defaultConfigDir = null;
+  }
   delete process.env.MUNINN_HOME;
 });
 
@@ -773,28 +804,30 @@ test('getExtractorLlmConfig defaults activeWindowDays to 7 and continuityHints t
   await writeFile(configPath, `${JSON.stringify({
     extractor: {
       name: 'default-extractor',
-      llm: 'extractor_llm',
+      llmProvider: 'extractor_llm',
+      embeddingProvider: 'default',
       maxAttempts: 3,
     },
     observer: {
       name: 'default-observer',
-      llm: 'observer_llm',
+      llmProvider: 'observer_llm',
       maxAttempts: 3,
     },
-    llm: {
-      extractor_llm: {
-        provider: 'mock',
+    providers: {
+      llm: {
+        extractor_llm: {
+          type: 'mock',
+        },
+        observer_llm: {
+          type: 'mock',
+        },
       },
-      observer_llm: {
-        provider: 'mock',
-      },
-    },
-    extraction: {
       embedding: {
-        provider: 'mock',
-        dimensions: 8,
+        default: {
+          type: 'mock',
+          dimensions: 8,
+        },
       },
-      defaultImportance: 0.7,
     },
   }, null, 2)}\n`, 'utf8');
 

@@ -19,11 +19,62 @@ export function transcriptMessages(document: MemoryDocument): TranscriptMessage[
     return fromTurn;
   }
 
+  const fromTurnDetail = turnDetailMessages(document.markdown);
+  if (fromTurnDetail.length > 0) {
+    return fromTurnDetail;
+  }
+
   return [{
     role: 'agent',
     label: document.agent ?? document.observer ?? 'Memory',
     body: document.markdown,
   }];
+}
+
+function turnDetailMessages(markdown: string): TranscriptMessage[] {
+  const detail = sectionBody(markdown, 'Detail');
+  if (!detail) {
+    return [];
+  }
+
+  const prompt = labeledBlock(detail, 'Prompt', ['Response']);
+  const response = labeledBlock(detail, 'Response', ['Tools', 'Artifacts']);
+  const messages: TranscriptMessage[] = [];
+  if (prompt) {
+    messages.push({ role: 'user', label: 'User', body: prompt });
+  }
+  if (response) {
+    messages.push({ role: 'agent', label: 'Agent', body: response });
+  }
+  return messages;
+}
+
+function sectionBody(markdown: string, heading: string): string | null {
+  const pattern = new RegExp(`^##\\s+${escapeRegExp(heading)}\\s*\\n([\\s\\S]*?)(?=^##\\s+|(?![\\s\\S]))`, 'im');
+  const match = markdown.match(pattern);
+  return match?.[1]?.trim() || null;
+}
+
+function labeledBlock(text: string, label: string, stopLabels: string[]): string | null {
+  const startPattern = new RegExp(`^${escapeRegExp(label)}:\\s*`, 'm');
+  const start = text.search(startPattern);
+  if (start < 0) {
+    return null;
+  }
+  const valueStart = start + text.slice(start).match(startPattern)![0].length;
+  let valueEnd = text.length;
+  for (const stopLabel of stopLabels) {
+    const stopPattern = new RegExp(`^${escapeRegExp(stopLabel)}:\\s*`, 'm');
+    const relativeStop = text.slice(valueStart).search(stopPattern);
+    if (relativeStop >= 0) {
+      valueEnd = Math.min(valueEnd, valueStart + relativeStop);
+    }
+  }
+  return text.slice(valueStart, valueEnd).trim() || null;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 function roleSectionMessages(markdown: string): TranscriptMessage[] {
@@ -57,7 +108,7 @@ function roleSectionMessages(markdown: string): TranscriptMessage[] {
 
 function turnSectionMessages(markdown: string): TranscriptMessage[] {
   const sections = new Map<string, string>();
-  const matches = markdown.matchAll(/^##\s+(.+?)\s*\n([\s\S]*?)(?=^##\s+|\s*$)/gm);
+  const matches = markdown.matchAll(/^##\s+(.+?)\s*\n([\s\S]*?)(?=^##\s+|(?![\s\S]))/gm);
 
   for (const match of matches) {
     sections.set(match[1].trim().toLowerCase(), match[2].trim());

@@ -16,9 +16,9 @@ import {
   getDemoSessionGroups,
   getDemoSessionTurns,
 } from '../demo/provider.js';
+import { sampleSettingsDraft, settingsDraftToJson } from './settings-model.js';
 import { trimTrailingSlash } from './utils.js';
 
-export type DataMode = 'live' | 'tree' | 'card';
 export type PrimaryView = 'search' | 'wiki' | 'session' | 'settings';
 
 export type ProjectTurnNode = TurnPreview & {
@@ -44,7 +44,6 @@ export type ProjectNode = {
 
 export type BoardClient = {
   apiBase: string;
-  dataMode: DataMode;
   usesDemoData: boolean;
   getVersion(): Promise<string>;
   getProjects(): Promise<ProjectNode[]>;
@@ -83,27 +82,13 @@ export function resolveApiBase(): string {
   return 'http://localhost:8080';
 }
 
-export function resolveDataMode(): DataMode {
-  const params = new URLSearchParams(window.location.search);
-  const demo = params.get('demo');
-  if (demo === '1') {
-    localStorage.setItem('muninn.board.dataMode', 'tree');
-    return 'tree';
-  }
-  if (demo === '0') {
-    localStorage.setItem('muninn.board.dataMode', 'live');
-    return 'live';
-  }
-
-  const stored = localStorage.getItem('muninn.board.dataMode');
-  if (stored === 'tree' || stored === 'card') {
-    return stored;
-  }
-  return 'live';
+export function resolveUsesDemoData(): boolean {
+  localStorage.removeItem('muninn.board.dataMode');
+  return /(?:[?&#])demo=1(?:[&#]|$)/.test(window.location.href);
 }
 
-export function createBoardClient(apiBase: string, dataMode: DataMode): BoardClient {
-  const usesDemoData = dataMode !== 'live';
+export function createBoardClient(apiBase: string, usesDemoData: boolean): BoardClient {
+  let demoSettingsContent = settingsDraftToJson(sampleSettingsDraft());
 
   async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
     const response = await fetch(`${apiBase}${path}`, init);
@@ -116,7 +101,6 @@ export function createBoardClient(apiBase: string, dataMode: DataMode): BoardCli
 
   return {
     apiBase,
-    dataMode,
     usesDemoData,
     async getVersion() {
       try {
@@ -130,13 +114,34 @@ export function createBoardClient(apiBase: string, dataMode: DataMode): BoardCli
       const agents = usesDemoData
         ? await getDemoSessionAgents()
         : (await fetchJson<SessionAgentsResponse>('/api/v1/ui/session/agents')).agents;
-      return projectTreeFromAgents(agents, async (agent) => {
+      const projects = await projectTreeFromAgents(agents, async (agent) => {
         return usesDemoData
           ? await getDemoSessionGroups(agent)
           : (await fetchJson<SessionGroupsResponse>(
             `/api/v1/ui/session/agents/${encodeURIComponent(agent)}/sessions`,
           )).sessions;
       });
+      if (!usesDemoData) {
+        return projects;
+      }
+
+      return Promise.all(projects.map(async (project) => ({
+        ...project,
+        sessions: await Promise.all(project.sessions.map(async (session) => {
+          const response = await getDemoSessionTurns(session.agent, session.sessionKey, 0, 20);
+          return {
+            ...session,
+            turns: response.turns.map((turn) => ({
+              ...turn,
+              agent: session.agent,
+              sessionKey: session.sessionKey,
+              sessionLabel: session.displaySessionId,
+            })),
+            nextOffset: response.nextOffset,
+            loaded: true,
+          };
+        })),
+      })));
     },
     async loadSessionTurns(session, offset = 0) {
       const response = usesDemoData
@@ -164,9 +169,24 @@ export function createBoardClient(apiBase: string, dataMode: DataMode): BoardCli
       return response.document;
     },
     getSettingsConfig() {
+      if (usesDemoData) {
+        return Promise.resolve({
+          pathLabel: 'demo muninn.json',
+          content: demoSettingsContent,
+          requestId: 'demo-settings',
+        });
+      }
       return fetchJson<SettingsConfigResponse>('/api/v1/ui/settings/config');
     },
     saveSettingsConfig(content) {
+      if (usesDemoData) {
+        demoSettingsContent = content;
+        return Promise.resolve({
+          pathLabel: 'demo muninn.json',
+          content: demoSettingsContent,
+          requestId: 'demo-settings',
+        });
+      }
       return fetchJson<SettingsConfigResponse>('/api/v1/ui/settings/config', {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },

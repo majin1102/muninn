@@ -111,7 +111,7 @@ async function writeMuninnConfig(configPath, {
   activeWindowDays,
 } = {}) {
   const root = {};
-  const llm = {};
+  const providers = { llm: {}, embedding: {} };
 
   if (storageUri) {
     root.storage = { uri: storageUri };
@@ -121,37 +121,35 @@ async function writeMuninnConfig(configPath, {
   }
 
   if (turnProvider) {
-    root.turn = { llm: 'test_turn_llm' };
-    llm.test_turn_llm = { provider: turnProvider };
+    root.turn = { llmProvider: 'test_turn_llm' };
+    providers.llm.test_turn_llm = { type: turnProvider };
   }
 
   if (observerProvider) {
-    root.extraction = {
-      embedding: {
-        provider: 'mock',
-        dimensions: semanticDimensions,
-      },
-      defaultImportance: 0.7,
+    providers.embedding.default = {
+      type: 'mock',
+      dimensions: semanticDimensions,
     };
     root.extractor = {
       name: 'test-observer',
-      llm: 'test_extractor_llm',
+      llmProvider: 'test_extractor_llm',
+      embeddingProvider: 'default',
       maxAttempts: 3,
       epochTurns: 1,
       ...(activeWindowDays === undefined ? {} : { activeWindowDays }),
     };
     root.observer = {
       name: 'test-observer-curator',
-      llm: 'test_observer_llm',
+      llmProvider: 'test_observer_llm',
       maxAttempts: 3,
       anchorThreshold: 5,
     };
-    llm.test_extractor_llm = { provider: observerProvider };
-    llm.test_observer_llm = { provider: observerProvider };
+    providers.llm.test_extractor_llm = { type: observerProvider };
+    providers.llm.test_observer_llm = { type: observerProvider };
   }
 
-  if (Object.keys(llm).length > 0) {
-    root.llm = llm;
+  if (Object.keys(providers.llm).length > 0 || Object.keys(providers.embedding).length > 0) {
+    root.providers = providers;
   }
 
   await mkdir(path.dirname(configPath), { recursive: true });
@@ -168,36 +166,39 @@ function createValidSettings({
   const config = {
     extractor: {
       name: 'default-extractor',
-      llm: 'default_extractor_llm',
+      llmProvider: 'default_extractor_llm',
+      embeddingProvider: 'default',
+      recallMode: 'hybrid',
       maxAttempts: 3,
       activeWindowDays,
     },
     observer: {
       name: 'default-observer',
-      llm: 'default_observer_llm',
+      llmProvider: 'default_observer_llm',
       maxAttempts: 3,
       anchorThreshold: 5,
     },
-    llm: {
-      default_extractor_llm: {
-        provider: observerProvider,
+    providers: {
+      llm: {
+        default_extractor_llm: {
+          type: observerProvider,
+        },
+        default_observer_llm: {
+          type: observerProvider,
+        },
       },
-      default_observer_llm: {
-        provider: observerProvider,
-      },
-    },
-    extraction: {
       embedding: {
-        provider: 'mock',
-        dimensions: semanticDimensions,
+        default: {
+          type: 'mock',
+          dimensions: semanticDimensions,
+        },
       },
-      defaultImportance: 0.7,
     },
   };
 
   if (turnProvider) {
-    config.turn = { llm: 'default_turn_llm' };
-    config.llm.default_turn_llm = { provider: turnProvider };
+    config.turn = { llmProvider: 'default_turn_llm' };
+    config.providers.llm.default_turn_llm = { type: turnProvider };
   }
 
   if (includeWatchdog) {
@@ -920,7 +921,7 @@ test('ui settings config reads and writes muninn.json through sidecar', async (t
 
   const updatedConfig = createValidSettings({ includeWatchdog: true });
   updatedConfig.observer.name = 'live-observer';
-  updatedConfig.extraction.defaultImportance = 0.5;
+  updatedConfig.extractor.recallMode = 'fts';
   const writeResponse = await app.request('/api/v1/ui/settings/config', {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
@@ -932,7 +933,8 @@ test('ui settings config reads and writes muninn.json through sidecar', async (t
 
   const persisted = await readFile(configPath, 'utf8');
   assert.match(persisted, /"name": "live-observer"/);
-  assert.match(persisted, /"defaultImportance": 0.5/);
+  assert.match(persisted, /"recallMode": "fts"/);
+  assert.doesNotMatch(persisted, /"defaultImportance"/);
 });
 
 test('ui settings config creates the parent directory on first save', async (t) => {
@@ -952,7 +954,8 @@ test('ui settings config creates the parent directory on first save', async (t) 
 
   const persisted = await readFile(configPath, 'utf8');
   assert.match(persisted, /"observer"/);
-  assert.match(persisted, /"extraction"/);
+  assert.match(persisted, /"embeddingProvider": "default"/);
+  assert.equal(Object.hasOwn(JSON.parse(persisted), 'extraction'), false);
   assert.match(persisted, /"watchdog"/);
 });
 
@@ -968,9 +971,12 @@ test('ui settings config returns a saveable default template when muninn.json is
   const readBody = await json(readResponse);
   assert.equal(readBody.pathLabel, configPath);
   assert.match(readBody.content, /"name": "default-observer"/);
-  assert.match(readBody.content, /"default_observer_llm"/);
+  assert.match(readBody.content, /"providers": \{/);
+  assert.match(readBody.content, /"llmProvider": "default"/);
   assert.match(readBody.content, /"activeWindowDays": 7/);
-  assert.match(readBody.content, /"extraction": \{/);
+  assert.match(readBody.content, /"embeddingProvider": "default"/);
+  assert.equal(Object.hasOwn(JSON.parse(readBody.content), 'extraction'), false);
+  assert.doesNotMatch(readBody.content, /"defaultImportance"/);
   assert.match(readBody.content, /"dimensions": 8/);
   assert.match(readBody.content, /"watchdog": \{/);
   assert.match(readBody.content, /"intervalMs": 60000/);
@@ -986,7 +992,9 @@ test('ui settings config returns a saveable default template when muninn.json is
   assert.equal(writeResponse.status, 200);
 
   const persisted = await readFile(configPath, 'utf8');
-  assert.match(persisted, /"default_observer_llm"/);
+  assert.match(persisted, /"providers": \{/);
+  assert.match(persisted, /"llmProvider": "default"/);
+  assert.match(persisted, /"embeddingProvider": "default"/);
 });
 
 test('ui settings config rejects invalid watchdog values server-side', async (t) => {
@@ -1076,14 +1084,14 @@ test('ui settings config rejects missing observer config', async (t) => {
   assert.match(body.errorMessage, /observer is required/i);
 });
 
-test('ui settings config rejects missing llm config', async (t) => {
+test('ui settings config rejects missing providers config', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(async () => rm(dir, { recursive: true, force: true }));
   process.env.MUNINN_HOME = homeDir;
 
   await mkdir(path.dirname(configPath), { recursive: true });
   const config = createValidSettings();
-  delete config.llm;
+  delete config.providers;
 
   const writeResponse = await app.request('/api/v1/ui/settings/config', {
     method: 'PUT',
@@ -1095,17 +1103,17 @@ test('ui settings config rejects missing llm config', async (t) => {
   assert.equal(writeResponse.status, 400);
   const body = await json(writeResponse);
   assert.equal(body.errorCode, 'invalidRequest');
-  assert.match(body.errorMessage, /llm is required/i);
+  assert.match(body.errorMessage, /providers is required/i);
 });
 
-test('ui settings config rejects missing extraction config', async (t) => {
+test('ui settings config rejects top-level extraction config', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(async () => rm(dir, { recursive: true, force: true }));
   process.env.MUNINN_HOME = homeDir;
 
   await mkdir(path.dirname(configPath), { recursive: true });
   const config = createValidSettings();
-  delete config.extraction;
+  config.extraction = { embeddingProvider: 'default' };
 
   const writeResponse = await app.request('/api/v1/ui/settings/config', {
     method: 'PUT',
@@ -1117,17 +1125,17 @@ test('ui settings config rejects missing extraction config', async (t) => {
   assert.equal(writeResponse.status, 400);
   const body = await json(writeResponse);
   assert.equal(body.errorCode, 'invalidRequest');
-  assert.match(body.errorMessage, /extraction is required/i);
+  assert.match(body.errorMessage, /extraction is no longer supported/i);
 });
 
-test('ui settings config rejects missing extraction.embedding config', async (t) => {
+test('ui settings config rejects missing extractor.embeddingProvider config', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(async () => rm(dir, { recursive: true, force: true }));
   process.env.MUNINN_HOME = homeDir;
 
   await mkdir(path.dirname(configPath), { recursive: true });
   const config = createValidSettings();
-  delete config.extraction.embedding;
+  delete config.extractor.embeddingProvider;
 
   const writeResponse = await app.request('/api/v1/ui/settings/config', {
     method: 'PUT',
@@ -1139,17 +1147,17 @@ test('ui settings config rejects missing extraction.embedding config', async (t)
   assert.equal(writeResponse.status, 400);
   const body = await json(writeResponse);
   assert.equal(body.errorCode, 'invalidRequest');
-  assert.match(body.errorMessage, /extraction\.embedding is required/i);
+  assert.match(body.errorMessage, /extractor\.embeddingProvider must be a non-empty string/i);
 });
 
-test('ui settings config accepts omitted extraction.embedding.dimensions when the default runtime dimensions apply', async (t) => {
+test('ui settings config accepts omitted providers.embedding dimensions when the default runtime dimensions apply', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(async () => rm(dir, { recursive: true, force: true }));
   process.env.MUNINN_HOME = homeDir;
 
   await mkdir(path.dirname(configPath), { recursive: true });
   const config = createValidSettings();
-  delete config.extraction.embedding.dimensions;
+  delete config.providers.embedding.default.dimensions;
 
   const writeResponse = await app.request('/api/v1/ui/settings/config', {
     method: 'PUT',
@@ -1184,11 +1192,13 @@ test('ui settings config rejects omitted semantic dimensions for an existing non
     body: JSON.stringify({
       content: JSON.stringify({
         ...createValidSettings(),
-        extraction: {
+        providers: {
+          ...createValidSettings().providers,
           embedding: {
-            provider: 'mock',
+            default: {
+              type: 'mock',
+            },
           },
-          defaultImportance: 0.5,
         },
       }, null, 2),
     }),
@@ -1199,7 +1209,7 @@ test('ui settings config rejects omitted semantic dimensions for an existing non
   assert.match(body.errorMessage, /extraction dimension mismatch/i);
 });
 
-test('ui settings config rejects extraction.embedding.provider when it is empty', async (t) => {
+test('ui settings config rejects providers.embedding type when it is empty', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(async () => rm(dir, { recursive: true, force: true }));
   process.env.MUNINN_HOME = homeDir;
@@ -1211,9 +1221,13 @@ test('ui settings config rejects extraction.embedding.provider when it is empty'
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
       content: JSON.stringify({
-        extraction: {
+        ...createValidSettings(),
+        providers: {
+          ...createValidSettings().providers,
           embedding: {
-            provider: '',
+            default: {
+              type: '',
+            },
           },
         },
       }, null, 2),
@@ -1222,7 +1236,7 @@ test('ui settings config rejects extraction.embedding.provider when it is empty'
   assert.equal(writeResponse.status, 400);
   const body = await json(writeResponse);
   assert.equal(body.errorCode, 'invalidRequest');
-  assert.match(body.errorMessage, /extraction\.embedding\.provider must be a non-empty string/i);
+  assert.match(body.errorMessage, /providers\.embedding\.default\.type must be a non-empty string/i);
 });
 
 test('ui settings config rejects openai observer llm without apiKey', async (t) => {
@@ -1232,8 +1246,8 @@ test('ui settings config rejects openai observer llm without apiKey', async (t) 
 
   await mkdir(path.dirname(configPath), { recursive: true });
   const config = createValidSettings({ observerProvider: 'openai' });
-  config.llm.default_extractor_llm.provider = 'mock';
-  delete config.llm.default_observer_llm.apiKey;
+  config.providers.llm.default_extractor_llm.type = 'mock';
+  delete config.providers.llm.default_observer_llm.apiKey;
 
   const writeResponse = await app.request('/api/v1/ui/settings/config', {
     method: 'PUT',
@@ -1245,7 +1259,7 @@ test('ui settings config rejects openai observer llm without apiKey', async (t) 
   assert.equal(writeResponse.status, 400);
   const body = await json(writeResponse);
   assert.equal(body.errorCode, 'invalidRequest');
-  assert.match(body.errorMessage, /llm\.default_observer_llm\.apiKey must be a non-empty string/i);
+  assert.match(body.errorMessage, /providers\.llm\.default_observer_llm\.apiKey must be a non-empty string/i);
 });
 
 test('ui settings config rejects openai semantic embeddings without apiKey', async (t) => {
@@ -1255,8 +1269,8 @@ test('ui settings config rejects openai semantic embeddings without apiKey', asy
 
   await mkdir(path.dirname(configPath), { recursive: true });
   const config = createValidSettings();
-  config.extraction.embedding.provider = 'openai';
-  delete config.extraction.embedding.apiKey;
+  config.providers.embedding.default.type = 'openai';
+  delete config.providers.embedding.default.apiKey;
 
   const writeResponse = await app.request('/api/v1/ui/settings/config', {
     method: 'PUT',
@@ -1268,10 +1282,10 @@ test('ui settings config rejects openai semantic embeddings without apiKey', asy
   assert.equal(writeResponse.status, 400);
   const body = await json(writeResponse);
   assert.equal(body.errorCode, 'invalidRequest');
-  assert.match(body.errorMessage, /extraction\.embedding\.apiKey must be a non-empty string/i);
+  assert.match(body.errorMessage, /providers\.embedding\.default\.apiKey must be a non-empty string/i);
 });
 
-test('ui settings config rejects observer config without observer.llm', async (t) => {
+test('ui settings config rejects observer config without observer.llmProvider', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(async () => rm(dir, { recursive: true, force: true }));
   process.env.MUNINN_HOME = homeDir;
@@ -1283,6 +1297,7 @@ test('ui settings config rejects observer config without observer.llm', async (t
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
       content: JSON.stringify({
+        ...createValidSettings(),
         observer: {
           name: 'test-observer',
         },
@@ -1292,10 +1307,10 @@ test('ui settings config rejects observer config without observer.llm', async (t
   assert.equal(writeResponse.status, 400);
   const body = await json(writeResponse);
   assert.equal(body.errorCode, 'invalidRequest');
-  assert.match(body.errorMessage, /observer\.llm must be a non-empty string/i);
+  assert.match(body.errorMessage, /observer\.llmProvider must be a non-empty string/i);
 });
 
-test('ui settings config rejects referenced llm entries without provider', async (t) => {
+test('ui settings config rejects referenced llm entries without type', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(async () => rm(dir, { recursive: true, force: true }));
   process.env.MUNINN_HOME = homeDir;
@@ -1307,12 +1322,16 @@ test('ui settings config rejects referenced llm entries without provider', async
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
       content: JSON.stringify({
+        ...createValidSettings(),
         observer: {
           name: 'test-observer',
-          llm: 'test_observer_llm',
+          llmProvider: 'test_observer_llm',
         },
-        llm: {
-          test_observer_llm: {},
+        providers: {
+          llm: {
+            test_observer_llm: {},
+          },
+          embedding: createValidSettings().providers.embedding,
         },
       }, null, 2),
     }),
@@ -1320,7 +1339,7 @@ test('ui settings config rejects referenced llm entries without provider', async
   assert.equal(writeResponse.status, 400);
   const body = await json(writeResponse);
   assert.equal(body.errorCode, 'invalidRequest');
-  assert.match(body.errorMessage, /llm\.test_observer_llm\.provider must be a non-empty string/i);
+  assert.match(body.errorMessage, /providers\.llm\.test_observer_llm\.type must be a non-empty string/i);
 });
 
 test('ui settings config rejects semantic index dimension changes that mismatch existing dataset', async (t) => {
@@ -1334,29 +1353,31 @@ test('ui settings config rejects semantic index dimension changes that mismatch 
     `${JSON.stringify({
       extractor: {
         name: 'test-extractor',
-        llm: 'test_extractor_llm',
+        llmProvider: 'test_extractor_llm',
+        embeddingProvider: 'default',
         maxAttempts: 3,
         epochTurns: 1,
       },
       observer: {
         name: 'test-observer',
-        llm: 'test_observer_llm',
+        llmProvider: 'test_observer_llm',
         maxAttempts: 3,
       },
-      llm: {
-        test_extractor_llm: {
-          provider: 'mock',
+      providers: {
+        llm: {
+          test_extractor_llm: {
+            type: 'mock',
+          },
+          test_observer_llm: {
+            type: 'mock',
+          },
         },
-        test_observer_llm: {
-          provider: 'mock',
-        },
-      },
-      extraction: {
         embedding: {
-          provider: 'mock',
-          dimensions: 4,
+          default: {
+            type: 'mock',
+            dimensions: 4,
+          },
         },
-        defaultImportance: 0.7,
       },
     }, null, 2)}\n`,
     'utf8',
@@ -1375,12 +1396,14 @@ test('ui settings config rejects semantic index dimension changes that mismatch 
     body: JSON.stringify({
       content: JSON.stringify({
         ...createValidSettings(),
-        extraction: {
+        providers: {
+          ...createValidSettings().providers,
           embedding: {
-            provider: 'mock',
-            dimensions: 8,
+            default: {
+              type: 'mock',
+              dimensions: 8,
+            },
           },
-          defaultImportance: 0.7,
         },
       }, null, 2),
     }),
@@ -1432,12 +1455,14 @@ test('ui settings config validates semantic dimensions against the pending stora
         storage: {
           uri: toFileStoreUri(storageB),
         },
-        extraction: {
+        providers: {
+          ...createValidSettings().providers,
           embedding: {
-            provider: 'mock',
-            dimensions: 8,
+            default: {
+              type: 'mock',
+              dimensions: 8,
+            },
           },
-          defaultImportance: 0.7,
         },
       }, null, 2),
     }),
