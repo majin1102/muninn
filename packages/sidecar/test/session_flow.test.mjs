@@ -926,6 +926,7 @@ test('ui settings config reads and writes muninn.json through sidecar', async (t
   const readBody = await json(readResponse);
   assert.equal(readBody.pathLabel, configPath);
   assert.match(readBody.content, /"name": "test-observer"/);
+  assert.equal(readBody.validationError, undefined);
 
   const updatedConfig = createValidSettings({ includeWatchdog: true });
   updatedConfig.observer.name = 'live-observer';
@@ -978,6 +979,7 @@ test('ui settings config returns a saveable default template when muninn.json is
   assert.equal(readResponse.status, 200);
   const readBody = await json(readResponse);
   assert.equal(readBody.pathLabel, configPath);
+  assert.equal(readBody.validationError, undefined);
   assert.match(readBody.content, /"name": "default-observer"/);
   assert.match(readBody.content, /"providers": \{/);
   assert.match(readBody.content, /"llmProvider": "default"/);
@@ -1003,6 +1005,25 @@ test('ui settings config returns a saveable default template when muninn.json is
   assert.match(persisted, /"providers": \{/);
   assert.match(persisted, /"llmProvider": "default"/);
   assert.match(persisted, /"embeddingProvider": "default"/);
+});
+
+test('ui settings config reports validation errors on read without replacing content', async (t) => {
+  const { dir, homeDir, configPath } = await makeDatasetUri();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+  process.env.MUNINN_HOME = homeDir;
+
+  const invalidConfig = createValidSettings();
+  delete invalidConfig.extractor.embeddingProvider;
+  await mkdir(path.dirname(configPath), { recursive: true });
+  await writeFile(configPath, `${JSON.stringify(invalidConfig, null, 2)}\n`, 'utf8');
+
+  const readResponse = await app.request('/api/v1/ui/settings/config');
+  assert.equal(readResponse.status, 200);
+  const readBody = await json(readResponse);
+  assert.equal(readBody.pathLabel, configPath);
+  assert.match(readBody.content, /"default-extractor"/);
+  assert.doesNotMatch(readBody.content, /"embeddingProvider"/);
+  assert.match(readBody.validationError, /extractor\.embeddingProvider must be a non-empty string/i);
 });
 
 test('ui settings config rejects invalid watchdog values server-side', async (t) => {

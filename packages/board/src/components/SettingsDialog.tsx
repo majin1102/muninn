@@ -10,7 +10,6 @@ import {
   type MuninnSettingsDraft,
 } from '../lib/settings-model.js';
 import { asErrorMessage } from '../lib/utils.js';
-import { validateSettingsJson } from '../server/settings.js';
 import { Button } from './ui/button.js';
 
 type SettingsPageProps = {
@@ -60,18 +59,17 @@ export function SettingsPage({ client }: SettingsPageProps) {
         }
         setPathLabel(response.pathLabel);
         setJsonText(response.content);
-        try {
-          validateSettingsJson(response.content);
-          const nextDraft = parseSettingsDraft(response.content);
-          setDraft(nextDraft);
-          setJsonText(settingsDraftToJson(nextDraft));
-          setStatus('saved');
-        } catch (validationError) {
+        if (response.validationError) {
           setDraft(null);
           setMode('json');
           setStatus('invalid');
-          setStatusMessage(asErrorMessage(validationError));
+          setStatusMessage(response.validationError);
+          return;
         }
+        const nextDraft = parseSettingsDraft(response.content);
+        setDraft(nextDraft);
+        setJsonText(settingsDraftToJson(nextDraft));
+        setStatus('saved');
       })
       .catch((loadError: unknown) => {
         if (cancelled) {
@@ -101,14 +99,6 @@ export function SettingsPage({ client }: SettingsPageProps) {
     }
 
     const nextJson = settingsDraftToJson(parsed.draft);
-    try {
-      validateSettingsJson(nextJson);
-    } catch (validationError) {
-      setStatus('invalid');
-      setStatusMessage(asErrorMessage(validationError));
-      return;
-    }
-
     try {
       setStatus('saving');
       setStatusMessage(null);

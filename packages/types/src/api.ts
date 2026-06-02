@@ -162,5 +162,6 @@ export interface ObservingListResponse {
 export interface SettingsConfigResponse {
   pathLabel: string;
   content: string;
+  validationError?: string;
   requestId: string;
 }

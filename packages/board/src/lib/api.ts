@@ -174,6 +174,7 @@ export function createBoardClient(apiBase: string, usesDemoData: boolean): Board
         return Promise.resolve({
           pathLabel: 'demo muninn.json',
           content: demoSettingsContent,
+          validationError: undefined,
           requestId: 'demo-settings',
         });
       }
@@ -185,6 +186,7 @@ export function createBoardClient(apiBase: string, usesDemoData: boolean): Board
         return Promise.resolve({
           pathLabel: 'demo muninn.json',
           content: demoSettingsContent,
+          validationError: undefined,
           requestId: 'demo-settings',
         });
       }

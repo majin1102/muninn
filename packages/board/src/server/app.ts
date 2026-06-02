@@ -508,9 +508,17 @@ boardApp.get('/api/v1/ui/settings/config', async (c) => {
     }
   }
 
+  let validationError: string | undefined;
+  try {
+    await validateSettings(content);
+  } catch (error) {
+    validationError = error instanceof Error ? error.message : String(error);
+  }
+
   const response: SettingsConfigResponse = {
     pathLabel: configPath,
     content,
+    validationError,
     requestId: generateRequestId(),
   };
 
