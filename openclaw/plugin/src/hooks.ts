@@ -8,11 +8,11 @@ import type {
 import { resolvePluginConfig } from "./config.js";
 import { createMuninnClient } from "./client.js";
 import { collectArtifacts } from "./artifacts.js";
-import { buildCapturePayload, type Artifact, type ToolCall } from "./payloads.js";
+import { buildCapturePayload, type Artifact, type TurnEvent } from "./payloads.js";
 
 type RunState = {
   updatedAt: number;
-  toolCalls: ToolCall[];
+  events: TurnEvent[];
   artifacts: Artifact[];
 };
 
@@ -63,7 +63,7 @@ export function registerMuninnHooks(api: OpenClawPluginApi): void {
     }
     const now = Date.now();
     const state = getRunState(runsById, runId, now);
-    state.toolCalls.push(buildToolCall(event));
+    state.events.push(...buildToolEvents(event));
     const artifacts = await collectArtifacts({
       toolName: event.toolName,
       toolParams: {
@@ -102,7 +102,7 @@ export function registerMuninnHooks(api: OpenClawPluginApi): void {
         agentId: ctx.agentId,
         prompt: extractFinalUserText(event),
         response: extractFinalAssistantText(event),
-        toolCalls: state?.toolCalls.length ? state.toolCalls : extractToolCalls(event),
+        events: state?.events.length ? state.events : extractToolEvents(event),
         artifacts: state?.artifacts.length ? state.artifacts : undefined,
       });
       if (payload) {
@@ -137,9 +137,9 @@ export function extractFinalUserText(event: PluginHookAgentEndEvent): string {
   return "";
 }
 
-export function extractToolCalls(event: PluginHookAgentEndEvent): ToolCall[] | undefined {
-  const toolCalls = event.messages.flatMap((message) => extractMessageToolCalls(message));
-  return toolCalls.length > 0 ? toolCalls : undefined;
+export function extractToolEvents(event: PluginHookAgentEndEvent): TurnEvent[] | undefined {
+  const events = event.messages.flatMap((message) => extractMessageToolEvents(message));
+  return events.length > 0 ? events : undefined;
 }
 
 export function formatRecallContext(memories: string[]): string {
@@ -164,7 +164,7 @@ function getRunState(runs: Map<string, RunState>, runId: string, now: number): R
   }
   const state: RunState = {
     updatedAt: now,
-    toolCalls: [],
+    events: [],
     artifacts: [],
   };
   runs.set(runId, state);
@@ -179,19 +179,36 @@ function sweepExpiredRuns(runs: Map<string, RunState>, now: number): void {
   }
 }
 
-function buildToolCall(event: PluginHookAfterToolCallEvent): ToolCall {
+function buildToolEvents(event: PluginHookAfterToolCallEvent): TurnEvent[] {
   const input = stringifyBlockValue(event.params);
   const output = stringifyBlockValue(event.result ?? event.error);
-  return {
+  const call: TurnEvent = {
+    type: "toolCall",
     ...(typeof event.toolCallId === "string" ? { id: event.toolCallId } : {}),
     name: event.toolName,
     ...(input ? { input } : {}),
-    ...(output ? { output } : {}),
   };
+  const events: TurnEvent[] = [call];
+  if (output) {
+    events.push({
+      type: "toolOutput",
+      ...(typeof event.toolCallId === "string" ? { id: event.toolCallId } : {}),
+      output,
+    });
+  }
+  return events;
 }
 
 function toArtifacts(artifacts: Record<string, string>): Artifact[] {
-  return Object.entries(artifacts).map(([key, content]) => ({ key, content }));
+  return Object.entries(artifacts).map(([key, content]) => ({
+    key,
+    kind: "text",
+    source: "tool",
+    content,
+    name: key,
+    mimeType: "text/plain",
+    sizeBytes: content.length,
+  }));
 }
 
 function mergeArtifacts(target: Artifact[], updates: Artifact[]): void {
@@ -236,7 +253,7 @@ function extractContentText(content: unknown): string {
   return blocks.join("\n\n").trim();
 }
 
-function extractMessageToolCalls(message: unknown): ToolCall[] {
+function extractMessageToolEvents(message: unknown): TurnEvent[] {
   if (!message || typeof message !== "object") {
     return [];
   }
@@ -254,6 +271,7 @@ function extractMessageToolCalls(message: unknown): ToolCall[] {
     }
     const input = stringifyBlockValue(entry.arguments);
     return [{
+      type: "toolCall",
       ...(typeof entry.id === "string" ? { id: entry.id } : {}),
       name: entry.name,
       ...(input ? { input } : {}),

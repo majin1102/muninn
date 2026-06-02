@@ -17,4 +17,4 @@ pub use extraction::{Extraction, ExtractionTable, RecallMode};
 pub use observation_context::{ObservationContext, ObservationContextTable};
 pub use observation::{Observation, ObservationTable};
 pub use session::{ObservedMemory, SessionSnapshot, SessionTable};
-pub use turn::{Artifact, ToolCall, Turn, TurnTable};
+pub use turn::{Artifact, Turn, TurnEvent, TurnTable};

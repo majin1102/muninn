@@ -33,7 +33,7 @@ import { readTurn } from './turn/types.js';
 import { Watchdog } from './watchdog.js';
 import { TableMutationLocks, lockNativeTables } from './table-locks.js';
 import { writeMuninnLog } from './logging.js';
-import type { Artifact, ToolCall, TurnContent } from '@muninn/types';
+import type { Artifact, TurnContent, TurnEvent } from '@muninn/types';
 
 export interface Turn {
   turnId: string;
@@ -44,7 +44,7 @@ export interface Turn {
   observer: string;
   title?: string | null;
   summary?: string | null;
-  toolCalls?: ToolCall[] | null;
+  events: TurnEvent[];
   artifacts?: Artifact[] | null;
   prompt?: string | null;
   response?: string | null;
@@ -283,6 +283,10 @@ export class MuninnBackend {
       const registry = this.ensureSessionRegistry(extractor.name);
       await extractor.accept(turnContent, registry);
     });
+  }
+
+  async deleteTurns(turnIds: string[]): Promise<{ deleted: number }> {
+    return this.checkpointLock.exclusive(async () => this.client.turnTable.deleteTurns({ turnIds }));
   }
 
   async memoryWatermark(): Promise<MemoryWatermark> {
@@ -558,6 +562,17 @@ export const turns = {
       sessionId: params.sessionId,
     });
     return (await getBackend(databaseName)).memories.listTurns(params);
+  },
+
+  async delete(params: {
+    turnIds: string[];
+    database?: string | null;
+  }): Promise<{ deleted: number }> {
+    const databaseName = resolveDatabaseName(params.database);
+    await writeMuninnLog(databaseName, 'info', 'delete', 'turn_delete', {
+      count: params.turnIds.length,
+    });
+    return (await getBackend(databaseName)).deleteTurns(params.turnIds);
   },
 };
 

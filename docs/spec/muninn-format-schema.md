@@ -82,7 +82,7 @@ type SessionTurn = {
   observer: string;
   title?: string | null;
   summary?: string | null;
-  tool_calls_json?: string | null;
+  events_json: string;
   artifacts_json?: string | null;
   prompt?: string | null;
   response?: string | null;
@@ -186,24 +186,29 @@ type ObservedMemory = {
 当前正式写接口是完整 turn capture：
 
 ```ts
-export interface ToolCall {
-  id?: string;
-  name: string;
-  input?: string;
-  output?: string;
-}
-
 export interface Artifact {
   key: string;
-  content: string;
+  kind: "metadata" | "text" | "image" | "file";
+  source: "prompt" | "response" | "tool" | "import";
+  content?: string;
+  uri?: string;
+  name?: string;
+  mimeType?: string;
+  sizeBytes?: number;
 }
+
+export type TurnEvent =
+  | { type: "userMessage"; text: string; timestamp?: string; artifacts?: Artifact[] }
+  | { type: "assistantMessage"; text: string; timestamp?: string; artifacts?: Artifact[] }
+  | { type: "toolCall"; id?: string; name: string; input?: string; timestamp?: string }
+  | { type: "toolOutput"; id?: string; output?: string; timestamp?: string; artifacts?: Artifact[] };
 
 export interface TurnContent {
   sessionId: string;
   agent: string;
   prompt: string;
   response: string;
-  toolCalls?: ToolCall[];
+  events: TurnEvent[];
   artifacts?: Artifact[];
 }
 ```
@@ -212,7 +217,8 @@ export interface TurnContent {
 
 - `observer` 不属于 `TurnContent`，它在 backend/session 路径内部注入并落到 `SessionTurn`
 - `title` / `summary` 不属于 `TurnContent`，它们是 `SessionTurn` 上的派生/存储字段
-- `toolCalls` 在 row 内部以 `tool_calls_json` 持久化
+- `events` 在 row 内部以 `events_json` 持久化，用于保留 user/assistant/tool 的原始时序
+- extractor/observer 使用 `prompt` / `response` / `summary` 这些文本投影，不直接消费 tool output
 - `artifacts` 在 row 内部以 `artifacts_json` 持久化
 
 ## 6. Current Read Contract

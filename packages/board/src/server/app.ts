@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {
@@ -11,6 +11,8 @@ import {
 import { Hono } from 'hono';
 import type {
   AgentNode,
+  CodexImportPreviewResponse,
+  CodexImportRunResponse,
   ErrorResponse,
   MemoryDocumentResponse,
   MemoryReference,
@@ -21,7 +23,9 @@ import type {
   SettingsConfigResponse,
   TurnPreview,
 } from '@muninn/types';
+import { previewCodexImport, runCodexImport } from './codex_import.js';
 import { renderRenderedMemoryDocument } from './render.js';
+import { sessionDisplayTitle } from './session_labels.js';
 
 const AGENT_DEFAULT_SESSION_PREFIX = '__agent_default__:';
 const OBSERVER_DEFAULT_SESSION_PREFIX = '__observer_default__:';
@@ -40,8 +44,12 @@ const MIME_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
+  '.gif': 'image/gif',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
   '.png': 'image/png',
   '.svg': 'image/svg+xml',
+  '.webp': 'image/webp',
 };
 
 function generateRequestId(): string {
@@ -84,6 +92,11 @@ function resolveConfigPath(): string {
   return path.join(os.homedir(), '.muninn', 'muninn.json');
 }
 
+function resolveArtifactStorePath(): string {
+  const home = process.env.MUNINN_HOME ?? path.join(os.homedir(), '.muninn');
+  return path.join(home, 'default', 'artifacts');
+}
+
 function resolveBoardDistPath(): string {
   const candidates = [
     path.join(packageDir, 'dist'),
@@ -103,34 +116,34 @@ function resolveBoardDistPath(): string {
 function defaultConfigContent(): string {
   return [
     '{',
-    '  "providers": {',
-    '    "llm": {',
-    '      "default": {',
-    '        "type": "mock"',
-    '      }',
-    '    },',
-    '    "embedding": {',
-    '      "default": {',
-    '        "type": "mock",',
-    '        "dimensions": 8',
-    '      }',
-    '    }',
+    '  "extractor": {',
+    '    "name": "default-extractor",',
+    '    "llm": "default_extractor_llm",',
+    '    "maxAttempts": 3,',
+    '    "activeWindowDays": 7',
     '  },',
-  '  "extractor": {',
-  '    "name": "default-extractor",',
-  '    "llmProvider": "default",',
-  '    "embeddingProvider": "default",',
-  '    "recallMode": "hybrid",',
-  '    "maxAttempts": 3,',
-  '    "activeWindowDays": 7',
-  '  },',
     '  "observer": {',
     '    "name": "default-observer",',
-    '    "llmProvider": "default",',
+    '    "llm": "default_observer_llm",',
     '    "maxAttempts": 3,',
     '    "anchorThreshold": 8',
     '  },',
-  '  "watchdog": {',
+    '  "llm": {',
+    '    "default_extractor_llm": {',
+    '      "provider": "mock"',
+    '    },',
+    '    "default_observer_llm": {',
+    '      "provider": "mock"',
+    '    }',
+    '  },',
+    '  "extraction": {',
+    '    "embedding": {',
+    '      "provider": "mock",',
+    '      "dimensions": 8',
+    '    },',
+    '    "defaultImportance": 0.7',
+    '  },',
+    '  "watchdog": {',
     '    "enabled": true,',
     '    "intervalMs": 60000,',
     '    "compactMinFragments": 8,',
@@ -157,12 +170,15 @@ function normalizeText(value: string | undefined | null): string | undefined {
 function resolveSessionNode(turn: Pick<BoardSessionTurn, 'sessionId' | 'agent' | 'observer'>): {
   sessionKey: string;
   displaySessionId: string;
+  projectKey?: string;
 } {
   const sessionId = normalizeText(turn.sessionId);
   if (sessionId) {
+    const [projectKey] = sessionId.split('/');
     return {
       sessionKey: sessionId,
-      displaySessionId: sessionId,
+      displaySessionId: sessionDisplayTitle(sessionId),
+      projectKey: projectKey || undefined,
     };
   }
 
@@ -241,6 +257,73 @@ function toTurnPreview(turn: BoardSessionTurn): TurnPreview {
     updatedAt: turn.updatedAt,
     title: turn.title ?? undefined,
     summary: turn.summary!,
+    prompt: turn.prompt ?? undefined,
+    response: turn.response ?? undefined,
+    events: turn.events.length > 0 ? turn.events : undefined,
+    artifacts: turn.artifacts ?? undefined,
+    toolCalls: toolCallsFromEvents(turn.events),
+  };
+}
+
+function toolCallsFromEvents(events: BoardSessionTurn['events']): TurnPreview['toolCalls'] {
+  const toolCalls: NonNullable<TurnPreview['toolCalls']> = [];
+  const toolCallIndexById = new Map<string, number>();
+  for (const event of events) {
+    if (event.type === 'toolCall') {
+      const index = toolCalls.length;
+      toolCalls.push({
+        id: event.id,
+        name: event.name,
+        input: event.input,
+      });
+      if (event.id) {
+        toolCallIndexById.set(event.id, index);
+      }
+      continue;
+    }
+    if (event.type !== 'toolOutput') {
+      continue;
+    }
+    const index = event.id ? toolCallIndexById.get(event.id) : undefined;
+    if (index !== undefined) {
+      toolCalls[index] = {
+        ...toolCalls[index],
+        output: event.output,
+      };
+    } else if (event.output) {
+      toolCalls.push({
+        id: event.id,
+        name: 'tool_output',
+        output: event.output,
+      });
+    }
+  }
+  return toolCalls.length > 0 ? toolCalls : undefined;
+}
+
+async function enrichMemoryDocument(
+  document: MemoryDocumentResponse['document'],
+  memoryId: string,
+): Promise<MemoryDocumentResponse['document']> {
+  if (!memoryId.startsWith('turn:')) {
+    return document;
+  }
+  const turn = await turns.get(memoryId);
+  if (!turn) {
+    return document;
+  }
+  return {
+    ...document,
+    agent: turn.agent,
+    observer: turn.observer,
+    sessionId: turn.sessionId ?? undefined,
+    prompt: turn.prompt ?? undefined,
+    response: turn.response ?? undefined,
+    events: turn.events.length > 0 ? turn.events : undefined,
+    toolCalls: toolCallsFromEvents(turn.events),
+    artifacts: turn.artifacts ?? undefined,
+    createdAt: turn.createdAt,
+    updatedAt: turn.updatedAt,
   };
 }
 
@@ -370,25 +453,17 @@ boardApp.get('/api/v1/ui/session/agents/:agent/sessions', async (c) => {
   const turns = (await loadAllSessionTurns())
     .filter((turn) => turn.agent === agent)
     .filter(hasSummary);
-  const grouped = new Map<string, { createdAt: string; latestUpdatedAt: string; displaySessionId: string }>();
+  const grouped = new Map<string, { latestUpdatedAt: string; displaySessionId: string; projectKey?: string }>();
 
   for (const turn of turns) {
     const sessionNode = resolveSessionNode(turn);
-    const current = grouped.get(sessionNode.sessionKey);
-    if (!current) {
+    const latest = grouped.get(sessionNode.sessionKey);
+    if (!latest || turn.updatedAt > latest.latestUpdatedAt) {
       grouped.set(sessionNode.sessionKey, {
-        createdAt: turn.createdAt,
         latestUpdatedAt: turn.updatedAt,
         displaySessionId: sessionNode.displaySessionId,
+        projectKey: sessionNode.projectKey,
       });
-      continue;
-    }
-    if (turn.createdAt < current.createdAt) {
-      current.createdAt = turn.createdAt;
-    }
-    if (turn.updatedAt > current.latestUpdatedAt) {
-      current.latestUpdatedAt = turn.updatedAt;
-      current.displaySessionId = sessionNode.displaySessionId;
     }
   }
 
@@ -396,7 +471,7 @@ boardApp.get('/api/v1/ui/session/agents/:agent/sessions', async (c) => {
     .map(([sessionKey, sessionNode]) => ({
       sessionKey,
       displaySessionId: sessionNode.displaySessionId,
-      createdAt: sessionNode.createdAt,
+      projectKey: sessionNode.projectKey,
       latestUpdatedAt: sessionNode.latestUpdatedAt,
     }))
     .sort((left, right) => right.latestUpdatedAt.localeCompare(left.latestUpdatedAt));
@@ -461,7 +536,7 @@ boardApp.get('/api/v1/ui/memories/:memoryId/document', async (c) => {
   }
 
   const response: MemoryDocumentResponse = {
-    document: renderRenderedMemoryDocument(memory),
+    document: await enrichMemoryDocument(renderRenderedMemoryDocument(memory), memoryId),
     requestId: generateRequestId(),
   };
 
@@ -508,17 +583,9 @@ boardApp.get('/api/v1/ui/settings/config', async (c) => {
     }
   }
 
-  let validationError: string | undefined;
-  try {
-    await validateSettings(content);
-  } catch (error) {
-    validationError = error instanceof Error ? error.message : String(error);
-  }
-
   const response: SettingsConfigResponse = {
     pathLabel: configPath,
     content,
-    validationError,
     requestId: generateRequestId(),
   };
 
@@ -566,3 +633,63 @@ boardApp.put('/api/v1/ui/settings/config', async (c) => {
 
   return c.json(response);
 });
+
+boardApp.get('/api/v1/ui/import/codex/preview', async (c) => {
+  const projectLimit = parseOptionalInteger(c.req.query('projectLimit'));
+  const sourceRoot = c.req.query('sourceRoot');
+  const projectKeys = c.req.queries('projectKey');
+  const response: CodexImportPreviewResponse = await previewCodexImport({
+    sourceRoot,
+    projectLimit,
+    projectKeys,
+  }, generateRequestId());
+  return c.json(response);
+});
+
+boardApp.post('/api/v1/ui/import/codex', async (c) => {
+  let body: { sourceRoot?: string; projectLimit?: number; projectKeys?: string[] } = {};
+  try {
+    body = await c.req.json<{ sourceRoot?: string; projectLimit?: number; projectKeys?: string[] }>();
+  } catch {
+    body = {};
+  }
+
+  invalidateSessionTreeCache();
+  const response: CodexImportRunResponse = await runCodexImport({
+    sourceRoot: body.sourceRoot,
+    projectLimit: body.projectLimit,
+    projectKeys: body.projectKeys,
+  }, generateRequestId());
+  invalidateSessionTreeCache();
+  return c.json(response);
+});
+
+boardApp.get('/api/v1/ui/artifacts/:name', async (c) => {
+  const name = c.req.param('name');
+  if (!/^[a-f0-9]{64}(?:\.[a-z0-9]+)?$/i.test(name)) {
+    return c.json(errorResponse('invalidRequest', 'invalid artifact name'), 400);
+  }
+
+  const store = resolveArtifactStorePath();
+  const filePath = path.join(store, name);
+  const resolvedStore = path.resolve(store);
+  const resolvedFile = path.resolve(filePath);
+  if (!resolvedFile.startsWith(`${resolvedStore}${path.sep}`)) {
+    return c.json(errorResponse('invalidRequest', 'invalid artifact path'), 400);
+  }
+
+  try {
+    await stat(resolvedFile);
+    return serveBoardFile(resolvedFile);
+  } catch {
+    return c.json(errorResponse('notFound', 'artifact not found'), 404);
+  }
+});
+
+function parseOptionalInteger(value: string | undefined): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}

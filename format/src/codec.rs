@@ -19,7 +19,7 @@ use crate::memory_id::{MemoryId, MemoryLayer};
 use crate::observation_context::ObservationContext;
 use crate::observation::Observation;
 use crate::session::SessionSnapshot;
-use crate::turn::{Artifact, Turn, ToolCall};
+use crate::turn::{Artifact, Turn, TurnEvent};
 
 pub(crate) fn turns_to_record_batch(
     turns: &[Turn],
@@ -52,15 +52,8 @@ pub(crate) fn turns_to_record_batch(
             .map(|turn| turn.summary.as_deref())
             .collect::<Vec<_>>(),
     );
-    let tool_calls_json = StringArray::from(
-        turns
-            .iter()
-            .map(|turn| {
-                turn.tool_calls
-                    .as_ref()
-                    .map(|tool_calls| tool_calls_to_json(tool_calls))
-            })
-            .collect::<Vec<_>>(),
+    let events_json = StringArray::from_iter_values(
+        turns.iter().map(|turn| events_to_json(&turn.events)),
     );
     let artifacts_json = StringArray::from(
         turns
@@ -101,7 +94,7 @@ pub(crate) fn turns_to_record_batch(
             Arc::new(observer),
             Arc::new(title),
             Arc::new(summary),
-            Arc::new(tool_calls_json),
+            Arc::new(events_json),
             Arc::new(artifacts_json),
             Arc::new(prompt),
             Arc::new(response),
@@ -162,7 +155,7 @@ pub(crate) fn record_batch_to_turns_with_row_ids(
         .as_any()
         .downcast_ref::<StringArray>()
         .unwrap();
-    let tool_calls_json = batch
+    let events_json = batch
         .column(7)
         .as_any()
         .downcast_ref::<StringArray>()
@@ -204,7 +197,7 @@ pub(crate) fn record_batch_to_turns_with_row_ids(
             observer: observer.value(index).to_string(),
             title: optional_string(title, index),
             summary: optional_string(summary, index),
-            tool_calls: optional_json(tool_calls_json, index),
+            events: serde_json::from_str(events_json.value(index)).unwrap_or_default(),
             artifacts: optional_artifacts(artifacts_json, index),
             prompt: optional_string(prompt, index),
             response: optional_string(response, index),
@@ -252,8 +245,8 @@ pub(crate) fn optional_string_list(array: &ListArray, index: usize) -> Option<Ve
     )
 }
 
-pub(crate) fn tool_calls_to_json(tool_calls: &[ToolCall]) -> String {
-    serde_json::to_string(tool_calls).expect("tool calls should serialize")
+pub(crate) fn events_to_json(events: &[TurnEvent]) -> String {
+    serde_json::to_string(events).expect("turn events should serialize")
 }
 
 pub(crate) fn artifacts_to_json(artifacts: &[Artifact]) -> String {

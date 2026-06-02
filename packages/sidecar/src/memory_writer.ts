@@ -5,7 +5,7 @@ import type {
   Artifact,
   CaptureTurnRequest,
   ErrorResponse,
-  ToolCall,
+  TurnEvent,
   TurnContent,
 } from '@muninn/types';
 import { generateRequestId } from './utils.js';
@@ -15,7 +15,11 @@ export const memoryWriter = new Hono();
 const TURN_CONTENT_FIELDS = new Set([
   'sessionId',
   'agent',
-  'toolCalls',
+  'createdAt',
+  'updatedAt',
+  'title',
+  'summary',
+  'events',
   'artifacts',
   'prompt',
   'response',
@@ -33,15 +37,36 @@ function hasTextContent(value: string | undefined): boolean {
   return typeof value === 'string' && value.trim().length > 0;
 }
 
-function isToolCall(value: unknown): value is ToolCall {
+function isTurnEvent(value: unknown): value is TurnEvent {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     return false;
   }
   const candidate = value as Record<string, unknown>;
-  return typeof candidate.name === 'string'
-    && (candidate.id === undefined || typeof candidate.id === 'string')
-    && (candidate.input === undefined || typeof candidate.input === 'string')
-    && (candidate.output === undefined || typeof candidate.output === 'string');
+  const timestamp = candidate.timestamp;
+  if (timestamp !== undefined && !isTimestamp(timestamp)) {
+    return false;
+  }
+  if (candidate.artifacts !== undefined) {
+    if (!Array.isArray(candidate.artifacts) || !candidate.artifacts.every(isArtifact)) {
+      return false;
+    }
+  }
+  switch (candidate.type) {
+    case 'userMessage':
+    case 'assistantMessage':
+      return typeof candidate.text === 'string'
+        && candidate.text.trim().length > 0;
+    case 'toolCall':
+      return typeof candidate.name === 'string'
+        && candidate.name.trim().length > 0
+        && (candidate.id === undefined || typeof candidate.id === 'string')
+        && (candidate.input === undefined || typeof candidate.input === 'string');
+    case 'toolOutput':
+      return (candidate.id === undefined || typeof candidate.id === 'string')
+        && (candidate.output === undefined || typeof candidate.output === 'string');
+    default:
+      return false;
+  }
 }
 
 function isArtifact(value: unknown): value is Artifact {
@@ -49,8 +74,28 @@ function isArtifact(value: unknown): value is Artifact {
     return false;
   }
   const candidate = value as Record<string, unknown>;
+  const kind = candidate.kind;
+  const source = candidate.source;
+  const hasContent = candidate.content === undefined || typeof candidate.content === 'string';
+  const hasUri = candidate.uri === undefined || typeof candidate.uri === 'string';
+  const hasName = candidate.name === undefined || typeof candidate.name === 'string';
+  const hasMimeType = candidate.mimeType === undefined || typeof candidate.mimeType === 'string';
+  const hasSize = candidate.sizeBytes === undefined
+    || (typeof candidate.sizeBytes === 'number' && Number.isFinite(candidate.sizeBytes) && candidate.sizeBytes >= 0);
+  const hasBody = typeof candidate.content === 'string' || typeof candidate.uri === 'string';
   return typeof candidate.key === 'string'
-    && typeof candidate.content === 'string';
+    && (kind === 'metadata' || kind === 'text' || kind === 'image' || kind === 'file')
+    && (source === 'prompt' || source === 'response' || source === 'tool' || source === 'import')
+    && hasContent
+    && hasUri
+    && hasName
+    && hasMimeType
+    && hasSize
+    && hasBody;
+}
+
+function isTimestamp(value: unknown): value is string {
+  return typeof value === 'string' && !Number.isNaN(Date.parse(value));
 }
 
 function mapCoreWriteError(error: unknown): { status: number; body: ErrorResponse } {
@@ -101,12 +146,28 @@ function validateTurn(turn: TurnContent | undefined): string | null {
     return 'turn.response is required';
   }
 
-  if (turn.toolCalls !== undefined && !Array.isArray(turn.toolCalls)) {
-    return 'turn.toolCalls must be an array';
+  if (turn.createdAt !== undefined && !isTimestamp(turn.createdAt)) {
+    return 'turn.createdAt must be an ISO timestamp';
   }
 
-  if (turn.toolCalls && !turn.toolCalls.every(isToolCall)) {
-    return 'turn.toolCalls must be an array of tool call objects';
+  if (turn.updatedAt !== undefined && !isTimestamp(turn.updatedAt)) {
+    return 'turn.updatedAt must be an ISO timestamp';
+  }
+
+  if (turn.title !== undefined && !hasTextContent(turn.title)) {
+    return 'turn.title must be a non-empty string';
+  }
+
+  if (turn.summary !== undefined && !hasTextContent(turn.summary)) {
+    return 'turn.summary must be a non-empty string';
+  }
+
+  if (!Array.isArray(turn.events) || turn.events.length === 0) {
+    return 'turn.events must be a non-empty array';
+  }
+
+  if (!turn.events.every(isTurnEvent)) {
+    return 'turn.events must be an array of turn event objects';
   }
 
   if (turn.artifacts !== undefined && !Array.isArray(turn.artifacts)) {

@@ -10,8 +10,8 @@ test("buildCapturePayload maps a complete turn into turn/capture shape", () => {
       agentId: "main",
       prompt: "hello",
       response: "done",
-      toolCalls: [{ name: "read", input: "{\"path\":\"a.ts\"}" }],
-      artifacts: [{ key: "a.ts", content: "export {};" }],
+      events: [{ type: "toolCall", name: "read", input: "{\"path\":\"a.ts\"}" }],
+      artifacts: [{ key: "a.ts", kind: "text", source: "tool", content: "export {};" }],
     }),
     {
       turn: {
@@ -19,8 +19,12 @@ test("buildCapturePayload maps a complete turn into turn/capture shape", () => {
         agent: "main",
         prompt: "hello",
         response: "done",
-        toolCalls: [{ name: "read", input: "{\"path\":\"a.ts\"}" }],
-        artifacts: [{ key: "a.ts", content: "export {};" }],
+        events: [
+          { type: "userMessage", text: "hello" },
+          { type: "toolCall", name: "read", input: "{\"path\":\"a.ts\"}" },
+          { type: "assistantMessage", text: "done" },
+        ],
+        artifacts: [{ key: "a.ts", kind: "text", source: "tool", content: "export {};" }],
       },
     },
   );
