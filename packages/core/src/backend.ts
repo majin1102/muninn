@@ -24,6 +24,7 @@ import {
   type ExtractorCheckpoint,
   type ObserverCheckpoint,
   type RecentTurn,
+  type SessionIndexEntry,
 } from './checkpoint.js';
 import { Memories } from './memories/memories.js';
 import { Extractor } from './extractor/extractor.js';
@@ -33,6 +34,7 @@ import { readTurn } from './turn/types.js';
 import { Watchdog } from './watchdog.js';
 import { TableMutationLocks, lockNativeTables } from './table-locks.js';
 import { writeMuninnLog } from './logging.js';
+import { SessionIndex } from './session-index.js';
 import type { Artifact, TurnContent, TurnEvent } from '@muninn/types';
 
 export interface Turn {
@@ -222,6 +224,7 @@ export class MuninnBackend {
   private extractor: Extractor | null = null;
   private observer: Observer | null = null;
   private sessionRegistry: SessionRegistry | null = null;
+  private readonly sessionIndex: SessionIndex;
   private watchdog: Watchdog | null = null;
   private watchdogClient: NativeTables | null = null;
   private finalizeDrainPromise: Promise<void> | null = null;
@@ -234,6 +237,7 @@ export class MuninnBackend {
     this.memories = new Memories(client);
     this.checkpointLock = new AsyncCheckpointLock();
     const extractorName = loadMuninnConfig()?.extractor?.name;
+    this.sessionIndex = new SessionIndex(checkpoint?.sessionIndex ?? null, extractorName ?? null);
     this.sessionRegistry = extractorName
       ? new SessionRegistry(client, extractorName)
       : null;
@@ -252,6 +256,7 @@ export class MuninnBackend {
           schemaVersion: checkpoint.schemaVersion,
           extractor: checkpoint.extractor,
           observer: checkpoint.observer,
+          sessionIndex: checkpoint.sessionIndex,
         })
         : null;
       const watchdogClient = lockNativeTables(
@@ -286,7 +291,17 @@ export class MuninnBackend {
   }
 
   async deleteTurns(turnIds: string[]): Promise<{ deleted: number }> {
-    return this.checkpointLock.exclusive(async () => this.client.turnTable.deleteTurns({ turnIds }));
+    return this.checkpointLock.exclusive(async () => {
+      const result = await this.client.turnTable.deleteTurns({ turnIds });
+      if (result.deleted > 0) {
+        this.sessionIndex.markDirty();
+      }
+      return result;
+    });
+  }
+
+  async listSessionIndex(): Promise<SessionIndexEntry[]> {
+    return this.checkpointLock.shared(async () => this.sessionIndex.list(this.client));
   }
 
   async memoryWatermark(): Promise<MemoryWatermark> {
@@ -362,9 +377,10 @@ export class MuninnBackend {
         runs: observerCheckpoint.runs,
       };
       return {
-        schemaVersion: 6,
+        schemaVersion: 7,
         extractor: extractorSection,
         observer: observerSection,
+        sessionIndex: await this.sessionIndex.exportCheckpoint(this.client),
       };
     });
   }
@@ -595,6 +611,12 @@ export const sessions = {
       observer: params.observer,
     });
     return (await getBackend(databaseName)).memories.listSessions(params);
+  },
+
+  async index(database?: string | null): Promise<SessionIndexEntry[]> {
+    const databaseName = resolveDatabaseName(database);
+    await writeMuninnLog(databaseName, 'info', 'list', 'session_index', {});
+    return (await getBackend(databaseName)).listSessionIndex();
   },
 };
 

@@ -8,6 +8,7 @@ import type {
   SessionAgentsResponse,
   SessionGroupsResponse,
   SessionNode,
+  SessionSegmentPreview,
   SessionTurnsResponse,
   SettingsConfigResponse,
   TurnPreview,
@@ -28,9 +29,16 @@ export type ProjectTurnNode = TurnPreview & {
   sessionLabel: string;
 };
 
+export type ProjectSegmentNode = SessionSegmentPreview & {
+  agent: string;
+  sessionKey: string;
+  sessionLabel: string;
+};
+
 export type ProjectSessionNode = SessionNode & {
   agent: string;
   turns: ProjectTurnNode[];
+  segments: ProjectSegmentNode[];
   nextOffset: number | null;
   loading: boolean;
   loaded: boolean;
@@ -50,6 +58,7 @@ export type BoardClient = {
   getProjects(): Promise<ProjectNode[]>;
   loadSessionTurns(session: ProjectSessionNode, offset?: number): Promise<{
     turns: ProjectTurnNode[];
+    segments: ProjectSegmentNode[];
     nextOffset: number | null;
   }>;
   getDocument(memoryId: string): Promise<MemoryDocument>;
@@ -138,6 +147,12 @@ export function createBoardClient(apiBase: string, usesDemoData: boolean): Board
               sessionKey: session.sessionKey,
               sessionLabel: session.displaySessionId,
             })),
+            segments: (response.segments ?? []).map((segment) => ({
+              ...segment,
+              agent: session.agent,
+              sessionKey: session.sessionKey,
+              sessionLabel: session.displaySessionId,
+            })),
             nextOffset: response.nextOffset,
             loaded: true,
           };
@@ -153,6 +168,12 @@ export function createBoardClient(apiBase: string, usesDemoData: boolean): Board
       return {
         turns: response.turns.map((turn) => ({
           ...turn,
+          agent: session.agent,
+          sessionKey: session.sessionKey,
+          sessionLabel: session.displaySessionId,
+        })),
+        segments: (response.segments ?? []).map((segment) => ({
+          ...segment,
           agent: session.agent,
           sessionKey: session.sessionKey,
           sessionLabel: session.displaySessionId,
@@ -220,6 +241,7 @@ async function projectTreeFromAgents(
         ...session,
         agent: agent.agent,
         turns: [],
+        segments: [],
         nextOffset: null,
         loading: false,
         loaded: false,

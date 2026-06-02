@@ -162,8 +162,15 @@ export interface TurnPreview {
   toolCalls?: ToolCall[];
 }
 
+export interface SessionSegmentPreview {
+  memoryId: string;
+  title: string;
+  createdAt: string;
+}
+
 export interface SessionTurnsResponse {
   turns: TurnPreview[];
+  segments: SessionSegmentPreview[];
   nextOffset: number | null;
   requestId: string;
 }

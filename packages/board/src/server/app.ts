@@ -19,6 +19,8 @@ import type {
   ObservingListResponse,
   SessionAgentsResponse,
   SessionGroupsResponse,
+  SessionNode,
+  SessionSegmentPreview,
   SessionTurnsResponse,
   SettingsConfigResponse,
   TurnPreview,
@@ -158,6 +160,7 @@ function defaultConfigContent(): string {
 }
 
 type BoardSessionTurn = Awaited<ReturnType<typeof turns.list>>[number];
+type BoardSessionIndexEntry = Awaited<ReturnType<typeof sessions.index>>[number];
 
 function normalizeText(value: string | undefined | null): string | undefined {
   if (typeof value !== 'string') {
@@ -195,6 +198,32 @@ function resolveSessionNode(turn: Pick<BoardSessionTurn, 'sessionId' | 'agent' |
     sessionKey: `${OBSERVER_DEFAULT_SESSION_PREFIX}${observer}`,
     displaySessionId: `Observer Default (${observer})`,
   };
+}
+
+function resolveSessionNodeFromIndex(entry: BoardSessionIndexEntry): SessionNode {
+  const [projectKey] = entry.sessionId.split('/');
+  return {
+    sessionKey: entry.sessionId,
+    displaySessionId: resolveIndexedSessionTitle(entry),
+    projectKey: projectKey || undefined,
+    latestUpdatedAt: entry.latestUpdatedAt,
+  };
+}
+
+function resolveIndexedSessionTitle(entry: Pick<BoardSessionIndexEntry, 'sessionId' | 'title'>): string {
+  const title = normalizeText(entry.title);
+  if (title && !isGeneratedSessionTitle(entry.sessionId, title)) {
+    return title;
+  }
+  return sessionDisplayTitle(entry.sessionId);
+}
+
+function isGeneratedSessionTitle(sessionId: string, title: string): boolean {
+  return title === `Session ${sessionId}` || title === 'Session observing thread';
+}
+
+export function resolveSessionNodeFromIndexForTests(entry: BoardSessionIndexEntry): SessionNode {
+  return resolveSessionNodeFromIndex(entry);
 }
 
 function matchesSessionNode(turn: BoardSessionTurn, sessionKey: string): boolean {
@@ -332,19 +361,142 @@ async function loadSessionTurnPreviewsPage(params: {
   sessionKey: string;
   offset: number;
   limit: number;
-}): Promise<{ turns: TurnPreview[]; nextOffset: number | null }> {
-  const turns = (await loadAllSessionTurns())
-    .filter((turn) => turn.agent === params.agent)
+}): Promise<{ turns: TurnPreview[]; segments: SessionSegmentPreview[]; nextOffset: number | null }> {
+  const allTurns = (await turns.list({
+    mode: { type: 'page', offset: 0, limit: SESSION_TREE_PAGE_LIMIT },
+    agent: params.agent,
+    sessionId: params.sessionKey,
+  }))
     .filter((turn) => matchesSessionNode(turn, params.sessionKey))
-    .filter(hasSummary);
-  const previews = turns
+    .filter(hasSummary)
+    .sort((left, right) => (
+      left.createdAt.localeCompare(right.createdAt)
+      || left.updatedAt.localeCompare(right.updatedAt)
+      || left.turnId.localeCompare(right.turnId)
+    ));
+  const previews = allTurns
     .slice(params.offset, params.offset + params.limit)
     .map(toTurnPreview);
-  const hasMore = params.offset + params.limit < turns.length;
+  const snapshot = await loadLatestSnapshotForSession(params.agent, params.sessionKey);
+  const segments = buildSessionSegments(snapshot?.content ?? null, allTurns.map(toTurnPreview));
+  const hasMore = params.offset + params.limit < allTurns.length;
   return {
     turns: previews,
+    segments,
     nextOffset: hasMore ? params.offset + params.limit : null,
   };
+}
+
+async function loadLatestSnapshotForSession(
+  agent: string,
+  sessionKey: string,
+): Promise<Awaited<ReturnType<typeof sessions.get>> | null> {
+  const entry = (await sessions.index())
+    .find((item) => item.agent === agent && item.sessionId === sessionKey);
+  if (!entry?.snapshotId) {
+    return null;
+  }
+  return sessions.get(entry.snapshotId);
+}
+
+function buildSessionSegments(
+  snapshotContent: string | null | undefined,
+  turnPreviews: TurnPreview[],
+): SessionSegmentPreview[] {
+  const fromSnapshot = snapshotContent
+    ? parseSnapshotExtractionSegments(snapshotContent, turnPreviews)
+    : [];
+  return fromSnapshot.length > 0 ? fromSnapshot : fallbackTurnSegments(turnPreviews);
+}
+
+function parseSnapshotExtractionSegments(
+  snapshotContent: string,
+  turnPreviews: TurnPreview[],
+): SessionSegmentPreview[] {
+  const extractionStart = snapshotContent.search(/^##\s+Extractions\s*$/im);
+  if (extractionStart < 0) {
+    return [];
+  }
+  const sectionStart = snapshotContent.indexOf('\n', extractionStart);
+  if (sectionStart < 0) {
+    return [];
+  }
+  const rest = snapshotContent.slice(sectionStart + 1);
+  const nextSection = rest.search(/^##\s+/m);
+  const section = nextSection >= 0 ? rest.slice(0, nextSection) : rest;
+  const turnById = new Map(turnPreviews.map((turn, index) => [turn.memoryId, { turn, index }]));
+  const refsPattern = /<!--\s*refs:\s*\[([^\]]*)\]\s*-->/g;
+  const matches = [...section.matchAll(refsPattern)];
+  const segments: Array<SessionSegmentPreview & { index: number }> = [];
+
+  for (let i = 0; i < matches.length; i += 1) {
+    const match = matches[i]!;
+    const next = matches[i + 1];
+    const title = normalizeSegmentTitle(section
+      .slice(match.index! + match[0].length, next?.index ?? section.length));
+    if (!title) {
+      continue;
+    }
+    const firstTurn = parseExtractionRefs(match[1])
+      .map((ref) => turnById.get(ref))
+      .find((entry) => entry !== undefined);
+    if (!firstTurn) {
+      continue;
+    }
+    segments.push({
+      memoryId: firstTurn.turn.memoryId,
+      title,
+      createdAt: firstTurn.turn.createdAt,
+      index: firstTurn.index,
+    });
+  }
+
+  return segments
+    .sort((left, right) => (
+      left.createdAt.localeCompare(right.createdAt)
+      || left.index - right.index
+    ))
+    .map(({ index: _index, ...segment }) => segment);
+}
+
+function normalizeSegmentTitle(raw: string): string {
+  let title = raw.trim();
+  const extraction = title.match(/\[Extraction\]\s*([\s\S]*)/i)?.[1]?.trim();
+  if (extraction) {
+    title = extraction;
+  }
+  title = title
+    .replace(/\[[^\]]+\]\s*/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/^Prompt:\s*/i, '');
+  const responseStart = title.search(/\bResponse:\s*/i);
+  if (responseStart > 0) {
+    title = title.slice(0, responseStart).trim();
+  }
+  return title;
+}
+
+function parseExtractionRefs(value: string | undefined): string[] {
+  return (value ?? '')
+    .split(',')
+    .map((ref) => ref.trim().replace(/^['"]|['"]$/g, ''))
+    .filter((ref) => ref.startsWith('turn:'));
+}
+
+function fallbackTurnSegments(turnPreviews: TurnPreview[]): SessionSegmentPreview[] {
+  return turnPreviews.map((turn) => ({
+    memoryId: turn.memoryId,
+    title: turn.prompt ?? turn.title ?? turn.summary,
+    createdAt: turn.createdAt,
+  }));
+}
+
+export function buildSessionSegmentsForTests(
+  snapshotContent: string | null | undefined,
+  turnPreviews: TurnPreview[],
+): SessionSegmentPreview[] {
+  return buildSessionSegments(snapshotContent, turnPreviews);
 }
 
 async function loadObservingReferences(references: string[]): Promise<MemoryReference[]> {
@@ -421,13 +573,13 @@ boardApp.get('/board/:asset{.+}', async (c) => {
 boardApp.get('/api/v1/ui/session/agents', async (c) => {
   console.log('[BOARD_UI_SESSION_AGENTS]');
 
-  const turns = (await loadAllSessionTurns()).filter(hasSummary);
+  const entries = await sessions.index();
   const grouped = new Map<string, string>();
 
-  for (const turn of turns) {
-    const latest = grouped.get(turn.agent);
-    if (!latest || turn.updatedAt > latest) {
-      grouped.set(turn.agent, turn.updatedAt);
+  for (const entry of entries) {
+    const latest = grouped.get(entry.agent);
+    if (!latest || entry.latestUpdatedAt > latest) {
+      grouped.set(entry.agent, entry.latestUpdatedAt);
     }
   }
 
@@ -450,30 +602,10 @@ boardApp.get('/api/v1/ui/session/agents/:agent/sessions', async (c) => {
   const agent = c.req.param('agent');
   console.log('[BOARD_UI_SESSION_GROUPS] agent:', agent);
 
-  const turns = (await loadAllSessionTurns())
-    .filter((turn) => turn.agent === agent)
-    .filter(hasSummary);
-  const grouped = new Map<string, { latestUpdatedAt: string; displaySessionId: string; projectKey?: string }>();
-
-  for (const turn of turns) {
-    const sessionNode = resolveSessionNode(turn);
-    const latest = grouped.get(sessionNode.sessionKey);
-    if (!latest || turn.updatedAt > latest.latestUpdatedAt) {
-      grouped.set(sessionNode.sessionKey, {
-        latestUpdatedAt: turn.updatedAt,
-        displaySessionId: sessionNode.displaySessionId,
-        projectKey: sessionNode.projectKey,
-      });
-    }
-  }
-
-  const sessionNodes = [...grouped.entries()]
-    .map(([sessionKey, sessionNode]) => ({
-      sessionKey,
-      displaySessionId: sessionNode.displaySessionId,
-      projectKey: sessionNode.projectKey,
-      latestUpdatedAt: sessionNode.latestUpdatedAt,
-    }))
+  const sessionNodes = (await sessions.index())
+    .filter((entry) => entry.agent === agent)
+    .map(resolveSessionNodeFromIndex);
+  sessionNodes
     .sort((left, right) => right.latestUpdatedAt.localeCompare(left.latestUpdatedAt));
 
   const response: SessionGroupsResponse = {
@@ -512,6 +644,7 @@ boardApp.get('/api/v1/ui/session/agents/:agent/sessions/:sessionKey/turns', asyn
 
   const response: SessionTurnsResponse = {
     turns: page.turns,
+    segments: page.segments,
     nextOffset: page.nextOffset,
     requestId: generateRequestId(),
   };

@@ -98,6 +98,7 @@ export function App() {
       const response = await client.loadSessionTurns(session);
       updateSession(session, {
         turns: response.turns,
+        segments: response.segments,
         nextOffset: response.nextOffset,
         loading: false,
         loaded: true,
@@ -117,6 +118,7 @@ export function App() {
       const response = await client.loadSessionTurns(session, session.nextOffset);
       updateSession(session, {
         turns: [...session.turns, ...response.turns],
+        segments: response.segments.length > 0 ? response.segments : session.segments,
         nextOffset: response.nextOffset,
         loading: false,
         loaded: true,

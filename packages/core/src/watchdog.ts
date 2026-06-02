@@ -486,7 +486,9 @@ export class Watchdog {
     }
     this.lastCheckpointJson ??= JSON.stringify({
       schemaVersion: checkpoint.schemaVersion,
+      extractor: checkpoint.extractor,
       observer: checkpoint.observer,
+      sessionIndex: checkpoint.sessionIndex,
     });
     this.updateCheckpointFloors(checkpoint);
   }

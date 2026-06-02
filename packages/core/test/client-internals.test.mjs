@@ -33,7 +33,7 @@ const { __testing: threadTesting } = threadModule;
 const { __testing: observingGatewayTesting } = observingGatewayModule;
 const { createObservingThread, getPendingIndex, getPendingIndexUpTo, loadThreads, toSessionSnapshot } = threadModule;
 const { addMessage, observer: observerApi, shutdownCoreForTests } = core;
-const CHECKPOINT_SCHEMA_VERSION = 6;
+const CHECKPOINT_SCHEMA_VERSION = 7;
 let defaultConfigDir = null;
 
 function createCheckpointBackend(exported = null) {
@@ -85,6 +85,10 @@ function makeCheckpointContent(overrides = {}) {
     ...(overrides.writerPid === undefined ? {} : { writerPid: overrides.writerPid }),
     extractor: overrides.extractor ?? makeExtractorCheckpoint(),
     observer: overrides.observer ?? makeObserverCheckpoint(),
+    sessionIndex: overrides.sessionIndex ?? {
+      baseline: { turn: 10, session: 21 },
+      entries: [],
+    },
   };
 }
 
@@ -270,6 +274,7 @@ test('checkpoint preserves observer runs', () => {
       }],
       pendingExtractionChanges: [],
     },
+    sessionIndex: { baseline: { turn: 0, session: 0 }, entries: [] },
   }));
   assert.equal(checkpoint.observer.runs[0].observeId, 'entity:caroline');
 });
@@ -623,6 +628,10 @@ function makeObservableTurn(turnId, observingEpoch, text) {
     agent: 'agent-a',
     observer: 'default-observer',
     summary: `${text} summary`,
+    events: [
+      { type: 'userMessage', text: `${text} prompt` },
+      { type: 'assistantMessage', text: `${text} response` },
+    ],
     prompt: `${text} prompt`,
     response: `${text} response`,
     observingEpoch,
@@ -674,8 +683,26 @@ function makePersistedTurn(turnId, text = turnId) {
     sessionId: 'group-a',
     agent: 'agent-a',
     observer: 'default-observer',
+    events: [
+      { type: 'userMessage', text: `${text} prompt` },
+      { type: 'assistantMessage', text: `${text} response` },
+    ],
     prompt: `${text} prompt`,
     response: `${text} response`,
+  };
+}
+
+function makeTurnContent(prompt, response, overrides = {}) {
+  return {
+    sessionId: 'group-a',
+    agent: 'agent-a',
+    prompt,
+    response,
+    events: [
+      { type: 'userMessage', text: prompt },
+      { type: 'assistantMessage', text: response },
+    ],
+    ...overrides,
   };
 }
 
@@ -1583,6 +1610,23 @@ test('readCheckpointFile throws when the checkpoint file is invalid JSON', async
   await assert.rejects(() => readCheckpointFile(), /Unexpected token|JSON/i);
 });
 
+test('readCheckpointFile ignores stale checkpoint schema cache', async (t) => {
+  const { dir, homeDir } = await makeConfigHome();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+  process.env.MUNINN_HOME = homeDir;
+
+  await mkdir(path.dirname(resolveCheckpointPath()), { recursive: true });
+  await writeFile(resolveCheckpointPath(), `${JSON.stringify({
+    schemaVersion: 6,
+    writtenAt: '2024-01-01T00:00:00Z',
+    writerPid: 123,
+    extractor: makeExtractorCheckpoint(),
+    observer: makeObserverCheckpoint(),
+  }, null, 2)}\n`, 'utf8');
+
+  assert.equal(await readCheckpointFile(), null);
+});
+
 test('readCheckpointFile rejects the legacy observers checkpoint schema', async (t) => {
   const { dir, homeDir } = await makeConfigHome();
   t.after(async () => rm(dir, { recursive: true, force: true }));
@@ -1660,6 +1704,7 @@ test('checkpoint preserves session runs', async () => {
       pendingExtractionChanges: [],
     },
     observer: makeObserverCheckpoint({ baseline: { observationContext: 0, observation: 0 } }),
+    sessionIndex: { baseline: { turn: 1, session: 1 }, entries: [] },
   };
 
   const parsed = parseCheckpointFile(serializeCheckpointFile(file));
@@ -3561,18 +3606,8 @@ test('session.accept serializes concurrent inserts for the same session', async 
     observer: 'default-observer',
   });
 
-  const first = session.accept({
-    sessionId: 'group-a',
-    agent: 'agent-a',
-    prompt: 'first prompt',
-    response: 'first response',
-  }, 1);
-  const second = session.accept({
-    sessionId: 'group-a',
-    agent: 'agent-a',
-    prompt: 'second prompt',
-    response: 'second response',
-  }, 1);
+  const first = session.accept(makeTurnContent('first prompt', 'first response'), 1);
+  const second = session.accept(makeTurnContent('second prompt', 'second response'), 1);
 
   const [firstTurn, secondTurn] = await Promise.all([first, second]);
   assert.equal(maxConcurrentInserts, 1);
@@ -3607,37 +3642,17 @@ test('session.accept dedupes against the recent three turns', async () => {
 
   const accepted = [];
   for (const prompt of ['A', 'B', 'C']) {
-    accepted.push(await session.accept({
-      sessionId: 'group-a',
-      agent: 'agent-a',
-      prompt,
-      response: `${prompt}-response`,
-    }, 1));
+    accepted.push(await session.accept(makeTurnContent(prompt, `${prompt}-response`), 1));
   }
 
-  const duplicate = await session.accept({
-    sessionId: 'group-a',
-    agent: 'agent-a',
-    prompt: 'A',
-    response: 'A-response',
-  }, 1);
+  const duplicate = await session.accept(makeTurnContent('A', 'A-response'), 1);
   assert.equal(duplicate.deduped, true);
   assert.equal(duplicate.turn, null);
 
-  const fourth = await session.accept({
-    sessionId: 'group-a',
-    agent: 'agent-a',
-    prompt: 'D',
-    response: 'D-response',
-  }, 1);
+  const fourth = await session.accept(makeTurnContent('D', 'D-response'), 1);
   assert.equal(fourth.deduped, false);
 
-  const expiredDuplicate = await session.accept({
-    sessionId: 'group-a',
-    agent: 'agent-a',
-    prompt: 'A',
-    response: 'A-response',
-  }, 1);
+  const expiredDuplicate = await session.accept(makeTurnContent('A', 'A-response'), 1);
   assert.equal(expiredDuplicate.deduped, false);
   assert.notEqual(expiredDuplicate.turn.turnId, accepted[0].turn.turnId);
 });
@@ -3658,20 +3673,10 @@ test('session.accept attaches recent three turns as transient extraction context
   });
 
   for (const prompt of ['A', 'B', 'C']) {
-    await session.accept({
-      sessionId: 'group-a',
-      agent: 'agent-a',
-      prompt,
-      response: `${prompt}-response`,
-    }, 1);
+    await session.accept(makeTurnContent(prompt, `${prompt}-response`), 1);
   }
 
-  const accepted = await session.accept({
-    sessionId: 'group-a',
-    agent: 'agent-a',
-    prompt: 'D',
-    response: 'D-response',
-  }, 1);
+  const accepted = await session.accept(makeTurnContent('D', 'D-response'), 1);
 
   assert.deepEqual(
     accepted.turn.recentContext.map((turn) => turn.turnId),
@@ -3709,12 +3714,7 @@ test('session.accept drops stale recent turns before inserting a new turn', asyn
     ],
   });
 
-  const accepted = await session.accept({
-    sessionId: 'group-a',
-    agent: 'agent-a',
-    prompt: 'stale prompt',
-    response: 'stale response',
-  }, 1);
+  const accepted = await session.accept(makeTurnContent('stale prompt', 'stale response'), 1);
 
   assert.equal(accepted.deduped, false);
   assert.equal(accepted.turn.turnId, 'turn:1');
@@ -5679,17 +5679,17 @@ test('observer.accept keeps a partial epoch open until epochTurns is reached', a
     }),
   };
 
-  await observer.accept({ sessionId: 'group-a', agent: 'agent-a', prompt: 'one', response: 'one' }, registry);
+  await observer.accept(makeTurnContent('one', 'one'), registry);
   assert.equal(observer.openEpoch.epoch, 1);
   assert.deepEqual(observer.openEpoch.stagedTurns().map((turn) => turn.turnId), ['turn-1']);
   assert.deepEqual(observer.epochQueue.pendingTurns(), []);
 
-  await observer.accept({ sessionId: 'group-a', agent: 'agent-a', prompt: 'two', response: 'two' }, registry);
+  await observer.accept(makeTurnContent('two', 'two'), registry);
   assert.equal(observer.openEpoch.epoch, 1);
   assert.deepEqual(observer.openEpoch.stagedTurns().map((turn) => turn.turnId), ['turn-1', 'turn-2']);
   assert.deepEqual(observer.epochQueue.pendingTurns(), []);
 
-  await observer.accept({ sessionId: 'group-a', agent: 'agent-a', prompt: 'three', response: 'three' }, registry);
+  await observer.accept(makeTurnContent('three', 'three'), registry);
   await observer.publishChain;
 
   assert.equal(observer.openEpoch.epoch, 2);
@@ -5717,7 +5717,7 @@ test('observer.accept seals a partial epoch when the epoch window expires', asyn
     }),
   };
 
-  await observer.accept({ sessionId: 'group-a', agent: 'agent-a', prompt: 'one', response: 'one' }, registry);
+  await observer.accept(makeTurnContent('one', 'one'), registry);
   assert.equal(observer.openEpoch.epoch, 1);
 
   await waitFor(() => observer.openEpoch.epoch === 2);
@@ -5750,7 +5750,7 @@ test('observer.accept does not start the epoch window for non-observable turns',
     }),
   };
 
-  await observer.accept({ sessionId: 'group-a', agent: 'agent-a', prompt: 'one' }, registry);
+  await observer.accept(makeTurnContent('one', ''), registry);
   await new Promise((resolve) => setTimeout(resolve, 40));
 
   assert.equal(observer.openEpoch.epoch, 1);
@@ -5786,12 +5786,7 @@ test('flushPending waits for an in-flight accept that started before the barrier
     }),
   };
 
-  const acceptPromise = observer.accept({
-    sessionId: 'group-a',
-    agent: 'agent-a',
-    prompt: 'first prompt',
-    response: 'first response',
-  }, registry);
+  const acceptPromise = observer.accept(makeTurnContent('first prompt', 'first response'), registry);
   await firstEntered.promise;
 
   const flushPromise = observer.flushPending();
@@ -5846,24 +5841,14 @@ test('flushPending does not wait for accepts that start after the barrier', asyn
     }),
   };
 
-  await observer.accept({
-    sessionId: 'group-a',
-    agent: 'agent-a',
-    prompt: 'first prompt',
-    response: 'first response',
-  }, registry);
+  await observer.accept(makeTurnContent('first prompt', 'first response'), registry);
 
   const flushPromise = observer.flushPending();
   while (observer.openEpoch.epoch !== 2) {
     await Promise.resolve();
   }
 
-  const secondAccept = observer.accept({
-    sessionId: 'group-a',
-    agent: 'agent-a',
-    prompt: 'second prompt',
-    response: 'second response',
-  }, registry);
+  const secondAccept = observer.accept(makeTurnContent('second prompt', 'second response'), registry);
   await secondEntered.promise;
 
   await Promise.race([
@@ -5915,12 +5900,7 @@ test('observer.accept rejects new writes after shutdown starts', async (t) => {
   await observer.shutdown();
 
   await assert.rejects(
-    () => observer.accept({
-      sessionId: 'group-a',
-      agent: 'agent-a',
-      prompt: 'late prompt',
-      response: 'late response',
-    }, {
+    () => observer.accept(makeTurnContent('late prompt', 'late response'), {
       load: async () => ({
         accept: async () => makeObservableTurn('turn-late', 1, 'late'),
       }),
@@ -6009,12 +5989,7 @@ test('observer shutdown relies on restart replay for unpublished observer work',
     globalThis.fetch = originalFetch;
   });
 
-  await addMessage({
-    sessionId: 'group-a',
-    agent: 'agent-a',
-    prompt: 'replay prompt',
-    response: 'replay response',
-  });
+  await addMessage(makeTurnContent('replay prompt', 'replay response'));
 
   await shutdownCoreForTests();
 
