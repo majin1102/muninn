@@ -146,7 +146,8 @@ export function SettingsPage({ client }: SettingsPageProps) {
     setMode(nextMode);
   }
 
-  const schemaMismatch = status === 'invalid' && draft === null;
+  const visualDisabled = draft === null;
+  const schemaMismatch = visualDisabled && jsonText.trim().length > 0;
   const inlineStatus = inlineStatusLabel(status);
 
   return (
@@ -155,8 +156,8 @@ export function SettingsPage({ client }: SettingsPageProps) {
         <button
           className={mode === 'visual' ? 'settings-mode-tab settings-mode-tab-active' : 'settings-mode-tab'}
           type="button"
-          disabled={schemaMismatch}
-          aria-disabled={schemaMismatch}
+          disabled={visualDisabled}
+          aria-disabled={visualDisabled}
           onClick={() => selectMode('visual')}
         >
           Visual
