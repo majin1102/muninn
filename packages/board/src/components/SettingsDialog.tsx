@@ -59,12 +59,20 @@ export function SettingsPage({ client }: SettingsPageProps) {
         if (cancelled) {
           return;
         }
-        validateSettingsJson(response.content);
-        const nextDraft = parseSettingsDraft(response.content);
-        setDraft(nextDraft);
-        setJsonText(settingsDraftToJson(nextDraft));
         setPathLabel(response.pathLabel);
-        setStatus('saved');
+        setJsonText(response.content);
+        try {
+          validateSettingsJson(response.content);
+          const nextDraft = parseSettingsDraft(response.content);
+          setDraft(nextDraft);
+          setJsonText(settingsDraftToJson(nextDraft));
+          setStatus('saved');
+        } catch (validationError) {
+          setDraft(null);
+          setMode('json');
+          setStatus('invalid');
+          setStatusMessage(asErrorMessage(validationError));
+        }
       })
       .catch((loadError: unknown) => {
         if (cancelled) {

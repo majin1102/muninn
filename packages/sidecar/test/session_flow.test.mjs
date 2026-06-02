@@ -780,6 +780,14 @@ test('ui session endpoints group by agent/session and return rendered turn docum
   assert.equal(turnsBody.turns.length, 2);
   assert.equal(turnsBody.turns[0].title, 'second alpha prompt');
   assert.match(turnsBody.turns[0].summary, /alpha/);
+  assert.equal(
+    sessionsBody.sessions[0].createdAt,
+    turnsBody.turns.reduce((earliest, turn) => turn.createdAt < earliest ? turn.createdAt : earliest, turnsBody.turns[0].createdAt),
+  );
+  assert.equal(
+    sessionsBody.sessions[0].latestUpdatedAt,
+    turnsBody.turns.reduce((latest, turn) => turn.updatedAt > latest ? turn.updatedAt : latest, turnsBody.turns[0].updatedAt),
+  );
 
   const documentResponse = await app.request(
     `/api/v1/ui/memories/${encodeURIComponent(turnsBody.turns[1].memoryId)}/document`

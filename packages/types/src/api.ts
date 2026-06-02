@@ -101,6 +101,7 @@ export interface SessionAgentsResponse {
 export interface SessionNode {
   sessionKey: string;
   displaySessionId: string;
+  createdAt: string;
   latestUpdatedAt: string;
 }
 

@@ -369,16 +369,25 @@ boardApp.get('/api/v1/ui/session/agents/:agent/sessions', async (c) => {
   const turns = (await loadAllSessionTurns())
     .filter((turn) => turn.agent === agent)
     .filter(hasSummary);
-  const grouped = new Map<string, { latestUpdatedAt: string; displaySessionId: string }>();
+  const grouped = new Map<string, { createdAt: string; latestUpdatedAt: string; displaySessionId: string }>();
 
   for (const turn of turns) {
     const sessionNode = resolveSessionNode(turn);
-    const latest = grouped.get(sessionNode.sessionKey);
-    if (!latest || turn.updatedAt > latest.latestUpdatedAt) {
+    const current = grouped.get(sessionNode.sessionKey);
+    if (!current) {
       grouped.set(sessionNode.sessionKey, {
+        createdAt: turn.createdAt,
         latestUpdatedAt: turn.updatedAt,
         displaySessionId: sessionNode.displaySessionId,
       });
+      continue;
+    }
+    if (turn.createdAt < current.createdAt) {
+      current.createdAt = turn.createdAt;
+    }
+    if (turn.updatedAt > current.latestUpdatedAt) {
+      current.latestUpdatedAt = turn.updatedAt;
+      current.displaySessionId = sessionNode.displaySessionId;
     }
   }
 
@@ -386,6 +395,7 @@ boardApp.get('/api/v1/ui/session/agents/:agent/sessions', async (c) => {
     .map(([sessionKey, sessionNode]) => ({
       sessionKey,
       displaySessionId: sessionNode.displaySessionId,
+      createdAt: sessionNode.createdAt,
       latestUpdatedAt: sessionNode.latestUpdatedAt,
     }))
     .sort((left, right) => right.latestUpdatedAt.localeCompare(left.latestUpdatedAt));

@@ -38,6 +38,7 @@ export type ProjectSessionNode = SessionNode & {
 export type ProjectNode = {
   projectKey: string;
   label: string;
+  createdAt: string;
   latestUpdatedAt: string;
   sessions: ProjectSessionNode[];
 };
@@ -209,10 +210,14 @@ async function projectTreeFromAgents(
       const project = projects.get(projectKey) ?? {
         projectKey,
         label: projectKey,
+        createdAt: session.createdAt,
         latestUpdatedAt: session.latestUpdatedAt,
         sessions: [],
       };
 
+      if (session.createdAt < project.createdAt) {
+        project.createdAt = session.createdAt;
+      }
       if (session.latestUpdatedAt > project.latestUpdatedAt) {
         project.latestUpdatedAt = session.latestUpdatedAt;
       }

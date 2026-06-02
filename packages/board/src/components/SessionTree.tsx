@@ -488,15 +488,12 @@ function filterProjects(projects: ProjectNode[], filter: ProjectFilter): Project
       if (selectedAgents.size > 0 && !selectedAgents.has(session.agent)) {
         return [];
       }
-      if (!isInRange(session.latestUpdatedAt, filter.timeRange)) {
-        return [];
-      }
 
       const sessionMatches = projectMatches
         || matchesQuery(session.displaySessionId, normalizedQuery)
         || matchesQuery(session.agent, normalizedQuery);
       const turns = session.turns
-        .filter((turn) => isInRange(turn.updatedAt, filter.timeRange))
+        .filter((turn) => isInRange(turn.createdAt, filter.timeRange))
         .filter((turn) => (
           !normalizedQuery
           || sessionMatches
@@ -504,6 +501,12 @@ function filterProjects(projects: ProjectNode[], filter: ProjectFilter): Project
           || matchesQuery(turn.summary, normalizedQuery)
         ))
         .sort((left, right) => compare(left.updatedAt, right.updatedAt));
+      const sessionMatchesTime = isInRange(session.createdAt, filter.timeRange)
+        || (session.loaded && turns.length > 0);
+
+      if (!sessionMatchesTime) {
+        return [];
+      }
 
       if (normalizedQuery && !sessionMatches && turns.length === 0) {
         return [];
