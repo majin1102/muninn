@@ -224,6 +224,7 @@ test('preserves interleaved assistant and tool events in order', async () => {
     assert.equal(session.turns[0].events[2].id, 'call-a');
     assert.equal(session.turns[0].events[4].text, '再说明 B');
     assert.equal(session.turns[0].events[6].output, 'README.md');
+    assert.equal(session.turns[0].response, '最后说明 C');
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

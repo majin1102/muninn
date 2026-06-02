@@ -192,18 +192,18 @@ async function readCodexSession(sourcePath: string, options: { artifactStore: st
   const sessionTurns: CodexTurn[] = [];
   let promptParts: string[] = [];
   let promptTimestamp: string | null = null;
-  let responseParts: string[] = [];
+  let responseText: string | null = null;
   let responseTimestamp: string | null = null;
   let pendingArtifacts: Artifact[] = [];
   let pendingEvents: TurnEvent[] = [];
 
   const flushPendingTurn = () => {
-    if (promptParts.length === 0 || responseParts.length === 0) {
+    if (promptParts.length === 0 || !responseText) {
       return;
     }
     sessionTurns.push({
       prompt: promptParts.join('\n\n---\n\n'),
-      response: responseParts.join('\n\n'),
+      response: responseText,
       promptTimestamp: promptTimestamp ?? responseTimestamp ?? updatedAt,
       responseTimestamp: responseTimestamp ?? promptTimestamp ?? updatedAt,
       events: pendingEvents.map((event) => ({ ...event })),
@@ -211,7 +211,7 @@ async function readCodexSession(sourcePath: string, options: { artifactStore: st
     });
     promptParts = [];
     promptTimestamp = null;
-    responseParts = [];
+    responseText = null;
     responseTimestamp = null;
     pendingArtifacts = [];
     pendingEvents = [];
@@ -275,7 +275,7 @@ async function readCodexSession(sourcePath: string, options: { artifactStore: st
         continue;
       }
       responseTimestamp = message.timestamp;
-      responseParts.push(message.text);
+      responseText = message.text;
       pendingArtifacts.push(...message.artifacts);
       pendingEvents.push({
         type: 'assistantMessage',
