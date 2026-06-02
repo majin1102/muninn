@@ -196,11 +196,21 @@ mod tests {
         fs::write(
             home.join(CONFIG_FILE_NAME),
             serde_json::to_string_pretty(&json!({
-                "extraction": {
+                "providers": {
+                    "llm": {
+                        "default": { "type": "mock" }
+                    },
                     "embedding": {
-                        "provider": "mock",
-                        "dimensions": 4
+                        "default": {
+                            "type": "mock",
+                            "dimensions": 4
+                        }
                     }
+                },
+                "extractor": {
+                    "name": "default-extractor",
+                    "llmProvider": "default",
+                    "embeddingProvider": "default"
                 }
             }))
             .unwrap(),

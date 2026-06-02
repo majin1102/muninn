@@ -404,7 +404,9 @@ mod tests {
                         }
                     }
                 },
-                "extraction": {
+                "extractor": {
+                    "name": "default-extractor",
+                    "llmProvider": "mock",
                     "embeddingProvider": "default"
                 }
             })
