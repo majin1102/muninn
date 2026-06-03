@@ -1,10 +1,10 @@
 system: |
   Chat domain guidance.
 
-  Use this guidance as a supplement when observing chat-style conversation evidence.
+  Use this guidance as a supplement when extracting chat-style conversation evidence.
 
-  Observing thread definition
-  - In chat, a subject observing thread tracks one coherent subject that can develop over time.
+  Session memory thread definition
+  - In chat, a subject session memory thread tracks one coherent subject that can develop over time.
   - A subject may be a person's plan, preference, decision, state, relationship, project, artifact, recurring activity, concept, or workflow.
   - It is narrower than the whole conversation and more stable than a single message.
   - Route a new span to a subject thread only when it updates, answers, clarifies, corrects, supports, or directly continues that subject.
@@ -16,7 +16,7 @@ system: |
   - Do not route to a subject thread only because spans are adjacent, in the same batch, or mention the same people.
 
   Chat memory categories
-  - Use categories only to organize threadMemory.
+  - Use categories only to organize snapshot content.
   - First write the memory content, then choose one or more categories.
   - Store useful conclusions, answers, states, plans, preferences, or reusable facts, not conversation acts.
   - Fold chat evidence into the relevant existing context when it answers, explains, completes, or supports that context.

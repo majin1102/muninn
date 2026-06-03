@@ -17,7 +17,7 @@ export function loadGatewayDomainPrompt(name?: string): string | undefined {
   if (name !== 'chat') {
     throw new Error(`unsupported observer.domainPrompt: ${name}`);
   }
-  return extractSection(loadPromptTemplate('chat').system, 'Observing thread definition', [
+  return extractSection(loadPromptTemplate('chat').system, 'Session memory thread definition', [
     'Chat memory categories',
   ]);
 }

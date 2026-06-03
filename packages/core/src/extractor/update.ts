@@ -2,44 +2,44 @@ import type { Turn } from '../client.js';
 import type { QueuedExtractionChange } from '../checkpoint.js';
 import { Memories } from '../memories/memories.js';
 import type { NativeTables } from '../native.js';
-import { observeThread } from '../llm/extracting.js';
+import { extractSessionMemory } from '../llm/extracting.js';
 import { applyExtractionChanges, applyExtractionTableChanges } from './memory-delta.js';
 import type { SealedEpoch } from './epoch.js';
 import {
   isActiveThread,
-  applyObserveResult,
-  createObservingThread,
-  currentObservingContent,
+  applyExtractionResult,
+  createSessionMemoryThread,
+  currentSessionMemoryContent,
   getPendingIndex,
   snapshotRef,
   toSessionSnapshot,
 } from './thread.js';
-import type { FragmentTurnInput, ObservingThread } from './types.js';
+import type { FragmentTurnInput, SessionMemoryThread } from './types.js';
 
-type ObserveThreadImpl = typeof observeThread;
+type ExtractSessionMemoryImpl = typeof extractSessionMemory;
 const DEFAULT_SESSION_ID = '__muninn_default_session__';
 
-type ObserveSessionThreadParams = {
-  threads: ObservingThread[];
-  observerName: string;
+type ExtractSessionThreadParams = {
+  threads: SessionMemoryThread[];
+  extractorName: string;
   pendingTurns: Turn[];
-  observingEpoch: number;
+  extractionEpoch: number;
   signal?: AbortSignal;
   database?: string;
   memories?: Pick<Memories, 'get'>;
-  observeThreadImpl?: ObserveThreadImpl;
+  extractSessionMemoryImpl?: ExtractSessionMemoryImpl;
 };
 
-export async function observeEpoch(params: {
+export async function extractEpoch(params: {
   client: NativeTables;
-  observerName: string;
+  extractorName: string;
   activeWindowDays: number;
-  threads: ObservingThread[];
+  threads: SessionMemoryThread[];
   sealedEpoch: SealedEpoch;
   signal?: AbortSignal;
   database?: string;
-  observeThreadImpl?: ObserveThreadImpl;
-}): Promise<{ threads: ObservingThread[]; touchedIds: Set<string> }> {
+  extractSessionMemoryImpl?: ExtractSessionMemoryImpl;
+}): Promise<{ threads: SessionMemoryThread[]; touchedIds: Set<string> }> {
   throwIfAborted(params.signal);
   ensureActiveThreads(
     params.threads,
@@ -50,19 +50,19 @@ export async function observeEpoch(params: {
   for (const turns of groupTurnsBySession(params.sealedEpoch.turns)) {
     ensureSessionThread(
       params.threads,
-      params.observerName,
+      params.extractorName,
       turns,
       params.sealedEpoch.epoch,
     );
-    const groupTouchedIds = await observeSessionThread({
+    const groupTouchedIds = await extractSessionThread({
       threads: params.threads,
-      observerName: params.observerName,
+      extractorName: params.extractorName,
       pendingTurns: turns,
-      observingEpoch: params.sealedEpoch.epoch,
+      extractionEpoch: params.sealedEpoch.epoch,
       signal: params.signal,
       database: params.database,
       memories,
-      observeThreadImpl: params.observeThreadImpl,
+      extractSessionMemoryImpl: params.extractSessionMemoryImpl,
     });
     for (const touchedId of groupTouchedIds) {
       touchedIds.add(touchedId);
@@ -106,22 +106,22 @@ function sessionIdForTurns(turns: Turn[]): string {
       continue;
     }
     if (sessionId !== expected) {
-      throw new Error('observeSessionThread requires pendingTurns from a single session');
+      throw new Error('extractSessionThread requires pendingTurns from a single session');
     }
   }
   return expected ?? DEFAULT_SESSION_ID;
 }
 
 function activeThreadInputs(
-  threads: ObservingThread[],
-  observerName: string,
+  threads: SessionMemoryThread[],
+  extractorName: string,
   activeWindowDays: number,
 ) {
   return threads
-    .filter((thread) => thread.observer === observerName)
+    .filter((thread) => thread.observer === extractorName)
     .filter((thread) => isActiveThread(thread.updatedAt, activeWindowDays))
     .map((thread) => ({
-      threadId: thread.observingId,
+      threadId: thread.threadId,
       ...(thread.snapshotId ? { memoryId: thread.snapshotId } : {}),
       title: thread.title,
       summary: thread.summary,
@@ -129,7 +129,7 @@ function activeThreadInputs(
 }
 
 function ensureActiveThreads(
-  threads: ObservingThread[],
+  threads: SessionMemoryThread[],
   activeWindowDays: number,
 ): void {
   const activeThreads = threads.filter((thread) => isActiveThread(thread.updatedAt, activeWindowDays));
@@ -137,30 +137,30 @@ function ensureActiveThreads(
 }
 
 function ensureSessionThread(
-  threads: ObservingThread[],
-  observerName: string,
+  threads: SessionMemoryThread[],
+  extractorName: string,
   pendingTurns: Turn[],
-  observingEpoch: number,
-): ObservingThread | null {
+  extractionEpoch: number,
+): SessionMemoryThread | null {
   const sessionId = sessionIdForTurns(pendingTurns);
   const existing = threads.find((thread) => (
-    thread.observer === observerName
+    thread.observer === extractorName
     && thread.kind === 'session'
     && (thread.sessionId ?? null) === sessionId
   ));
   if (existing) {
     return existing;
   }
-  const title = sessionId ? `Session ${sessionId}` : 'Session observing thread';
+  const title = sessionId ? `Session ${sessionId}` : 'Session memory thread';
   const summary = sessionId
-    ? `Default observing thread for session ${sessionId}.`
-    : 'Default observing thread for this session.';
-  const thread = createObservingThread(
-    observerName,
+    ? `Default session memory thread for session ${sessionId}.`
+    : 'Default session memory thread for this session.';
+  const thread = createSessionMemoryThread(
+    extractorName,
     title,
     summary,
     [],
-    observingEpoch,
+    extractionEpoch,
     new Date().toISOString(),
     'session',
     sessionId,
@@ -169,22 +169,22 @@ function ensureSessionThread(
   return thread;
 }
 
-async function observeSessionThread(params: ObserveSessionThreadParams): Promise<Set<string>> {
+async function extractSessionThread(params: ExtractSessionThreadParams): Promise<Set<string>> {
   const {
     threads,
-    observerName,
+    extractorName,
     pendingTurns,
-    observingEpoch,
+    extractionEpoch,
     signal,
     memories,
-    observeThreadImpl = observeThread,
+    extractSessionMemoryImpl = extractSessionMemory,
   } = params;
   throwIfAborted(signal);
   const touchedIds = new Set<string>();
   const now = new Date().toISOString();
   const sessionId = sessionIdForTurns(pendingTurns);
   const thread = threads.find((candidate) => (
-    candidate.observer === observerName
+    candidate.observer === extractorName
     && candidate.kind === 'session'
     && (candidate.sessionId ?? null) === sessionId
   ));
@@ -199,23 +199,23 @@ async function observeSessionThread(params: ObserveSessionThreadParams): Promise
     summary: turn.summary,
   }));
   thread.updatedAt = now;
-  thread.observingEpoch = observingEpoch;
-  const result = await observeThreadImpl({
-    observingContent: currentObservingContent(thread),
+  thread.extractionEpoch = extractionEpoch;
+  const result = await extractSessionMemoryImpl({
+    sessionMemoryContent: currentSessionMemoryContent(thread),
     turns,
   }, signal, { memories, database: params.database });
-  applyObserveResult(thread, result, observingEpoch, applyExtractionChanges);
-  touchedIds.add(thread.observingId);
+  applyExtractionResult(thread, result, extractionEpoch, applyExtractionChanges);
+  touchedIds.add(thread.threadId);
   return touchedIds;
 }
 
 async function flushThreads(
   client: NativeTables,
-  threads: ObservingThread[],
+  threads: SessionMemoryThread[],
   touchedIds: Set<string>,
 ): Promise<void> {
   const touched = threads
-    .filter((thread) => touchedIds.has(thread.observingId))
+    .filter((thread) => touchedIds.has(thread.threadId))
     .filter((thread) => thread.snapshots.length > 0);
   if (touched.length === 0) {
     return;
@@ -229,7 +229,7 @@ async function flushThreads(
 
 async function catchUpIndex(
   client: NativeTables,
-  thread: ObservingThread,
+  thread: SessionMemoryThread,
   signal?: AbortSignal,
 ): Promise<QueuedExtractionChange[]> {
   const pending = getPendingIndex(thread);
@@ -249,7 +249,7 @@ async function catchUpIndex(
     const diff = applyExtractionChanges(previous?.extractions ?? [], {
       title: thread.title,
       summary: thread.summary,
-      threadMemory: current.threadMemory,
+      snapshotContent: current.snapshotContent,
       extractions: current.extractions.map((extraction) => (
         extraction.id && previousIds.has(extraction.id)
           ? extraction
@@ -280,7 +280,7 @@ async function catchUpIndex(
 
 export async function buildExtraction(
   client: NativeTables,
-  threads: ObservingThread[],
+  threads: SessionMemoryThread[],
   signal?: AbortSignal,
 ): Promise<QueuedExtractionChange[]> {
   let firstError: unknown = null;
@@ -304,7 +304,7 @@ export async function buildExtraction(
 
 export async function buildTouchedIndex(
   client: NativeTables,
-  threads: ObservingThread[],
+  threads: SessionMemoryThread[],
   touchedIds: Set<string>,
   signal?: AbortSignal,
 ): Promise<QueuedExtractionChange[]> {
@@ -312,7 +312,7 @@ export async function buildTouchedIndex(
   const queued: QueuedExtractionChange[] = [];
   for (const thread of threads) {
     throwIfAborted(signal);
-    if (!touchedIds.has(thread.observingId) || !getPendingIndex(thread)) {
+    if (!touchedIds.has(thread.threadId) || !getPendingIndex(thread)) {
       continue;
     }
     try {
@@ -328,12 +328,12 @@ export async function buildTouchedIndex(
 }
 
 function updateThreadsFromRows(
-  threads: ObservingThread[],
+  threads: SessionMemoryThread[],
   rows: Array<import('./types.js').SessionSnapshot>,
 ): void {
   const rowsById = new Map(rows.map((row) => [row.sessionId, row]));
   for (const thread of threads) {
-    const row = rowsById.get(thread.observingId);
+    const row = rowsById.get(thread.threadId);
     if (!row) {
       continue;
     }
@@ -350,9 +350,9 @@ export const __testing = {
   flushThreads,
   buildTouchedIndex,
   buildExtraction,
-  observeEpoch,
+  extractEpoch,
   activeThreadInputsForTests: activeThreadInputs,
-  observeSessionThreadForTests: observeSessionThread,
+  extractSessionThreadForTests: extractSessionThread,
 };
 
 function throwIfAborted(signal?: AbortSignal): void {

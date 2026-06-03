@@ -16,12 +16,12 @@ import type {
   ErrorResponse,
   MemoryDocumentResponse,
   MemoryReference,
-  ObservingListResponse,
   PipelineTasksResponse,
   SessionAgentsResponse,
   SessionGroupsResponse,
   SessionNode,
   SessionSegmentPreview,
+  SessionSnapshotListResponse,
   SessionTurnsResponse,
   SettingsConfigResponse,
   TurnPreview,
@@ -36,6 +36,7 @@ const SESSION_TREE_PAGE_LIMIT = 1_000_000;
 const packageDir = path.resolve(__dirname, '..');
 
 export const boardApp = new Hono();
+export const SESSION_SNAPSHOTS_ROUTE = '/api/v1/ui/session-snapshots';
 
 let sessionTreeCache: Awaited<ReturnType<typeof turns.list>> | null = null;
 let sessionTreeLoading: Promise<Awaited<ReturnType<typeof turns.list>>> | null = null;
@@ -425,12 +426,37 @@ function buildSessionTurnPage(params: {
 }): { turns: TurnPreview[]; segments: SessionSegmentPreview[]; nextOffset: number | null } {
   const pageTurns = params.turns.slice(params.offset, params.offset + params.limit);
   const segments = buildSessionSegments(params.snapshotContent, params.turns);
-  const hasMore = params.offset + params.limit < params.turns.length;
   return {
     turns: pageTurns,
     segments,
-    nextOffset: hasMore ? params.offset + params.limit : null,
+    nextOffset: resolveSessionTreeNextOffset({
+      segmentCount: segments.length,
+      offset: params.offset,
+      limit: params.limit,
+      turnCount: params.turns.length,
+    }),
   };
+}
+
+function resolveSessionTreeNextOffset(params: {
+  segmentCount: number;
+  offset: number;
+  limit: number;
+  turnCount: number;
+}): number | null {
+  if (params.segmentCount > 0) {
+    return null;
+  }
+  return params.offset + params.limit < params.turnCount ? params.offset + params.limit : null;
+}
+
+export function resolveSessionTreeNextOffsetForTests(params: {
+  segmentCount: number;
+  offset: number;
+  limit: number;
+  turnCount: number;
+}): number | null {
+  return resolveSessionTreeNextOffset(params);
 }
 
 function buildSessionSegments(
@@ -459,7 +485,7 @@ function parseSnapshotExtractionSegments(
   const nextSection = rest.search(/^##\s+/m);
   const section = nextSection >= 0 ? rest.slice(0, nextSection) : rest;
   const turnById = new Map(turnPreviews.map((turn, index) => [turn.memoryId, { turn, index }]));
-  const refsPattern = /<!--\s*refs:\s*\[([^\]]*)\]\s*-->/g;
+  const refsPattern = /<!--\s*(?:sequence:\s*\d+\s*;\s*)?refs:\s*\[([^\]]*)\]\s*-->/g;
   const matches = [...section.matchAll(refsPattern)];
   const segments: Array<SessionSegmentPreview & { index: number }> = [];
 
@@ -495,12 +521,14 @@ function parseSnapshotExtractionSegments(
 
 function normalizeSegmentTitle(raw: string): string {
   let title = raw.trim();
-  const extraction = title.match(/\[Extraction\]\s*([\s\S]*)/i)?.[1]?.trim();
-  if (extraction) {
-    title = extraction;
+  const explicitTitle = title.match(/(?:^|\n)###\s+Title\s*\n([\s\S]*?)(?=\n###\s+|^\s*----\s*$|\s*$)/im)?.[1]?.trim();
+  const summary = title.match(/(?:^|\n)###\s+Summary\s*\n([\s\S]*?)(?=\n###\s+|^\s*----\s*$|\s*$)/im)?.[1]?.trim();
+  if (explicitTitle) {
+    title = explicitTitle;
+  } else if (summary) {
+    title = summary;
   }
   title = title
-    .replace(/\[[^\]]+\]\s*/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
     .replace(/^Prompt:\s*/i, '');
@@ -542,7 +570,7 @@ export function buildSessionTurnPageForTests(params: {
   return buildSessionTurnPage(params);
 }
 
-async function loadObservingReferences(references: string[]): Promise<MemoryReference[]> {
+async function loadSnapshotReferences(references: string[]): Promise<MemoryReference[]> {
   const resolved = await Promise.all(
     references.map(async (memoryId) => {
       if (memoryId.startsWith('turn:')) {
@@ -734,27 +762,27 @@ boardApp.get('/api/v1/ui/memories/:memoryId/document', async (c) => {
   return c.json(response);
 });
 
-boardApp.get('/api/v1/ui/observing', async (c) => {
-  console.log('[BOARD_UI_OBSERVING]');
+boardApp.get(SESSION_SNAPSHOTS_ROUTE, async (c) => {
+  console.log('[BOARD_UI_SESSION_SNAPSHOTS]');
 
   const rows = await sessions.list({
     mode: { type: 'recency', limit: 50 },
   });
-  const extractionCards = await Promise.all(
+  const sessionSnapshotCards = await Promise.all(
     rows
       .slice()
       .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
-      .map(async (observing) => ({
-        memoryId: observing.snapshotId,
-        title: observing.title,
-        summary: observing.summary,
-        updatedAt: observing.updatedAt,
-        references: await loadObservingReferences(observing.references),
+      .map(async (snapshot) => ({
+        memoryId: snapshot.snapshotId,
+        title: snapshot.title,
+        summary: snapshot.summary,
+        updatedAt: snapshot.updatedAt,
+        references: await loadSnapshotReferences(snapshot.references),
       })),
   );
 
-  const response: ObservingListResponse = {
-    extractions: extractionCards,
+  const response: SessionSnapshotListResponse = {
+    sessionSnapshots: sessionSnapshotCards,
     requestId: generateRequestId(),
   };
 

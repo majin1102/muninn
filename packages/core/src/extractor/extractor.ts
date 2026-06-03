@@ -1,6 +1,6 @@
 import {
   type ExtractorCheckpoint,
-  type ObservingRun,
+  type ExtractorRun,
   type QueuedExtractionChange,
   type ThreadRef,
 } from '../checkpoint.js';
@@ -12,7 +12,7 @@ import type { SessionRegistry } from '../turn/registry.js';
 import { readTurn } from '../turn/types.js';
 import { EpochQueue, EpochSealedError, OpenEpoch, type SealedEpoch } from './epoch.js';
 import {
-  cloneObservingThreads,
+  cloneSessionMemoryThreads,
   getPendingIndex,
   getPendingIndexUpTo,
   isActiveThread,
@@ -20,8 +20,8 @@ import {
   replaySnapshots,
   threadFromSnapshots,
 } from './thread.js';
-import type { ObservingThread } from './types.js';
-import { buildExtraction, buildTouchedIndex, observeEpoch } from './update.js';
+import type { SessionMemoryThread } from './types.js';
+import { buildExtraction, buildTouchedIndex, extractEpoch } from './update.js';
 import { resolveDatabaseName } from '../config.js';
 import { writeMuninnLog } from '../logging.js';
 
@@ -33,7 +33,7 @@ export type ExtractorCheckpointState = {
   committedEpoch?: number;
   nextEpoch: number;
   threads: ThreadRef[];
-  runs: ObservingRun[];
+  runs: ExtractorRun[];
   pendingExtractionChanges: QueuedExtractionChange[];
 };
 
@@ -51,7 +51,7 @@ export class Extractor {
   private openEpoch!: OpenEpoch;
   private currentEpoch: SealedEpoch | null = null;
   private publishingEpochs: OpenEpoch[] = [];
-  private threads: ObservingThread[] = [];
+  private threads: SessionMemoryThread[] = [];
   private nextIndexRetryAt?: number;
   private pendingExtractionChanges: QueuedExtractionChange[] = [];
   private shuttingDown = false;
@@ -60,7 +60,7 @@ export class Extractor {
   private checkpointCommittedEpoch?: number;
   private checkpointNextEpoch = 0;
   private checkpointThreads: ThreadRef[] = [];
-  private checkpointRuns: ObservingRun[] = [];
+  private checkpointRuns: ExtractorRun[] = [];
   // Serializes sealed epoch publish order so epoch N never lands after epoch N+1.
   private publishChain: Promise<void> = Promise.resolve();
   private loopPromise: Promise<void> | null = null;
@@ -87,7 +87,7 @@ export class Extractor {
     this.epochTurns = config.epochTurns;
     this.epochWindowMs = config.epochWindowMs;
     this.pendingExtractionChanges = checkpoint?.pendingExtractionChanges.map(cloneQueuedExtractionChange) ?? [];
-    this.checkpointRuns = checkpoint?.runs.filter((run) => run.status === 'running').map(cloneObservingRun) ?? [];
+    this.checkpointRuns = checkpoint?.runs.filter((run) => run.status === 'running').map(cloneExtractorRun) ?? [];
   }
 
   private readonly database: string;
@@ -187,7 +187,7 @@ export class Extractor {
       committedEpoch: this.checkpointCommittedEpoch,
       nextEpoch: this.checkpointNextEpoch,
       threads: this.checkpointThreads.map((thread) => ({ ...thread })),
-      runs: this.checkpointRuns.map(cloneObservingRun),
+      runs: this.checkpointRuns.map(cloneExtractorRun),
       pendingExtractionChanges: this.pendingExtractionChanges.map(cloneQueuedExtractionChange),
     };
   }
@@ -280,7 +280,7 @@ export class Extractor {
       const turnsByEpoch = new Map<number, Turn[]>();
       for (const turn of pendingTurns) {
         if (turn.observingEpoch == null) {
-          throw new Error(`pending observable turn ${turn.turnId} is missing observingEpoch`);
+          throw new Error(`pending observable turn ${turn.turnId} is missing extractionEpoch`);
         }
         const turns = turnsByEpoch.get(turn.observingEpoch) ?? [];
         turns.push(turn);
@@ -368,10 +368,10 @@ export class Extractor {
     }
 
     await this.checkpointLock.shared(async () => {
-      const threads = cloneObservingThreads(this.threads);
-      const result = await observeEpoch({
+      const threads = cloneSessionMemoryThreads(this.threads);
+      const result = await extractEpoch({
         client: this.client,
-        observerName: this.name,
+        extractorName: this.name,
         activeWindowDays: this.activeWindowDays,
         threads,
         sealedEpoch: this.currentEpoch!,
@@ -551,7 +551,7 @@ export class Extractor {
     return this.threads
       .filter((thread) => isActiveThread(thread.updatedAt, this.activeWindowDays))
       .map((thread) => ({
-        sessionId: thread.sessionId ?? thread.observingId,
+        sessionId: thread.sessionId ?? thread.threadId,
         latestSnapshotId: thread.snapshotId ?? '',
         latestSnapshotSequence: thread.snapshots.length - 1,
         indexedSnapshotSequence: thread.indexedSnapshotSequence ?? null,
@@ -568,7 +568,7 @@ export class Extractor {
   }
 
   private async restoreCheckpointState(): Promise<{
-    threads: ObservingThread[];
+    threads: SessionMemoryThread[];
     committedEpoch?: number;
     pendingTurns: Turn[];
   } | null> {
@@ -608,7 +608,7 @@ export class Extractor {
     deltaRows: Array<import('./types.js').SessionSnapshot>,
     turnById: Map<string, Turn>,
   ): Promise<{
-    threads: ObservingThread[];
+    threads: SessionMemoryThread[];
     observedTurnIds: Set<string>;
     committedEpoch?: number;
   } | null> {
@@ -618,7 +618,7 @@ export class Extractor {
       rows.push(row);
       rowsById.set(row.sessionId, rows);
     }
-    const restored: ObservingThread[] = [];
+    const restored: SessionMemoryThread[] = [];
     const observedTurnIds = new Set<string>();
     let committedEpoch = section.committedEpoch;
     const turnCache = new Map(turnById);
@@ -708,7 +708,7 @@ export class Extractor {
         }
       }
       let previousRefs = new Set<string>();
-      let thread: ObservingThread | null = null;
+      let thread: SessionMemoryThread | null = null;
       for (const row of prefixRows) {
         const newRefs = row.references.filter((reference) => !previousRefs.has(reference));
         if (newRefs.length === 0) {
@@ -827,7 +827,7 @@ export class Extractor {
   }
 }
 
-function cloneObservingRun(run: ObservingRun): ObservingRun {
+function cloneExtractorRun(run: ExtractorRun): ExtractorRun {
   return {
     ...run,
     inputTurnIds: [...run.inputTurnIds],

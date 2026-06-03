@@ -20,7 +20,7 @@ export class SessionIndex {
 
   constructor(
     checkpoint: SessionIndexCheckpoint | null,
-    private readonly observerName: string | null,
+    private readonly extractorName: string | null,
   ) {
     this.baseline = checkpoint?.baseline ?? { turn: 0, session: 0 };
     for (const entry of checkpoint?.entries ?? []) {
@@ -48,18 +48,18 @@ export class SessionIndex {
   }
 
   private async ensureFresh(client: NativeTables): Promise<void> {
-    if (this.dirty || this.baseline.turn === 0 || this.baseline.session === 0 || !this.observerName) {
+    if (this.dirty || this.baseline.turn === 0 || this.baseline.session === 0 || !this.extractorName) {
       await this.rebuild(client);
       return;
     }
 
     const [turnDelta, sessionDelta] = await Promise.all([
       client.turnTable.delta({
-        observer: this.observerName,
+        observer: this.extractorName,
         baselineVersion: this.baseline.turn,
       }),
       client.sessionTable.delta({
-        observer: this.observerName,
+        observer: this.extractorName,
         baselineVersion: this.baseline.session,
       }),
     ]);

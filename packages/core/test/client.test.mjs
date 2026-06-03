@@ -155,7 +155,7 @@ function defaultStorageTarget(homeDir) {
 
 function firstExtractionRef(hits) {
   return hits
-    .flatMap((hit) => hit.references ?? [])
+    .flatMap((hit) => [hit.memoryId, ...(hit.references ?? [])])
     .map((ref) => ref.startsWith('extraction:') ? ref.slice('extraction:'.length) : ref)
     .find((ref) => ref && !ref.startsWith('turn:') && !ref.startsWith('session:'));
 }
@@ -806,6 +806,21 @@ test('validateSettings rejects missing observer config', async (t) => {
       observer: undefined,
     }), null, 2)),
     /observer is required/i,
+  );
+});
+
+test('validateSettings accepts disabled observer without observer name or llmProvider', async (t) => {
+  const { dir, homeDir } = await makeDatasetUri();
+  t.after(cleanupDataset(dir));
+
+  process.env.MUNINN_HOME = homeDir;
+
+  await assert.doesNotReject(
+    () => validateSettings(JSON.stringify(validSettings({
+      observer: {
+        enabled: false,
+      },
+    }), null, 2)),
   );
 });
 

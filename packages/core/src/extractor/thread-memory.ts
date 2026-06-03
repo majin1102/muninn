@@ -1,104 +1,170 @@
-import type { Extraction, ExtractionCategory } from './types.js';
+import type { Extraction } from './types.js';
 
-type ThreadMemoryAnchor = {
-  name: Extract<ExtractionCategory, 'Entity' | 'Fact' | 'Decision' | 'Preference'>;
-  phrase: string;
-};
-
-export type ParsedThreadMemoryDocument = {
+export type ParsedSnapshotContent = {
   title: string;
   summary: string;
-  threadMemory: string;
+  snapshotContent: string;
   extractionMarkdown: string;
   extractions: Extraction[];
 };
 
-export function parseThreadMemoryDocument(
+export type ParsedSnapshotPatch = {
+  title?: string;
+  summary?: string;
+  updates: Array<{
+    sequence: number;
+    refs: string[];
+    title: string;
+    summary: string;
+    content?: string | null;
+  }>;
+  additions: Array<{
+    refs: string[];
+    title: string;
+    summary: string;
+    content?: string | null;
+  }>;
+};
+
+type UnitMetadata = {
+  sequence?: number;
+  references: string[];
+};
+
+export function parseSnapshotContent(
   raw: string,
   validReferences: Set<string>,
-): ParsedThreadMemoryDocument {
-  const threadMemory = stripMarkdownFence(typeof raw === 'string' ? raw.trim() : '');
-  if (!threadMemory) {
-    throw new Error('extraction update returned empty threadMemory');
+): ParsedSnapshotContent {
+  const snapshotContent = stripMarkdownFence(typeof raw === 'string' ? raw.trim() : '');
+  if (!snapshotContent) {
+    throw new Error('extraction update returned empty snapshot content');
   }
-  if (/^\s*\{/.test(threadMemory)) {
-    throw new Error('observe result must return thread memory Markdown, not JSON');
-  }
+  rejectJson(snapshotContent);
 
-  const lines = threadMemory.split(/\r?\n/);
-  const titleIndexes = headingIndexes(lines, 1, null);
-  if (titleIndexes.length !== 1) {
-    throw new Error('threadMemory document must include exactly one # title');
-  }
-  const summaryIndex = headingIndexes(lines, 2, 'Summary')[0];
+  const lines = snapshotContent.split(/\r?\n/);
+  const title = parseRequiredTitle(lines);
+  const summaryIndex = headingIndex(lines, 2, 'Summary');
   if (summaryIndex === undefined) {
-    throw new Error('threadMemory document must include ## Summary');
+    throw new Error('snapshot content document must include ## Summary');
   }
-  const extractionsIndex = headingIndexes(lines, 2, 'Extractions')[0];
-  if (extractionsIndex === undefined) {
-    throw new Error('threadMemory document must include ## Extractions');
-  }
-  if (!(titleIndexes[0] < summaryIndex && summaryIndex < extractionsIndex)) {
-    throw new Error('threadMemory document headings must be ordered # title, ## Summary, ## Extractions');
+  const extractionsIndex = headingIndex(lines, 2, 'Extractions');
+  if (extractionsIndex !== undefined && summaryIndex > extractionsIndex) {
+    throw new Error('snapshot content document headings must order ## Summary before ## Extractions');
   }
 
-  const title = normalizeText(lines[titleIndexes[0]]!.replace(/^#\s+/, ''));
-  if (!title) {
-    throw new Error('threadMemory document title cannot be empty');
-  }
-  const summary = lines.slice(summaryIndex + 1, extractionsIndex).join('\n').trim();
+  const summaryEnd = extractionsIndex ?? lines.length;
+  const summary = lines.slice(summaryIndex + 1, summaryEnd).join('\n').trim();
   if (!normalizeText(summary)) {
-    throw new Error('threadMemory document summary cannot be empty');
-  }
-  if (wordCount(summary) > 500) {
-    throw new Error('threadMemory document summary must be 500 words or fewer');
+    throw new Error('snapshot content document summary cannot be empty');
   }
 
-  const extractionMarkdown = lines.slice(extractionsIndex + 1).join('\n').trim();
+  const extractionMarkdown = extractionsIndex === undefined
+    ? ''
+    : lines.slice(extractionsIndex + 1).join('\n').trim();
+
   return {
     title,
-    summary: summary.trim(),
-    threadMemory,
+    summary,
+    snapshotContent,
     extractionMarkdown,
-    extractions: parseThreadMemoryUnits(extractionMarkdown, validReferences),
+    extractions: parseSnapshotContentUnits(extractionMarkdown, validReferences),
   };
 }
 
-export function parseThreadMemoryUnits(
-  threadMemory: string,
+export function parseSnapshotPatch(
+  raw: string,
+  validNewReferences: Set<string>,
+): ParsedSnapshotPatch {
+  const patch = stripMarkdownFence(typeof raw === 'string' ? raw.trim() : '');
+  if (!patch) {
+    return { updates: [], additions: [] };
+  }
+  rejectJson(patch);
+
+  const lines = patch.split(/\r?\n/);
+  const title = parseOptionalTitle(lines);
+  const summaryIndex = headingIndex(lines, 2, 'Summary');
+  const extractionsIndex = headingIndex(lines, 2, 'Extractions');
+  const summary = summaryIndex === undefined
+    ? undefined
+    : lines
+      .slice(summaryIndex + 1, extractionsIndex === undefined ? lines.length : extractionsIndex)
+      .join('\n')
+      .trim();
+  if (summaryIndex !== undefined && !normalizeText(summary ?? '')) {
+    throw new Error('snapshot patch summary cannot be empty');
+  }
+
+  const extractionMarkdown = extractionsIndex === undefined
+    ? ''
+    : lines.slice(extractionsIndex + 1).join('\n').trim();
+  const units = parsePatchUnits(extractionMarkdown, validNewReferences);
+  return {
+    ...(title === undefined ? {} : { title }),
+    ...(summary === undefined ? {} : { summary }),
+    updates: units.updates,
+    additions: units.additions,
+  };
+}
+
+export function parseSnapshotContentUnits(
+  snapshotContent: string,
   validReferences: Set<string>,
 ): Extraction[] {
-  if (!threadMemory.trim()) {
+  if (!snapshotContent.trim()) {
     return [];
   }
 
-  const extractions: Extraction[] = [];
-  const units = threadMemory
-    .split(/^\s*----\s*$/m)
-    .map((unit) => unit.trim())
-    .filter(Boolean);
-
-  for (const unit of units) {
+  return splitUnits(snapshotContent).map((unit) => {
     const lines = unit.split(/\r?\n/);
-    const metadata = parseThreadMemoryMetadata(lines[0] ?? '');
-    if (!metadata) {
-      throw new Error('threadMemory unit must start with metadata comment');
+    const metadata = parseSnapshotContentMetadata(lines[0] ?? '');
+    if (!metadata || metadata.sequence !== undefined) {
+      throw new Error('snapshot unit must start with refs metadata comment');
     }
-    const body = parseThreadMemoryBody(lines.slice(1));
-    const text = normalizeText(body.extraction);
-    if (!text) {
-      throw new Error('threadMemory unit must include [Extraction]');
-    }
-    validateThreadMemoryReferences(metadata.references, validReferences);
-    extractions.push({
-      text,
-      context: normalizeText(body.context ?? '') || null,
-      anchors: renderThreadMemoryAnchors(body.anchors),
-      category: body.anchors[0].name,
+    validateSnapshotContentReferences(metadata.references, validReferences);
+    const body = parseTitleSummaryContent(lines.slice(1));
+    return {
+      title: body.title,
+      text: normalizeText(body.summary),
+      context: normalizeContext(body.content ?? ''),
+      anchors: [],
+      category: 'Other',
       references: metadata.references,
-    });
-  }
-  return extractions;
+    };
+  });
+}
+
+export function renderSnapshotContent(title: string, summary: string, extractions: Extraction[]): string {
+  return [
+    `# ${normalizeTitle(title)}`,
+    '',
+    '## Summary',
+    summary.trim(),
+    '',
+    '## Extractions',
+    extractions.map((extraction) => renderExtractionBlock(extraction)).join('\n\n----\n\n'),
+  ].join('\n').trimEnd();
+}
+
+export function renderExtractionBlock(
+  extraction: Extraction,
+  options: { sequence?: number; includeRefs?: boolean } = {},
+): string {
+  const metadata = renderMetadata({
+    sequence: options.sequence,
+    references: options.includeRefs === false ? [] : extraction.references,
+  });
+  return [
+    metadata,
+    '### Title',
+    normalizeTitle(extraction.title ?? extraction.text),
+    '',
+    '### Summary',
+    extraction.text.trim(),
+    ...(normalizeContext(extraction.context ?? '')
+      ? ['', '### Content', extraction.context!.trim()]
+      : []),
+  ].join('\n');
 }
 
 export function stripMarkdownFence(value: string): string {
@@ -106,127 +172,190 @@ export function stripMarkdownFence(value: string): string {
   return (match?.[1] ?? value).trim();
 }
 
-function headingIndexes(lines: string[], level: number, label: string | null): number[] {
-  const hashes = '#'.repeat(level);
-  const regex = new RegExp(`^${hashes}\\s+(.+?)\\s*$`);
-  return lines.flatMap((line, index) => {
-    const match = line.match(regex);
-    if (!match) {
-      return [];
-    }
-    const text = normalizeText(match[1] ?? '');
-    if (label !== null && text.toLowerCase() !== label.toLowerCase()) {
-      return [];
-    }
-    return [index];
-  });
-}
-
-function parseThreadMemoryBody(lines: string[]): { anchors: ThreadMemoryAnchor[]; context?: string; extraction: string } {
-  const content = lines.join('\n').trim();
-  const extractionMatch = content.match(/(?:^|\n)\s*\[Extraction\]\s*([\s\S]*?)(?=\n\s*\[Context\]|\n\s*\[Extraction\]|\s*$)/);
-  if (!extractionMatch) {
-    return { anchors: parseThreadMemoryAnchors(lines), extraction: '' };
+function parsePatchUnits(
+  extractionMarkdown: string,
+  validReferences: Set<string>,
+): {
+  updates: ParsedSnapshotPatch['updates'];
+  additions: ParsedSnapshotPatch['additions'];
+} {
+  const updates: ParsedSnapshotPatch['updates'] = [];
+  const additions: ParsedSnapshotPatch['additions'] = [];
+  if (!extractionMarkdown.trim()) {
+    return { updates, additions };
   }
-  const contextMatch = content.match(/(?:^|\n)\s*\[Context\]\s*([\s\S]*?)(?=\n\s*\[Extraction\]|\n\s*\[Context\]|\s*$)/);
-  return {
-    anchors: parseThreadMemoryAnchors(lines),
-    context: contextMatch?.[1],
-    extraction: extractionMatch[1] ?? '',
-  };
+
+  for (const unit of splitUnits(extractionMarkdown)) {
+    const lines = unit.split(/\r?\n/);
+    const metadata = parseSnapshotContentMetadata(lines[0] ?? '');
+    if (!metadata) {
+      throw new Error('snapshot patch extraction must start with metadata comment');
+    }
+    validateSnapshotContentReferences(metadata.references, validReferences);
+    const body = parseTitleSummaryContent(lines.slice(1));
+    const record = {
+      refs: metadata.references,
+      title: body.title,
+      summary: normalizeText(body.summary),
+      content: normalizeContext(body.content ?? ''),
+    };
+    if (metadata.sequence === undefined) {
+      additions.push(record);
+    } else {
+      updates.push({
+        sequence: metadata.sequence,
+        ...record,
+      });
+    }
+  }
+  return { updates, additions };
 }
 
-function parseThreadMemoryMetadata(
-  value: string,
-): { references: string[] } | null {
-  const match = value.match(/^\s*<!--\s*refs:\s*\[([^\]]*)\]\s*-->\s*$/i);
+function parseTitleSummaryContent(lines: string[]): { title: string; summary: string; content?: string | null } {
+  const titleIndex = headingIndex(lines, 3, 'Title');
+  if (titleIndex === undefined) {
+    throw new Error('snapshot unit must include ### Title');
+  }
+  const summaryIndex = headingIndex(lines, 3, 'Summary');
+  if (summaryIndex === undefined) {
+    throw new Error('snapshot unit must include ### Summary');
+  }
+  if (titleIndex > summaryIndex) {
+    throw new Error('snapshot unit headings must order ### Title before ### Summary');
+  }
+  const contentIndex = headingIndex(lines, 3, 'Content');
+  if (contentIndex !== undefined && contentIndex < summaryIndex) {
+    throw new Error('snapshot unit headings must order ### Summary before ### Content');
+  }
+  const nextUnexpectedHeading = lines.find((line) => /^###\s+(.+?)\s*$/.test(line)
+    && !/^###\s+(Title|Summary|Content)\s*$/i.test(line));
+  if (nextUnexpectedHeading) {
+    throw new Error(`unsupported snapshot unit heading: ${nextUnexpectedHeading.trim()}`);
+  }
+
+  const titleEnd = summaryIndex;
+  const title = normalizeTitle(lines.slice(titleIndex + 1, titleEnd).join('\n'));
+  const summaryEnd = contentIndex ?? lines.length;
+  const summary = lines.slice(summaryIndex + 1, summaryEnd).join('\n').trim();
+  if (!normalizeText(summary)) {
+    throw new Error('snapshot unit summary cannot be empty');
+  }
+  const content = contentIndex === undefined
+    ? null
+    : lines.slice(contentIndex + 1).join('\n').trim() || null;
+  return { title, summary, content };
+}
+
+function parseSnapshotContentMetadata(value: string): UnitMetadata | null {
+  const match = value.match(/^\s*<!--\s*(.*?)\s*-->\s*$/);
   if (!match) {
     return null;
   }
+  const body = match[1] ?? '';
+  const refsMatch = body.match(/(?:^|;)\s*refs:\s*\[([^\]]*)\]\s*(?:;|$)/i);
+  if (!refsMatch) {
+    return null;
+  }
+  const sequenceMatch = body.match(/(?:^|;)\s*sequence:\s*([^;]+?)\s*(?:;|$)/i);
+  const sequence = sequenceMatch ? Number(sequenceMatch[1]!.trim()) : undefined;
+  if (sequence !== undefined && (!Number.isInteger(sequence) || sequence < 0)) {
+    throw new Error(`invalid extraction sequence: ${sequenceMatch?.[1] ?? ''}`);
+  }
   return {
-    references: parseThreadMemoryRefs(match[1]),
+    ...(sequence === undefined ? {} : { sequence }),
+    references: parseSnapshotContentRefs(refsMatch[1]),
   };
 }
 
-function parseThreadMemoryRefs(value: string): string[] {
+function renderMetadata(value: UnitMetadata): string {
+  const parts = [];
+  if (value.sequence !== undefined) {
+    parts.push(`sequence: ${value.sequence}`);
+  }
+  if (value.references.length > 0) {
+    parts.push(`refs: [${value.references.join(', ')}]`);
+  }
+  return `<!-- ${parts.join('; ')} -->`;
+}
+
+function splitUnits(value: string): string[] {
+  return value
+    .split(/^\s*----\s*$/m)
+    .map((unit) => unit.trim())
+    .filter(Boolean);
+}
+
+function parseSnapshotContentRefs(value: string): string[] {
   const references = value
     .split(',')
-    .map((reference) => reference.trim())
+    .map((reference) => reference.trim().replace(/^['"]|['"]$/g, ''))
     .filter(Boolean);
   if (references.length === 0) {
-    throw new Error('threadMemory metadata refs must include at least one reference');
+    throw new Error('snapshot content metadata refs must include at least one reference');
   }
   return [...new Set(references)];
 }
 
-function validateThreadMemoryReferences(references: string[], validReferences: Set<string>): void {
+function validateSnapshotContentReferences(references: string[], validReferences: Set<string>): void {
   if (references.length === 0) {
-    throw new Error('threadMemory metadata must include refs');
+    throw new Error('snapshot content metadata must include refs');
   }
   for (const reference of references) {
     if (!validReferences.has(reference)) {
-      throw new Error(`threadMemory referenced unknown ref: ${reference}`);
+      throw new Error(`snapshot content referenced unknown ref: ${reference}`);
     }
   }
 }
 
-function parseThreadMemoryAnchors(lines: string[]): ThreadMemoryAnchor[] {
-  const anchors: ThreadMemoryAnchor[] = [];
-  for (const line of lines) {
-    const match = line.match(/^\s*\[([A-Za-z]+)\]\s*(.*?)\s*$/);
-    if (!match) {
-      continue;
-    }
-    const label = match[1] ?? '';
-    if (label === 'Context' || label === 'Extraction') {
-      continue;
-    }
-    anchors.push({
-      name: normalizeThreadMemoryAnchorName(label),
-      phrase: normalizeText(match[2] ?? ''),
-    });
-  }
-
-  if (anchors.length === 0) {
-    throw new Error('threadMemory unit must include at least one anchor');
-  }
-  if (anchors.length > 3) {
-    throw new Error('threadMemory unit cannot include more than three anchors');
-  }
-  for (const anchor of anchors) {
-    validateThreadMemoryAnchorPhrase(anchor.phrase);
-  }
-  return anchors;
+function headingIndex(lines: string[], level: number, label: string): number | undefined {
+  const hashes = '#'.repeat(level);
+  const regex = new RegExp(`^${hashes}\\s+${escapeRegExp(label)}\\s*$`, 'i');
+  const index = lines.findIndex((line) => regex.test(line));
+  return index >= 0 ? index : undefined;
 }
 
-function renderThreadMemoryAnchors(anchors: ThreadMemoryAnchor[]): string[] {
-  return anchors.map((anchor) => `${anchor.name}: ${anchor.phrase}`);
-}
-
-function normalizeThreadMemoryAnchorName(value: string): ThreadMemoryAnchor['name'] {
-  const text = value.trim();
-  if (
-    text !== 'Preference'
-    && text !== 'Fact'
-    && text !== 'Decision'
-    && text !== 'Entity'
-  ) {
-    throw new Error(`invalid thread memory anchor: ${value}`);
+function parseRequiredTitle(lines: string[]): string {
+  const title = parseOptionalTitle(lines);
+  if (title === undefined) {
+    throw new Error('snapshot content document must include # title');
   }
-  return text;
+  return title;
 }
 
-function validateThreadMemoryAnchorPhrase(value: string): void {
-  const words = value.split(/\s+/).filter(Boolean);
-  if (words.length < 1 || words.length > 5) {
-    throw new Error('threadMemory anchor phrase must contain 1-5 words');
+function parseOptionalTitle(lines: string[]): string | undefined {
+  const index = lines.findIndex((line) => /^#\s+(.+?)\s*$/.test(line));
+  if (index < 0) {
+    return undefined;
+  }
+  return normalizeTitle(lines[index]!.replace(/^#\s+/, ''));
+}
+
+function rejectJson(value: string): void {
+  if (/^\s*\{/.test(value)) {
+    throw new Error('extraction result must return snapshot content Markdown, not JSON');
   }
 }
 
-function wordCount(value: string): number {
-  return value.split(/\s+/).filter(Boolean).length;
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 function normalizeText(value: string): string {
   return value.split(/\s+/).join(' ').trim();
+}
+
+function normalizeTitle(value: string): string {
+  const title = normalizeText(value);
+  if (!title) {
+    throw new Error('snapshot title cannot be empty');
+  }
+  return title;
+}
+
+function normalizeContext(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  return trimmed;
 }

@@ -202,7 +202,7 @@ export interface MemoryReference {
   summary: string;
 }
 
-export interface ObservingCard {
+export interface SessionSnapshotCard {
   memoryId: string;
   title: string;
   summary: string;
@@ -210,8 +210,8 @@ export interface ObservingCard {
   references: MemoryReference[];
 }
 
-export interface ObservingListResponse {
-  extractions: ObservingCard[];
+export interface SessionSnapshotListResponse {
+  sessionSnapshots: SessionSnapshotCard[];
   requestId: string;
 }
 

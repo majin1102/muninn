@@ -8,13 +8,13 @@ import type {
   Extraction,
   ExtractionCategory,
   ExtractionChange,
-  ObserveResult,
+  ExtractSessionMemoryResult,
   SnapshotContent,
 } from './types.js';
 
 export function applyExtractionChanges(
   currentExtractions: Extraction[],
-  result: ObserveResult,
+  result: ExtractSessionMemoryResult,
 ): {
   extractionChanges: ExtractionChange[];
   extractions: Extraction[];
@@ -388,6 +388,7 @@ function cloneExtraction(
   }
   return {
     id: extraction.id?.trim() || null,
+    title: normalizeText(extraction.title ?? '') || null,
     text,
     context: normalizeText(extraction.context ?? '') || null,
     anchors: normalizeAnchors(extraction.anchors ?? []),

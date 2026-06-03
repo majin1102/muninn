@@ -31,7 +31,7 @@ import { getNativeTables } from '../dist/native.js';
 const { __testing: updateTesting } = updateModule;
 const { __testing: threadTesting } = threadModule;
 const { __testing: observingGatewayTesting } = observingGatewayModule;
-const { createObservingThread, getPendingIndex, getPendingIndexUpTo, loadThreads, toSessionSnapshot } = threadModule;
+const { createSessionMemoryThread, getPendingIndex, getPendingIndexUpTo, loadThreads, toSessionSnapshot } = threadModule;
 const { addMessage, observer: observerApi, shutdownCoreForTests } = core;
 const CHECKPOINT_SCHEMA_VERSION = 7;
 let defaultConfigDir = null;
@@ -619,7 +619,7 @@ function deferred() {
   return { promise, resolve, reject };
 }
 
-function makeObservableTurn(turnId, observingEpoch, text) {
+function makeObservableTurn(turnId, extractionEpoch, text) {
   return {
     turnId,
     createdAt: '2024-01-01T00:00:00Z',
@@ -634,7 +634,7 @@ function makeObservableTurn(turnId, observingEpoch, text) {
     ],
     prompt: `${text} prompt`,
     response: `${text} response`,
-    observingEpoch,
+    observingEpoch: extractionEpoch,
   };
 }
 
@@ -660,7 +660,7 @@ function storedExtraction(id) {
   };
 }
 
-function threadMemoryDocument(units, {
+function snapshotContentFixture(units, {
   title = 'Painting Memory',
   summary = 'This thread tracks durable painting memory.',
 } = {}) {
@@ -706,7 +706,7 @@ function makeTurnContent(prompt, response, overrides = {}) {
   };
 }
 
-test('createObservingThread preserves complete readable title and summary text', () => {
+test('createSessionMemoryThread preserves complete readable title and summary text', () => {
   const title = 'Caroline LGBTQ support group impact and counseling career direction';
   const summary = [
     'Caroline attended an LGBTQ support group on 7 May 2023.',
@@ -715,7 +715,7 @@ test('createObservingThread preserves complete readable title and summary text',
     'Melanie believes Caroline would be a strong counselor because of Caroline\'s empathy and understanding.',
   ].join(' ');
 
-  const thread = createObservingThread(
+  const thread = createSessionMemoryThread(
     'default-observer',
     title,
     summary,
@@ -1768,7 +1768,7 @@ test('watchdog rewrites checkpoint when observer content changes', async (t) => 
 test('getPendingIndex returns the unindexed snapshot range', () => {
   const pending = getPendingIndex({
     sessionId: 'session-a',
-    observingEpoch: 7,
+    extractionEpoch: 7,
     title: 'Title',
     summary: 'Summary',
     snapshots: [
@@ -1791,7 +1791,7 @@ test('getPendingIndex returns the unindexed snapshot range', () => {
 test('getPendingIndexUpTo only reports snapshots at or before the barrier epoch', () => {
   const pending = getPendingIndexUpTo({
     sessionId: 'session-a',
-    observingEpoch: 8,
+    extractionEpoch: 8,
     title: 'Title',
     summary: 'Summary',
     snapshots: [
@@ -1826,7 +1826,7 @@ test('loadThreads filters snapshots by the configured active window', () => {
       observer: 'default-observer',
       title: 'Fresh thread',
       summary: 'Fresh summary',
-      content: threadMemoryDocument('', { title: 'Fresh thread', summary: 'Fresh summary' }),
+      content: snapshotContentFixture('', { title: 'Fresh thread', summary: 'Fresh summary' }),
       references: [],
     },
     {
@@ -1838,7 +1838,7 @@ test('loadThreads filters snapshots by the configured active window', () => {
       observer: 'default-observer',
       title: 'Stale thread',
       summary: 'Stale summary',
-      content: threadMemoryDocument('', { title: 'Stale thread', summary: 'Stale summary' }),
+      content: snapshotContentFixture('', { title: 'Stale thread', summary: 'Stale summary' }),
       references: [],
     },
   ];
@@ -1862,7 +1862,7 @@ test('loadThreads keeps full history for active threads', () => {
       observer: 'default-observer',
       title: 'Thread',
       summary: 'Summary',
-      content: threadMemoryDocument('', { title: 'Thread', summary: 'Summary' }),
+      content: snapshotContentFixture('', { title: 'Thread', summary: 'Summary' }),
       references: [],
     },
     {
@@ -1874,7 +1874,7 @@ test('loadThreads keeps full history for active threads', () => {
       observer: 'default-observer',
       title: 'Thread',
       summary: 'Summary',
-      content: threadMemoryDocument('', { title: 'Thread', summary: 'Summary' }),
+      content: snapshotContentFixture('', { title: 'Thread', summary: 'Summary' }),
       references: [],
     },
   ];
@@ -1898,7 +1898,7 @@ test('epochQueue.shift returns a published epoch without waiting', () => {
     observer: 'default-observer',
     summary: 'queued summary',
     response: 'queued response',
-    observingEpoch: 1,
+    extractionEpoch: 1,
   };
 
   queue.publishEpoch({ epoch: 1, turns: [turn] });
@@ -1923,7 +1923,7 @@ test('observer.watermark stays unresolved when only extraction index work is pen
       sessionId: 'session-a',
       snapshotId: 'snapshot-1',
       snapshotIds: ['snapshot-0', 'snapshot-1'],
-      observingEpoch: 7,
+      extractionEpoch: 7,
       title: 'Title',
       summary: 'Summary',
       snapshots: [
@@ -1964,7 +1964,7 @@ test('observer checkpoint export omits threads outside the active window', async
       sessionId: 'fresh-thread',
       snapshotId: 'fresh-snapshot',
       snapshotIds: ['fresh-snapshot'],
-      observingEpoch: 1,
+      extractionEpoch: 1,
       title: 'Fresh',
       summary: 'Fresh',
       snapshots: [{ extractions: [], contextRefs: [], openQuestions: [], nextSteps: [], extractionDelta: { before: [], after: [] } }],
@@ -1978,7 +1978,7 @@ test('observer checkpoint export omits threads outside the active window', async
       sessionId: 'stale-thread',
       snapshotId: 'stale-snapshot',
       snapshotIds: ['stale-snapshot'],
-      observingEpoch: 1,
+      extractionEpoch: 1,
       title: 'Stale',
       summary: 'Stale',
       snapshots: [{ extractions: [], contextRefs: [], openQuestions: [], nextSteps: [], extractionDelta: { before: [], after: [] } }],
@@ -2030,7 +2030,7 @@ test('observer bootstrap without checkpoint derives committedEpoch from session 
       observer: 'default-observer',
       title: 'Thread',
       summary: 'Summary',
-      content: threadMemoryDocument('', { title: 'Thread', summary: 'Summary' }),
+      content: snapshotContentFixture('', { title: 'Thread', summary: 'Summary' }),
       references: ['turn-13'],
     },
     {
@@ -2042,7 +2042,7 @@ test('observer bootstrap without checkpoint derives committedEpoch from session 
       observer: 'default-observer',
       title: 'Thread',
       summary: 'Summary',
-      content: threadMemoryDocument('', { title: 'Thread', summary: 'Summary' }),
+      content: snapshotContentFixture('', { title: 'Thread', summary: 'Summary' }),
       references: ['turn-13', 'turn-14'],
     },
   ];
@@ -2068,7 +2068,7 @@ test('observer bootstrap without checkpoint derives committedEpoch from session 
   assert.deepEqual(observer.threads[0].snapshotIds, ['snapshot-1', 'snapshot-2']);
 });
 
-test('observer bootstrap publishes pending turns by their observingEpoch', async (t) => {
+test('observer bootstrap publishes pending turns by their extractionEpoch', async (t) => {
   const { dir, homeDir, configPath } = await makeConfigHome();
   t.after(async () => rm(dir, { recursive: true, force: true }));
   process.env.MUNINN_HOME = homeDir;
@@ -2165,7 +2165,7 @@ test('observer bootstrap restores committed state from checkpoint when baselines
             observer: 'default-observer',
             title: 'Thread',
             summary: 'Summary',
-            content: threadMemoryDocument('', { title: 'Thread', summary: 'Summary' }),
+            content: snapshotContentFixture('', { title: 'Thread', summary: 'Summary' }),
             references: [],
           },
           {
@@ -2177,7 +2177,7 @@ test('observer bootstrap restores committed state from checkpoint when baselines
             observer: 'default-observer',
             title: 'Thread',
             summary: 'Summary',
-            content: threadMemoryDocument('', { title: 'Thread', summary: 'Summary' }),
+            content: snapshotContentFixture('', { title: 'Thread', summary: 'Summary' }),
             references: [],
           },
         ];
@@ -2266,7 +2266,7 @@ test('observer checkpoint restore keeps full history for active threads', async 
             observer: 'default-observer',
             title: 'Thread',
             summary: 'Summary',
-            content: threadMemoryDocument('', { title: 'Thread', summary: 'Summary' }),
+            content: snapshotContentFixture('', { title: 'Thread', summary: 'Summary' }),
             references: [],
           },
           {
@@ -2278,7 +2278,7 @@ test('observer checkpoint restore keeps full history for active threads', async 
             observer: 'default-observer',
             title: 'Thread',
             summary: 'Summary',
-            content: threadMemoryDocument('', { title: 'Thread', summary: 'Summary' }),
+            content: snapshotContentFixture('', { title: 'Thread', summary: 'Summary' }),
             references: [],
           },
         ];
@@ -2345,7 +2345,7 @@ test('observer restoreCheckpointState advances committedEpoch and excludes obser
           observer: 'default-observer',
           title: 'Thread',
           summary: 'Summary',
-          content: threadMemoryDocument('', { title: 'Thread', summary: 'Summary' }),
+          content: snapshotContentFixture('', { title: 'Thread', summary: 'Summary' }),
           references: ['turn-13'],
         },
         {
@@ -2357,7 +2357,7 @@ test('observer restoreCheckpointState advances committedEpoch and excludes obser
           observer: 'default-observer',
           title: 'Thread',
           summary: 'Summary',
-          content: threadMemoryDocument('', { title: 'Thread', summary: 'Summary' }),
+          content: snapshotContentFixture('', { title: 'Thread', summary: 'Summary' }),
           references: ['turn-13', 'turn-14'],
         },
       ],
@@ -2371,7 +2371,7 @@ test('observer restoreCheckpointState advances committedEpoch and excludes obser
           observer: 'default-observer',
           title: 'Thread',
           summary: 'Summary',
-          content: threadMemoryDocument('', { title: 'Thread', summary: 'Summary' }),
+          content: snapshotContentFixture('', { title: 'Thread', summary: 'Summary' }),
           references: [],
         },
         {
@@ -2383,7 +2383,7 @@ test('observer restoreCheckpointState advances committedEpoch and excludes obser
           observer: 'default-observer',
           title: 'Thread',
           summary: 'Summary',
-          content: threadMemoryDocument('', { title: 'Thread', summary: 'Summary' }),
+          content: snapshotContentFixture('', { title: 'Thread', summary: 'Summary' }),
           references: ['turn-13'],
         },
         {
@@ -2395,7 +2395,7 @@ test('observer restoreCheckpointState advances committedEpoch and excludes obser
           observer: 'default-observer',
           title: 'Thread',
           summary: 'Summary',
-          content: threadMemoryDocument('', { title: 'Thread', summary: 'Summary' }),
+          content: snapshotContentFixture('', { title: 'Thread', summary: 'Summary' }),
           references: ['turn-13', 'turn-14'],
         },
       ],
@@ -2449,7 +2449,7 @@ test('observer restoreCheckpointState falls back when session delta refs are mis
           observer: 'default-observer',
           title: 'Thread',
           summary: 'Summary',
-          content: threadMemoryDocument('', { title: 'Thread', summary: 'Summary' }),
+          content: snapshotContentFixture('', { title: 'Thread', summary: 'Summary' }),
           references: ['missing-turn'],
         },
       ],
@@ -2463,7 +2463,7 @@ test('observer restoreCheckpointState falls back when session delta refs are mis
           observer: 'default-observer',
           title: 'Thread',
           summary: 'Summary',
-          content: threadMemoryDocument('', { title: 'Thread', summary: 'Summary' }),
+          content: snapshotContentFixture('', { title: 'Thread', summary: 'Summary' }),
           references: [],
         },
       ],
@@ -2501,7 +2501,7 @@ test('observer restoreCheckpointState skips stale threads resource only from ses
     observer: 'default-observer',
     title: 'Stale Thread',
     summary: 'Summary',
-    content: threadMemoryDocument('', { title: 'Thread', summary: 'Summary' }),
+    content: snapshotContentFixture('', { title: 'Thread', summary: 'Summary' }),
     references: ['turn-13'],
   };
   const observer = new Observer({
@@ -2547,7 +2547,7 @@ test('observer restoreCheckpointState rebuilds delta-only threads from full hist
     observer: 'default-observer',
     title: 'Legacy Thread',
     summary: `Summary ${index}`,
-    content: threadMemoryDocument('', { title: 'Thread', summary: 'Summary' }),
+    content: snapshotContentFixture('', { title: 'Thread', summary: 'Summary' }),
     references: Array.from({ length: index + 1 }, (_, turnIndex) => `turn-${turnIndex + 1}`),
   }));
   const turnById = new Map(fullRows.map((row, index) => [
@@ -2683,7 +2683,7 @@ test('observer exportCheckpoint keeps the last committed snapshot while observeC
     sessionId: 'session-a',
     snapshotId: 'snapshot-0',
     snapshotIds: ['snapshot-0'],
-    observingEpoch: 0,
+    extractionEpoch: 0,
     title: 'Existing title',
     summary: 'Existing summary',
     snapshots: [
@@ -2793,7 +2793,7 @@ test('observer bootstrap ignores extraction version mismatches when session base
           observer: 'default-observer',
           title: 'Thread',
           summary: 'Summary',
-          content: threadMemoryDocument('', { title: 'Thread', summary: 'Summary' }),
+          content: snapshotContentFixture('', { title: 'Thread', summary: 'Summary' }),
           references: [],
         },
         {
@@ -2805,7 +2805,7 @@ test('observer bootstrap ignores extraction version mismatches when session base
           observer: 'default-observer',
           title: 'Thread',
           summary: 'Summary',
-          content: threadMemoryDocument('', { title: 'Thread', summary: 'Summary' }),
+          content: snapshotContentFixture('', { title: 'Thread', summary: 'Summary' }),
           references: [],
         },
       ],
@@ -3739,7 +3739,7 @@ test('open epoch skips deduped turns when staging observable turns', async () =>
     artifacts: null,
     prompt: 'prompt',
     response: 'response',
-    observingEpoch: 7,
+    extractionEpoch: 7,
   };
   const sessionRegistry = {
     load: async () => ({
@@ -3790,15 +3790,15 @@ test('observer.observeCurrentEpoch keeps thread state unchanged when pre-commit 
       observer: 'default-observer',
       summary: 'pending summary',
       response: 'pending response',
-      observingEpoch: 1,
+      extractionEpoch: 1,
     };
     const originalThreads = [{
-      observingId: 'session-a',
+      threadId: 'session-a',
       sessionId: 'session-a',
       kind: 'session',
       snapshotId: 'snapshot-0',
       snapshotIds: ['snapshot-0'],
-      observingEpoch: 0,
+      extractionEpoch: 0,
       title: 'Existing title',
       summary: 'Existing summary',
       snapshots: [
@@ -3853,7 +3853,7 @@ test('snapshot extraction state rewrite updates and deletes extraction rows', as
     { id: 'obs-b', text: 'obs-b old text', category: 'Fact', references: ['turn:2'] },
   ], {
     title: 'T',
-    threadMemory: 'S',
+    snapshotContent: 'S',
     extractions: [
       { id: 'obs-a', text: 'updated career memory', context: 'updated context', anchors: ['Decision: career plan'], category: 'Decision', references: ['turn:2'] },
       { text: 'new painting memory', context: 'new context', anchors: ['Preference: painting'], category: 'Preference', references: ['turn:3'] },
@@ -3890,7 +3890,7 @@ test('extraction state rewrite computes update add and delete changes', () => {
 
   const result = applyExtractionChanges(current, {
     title: 'T',
-    threadMemory: 'S',
+    snapshotContent: 'S',
     extractions: [
       { id: 'obs-a', text: 'updated career memory', category: 'Decision', references: ['turn:1', 'turn:3'] },
       { text: 'new painting memory', category: 'Preference', references: ['turn:4'] },
@@ -3914,7 +3914,7 @@ test('extraction state rewrite rejects unknown and duplicate ids', () => {
   assert.throws(
     () => applyExtractionChanges(current, {
       title: 'T',
-      threadMemory: 'S',
+      snapshotContent: 'S',
       extractions: [{ id: 'missing', text: 'updated', category: 'Fact', references: ['turn:1'] }],
       openQuestions: [],
       nextSteps: [],
@@ -3926,7 +3926,7 @@ test('extraction state rewrite rejects unknown and duplicate ids', () => {
   assert.throws(
     () => applyExtractionChanges(current, {
       title: 'T',
-      threadMemory: 'S',
+      snapshotContent: 'S',
       extractions: [
         { id: 'obs-a', text: 'updated', category: 'Fact', references: ['turn:1'] },
         { id: 'obs-a', text: 'duplicate', category: 'Fact', references: ['turn:1'] },
@@ -4136,7 +4136,7 @@ test('buildExtraction surfaces extraction write failures and leaves work pending
       sessionId: 'session-a',
       snapshotId: 'snapshot-1',
       snapshotIds: ['snapshot-0', 'snapshot-1'],
-      observingEpoch: 7,
+      extractionEpoch: 7,
       title: 'Title',
       summary: 'Summary',
       snapshots: [
@@ -4228,7 +4228,7 @@ test('gateway validation accepts session fragments', () => {
 test('gateway system prompt injects chat session thread definition only', () => {
   const system = observingGatewayTesting.buildGatewaySystemPromptForTests('chat');
 
-  assert.match(system, /Observing thread definition/);
+  assert.match(system, /Session memory thread definition/);
   assert.match(system, /tracks one coherent subject that can develop over time/);
   assert.match(system, /narrower than the whole conversation and more stable than a single message/);
   assert.match(system, /updates, answers, clarifies, corrects, supports, or directly continues/);
@@ -4282,27 +4282,33 @@ test('gateway validation rejects session fragments with unknown threads', () => 
   );
 });
 
-test('observer validation derives extractions from thread memory', () => {
-  const result = observingGatewayTesting.validateObserveResultForTests(
-    threadMemoryDocument([
+test('observer validation derives extractions from titled snapshot content', () => {
+  const result = observingGatewayTesting.validateExtractSessionMemoryResultForTests(
+    snapshotContentFixture([
       '<!-- refs: [turn:13] -->',
-      '[Entity] Melanie',
-      '[Fact] lake sunrise',
-      '[Context] Caroline asked whether Melanie painted the lake sunrise herself.',
-      '[Extraction] Melanie painted a lake sunrise in 2022.',
+      '### Title',
+      'Lake sunrise painting',
+      '',
+      '### Summary',
+      'Melanie painted a lake sunrise in 2022.',
+      '',
+      '### Content',
+      'Caroline asked whether Melanie painted the lake sunrise herself.',
       '',
       '----',
       '',
       '<!-- refs: [turn:13] -->',
-      '[Entity] lake painting',
-      '[Fact] special painting',
-      '[Extraction] The lake sunrise painting is special to Melanie.',
+      '### Title',
+      'Special lake painting',
+      '',
+      '### Summary',
+      'The lake sunrise painting is special to Melanie.',
     ].join('\n'), {
       title: 'Melanie Painting',
       summary: 'Melanie painted a lake sunrise in 2022.',
     }),
     {
-      observingContent: {
+      sessionMemoryContent: {
         title: 'Painting',
         summary: '',
         extractions: [],
@@ -4322,103 +4328,70 @@ test('observer validation derives extractions from thread memory', () => {
     turnId: 'turn:13',
     summary: 'Summary: Melanie says she painted the lake sunrise in 2022, described as last year relative to 8 May 2023.',
   }]);
-  assert.equal(result.threadMemory, threadMemoryDocument([
-      '<!-- refs: [turn:13] -->',
-      '[Entity] Melanie',
-    '[Fact] lake sunrise',
-    '[Context] Caroline asked whether Melanie painted the lake sunrise herself.',
-    '[Extraction] Melanie painted a lake sunrise in 2022.',
+  assert.equal(result.snapshotContent, snapshotContentFixture([
+    '<!-- refs: [turn:13] -->',
+    '### Title',
+    'Lake sunrise painting',
+    '',
+    '### Summary',
+    'Melanie painted a lake sunrise in 2022.',
+    '',
+    '### Content',
+    'Caroline asked whether Melanie painted the lake sunrise herself.',
     '',
     '----',
     '',
-      '<!-- refs: [turn:13] -->',
-      '[Entity] lake painting',
-      '[Fact] special painting',
-      '[Extraction] The lake sunrise painting is special to Melanie.',
+    '<!-- refs: [turn:13] -->',
+    '### Title',
+    'Special lake painting',
+    '',
+    '### Summary',
+    'The lake sunrise painting is special to Melanie.',
   ].join('\n'), {
     title: 'Melanie Painting',
     summary: 'Melanie painted a lake sunrise in 2022.',
   }));
   assert.deepEqual(result.extractions, [{
+    title: 'Lake sunrise painting',
     text: 'Melanie painted a lake sunrise in 2022.',
     context: 'Caroline asked whether Melanie painted the lake sunrise herself.',
-    anchors: ['Entity: Melanie', 'Fact: lake sunrise'],
-    category: 'Entity',
+    anchors: [],
+    category: 'Other',
     references: ['turn:13'],
   }, {
+    title: 'Special lake painting',
     text: 'The lake sunrise painting is special to Melanie.',
     context: null,
-    anchors: ['Entity: lake painting', 'Fact: special painting'],
-    category: 'Entity',
+    anchors: [],
+    category: 'Other',
     references: ['turn:13'],
   }]);
 });
 
-test('observer validation rejects thread memory units without extraction marker', () => {
-  assert.throws(
-    () => observingGatewayTesting.validateObserveResultForTests(
-      threadMemoryDocument([
-        '<!-- refs: [turn:13] -->',
-        '[Entity] Melanie',
-        '[Context] Caroline asked whether Melanie painted the lake sunrise herself.',
-        'Melanie painted a lake sunrise in 2022.',
-      ].join('\n')),
-      {
-        observingContent: {
-          title: 'Painting',
-          summary: '',
-          extractions: [],
-          openQuestions: [],
-          nextSteps: [],
-        },
-        turns: [{ turnId: 'turn:13', summary: 'Melanie discussed painting.' }],
-      },
-    ),
-    /must include \[Extraction\]/i,
-  );
-});
-
-test('observer validation rejects legacy uppercase context and extraction markers', () => {
-  assert.throws(
-    () => observingGatewayTesting.validateObserveResultForTests(
-      threadMemoryDocument([
-        '<!-- refs: [turn:13] -->',
-        '[Entity] Melanie',
-        '[CONTEXT] Caroline asked whether Melanie painted the lake sunrise herself.',
-        '[EXTRACTION] Melanie painted a lake sunrise in 2022.',
-      ].join('\n')),
-      {
-        observingContent: {
-          title: 'Painting',
-          summary: '',
-          extractions: [],
-          openQuestions: [],
-          nextSteps: [],
-        },
-        turns: [{ turnId: 'turn:13', summary: 'Melanie discussed painting.' }],
-      },
-    ),
-    /invalid thread memory anchor: CONTEXT/i,
-  );
-});
-
-test('observer validation keeps independent refs per thread memory unit', () => {
-  const result = observingGatewayTesting.validateObserveResultForTests(
-    threadMemoryDocument([
+test('observer validation keeps independent refs per snapshot content unit', () => {
+  const result = observingGatewayTesting.validateExtractSessionMemoryResultForTests(
+    snapshotContentFixture([
       '<!-- refs: [turn:13] -->',
-      '[Entity] Melanie',
-      '[Fact] lake sunrise',
-      '[Extraction] Melanie painted a lake sunrise in 2022.',
+      '### Title',
+      'Lake sunrise painting',
+      '',
+      '### Summary',
+      'Melanie painted a lake sunrise in 2022.',
       '',
       '----',
       '',
       '<!-- refs: [turn:14, turn:15] -->',
-      '[Entity] Caroline',
-      '[Decision] counseling work',
-      '[Extraction] Caroline plans to explore counseling work.',
-    ].join('\n')),
+      '### Title',
+      'Counseling work',
+      '',
+      '### Summary',
+      'Caroline plans to explore counseling work.',
+    ].join('\n'), {
+      title: 'Session',
+      summary: 'Session memory.',
+    }),
     {
-      observingContent: {
+      sessionMemoryContent: {
         title: 'Session',
         summary: '',
         extractions: [],
@@ -4439,8 +4412,8 @@ test('observer validation keeps independent refs per thread memory unit', () => 
   ]);
 });
 
-test('observer validation accepts markdown fenced thread memory', () => {
-  const result = observingGatewayTesting.validateObserveResultForTests(
+test('observer validation accepts markdown fenced snapshot content', () => {
+  const result = observingGatewayTesting.validateExtractSessionMemoryResultForTests(
     [
       '```markdown',
       '# Painting Memory',
@@ -4450,12 +4423,15 @@ test('observer validation accepts markdown fenced thread memory', () => {
       '',
       '## Extractions',
       '<!-- refs: [turn:13] -->',
-      '[Entity] Melanie',
-      '[Extraction] Melanie painted a lake sunrise in 2022.',
+      '### Title',
+      'Lake sunrise painting',
+      '',
+      '### Summary',
+      'Melanie painted a lake sunrise in 2022.',
       '```',
     ].join('\n'),
     {
-      observingContent: {
+      sessionMemoryContent: {
         title: 'Painting',
         summary: '',
         extractions: [],
@@ -4466,19 +4442,19 @@ test('observer validation accepts markdown fenced thread memory', () => {
     },
   );
 
-  assert.equal(result.threadMemory, threadMemoryDocument(
-    '<!-- refs: [turn:13] -->\n[Entity] Melanie\n[Extraction] Melanie painted a lake sunrise in 2022.',
+  assert.equal(result.snapshotContent, snapshotContentFixture(
+    '<!-- refs: [turn:13] -->\n### Title\nLake sunrise painting\n\n### Summary\nMelanie painted a lake sunrise in 2022.',
     { title: 'Painting Memory', summary: 'Melanie discussed a lake sunrise painting.' },
   ));
   assert.deepEqual(result.extractions[0].references, ['turn:13']);
 });
 
-test('observer validation rejects thread memory units without metadata', () => {
+test('observer validation rejects snapshot content units without metadata', () => {
   assert.throws(
-    () => observingGatewayTesting.validateObserveResultForTests(
-      threadMemoryDocument('[Fact]\nMelanie painted a lake sunrise in 2022.'),
+    () => observingGatewayTesting.validateExtractSessionMemoryResultForTests(
+      snapshotContentFixture('### Title\nPainting\n\n### Summary\nMelanie painted a lake sunrise in 2022.'),
       {
-        observingContent: {
+        sessionMemoryContent: {
           title: 'Painting',
           summary: '',
           extractions: [],
@@ -4492,12 +4468,12 @@ test('observer validation rejects thread memory units without metadata', () => {
   );
 });
 
-test('observer validation rejects legacy category metadata', () => {
+test('observer validation rejects legacy snapshot content format', () => {
   assert.throws(
-    () => observingGatewayTesting.validateObserveResultForTests(
-      threadMemoryDocument('<!-- categories: [Fact]; refs: [turn:13] -->\n[Entity] Melanie\n[Extraction] Melanie painted a lake sunrise in 2022.'),
+    () => observingGatewayTesting.validateExtractSessionMemoryResultForTests(
+      snapshotContentFixture('<!-- categories: [Fact]; refs: [turn:13] -->\n[Entity] Melanie\n[Extraction] Melanie painted a lake sunrise in 2022.'),
       {
-        observingContent: {
+        sessionMemoryContent: {
           title: 'Painting',
           summary: '',
           extractions: [],
@@ -4507,16 +4483,16 @@ test('observer validation rejects legacy category metadata', () => {
         turns: [{ turnId: 'turn:13', summary: 'Melanie discussed painting.' }],
       },
     ),
-    /must start with metadata comment/i,
+    /snapshot unit must include ### Title|snapshot patch extraction must start with metadata comment/i,
   );
 });
 
-test('observer validation rejects thread memory units without anchors', () => {
+test('observer validation rejects snapshot content units without title', () => {
   assert.throws(
-    () => observingGatewayTesting.validateObserveResultForTests(
-      threadMemoryDocument('<!-- refs: [turn:13] -->\n[Extraction] Melanie painted a lake sunrise in 2022.'),
+    () => observingGatewayTesting.validateExtractSessionMemoryResultForTests(
+      snapshotContentFixture('<!-- refs: [turn:13] -->\n### Summary\nMelanie painted a lake sunrise in 2022.'),
       {
-        observingContent: {
+        sessionMemoryContent: {
           title: 'Painting',
           summary: '',
           extractions: [],
@@ -4526,16 +4502,16 @@ test('observer validation rejects thread memory units without anchors', () => {
         turns: [{ turnId: 'turn:13', summary: 'Melanie discussed painting.' }],
       },
     ),
-    /must include at least one anchor/i,
+    /must include ### Title/i,
   );
 });
 
-test('observer validation rejects unknown thread memory refs', () => {
+test('observer validation rejects unknown snapshot content refs', () => {
   assert.throws(
-    () => observingGatewayTesting.validateObserveResultForTests(
-      threadMemoryDocument('<!-- refs: [session:missing] -->\n[Entity] Melanie\n[Extraction] Melanie painted a lake sunrise in 2022.'),
+    () => observingGatewayTesting.validateExtractSessionMemoryResultForTests(
+      snapshotContentFixture('<!-- refs: [session:missing] -->\n### Title\nPainting\n\n### Summary\nMelanie painted a lake sunrise in 2022.'),
       {
-        observingContent: {
+        sessionMemoryContent: {
           title: 'Painting',
           summary: '',
           extractions: [],
@@ -4549,12 +4525,12 @@ test('observer validation rejects unknown thread memory refs', () => {
   );
 });
 
-test('observer validation rejects thread memory units without refs metadata', () => {
+test('observer validation rejects snapshot content units without refs metadata', () => {
   assert.throws(
-    () => observingGatewayTesting.validateObserveResultForTests(
-      threadMemoryDocument('<!-- refs: [] -->\n[Entity] Melanie\n[Extraction] Melanie painted a lake sunrise in 2022.'),
+    () => observingGatewayTesting.validateExtractSessionMemoryResultForTests(
+      snapshotContentFixture('<!-- refs: [] -->\n### Title\nPainting\n\n### Summary\nMelanie painted a lake sunrise in 2022.'),
       {
-        observingContent: {
+        sessionMemoryContent: {
           title: 'Painting',
           summary: '',
           extractions: [],
@@ -4570,39 +4546,36 @@ test('observer validation rejects thread memory units without refs metadata', ()
 
 test('observer validation rejects JSON output', () => {
   assert.throws(
-    () => observingGatewayTesting.validateObserveResultForTests(JSON.stringify({
+    () => observingGatewayTesting.validateExtractSessionMemoryResultForTests(JSON.stringify({
       title: 'Painting',
-      threadMemory: '<!-- refs: [turn:13] -->\n[Entity] Melanie\n[Extraction] Melanie painted a lake sunrise.',
+      snapshotContent: '<!-- refs: [turn:13] -->\n### Title\nPainting\n\n### Summary\nMelanie painted a lake sunrise.',
       openQuestions: [],
       nextSteps: [],
       contextRefs: [],
     })),
-    /must return thread memory Markdown, not JSON/i,
+    /must return snapshot content Markdown, not JSON/i,
   );
 });
 
-test('observer validation rejects summaries longer than 500 words', () => {
-  assert.throws(
-    () => observingGatewayTesting.validateObserveResultForTests(
-      threadMemoryDocument(
-        '<!-- refs: [turn:13] -->\n[Entity] Melanie\n[Fact] painting\n[Extraction] Melanie painted a lake sunrise in 2022.',
-        { summary: Array.from({ length: 501 }, (_, index) => `word${index}`).join(' ') },
-      ),
-      {
-        observingContent: { title: 'Painting', summary: '', extractions: [], openQuestions: [], nextSteps: [] },
-        turns: [{ turnId: 'turn:13', summary: 'Melanie discussed painting.' }],
-      },
+test('observer validation accepts long titles without runtime length rejection', () => {
+  const result = observingGatewayTesting.validateExtractSessionMemoryResultForTests(
+    snapshotContentFixture(
+      `<!-- refs: [turn:13] -->\n### Title\n${'x'.repeat(81)}\n\n### Summary\nMelanie painted a lake sunrise in 2022.`,
     ),
-    /summary must be 500 words or fewer/i,
+    {
+      sessionMemoryContent: { title: 'Painting', summary: '', extractions: [], openQuestions: [], nextSteps: [] },
+      turns: [{ turnId: 'turn:13', summary: 'Melanie discussed painting.' }],
+    },
   );
+  assert.equal(result.extractions[0].title, 'x'.repeat(81));
 });
 
-test('observer validation rejects invalid thread memory anchors', () => {
+test('observer validation rejects snapshot content units without summary', () => {
   assert.throws(
-    () => observingGatewayTesting.validateObserveResultForTests(
-      threadMemoryDocument('<!-- refs: [turn:13] -->\n[Goal] painting\n[Extraction] Melanie wants to paint more.'),
+    () => observingGatewayTesting.validateExtractSessionMemoryResultForTests(
+      snapshotContentFixture('<!-- refs: [turn:13] -->\n### Title\nPainting'),
       {
-        observingContent: {
+        sessionMemoryContent: {
           title: 'Painting',
           summary: '',
           extractions: [],
@@ -4612,70 +4585,52 @@ test('observer validation rejects invalid thread memory anchors', () => {
         turns: [{ turnId: 'turn:13', summary: 'Melanie discussed painting.' }],
       },
     ),
-    /invalid thread memory anchor/i,
+    /must include ### Summary/i,
   );
 });
 
-test('observer validation rejects more than three thread memory anchors', () => {
-  assert.throws(
-    () => observingGatewayTesting.validateObserveResultForTests(
-      threadMemoryDocument('<!-- refs: [turn:13] -->\n[Entity] Melanie\n[Fact] painting\n[Decision] paint more\n[Preference] creative outlet\n[Extraction] Melanie wants to paint more.'),
-      {
-        observingContent: {
-          title: 'Painting',
-          summary: '',
-          extractions: [],
-          openQuestions: [],
-          nextSteps: [],
-        },
-        turns: [{ turnId: 'turn:13', summary: 'Melanie discussed painting.' }],
-      },
-    ),
-    /cannot include more than three anchors/i,
-  );
-});
-
-test('observer validation rejects long thread memory anchor phrases', () => {
-  assert.throws(
-    () => observingGatewayTesting.validateObserveResultForTests(
-      threadMemoryDocument('<!-- refs: [turn:13] -->\n[Fact] this anchor phrase has too many words\n[Extraction] Melanie wants to paint more.'),
-      {
-        observingContent: {
-          title: 'Painting',
-          summary: '',
-          extractions: [],
-          openQuestions: [],
-          nextSteps: [],
-        },
-        turns: [{ turnId: 'turn:13', summary: 'Melanie discussed painting.' }],
-      },
-    ),
-    /anchor phrase must contain 1-5 words/i,
-  );
-});
-
-test('thread session memory-get expands visible raw turns only', async (t) => {
+test('thread session getExtraction expands visible extraction sequences only', async (t) => {
   const { dir, homeDir, configPath } = await makeConfigHome();
   t.after(async () => rm(dir, { recursive: true, force: true }));
 
   process.env.MUNINN_HOME = homeDir;
   await writeOpenAiObserverConfig(configPath);
   const tracePath = path.join(dir, 'thread-session-trace.jsonl');
-  process.env.MUNINN_THREAD_OBSERVING_TRACE_FILE = tracePath;
+  process.env.MUNINN_SESSION_MEMORY_TRACE_FILE = tracePath;
   t.after(() => {
-    delete process.env.MUNINN_THREAD_OBSERVING_TRACE_FILE;
+    delete process.env.MUNINN_SESSION_MEMORY_TRACE_FILE;
   });
 
   const requests = [];
-  const result = await observingGatewayModule.observeThread({
-    observingContent: {
+  const result = await observingGatewayModule.extractSessionMemory({
+    sessionMemoryContent: {
       title: 'Caroline support group',
       summary: 'Caroline discussed a support group.',
-      threadMemory: threadMemoryDocument('', {
-        title: 'Caroline support group',
-        summary: 'Caroline discussed a support group.',
-      }),
-      extractions: [{ id: 'obs-1', text: 'Existing support extraction.', category: 'Fact', references: ['turn:1'] }],
+      snapshotContent: [
+        '# Caroline support group',
+        '',
+        '## Summary',
+        'Caroline discussed a support group.',
+        '',
+        '## Extractions',
+        '<!-- refs: [turn:0] -->',
+        '### Title',
+        'Support group attendance',
+        '',
+        '### Summary',
+        'Existing support extraction.',
+        '',
+        '### Content',
+        '- Existing full detail.',
+      ].join('\n'),
+      extractions: [{
+        id: 'obs-1',
+        title: 'Support group attendance',
+        text: 'Existing support extraction.',
+        context: '- Existing full detail.',
+        category: 'Other',
+        references: ['turn:0'],
+      }],
       openQuestions: [],
       nextSteps: [],
     },
@@ -4685,17 +4640,6 @@ test('thread session memory-get expands visible raw turns only', async (t) => {
       response: '[imported dialogue event; no assistant response]',
     }],
   }, undefined, {
-    memories: {
-      get: async (memoryId) => ({
-        memoryId,
-        kind: memoryId.startsWith('extraction:') ? 'extraction' : memoryId.startsWith('session:') ? 'session' : 'session',
-        title: memoryId,
-        text: `detail for ${memoryId}`,
-        createdAt: '2026-01-01T00:00:00.000Z',
-        updatedAt: '2026-01-01T00:00:00.000Z',
-        detail: `detail for ${memoryId}`,
-      }),
-    },
     model: async (_task, request) => {
       requests.push(request);
       if (requests.length === 1) {
@@ -4703,55 +4647,68 @@ test('thread session memory-get expands visible raw turns only', async (t) => {
           type: 'tool_calls',
           toolCalls: [{
             id: 'call-1',
-            name: 'memory-get',
+            name: 'getExtraction',
             arguments: {
-              memoryIds: ['turn:1', 'extraction:obs-1', 'turn:1', 'session:missing'],
+              sequences: [0, 0, 42],
             },
           }],
         };
       }
       return {
         type: 'final',
-        text: threadMemoryDocument(
-          '<!-- refs: [turn:1] -->\n[Entity] Caroline\n[Fact] support group\n[Extraction] Caroline attended an LGBTQ support group on 7 May 2023.',
-          { title: 'Caroline Support Group', summary: 'Caroline attended an LGBTQ support group.' },
-        ),
+        text: [
+          '## Summary',
+          'Caroline attended an LGBTQ support group.',
+          '',
+          '## Extractions',
+          '<!-- sequence: 0; refs: [turn:1] -->',
+          '### Title',
+          'LGBTQ support group',
+          '',
+          '### Summary',
+          'Caroline attended an LGBTQ support group on 7 May 2023.',
+          '',
+          '### Content',
+          '- Caroline said she went to the support group yesterday relative to 8 May 2023.',
+        ].join('\n'),
       };
     },
   });
 
-  assert.equal(requests[0].tools[0].name, 'memory-get');
-  assert.match(requests[0].tools[0].description, /Get visible raw turn details/);
-  assert.match(requests[0].tools[0].description, /verify context/);
-  assert.match(requests[0].tools[0].description, /update memories/);
-  assert.match(requests[0].tools[0].parameters.properties.memoryIds.description, /Visible turns\[\]\.turnId values/);
+  assert.equal(requests[0].tools[0].name, 'getExtraction');
+  assert.match(requests[0].tools[0].description, /full extraction details/i);
+  assert.equal(requests[0].tools[0].parameters.properties.sequences.items.type, 'number');
   const firstUserMessage = requests[0].messages.find((message) => message.role === 'user');
   assert.ok(firstUserMessage);
+  assert.match(firstUserMessage.content, /## Current Snapshot/);
   assert.match(firstUserMessage.content, /# Caroline support group/);
-  assert.doesNotMatch(firstUserMessage.content, /existingThreadMemory/);
-  assert.match(firstUserMessage.content, /"newTurns"/);
-  assert.match(firstUserMessage.content, /"prompt"/);
-  assert.match(firstUserMessage.content, /"response"/);
-  assert.doesNotMatch(firstUserMessage.content, /"fragments"/);
-  assert.doesNotMatch(firstUserMessage.content, /"content"/);
-  assert.doesNotMatch(firstUserMessage.content, /"sourceRefs"/);
-  assert.doesNotMatch(firstUserMessage.content, /"excerpt"/);
-  assert.doesNotMatch(firstUserMessage.content, /allowedMemoryIds/);
+  assert.match(firstUserMessage.content, /### Title/);
+  assert.match(firstUserMessage.content, /### Summary/);
+  assert.match(firstUserMessage.content, /### Extractions/);
+  assert.doesNotMatch(firstUserMessage.content, /Extraction Index/);
+  assert.match(firstUserMessage.content, /<!-- sequence: 0 -->/);
+  assert.match(firstUserMessage.content, /Support group attendance/);
+  assert.match(firstUserMessage.content, /Existing support extraction\./);
+  assert.doesNotMatch(firstUserMessage.content, /turn:0/);
+  assert.doesNotMatch(firstUserMessage.content, /Existing full detail/);
+  assert.doesNotMatch(firstUserMessage.content, /existingSnapshotContent/);
+  assert.match(firstUserMessage.content, /## Current Batch Turns/);
   const toolMessage = requests[1].messages.find((message) => message.role === 'tool');
   assert.ok(toolMessage);
   const toolPayload = JSON.parse(toolMessage.content);
-  assert.match(toolPayload.memories[0].content, /detail for turn:1/);
-  assert.equal(toolPayload.memories[1].error, 'memory id is not allowlisted');
-  assert.equal(toolPayload.memories[2].error, 'memory id is not allowlisted');
+  assert.match(toolPayload.extractions[0].content, /Existing full detail/);
+  assert.equal(toolPayload.extractions[1].error, 'sequence is not visible');
+  assert.equal(result.title, 'Caroline support group');
+  assert.equal(result.extractions[0].title, 'LGBTQ support group');
   assert.equal(result.extractions[0].text, 'Caroline attended an LGBTQ support group on 7 May 2023.');
-  assert.deepEqual(result.extractions[0].references, ['turn:1']);
+  assert.equal(result.extractions[0].context, '- Caroline said she went to the support group yesterday relative to 8 May 2023.');
+  assert.equal(result.extractions[0].category, 'Other');
+  assert.deepEqual(result.extractions[0].references, ['turn:0', 'turn:1']);
   const trace = JSON.parse(await readFile(tracePath, 'utf8'));
-  assert.equal(trace.toolCalls[0].name, 'memory-get');
+  assert.equal(trace.toolCalls[0].name, 'getExtraction');
   assert.equal(trace.extractions[0].text, 'Caroline attended an LGBTQ support group on 7 May 2023.');
-  assert.match(trace.finalText, /# Caroline Support Group/);
+  assert.match(trace.finalText, /## Summary/);
   assert.match(trace.finalText, /Caroline attended an LGBTQ support group on 7 May 2023/);
-  assert.equal(trace.input.allowedMemoryIds, undefined);
-  assert.equal(trace.input.threadMemoryId, undefined);
 });
 
 test('thread session traces invalid markdown attempts without JSON retry instructions', async (t) => {
@@ -4761,14 +4718,14 @@ test('thread session traces invalid markdown attempts without JSON retry instruc
   process.env.MUNINN_HOME = homeDir;
   await writeOpenAiObserverConfig(configPath);
   const tracePath = path.join(dir, 'thread-session-invalid-trace.jsonl');
-  process.env.MUNINN_THREAD_OBSERVING_TRACE_FILE = tracePath;
+  process.env.MUNINN_SESSION_MEMORY_TRACE_FILE = tracePath;
   t.after(() => {
-    delete process.env.MUNINN_THREAD_OBSERVING_TRACE_FILE;
+    delete process.env.MUNINN_SESSION_MEMORY_TRACE_FILE;
   });
 
   const requests = [];
-  const result = await observingGatewayModule.observeThread({
-    observingContent: {
+  const result = await observingGatewayModule.extractSessionMemory({
+    sessionMemoryContent: {
       title: 'Caroline support group',
       summary: '',
       extractions: [],
@@ -4786,13 +4743,20 @@ test('thread session traces invalid markdown attempts without JSON retry instruc
       if (requests.length === 1) {
         return {
           type: 'final',
-          text: '{"threadMemory":"<!-- refs: [turn:1] -->\\n[Entity] Caroline\\n[Extraction] Caroline attended an LGBTQ support group."}',
+          text: '{"snapshotContent":"<!-- refs: [turn:1] -->\\n[Entity] Caroline\\n[Extraction] Caroline attended an LGBTQ support group."}',
         };
       }
       return {
         type: 'final',
-        text: threadMemoryDocument(
-          '<!-- refs: [turn:1] -->\n[Entity] Caroline\n[Fact] support group\n[Extraction] Caroline attended an LGBTQ support group on 7 May 2023.',
+        text: snapshotContentFixture(
+          [
+            '<!-- refs: [turn:1] -->',
+            '### Title',
+            'LGBTQ support group',
+            '',
+            '### Summary',
+            'Caroline attended an LGBTQ support group on 7 May 2023.',
+          ].join('\n'),
           { title: 'Caroline Support Group', summary: 'Caroline attended an LGBTQ support group.' },
         ),
       };
@@ -4804,14 +4768,14 @@ test('thread session traces invalid markdown attempts without JSON retry instruc
   const retryUserMessage = requests[1].messages.find((message) => message.role === 'user');
   assert.ok(retryUserMessage);
   assert.match(retryUserMessage.content, /Previous output was invalid/);
-  assert.match(retryUserMessage.content, /Return only valid thread memory Markdown/);
+  assert.match(retryUserMessage.content, /Return only a valid Markdown snapshot patch/);
   assert.doesNotMatch(retryUserMessage.content, /Return one JSON object only/);
 
   const traceLines = (await readFile(tracePath, 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
   assert.equal(traceLines.length, 2);
   assert.equal(traceLines[0].attempt, 1);
-  assert.match(traceLines[0].rawText, /^\{"threadMemory"/);
-  assert.match(traceLines[0].validationError, /must return thread memory Markdown, not JSON/);
+  assert.match(traceLines[0].rawText, /^\{"snapshotContent"/);
+  assert.match(traceLines[0].validationError, /must return snapshot content Markdown, not JSON/);
   assert.equal(traceLines[1].attempt, 2);
   assert.match(traceLines[1].finalText, /# Caroline Support Group/);
 });
@@ -4824,8 +4788,8 @@ test('thread session omits default session summary from memory input', async (t)
   await writeOpenAiObserverConfig(configPath);
 
   const requests = [];
-  await observingGatewayModule.observeThread({
-    observingContent: {
+  await observingGatewayModule.extractSessionMemory({
+    sessionMemoryContent: {
       title: 'Session locomo',
       summary: 'Default session thread for session locomo:conv-26:session_1.',
       extractions: [],
@@ -4842,8 +4806,15 @@ test('thread session omits default session summary from memory input', async (t)
       requests.push(request);
       return {
         type: 'final',
-        text: threadMemoryDocument(
-          '<!-- refs: [turn:1] -->\n[Entity] Caroline\n[Fact] felt accepted\n[Extraction] Caroline felt accepted on 8 May 2023.',
+        text: snapshotContentFixture(
+          [
+            '<!-- refs: [turn:1] -->',
+            '### Title',
+            'Caroline felt accepted',
+            '',
+            '### Summary',
+            'Caroline felt accepted on 8 May 2023.',
+          ].join('\n'),
           { title: 'Session Locomo', summary: 'Caroline felt accepted.' },
         ),
       };
@@ -4852,9 +4823,9 @@ test('thread session omits default session summary from memory input', async (t)
 
   const firstUserMessage = requests[0].messages.find((message) => message.role === 'user');
   assert.ok(firstUserMessage);
-  assert.match(firstUserMessage.content, /"memory": ""/);
+  assert.match(firstUserMessage.content, /### Summary\n\(empty\)/);
   assert.doesNotMatch(firstUserMessage.content, /Default session thread/);
-  assert.doesNotMatch(firstUserMessage.content, /existingThreadMemory/);
+  assert.doesNotMatch(firstUserMessage.content, /existingSnapshotContent/);
 });
 
 test('thread session inlines chat memory categories', async (t) => {
@@ -4865,8 +4836,8 @@ test('thread session inlines chat memory categories', async (t) => {
   await writeOpenAiObserverConfig(configPath);
 
   const requests = [];
-  await observingGatewayModule.observeThread({
-    observingContent: {
+  await observingGatewayModule.extractSessionMemory({
+    sessionMemoryContent: {
       title: 'Caroline support group',
       summary: 'Caroline discussed a support group.',
       extractions: [],
@@ -4883,17 +4854,24 @@ test('thread session inlines chat memory categories', async (t) => {
       requests.push(request);
       return {
         type: 'final',
-        text: threadMemoryDocument(
-          '<!-- refs: [turn:1] -->\n[Entity] Melanie\n[Fact] brief reaction\n[Extraction] Melanie said that was cool.',
+        text: snapshotContentFixture(
+          [
+            '<!-- refs: [turn:1] -->',
+            '### Title',
+            'Melanie brief reaction',
+            '',
+            '### Summary',
+            'Melanie said that was cool.',
+          ].join('\n'),
           { title: 'Caroline Support Group', summary: 'Melanie reacted to Caroline.' },
         ),
       };
     },
   });
 
-  assert.match(requests[0].messages[0].content, /Memory anchors/);
-  assert.match(requests[0].messages[0].content, /`Fact`: Concrete information that happened, exists, was described, or is currently true/);
-  assert.match(requests[0].messages[0].content, /stable or recurring like/);
+  assert.match(requests[0].messages[0].content, /Each extraction must include `### Title`/);
+  assert.match(requests[0].messages[0].content, /`### Content` is optional/);
+  assert.match(requests[0].messages[0].content, /durable topic: a decision, requirement, preference, correction/);
   assert.doesNotMatch(requests[0].messages[0].content, /Domain guidance/);
   assert.doesNotMatch(requests[0].messages[0].content, /domain_prompt/);
   assert.doesNotMatch(requests[0].messages[0].content, /Extraction granularity/);
@@ -4902,7 +4880,7 @@ test('thread session inlines chat memory categories', async (t) => {
 });
 
 test('session snapshots keep complete cumulative context refs', () => {
-  const thread = createObservingThread(
+  const thread = createSessionMemoryThread(
     'default-observer',
     'Career',
     'Career thread',
@@ -4912,7 +4890,7 @@ test('session snapshots keep complete cumulative context refs', () => {
   );
   const result = (summary, turnId) => ({
     title: 'Career',
-    threadMemory: '',
+    snapshotContent: '',
     extractions: [],
     openQuestions: [],
     nextSteps: [],
@@ -4920,7 +4898,7 @@ test('session snapshots keep complete cumulative context refs', () => {
   });
 
   for (let index = 1; index <= 10; index += 1) {
-    threadTesting.applyObserveResultForTests(
+    threadTesting.applyExtractionResultForTests(
       thread,
       result(`slice ${index}`, `turn:${index}`),
       index,
@@ -4958,7 +4936,7 @@ test('session snapshots keep complete cumulative context refs', () => {
 });
 
 test('session context refs update duplicate turn summaries without duplicates', () => {
-  const thread = createObservingThread(
+  const thread = createSessionMemoryThread(
     'default-observer',
     'Career',
     'Career thread',
@@ -4968,21 +4946,21 @@ test('session context refs update duplicate turn summaries without duplicates', 
   );
   const observeResult = (summary) => ({
     title: 'Career',
-    threadMemory: '',
+    snapshotContent: '',
     extractions: [],
     openQuestions: [],
     nextSteps: [],
     contextRefs: [{ turnId: 'turn:1', summary }],
   });
 
-  threadTesting.applyObserveResultForTests(
+  threadTesting.applyExtractionResultForTests(
     thread,
     observeResult('initial summary'),
     1,
     applyExtractionChanges,
     '2026-01-01T00:00:00.000Z',
   );
-  threadTesting.applyObserveResultForTests(
+  threadTesting.applyExtractionResultForTests(
     thread,
     observeResult('updated summary'),
     2,
@@ -4998,7 +4976,7 @@ test('session context refs update duplicate turn summaries without duplicates', 
 });
 
 test('session snapshot persists markdown content with parsed title and summary', () => {
-  const thread = createObservingThread(
+  const thread = createSessionMemoryThread(
     'default-observer',
     'Draft title',
     'Draft summary',
@@ -5006,20 +4984,27 @@ test('session snapshot persists markdown content with parsed title and summary',
     1,
     '2026-01-01T00:00:00.000Z',
   );
-  const markdown = threadMemoryDocument(
-    '<!-- refs: [turn:1] -->\n[Entity] Melanie\n[Fact] lake painting\n[Extraction] Melanie painted a lake sunrise in 2022.',
+  const markdown = snapshotContentFixture(
+    [
+      '<!-- refs: [turn:1] -->',
+      '### Title',
+      'Lake sunrise painting',
+      '',
+      '### Summary',
+      'Melanie painted a lake sunrise in 2022.',
+    ].join('\n'),
     {
       title: 'Melanie Painting',
       summary: 'Melanie painted a lake sunrise and considers it special.',
     },
   );
 
-  threadTesting.applyObserveResultForTests(
+  threadTesting.applyExtractionResultForTests(
     thread,
     {
       title: 'Melanie Painting',
       summary: 'Melanie painted a lake sunrise and considers it special.',
-      threadMemory: markdown,
+      snapshotContent: markdown,
       extractions: [{
         text: 'Melanie painted a lake sunrise in 2022.',
         category: 'Fact',
@@ -5041,15 +5026,28 @@ test('session snapshot persists markdown content with parsed title and summary',
   assert.doesNotMatch(snapshot.content, /^\s*\{/);
 });
 
-test('observeSessionThread passes raw turns to observer', async () => {
+test('extractSessionThread passes raw turns to observer', async () => {
   const now = '2026-01-01T00:00:00.000Z';
-  const thread = createObservingThread('default-observer', 'Session locomo', 'Default session thread for session locomo.', [], 1, now, 'session', 'locomo');
+  const thread = createSessionMemoryThread('default-observer', 'Session locomo', 'Default session thread for session locomo.', [], 1, now, 'session', 'locomo');
   const observedInputs = [];
-  const observeThreadImpl = async (input) => {
+  const extractSessionMemoryImpl = async (input) => {
     observedInputs.push(input);
     return {
       title: 'Painting',
-      threadMemory: '<!-- refs: [turn:13] -->\n[Entity] Melanie\n[Fact] lake sunrise\n[Extraction] Melanie painted a lake sunrise in 2022.',
+      snapshotContent: snapshotContentFixture(
+        [
+          '<!-- refs: [turn:13] -->',
+          '### Title',
+          'Lake sunrise painting',
+          '',
+          '### Summary',
+          'Melanie painted a lake sunrise in 2022.',
+        ].join('\n'),
+        {
+          title: 'Painting',
+          summary: 'Melanie painted a lake sunrise.',
+        },
+      ),
       extractions: [],
       openQuestions: [],
       nextSteps: [],
@@ -5060,9 +5058,9 @@ test('observeSessionThread passes raw turns to observer', async () => {
     };
   };
 
-  await updateTesting.observeSessionThreadForTests({
+  await updateTesting.extractSessionThreadForTests({
     threads: [thread],
-    observerName: 'default-observer',
+    extractorName: 'default-observer',
     pendingTurns: [{
       turnId: 'turn:13',
       createdAt: now,
@@ -5074,10 +5072,10 @@ test('observeSessionThread passes raw turns to observer', async () => {
       summary: 'DATE: 1:56 pm on 8 May, 2023\nDIALOGUE:\nMelanie said: "Yeah, I painted that lake sunrise last year!"',
       prompt: 'DATE: 1:56 pm on 8 May, 2023\nDIALOGUE:\nMelanie said: "Yeah, I painted that lake sunrise last year!"',
       response: '[imported dialogue event; no assistant response]',
-      observingEpoch: 2,
+      extractionEpoch: 2,
     }],
-    observingEpoch: 2,
-    observeThreadImpl,
+    extractionEpoch: 2,
+    extractSessionMemoryImpl,
   });
 
   assert.deepEqual(observedInputs[0].turns, [{
@@ -5093,7 +5091,7 @@ test('observeSessionThread passes raw turns to observer', async () => {
 });
 
 test('gateway input includes thread kind and prompt plus response turn text', () => {
-  const thread = createObservingThread(
+  const thread = createSessionMemoryThread(
     'default-observer',
     'Career',
     'Career thread',
@@ -5123,7 +5121,7 @@ test('gateway input includes thread kind and prompt plus response turn text', ()
     summary: 'Melanie encouraged Caroline.',
     prompt: 'Melanie encouraged Caroline.',
     response: 'placeholder',
-    observingEpoch: 2,
+    extractionEpoch: 2,
     previousTurnSummary: 'Caroline said she is keen on counseling or mental health.',
   }]);
   assert.deepEqual(turns[0], {
@@ -5141,7 +5139,7 @@ test('gateway input includes thread kind and prompt plus response turn text', ()
     summary: 'Melanie talked about camping.',
     prompt: 'Melanie talked about camping.',
     response: 'Caroline researched adoption agencies.',
-    observingEpoch: 2,
+    extractionEpoch: 2,
   }]);
   assert.equal(
     responseOnlyTurns[0].text,
@@ -5151,19 +5149,19 @@ test('gateway input includes thread kind and prompt plus response turn text', ()
 
 test('observed turns without observer context refs are not persisted as references', async () => {
   const now = '2026-01-01T00:00:00.000Z';
-  const thread = createObservingThread('default-observer', 'Session locomo', 'Default session thread for session locomo.', [], 1, now, 'session', 'locomo');
-  const observeThreadImpl = async () => ({
+  const thread = createSessionMemoryThread('default-observer', 'Session locomo', 'Default session thread for session locomo.', [], 1, now, 'session', 'locomo');
+  const extractSessionMemoryImpl = async () => ({
     title: 'Career',
-    threadMemory: '',
+    snapshotContent: '',
     extractions: [],
     openQuestions: [],
     nextSteps: [],
     contextRefs: [],
   });
 
-  await updateTesting.observeSessionThreadForTests({
+  await updateTesting.extractSessionThreadForTests({
     threads: [thread],
-    observerName: 'default-observer',
+    extractorName: 'default-observer',
     pendingTurns: [{
       turnId: 'turn:99',
       createdAt: now,
@@ -5175,10 +5173,10 @@ test('observed turns without observer context refs are not persisted as referenc
       summary: 'A routed but ultimately irrelevant turn.',
       prompt: 'A routed but ultimately irrelevant turn.',
       response: null,
-      observingEpoch: 2,
+      extractionEpoch: 2,
     }],
-    observingEpoch: 2,
-    observeThreadImpl,
+    extractionEpoch: 2,
+    extractSessionMemoryImpl,
   });
 
   assert.deepEqual(thread.snapshots.at(-1).contextRefs, []);
@@ -5187,7 +5185,7 @@ test('observed turns without observer context refs are not persisted as referenc
 
 test('raw-turn session only updates the session thread', async () => {
   const now = '2026-01-01T00:00:00.000Z';
-  const thread = createObservingThread(
+  const thread = createSessionMemoryThread(
     'default-observer',
     'Session locomo',
     'Default session thread for session locomo.',
@@ -5199,11 +5197,24 @@ test('raw-turn session only updates the session thread', async () => {
   );
   const threads = [thread];
   const observedInputs = [];
-  const observeThreadImpl = async (input) => {
+  const extractSessionMemoryImpl = async (input) => {
     observedInputs.push(input);
     return {
       title: 'Melanie lake sunrise painting and creative outlet',
-      threadMemory: '<!-- refs: [turn:12] -->\n[Entity] Melanie\n[Fact] lake painting\n[Extraction] Melanie discusses her lake sunrise painting and painting as a creative outlet.',
+      snapshotContent: snapshotContentFixture(
+        [
+          '<!-- refs: [turn:12] -->',
+          '### Title',
+          'Lake painting outlet',
+          '',
+          '### Summary',
+          'Melanie discusses her lake sunrise painting and painting as a creative outlet.',
+        ].join('\n'),
+        {
+          title: 'Melanie lake sunrise painting and creative outlet',
+          summary: 'Melanie shared a lake sunrise painting memory.',
+        },
+      ),
       extractions: [],
       openQuestions: [],
       nextSteps: [],
@@ -5214,9 +5225,9 @@ test('raw-turn session only updates the session thread', async () => {
     };
   };
 
-  await updateTesting.observeSessionThreadForTests({
+  await updateTesting.extractSessionThreadForTests({
     threads,
-    observerName: 'default-observer',
+    extractorName: 'default-observer',
     pendingTurns: [{
       turnId: 'turn:12',
       createdAt: now,
@@ -5228,10 +5239,10 @@ test('raw-turn session only updates the session thread', async () => {
       summary: 'Melanie encouraged Caroline and shared a lake painting.',
       prompt: 'Melanie said: "You would be a great counselor. By the way, take a look at this painting."',
       response: null,
-      observingEpoch: 2,
+      extractionEpoch: 2,
     }],
-    observingEpoch: 2,
-    observeThreadImpl,
+    extractionEpoch: 2,
+    extractSessionMemoryImpl,
   });
 
   assert.equal(threads.length, 1);
@@ -5239,7 +5250,7 @@ test('raw-turn session only updates the session thread', async () => {
   assert.equal(observedInputs[0].turns[0].prompt, 'Melanie said: "You would be a great counselor. By the way, take a look at this painting."');
 });
 
-test('observeEpoch groups mixed session turns before session', async () => {
+test('extractEpoch groups mixed session turns before session', async () => {
   const threads = [];
   const observedInputs = [];
   const observingRows = [];
@@ -5254,11 +5265,11 @@ test('observeEpoch groups mixed session turns before session', async () => {
       },
     },
   };
-  const observeThreadImpl = async (input) => {
+  const extractSessionMemoryImpl = async (input) => {
     observedInputs.push(input);
     return {
-      title: input.observingContent.title,
-      threadMemory: '',
+      title: input.sessionMemoryContent.title,
+      snapshotContent: '',
       extractions: [],
       openQuestions: [],
       nextSteps: [],
@@ -5273,16 +5284,16 @@ test('observeEpoch groups mixed session turns before session', async () => {
   const groupB1 = { ...makeObservableTurn('session:b1', 2, 'b1'), sessionId: 'group-b' };
   const groupA2 = makeObservableTurn('session:a2', 2, 'a2');
 
-  const result = await updateTesting.observeEpoch({
+  const result = await updateTesting.extractEpoch({
     client,
-    observerName: 'default-observer',
+    extractorName: 'default-observer',
     activeWindowDays: 3650,
     threads,
     sealedEpoch: {
       epoch: 2,
       turns: [groupA1, groupB1, groupA2],
     },
-    observeThreadImpl,
+    extractSessionMemoryImpl,
   });
 
   assert.equal(observedInputs.length, 2);
@@ -5293,7 +5304,7 @@ test('observeEpoch groups mixed session turns before session', async () => {
   assert.equal(observingRows.length, 2);
 });
 
-test('observeEpoch routes missing sessionId turns to default session thread', async () => {
+test('extractEpoch routes missing sessionId turns to default session thread', async () => {
   const threads = [];
   const observedInputs = [];
   const client = {
@@ -5304,11 +5315,11 @@ test('observeEpoch routes missing sessionId turns to default session thread', as
       })),
     },
   };
-  const observeThreadImpl = async (input) => {
+  const extractSessionMemoryImpl = async (input) => {
     observedInputs.push(input);
     return {
-      title: input.observingContent.title,
-      threadMemory: '',
+      title: input.sessionMemoryContent.title,
+      snapshotContent: '',
       extractions: [],
       openQuestions: [],
       nextSteps: [],
@@ -5319,9 +5330,9 @@ test('observeEpoch routes missing sessionId turns to default session thread', as
     };
   };
 
-  await updateTesting.observeEpoch({
+  await updateTesting.extractEpoch({
     client,
-    observerName: 'default-observer',
+    extractorName: 'default-observer',
     activeWindowDays: 3650,
     threads,
     sealedEpoch: {
@@ -5331,7 +5342,7 @@ test('observeEpoch routes missing sessionId turns to default session thread', as
         { ...makeObservableTurn('turn:blank-1', 2, 'blank-1'), sessionId: '   ' },
       ],
     },
-    observeThreadImpl,
+    extractSessionMemoryImpl,
   });
 
   assert.equal(observedInputs.length, 1);
@@ -5340,23 +5351,23 @@ test('observeEpoch routes missing sessionId turns to default session thread', as
   assert.equal(threads[0].sessionId, '__muninn_default_session__');
 });
 
-test('observeSessionThread rejects mixed session turns', async () => {
+test('extractSessionThread rejects mixed session turns', async () => {
   const now = '2026-01-01T00:00:00.000Z';
-  const thread = createObservingThread('default-observer', 'Session group-a', 'Default session thread for session group-a.', [], 1, now, 'session', 'group-a');
-  const observeThreadImpl = async () => {
-    throw new Error('observeThreadImpl should not be called for mixed session turns');
+  const thread = createSessionMemoryThread('default-observer', 'Session group-a', 'Default session thread for session group-a.', [], 1, now, 'session', 'group-a');
+  const extractSessionMemoryImpl = async () => {
+    throw new Error('extractSessionMemoryImpl should not be called for mixed session turns');
   };
 
   await assert.rejects(
-    updateTesting.observeSessionThreadForTests({
+    updateTesting.extractSessionThreadForTests({
       threads: [thread],
-      observerName: 'default-observer',
+      extractorName: 'default-observer',
       pendingTurns: [
         makeObservableTurn('session:a1', 2, 'a1'),
         { ...makeObservableTurn('session:b1', 2, 'b1'), sessionId: 'group-b' },
       ],
-      observingEpoch: 2,
-      observeThreadImpl,
+      extractionEpoch: 2,
+      extractSessionMemoryImpl,
     }),
     /single session/i,
   );
@@ -5371,12 +5382,12 @@ test('buildTouchedIndex immediately advances extraction index for touched thread
 
   let semanticUpserts = 0;
   const threads = [{
-    observingId: 'session-a',
+    threadId: 'session-a',
     sessionId: 'session-a',
     kind: 'session',
     snapshotId: 'snapshot-1',
     snapshotIds: ['snapshot-0', 'snapshot-1'],
-    observingEpoch: 1,
+    extractionEpoch: 1,
     title: 'Existing title',
     summary: 'Existing summary',
     snapshots: [
@@ -5456,7 +5467,7 @@ test('observer.retryExtraction refreshes the committed checkpoint snapshot after
     sessionId: 'session-a',
     snapshotId: 'snapshot-1',
     snapshotIds: ['snapshot-0', 'snapshot-1'],
-    observingEpoch: 1,
+    extractionEpoch: 1,
     title: 'Existing title',
     summary: 'Existing summary',
     snapshots: [
@@ -5533,7 +5544,7 @@ test('observer.observeCurrentEpoch commits session rows before retrying extracti
     sessionId: 'session-a',
     snapshotId: 'snapshot-0',
     snapshotIds: ['snapshot-0'],
-    observingEpoch: 0,
+    extractionEpoch: 0,
     title: 'Existing title',
     summary: 'Existing summary',
     snapshots: [
@@ -5590,7 +5601,7 @@ test('observer.run retries pending extraction index before queued epochs when du
       sessionId: 'session-a',
       snapshotId: 'snapshot-1',
       snapshotIds: ['snapshot-0', 'snapshot-1'],
-      observingEpoch: 7,
+      extractionEpoch: 7,
       title: 'Title',
       summary: 'Summary',
       snapshots: [
@@ -5631,7 +5642,7 @@ test('observer.run retries pending extraction index before queued epochs when du
         observer: 'default-observer',
         summary: 'queued summary',
         response: 'queued response',
-        observingEpoch: 8,
+        extractionEpoch: 8,
       },
     ],
   });
@@ -6008,12 +6019,12 @@ test('flushThreads persists session state without inline ref or index builders',
 
   const threads = [
     {
-      observingId: 'session-child',
+      threadId: 'session-child',
       sessionId: 'session-child',
       kind: 'session',
       snapshotId: undefined,
       snapshotIds: [],
-      observingEpoch: 1,
+      extractionEpoch: 1,
       title: 'Child',
       summary: 'Child summary',
       snapshots: [

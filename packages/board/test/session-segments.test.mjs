@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   buildSessionSegmentsForTests,
   buildSessionTurnPageForTests,
+  resolveSessionTreeNextOffsetForTests,
   resolveSessionNodeFromIndexForTests,
 } from '../dist-server/app.js';
 
@@ -53,24 +54,24 @@ test('builds snapshot extraction segments ordered by first turn createdAt', () =
   ]);
 });
 
-test('cleans thread memory extraction markup for segment titles', () => {
+test('uses extraction title heading for segment titles', () => {
   const snapshot = [
-    '# lance',
-    '',
-    '## Summary',
-    'ignored',
-    '',
     '## Extractions',
     '<!-- refs: [turn:1] -->',
-    '[Entity] mock entity',
-    '[Fact] observed turn',
-    '[Extraction] Prompt: 有说明白用的是 _row_id 而不是 _rowid 来保持兼容性吗， Response: 是的。',
+    '### Title',
+    'Discussion segment navigation',
+    '',
+    '### Summary',
+    'The tree should show discussion segments instead of every user prompt.',
+    '',
+    '### Content',
+    '- Keep title and summary required.',
   ].join('\n');
 
   assert.deepEqual(buildSessionSegmentsForTests(snapshot, turns), [
     {
       memoryId: 'turn:1',
-      title: '有说明白用的是 _row_id 而不是 _rowid 来保持兼容性吗，',
+      title: 'Discussion segment navigation',
       createdAt: '2026-06-02T10:00:00.000Z',
     },
   ]);
@@ -122,7 +123,22 @@ test('session turn page segments use snapshot content when available', async () 
     },
   ]);
   assert.equal(page.turns.length, 1);
-  assert.equal(page.nextOffset, 1);
+  assert.equal(page.nextOffset, null);
+});
+
+test('session tree pagination ignores turn nextOffset when snapshot segments exist', () => {
+  assert.equal(resolveSessionTreeNextOffsetForTests({
+    segmentCount: 1,
+    offset: 0,
+    limit: 20,
+    turnCount: 80,
+  }), null);
+  assert.equal(resolveSessionTreeNextOffsetForTests({
+    segmentCount: 0,
+    offset: 0,
+    limit: 20,
+    turnCount: 80,
+  }), 20);
 });
 
 test('session node display title prefers sessionIndex title', () => {

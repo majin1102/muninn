@@ -41,7 +41,7 @@ export type ExtractorCheckpoint = {
   nextEpoch: number;
   recentSessions: RecentSessionCheckpoint[];
   threads: ThreadRef[];
-  runs: ObservingRun[];
+  runs: ExtractorRun[];
   pendingExtractionChanges: QueuedExtractionChange[];
 };
 
@@ -77,27 +77,27 @@ export type CheckpointFile = CheckpointContent & {
   writerPid: number;
 };
 
-export type ObservingRunStatus = 'running' | 'completed' | 'failed';
+export type ExtractorRunStatus = 'running' | 'completed' | 'failed';
 
-export type ObservingRunStage =
+export type ExtractorRunStage =
   | 'fittingThreads'
   | 'committingExtractions'
-  | 'observingThreads'
+  | 'extractingSessionMemory'
   | 'committingSnapshots'
   | 'indexingSnapshots'
   | 'completed';
 
-export type ObservingRunError = {
+export type ExtractorRunError = {
   stage: string;
   message: string;
   at: string;
 };
 
-export type ObservingRun = {
+export type ExtractorRun = {
   observer: string;
   epoch: number;
-  status: ObservingRunStatus;
-  stage: ObservingRunStage;
+  status: ExtractorRunStatus;
+  stage: ExtractorRunStage;
   inputTurnIds: string[];
   pending?: {
     sessionFragments?: SessionFragment[];
@@ -108,7 +108,7 @@ export type ObservingRun = {
     snapshotIds: string[];
   };
   traceRefs: string[];
-  errors: ObservingRunError[];
+  errors: ExtractorRunError[];
 };
 
 export type ObserverRunStage =
@@ -211,7 +211,7 @@ function parseExtractorSection(value: unknown): ExtractorCheckpoint | null {
   const nextEpoch = value.nextEpoch;
   const recentSessions = parseRecentSessions(value.recentSessions);
   const threads = parseThreads(value.threads);
-  const runs = parseObservingRuns(value.runs ?? []);
+  const runs = parseExtractorRuns(value.runs ?? []);
   const pendingExtractionChanges = parseQueuedExtractionChanges(value.pendingExtractionChanges);
   if (!baseline || typeof nextEpoch !== 'number' || !recentSessions || !threads || !runs || !pendingExtractionChanges) {
     return null;
@@ -496,13 +496,13 @@ function parseThreads(value: unknown): ThreadRef[] | null {
   return threads;
 }
 
-function parseObservingRuns(value: unknown): ObservingRun[] | null {
+function parseExtractorRuns(value: unknown): ExtractorRun[] | null {
   if (!Array.isArray(value)) {
     return null;
   }
-  const runs: ObservingRun[] = [];
+  const runs: ExtractorRun[] = [];
   for (const run of value) {
-    const parsed = parseObservingRun(run);
+    const parsed = parseExtractorRun(run);
     if (!parsed) {
       return null;
     }
@@ -511,7 +511,7 @@ function parseObservingRuns(value: unknown): ObservingRun[] | null {
   return runs;
 }
 
-function parseObservingRun(value: unknown): ObservingRun | null {
+function parseExtractorRun(value: unknown): ExtractorRun | null {
   if (!isObjectRecord(value)) {
     return null;
   }
@@ -547,7 +547,7 @@ function parseObservingRun(value: unknown): ObservingRun | null {
   };
 }
 
-function parseRunCommitted(value: unknown): ObservingRun['committed'] | null {
+function parseRunCommitted(value: unknown): ExtractorRun['committed'] | null {
   if (!isObjectRecord(value)) {
     return null;
   }
@@ -559,11 +559,11 @@ function parseRunCommitted(value: unknown): ObservingRun['committed'] | null {
   return { extractionIds, snapshotIds };
 }
 
-function parseRunPending(value: unknown): NonNullable<ObservingRun['pending']> | null {
+function parseRunPending(value: unknown): NonNullable<ExtractorRun['pending']> | null {
   if (!isObjectRecord(value)) {
     return null;
   }
-  const pending: NonNullable<ObservingRun['pending']> = {};
+  const pending: NonNullable<ExtractorRun['pending']> = {};
   if (value.sessionFragments != null) {
     if (!Array.isArray(value.sessionFragments)) {
       return null;
@@ -579,11 +579,11 @@ function parseRunPending(value: unknown): NonNullable<ObservingRun['pending']> |
   return pending;
 }
 
-function parseRunErrors(value: unknown): ObservingRunError[] | null {
+function parseRunErrors(value: unknown): ExtractorRunError[] | null {
   if (!Array.isArray(value)) {
     return null;
   }
-  const errors: ObservingRunError[] = [];
+  const errors: ExtractorRunError[] = [];
   for (const error of value) {
     if (
       !isObjectRecord(error)
@@ -728,14 +728,14 @@ function isNumberArray(value: unknown): value is number[] {
   return Array.isArray(value) && value.every((item) => typeof item === 'number');
 }
 
-function isRunStatus(value: unknown): value is ObservingRunStatus {
+function isRunStatus(value: unknown): value is ExtractorRunStatus {
   return value === 'running' || value === 'completed' || value === 'failed';
 }
 
-function isRunStage(value: unknown): value is ObservingRunStage {
+function isRunStage(value: unknown): value is ExtractorRunStage {
   return value === 'fittingThreads'
     || value === 'committingExtractions'
-    || value === 'observingThreads'
+    || value === 'extractingSessionMemory'
     || value === 'committingSnapshots'
     || value === 'indexingSnapshots'
     || value === 'completed';

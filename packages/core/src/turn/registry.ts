@@ -16,16 +16,16 @@ export class SessionRegistry {
 
   constructor(
     private readonly client: NativeTables,
-    readonly observerName: string,
+    readonly extractorName: string,
   ) {}
 
   restoreSession(sessionId: string | undefined, agent: string, recentTurns: RecentTurn[]): void {
     const normalizedSessionId = normalizeSessionId(sessionId);
-    const key = sessionKey(normalizedSessionId, agent, this.observerName);
+    const key = sessionKey(normalizedSessionId, agent, this.extractorName);
     const session = new Session(this.client, {
       sessionId: normalizedSessionId,
       agent,
-      observer: this.observerName,
+      observer: this.extractorName,
       recentTurns,
     });
     this.sessions.set(key, {
@@ -36,7 +36,7 @@ export class SessionRegistry {
 
   rememberTurn(turn: Turn): void {
     const normalizedSessionId = normalizeSessionId(turn.sessionId ?? undefined);
-    const key = sessionKey(normalizedSessionId, turn.agent, this.observerName);
+    const key = sessionKey(normalizedSessionId, turn.agent, this.extractorName);
     const existing = this.sessions.get(key)?.resolved;
     if (existing) {
       existing.rememberTurn(turn);
@@ -45,7 +45,7 @@ export class SessionRegistry {
     const session = new Session(this.client, {
       sessionId: normalizedSessionId,
       agent: turn.agent,
-      observer: this.observerName,
+      observer: this.extractorName,
     });
     session.rememberTurn(turn);
     this.sessions.set(key, {
@@ -57,7 +57,7 @@ export class SessionRegistry {
   async load(sessionId: string | undefined, agent: string): Promise<Session> {
     this.evictExpired();
     const normalizedSessionId = normalizeSessionId(sessionId);
-    const key = sessionKey(normalizedSessionId, agent, this.observerName);
+    const key = sessionKey(normalizedSessionId, agent, this.extractorName);
     const existing = this.sessions.get(key);
     if (existing) {
       const session = await existing.promise;
@@ -70,7 +70,7 @@ export class SessionRegistry {
         const session = new Session(this.client, {
           sessionId: normalizedSessionId,
           agent,
-          observer: this.observerName,
+          observer: this.extractorName,
         });
         entry.resolved = session;
         return session;

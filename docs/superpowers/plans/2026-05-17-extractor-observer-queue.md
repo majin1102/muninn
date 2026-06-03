@@ -518,7 +518,7 @@ test('applyExtractionTableChanges returns queued upsert and delete extraction ch
   const result = await applyExtractionTableChanges(client, {
     title: 'Session',
     summary: '',
-    threadMemory: '',
+    snapshotContent: '',
     extractions: [
       { id: 'old-1', text: 'new text', context: null, anchors: ['Entity: Caroline'], category: 'Fact', references: ['turn:1'] }
     ],

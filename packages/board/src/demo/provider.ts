@@ -2,12 +2,12 @@ import type { PipelineTasksResponse } from '@muninn/types';
 import {
   demoAgents,
   demoDocuments,
-  demoObservings,
   demoPipelineTasks,
+  demoSessionSnapshots,
   demoSessionGroups,
   demoSessionTurns,
   type DemoMemoryDocument,
-  type DemoObservingListItem,
+  type DemoSessionSnapshotListItem,
   type DemoSessionAgentItem,
   type DemoSessionGroupItem,
   type DemoSessionTimelineItem,
@@ -98,8 +98,8 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-export async function getDemoObservings(): Promise<DemoObservingListItem[]> {
-  return demoObservings;
+export async function getDemoSessionSnapshots(): Promise<DemoSessionSnapshotListItem[]> {
+  return demoSessionSnapshots;
 }
 
 export async function getDemoPipelineTasks(): Promise<PipelineTasksResponse> {
