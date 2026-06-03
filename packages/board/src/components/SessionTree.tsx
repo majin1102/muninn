@@ -117,6 +117,17 @@ export function SessionTree({
   }, [filteredProjects, query]);
 
   useEffect(() => {
+    if (!activePath) {
+      return;
+    }
+    setOpenProjects((current) => ({ ...current, [activePath.projectKey]: true }));
+    setOpenSessions((current) => ({ ...current, [activePath.sessionKey]: true }));
+    window.requestAnimationFrame(() => {
+      activeRef.current?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    });
+  }, [activePath]);
+
+  useEffect(() => {
     if (!agentFilterOpen && !timeFilterOpen) {
       return;
     }

@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { buildSessionSegmentsForTests, resolveSessionNodeFromIndexForTests } from '../dist-server/app.js';
+import {
+  buildSessionSegmentsForTests,
+  buildSessionTurnPageForTests,
+  resolveSessionNodeFromIndexForTests,
+} from '../dist-server/app.js';
 
 const turns = [
   {
@@ -85,6 +89,40 @@ test('falls back to user prompt list when snapshot has no usable extraction refs
       createdAt: '2026-06-02T10:00:00.000Z',
     },
   ]);
+});
+
+test('session turn page segments use snapshot content when available', async () => {
+  const snapshot = [
+    '# muninn',
+    '',
+    '## Extractions',
+    '<!-- refs: [turn:2] -->',
+    'snapshot segment b',
+    '',
+    '<!-- refs: [turn:1] -->',
+    'snapshot segment a',
+  ].join('\n');
+  const page = await buildSessionTurnPageForTests({
+    turns,
+    snapshotContent: snapshot,
+    offset: 0,
+    limit: 1,
+  });
+
+  assert.deepEqual(page.segments, [
+    {
+      memoryId: 'turn:1',
+      title: 'snapshot segment a',
+      createdAt: '2026-06-02T10:00:00.000Z',
+    },
+    {
+      memoryId: 'turn:2',
+      title: 'snapshot segment b',
+      createdAt: '2026-06-02T10:10:00.000Z',
+    },
+  ]);
+  assert.equal(page.turns.length, 1);
+  assert.equal(page.nextOffset, 1);
 });
 
 test('session node display title prefers sessionIndex title', () => {

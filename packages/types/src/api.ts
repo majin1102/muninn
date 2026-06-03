@@ -117,7 +117,6 @@ export interface TurnContent {
   summary?: string;
   events: TurnEvent[];
   artifacts?: Artifact[];
-  toolCalls?: ToolCall[];
   prompt: string;
   response: string;
 }
@@ -219,6 +218,7 @@ export interface ObservingListResponse {
 export interface SettingsConfigResponse {
   pathLabel: string;
   content: string;
+  validationError?: string;
   requestId: string;
 }
 

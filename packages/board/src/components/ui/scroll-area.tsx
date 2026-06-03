@@ -1,13 +1,14 @@
-import type { HTMLAttributes, ReactNode } from 'react';
+import type { HTMLAttributes, ReactNode, Ref } from 'react';
 import { cn } from '../../lib/utils.js';
 
 export function ScrollArea({
   className,
   children,
+  ref,
   ...props
-}: HTMLAttributes<HTMLDivElement> & { children: ReactNode }) {
+}: HTMLAttributes<HTMLDivElement> & { children: ReactNode; ref?: Ref<HTMLDivElement> }) {
   return (
-    <div className={cn('ui-scroll-area', className)} {...props}>
+    <div ref={ref} className={cn('ui-scroll-area', className)} {...props}>
       {children}
     </div>
   );

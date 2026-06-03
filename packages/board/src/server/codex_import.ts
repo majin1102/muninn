@@ -53,6 +53,8 @@ type ExistingImportTurn = {
   marker: string;
 };
 
+type ArtifactMode = 'preview' | 'copy';
+
 export type CodexImportOptions = {
   sourceRoot?: string;
   projectLimit?: number;
@@ -69,14 +71,24 @@ const IMPORT_ARTIFACT_KEY = 'codex.import';
 const SMALL_TEXT_ARTIFACT_LIMIT = 16 * 1024;
 
 export async function previewCodexImport(options: CodexImportOptions, requestId: string): Promise<CodexImportPreviewResponse> {
-  const selection = await selectCodexImportSessions(options);
+  const selection = await selectCodexImportSessions(options, 'preview');
   return toPreviewResponse(selection, requestId);
 }
 
 export async function runCodexImport(options: CodexImportOptions, requestId: string): Promise<CodexImportRunResponse> {
-  const selection = await selectCodexImportSessions(options);
-  const selectedSessionIds = new Set(selection.sessions.map(importSessionId));
-  const existingImports = await collectExistingCodexImports(selectedSessionIds);
+  const selection = await selectCodexImportSessions(options, 'preview');
+  const importSessions = (await Promise.all(selection.sessions.map((session) => (
+    readCodexSession(session.sourcePath, {
+      artifactStore: selection.artifactStore,
+      artifactMode: 'copy',
+    })
+  )))).filter((session): session is CodexSession => session !== null);
+  const selectedRawSessionIds = new Set(selection.sessions.map((session) => session.sessionId));
+  const selectedImportedSessionIds = new Set(selection.sessions.map(importSessionId));
+  const existingImports = await collectExistingCodexImports({
+    rawSessionIds: selectedRawSessionIds,
+    importedSessionIds: selectedImportedSessionIds,
+  });
   const existingImportTurns = [...existingImports.values()].flat();
   let importedSessions = 0;
   let importedTurns = 0;
@@ -84,7 +96,7 @@ export async function runCodexImport(options: CodexImportOptions, requestId: str
   let deletedTurns = await deleteExistingImport(existingImportTurns);
   const failedSessions: CodexImportRunResponse['failedSessions'] = [];
 
-  for (const session of selection.sessions) {
+  for (const session of importSessions) {
     try {
       const result = await importCodexSession(session);
       if (result.importedTurns > 0 || result.skippedTurns > 0) {
@@ -111,13 +123,13 @@ export async function runCodexImport(options: CodexImportOptions, requestId: str
   };
 }
 
-async function selectCodexImportSessions(options: CodexImportOptions): Promise<ImportSelection> {
+async function selectCodexImportSessions(options: CodexImportOptions, artifactMode: ArtifactMode): Promise<ImportSelection> {
   const sourceRoot = options.sourceRoot ?? path.join(os.homedir(), '.codex');
   const artifactStore = options.artifactStore ?? defaultArtifactStore();
   const projectLimit = normalizeProjectLimit(options.projectLimit);
   const projectKeys = normalizeProjectKeys(options.projectKeys);
   const sessionFiles = await listCodexSessionFiles(sourceRoot);
-  const sessions = (await Promise.all(sessionFiles.map((file) => readCodexSession(file, { artifactStore }))))
+  const sessions = (await Promise.all(sessionFiles.map((file) => readCodexSession(file, { artifactStore, artifactMode }))))
     .filter((session): session is CodexSession => session !== null)
     .filter((session) => projectKeys.has(session.projectKey))
     .filter((session) => !isExcludedImportSession(session))
@@ -182,7 +194,7 @@ async function listJsonlFiles(root: string): Promise<string[]> {
   return files;
 }
 
-async function readCodexSession(sourcePath: string, options: { artifactStore: string }): Promise<CodexSession | null> {
+async function readCodexSession(sourcePath: string, options: { artifactStore: string; artifactMode?: ArtifactMode }): Promise<CodexSession | null> {
   const content = await readFile(sourcePath, 'utf8');
   const fallbackUpdatedAt = (await stat(sourcePath)).mtime.toISOString();
   let sessionId = path.basename(sourcePath, '.jsonl');
@@ -254,7 +266,9 @@ async function readCodexSession(sourcePath: string, options: { artifactStore: st
 
     const message = await messageFromEntry(entry, {
       artifactStore: options.artifactStore,
+      artifactMode: options.artifactMode ?? 'copy',
       artifactIndexStart: sessionTurns.length + promptParts.length,
+      baseDirs: [cwd, path.dirname(sourcePath)],
     });
     if (message) {
       updatedAt = message.timestamp;
@@ -308,7 +322,7 @@ async function readCodexSession(sourcePath: string, options: { artifactStore: st
 
 async function messageFromEntry(
   entry: Record<string, unknown>,
-  options: { artifactStore: string; artifactIndexStart: number },
+  options: { artifactStore: string; artifactMode: ArtifactMode; artifactIndexStart: number; baseDirs: string[] },
 ): Promise<CodexMessage | null> {
   if (entry.type !== 'response_item' || !isRecord(entry.payload)) {
     return null;
@@ -322,8 +336,10 @@ async function messageFromEntry(
   }
   const content = await contentFromParts(entry.payload.content, {
     artifactStore: options.artifactStore,
+    artifactMode: options.artifactMode,
     source: role === 'user' ? 'prompt' : 'response',
     keyPrefix: `${role}-${options.artifactIndexStart + 1}`,
+    baseDirs: options.baseDirs,
   });
   const text = content.text;
   if (!text) {
@@ -377,7 +393,13 @@ function normalizeUserMessage(text: string): string | null {
 
 async function contentFromParts(
   content: unknown,
-  options: { artifactStore: string; source: Artifact['source']; keyPrefix: string },
+  options: {
+    artifactStore: string;
+    artifactMode: ArtifactMode;
+    source: Artifact['source'];
+    keyPrefix: string;
+    baseDirs: string[];
+  },
 ): Promise<{ text: string | null; artifacts: Artifact[] }> {
   if (!Array.isArray(content)) {
     return { text: null, artifacts: [] };
@@ -395,8 +417,10 @@ async function contentFromParts(
     }
     const artifact = await artifactFromPart(part, {
       artifactStore: options.artifactStore,
+      artifactMode: options.artifactMode,
       source: options.source,
       key: `${options.keyPrefix}-artifact-${index + 1}`,
+      baseDirs: options.baseDirs,
     });
     if (artifact) {
       artifacts.push(artifact);
@@ -441,7 +465,13 @@ function toolOutputFromEntry(entry: Record<string, unknown>): TurnEvent | null {
 
 async function artifactFromPart(
   part: Record<string, unknown>,
-  options: { artifactStore: string; source: Artifact['source']; key: string },
+  options: {
+    artifactStore: string;
+    artifactMode: ArtifactMode;
+    source: Artifact['source'];
+    key: string;
+    baseDirs: string[];
+  },
 ): Promise<Artifact | null> {
   const imageUrl = artifactUrl(part.image_url ?? part.imageUrl);
   if (imageUrl) {
@@ -468,8 +498,24 @@ function artifactUrl(value: unknown): string | null {
 
 async function imageArtifactFromUrl(
   value: string,
-  options: { artifactStore: string; source: Artifact['source']; key: string },
-): Promise<Artifact> {
+  options: {
+    artifactStore: string;
+    artifactMode: ArtifactMode;
+    source: Artifact['source'];
+    key: string;
+    baseDirs: string[];
+  },
+): Promise<Artifact | null> {
+  if (options.artifactMode === 'preview') {
+    return {
+      key: options.key,
+      kind: 'image',
+      source: options.source,
+      name: artifactNameFromValue(value, 'image'),
+      mimeType: mimeTypeFromPath(value) ?? 'image/*',
+    };
+  }
+
   if (value.startsWith('data:')) {
     const saved = await saveDataUrlArtifact(value, options.artifactStore);
     return {
@@ -503,15 +549,19 @@ async function imageArtifactFromUrl(
 
 async function imageArtifactFromLocalPath(
   filePath: string,
-  options: { artifactStore: string; source: Artifact['source']; key: string },
-): Promise<Artifact> {
-  const saved = await saveLocalFileArtifact(filePath, options.artifactStore);
+  options: { artifactStore: string; source: Artifact['source']; key: string; baseDirs: string[] },
+): Promise<Artifact | null> {
+  const resolved = await resolveLocalArtifactPath(filePath, options.baseDirs);
+  if (!resolved) {
+    return null;
+  }
+  const saved = await saveLocalFileArtifact(resolved, options.artifactStore);
   return {
     key: options.key,
     kind: 'image',
     source: options.source,
     uri: saved.uri,
-    name: path.basename(filePath),
+    name: path.basename(resolved),
     mimeType: saved.mimeType ?? 'image/*',
     sizeBytes: saved.sizeBytes,
   };
@@ -519,8 +569,14 @@ async function imageArtifactFromLocalPath(
 
 async function fileArtifactFromPath(
   filePath: string,
-  options: { artifactStore: string; source: Artifact['source']; key: string },
-): Promise<Artifact> {
+  options: {
+    artifactStore: string;
+    artifactMode: ArtifactMode;
+    source: Artifact['source'];
+    key: string;
+    baseDirs: string[];
+  },
+): Promise<Artifact | null> {
   if (/^https?:\/\//i.test(filePath)) {
     return {
       key: options.key,
@@ -533,19 +589,33 @@ async function fileArtifactFromPath(
   }
 
   const localPath = filePath.startsWith('file://') ? filePathFromFileUrl(filePath) : filePath;
-  const saved = await saveLocalFileArtifact(localPath, options.artifactStore);
+  if (options.artifactMode === 'preview') {
+    return {
+      key: options.key,
+      kind: mimeTypeFromPath(localPath)?.startsWith('image/') ? 'image' : 'file',
+      source: options.source,
+      name: path.basename(localPath),
+      mimeType: mimeTypeFromPath(localPath),
+    };
+  }
+
+  const resolved = await resolveLocalArtifactPath(localPath, options.baseDirs);
+  if (!resolved) {
+    return null;
+  }
+  const saved = await saveLocalFileArtifact(resolved, options.artifactStore);
   const kind = saved.mimeType?.startsWith('image/') ? 'image' : 'file';
   const artifact: Artifact = {
     key: options.key,
     kind,
     source: options.source,
     uri: saved.uri,
-    name: path.basename(localPath),
+    name: path.basename(resolved),
     mimeType: saved.mimeType,
     sizeBytes: saved.sizeBytes,
   };
   if (kind === 'file' && saved.sizeBytes <= SMALL_TEXT_ARTIFACT_LIMIT && saved.mimeType?.startsWith('text/')) {
-    artifact.content = await readFile(localPath, 'utf8');
+    artifact.content = await readFile(resolved, 'utf8');
   }
   return artifact;
 }
@@ -566,6 +636,26 @@ async function saveLocalFileArtifact(filePath: string, artifactStore: string): P
   const content = await readFile(filePath);
   const mimeType = mimeTypeFromPath(filePath);
   return writeArtifactBytes(content, artifactStore, path.extname(filePath), mimeType);
+}
+
+async function resolveLocalArtifactPath(filePath: string, baseDirs: string[]): Promise<string | null> {
+  const candidates = path.isAbsolute(filePath)
+    ? [filePath]
+    : [
+      ...baseDirs.map((baseDir) => path.resolve(baseDir, filePath)),
+      path.resolve(filePath),
+    ];
+  for (const candidate of candidates) {
+    try {
+      const info = await stat(candidate);
+      if (info.isFile()) {
+        return candidate;
+      }
+    } catch {
+      // Try the next candidate.
+    }
+  }
+  return null;
 }
 
 type StoredArtifact = {
@@ -597,6 +687,21 @@ async function writeArtifactBytes(
 
 function filePathFromFileUrl(value: string): string {
   return decodeURIComponent(new URL(value).pathname);
+}
+
+function artifactNameFromValue(value: string, fallback: string): string {
+  try {
+    if (/^https?:\/\//i.test(value)) {
+      return path.basename(new URL(value).pathname) || fallback;
+    }
+  } catch {
+    return fallback;
+  }
+  if (value.startsWith('data:')) {
+    return fallback;
+  }
+  const localPath = value.startsWith('file://') ? filePathFromFileUrl(value) : value;
+  return path.basename(localPath) || fallback;
 }
 
 function mimeTypeFromPath(value: string): string | undefined {
@@ -702,7 +807,10 @@ function toTurnContent(session: CodexSession, turn: CodexTurn, index: number): T
   };
 }
 
-async function collectExistingCodexImports(selectedSessionIds: Set<string>): Promise<Map<string, ExistingImportTurn[]>> {
+async function collectExistingCodexImports(selected: {
+  rawSessionIds: Set<string>;
+  importedSessionIds: Set<string>;
+}): Promise<Map<string, ExistingImportTurn[]>> {
   const existing = await turns.list({
     mode: { type: 'page', offset: 0, limit: 100_000 },
     agent: CODEX_IMPORT_AGENT,
@@ -711,9 +819,12 @@ async function collectExistingCodexImports(selectedSessionIds: Set<string>): Pro
   for (const turn of existing) {
     let marker = markerFromTurn(turn);
     let sessionId = marker?.split('#', 1)[0] ?? '';
+    if (marker && !selected.rawSessionIds.has(sessionId)) {
+      continue;
+    }
     if (!marker) {
       const legacySessionId = typeof turn.sessionId === 'string' ? turn.sessionId : '';
-      if (!selectedSessionIds.has(legacySessionId)) {
+      if (!selected.importedSessionIds.has(legacySessionId)) {
         continue;
       }
       marker = `legacy:${turn.turnId}`;

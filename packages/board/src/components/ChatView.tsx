@@ -1,13 +1,14 @@
-import type { Artifact, MemoryDocument, ToolCall } from '@muninn/types';
+import type { Artifact, MemoryDocument } from '@muninn/types';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Bot } from 'lucide-react';
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import claudeLogoUrl from '../assets/agent-claude.svg';
 import codexLogoUrl from '../assets/agent-codex.svg';
 import openclawLogoUrl from '../assets/agent-openclaw.svg';
 import userAvatarUrl from '../assets/user-avatar.png';
 import type { ProjectTurnNode } from '../lib/api.js';
+import { CHAT_CONTEXT_STEP, INITIAL_CHAT_CONTEXT_RADIUS, chatTurnWindow } from '../lib/chat_window.js';
 import { transcriptMessages, type TranscriptMessage } from '../lib/transcript.js';
 import { cn } from '../lib/utils.js';
 import {
@@ -15,37 +16,46 @@ import {
   entriesFromFallback,
   type ChatMessage,
   type ChatTimelineEntry,
+  type ChatToolCall,
 } from '../server/chat_timeline.js';
 import { Avatar } from './ui/avatar.js';
+import { Button } from './ui/button.js';
 import { ScrollArea } from './ui/scroll-area.js';
 
 type ChatViewProps = {
   document: MemoryDocument | null;
   activeMemoryId: string | null;
   sessionTurns: ProjectTurnNode[];
+  canLoadMoreAfter?: boolean;
+  loadingMoreAfter?: boolean;
+  onLoadMoreAfter?: () => void;
   loading: boolean;
   error: string | null;
-};
-
-type ChatTurnWindow = {
-  turns: ProjectTurnNode[];
-  beforeCount: number;
-  afterCount: number;
 };
 
 type ChatTimelineItem =
   | { type: 'time'; key: string; timestamp: string }
   | { type: 'entry'; key: string; entry: ChatTimelineEntry; index: number };
 
-const CHAT_TURN_COLLAPSE_THRESHOLD = 40;
-const CHAT_TURN_WINDOW_RADIUS = 12;
 const TIME_SEPARATOR_GAP_MS = 5 * 60 * 1000;
 
-export function ChatView({ document, activeMemoryId, sessionTurns, loading, error }: ChatViewProps) {
+export function ChatView({
+  document,
+  activeMemoryId,
+  sessionTurns,
+  canLoadMoreAfter = false,
+  loadingMoreAfter = false,
+  onLoadMoreAfter,
+  loading,
+  error,
+}: ChatViewProps) {
+  const scrollRef = useRef<HTMLDivElement>(null);
   const activeMessageRef = useRef<HTMLElement>(null);
+  const [beforeLimit, setBeforeLimit] = useState(INITIAL_CHAT_CONTEXT_RADIUS);
+  const [afterLimit, setAfterLimit] = useState(INITIAL_CHAT_CONTEXT_RADIUS);
   const turnWindow = useMemo(
-    () => chatTurnWindow(sessionTurns, activeMemoryId),
-    [activeMemoryId, sessionTurns],
+    () => chatTurnWindow(sessionTurns, activeMemoryId, beforeLimit, afterLimit),
+    [activeMemoryId, afterLimit, beforeLimit, sessionTurns],
   );
   const entries = useMemo(() => (
     sessionTurns.length > 0 ? entriesFromTurns(turnWindow.turns) : entriesFromDocument(document)
@@ -53,8 +63,39 @@ export function ChatView({ document, activeMemoryId, sessionTurns, loading, erro
   const timelineItems = useMemo(() => chatTimelineItems(entries), [entries]);
 
   useEffect(() => {
-    activeMessageRef.current?.scrollIntoView({ block: 'start', behavior: 'smooth' });
-  }, [activeMemoryId, timelineItems.length]);
+    setBeforeLimit(INITIAL_CHAT_CONTEXT_RADIUS);
+    setAfterLimit(INITIAL_CHAT_CONTEXT_RADIUS);
+  }, [activeMemoryId]);
+
+  useEffect(() => {
+    if (!activeMemoryId) {
+      return;
+    }
+
+    const scrollToActive = () => {
+      const scroller = scrollRef.current;
+      const active = scroller
+        ? Array.from(scroller.querySelectorAll<HTMLElement>('.chat-message-row'))
+          .find((row) => row.dataset.memoryId === activeMemoryId)
+        : null;
+      if (!active || !scroller) {
+        return;
+      }
+      const scrollerRect = scroller.getBoundingClientRect();
+      const activeRect = active.getBoundingClientRect();
+      scroller.scrollTo({
+        top: scroller.scrollTop + activeRect.top - scrollerRect.top - 24,
+      });
+    };
+
+    scrollToActive();
+    const frame = window.requestAnimationFrame(scrollToActive);
+    const timeout = window.setTimeout(scrollToActive, 50);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.clearTimeout(timeout);
+    };
+  }, [activeMemoryId, timelineItems.length, turnWindow.turns]);
 
   if (loading) {
     return <div className="empty-state">Loading conversation...</div>;
@@ -73,10 +114,17 @@ export function ChatView({ document, activeMemoryId, sessionTurns, loading, erro
   }
 
   return (
-    <ScrollArea className="chat-scroll">
+    <ScrollArea ref={scrollRef} className="chat-scroll">
       <div className="chat-thread">
         {turnWindow.beforeCount > 0 ? (
-          <div className="chat-collapse-divider">{turnWindow.beforeCount} earlier turns collapsed</div>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="chat-collapse-divider"
+            onClick={() => setBeforeLimit((current) => current + CHAT_CONTEXT_STEP)}
+          >
+            Show {Math.min(CHAT_CONTEXT_STEP, turnWindow.beforeCount)} earlier turns
+          </Button>
         ) : null}
         {timelineItems.map((item) => {
           if (item.type === 'time') {
@@ -89,34 +137,27 @@ export function ChatView({ document, activeMemoryId, sessionTurns, loading, erro
             documentAgent: document?.agent ?? document?.observer ?? '',
           });
         })}
-        {turnWindow.afterCount > 0 ? (
-          <div className="chat-collapse-divider">{turnWindow.afterCount} later turns collapsed</div>
+        {turnWindow.afterCount > 0 || canLoadMoreAfter ? (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="chat-collapse-divider"
+            disabled={loadingMoreAfter}
+            onClick={() => {
+              if (turnWindow.afterCount > 0) {
+                setAfterLimit((current) => current + CHAT_CONTEXT_STEP);
+                return;
+              }
+              setAfterLimit((current) => current + CHAT_CONTEXT_STEP);
+              onLoadMoreAfter?.();
+            }}
+          >
+            {loadingMoreAfter ? 'Loading...' : `Show ${Math.min(CHAT_CONTEXT_STEP, Math.max(turnWindow.afterCount, CHAT_CONTEXT_STEP))} later turns`}
+          </Button>
         ) : null}
       </div>
     </ScrollArea>
   );
-}
-
-function chatTurnWindow(turns: ProjectTurnNode[], activeMemoryId: string | null): ChatTurnWindow {
-  if (turns.length <= CHAT_TURN_COLLAPSE_THRESHOLD) {
-    return {
-      turns,
-      beforeCount: 0,
-      afterCount: 0,
-    };
-  }
-
-  const matchedIndex = activeMemoryId
-    ? turns.findIndex((turn) => turn.memoryId === activeMemoryId)
-    : -1;
-  const activeIndex = matchedIndex >= 0 ? matchedIndex : 0;
-  const start = Math.max(0, activeIndex - CHAT_TURN_WINDOW_RADIUS);
-  const end = Math.min(turns.length, activeIndex + CHAT_TURN_WINDOW_RADIUS + 1);
-  return {
-    turns: turns.slice(start, end),
-    beforeCount: start,
-    afterCount: turns.length - end,
-  };
 }
 
 function renderTimelineEntry(params: {
@@ -141,27 +182,31 @@ function renderTimelineEntry(params: {
           <AgentAvatar logo={logoForAgent(group.agent ?? documentAgent)} />
         </Avatar>
         <div className="chat-message-content chat-message-content-tools">
-          <ToolCallList toolCalls={group.toolCalls} />
+          <ToolCallList toolCalls={group.toolCalls} startedAt={group.startedAt} completedAt={group.completedAt} />
         </div>
       </section>
     );
   }
 
-  if (item.entry.type === 'cost') {
+  if (item.entry.type === 'totalTime') {
     return (
       <section
         key={item.key}
-        data-memory-id={item.entry.cost.memoryId}
+        data-memory-id={item.entry.totalTime.memoryId}
         className={cn(
-          'chat-message-row chat-message-row-agent chat-cost-row',
-          item.entry.cost.memoryId === activeMemoryId && 'chat-turn-active',
+          'chat-message-row chat-message-row-agent chat-total-time-row',
+          item.entry.totalTime.memoryId === activeMemoryId && 'chat-turn-active',
         )}
       >
         <Avatar className="chat-avatar chat-avatar-agent chat-avatar-spacer">
           <AgentAvatar logo={logoForAgent(documentAgent)} />
         </Avatar>
         <div className="chat-message-content chat-message-content-tools">
-          <AgentResponseCost startedAt={item.entry.cost.startedAt} completedAt={item.entry.cost.completedAt} />
+          <ChatTimeMeta
+            label="total time"
+            startedAt={item.entry.totalTime.startedAt}
+            completedAt={item.entry.totalTime.completedAt}
+          />
         </div>
       </section>
     );
@@ -193,12 +238,17 @@ function renderTimelineEntry(params: {
         )}
       >
         {message.body ? (
-          <div className="chat-bubble">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.body}</ReactMarkdown>
-            {message.artifacts && message.artifacts.length > 0 ? (
-              <ArtifactList artifacts={message.artifacts} />
+          <>
+            <div className="chat-bubble">
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.body}</ReactMarkdown>
+              {message.artifacts && message.artifacts.length > 0 ? (
+                <ArtifactList artifacts={message.artifacts} />
+              ) : null}
+            </div>
+            {message.role === 'agent' ? (
+              <ChatTimeMeta label="time" startedAt={message.startedAt} completedAt={message.completedAt} />
             ) : null}
-          </div>
+          </>
         ) : null}
       </div>
     </section>
@@ -245,7 +295,7 @@ function keyForEntry(entry: ChatTimelineEntry, index: number): string {
   if (entry.type === 'toolGroup') {
     return `${entry.group.memoryId ?? 'document'}-tool-${index}`;
   }
-  return `${entry.cost.memoryId ?? 'document'}-cost-${index}`;
+  return `${entry.totalTime.memoryId ?? 'document'}-total-time-${index}`;
 }
 
 function shouldShowTimeSeparator(timestamp: string, previous: Date | null): boolean {
@@ -312,6 +362,8 @@ function entriesFromTurns(turns: ProjectTurnNode[]): ChatTimelineEntry[] {
       updatedAt: turn.updatedAt,
       prompt: turn.prompt,
       response: turn.response,
+      title: turn.title,
+      summary: turn.summary,
       artifacts: turn.artifacts,
       toolCalls: turn.toolCalls,
     });
@@ -359,14 +411,14 @@ function TimeSeparator({ timestamp }: { timestamp: string }) {
   );
 }
 
-function AgentResponseCost({ startedAt, completedAt }: { startedAt?: string; completedAt?: string }) {
-  const cost = formatResponseCost(startedAt, completedAt);
-  if (!cost) {
+function ChatTimeMeta({ label, startedAt, completedAt }: { label: string; startedAt?: string; completedAt?: string }) {
+  const duration = formatDuration(startedAt, completedAt);
+  if (!duration) {
     return null;
   }
   return (
-    <div className="chat-agent-response-cost" title={responseCostTitle(startedAt, completedAt)}>
-      cost: {cost}
+    <div className="chat-time-meta" title={timeRangeTitle(startedAt, completedAt)}>
+      {label}: {duration}
     </div>
   );
 }
@@ -406,46 +458,58 @@ function ArtifactList({ artifacts }: { artifacts: Artifact[] }) {
   );
 }
 
-function ToolCallList({ toolCalls }: { toolCalls: ToolCall[] }) {
+function ToolCallList({
+  toolCalls,
+  startedAt,
+  completedAt,
+}: {
+  toolCalls: ChatToolCall[];
+  startedAt?: string;
+  completedAt?: string;
+}) {
   const summary = toolCallSummary(toolCalls);
   return (
-    <details className="chat-tool-call-group">
-      <summary className="chat-tool-call-group-summary">
-        <span className="chat-tool-call-chevron">›</span>
-        <span className="chat-tool-call-title">Tool calls: {toolCalls.length}</span>
-        <span className="chat-tool-call-meta">{summary}</span>
-      </summary>
-      <div className="chat-tool-call-panel">
-        {toolCalls.map((toolCall, index) => (
-          <details key={toolCall.id ?? `${toolCall.name}-${index}`} className="chat-tool-call-row">
-            <summary className="chat-tool-call-row-summary">
-              <span className="chat-tool-call-chevron">›</span>
-              <span className="chat-tool-call-name">{toolCall.name}</span>
-              <span className="chat-tool-call-arg">{toolCallInputSummary(toolCall)}</span>
-              <span className="chat-tool-call-state">{toolCall.output ? 'output' : 'input'}</span>
-            </summary>
-            <div className="chat-tool-call-io">
-              {toolCall.input ? (
-                <div className="chat-tool-call-section">
-                  <div className="chat-tool-call-label">Input</div>
-                  <pre>{toolCall.input}</pre>
-                </div>
-              ) : null}
-              {toolCall.output ? (
-                <div className="chat-tool-call-section">
-                  <div className="chat-tool-call-label">Output</div>
-                  <pre>{toolCall.output}</pre>
-                </div>
-              ) : null}
-            </div>
-          </details>
-        ))}
-      </div>
-    </details>
+    <>
+      <details className="chat-tool-call-group">
+        <summary className="chat-tool-call-group-summary">
+          <span className="chat-tool-call-chevron">›</span>
+          <span className="chat-tool-call-title">Tool calls: {toolCalls.length}</span>
+          <span className="chat-tool-call-meta">{summary}</span>
+        </summary>
+        <div className="chat-tool-call-panel">
+          {toolCalls.map((toolCall, index) => (
+            <details key={toolCall.id ?? `${toolCall.name}-${index}`} className="chat-tool-call-row">
+              <summary className="chat-tool-call-row-summary">
+                <span className="chat-tool-call-chevron">›</span>
+                <span className="chat-tool-call-name">{toolCall.name}</span>
+                <span className="chat-tool-call-arg">{toolCallInputSummary(toolCall)}</span>
+                <span className="chat-tool-call-state">{toolCall.output ? 'output' : 'input'}</span>
+              </summary>
+              <div className="chat-tool-call-io">
+                {toolCall.input ? (
+                  <div className="chat-tool-call-section">
+                    <div className="chat-tool-call-label">Input</div>
+                    <pre>{toolCall.input}</pre>
+                  </div>
+                ) : null}
+                {toolCall.output ? (
+                  <div className="chat-tool-call-section">
+                    <div className="chat-tool-call-label">Output</div>
+                    <pre>{toolCall.output}</pre>
+                  </div>
+                ) : null}
+                <ChatTimeMeta label="time" startedAt={toolCall.startedAt} completedAt={toolCall.completedAt} />
+              </div>
+            </details>
+          ))}
+        </div>
+      </details>
+      <ChatTimeMeta label="time" startedAt={startedAt} completedAt={completedAt} />
+    </>
   );
 }
 
-function toolCallInputSummary(toolCall: ToolCall): string {
+function toolCallInputSummary(toolCall: ChatToolCall): string {
   const input = toolCall.input?.trim();
   if (!input) {
     return '';
@@ -485,7 +549,7 @@ function truncateToolCallSummary(value: string): string {
   return normalized.length > maxLength ? `${normalized.slice(0, maxLength - 3)}...` : normalized;
 }
 
-function toolCallSummary(toolCalls: ToolCall[]): string {
+function toolCallSummary(toolCalls: ChatToolCall[]): string {
   const counts = new Map<string, number>();
   for (const toolCall of toolCalls) {
     counts.set(toolCall.name, (counts.get(toolCall.name) ?? 0) + 1);
@@ -562,7 +626,7 @@ function timeParts(date: Date): string {
   return `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
 }
 
-function formatResponseCost(startedAt?: string, completedAt?: string): string | null {
+function formatDuration(startedAt?: string, completedAt?: string): string | null {
   if (!startedAt || !completedAt) {
     return null;
   }
@@ -585,7 +649,7 @@ function formatResponseCost(startedAt?: string, completedAt?: string): string | 
   return `${hours}h ${pad(remainingMinutes)}m ${pad(seconds)}s`;
 }
 
-function responseCostTitle(startedAt?: string, completedAt?: string): string {
+function timeRangeTitle(startedAt?: string, completedAt?: string): string {
   if (!startedAt || !completedAt) {
     return '';
   }

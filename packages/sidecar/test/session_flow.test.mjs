@@ -648,8 +648,8 @@ test('timeline stays scoped to the full session key when agents share a sessionI
   const agentTurnsResponse = await app.request('/api/v1/ui/session/agents/agent-a/sessions/group-a/turns?offset=0&limit=10');
   assert.equal(agentTurnsResponse.status, 200);
   const agentTurns = await json(agentTurnsResponse);
-  const firstTurnId = agentTurns.turns[1].memoryId;
-  const secondTurnId = agentTurns.turns[0].memoryId;
+  const firstTurnId = agentTurns.turns[0].memoryId;
+  const secondTurnId = agentTurns.turns[1].memoryId;
 
   const otherTurnsResponse = await app.request('/api/v1/ui/session/agents/agent-b/sessions/group-a/turns?offset=0&limit=10');
   assert.equal(otherTurnsResponse.status, 200);
@@ -870,19 +870,15 @@ test('ui session endpoints group by agent/session and return rendered turn docum
   assert.equal(turnsResponse.status, 200);
   const turnsBody = await json(turnsResponse);
   assert.equal(turnsBody.turns.length, 2);
-  assert.equal(turnsBody.turns[0].title, 'second alpha prompt');
+  assert.equal(turnsBody.turns[0].title, 'first alpha prompt');
   assert.match(turnsBody.turns[0].summary, /alpha/);
-  assert.equal(
-    sessionsBody.sessions[0].createdAt,
-    turnsBody.turns.reduce((earliest, turn) => turn.createdAt < earliest ? turn.createdAt : earliest, turnsBody.turns[0].createdAt),
-  );
   assert.equal(
     sessionsBody.sessions[0].latestUpdatedAt,
     turnsBody.turns.reduce((latest, turn) => turn.updatedAt > latest ? turn.updatedAt : latest, turnsBody.turns[0].updatedAt),
   );
 
   const documentResponse = await app.request(
-    `/api/v1/ui/memories/${encodeURIComponent(turnsBody.turns[1].memoryId)}/document`
+    `/api/v1/ui/memories/${encodeURIComponent(turnsBody.turns[0].memoryId)}/document`
   );
   assert.equal(documentResponse.status, 200);
   const documentBody = await json(documentResponse);

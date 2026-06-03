@@ -120,30 +120,30 @@ function defaultConfigContent(): string {
     '{',
     '  "extractor": {',
     '    "name": "default-extractor",',
-    '    "llm": "default_extractor_llm",',
+    '    "llmProvider": "default",',
+    '    "embeddingProvider": "default",',
+    '    "recallMode": "hybrid",',
     '    "maxAttempts": 3,',
     '    "activeWindowDays": 7',
     '  },',
     '  "observer": {',
     '    "name": "default-observer",',
-    '    "llm": "default_observer_llm",',
+    '    "llmProvider": "default",',
     '    "maxAttempts": 3,',
     '    "anchorThreshold": 8',
     '  },',
-    '  "llm": {',
-    '    "default_extractor_llm": {',
-    '      "provider": "mock"',
+    '  "providers": {',
+    '    "llm": {',
+    '      "default": {',
+    '        "type": "mock"',
+    '      }',
     '    },',
-    '    "default_observer_llm": {',
-    '      "provider": "mock"',
-    '    }',
-    '  },',
-    '  "extraction": {',
     '    "embedding": {',
-    '      "provider": "mock",',
-    '      "dimensions": 8',
-    '    },',
-    '    "defaultImportance": 0.7',
+    '      "default": {',
+    '        "type": "mock",',
+    '        "dimensions": 8',
+    '      }',
+    '    }',
     '  },',
     '  "watchdog": {',
     '    "enabled": true,',
@@ -280,6 +280,7 @@ async function loadAllSessionTurns(): Promise<Awaited<ReturnType<typeof turns.li
 }
 
 function toTurnPreview(turn: BoardSessionTurn): TurnPreview {
+  const events = turnEvents(turn);
   return {
     memoryId: turn.turnId,
     createdAt: turn.createdAt,
@@ -288,13 +289,19 @@ function toTurnPreview(turn: BoardSessionTurn): TurnPreview {
     summary: turn.summary!,
     prompt: turn.prompt ?? undefined,
     response: turn.response ?? undefined,
-    events: turn.events.length > 0 ? turn.events : undefined,
+    events: events.length > 0 ? events : undefined,
     artifacts: turn.artifacts ?? undefined,
-    toolCalls: toolCallsFromEvents(turn.events),
+    toolCalls: toolCallsFromEvents(events),
   };
 }
 
-function toolCallsFromEvents(events: BoardSessionTurn['events']): TurnPreview['toolCalls'] {
+function turnEvents(turn: BoardSessionTurn): NonNullable<BoardSessionTurn['events']> {
+  return Array.isArray((turn as { events?: BoardSessionTurn['events'] }).events)
+    ? (turn as { events: NonNullable<BoardSessionTurn['events']> }).events
+    : [];
+}
+
+function toolCallsFromEvents(events: NonNullable<BoardSessionTurn['events']>): TurnPreview['toolCalls'] {
   const toolCalls: NonNullable<TurnPreview['toolCalls']> = [];
   const toolCallIndexById = new Map<string, number>();
   for (const event of events) {
@@ -341,6 +348,7 @@ async function enrichMemoryDocument(
   if (!turn) {
     return document;
   }
+  const events = turnEvents(turn);
   return {
     ...document,
     agent: turn.agent,
@@ -348,8 +356,8 @@ async function enrichMemoryDocument(
     sessionId: turn.sessionId ?? undefined,
     prompt: turn.prompt ?? undefined,
     response: turn.response ?? undefined,
-    events: turn.events.length > 0 ? turn.events : undefined,
-    toolCalls: toolCallsFromEvents(turn.events),
+    events: events.length > 0 ? events : undefined,
+    toolCalls: toolCallsFromEvents(events),
     artifacts: turn.artifacts ?? undefined,
     createdAt: turn.createdAt,
     updatedAt: turn.updatedAt,
@@ -374,29 +382,49 @@ async function loadSessionTurnPreviewsPage(params: {
       || left.updatedAt.localeCompare(right.updatedAt)
       || left.turnId.localeCompare(right.turnId)
     ));
-  const previews = allTurns
-    .slice(params.offset, params.offset + params.limit)
-    .map(toTurnPreview);
-  const snapshot = await loadLatestSnapshotForSession(params.agent, params.sessionKey);
-  const segments = buildSessionSegments(snapshot?.content ?? null, allTurns.map(toTurnPreview));
-  const hasMore = params.offset + params.limit < allTurns.length;
-  return {
+  const previews = allTurns.map(toTurnPreview);
+  const snapshotContent = await loadSessionSnapshotContent(params.agent, params.sessionKey);
+  return buildSessionTurnPage({
     turns: previews,
+    snapshotContent,
+    offset: params.offset,
+    limit: params.limit,
+  });
+}
+
+async function loadSessionSnapshotContent(agent: string, sessionKey: string): Promise<string | null> {
+  const sessionIndex = await sessions.index();
+  const session = sessionIndex.find((entry) => (
+    entry.agent === agent
+    && entry.sessionId === sessionKey
+  ));
+
+  if (!session?.snapshotId) {
+    return null;
+  }
+
+  const snapshot = await memories.get(session.snapshotId);
+  if (!snapshot) {
+    return null;
+  }
+
+  return renderRenderedMemoryDocument(snapshot).markdown;
+}
+
+function buildSessionTurnPage(params: {
+  turns: TurnPreview[];
+  snapshotContent?: string | null;
+  offset: number;
+  limit: number;
+}): { turns: TurnPreview[]; segments: SessionSegmentPreview[]; nextOffset: number | null } {
+  const pageTurns = params.turns.slice(params.offset, params.offset + params.limit);
+  const segments = buildSessionSegments(params.snapshotContent, params.turns);
+  const hasMore = params.offset + params.limit < params.turns.length;
+  return {
+    turns: pageTurns,
     segments,
     nextOffset: hasMore ? params.offset + params.limit : null,
   };
-}
-
-async function loadLatestSnapshotForSession(
-  agent: string,
-  sessionKey: string,
-): Promise<Awaited<ReturnType<typeof sessions.get>> | null> {
-  const entry = (await sessions.index())
-    .find((item) => item.agent === agent && item.sessionId === sessionKey);
-  if (!entry?.snapshotId) {
-    return null;
-  }
-  return sessions.get(entry.snapshotId);
 }
 
 function buildSessionSegments(
@@ -499,6 +527,15 @@ export function buildSessionSegmentsForTests(
   return buildSessionSegments(snapshotContent, turnPreviews);
 }
 
+export function buildSessionTurnPageForTests(params: {
+  turns: TurnPreview[];
+  snapshotContent?: string | null;
+  offset: number;
+  limit: number;
+}): { turns: TurnPreview[]; segments: SessionSegmentPreview[]; nextOffset: number | null } {
+  return buildSessionTurnPage(params);
+}
+
 async function loadObservingReferences(references: string[]): Promise<MemoryReference[]> {
   const resolved = await Promise.all(
     references.map(async (memoryId) => {
@@ -573,13 +610,17 @@ boardApp.get('/board/:asset{.+}', async (c) => {
 boardApp.get('/api/v1/ui/session/agents', async (c) => {
   console.log('[BOARD_UI_SESSION_AGENTS]');
 
-  const entries = await sessions.index();
+  const entries = (await loadAllSessionTurns()).filter(hasSummary);
   const grouped = new Map<string, string>();
 
   for (const entry of entries) {
-    const latest = grouped.get(entry.agent);
-    if (!latest || entry.latestUpdatedAt > latest) {
-      grouped.set(entry.agent, entry.latestUpdatedAt);
+    const agent = normalizeText(entry.agent);
+    if (!agent) {
+      continue;
+    }
+    const latest = grouped.get(agent);
+    if (!latest || entry.updatedAt > latest) {
+      grouped.set(agent, entry.updatedAt);
     }
   }
 
@@ -602,10 +643,21 @@ boardApp.get('/api/v1/ui/session/agents/:agent/sessions', async (c) => {
   const agent = c.req.param('agent');
   console.log('[BOARD_UI_SESSION_GROUPS] agent:', agent);
 
-  const sessionNodes = (await sessions.index())
-    .filter((entry) => entry.agent === agent)
-    .map(resolveSessionNodeFromIndex);
-  sessionNodes
+  const grouped = new Map<string, SessionNode>();
+  for (const turn of (await loadAllSessionTurns()).filter(hasSummary)) {
+    if (turn.agent !== agent) {
+      continue;
+    }
+    const node = resolveSessionNode(turn);
+    const current = grouped.get(node.sessionKey);
+    if (!current || turn.updatedAt > current.latestUpdatedAt) {
+      grouped.set(node.sessionKey, {
+        ...node,
+        latestUpdatedAt: turn.updatedAt,
+      });
+    }
+  }
+  const sessionNodes = [...grouped.values()]
     .sort((left, right) => right.latestUpdatedAt.localeCompare(left.latestUpdatedAt));
 
   const response: SessionGroupsResponse = {
@@ -716,9 +768,17 @@ boardApp.get('/api/v1/ui/settings/config', async (c) => {
     }
   }
 
+  let validationError: string | undefined;
+  try {
+    await validateSettings(content);
+  } catch (error) {
+    validationError = error instanceof Error ? error.message : String(error);
+  }
+
   const response: SettingsConfigResponse = {
     pathLabel: configPath,
     content,
+    validationError,
     requestId: generateRequestId(),
   };
 

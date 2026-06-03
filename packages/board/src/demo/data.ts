@@ -1,3 +1,5 @@
+import type { ToolCall } from '@muninn/types';
+
 export type DemoSessionAgentItem = {
   agent: string;
   latestUpdatedAt: string;
@@ -15,6 +17,9 @@ export type DemoSessionTimelineItem = {
   updatedAt: string;
   title?: string;
   summary: string;
+  prompt?: string;
+  response?: string;
+  toolCalls?: ToolCall[];
 };
 
 export type DemoObservingReferenceItem = {
