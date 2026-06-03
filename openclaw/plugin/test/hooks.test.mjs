@@ -6,6 +6,27 @@ import path from "node:path";
 
 import { extractFinalAssistantText, registerMuninnHooks } from "../dist/src/hooks.js";
 
+function turnEvents(prompt, response, tool) {
+  const events = [{ type: "userMessage", text: prompt }];
+  if (tool) {
+    events.push({
+      type: "toolCall",
+      ...(tool.id ? { id: tool.id } : {}),
+      name: tool.name,
+      ...(tool.input ? { input: tool.input } : {}),
+    });
+    if (tool.output) {
+      events.push({
+        type: "toolOutput",
+        ...(tool.id ? { id: tool.id } : {}),
+        output: tool.output,
+      });
+    }
+  }
+  events.push({ type: "assistantMessage", text: response });
+  return events;
+}
+
 test("extractFinalAssistantText returns the last assistant text block", () => {
   const text = extractFinalAssistantText({
     success: true,
@@ -220,15 +241,20 @@ test("registerMuninnHooks captures after_tool_call artifacts and clears cache af
       agent: "agent-a",
       prompt: "hello",
       response: "done",
-      toolCalls: [{
+      events: turnEvents("hello", "done", {
         id: "tool-1",
         name: "read",
         input: "{\"path\":\"note.txt\"}",
         output: "ok",
-      }],
+      }),
       artifacts: [{
         key: "note.txt",
+        kind: "text",
+        source: "tool",
         content: "first artifact",
+        name: "note.txt",
+        mimeType: "text/plain",
+        sizeBytes: 14,
       }],
     },
   });
@@ -238,6 +264,7 @@ test("registerMuninnHooks captures after_tool_call artifacts and clears cache af
       agent: "agent-a",
       prompt: "hello again",
       response: "done again",
+      events: turnEvents("hello again", "done again"),
     },
   });
 });
@@ -318,7 +345,12 @@ test("registerMuninnHooks keeps the latest artifact content for the same path", 
 
   assert.deepEqual(requests[0].turn.artifacts, [{
     key: "note.txt",
+    kind: "text",
+    source: "tool",
     content: "second",
+    name: "note.txt",
+    mimeType: "text/plain",
+    sizeBytes: 6,
   }]);
 });
 
@@ -478,7 +510,12 @@ test("registerMuninnHooks collects artifacts from tool result paths", async (t) 
 
   assert.deepEqual(requests[0].turn.artifacts, [{
     key: "./note.txt",
+    kind: "text",
+    source: "tool",
     content: "from result path",
+    name: "./note.txt",
+    mimeType: "text/plain",
+    sizeBytes: 16,
   }]);
 });
 
@@ -583,15 +620,20 @@ test("registerMuninnHooks prefers ctx.runId and isolates cached data per run", a
       agent: "agent-a",
       prompt: "hello",
       response: "done",
-      toolCalls: [{
+      events: turnEvents("hello", "done", {
         id: "tool-1",
         name: "read",
         input: "{\"path\":\"note.txt\"}",
         output: "ok",
-      }],
+      }),
       artifacts: [{
         key: "note.txt",
+        kind: "text",
+        source: "tool",
         content: "first artifact",
+        name: "note.txt",
+        mimeType: "text/plain",
+        sizeBytes: 14,
       }],
     },
   });
@@ -601,15 +643,20 @@ test("registerMuninnHooks prefers ctx.runId and isolates cached data per run", a
       agent: "agent-a",
       prompt: "hello again",
       response: "done again",
-      toolCalls: [{
+      events: turnEvents("hello again", "done again", {
         id: "tool-2",
         name: "edit",
         input: "{\"path\":\"note.txt\"}",
         output: "ok",
-      }],
+      }),
       artifacts: [{
         key: "note.txt",
+        kind: "text",
+        source: "tool",
         content: "first artifact",
+        name: "note.txt",
+        mimeType: "text/plain",
+        sizeBytes: 14,
       }],
     },
   });
@@ -674,11 +721,11 @@ test("registerMuninnHooks falls back to agent_end tool calls when ctx.runId is m
       agent: "agent-a",
       prompt: "hello",
       response: "done",
-      toolCalls: [{
+      events: turnEvents("hello", "done", {
         id: "end-tool",
         name: "read",
         input: "{\"path\":\"note.txt\"}",
-      }],
+      }),
     },
   }]);
 });
@@ -766,6 +813,7 @@ test("registerMuninnHooks consumes cached state when agent_end has runId but mis
       agent: "agent-a",
       prompt: "hello",
       response: "done",
+      events: turnEvents("hello", "done"),
     },
   });
   assert.equal(warnings.length, 1);
@@ -867,15 +915,20 @@ test("registerMuninnHooks isolates cache by runId within the same session and ag
         agent: "agent-a",
         prompt: "hello from a",
         response: "done a",
-        toolCalls: [{
+        events: turnEvents("hello from a", "done a", {
           id: "tool-a",
           name: "read",
           input: "{\"path\":\"note.txt\"}",
           output: "ok",
-        }],
+        }),
         artifacts: [{
           key: "note.txt",
+          kind: "text",
+          source: "tool",
           content: "shared artifact",
+          name: "note.txt",
+          mimeType: "text/plain",
+          sizeBytes: 15,
         }],
       },
     },
@@ -885,15 +938,20 @@ test("registerMuninnHooks isolates cache by runId within the same session and ag
         agent: "agent-a",
         prompt: "hello from b",
         response: "done b",
-        toolCalls: [{
+        events: turnEvents("hello from b", "done b", {
           id: "tool-b",
           name: "read",
           input: "{\"path\":\"note.txt\"}",
           output: "ok",
-        }],
+        }),
         artifacts: [{
           key: "note.txt",
+          kind: "text",
+          source: "tool",
           content: "shared artifact",
+          name: "note.txt",
+          mimeType: "text/plain",
+          sizeBytes: 15,
         }],
       },
     },
@@ -988,6 +1046,7 @@ test("registerMuninnHooks evicts stale runs on agent_end after twenty four hours
         agent: "agent-a",
         prompt: "hello",
         response: "done",
+        events: turnEvents("hello", "done"),
       },
     },
     {
@@ -996,6 +1055,7 @@ test("registerMuninnHooks evicts stale runs on agent_end after twenty four hours
         agent: "agent-a",
         prompt: "hello again",
         response: "done again",
+        events: turnEvents("hello again", "done again"),
       },
     },
   ]);
@@ -1075,15 +1135,20 @@ test("registerMuninnHooks keeps current run cache when agent_end arrives after t
       agent: "agent-a",
       prompt: "hello",
       response: "done",
-      toolCalls: [{
+      events: turnEvents("hello", "done", {
         id: "tool-1",
         name: "read",
         input: "{\"path\":\"note.txt\"}",
         output: "ok",
-      }],
+      }),
       artifacts: [{
         key: "note.txt",
+        kind: "text",
+        source: "tool",
         content: "late artifact",
+        name: "note.txt",
+        mimeType: "text/plain",
+        sizeBytes: 13,
       }],
     },
   }]);

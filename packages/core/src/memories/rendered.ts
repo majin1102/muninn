@@ -112,13 +112,19 @@ export function renderTurnDetail(turn: Turn): string | undefined {
   if (trimText(turn.response)) {
     lines.push(`Response: ${turn.response!.trim()}`);
   }
-  if (turn.toolCalls && turn.toolCalls.length > 0) {
-    lines.push(`Tools: ${turn.toolCalls.map((toolCall) => toolCall.name).join(', ')}`);
+  const toolNames = turn.events
+    .filter((event) => event.type === 'toolCall')
+    .map((event) => event.name);
+  if (toolNames.length > 0) {
+    lines.push(`Tools: ${toolNames.join(', ')}`);
   }
   if (turn.artifacts && turn.artifacts.length > 0) {
     const rendered = [...turn.artifacts]
       .sort((left, right) => left.key.localeCompare(right.key))
-      .map((artifact) => `${artifact.key}: ${artifact.content}`)
+      .map((artifact) => {
+        const value = artifact.content ?? artifact.name ?? artifact.uri ?? artifact.kind;
+        return `${artifact.key}: ${value}`;
+      })
       .join(', ');
     lines.push(`Artifacts: ${rendered}`);
   }

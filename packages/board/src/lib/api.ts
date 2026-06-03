@@ -1,11 +1,14 @@
 import type {
   AgentNode,
+  CodexImportPreviewResponse,
+  CodexImportRunResponse,
   ErrorResponse,
   MemoryDocument,
   MemoryDocumentResponse,
   SessionAgentsResponse,
   SessionGroupsResponse,
   SessionNode,
+  SessionSegmentPreview,
   SessionTurnsResponse,
   SettingsConfigResponse,
   TurnPreview,
@@ -16,7 +19,6 @@ import {
   getDemoSessionGroups,
   getDemoSessionTurns,
 } from '../demo/provider.js';
-import { sampleSettingsDraft, settingsDraftToJson } from './settings-model.js';
 import { trimTrailingSlash } from './utils.js';
 
 export type PrimaryView = 'search' | 'wiki' | 'session' | 'settings';
@@ -27,9 +29,16 @@ export type ProjectTurnNode = TurnPreview & {
   sessionLabel: string;
 };
 
+export type ProjectSegmentNode = SessionSegmentPreview & {
+  agent: string;
+  sessionKey: string;
+  sessionLabel: string;
+};
+
 export type ProjectSessionNode = SessionNode & {
   agent: string;
   turns: ProjectTurnNode[];
+  segments: ProjectSegmentNode[];
   nextOffset: number | null;
   loading: boolean;
   loaded: boolean;
@@ -38,7 +47,6 @@ export type ProjectSessionNode = SessionNode & {
 export type ProjectNode = {
   projectKey: string;
   label: string;
-  createdAt: string;
   latestUpdatedAt: string;
   sessions: ProjectSessionNode[];
 };
@@ -50,11 +58,14 @@ export type BoardClient = {
   getProjects(): Promise<ProjectNode[]>;
   loadSessionTurns(session: ProjectSessionNode, offset?: number): Promise<{
     turns: ProjectTurnNode[];
+    segments: ProjectSegmentNode[];
     nextOffset: number | null;
   }>;
   getDocument(memoryId: string): Promise<MemoryDocument>;
   getSettingsConfig(): Promise<SettingsConfigResponse>;
   saveSettingsConfig(content: string): Promise<SettingsConfigResponse>;
+  previewCodexImport(projectLimit?: number, projectKeys?: string[]): Promise<CodexImportPreviewResponse>;
+  importCodexSessions(projectLimit?: number, projectKeys?: string[]): Promise<CodexImportRunResponse>;
 };
 
 type VersionResponse = {
@@ -89,8 +100,6 @@ export function resolveUsesDemoData(): boolean {
 }
 
 export function createBoardClient(apiBase: string, usesDemoData: boolean): BoardClient {
-  let demoSettingsContent = settingsDraftToJson(sampleSettingsDraft());
-
   async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
     const response = await fetch(`${apiBase}${path}`, init);
     if (!response.ok) {
@@ -138,6 +147,12 @@ export function createBoardClient(apiBase: string, usesDemoData: boolean): Board
               sessionKey: session.sessionKey,
               sessionLabel: session.displaySessionId,
             })),
+            segments: (response.segments ?? []).map((segment) => ({
+              ...segment,
+              agent: session.agent,
+              sessionKey: session.sessionKey,
+              sessionLabel: session.displaySessionId,
+            })),
             nextOffset: response.nextOffset,
             loaded: true,
           };
@@ -146,13 +161,19 @@ export function createBoardClient(apiBase: string, usesDemoData: boolean): Board
     },
     async loadSessionTurns(session, offset = 0) {
       const response = usesDemoData
-        ? await getDemoSessionTurns(session.agent, session.sessionKey, offset, 10)
+        ? await getDemoSessionTurns(session.agent, session.sessionKey, offset, 100)
         : await fetchJson<SessionTurnsResponse>(
-          `/api/v1/ui/session/agents/${encodeURIComponent(session.agent)}/sessions/${encodeURIComponent(session.sessionKey)}/turns?offset=${offset}&limit=10`,
+          `/api/v1/ui/session/agents/${encodeURIComponent(session.agent)}/sessions/${encodeURIComponent(session.sessionKey)}/turns?offset=${offset}&limit=100`,
         );
       return {
         turns: response.turns.map((turn) => ({
           ...turn,
+          agent: session.agent,
+          sessionKey: session.sessionKey,
+          sessionLabel: session.displaySessionId,
+        })),
+        segments: (response.segments ?? []).map((segment) => ({
+          ...segment,
           agent: session.agent,
           sessionKey: session.sessionKey,
           sessionLabel: session.displaySessionId,
@@ -170,30 +191,27 @@ export function createBoardClient(apiBase: string, usesDemoData: boolean): Board
       return response.document;
     },
     getSettingsConfig() {
-      if (usesDemoData) {
-        return Promise.resolve({
-          pathLabel: 'demo muninn.json',
-          content: demoSettingsContent,
-          validationError: undefined,
-          requestId: 'demo-settings',
-        });
-      }
       return fetchJson<SettingsConfigResponse>('/api/v1/ui/settings/config');
     },
     saveSettingsConfig(content) {
-      if (usesDemoData) {
-        demoSettingsContent = content;
-        return Promise.resolve({
-          pathLabel: 'demo muninn.json',
-          content: demoSettingsContent,
-          validationError: undefined,
-          requestId: 'demo-settings',
-        });
-      }
       return fetchJson<SettingsConfigResponse>('/api/v1/ui/settings/config', {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ content }),
+      });
+    },
+    previewCodexImport(projectLimit = 5, projectKeys = ['muninn', 'lance']) {
+      const params = new URLSearchParams({ projectLimit: String(projectLimit) });
+      for (const projectKey of projectKeys) {
+        params.append('projectKey', projectKey);
+      }
+      return fetchJson<CodexImportPreviewResponse>(`/api/v1/ui/import/codex/preview?${params.toString()}`);
+    },
+    importCodexSessions(projectLimit = 5, projectKeys = ['muninn', 'lance']) {
+      return fetchJson<CodexImportRunResponse>('/api/v1/ui/import/codex', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ projectLimit, projectKeys }),
       });
     },
   };
@@ -212,14 +230,10 @@ async function projectTreeFromAgents(
       const project = projects.get(projectKey) ?? {
         projectKey,
         label: projectKey,
-        createdAt: session.createdAt,
         latestUpdatedAt: session.latestUpdatedAt,
         sessions: [],
       };
 
-      if (session.createdAt < project.createdAt) {
-        project.createdAt = session.createdAt;
-      }
       if (session.latestUpdatedAt > project.latestUpdatedAt) {
         project.latestUpdatedAt = session.latestUpdatedAt;
       }
@@ -227,6 +241,7 @@ async function projectTreeFromAgents(
         ...session,
         agent: agent.agent,
         turns: [],
+        segments: [],
         nextOffset: null,
         loading: false,
         loaded: false,
@@ -244,6 +259,9 @@ async function projectTreeFromAgents(
 }
 
 function projectKeyFromSession(session: SessionNode): string {
+  if (session.projectKey) {
+    return session.projectKey;
+  }
   const label = session.displaySessionId || session.sessionKey;
   const [first] = label.split(/[/:#]/).filter(Boolean);
   return first || 'Default Project';

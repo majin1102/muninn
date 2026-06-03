@@ -126,24 +126,29 @@ Query 参数：
 请求体语义：
 
 ```ts
-export interface ToolCall {
-  id?: string;
-  name: string;
-  input?: string;
-  output?: string;
-}
-
 export interface Artifact {
   key: string;
-  content: string;
+  kind: "metadata" | "text" | "image" | "file";
+  source: "prompt" | "response" | "tool" | "import";
+  content?: string;
+  uri?: string;
+  name?: string;
+  mimeType?: string;
+  sizeBytes?: number;
 }
+
+export type TurnEvent =
+  | { type: "userMessage"; text: string; timestamp?: string; artifacts?: Artifact[] }
+  | { type: "assistantMessage"; text: string; timestamp?: string; artifacts?: Artifact[] }
+  | { type: "toolCall"; id?: string; name: string; input?: string; timestamp?: string }
+  | { type: "toolOutput"; id?: string; output?: string; timestamp?: string; artifacts?: Artifact[] };
 
 export interface TurnContent {
   sessionId: string;
   agent: string;
   prompt: string;
   response: string;
-  toolCalls?: ToolCall[];
+  events: TurnEvent[];
   artifacts?: Artifact[];
 }
 ```
@@ -154,7 +159,8 @@ export interface TurnContent {
 - `agent` 是当前 turn 的基础归属信息
 - `observer` 在 backend 内部注入，不由 capture 请求提供
 - `prompt` / `response` 必须一次性完整提交
-- `toolCalls` / `artifacts` 是可选结构化附加信息
+- `events` 是本轮 user/assistant/tool 事件的有序列表
+- `artifacts` 是可选结构化附件信息
 
 ## 4. Rendering Boundary
 

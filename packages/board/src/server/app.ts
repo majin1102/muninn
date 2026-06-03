@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {
@@ -11,17 +11,23 @@ import {
 import { Hono } from 'hono';
 import type {
   AgentNode,
+  CodexImportPreviewResponse,
+  CodexImportRunResponse,
   ErrorResponse,
   MemoryDocumentResponse,
   MemoryReference,
   ObservingListResponse,
   SessionAgentsResponse,
   SessionGroupsResponse,
+  SessionNode,
+  SessionSegmentPreview,
   SessionTurnsResponse,
   SettingsConfigResponse,
   TurnPreview,
 } from '@muninn/types';
+import { previewCodexImport, runCodexImport } from './codex_import.js';
 import { renderRenderedMemoryDocument } from './render.js';
+import { sessionDisplayTitle } from './session_labels.js';
 
 const AGENT_DEFAULT_SESSION_PREFIX = '__agent_default__:';
 const OBSERVER_DEFAULT_SESSION_PREFIX = '__observer_default__:';
@@ -40,8 +46,12 @@ const MIME_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
+  '.gif': 'image/gif',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
   '.png': 'image/png',
   '.svg': 'image/svg+xml',
+  '.webp': 'image/webp',
 };
 
 function generateRequestId(): string {
@@ -84,6 +94,11 @@ function resolveConfigPath(): string {
   return path.join(os.homedir(), '.muninn', 'muninn.json');
 }
 
+function resolveArtifactStorePath(): string {
+  const home = process.env.MUNINN_HOME ?? path.join(os.homedir(), '.muninn');
+  return path.join(home, 'default', 'artifacts');
+}
+
 function resolveBoardDistPath(): string {
   const candidates = [
     path.join(packageDir, 'dist'),
@@ -103,6 +118,20 @@ function resolveBoardDistPath(): string {
 function defaultConfigContent(): string {
   return [
     '{',
+    '  "extractor": {',
+    '    "name": "default-extractor",',
+    '    "llmProvider": "default",',
+    '    "embeddingProvider": "default",',
+    '    "recallMode": "hybrid",',
+    '    "maxAttempts": 3,',
+    '    "activeWindowDays": 7',
+    '  },',
+    '  "observer": {',
+    '    "name": "default-observer",',
+    '    "llmProvider": "default",',
+    '    "maxAttempts": 3,',
+    '    "anchorThreshold": 8',
+    '  },',
     '  "providers": {',
     '    "llm": {',
     '      "default": {',
@@ -116,21 +145,7 @@ function defaultConfigContent(): string {
     '      }',
     '    }',
     '  },',
-  '  "extractor": {',
-  '    "name": "default-extractor",',
-  '    "llmProvider": "default",',
-  '    "embeddingProvider": "default",',
-  '    "recallMode": "hybrid",',
-  '    "maxAttempts": 3,',
-  '    "activeWindowDays": 7',
-  '  },',
-    '  "observer": {',
-    '    "name": "default-observer",',
-    '    "llmProvider": "default",',
-    '    "maxAttempts": 3,',
-    '    "anchorThreshold": 8',
-    '  },',
-  '  "watchdog": {',
+    '  "watchdog": {',
     '    "enabled": true,',
     '    "intervalMs": 60000,',
     '    "compactMinFragments": 8,',
@@ -145,6 +160,7 @@ function defaultConfigContent(): string {
 }
 
 type BoardSessionTurn = Awaited<ReturnType<typeof turns.list>>[number];
+type BoardSessionIndexEntry = Awaited<ReturnType<typeof sessions.index>>[number];
 
 function normalizeText(value: string | undefined | null): string | undefined {
   if (typeof value !== 'string') {
@@ -157,12 +173,15 @@ function normalizeText(value: string | undefined | null): string | undefined {
 function resolveSessionNode(turn: Pick<BoardSessionTurn, 'sessionId' | 'agent' | 'observer'>): {
   sessionKey: string;
   displaySessionId: string;
+  projectKey?: string;
 } {
   const sessionId = normalizeText(turn.sessionId);
   if (sessionId) {
+    const [projectKey] = sessionId.split('/');
     return {
       sessionKey: sessionId,
-      displaySessionId: sessionId,
+      displaySessionId: sessionDisplayTitle(sessionId),
+      projectKey: projectKey || undefined,
     };
   }
 
@@ -181,8 +200,39 @@ function resolveSessionNode(turn: Pick<BoardSessionTurn, 'sessionId' | 'agent' |
   };
 }
 
+function resolveSessionNodeFromIndex(entry: BoardSessionIndexEntry): SessionNode {
+  const [projectKey] = entry.sessionId.split('/');
+  return {
+    sessionKey: entry.sessionId,
+    displaySessionId: resolveIndexedSessionTitle(entry),
+    projectKey: projectKey || undefined,
+    latestUpdatedAt: entry.latestUpdatedAt,
+  };
+}
+
+function resolveIndexedSessionTitle(entry: Pick<BoardSessionIndexEntry, 'sessionId' | 'title'>): string {
+  const title = normalizeText(entry.title);
+  if (title && !isGeneratedSessionTitle(entry.sessionId, title)) {
+    return title;
+  }
+  return sessionDisplayTitle(entry.sessionId);
+}
+
+function isGeneratedSessionTitle(sessionId: string, title: string): boolean {
+  return title === `Session ${sessionId}` || title === 'Session observing thread';
+}
+
+export function resolveSessionNodeFromIndexForTests(entry: BoardSessionIndexEntry): SessionNode {
+  return resolveSessionNodeFromIndex(entry);
+}
+
 function matchesSessionNode(turn: BoardSessionTurn, sessionKey: string): boolean {
   return resolveSessionNode(turn).sessionKey === sessionKey;
+}
+
+function isDefaultSessionKey(sessionKey: string): boolean {
+  return sessionKey.startsWith(AGENT_DEFAULT_SESSION_PREFIX)
+    || sessionKey.startsWith(OBSERVER_DEFAULT_SESSION_PREFIX);
 }
 
 function hasSummary(turn: { summary?: string | null }): boolean {
@@ -235,12 +285,87 @@ async function loadAllSessionTurns(): Promise<Awaited<ReturnType<typeof turns.li
 }
 
 function toTurnPreview(turn: BoardSessionTurn): TurnPreview {
+  const events = turnEvents(turn);
   return {
     memoryId: turn.turnId,
     createdAt: turn.createdAt,
     updatedAt: turn.updatedAt,
     title: turn.title ?? undefined,
     summary: turn.summary!,
+    prompt: turn.prompt ?? undefined,
+    response: turn.response ?? undefined,
+    events: events.length > 0 ? events : undefined,
+    artifacts: turn.artifacts ?? undefined,
+    toolCalls: toolCallsFromEvents(events),
+  };
+}
+
+function turnEvents(turn: BoardSessionTurn): NonNullable<BoardSessionTurn['events']> {
+  return Array.isArray((turn as { events?: BoardSessionTurn['events'] }).events)
+    ? (turn as { events: NonNullable<BoardSessionTurn['events']> }).events
+    : [];
+}
+
+function toolCallsFromEvents(events: NonNullable<BoardSessionTurn['events']>): TurnPreview['toolCalls'] {
+  const toolCalls: NonNullable<TurnPreview['toolCalls']> = [];
+  const toolCallIndexById = new Map<string, number>();
+  for (const event of events) {
+    if (event.type === 'toolCall') {
+      const index = toolCalls.length;
+      toolCalls.push({
+        id: event.id,
+        name: event.name,
+        input: event.input,
+      });
+      if (event.id) {
+        toolCallIndexById.set(event.id, index);
+      }
+      continue;
+    }
+    if (event.type !== 'toolOutput') {
+      continue;
+    }
+    const index = event.id ? toolCallIndexById.get(event.id) : undefined;
+    if (index !== undefined) {
+      toolCalls[index] = {
+        ...toolCalls[index],
+        output: event.output,
+      };
+    } else if (event.output) {
+      toolCalls.push({
+        id: event.id,
+        name: 'tool_output',
+        output: event.output,
+      });
+    }
+  }
+  return toolCalls.length > 0 ? toolCalls : undefined;
+}
+
+async function enrichMemoryDocument(
+  document: MemoryDocumentResponse['document'],
+  memoryId: string,
+): Promise<MemoryDocumentResponse['document']> {
+  if (!memoryId.startsWith('turn:')) {
+    return document;
+  }
+  const turn = await turns.get(memoryId);
+  if (!turn) {
+    return document;
+  }
+  const events = turnEvents(turn);
+  return {
+    ...document,
+    agent: turn.agent,
+    observer: turn.observer,
+    sessionId: turn.sessionId ?? undefined,
+    prompt: turn.prompt ?? undefined,
+    response: turn.response ?? undefined,
+    events: events.length > 0 ? events : undefined,
+    toolCalls: toolCallsFromEvents(events),
+    artifacts: turn.artifacts ?? undefined,
+    createdAt: turn.createdAt,
+    updatedAt: turn.updatedAt,
   };
 }
 
@@ -249,19 +374,171 @@ async function loadSessionTurnPreviewsPage(params: {
   sessionKey: string;
   offset: number;
   limit: number;
-}): Promise<{ turns: TurnPreview[]; nextOffset: number | null }> {
-  const turns = (await loadAllSessionTurns())
-    .filter((turn) => turn.agent === params.agent)
+}): Promise<{ turns: TurnPreview[]; segments: SessionSegmentPreview[]; nextOffset: number | null }> {
+  const allTurns = (await turns.list({
+    mode: { type: 'page', offset: 0, limit: SESSION_TREE_PAGE_LIMIT },
+    agent: params.agent,
+    ...(isDefaultSessionKey(params.sessionKey) ? {} : { sessionId: params.sessionKey }),
+  }))
     .filter((turn) => matchesSessionNode(turn, params.sessionKey))
-    .filter(hasSummary);
-  const previews = turns
-    .slice(params.offset, params.offset + params.limit)
-    .map(toTurnPreview);
-  const hasMore = params.offset + params.limit < turns.length;
-  return {
+    .filter(hasSummary)
+    .sort((left, right) => (
+      left.createdAt.localeCompare(right.createdAt)
+      || left.updatedAt.localeCompare(right.updatedAt)
+      || left.turnId.localeCompare(right.turnId)
+    ));
+  const previews = allTurns.map(toTurnPreview);
+  const snapshotContent = await loadSessionSnapshotContent(params.agent, params.sessionKey);
+  return buildSessionTurnPage({
     turns: previews,
+    snapshotContent,
+    offset: params.offset,
+    limit: params.limit,
+  });
+}
+
+async function loadSessionSnapshotContent(agent: string, sessionKey: string): Promise<string | null> {
+  const sessionIndex = await sessions.index();
+  const session = sessionIndex.find((entry) => (
+    entry.agent === agent
+    && entry.sessionId === sessionKey
+  ));
+
+  if (!session?.snapshotId) {
+    return null;
+  }
+
+  const snapshot = await memories.get(session.snapshotId);
+  if (!snapshot) {
+    return null;
+  }
+
+  return renderRenderedMemoryDocument(snapshot).markdown;
+}
+
+function buildSessionTurnPage(params: {
+  turns: TurnPreview[];
+  snapshotContent?: string | null;
+  offset: number;
+  limit: number;
+}): { turns: TurnPreview[]; segments: SessionSegmentPreview[]; nextOffset: number | null } {
+  const pageTurns = params.turns.slice(params.offset, params.offset + params.limit);
+  const segments = buildSessionSegments(params.snapshotContent, params.turns);
+  const hasMore = params.offset + params.limit < params.turns.length;
+  return {
+    turns: pageTurns,
+    segments,
     nextOffset: hasMore ? params.offset + params.limit : null,
   };
+}
+
+function buildSessionSegments(
+  snapshotContent: string | null | undefined,
+  turnPreviews: TurnPreview[],
+): SessionSegmentPreview[] {
+  const fromSnapshot = snapshotContent
+    ? parseSnapshotExtractionSegments(snapshotContent, turnPreviews)
+    : [];
+  return fromSnapshot.length > 0 ? fromSnapshot : fallbackTurnSegments(turnPreviews);
+}
+
+function parseSnapshotExtractionSegments(
+  snapshotContent: string,
+  turnPreviews: TurnPreview[],
+): SessionSegmentPreview[] {
+  const extractionStart = snapshotContent.search(/^##\s+Extractions\s*$/im);
+  if (extractionStart < 0) {
+    return [];
+  }
+  const sectionStart = snapshotContent.indexOf('\n', extractionStart);
+  if (sectionStart < 0) {
+    return [];
+  }
+  const rest = snapshotContent.slice(sectionStart + 1);
+  const nextSection = rest.search(/^##\s+/m);
+  const section = nextSection >= 0 ? rest.slice(0, nextSection) : rest;
+  const turnById = new Map(turnPreviews.map((turn, index) => [turn.memoryId, { turn, index }]));
+  const refsPattern = /<!--\s*refs:\s*\[([^\]]*)\]\s*-->/g;
+  const matches = [...section.matchAll(refsPattern)];
+  const segments: Array<SessionSegmentPreview & { index: number }> = [];
+
+  for (let i = 0; i < matches.length; i += 1) {
+    const match = matches[i]!;
+    const next = matches[i + 1];
+    const title = normalizeSegmentTitle(section
+      .slice(match.index! + match[0].length, next?.index ?? section.length));
+    if (!title) {
+      continue;
+    }
+    const firstTurn = parseExtractionRefs(match[1])
+      .map((ref) => turnById.get(ref))
+      .find((entry) => entry !== undefined);
+    if (!firstTurn) {
+      continue;
+    }
+    segments.push({
+      memoryId: firstTurn.turn.memoryId,
+      title,
+      createdAt: firstTurn.turn.createdAt,
+      index: firstTurn.index,
+    });
+  }
+
+  return segments
+    .sort((left, right) => (
+      left.createdAt.localeCompare(right.createdAt)
+      || left.index - right.index
+    ))
+    .map(({ index: _index, ...segment }) => segment);
+}
+
+function normalizeSegmentTitle(raw: string): string {
+  let title = raw.trim();
+  const extraction = title.match(/\[Extraction\]\s*([\s\S]*)/i)?.[1]?.trim();
+  if (extraction) {
+    title = extraction;
+  }
+  title = title
+    .replace(/\[[^\]]+\]\s*/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/^Prompt:\s*/i, '');
+  const responseStart = title.search(/\bResponse:\s*/i);
+  if (responseStart > 0) {
+    title = title.slice(0, responseStart).trim();
+  }
+  return title;
+}
+
+function parseExtractionRefs(value: string | undefined): string[] {
+  return (value ?? '')
+    .split(',')
+    .map((ref) => ref.trim().replace(/^['"]|['"]$/g, ''))
+    .filter((ref) => ref.startsWith('turn:'));
+}
+
+function fallbackTurnSegments(turnPreviews: TurnPreview[]): SessionSegmentPreview[] {
+  return turnPreviews.map((turn) => ({
+    memoryId: turn.memoryId,
+    title: turn.prompt ?? turn.title ?? turn.summary,
+    createdAt: turn.createdAt,
+  }));
+}
+
+export function buildSessionSegmentsForTests(
+  snapshotContent: string | null | undefined,
+  turnPreviews: TurnPreview[],
+): SessionSegmentPreview[] {
+  return buildSessionSegments(snapshotContent, turnPreviews);
+}
+
+export function buildSessionTurnPageForTests(params: {
+  turns: TurnPreview[];
+  snapshotContent?: string | null;
+  offset: number;
+  limit: number;
+}): { turns: TurnPreview[]; segments: SessionSegmentPreview[]; nextOffset: number | null } {
+  return buildSessionTurnPage(params);
 }
 
 async function loadObservingReferences(references: string[]): Promise<MemoryReference[]> {
@@ -338,13 +615,17 @@ boardApp.get('/board/:asset{.+}', async (c) => {
 boardApp.get('/api/v1/ui/session/agents', async (c) => {
   console.log('[BOARD_UI_SESSION_AGENTS]');
 
-  const turns = (await loadAllSessionTurns()).filter(hasSummary);
+  const entries = (await loadAllSessionTurns()).filter(hasSummary);
   const grouped = new Map<string, string>();
 
-  for (const turn of turns) {
-    const latest = grouped.get(turn.agent);
-    if (!latest || turn.updatedAt > latest) {
-      grouped.set(turn.agent, turn.updatedAt);
+  for (const entry of entries) {
+    const agent = normalizeText(entry.agent);
+    if (!agent) {
+      continue;
+    }
+    const latest = grouped.get(agent);
+    if (!latest || entry.updatedAt > latest) {
+      grouped.set(agent, entry.updatedAt);
     }
   }
 
@@ -367,38 +648,21 @@ boardApp.get('/api/v1/ui/session/agents/:agent/sessions', async (c) => {
   const agent = c.req.param('agent');
   console.log('[BOARD_UI_SESSION_GROUPS] agent:', agent);
 
-  const turns = (await loadAllSessionTurns())
-    .filter((turn) => turn.agent === agent)
-    .filter(hasSummary);
-  const grouped = new Map<string, { createdAt: string; latestUpdatedAt: string; displaySessionId: string }>();
-
-  for (const turn of turns) {
-    const sessionNode = resolveSessionNode(turn);
-    const current = grouped.get(sessionNode.sessionKey);
-    if (!current) {
-      grouped.set(sessionNode.sessionKey, {
-        createdAt: turn.createdAt,
-        latestUpdatedAt: turn.updatedAt,
-        displaySessionId: sessionNode.displaySessionId,
-      });
+  const grouped = new Map<string, SessionNode>();
+  for (const turn of (await loadAllSessionTurns()).filter(hasSummary)) {
+    if (turn.agent !== agent) {
       continue;
     }
-    if (turn.createdAt < current.createdAt) {
-      current.createdAt = turn.createdAt;
-    }
-    if (turn.updatedAt > current.latestUpdatedAt) {
-      current.latestUpdatedAt = turn.updatedAt;
-      current.displaySessionId = sessionNode.displaySessionId;
+    const node = resolveSessionNode(turn);
+    const current = grouped.get(node.sessionKey);
+    if (!current || turn.updatedAt > current.latestUpdatedAt) {
+      grouped.set(node.sessionKey, {
+        ...node,
+        latestUpdatedAt: turn.updatedAt,
+      });
     }
   }
-
-  const sessionNodes = [...grouped.entries()]
-    .map(([sessionKey, sessionNode]) => ({
-      sessionKey,
-      displaySessionId: sessionNode.displaySessionId,
-      createdAt: sessionNode.createdAt,
-      latestUpdatedAt: sessionNode.latestUpdatedAt,
-    }))
+  const sessionNodes = [...grouped.values()]
     .sort((left, right) => right.latestUpdatedAt.localeCompare(left.latestUpdatedAt));
 
   const response: SessionGroupsResponse = {
@@ -437,6 +701,7 @@ boardApp.get('/api/v1/ui/session/agents/:agent/sessions/:sessionKey/turns', asyn
 
   const response: SessionTurnsResponse = {
     turns: page.turns,
+    segments: page.segments,
     nextOffset: page.nextOffset,
     requestId: generateRequestId(),
   };
@@ -461,7 +726,7 @@ boardApp.get('/api/v1/ui/memories/:memoryId/document', async (c) => {
   }
 
   const response: MemoryDocumentResponse = {
-    document: renderRenderedMemoryDocument(memory),
+    document: await enrichMemoryDocument(renderRenderedMemoryDocument(memory), memoryId),
     requestId: generateRequestId(),
   };
 
@@ -566,3 +831,63 @@ boardApp.put('/api/v1/ui/settings/config', async (c) => {
 
   return c.json(response);
 });
+
+boardApp.get('/api/v1/ui/import/codex/preview', async (c) => {
+  const projectLimit = parseOptionalInteger(c.req.query('projectLimit'));
+  const sourceRoot = c.req.query('sourceRoot');
+  const projectKeys = c.req.queries('projectKey');
+  const response: CodexImportPreviewResponse = await previewCodexImport({
+    sourceRoot,
+    projectLimit,
+    projectKeys,
+  }, generateRequestId());
+  return c.json(response);
+});
+
+boardApp.post('/api/v1/ui/import/codex', async (c) => {
+  let body: { sourceRoot?: string; projectLimit?: number; projectKeys?: string[] } = {};
+  try {
+    body = await c.req.json<{ sourceRoot?: string; projectLimit?: number; projectKeys?: string[] }>();
+  } catch {
+    body = {};
+  }
+
+  invalidateSessionTreeCache();
+  const response: CodexImportRunResponse = await runCodexImport({
+    sourceRoot: body.sourceRoot,
+    projectLimit: body.projectLimit,
+    projectKeys: body.projectKeys,
+  }, generateRequestId());
+  invalidateSessionTreeCache();
+  return c.json(response);
+});
+
+boardApp.get('/api/v1/ui/artifacts/:name', async (c) => {
+  const name = c.req.param('name');
+  if (!/^[a-f0-9]{64}(?:\.[a-z0-9]+)?$/i.test(name)) {
+    return c.json(errorResponse('invalidRequest', 'invalid artifact name'), 400);
+  }
+
+  const store = resolveArtifactStorePath();
+  const filePath = path.join(store, name);
+  const resolvedStore = path.resolve(store);
+  const resolvedFile = path.resolve(filePath);
+  if (!resolvedFile.startsWith(`${resolvedStore}${path.sep}`)) {
+    return c.json(errorResponse('invalidRequest', 'invalid artifact path'), 400);
+  }
+
+  try {
+    await stat(resolvedFile);
+    return serveBoardFile(resolvedFile);
+  } catch {
+    return c.json(errorResponse('notFound', 'artifact not found'), 404);
+  }
+});
+
+function parseOptionalInteger(value: string | undefined): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}

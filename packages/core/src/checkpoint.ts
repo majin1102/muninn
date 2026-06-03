@@ -45,14 +45,31 @@ export type ExtractorCheckpoint = {
   pendingExtractionChanges: QueuedExtractionChange[];
 };
 
+export type SessionIndexEntry = {
+  sessionId: string;
+  agent: string;
+  latestUpdatedAt: string;
+  snapshotId?: string;
+  title?: string;
+};
+
+export type SessionIndexCheckpoint = {
+  baseline: {
+    turn: number;
+    session: number;
+  };
+  entries: SessionIndexEntry[];
+};
+
 export type QueuedExtractionChange =
   | { type: 'upsert'; extraction: Extraction }
   | { type: 'delete'; extraction: Extraction };
 
 export type CheckpointContent = {
-  schemaVersion: 6;
+  schemaVersion: 7;
   extractor: ExtractorCheckpoint;
   observer: ObserverCheckpoint;
+  sessionIndex: SessionIndexCheckpoint;
 };
 
 export type CheckpointFile = CheckpointContent & {
@@ -142,23 +159,28 @@ export function parseCheckpointFile(raw: string): CheckpointFile {
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
     throw new Error('checkpoint must be a JSON object');
   }
-  if (parsed.schemaVersion !== 6) {
+  if (parsed.schemaVersion !== 7) {
     throw new Error(`unsupported checkpoint schemaVersion: ${String(parsed.schemaVersion)}`);
   }
   const extractor = parseExtractorSection(parsed.extractor);
   const observer = parseObserverSection(parsed.observer);
+  const sessionIndex = parseSessionIndexSection(parsed.sessionIndex);
   if (!extractor) {
     throw new Error('checkpoint extractor section is invalid');
   }
   if (!observer) {
     throw new Error('checkpoint observer section is invalid');
   }
+  if (!sessionIndex) {
+    throw new Error('checkpoint sessionIndex section is invalid');
+  }
   return {
-    schemaVersion: 6,
+    schemaVersion: 7,
     writtenAt: typeof parsed.writtenAt === 'string' ? parsed.writtenAt : new Date(0).toISOString(),
     writerPid: typeof parsed.writerPid === 'number' ? parsed.writerPid : 0,
     extractor,
     observer,
+    sessionIndex,
   };
 }
 
@@ -168,6 +190,9 @@ export async function readCheckpointFile(database?: string | null): Promise<Chec
     return parseCheckpointFile(raw);
   } catch (error) {
     if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') {
+      return null;
+    }
+    if (error instanceof Error && /^unsupported checkpoint schemaVersion: /.test(error.message)) {
       return null;
     }
     throw error;
@@ -252,6 +277,47 @@ function parseObserverBaseline(value: unknown): ObserverCheckpoint['baseline'] |
   return {
     observationContext: value.observationContext,
     observation: value.observation,
+  };
+}
+
+function parseSessionIndexSection(value: unknown): SessionIndexCheckpoint | null {
+  if (!isObjectRecord(value) || !Array.isArray(value.entries)) {
+    return null;
+  }
+  const baseline = parseSessionIndexBaseline(value.baseline);
+  if (!baseline) {
+    return null;
+  }
+  const entries: SessionIndexEntry[] = [];
+  for (const entry of value.entries) {
+    if (
+      !isObjectRecord(entry)
+      || typeof entry.sessionId !== 'string'
+      || typeof entry.agent !== 'string'
+      || typeof entry.latestUpdatedAt !== 'string'
+      || (entry.snapshotId != null && typeof entry.snapshotId !== 'string')
+      || (entry.title != null && typeof entry.title !== 'string')
+    ) {
+      return null;
+    }
+    entries.push({
+      sessionId: entry.sessionId,
+      agent: entry.agent,
+      latestUpdatedAt: entry.latestUpdatedAt,
+      snapshotId: entry.snapshotId ?? undefined,
+      title: entry.title ?? undefined,
+    });
+  }
+  return { baseline, entries };
+}
+
+function parseSessionIndexBaseline(value: unknown): SessionIndexCheckpoint['baseline'] | null {
+  if (!isObjectRecord(value) || typeof value.turn !== 'number' || typeof value.session !== 'number') {
+    return null;
+  }
+  return {
+    turn: value.turn,
+    session: value.session,
   };
 }
 

@@ -68,6 +68,7 @@ type TurnContent = {
   agent: string;
   prompt: string;
   response: string;
+  events?: Array<{ type: 'userMessage' | 'assistantMessage'; text: string }>;
 };
 
 type CapturedTurn = {
@@ -574,10 +575,17 @@ function errorMessage(error: unknown): string {
 }
 
 async function captureTurn(content: TurnContent, database: string): Promise<CapturedTurn> {
+  const turnPayload = {
+    ...content,
+    events: content.events ?? [
+      { type: 'userMessage' as const, text: content.prompt },
+      { type: 'assistantMessage' as const, text: content.response },
+    ],
+  };
   const payload = await fetchJsonObject(`${sidecarBaseUrl()}/api/v1/benchmark/locomo/turn/capture`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ database, turn: content }),
+    body: JSON.stringify({ database, turn: turnPayload }),
   }, 'benchmark capture');
   const turn = payload.turn;
   if (!turn || typeof turn !== 'object' || typeof (turn as Record<string, unknown>).turnId !== 'string') {

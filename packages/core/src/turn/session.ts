@@ -145,19 +145,23 @@ async function buildTurn(
 ): Promise<Turn> {
   const summary = await resolveTurnSummary({
     prompt: content.prompt,
+    title: content.title,
+    summary: content.summary,
     response: content.response,
   });
   const now = new Date().toISOString();
+  const createdAt = content.createdAt ?? content.updatedAt ?? now;
+  const updatedAt = content.updatedAt ?? createdAt;
   const turn: Turn = {
     turnId: PENDING_TURN_ID,
-    createdAt: now,
-    updatedAt: now,
+    createdAt,
+    updatedAt,
     sessionId: sessionId ?? null,
     agent: config.agent,
     observer: config.observer,
     title: summary.title ?? null,
     summary: summary.summary ?? null,
-    toolCalls: content.toolCalls?.map((toolCall) => ({ ...toolCall })) ?? null,
+    events: content.events.map((event) => ({ ...event })),
     artifacts: content.artifacts?.map((artifact) => ({ ...artifact })) ?? null,
     prompt: content.prompt,
     response: content.response,
@@ -185,6 +189,21 @@ function validateTurnContent(
   if (!hasText(content.response)) {
     throw new Error('turn must include response');
   }
+  if (content.title !== undefined && !hasText(content.title)) {
+    throw new Error('turn.title must be a non-empty string');
+  }
+  if (content.summary !== undefined && !hasText(content.summary)) {
+    throw new Error('turn.summary must be a non-empty string');
+  }
+  if (content.createdAt !== undefined && !isTimestamp(content.createdAt)) {
+    throw new Error('turn.createdAt must be an ISO timestamp');
+  }
+  if (content.updatedAt !== undefined && !isTimestamp(content.updatedAt)) {
+    throw new Error('turn.updatedAt must be an ISO timestamp');
+  }
+  if (!Array.isArray(content.events) || content.events.length === 0) {
+    throw new Error('turn.events must be a non-empty array');
+  }
 
   if (content.agent !== config.agent) {
     throw new Error('turn session does not match loaded session');
@@ -192,6 +211,10 @@ function validateTurnContent(
   if (sessionId !== config.sessionId) {
     throw new Error('turn session does not match loaded session');
   }
+}
+
+function isTimestamp(value: unknown): value is string {
+  return typeof value === 'string' && !Number.isNaN(Date.parse(value));
 }
 
 function samePromptResponse(

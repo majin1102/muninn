@@ -6,6 +6,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 
 import core from '@muninn/core';
 import { getNativeTables } from '../../core/dist/native.js';
+import { serializeTurn } from '../../core/dist/turn/types.js';
 import {
   getSessionTreeLoadCountForTests,
   resetSessionTreeCacheForTests,
@@ -61,12 +62,20 @@ async function waitForWatermarkResolved() {
 }
 
 function makeTurnContent(overrides = {}) {
-  return {
+  const turn = {
     sessionId: 'group-a',
     agent: 'agent-a',
     prompt: 'alpha prompt',
     response: 'alpha response',
     ...overrides,
+  };
+  const events = overrides.events ?? [
+    { type: 'userMessage', text: turn.prompt },
+    { type: 'assistantMessage', text: turn.response },
+  ];
+  return {
+    ...turn,
+    events,
   };
 }
 
@@ -231,8 +240,12 @@ test('turn/capture writes a complete turn and detail reads it back', async (t) =
   await writeMuninnConfig(configPath, { turnProvider: 'mock' });
 
   const addedTurn = await captureTurnAndGetTurn(makeTurnContent({
-    toolCalls: [{ name: 'tool-a' }],
-    artifacts: [{ key: 'key', content: 'value' }],
+    events: [
+      { type: 'userMessage', text: 'alpha prompt' },
+      { type: 'toolCall', name: 'tool-a' },
+      { type: 'assistantMessage', text: 'alpha response' },
+    ],
+    artifacts: [{ key: 'key', kind: 'text', source: 'tool', content: 'value' }],
   }));
 
   const detailResponse = await app.request(
@@ -326,15 +339,30 @@ test('openclaw hook capture persists artifacts through sidecar and native readba
   const tables = await getNativeTables(defaultStorageTarget(homeDir));
   const persisted = await tables.turnTable.getTurn(match.memoryId);
   assert.ok(persisted);
-  assert.deepEqual(persisted.toolCalls, [{
-    id: 'tool-1',
-    name: 'read',
-    input: '{"path":"note.txt"}',
-    output: 'ok',
-  }]);
+  assert.deepEqual(persisted.events, [
+    { type: 'userMessage', text: 'hook prompt' },
+    {
+      type: 'toolCall',
+      id: 'tool-1',
+      name: 'read',
+      input: '{"path":"note.txt"}',
+    },
+    {
+      type: 'toolOutput',
+      id: 'tool-1',
+      output: 'ok',
+    },
+    { type: 'assistantMessage', text: 'hook response' },
+  ]);
   assert.deepEqual(persisted.artifacts, [{
     key: 'note.txt',
+    kind: 'text',
+    source: 'tool',
     content: 'artifact body',
+    name: 'note.txt',
+    mimeType: 'text/plain',
+    sizeBytes: 13,
+    uri: null,
   }]);
 
   const detailResponse = await app.request(
@@ -344,6 +372,66 @@ test('openclaw hook capture persists artifacts through sidecar and native readba
   const detail = await json(detailResponse);
   assert.equal(detail.memoryHits.length, 1);
   assert.match(detail.memoryHits[0].content, /Artifacts: note\.txt: artifact body/);
+});
+
+test('turn/capture accepts typed image and file artifacts', async (t) => {
+  const { dir, homeDir, configPath } = await makeDatasetUri();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+
+  process.env.MUNINN_HOME = homeDir;
+  await writeMuninnConfig(configPath, { turnProvider: 'mock' });
+
+  const addResponse = await captureTurn({
+    ...makeTurnContent(),
+    artifacts: [
+      {
+        key: 'prompt-image',
+        kind: 'image',
+        source: 'prompt',
+        uri: 'artifact://abc123.png',
+        name: 'shot.png',
+        mimeType: 'image/png',
+        sizeBytes: 8,
+      },
+      {
+        key: 'import-marker',
+        kind: 'metadata',
+        source: 'import',
+        content: '{"marker":"session#1"}',
+      },
+    ],
+  });
+  assert.equal(addResponse.status, 204);
+
+  const listResponse = await app.request(`/api/v1/ui/session/agents/${encodeURIComponent('agent-a')}/sessions/${encodeURIComponent('group-a')}/turns`);
+  assert.equal(listResponse.status, 200);
+  const list = await json(listResponse);
+  assert.equal(list.turns.length, 1);
+
+  const detailResponse = await app.request(`/api/v1/ui/memories/${encodeURIComponent(list.turns[0].memoryId)}/document`);
+  assert.equal(detailResponse.status, 200);
+  const detail = await json(detailResponse);
+  assert.match(detail.document.markdown, /prompt-image/);
+  assert.match(detail.document.markdown, /shot\.png/);
+});
+
+test('ui artifact endpoint serves only artifact store files by hash name', async (t) => {
+  const { dir, homeDir } = await makeDatasetUri();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+
+  process.env.MUNINN_HOME = homeDir;
+  const artifactName = 'a'.repeat(64) + '.png';
+  const artifactDir = path.join(homeDir, 'default', 'artifacts');
+  await mkdir(artifactDir, { recursive: true });
+  await writeFile(path.join(artifactDir, artifactName), Buffer.from('89504e470d0a1a0a', 'hex'));
+
+  const good = await app.request(`/api/v1/ui/artifacts/${artifactName}`);
+  assert.equal(good.status, 200);
+  assert.equal(good.headers.get('content-type'), 'image/png');
+  assert.deepEqual(Buffer.from(await good.arrayBuffer()), Buffer.from('89504e470d0a1a0a', 'hex'));
+
+  const bad = await app.request('/api/v1/ui/artifacts/not-safe.png');
+  assert.equal(bad.status, 400);
 });
 
 test('turn/capture rejects legacy snake_case turn fields', async (t) => {
@@ -385,8 +473,8 @@ test('turn/capture validates request shape and requires a complete turn', async 
       { ...makeTurnContent(), agent: '' },
       { ...makeTurnContent(), prompt: '   ' },
       { ...makeTurnContent(), response: '' },
-      { ...makeTurnContent(), toolCalls: 'tool-a' },
-      { ...makeTurnContent(), toolCalls: [{ name: 123 }] },
+      { ...makeTurnContent(), events: [] },
+      { ...makeTurnContent(), events: [{ type: 'toolCall', name: 123 }] },
       { ...makeTurnContent(), artifacts: { key: 'artifact', content: 'value' } },
       { ...makeTurnContent(), artifacts: [{ key: 'artifact', content: 1 }] },
       { ...makeTurnContent(), observer: 'unexpected' },
@@ -561,8 +649,8 @@ test('timeline stays scoped to the full session key when agents share a sessionI
   const agentTurnsResponse = await app.request('/api/v1/ui/session/agents/agent-a/sessions/group-a/turns?offset=0&limit=10');
   assert.equal(agentTurnsResponse.status, 200);
   const agentTurns = await json(agentTurnsResponse);
-  const firstTurnId = agentTurns.turns[1].memoryId;
-  const secondTurnId = agentTurns.turns[0].memoryId;
+  const firstTurnId = agentTurns.turns[0].memoryId;
+  const secondTurnId = agentTurns.turns[1].memoryId;
 
   const otherTurnsResponse = await app.request('/api/v1/ui/session/agents/agent-b/sessions/group-a/turns?offset=0&limit=10');
   assert.equal(otherTurnsResponse.status, 200);
@@ -744,7 +832,12 @@ test('ui session endpoints group by agent/session and return rendered turn docum
       agent: 'codex_cli',
       prompt: 'codex prompt',
       response: 'codex response',
-      toolCalls: [{ name: 'grep' }, { name: 'sed' }],
+      events: [
+        { type: 'userMessage', text: 'document prompt' },
+        { type: 'toolCall', name: 'grep' },
+        { type: 'toolCall', name: 'sed' },
+        { type: 'assistantMessage', text: 'document response' },
+      ],
     }),
   ];
 
@@ -778,25 +871,85 @@ test('ui session endpoints group by agent/session and return rendered turn docum
   assert.equal(turnsResponse.status, 200);
   const turnsBody = await json(turnsResponse);
   assert.equal(turnsBody.turns.length, 2);
-  assert.equal(turnsBody.turns[0].title, 'second alpha prompt');
+  assert.equal(turnsBody.turns[0].title, 'first alpha prompt');
   assert.match(turnsBody.turns[0].summary, /alpha/);
-  assert.equal(
-    sessionsBody.sessions[0].createdAt,
-    turnsBody.turns.reduce((earliest, turn) => turn.createdAt < earliest ? turn.createdAt : earliest, turnsBody.turns[0].createdAt),
-  );
   assert.equal(
     sessionsBody.sessions[0].latestUpdatedAt,
     turnsBody.turns.reduce((latest, turn) => turn.updatedAt > latest ? turn.updatedAt : latest, turnsBody.turns[0].updatedAt),
   );
 
   const documentResponse = await app.request(
-    `/api/v1/ui/memories/${encodeURIComponent(turnsBody.turns[1].memoryId)}/document`
+    `/api/v1/ui/memories/${encodeURIComponent(turnsBody.turns[0].memoryId)}/document`
   );
   assert.equal(documentResponse.status, 200);
   const documentBody = await json(documentResponse);
   assert.equal(documentBody.document.kind, 'turn');
   assert.match(documentBody.document.markdown, /## Created At/);
   assert.match(documentBody.document.markdown, /first alpha prompt/);
+
+  const codexTurnsResponse = await app.request('/api/v1/ui/session/agents/codex_cli/sessions/group-b/turns?offset=0&limit=10');
+  assert.equal(codexTurnsResponse.status, 200);
+  const codexTurnsBody = await json(codexTurnsResponse);
+  assert.equal(codexTurnsBody.turns.length, 1);
+  const codexDocumentResponse = await app.request(
+    `/api/v1/ui/memories/${encodeURIComponent(codexTurnsBody.turns[0].memoryId)}/document`
+  );
+  assert.equal(codexDocumentResponse.status, 200);
+  const codexDocumentBody = await json(codexDocumentResponse);
+  assert.deepEqual(codexDocumentBody.document.events, [
+    { type: 'userMessage', text: 'document prompt' },
+    { type: 'toolCall', name: 'grep' },
+    { type: 'toolCall', name: 'sed' },
+    { type: 'assistantMessage', text: 'document response' },
+  ]);
+});
+
+test('ui session default session turns include historical null session rows', async (t) => {
+  const { dir, homeDir, configPath } = await makeDatasetUri();
+  t.after(async () => {
+    await shutdownCoreForTests();
+    resetSessionTreeCacheForTests();
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  process.env.MUNINN_HOME = homeDir;
+  await writeMuninnConfig(configPath, { turnProvider: 'mock' });
+  resetSessionTreeCacheForTests();
+
+  const tables = await getNativeTables(defaultStorageTarget(homeDir));
+  await tables.turnTable.insert({
+    turns: [serializeTurn({
+      turnId: 'turn:18446744073709551615',
+      createdAt: '2026-06-03T01:00:00.000Z',
+      updatedAt: '2026-06-03T01:01:00.000Z',
+      sessionId: null,
+      agent: 'agent-a',
+      observer: 'default',
+      title: 'historical default prompt',
+      summary: 'historical default prompt historical default response',
+      events: [
+        { type: 'userMessage', text: 'historical default prompt' },
+        { type: 'assistantMessage', text: 'historical default response' },
+      ],
+      artifacts: null,
+      prompt: 'historical default prompt',
+      response: 'historical default response',
+    })],
+  });
+
+  const sessionsResponse = await app.request('/api/v1/ui/session/agents/agent-a/sessions');
+  assert.equal(sessionsResponse.status, 200);
+  const sessionsBody = await json(sessionsResponse);
+  assert.equal(sessionsBody.sessions.length, 1);
+  assert.equal(sessionsBody.sessions[0].sessionKey, '__agent_default__:agent-a');
+
+  const turnsResponse = await app.request(
+    `/api/v1/ui/session/agents/agent-a/sessions/${encodeURIComponent('__agent_default__:agent-a')}/turns?offset=0&limit=10`
+  );
+  assert.equal(turnsResponse.status, 200);
+  const turnsBody = await json(turnsResponse);
+  assert.equal(turnsBody.turns.length, 1);
+  assert.equal(turnsBody.turns[0].prompt, 'historical default prompt');
 });
 
 test('ui session endpoints reuse the cached session tree until a write invalidates it', async (t) => {

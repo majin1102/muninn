@@ -82,7 +82,7 @@ function makePendingTurn({
   agent,
   observer,
   prompt = null,
-  toolCalls = null,
+  events = [],
 }) {
   const now = new Date().toISOString();
   return {
@@ -94,7 +94,7 @@ function makePendingTurn({
     observer,
     title: null,
     summary: null,
-    toolCalls,
+    events,
     artifacts: null,
     prompt,
     response: null,
@@ -103,12 +103,19 @@ function makePendingTurn({
 }
 
 function makeTurnContent(overrides = {}) {
-  return {
+  const turn = {
     sessionId: 'group-a',
     agent: 'agent-a',
     prompt: 'default prompt',
     response: 'default response',
     ...overrides,
+  };
+  return {
+    ...turn,
+    events: overrides.events ?? [
+      { type: 'userMessage', text: turn.prompt },
+      { type: 'assistantMessage', text: turn.response },
+    ],
   };
 }
 
@@ -117,15 +124,22 @@ function normalizeTestSessionId(sessionId) {
 }
 
 async function writeTurnAndGet(turn) {
-  await addMessage(turn);
+  const content = turn.events ? turn : {
+    ...turn,
+    events: [
+      { type: 'userMessage', text: turn.prompt },
+      { type: 'assistantMessage', text: turn.response },
+    ],
+  };
+  await addMessage(content);
   const listed = await turns.list({
     mode: { type: 'recency', limit: 20 },
-    agent: turn.agent,
-    sessionId: normalizeTestSessionId(turn.sessionId),
+    agent: content.agent,
+    sessionId: normalizeTestSessionId(content.sessionId),
   });
   const match = listed.find((candidate) => (
-    candidate.prompt === turn.prompt
-    && candidate.response === turn.response
+    candidate.prompt === content.prompt
+    && candidate.response === content.response
   ));
   assert.ok(match);
   return match;
@@ -340,7 +354,11 @@ test('addMessage normalizes sessionId whitespace through the native binding', as
     sessionId: 'group-a',
     prompt: 'second prompt',
     response: 'second response',
-    toolCalls: [{ name: 'tool-a' }],
+    events: [
+      { type: 'userMessage', text: 'second prompt' },
+      { type: 'toolCall', name: 'tool-a' },
+      { type: 'assistantMessage', text: 'second response' },
+    ],
   }));
 
   assert.equal(first.sessionId, 'group-a');
@@ -403,13 +421,21 @@ test('addMessage dedupes identical prompt and response within the same session',
   const first = await writeTurnAndGet(makeTurnContent({
     prompt: 'same prompt',
     response: 'same response',
-    toolCalls: [{ name: 'tool-a' }],
+    events: [
+      { type: 'userMessage', text: 'same prompt' },
+      { type: 'toolCall', name: 'tool-a' },
+      { type: 'assistantMessage', text: 'same response' },
+    ],
   }));
   const second = await writeTurnAndGet(makeTurnContent({
     prompt: 'same prompt',
     response: 'same response',
-    toolCalls: [{ name: 'tool-b' }],
-    artifacts: [{ key: 'artifact', content: 'value' }],
+    events: [
+      { type: 'userMessage', text: 'same prompt' },
+      { type: 'toolCall', name: 'tool-b' },
+      { type: 'assistantMessage', text: 'same response' },
+    ],
+    artifacts: [{ key: 'artifact', kind: 'text', source: 'tool', content: 'value' }],
   }));
 
   assert.equal(second.turnId, first.turnId);
@@ -628,13 +654,13 @@ test('cold start does not wait for the first watchdog interval before serving wr
     },
   });
 
-  await addMessage({
+  await addMessage(makeTurnContent({
     sessionId: 'group-a',
     agent: 'agent-a',
     prompt: 'cold-start prompt',
     response: 'cold-start response',
     summary: 'cold-start summary',
-  });
+  }));
   const watchdogLogPath = path.join(homeDir, 'main', 'logs', 'watchdog.jsonl');
   await assert.rejects(
     () => readFile(watchdogLogPath, 'utf8'),
@@ -665,13 +691,13 @@ test('validateSettings rejects extraction index dimension changes that mismatch 
   process.env.MUNINN_HOME = homeDir;
   await writeMuninnConfig(configPath, { observerProvider: 'mock' });
 
-  await addMessage({
+  await addMessage(makeTurnContent({
     sessionId: 'group-a',
     agent: 'agent-a',
     prompt: 'extraction prompt',
     response: 'extraction response',
     summary: 'extraction summary',
-  });
+  }));
   await new Promise((resolve) => setTimeout(resolve, 50));
 
   await assert.rejects(
@@ -938,13 +964,13 @@ test('validateSettings rejects omitted extraction dimensions for an existing non
   process.env.MUNINN_HOME = homeDir;
   await writeMuninnConfig(configPath, { observerProvider: 'mock', semanticDimensions: 4 });
 
-  await addMessage({
+  await addMessage(makeTurnContent({
     sessionId: 'group-a',
     agent: 'agent-a',
     prompt: 'extraction prompt',
     response: 'extraction response',
     summary: 'extraction summary',
-  });
+  }));
   await new Promise((resolve) => setTimeout(resolve, 50));
 
   await assert.rejects(
@@ -1142,12 +1168,12 @@ test('validateSettings checks the pending storage target instead of the current 
     observerProvider: 'mock',
     storageUri: toFileStoreUri(storageB),
   });
-  await addMessage({
+  await addMessage(makeTurnContent({
     sessionId: 'group-b',
     agent: 'agent-b',
     prompt: 'storage b prompt',
     response: 'storage b response',
-  });
+  }));
   await new Promise((resolve) => setTimeout(resolve, 50));
 
   await shutdownCoreForTests();
@@ -1388,12 +1414,12 @@ test('rendered memory page mode paginates after combining session and observing 
   await writeMuninnConfig(configPath, { turnProvider: 'mock', observerProvider: 'mock' });
 
   for (let index = 0; index < 3; index += 1) {
-    await addMessage({
+    await addMessage(makeTurnContent({
       sessionId: `group-${index}`,
       agent: `agent-${index}`,
       prompt: `prompt ${index}`,
       response: `response ${index}`,
-    });
+    }));
     await new Promise((resolve) => setTimeout(resolve, 30));
   }
 

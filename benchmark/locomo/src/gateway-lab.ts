@@ -237,6 +237,7 @@ function toTurns(turns: LabTurn[]) {
     prompt: turn.text,
     summary: turn.text,
     response: null,
+    events: [{ type: 'userMessage' as const, text: turn.text }],
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     sessionId: 'locomo-observing-lab',

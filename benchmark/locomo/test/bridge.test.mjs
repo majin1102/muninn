@@ -252,6 +252,7 @@ test('import writes an external manifest aligned to locomo sessions', async (t) 
     mode: { type: 'recency', limit: 10 },
     sessionId: 'locomo:sample-a:session_1',
     agent: 'Caroline',
+    database: 'sample-a',
   });
   const firstTurn = importedTurns.find((turn) => turn.turnId === manifest.turns[0].turn_id);
   assert.ok(firstTurn);
@@ -259,6 +260,7 @@ test('import writes an external manifest aligned to locomo sessions', async (t) 
   assert.match(firstTurn.prompt, /Caroline said:/);
   assert.match(firstTurn.response, /DATE: 1:56 pm on 8 May, 2023/);
   assert.match(firstTurn.response, /Melanie said:/);
+  assert.deepEqual(firstTurn.events.map((event) => event.type), ['userMessage', 'assistantMessage']);
   assert.doesNotMatch(firstTurn.prompt, /Recorded/);
   assert.doesNotMatch(firstTurn.response, /import placeholder/);
 });

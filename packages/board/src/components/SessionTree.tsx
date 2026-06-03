@@ -1,9 +1,8 @@
 import { Bot, Check, ChevronDown, ChevronRight, Folder, MessageSquare, Search, X } from 'lucide-react';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import claudeLogoUrl from '../assets/agent-claude.svg';
-import codexLogoUrl from '../assets/agent-codex.svg';
-import openclawLogoUrl from '../assets/agent-openclaw.svg';
-import type { ProjectNode, ProjectSessionNode } from '../lib/api.js';
+import type { RefObject } from 'react';
+import { logoForAgent, type AgentLogo } from '../lib/agent_logo.js';
+import type { ProjectNode, ProjectSegmentNode, ProjectSessionNode, ProjectTurnNode } from '../lib/api.js';
 import { formatRelativeTime, formatTimelineTime, formatTimestamp } from '../lib/utils.js';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from './ui/collapsible.js';
 import { Button } from './ui/button.js';
@@ -32,6 +31,7 @@ type SessionToolbarState = {
 };
 
 const SESSION_TOOLBAR_STORAGE_KEY = 'muninn:board:session-toolbar-filter:v1';
+const TURN_LIST_PAGE_SIZE = 20;
 
 export function SessionTree({
   projects,
@@ -61,6 +61,7 @@ export function SessionTree({
   const [draftCustomToTime, setDraftCustomToTime] = useState(() => initialToolbarState.current.customToTime);
   const [openProjects, setOpenProjects] = useState<Record<string, boolean>>({});
   const [openSessions, setOpenSessions] = useState<Record<string, boolean>>({});
+  const [expandedTurnLists, setExpandedTurnLists] = useState<Record<string, number>>({});
   const activeRef = useRef<HTMLButtonElement>(null);
   const toolbarRef = useRef<HTMLDivElement>(null);
 
@@ -97,7 +98,7 @@ export function SessionTree({
         for (const session of project.sessions) {
           const key = sessionKey(session);
           if (next[key] === undefined) {
-            next[key] = session.loaded;
+            next[key] = session.loaded && shouldAutoExpandSession(session);
           }
         }
       }
@@ -112,6 +113,17 @@ export function SessionTree({
     setOpenProjects((current) => openVisibleProjects(current, filteredProjects));
     setOpenSessions((current) => openVisibleSessions(current, filteredProjects));
   }, [filteredProjects, query]);
+
+  useEffect(() => {
+    if (!activePath) {
+      return;
+    }
+    setOpenProjects((current) => ({ ...current, [activePath.projectKey]: true }));
+    setOpenSessions((current) => ({ ...current, [activePath.sessionKey]: true }));
+    window.requestAnimationFrame(() => {
+      activeRef.current?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    });
+  }, [activePath]);
 
   useEffect(() => {
     if (!agentFilterOpen && !timeFilterOpen) {
@@ -256,7 +268,7 @@ export function SessionTree({
               }}
             >
               {selectedAgents.length > 0 ? (
-                <AgentLogoCluster agents={selectedAgents.map(logoForAgent).filter((logo): logo is AgentLogo => logo !== null)} />
+                <AgentLogoCluster agents={selectedAgents.map(logoForAgent)} />
               ) : (
                 <span>Agents: All</span>
               )}
@@ -285,7 +297,7 @@ export function SessionTree({
                     <span className={selectedAgents.includes(agent) ? 'menu-check menu-check-checked' : 'menu-check'}>
                       {selectedAgents.includes(agent) ? <Check /> : null}
                     </span>
-                    <AgentLogoCluster agents={[logoForAgent(agent)].filter((logo): logo is AgentLogo => logo !== null)} />
+                    <AgentLogoCluster agents={[logoForAgent(agent)]} />
                     <span>{agentLabel(agent)}</span>
                   </button>
                 ))}
@@ -425,25 +437,18 @@ export function SessionTree({
                   {session.loading && session.turns.length === 0 ? (
                     <div className="turn-empty">Loading turns...</div>
                   ) : null}
-                  {session.turns.map((turn) => (
-                    <button
-                      key={turn.memoryId}
-                      ref={activeMemoryId === turn.memoryId ? activeRef : null}
-                      data-memory-id={turn.memoryId}
-                      className={activeMemoryId === turn.memoryId ? 'turn-item turn-item-active' : 'turn-item'}
-                      type="button"
-                      onClick={() => onOpenTurn(turn.memoryId)}
-                    >
-                      <MessageSquare className="turn-icon" />
-                      <TurnSummary text={turn.title ?? turn.summary} />
-                      <span className="turn-time" title={formatTimestamp(turn.updatedAt)}>{formatTimelineTime(turn.updatedAt)}</span>
-                    </button>
-                  ))}
-                  {session.nextOffset !== null ? (
-                    <Button variant="ghost" size="sm" className="load-more" onClick={() => onLoadMore(session)}>
-                      {session.loading ? 'Loading...' : 'More'}
-                    </Button>
-                  ) : null}
+                  <SessionTurnList
+                    session={session}
+                    activeMemoryId={activeMemoryId}
+                    activeRef={activeRef}
+                    visibleCount={expandedTurnLists[sessionKey(session)] ?? TURN_LIST_PAGE_SIZE}
+                    onVisibleCountChange={(visibleCount) => setExpandedTurnLists((current) => ({
+                      ...current,
+                      [sessionKey(session)]: visibleCount,
+                    }))}
+                    onOpenTurn={onOpenTurn}
+                    onLoadMore={onLoadMore}
+                  />
                 </CollapsibleContent>
               </Collapsible>
             ))}
@@ -453,6 +458,72 @@ export function SessionTree({
       </div>
     </div>
   );
+}
+
+function SessionTurnList({
+  session,
+  activeMemoryId,
+  activeRef,
+  visibleCount,
+  onVisibleCountChange,
+  onOpenTurn,
+  onLoadMore,
+}: {
+  session: ProjectSessionNode;
+  activeMemoryId: string | null;
+  activeRef: RefObject<HTMLButtonElement | null>;
+  visibleCount: number;
+  onVisibleCountChange: (visibleCount: number) => void;
+  onOpenTurn: (memoryId: string) => void;
+  onLoadMore: (session: ProjectSessionNode) => void;
+}) {
+  const items = session.segments.length > 0 ? session.segments : session.turns;
+  const visibleItems = items.slice(0, visibleCount);
+  const localHiddenCount = Math.max(0, items.length - visibleItems.length);
+  const hasMore = localHiddenCount > 0 || session.nextOffset !== null;
+
+  function showMore() {
+    if (localHiddenCount === 0 && session.nextOffset !== null && !session.loading) {
+      onLoadMore(session);
+    }
+    onVisibleCountChange(visibleCount + TURN_LIST_PAGE_SIZE);
+  }
+
+  return (
+    <>
+      {visibleItems.map((turn) => (
+        <button
+          key={turn.memoryId}
+          ref={activeMemoryId === turn.memoryId ? activeRef : null}
+          data-memory-id={turn.memoryId}
+          className={activeMemoryId === turn.memoryId ? 'turn-item turn-item-active' : 'turn-item'}
+          type="button"
+          onClick={() => onOpenTurn(turn.memoryId)}
+        >
+          <MessageSquare className="turn-icon" />
+          <TurnSummary text={segmentTitle(turn)} />
+          <span className="turn-time" title={formatTimestamp(turn.createdAt)}>{formatTimelineTime(turn.createdAt)}</span>
+        </button>
+      ))}
+      {hasMore ? (
+        <Button
+          variant="ghost"
+          size="sm"
+          className="load-more turn-list-toggle"
+          disabled={session.loading}
+          onClick={showMore}
+        >
+          {session.loading ? 'Loading...' : `Show ${TURN_LIST_PAGE_SIZE} more`}
+        </Button>
+      ) : null}
+    </>
+  );
+}
+
+function segmentTitle(item: ProjectSegmentNode | ProjectTurnNode): string {
+  return 'prompt' in item
+    ? item.prompt ?? item.title ?? item.summary ?? ''
+    : item.title ?? '';
 }
 
 type TimeRange = {
@@ -488,33 +559,31 @@ function filterProjects(projects: ProjectNode[], filter: ProjectFilter): Project
       if (selectedAgents.size > 0 && !selectedAgents.has(session.agent)) {
         return [];
       }
+      if (!isInRange(session.latestUpdatedAt, filter.timeRange)) {
+        return [];
+      }
 
       const sessionMatches = projectMatches
         || matchesQuery(session.displaySessionId, normalizedQuery)
         || matchesQuery(session.agent, normalizedQuery);
-      const turns = session.turns
-        .filter((turn) => isInRange(turn.createdAt, filter.timeRange))
-        .filter((turn) => (
+      const items = session.segments.length > 0 ? session.segments : session.turns;
+      const filteredItems = items
+        .filter((item) => isInRange(item.createdAt, filter.timeRange))
+        .filter((item) => (
           !normalizedQuery
           || sessionMatches
-          || matchesQuery(turn.title ?? '', normalizedQuery)
-          || matchesQuery(turn.summary, normalizedQuery)
+          || matchesQuery(segmentTitle(item), normalizedQuery)
         ))
-        .sort((left, right) => compare(left.updatedAt, right.updatedAt));
-      const sessionMatchesTime = isInRange(session.createdAt, filter.timeRange)
-        || (session.loaded && turns.length > 0);
+        .sort((left, right) => compare(left.createdAt, right.createdAt));
 
-      if (!sessionMatchesTime) {
-        return [];
-      }
-
-      if (normalizedQuery && !sessionMatches && turns.length === 0) {
+      if (normalizedQuery && !sessionMatches && filteredItems.length === 0) {
         return [];
       }
 
       return [{
         ...session,
-        turns,
+        segments: session.segments.length > 0 ? filteredItems as ProjectSegmentNode[] : session.segments,
+        turns: session.segments.length > 0 ? session.turns : filteredItems as ProjectTurnNode[],
       }];
     }).sort((left, right) => compare(left.latestUpdatedAt, right.latestUpdatedAt));
 
@@ -561,6 +630,11 @@ function sessionKey(session: ProjectSessionNode): string {
   return `${session.agent}:${session.sessionKey}`;
 }
 
+function shouldAutoExpandSession(session: ProjectSessionNode): boolean {
+  const itemCount = session.segments.length > 0 ? session.segments.length : session.turns.length;
+  return itemCount <= TURN_LIST_PAGE_SIZE;
+}
+
 function openVisibleProjects(current: Record<string, boolean>, projects: ProjectNode[]): Record<string, boolean> {
   const next = { ...current };
   for (const project of projects) {
@@ -585,7 +659,10 @@ function findActivePath(projects: ProjectNode[], activeMemoryId: string | null):
   }
   for (const project of projects) {
     for (const session of project.sessions) {
-      if (session.turns.some((turn) => turn.memoryId === activeMemoryId)) {
+      if (
+        session.turns.some((turn) => turn.memoryId === activeMemoryId)
+        || session.segments.some((segment) => segment.memoryId === activeMemoryId)
+      ) {
         return {
           projectKey: project.projectKey,
           sessionKey: sessionKey(session),
@@ -848,7 +925,7 @@ function formatRangePart(date: Date): string {
 
 function agentLabel(agent: string): string {
   const logo = logoForAgent(agent);
-  return logo?.fallback ? 'Other' : (logo?.label ?? agent);
+  return logo.fallback ? 'Other' : logo.label;
 }
 
 function CollapseIcon() {
@@ -923,49 +1000,18 @@ function TurnSummary({ text }: { text: string }) {
   );
 }
 
-type AgentLogo = {
-  key: string;
-  label: string;
-  src?: string;
-  fallback?: boolean;
-};
-
-const AGENT_LOGOS: Record<string, AgentLogo> = {
-  claude: { key: 'claude', label: 'Claude Code', src: claudeLogoUrl },
-  codex: { key: 'codex', label: 'Codex', src: codexLogoUrl },
-  openclaw: { key: 'openclaw', label: 'OpenClaw', src: openclawLogoUrl },
-  cursor: { key: 'cursor', label: 'Cursor', src: codexLogoUrl },
-};
-
 function projectAgents(project: ProjectNode): AgentLogo[] {
   const logos: AgentLogo[] = [];
   const seen = new Set<string>();
   for (const session of project.sessions) {
     const logo = logoForAgent(session.agent);
-    if (!logo || seen.has(logo.key)) {
+    if (seen.has(logo.key)) {
       continue;
     }
     seen.add(logo.key);
     logos.push(logo);
   }
   return logos;
-}
-
-function logoForAgent(agent: string): AgentLogo | null {
-  const normalized = agent.toLowerCase().replace(/[\s-]+/g, '_');
-  if (normalized.includes('claude')) {
-    return AGENT_LOGOS.claude;
-  }
-  if (normalized.includes('codex') || normalized.includes('openai')) {
-    return AGENT_LOGOS.codex;
-  }
-  if (normalized.includes('openclaw') || normalized.includes('open_claw')) {
-    return AGENT_LOGOS.openclaw;
-  }
-  if (normalized.includes('cursor')) {
-    return AGENT_LOGOS.cursor;
-  }
-  return { key: `fallback:${normalized}`, label: agent || 'Unknown agent', fallback: true };
 }
 
 function AgentLogoCluster({ agents }: { agents: AgentLogo[] }) {
@@ -989,10 +1035,7 @@ function AgentLogoCluster({ agents }: { agents: AgentLogo[] }) {
   );
 }
 
-function AgentLogoIcon({ logo }: { logo: AgentLogo | null }) {
-  if (!logo) {
-    return null;
-  }
+function AgentLogoIcon({ logo }: { logo: AgentLogo }) {
   return (
     <span className="tree-session-agent-icon" title={logo.label}>
       {logo.fallback ? (

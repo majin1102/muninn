@@ -408,7 +408,7 @@ mod tests {
             observer: "default-observer".to_string(),
             title: None,
             summary: Some("summary".to_string()),
-            tool_calls: None,
+            events: vec![],
             artifacts: None,
             prompt: Some("prompt".to_string()),
             response: Some("response".to_string()),

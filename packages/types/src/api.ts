@@ -62,6 +62,45 @@ export interface GetDetailRequest {
   memoryId: string;
 }
 
+export interface Artifact {
+  key: string;
+  kind: 'metadata' | 'text' | 'image' | 'file';
+  source: 'prompt' | 'response' | 'tool' | 'import';
+  content?: string;
+  uri?: string;
+  name?: string;
+  mimeType?: string;
+  sizeBytes?: number;
+}
+
+export type TurnEvent =
+  | {
+      type: 'userMessage';
+      text: string;
+      timestamp?: string;
+      artifacts?: Artifact[];
+    }
+  | {
+      type: 'assistantMessage';
+      text: string;
+      timestamp?: string;
+      artifacts?: Artifact[];
+    }
+  | {
+      type: 'toolCall';
+      id?: string;
+      name: string;
+      input?: string;
+      timestamp?: string;
+    }
+  | {
+      type: 'toolOutput';
+      id?: string;
+      output?: string;
+      timestamp?: string;
+      artifacts?: Artifact[];
+    };
+
 export interface ToolCall {
   id?: string;
   name: string;
@@ -69,15 +108,14 @@ export interface ToolCall {
   output?: string;
 }
 
-export interface Artifact {
-  key: string;
-  content: string;
-}
-
 export interface TurnContent {
   sessionId: string;
   agent: string;
-  toolCalls?: ToolCall[];
+  createdAt?: string;
+  updatedAt?: string;
+  title?: string;
+  summary?: string;
+  events: TurnEvent[];
   artifacts?: Artifact[];
   prompt: string;
   response: string;
@@ -101,7 +139,7 @@ export interface SessionAgentsResponse {
 export interface SessionNode {
   sessionKey: string;
   displaySessionId: string;
-  createdAt: string;
+  projectKey?: string;
   latestUpdatedAt: string;
 }
 
@@ -116,10 +154,22 @@ export interface TurnPreview {
   updatedAt: string;
   title?: string;
   summary: string;
+  prompt?: string;
+  response?: string;
+  events?: TurnEvent[];
+  artifacts?: Artifact[];
+  toolCalls?: ToolCall[];
+}
+
+export interface SessionSegmentPreview {
+  memoryId: string;
+  title: string;
+  createdAt: string;
 }
 
 export interface SessionTurnsResponse {
   turns: TurnPreview[];
+  segments: SessionSegmentPreview[];
   nextOffset: number | null;
   requestId: string;
 }
@@ -132,6 +182,12 @@ export interface MemoryDocument {
   agent?: string;
   observer?: string;
   sessionId?: string;
+  prompt?: string;
+  response?: string;
+  events?: TurnEvent[];
+  artifacts?: Artifact[];
+  toolCalls?: ToolCall[];
+  createdAt?: string;
   updatedAt?: string;
 }
 
@@ -164,4 +220,43 @@ export interface SettingsConfigResponse {
   content: string;
   validationError?: string;
   requestId: string;
+}
+
+export interface CodexImportSessionPreview {
+  sessionId: string;
+  title: string;
+  cwd: string;
+  sourcePath: string;
+  updatedAt: string;
+  turnCount: number;
+  artifactCount: number;
+}
+
+export interface CodexImportProjectPreview {
+  projectKey: string;
+  cwd: string;
+  sessions: CodexImportSessionPreview[];
+}
+
+export interface CodexImportPreviewResponse {
+  sourceRoot: string;
+  projectLimit: number;
+  projectCount: number;
+  sessionCount: number;
+  turnCount: number;
+  artifactCount: number;
+  projects: CodexImportProjectPreview[];
+  requestId: string;
+}
+
+export interface CodexImportRunResponse extends CodexImportPreviewResponse {
+  deletedTurns: number;
+  importedSessions: number;
+  importedTurns: number;
+  skippedTurns: number;
+  failedSessions: Array<{
+    sessionId: string;
+    sourcePath: string;
+    errorMessage: string;
+  }>;
 }

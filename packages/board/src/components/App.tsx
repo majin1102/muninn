@@ -46,6 +46,24 @@ export function App() {
   const [documentError, setDocumentError] = useState<string | null>(null);
   const contentShellRef = useRef<HTMLDivElement>(null);
   const client = useMemo(() => createBoardClient(apiBase, usesDemoData), [apiBase, usesDemoData]);
+  const activeTurnSession = useMemo(() => (
+    route.memoryId ? findSessionForTurn(projects, route.memoryId) : null
+  ), [projects, route.memoryId]);
+  const documentSession = useMemo(() => (
+    document ? findSessionForDocument(projects, document) : null
+  ), [document, projects]);
+  const activeSession = activeTurnSession ?? documentSession;
+  const activeSessionTurns = activeSession?.turns ?? [];
+  const pendingActiveSessionSearch = Boolean(
+    route.memoryId
+    && !activeTurnSession
+    && findNextSessionToSearch(projects),
+  );
+  const locatingActiveTurn = Boolean(
+    route.memoryId
+    && !activeTurnSession
+    && (pendingActiveSessionSearch || (documentSession && documentSession.nextOffset !== null)),
+  );
 
   useEffect(() => {
     const onHashChange = () => setRoute(parseRoute(window.location.hash));
@@ -92,12 +110,49 @@ export function App() {
       .finally(() => setDocumentLoading(false));
   }, [client, route.memoryId]);
 
+  useEffect(() => {
+    if (route.view !== 'session' || !documentSession || documentSession.loaded || documentSession.loading) {
+      return;
+    }
+
+    void openSession(documentSession);
+  }, [documentSession, route.view]);
+
+  useEffect(() => {
+    if (route.view !== 'session' || !route.memoryId || activeTurnSession) {
+      return;
+    }
+
+    const session = findNextSessionToSearch(projects);
+    if (!session) {
+      return;
+    }
+
+    void openSession(session);
+  }, [activeTurnSession, projects, route.memoryId, route.view]);
+
+  useEffect(() => {
+    if (
+      route.view !== 'session'
+      || !documentSession
+      || activeTurnSession
+      || !documentSession.loaded
+      || documentSession.loading
+      || documentSession.nextOffset === null
+    ) {
+      return;
+    }
+
+    void loadMore(documentSession);
+  }, [activeTurnSession, documentSession, route.view]);
+
   async function openSession(session: ProjectSessionNode) {
     updateSession(session, { loading: true });
     try {
       const response = await client.loadSessionTurns(session);
       updateSession(session, {
         turns: response.turns,
+        segments: response.segments,
         nextOffset: response.nextOffset,
         loading: false,
         loaded: true,
@@ -117,6 +172,7 @@ export function App() {
       const response = await client.loadSessionTurns(session, session.nextOffset);
       updateSession(session, {
         turns: [...session.turns, ...response.turns],
+        segments: response.segments.length > 0 ? response.segments : session.segments,
         nextOffset: response.nextOffset,
         loading: false,
         loaded: true,
@@ -266,7 +322,20 @@ export function App() {
                 />
               </aside>
               <section className="conversation-pane">
-                <ChatView document={document} loading={documentLoading} error={documentError} />
+                <ChatView
+                  document={document}
+                  activeMemoryId={route.memoryId}
+                  sessionTurns={activeSessionTurns}
+                  canLoadMoreAfter={Boolean(activeSession && activeSession.nextOffset !== null)}
+                  loadingMoreAfter={activeSession?.loading ?? false}
+                  onLoadMoreAfter={() => {
+                    if (activeSession) {
+                      void loadMore(activeSession);
+                    }
+                  }}
+                  loading={documentLoading || locatingActiveTurn}
+                  error={documentError}
+                />
               </section>
             </>
           ) : (
@@ -282,6 +351,43 @@ export function App() {
       </main>
     </div>
   );
+}
+
+function findSessionForTurn(projects: ProjectNode[], memoryId: string): ProjectNode['sessions'][number] | null {
+  for (const project of projects) {
+    for (const session of project.sessions) {
+      if (session.turns.some((turn) => turn.memoryId === memoryId)) {
+        return session;
+      }
+    }
+  }
+  return null;
+}
+
+function findSessionForDocument(projects: ProjectNode[], document: MemoryDocument): ProjectNode['sessions'][number] | null {
+  if (!document.sessionId) {
+    return null;
+  }
+
+  for (const project of projects) {
+    for (const session of project.sessions) {
+      if (session.sessionKey === document.sessionId && session.agent === document.agent) {
+        return session;
+      }
+    }
+  }
+  return null;
+}
+
+function findNextSessionToSearch(projects: ProjectNode[]): ProjectNode['sessions'][number] | null {
+  for (const project of projects) {
+    for (const session of project.sessions) {
+      if (!session.loaded && !session.loading) {
+        return session;
+      }
+    }
+  }
+  return null;
 }
 
 function GitHubMark() {

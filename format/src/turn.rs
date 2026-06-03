@@ -58,18 +58,53 @@ impl TurnQuery {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
-pub struct ToolCall {
-    pub id: Option<String>,
-    pub name: String,
-    pub input: Option<String>,
-    pub output: Option<String>,
+pub struct Artifact {
+    pub key: String,
+    pub kind: String,
+    pub source: String,
+    pub content: Option<String>,
+    pub uri: Option<String>,
+    pub name: Option<String>,
+    pub mime_type: Option<String>,
+    pub size_bytes: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct Artifact {
-    pub key: String,
-    pub content: String,
+#[serde(rename_all = "camelCase", tag = "type")]
+pub enum TurnEvent {
+    UserMessage {
+        text: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        timestamp: Option<DateTime<Utc>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        artifacts: Option<Vec<Artifact>>,
+    },
+    AssistantMessage {
+        text: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        timestamp: Option<DateTime<Utc>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        artifacts: Option<Vec<Artifact>>,
+    },
+    ToolCall {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+        name: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        input: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        timestamp: Option<DateTime<Utc>>,
+    },
+    ToolOutput {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        output: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        timestamp: Option<DateTime<Utc>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        artifacts: Option<Vec<Artifact>>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -88,7 +123,7 @@ pub struct Turn {
     pub observer: String,
     pub title: Option<String>,
     pub summary: Option<String>,
-    pub tool_calls: Option<Vec<ToolCall>>,
+    pub events: Vec<TurnEvent>,
     pub artifacts: Option<Vec<Artifact>>,
     pub prompt: Option<String>,
     pub response: Option<String>,
@@ -404,7 +439,11 @@ impl TurnTable {
         let Some(dataset) = self.access.try_open().await? else {
             return Ok(Vec::new());
         };
-        let batch = dataset.scan().with_row_id().try_into_batch().await?;
+        let batch = dataset
+            .scan()
+            .with_row_id()
+            .try_into_batch()
+            .await?;
         if batch.num_rows() == 0 {
             return Ok(Vec::new());
         }

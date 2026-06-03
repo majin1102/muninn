@@ -23,24 +23,29 @@ export interface MemoryResponse {
 ## Write Shape
 
 ```ts
-export interface ToolCall {
-  id?: string;
-  name: string;
-  input?: string;
-  output?: string;
-}
-
 export interface Artifact {
   key: string;
-  content: string;
+  kind: "metadata" | "text" | "image" | "file";
+  source: "prompt" | "response" | "tool" | "import";
+  content?: string;
+  uri?: string;
+  name?: string;
+  mimeType?: string;
+  sizeBytes?: number;
 }
+
+export type TurnEvent =
+  | { type: "userMessage"; text: string; timestamp?: string; artifacts?: Artifact[] }
+  | { type: "assistantMessage"; text: string; timestamp?: string; artifacts?: Artifact[] }
+  | { type: "toolCall"; id?: string; name: string; input?: string; timestamp?: string }
+  | { type: "toolOutput"; id?: string; output?: string; timestamp?: string; artifacts?: Artifact[] };
 
 export interface TurnContent {
   sessionId: string;
   agent: string;
   prompt: string;
   response: string;
-  toolCalls?: ToolCall[];
+  events: TurnEvent[];
   artifacts?: Artifact[];
 }
 
@@ -54,4 +59,4 @@ export interface CaptureTurnResponse {
 }
 ```
 
-The HTTP path is `POST /api/v1/turn/capture`. `sessionId`, `agent`, `prompt`, and `response` are required. `toolCalls` and `artifacts` are optional.
+The HTTP path is `POST /api/v1/turn/capture`. `sessionId`, `agent`, `prompt`, `response`, and `events` are required. `artifacts` is optional.

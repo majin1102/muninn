@@ -24,6 +24,7 @@ import {
   type ExtractorCheckpoint,
   type ObserverCheckpoint,
   type RecentTurn,
+  type SessionIndexEntry,
 } from './checkpoint.js';
 import { Memories } from './memories/memories.js';
 import { Extractor } from './extractor/extractor.js';
@@ -33,7 +34,8 @@ import { readTurn } from './turn/types.js';
 import { Watchdog } from './watchdog.js';
 import { TableMutationLocks, lockNativeTables } from './table-locks.js';
 import { writeMuninnLog } from './logging.js';
-import type { Artifact, ToolCall, TurnContent } from '@muninn/types';
+import { SessionIndex } from './session-index.js';
+import type { Artifact, TurnContent, TurnEvent } from '@muninn/types';
 
 export interface Turn {
   turnId: string;
@@ -44,7 +46,7 @@ export interface Turn {
   observer: string;
   title?: string | null;
   summary?: string | null;
-  toolCalls?: ToolCall[] | null;
+  events: TurnEvent[];
   artifacts?: Artifact[] | null;
   prompt?: string | null;
   response?: string | null;
@@ -222,6 +224,7 @@ export class MuninnBackend {
   private extractor: Extractor | null = null;
   private observer: Observer | null = null;
   private sessionRegistry: SessionRegistry | null = null;
+  private readonly sessionIndex: SessionIndex;
   private watchdog: Watchdog | null = null;
   private watchdogClient: NativeTables | null = null;
   private finalizeDrainPromise: Promise<void> | null = null;
@@ -234,6 +237,7 @@ export class MuninnBackend {
     this.memories = new Memories(client);
     this.checkpointLock = new AsyncCheckpointLock();
     const extractorName = loadMuninnConfig()?.extractor?.name;
+    this.sessionIndex = new SessionIndex(checkpoint?.sessionIndex ?? null, extractorName ?? null);
     this.sessionRegistry = extractorName
       ? new SessionRegistry(client, extractorName)
       : null;
@@ -252,6 +256,7 @@ export class MuninnBackend {
           schemaVersion: checkpoint.schemaVersion,
           extractor: checkpoint.extractor,
           observer: checkpoint.observer,
+          sessionIndex: checkpoint.sessionIndex,
         })
         : null;
       const watchdogClient = lockNativeTables(
@@ -283,6 +288,20 @@ export class MuninnBackend {
       const registry = this.ensureSessionRegistry(extractor.name);
       await extractor.accept(turnContent, registry);
     });
+  }
+
+  async deleteTurns(turnIds: string[]): Promise<{ deleted: number }> {
+    return this.checkpointLock.exclusive(async () => {
+      const result = await this.client.turnTable.deleteTurns({ turnIds });
+      if (result.deleted > 0) {
+        this.sessionIndex.markDirty();
+      }
+      return result;
+    });
+  }
+
+  async listSessionIndex(): Promise<SessionIndexEntry[]> {
+    return this.checkpointLock.shared(async () => this.sessionIndex.list(this.client));
   }
 
   async memoryWatermark(): Promise<MemoryWatermark> {
@@ -358,9 +377,10 @@ export class MuninnBackend {
         runs: observerCheckpoint.runs,
       };
       return {
-        schemaVersion: 6,
+        schemaVersion: 7,
         extractor: extractorSection,
         observer: observerSection,
+        sessionIndex: await this.sessionIndex.exportCheckpoint(this.client),
       };
     });
   }
@@ -559,6 +579,17 @@ export const turns = {
     });
     return (await getBackend(databaseName)).memories.listTurns(params);
   },
+
+  async delete(params: {
+    turnIds: string[];
+    database?: string | null;
+  }): Promise<{ deleted: number }> {
+    const databaseName = resolveDatabaseName(params.database);
+    await writeMuninnLog(databaseName, 'info', 'delete', 'turn_delete', {
+      count: params.turnIds.length,
+    });
+    return (await getBackend(databaseName)).deleteTurns(params.turnIds);
+  },
 };
 
 export const sessions = {
@@ -580,6 +611,12 @@ export const sessions = {
       observer: params.observer,
     });
     return (await getBackend(databaseName)).memories.listSessions(params);
+  },
+
+  async index(database?: string | null): Promise<SessionIndexEntry[]> {
+    const databaseName = resolveDatabaseName(database);
+    await writeMuninnLog(databaseName, 'info', 'list', 'session_index', {});
+    return (await getBackend(databaseName)).listSessionIndex();
   },
 };
 

@@ -1,3 +1,5 @@
+import type { ToolCall } from '@muninn/types';
+
 export type DemoSessionAgentItem = {
   agent: string;
   latestUpdatedAt: string;
@@ -6,7 +8,6 @@ export type DemoSessionAgentItem = {
 export type DemoSessionGroupItem = {
   sessionKey: string;
   displaySessionId: string;
-  createdAt: string;
   latestUpdatedAt: string;
 };
 
@@ -16,6 +17,9 @@ export type DemoSessionTimelineItem = {
   updatedAt: string;
   title?: string;
   summary: string;
+  prompt?: string;
+  response?: string;
+  toolCalls?: ToolCall[];
 };
 
 export type DemoObservingReferenceItem = {
@@ -51,20 +55,20 @@ export const demoAgents: DemoSessionAgentItem[] = [
 
 export const demoSessionGroups: Record<string, DemoSessionGroupItem[]> = {
   openclaw: [
-    { sessionKey: 'auth-refactor', displaySessionId: 'auth-refactor', createdAt: '2026-03-20T10:12:00.000Z', latestUpdatedAt: '2026-06-01T12:01:00.000Z' },
-    { sessionKey: 'board-mvp', displaySessionId: 'board-mvp', createdAt: '2026-03-20T11:05:00.000Z', latestUpdatedAt: '2026-06-01T07:15:00.000Z' },
+    { sessionKey: 'auth-refactor', displaySessionId: 'auth-refactor', latestUpdatedAt: '2026-06-01T12:01:00.000Z' },
+    { sessionKey: 'board-mvp', displaySessionId: 'board-mvp', latestUpdatedAt: '2026-06-01T07:15:00.000Z' },
   ],
   claude_code: [
-    { sessionKey: 'auth-refactor', displaySessionId: 'auth-refactor', createdAt: '2026-03-20T13:42:00.000Z', latestUpdatedAt: '2026-05-29T12:00:00.000Z' },
-    { sessionKey: 'release-check', displaySessionId: 'release-check', createdAt: '2026-03-20T11:32:00.000Z', latestUpdatedAt: '2026-05-26T12:00:00.000Z' },
+    { sessionKey: 'auth-refactor', displaySessionId: 'auth-refactor', latestUpdatedAt: '2026-05-29T12:00:00.000Z' },
+    { sessionKey: 'release-check', displaySessionId: 'release-check', latestUpdatedAt: '2026-05-26T12:00:00.000Z' },
   ],
   codex_cli: [
-    { sessionKey: 'auth-refactor', displaySessionId: 'auth-refactor', createdAt: '2026-03-20T13:18:00.000Z', latestUpdatedAt: '2026-05-25T12:00:00.000Z' },
-    { sessionKey: 'sdk-cleanup', displaySessionId: 'sdk-cleanup', createdAt: '2026-03-20T10:41:00.000Z', latestUpdatedAt: '2026-05-18T12:00:00.000Z' },
+    { sessionKey: 'auth-refactor', displaySessionId: 'auth-refactor', latestUpdatedAt: '2026-05-25T12:00:00.000Z' },
+    { sessionKey: 'sdk-cleanup', displaySessionId: 'sdk-cleanup', latestUpdatedAt: '2026-05-18T12:00:00.000Z' },
   ],
   memory_agent: [
-    { sessionKey: 'memory-inbox/daily-recall', displaySessionId: 'memory-inbox/daily-recall', createdAt: '2026-06-01T12:50:15.000Z', latestUpdatedAt: '2026-06-01T13:32:00.000Z' },
-    { sessionKey: 'auth-refactor', displaySessionId: 'auth-refactor', createdAt: '2026-03-20T12:56:00.000Z', latestUpdatedAt: '2026-05-18T12:00:00.000Z' },
+    { sessionKey: 'memory-inbox/daily-recall', displaySessionId: 'memory-inbox/daily-recall', latestUpdatedAt: '2026-06-01T13:32:00.000Z' },
+    { sessionKey: 'auth-refactor', displaySessionId: 'auth-refactor', latestUpdatedAt: '2026-05-18T12:00:00.000Z' },
   ],
 };
 
