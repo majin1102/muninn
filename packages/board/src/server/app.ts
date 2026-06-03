@@ -230,6 +230,11 @@ function matchesSessionNode(turn: BoardSessionTurn, sessionKey: string): boolean
   return resolveSessionNode(turn).sessionKey === sessionKey;
 }
 
+function isDefaultSessionKey(sessionKey: string): boolean {
+  return sessionKey.startsWith(AGENT_DEFAULT_SESSION_PREFIX)
+    || sessionKey.startsWith(OBSERVER_DEFAULT_SESSION_PREFIX);
+}
+
 function hasSummary(turn: { summary?: string | null }): boolean {
   return typeof turn.summary === 'string' && turn.summary.trim().length > 0;
 }
@@ -373,7 +378,7 @@ async function loadSessionTurnPreviewsPage(params: {
   const allTurns = (await turns.list({
     mode: { type: 'page', offset: 0, limit: SESSION_TREE_PAGE_LIMIT },
     agent: params.agent,
-    sessionId: params.sessionKey,
+    ...(isDefaultSessionKey(params.sessionKey) ? {} : { sessionId: params.sessionKey }),
   }))
     .filter((turn) => matchesSessionNode(turn, params.sessionKey))
     .filter(hasSummary)

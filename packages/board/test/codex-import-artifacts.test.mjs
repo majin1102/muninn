@@ -621,6 +621,72 @@ test('preview does not write artifacts but run imports relative and missing atta
   }
 });
 
+test('run import records artifact copy failures per session', async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), 'muninn-codex-import-artifact-copy-failure-'));
+  const previousHome = process.env.MUNINN_HOME;
+  const previousObserverPollMs = process.env.MUNINN_OBSERVER_POLL_MS;
+  process.env.MUNINN_HOME = path.join(tempDir, 'muninn');
+  process.env.MUNINN_OBSERVER_POLL_MS = '60000';
+  try {
+    await writeTestConfig(process.env.MUNINN_HOME);
+
+    const sourceRoot = path.join(tempDir, 'codex');
+    const workspaceDir = path.join(tempDir, 'muninn');
+    const sessionDir = path.join(sourceRoot, 'sessions', '2026', '06', '03');
+    await mkdir(sessionDir, { recursive: true });
+
+    await writeCodexSessionFile(sessionDir, {
+      fileName: 'rollout-good.jsonl',
+      rawSessionId: 'raw-good-artifact-copy',
+      cwd: workspaceDir,
+      timestamp: '2026-06-03T06:00:00.000Z',
+      prompt: 'good artifact copy prompt',
+      response: 'good artifact copy response',
+    });
+    await writeCodexSessionFile(sessionDir, {
+      fileName: 'rollout-bad.jsonl',
+      rawSessionId: 'raw-bad-artifact-copy',
+      cwd: workspaceDir,
+      timestamp: '2026-06-03T05:00:00.000Z',
+      prompt: 'bad artifact copy prompt',
+      response: 'bad artifact copy response',
+      imageUrl: 'data:broken-image-url',
+    });
+
+    const result = await codexImport.runCodexImport({
+      sourceRoot,
+      projectKeys: ['muninn'],
+      projectLimit: 5,
+      artifactStore: path.join(tempDir, 'artifacts'),
+    }, 'req-run');
+
+    assert.equal(result.importedTurns, 1);
+    assert.equal(result.failedSessions.length, 1);
+    assert.equal(result.failedSessions[0]?.sessionId, 'raw-bad-artifact-copy');
+    assert.match(result.failedSessions[0]?.errorMessage ?? '', /invalid data URL artifact/);
+
+    const persisted = await turns.list({
+      mode: { type: 'page', offset: 0, limit: 20 },
+      agent: 'codex',
+    });
+    assert.ok(persisted.some((turn) => turn.prompt === 'good artifact copy prompt'));
+    assert.ok(!persisted.some((turn) => turn.prompt === 'bad artifact copy prompt'));
+  } finally {
+    await shutdownCoreForTests();
+    if (previousHome === undefined) {
+      delete process.env.MUNINN_HOME;
+    } else {
+      process.env.MUNINN_HOME = previousHome;
+    }
+    if (previousObserverPollMs === undefined) {
+      delete process.env.MUNINN_OBSERVER_POLL_MS;
+    } else {
+      process.env.MUNINN_OBSERVER_POLL_MS = previousObserverPollMs;
+    }
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test('run import only copies artifacts for selected sessions', async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), 'muninn-codex-import-selected-artifacts-'));
   const previousHome = process.env.MUNINN_HOME;

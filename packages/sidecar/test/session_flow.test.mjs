@@ -6,6 +6,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 
 import core from '@muninn/core';
 import { getNativeTables } from '../../core/dist/native.js';
+import { serializeTurn } from '../../core/dist/turn/types.js';
 import {
   getSessionTreeLoadCountForTests,
   resetSessionTreeCacheForTests,
@@ -901,6 +902,54 @@ test('ui session endpoints group by agent/session and return rendered turn docum
     { type: 'toolCall', name: 'sed' },
     { type: 'assistantMessage', text: 'document response' },
   ]);
+});
+
+test('ui session default session turns include historical null session rows', async (t) => {
+  const { dir, homeDir, configPath } = await makeDatasetUri();
+  t.after(async () => {
+    await shutdownCoreForTests();
+    resetSessionTreeCacheForTests();
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  process.env.MUNINN_HOME = homeDir;
+  await writeMuninnConfig(configPath, { turnProvider: 'mock' });
+  resetSessionTreeCacheForTests();
+
+  const tables = await getNativeTables(defaultStorageTarget(homeDir));
+  await tables.turnTable.insert({
+    turns: [serializeTurn({
+      turnId: 'turn:18446744073709551615',
+      createdAt: '2026-06-03T01:00:00.000Z',
+      updatedAt: '2026-06-03T01:01:00.000Z',
+      sessionId: null,
+      agent: 'agent-a',
+      observer: 'default',
+      title: 'historical default prompt',
+      summary: 'historical default prompt historical default response',
+      events: [
+        { type: 'userMessage', text: 'historical default prompt' },
+        { type: 'assistantMessage', text: 'historical default response' },
+      ],
+      artifacts: null,
+      prompt: 'historical default prompt',
+      response: 'historical default response',
+    })],
+  });
+
+  const sessionsResponse = await app.request('/api/v1/ui/session/agents/agent-a/sessions');
+  assert.equal(sessionsResponse.status, 200);
+  const sessionsBody = await json(sessionsResponse);
+  assert.equal(sessionsBody.sessions.length, 1);
+  assert.equal(sessionsBody.sessions[0].sessionKey, '__agent_default__:agent-a');
+
+  const turnsResponse = await app.request(
+    `/api/v1/ui/session/agents/agent-a/sessions/${encodeURIComponent('__agent_default__:agent-a')}/turns?offset=0&limit=10`
+  );
+  assert.equal(turnsResponse.status, 200);
+  const turnsBody = await json(turnsResponse);
+  assert.equal(turnsBody.turns.length, 1);
+  assert.equal(turnsBody.turns[0].prompt, 'historical default prompt');
 });
 
 test('ui session endpoints reuse the cached session tree until a write invalidates it', async (t) => {

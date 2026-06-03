@@ -77,12 +77,6 @@ export async function previewCodexImport(options: CodexImportOptions, requestId:
 
 export async function runCodexImport(options: CodexImportOptions, requestId: string): Promise<CodexImportRunResponse> {
   const selection = await selectCodexImportSessions(options, 'preview');
-  const importSessions = (await Promise.all(selection.sessions.map((session) => (
-    readCodexSession(session.sourcePath, {
-      artifactStore: selection.artifactStore,
-      artifactMode: 'copy',
-    })
-  )))).filter((session): session is CodexSession => session !== null);
   const selectedRawSessionIds = new Set(selection.sessions.map((session) => session.sessionId));
   const selectedImportedSessionIds = new Set(selection.sessions.map(importSessionId));
   const existingImports = await collectExistingCodexImports({
@@ -96,8 +90,15 @@ export async function runCodexImport(options: CodexImportOptions, requestId: str
   let deletedTurns = await deleteExistingImport(existingImportTurns);
   const failedSessions: CodexImportRunResponse['failedSessions'] = [];
 
-  for (const session of importSessions) {
+  for (const previewSession of selection.sessions) {
     try {
+      const session = await readCodexSession(previewSession.sourcePath, {
+        artifactStore: selection.artifactStore,
+        artifactMode: 'copy',
+      });
+      if (!session) {
+        continue;
+      }
       const result = await importCodexSession(session);
       if (result.importedTurns > 0 || result.skippedTurns > 0) {
         importedSessions += 1;
@@ -106,8 +107,8 @@ export async function runCodexImport(options: CodexImportOptions, requestId: str
       skippedTurns += result.skippedTurns;
     } catch (error) {
       failedSessions.push({
-        sessionId: session.sessionId,
-        sourcePath: session.sourcePath,
+        sessionId: previewSession.sessionId,
+        sourcePath: previewSession.sourcePath,
         errorMessage: error instanceof Error ? error.message : String(error),
       });
     }
