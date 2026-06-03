@@ -3,10 +3,8 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Bot } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import claudeLogoUrl from '../assets/agent-claude.svg';
-import codexLogoUrl from '../assets/agent-codex.svg';
-import openclawLogoUrl from '../assets/agent-openclaw.svg';
 import userAvatarUrl from '../assets/user-avatar.png';
+import { logoForAgent, type AgentLogo } from '../lib/agent_logo.js';
 import type { ProjectTurnNode } from '../lib/api.js';
 import { CHAT_CONTEXT_STEP, INITIAL_CHAT_CONTEXT_RADIUS, chatTurnWindow } from '../lib/chat_window.js';
 import { transcriptMessages, type TranscriptMessage } from '../lib/transcript.js';
@@ -372,28 +370,6 @@ function entriesFromTurns(turns: ProjectTurnNode[]): ChatTimelineEntry[] {
 
 function isLongMessage(body: string): boolean {
   return body.length > 48 || body.includes('\n');
-}
-
-type AgentLogo = {
-  label: string;
-  src?: string;
-};
-
-function logoForAgent(agent: string): AgentLogo {
-  const normalized = agent.toLowerCase().replace(/[\s-]+/g, '_');
-  if (normalized.includes('claude')) {
-    return { label: 'Claude Code', src: claudeLogoUrl };
-  }
-  if (normalized.includes('codex') || normalized.includes('openai')) {
-    return { label: 'Codex', src: codexLogoUrl };
-  }
-  if (normalized.includes('openclaw') || normalized.includes('open_claw')) {
-    return { label: 'OpenClaw', src: openclawLogoUrl };
-  }
-  if (normalized.includes('cursor')) {
-    return { label: 'Cursor', src: codexLogoUrl };
-  }
-  return { label: agent || 'Agent' };
 }
 
 function AgentAvatar({ logo }: { logo: AgentLogo }) {

@@ -181,8 +181,9 @@ pub(crate) fn record_batch_to_turns_with_row_ids(
         .downcast_ref::<UInt64Array>()
         .unwrap();
 
-    let turns = (0..batch.num_rows())
-        .map(|index| Turn {
+    let mut turns = Vec::with_capacity(batch.num_rows());
+    for index in 0..batch.num_rows() {
+        turns.push(Turn {
             turn_id: MemoryId::new(MemoryLayer::Turn, row_ids[index]),
             created_at: Utc
                 .timestamp_micros(created_at.value(index))
@@ -197,13 +198,13 @@ pub(crate) fn record_batch_to_turns_with_row_ids(
             observer: observer.value(index).to_string(),
             title: optional_string(title, index),
             summary: optional_string(summary, index),
-            events: serde_json::from_str(events_json.value(index)).unwrap_or_default(),
+            events: required_events(events_json, index)?,
             artifacts: optional_artifacts(artifacts_json, index),
             prompt: optional_string(prompt, index),
             response: optional_string(response, index),
             observing_epoch: optional_u64(observing_epoch, index),
-        })
-        .collect();
+        });
+    }
     Ok(turns)
 }
 
@@ -265,6 +266,12 @@ where
 
 pub(crate) fn optional_artifacts(array: &StringArray, index: usize) -> Option<Vec<Artifact>> {
     optional_json(array, index)
+}
+
+pub(crate) fn required_events(array: &StringArray, index: usize) -> Result<Vec<TurnEvent>> {
+    serde_json::from_str(array.value(index)).map_err(|error| {
+        Error::invalid_input(format!("invalid events_json for turn row {index}: {error}"))
+    })
 }
 
 pub(crate) fn session_snapshots_to_record_batch(
@@ -877,4 +884,60 @@ pub(crate) fn extraction_dimensions() -> Result<usize> {
 
 pub(crate) fn arrow_error_from_lance(error: Error) -> ArrowError {
     ArrowError::ExternalError(Box::new(error))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::TimeZone;
+
+    fn sample_turn() -> Turn {
+        Turn {
+            turn_id: MemoryId::new(MemoryLayer::Turn, 1),
+            created_at: Utc.timestamp_micros(1_000_000).single().unwrap(),
+            updated_at: Utc.timestamp_micros(2_000_000).single().unwrap(),
+            session_id: Some("session-1".to_string()),
+            agent: "agent".to_string(),
+            observer: "observer".to_string(),
+            title: Some("Title".to_string()),
+            summary: Some("Summary".to_string()),
+            events: vec![TurnEvent::UserMessage {
+                text: "hello".to_string(),
+                timestamp: None,
+                artifacts: None,
+            }],
+            artifacts: None,
+            prompt: Some("hello".to_string()),
+            response: Some("world".to_string()),
+            observing_epoch: None,
+        }
+    }
+
+    #[test]
+    fn invalid_turn_events_json_returns_error() {
+        let batch = turns_to_record_batch(&[sample_turn()]).unwrap();
+        let columns = batch
+            .columns()
+            .iter()
+            .enumerate()
+            .map(|(index, column)| {
+                if index == 7 {
+                    Arc::new(StringArray::from_iter_values(["not json"])) as Arc<dyn Array>
+                } else {
+                    Arc::clone(column)
+                }
+            })
+            .collect();
+        let batch = RecordBatch::try_new(batch.schema(), columns).unwrap();
+
+        let error = record_batch_to_turns_with_row_ids(&batch, &[1])
+            .expect_err("invalid events_json should be reported");
+
+        assert!(
+            error
+                .to_string()
+                .contains("invalid events_json for turn row 0"),
+            "{error}"
+        );
+    }
 }

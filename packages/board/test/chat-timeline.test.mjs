@@ -2,9 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import ts from 'typescript';
-import chatTimeline from '../dist-server/chat_timeline.js';
-
-const { __testing } = chatTimeline;
+import { __testing } from '../dist-server/chat_timeline.js';
 
 async function loadSourceChatTimeline() {
   const source = await readFile(new URL('../src/server/chat_timeline.ts', import.meta.url), 'utf8');

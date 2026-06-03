@@ -318,7 +318,3 @@ export const __testing = {
   entriesFromEvents,
   entriesFromFallback,
 };
-
-export default {
-  __testing,
-};

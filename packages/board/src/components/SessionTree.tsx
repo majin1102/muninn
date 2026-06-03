@@ -1,9 +1,7 @@
 import { Bot, Check, ChevronDown, ChevronRight, Folder, MessageSquare, Search, X } from 'lucide-react';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { RefObject } from 'react';
-import claudeLogoUrl from '../assets/agent-claude.svg';
-import codexLogoUrl from '../assets/agent-codex.svg';
-import openclawLogoUrl from '../assets/agent-openclaw.svg';
+import { logoForAgent, type AgentLogo } from '../lib/agent_logo.js';
 import type { ProjectNode, ProjectSegmentNode, ProjectSessionNode, ProjectTurnNode } from '../lib/api.js';
 import { formatRelativeTime, formatTimelineTime, formatTimestamp } from '../lib/utils.js';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from './ui/collapsible.js';
@@ -270,7 +268,7 @@ export function SessionTree({
               }}
             >
               {selectedAgents.length > 0 ? (
-                <AgentLogoCluster agents={selectedAgents.map(logoForAgent).filter((logo): logo is AgentLogo => logo !== null)} />
+                <AgentLogoCluster agents={selectedAgents.map(logoForAgent)} />
               ) : (
                 <span>Agents: All</span>
               )}
@@ -299,7 +297,7 @@ export function SessionTree({
                     <span className={selectedAgents.includes(agent) ? 'menu-check menu-check-checked' : 'menu-check'}>
                       {selectedAgents.includes(agent) ? <Check /> : null}
                     </span>
-                    <AgentLogoCluster agents={[logoForAgent(agent)].filter((logo): logo is AgentLogo => logo !== null)} />
+                    <AgentLogoCluster agents={[logoForAgent(agent)]} />
                     <span>{agentLabel(agent)}</span>
                   </button>
                 ))}
@@ -927,7 +925,7 @@ function formatRangePart(date: Date): string {
 
 function agentLabel(agent: string): string {
   const logo = logoForAgent(agent);
-  return logo?.fallback ? 'Other' : (logo?.label ?? agent);
+  return logo.fallback ? 'Other' : logo.label;
 }
 
 function CollapseIcon() {
@@ -1002,49 +1000,18 @@ function TurnSummary({ text }: { text: string }) {
   );
 }
 
-type AgentLogo = {
-  key: string;
-  label: string;
-  src?: string;
-  fallback?: boolean;
-};
-
-const AGENT_LOGOS: Record<string, AgentLogo> = {
-  claude: { key: 'claude', label: 'Claude Code', src: claudeLogoUrl },
-  codex: { key: 'codex', label: 'Codex', src: codexLogoUrl },
-  openclaw: { key: 'openclaw', label: 'OpenClaw', src: openclawLogoUrl },
-  cursor: { key: 'cursor', label: 'Cursor', src: codexLogoUrl },
-};
-
 function projectAgents(project: ProjectNode): AgentLogo[] {
   const logos: AgentLogo[] = [];
   const seen = new Set<string>();
   for (const session of project.sessions) {
     const logo = logoForAgent(session.agent);
-    if (!logo || seen.has(logo.key)) {
+    if (seen.has(logo.key)) {
       continue;
     }
     seen.add(logo.key);
     logos.push(logo);
   }
   return logos;
-}
-
-function logoForAgent(agent: string): AgentLogo | null {
-  const normalized = agent.toLowerCase().replace(/[\s-]+/g, '_');
-  if (normalized.includes('claude')) {
-    return AGENT_LOGOS.claude;
-  }
-  if (normalized.includes('codex') || normalized.includes('openai')) {
-    return AGENT_LOGOS.codex;
-  }
-  if (normalized.includes('openclaw') || normalized.includes('open_claw')) {
-    return AGENT_LOGOS.openclaw;
-  }
-  if (normalized.includes('cursor')) {
-    return AGENT_LOGOS.cursor;
-  }
-  return { key: `fallback:${normalized}`, label: agent || 'Unknown agent', fallback: true };
 }
 
 function AgentLogoCluster({ agents }: { agents: AgentLogo[] }) {
@@ -1068,10 +1035,7 @@ function AgentLogoCluster({ agents }: { agents: AgentLogo[] }) {
   );
 }
 
-function AgentLogoIcon({ logo }: { logo: AgentLogo | null }) {
-  if (!logo) {
-    return null;
-  }
+function AgentLogoIcon({ logo }: { logo: AgentLogo }) {
   return (
     <span className="tree-session-agent-icon" title={logo.label}>
       {logo.fallback ? (

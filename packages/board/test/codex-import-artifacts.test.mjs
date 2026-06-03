@@ -4,9 +4,8 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import core, { addMessage, turns } from '@muninn/core';
-import codexImport from '../dist-server/codex_import.js';
+import { __testing, previewCodexImport, runCodexImport } from '../dist-server/codex_import.js';
 
-const { __testing } = codexImport;
 const { shutdownCoreForTests } = core;
 
 async function writeTestConfig(homeDir) {
@@ -370,7 +369,7 @@ test('run import deletes legacy codex rows that predate import markers', async (
       ],
     });
 
-    const result = await codexImport.runCodexImport({
+    const result = await runCodexImport({
       sourceRoot,
       projectKeys: ['muninn'],
       projectLimit: 5,
@@ -486,7 +485,7 @@ test('run import only deletes existing marker turns for selected codex sessions'
       }],
     });
 
-    const result = await codexImport.runCodexImport({
+    const result = await runCodexImport({
       sourceRoot,
       projectKeys: ['muninn'],
       projectLimit: 5,
@@ -573,7 +572,7 @@ test('preview does not write artifacts but run imports relative and missing atta
     );
 
     const artifactStore = path.join(tempDir, 'artifacts');
-    const preview = await codexImport.previewCodexImport({
+    const preview = await previewCodexImport({
       sourceRoot,
       projectKeys: ['muninn'],
       projectLimit: 5,
@@ -583,7 +582,7 @@ test('preview does not write artifacts but run imports relative and missing atta
     assert.equal(preview.artifactCount, 2);
     assert.equal(await artifactFileCount(artifactStore), 0);
 
-    const result = await codexImport.runCodexImport({
+    const result = await runCodexImport({
       sourceRoot,
       projectKeys: ['muninn'],
       projectLimit: 5,
@@ -653,7 +652,7 @@ test('run import records artifact copy failures per session', async () => {
       imageUrl: 'data:broken-image-url',
     });
 
-    const result = await codexImport.runCodexImport({
+    const result = await runCodexImport({
       sourceRoot,
       projectKeys: ['muninn'],
       projectLimit: 5,
@@ -723,7 +722,7 @@ test('run import only copies artifacts for selected sessions', async () => {
     });
 
     const artifactStore = path.join(tempDir, 'artifacts');
-    const result = await codexImport.runCodexImport({
+    const result = await runCodexImport({
       sourceRoot,
       projectKeys: ['muninn'],
       projectLimit: 1,
