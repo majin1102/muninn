@@ -2412,7 +2412,7 @@ svg {
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   min-height: 44px;
-  border-radius: 22px;
+  border-radius: 16px;
   padding: 0 10px 0 16px;
 }
 
@@ -2426,7 +2426,7 @@ svg {
 }
 
 .search-page-submitted .search-composer {
-  border-radius: 22px;
+  border-radius: 16px;
 }
 
 .search-page-submitted .search-composer:focus-within {
@@ -2764,14 +2764,14 @@ button.search-menu-item:hover,
 
 .search-results {
   width: min(720px, 100%);
-  margin: 24px auto 0;
+  margin: 14px auto 0;
 }
 
 .search-source-tabs {
   display: flex;
   align-items: flex-end;
   gap: 28px;
-  width: min(840px, 100%);
+  width: min(720px, 100%);
   min-height: 42px;
   margin: 8px auto 0;
   border-bottom: 1px solid #ececec;
@@ -4035,6 +4035,13 @@ button.search-menu-item:hover,
   .search-status,
   .search-error {
     width: min(780px, 100%);
+  }
+
+  .search-source-tabs,
+  .search-results,
+  .search-status,
+  .search-error {
+    width: min(720px, 100%);
   }
 
   .search-source-tabs {
