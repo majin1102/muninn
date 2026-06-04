@@ -319,10 +319,9 @@ Build request params by appending repeated `projectKey` and `sessionKey` values.
 In `packages/board/src/components/SearchPage.tsx`, render:
 
 ```tsx
-<h1 className="search-prompt-title">What do you want to know</h1>
+<h1 className="search-prompt-title">Search context across all your agents</h1>
 <textarea
   value={controls.query}
-  placeholder="Search memories"
   rows={3}
   onChange={(event) => patchControls({ query: event.target.value })}
   onInput={resizeTextarea}
@@ -411,7 +410,7 @@ http://localhost:18080/board/?demo=1#/search
 
 Expected:
 
-- Slogan reads `What do you want to know`.
+- Slogan reads `Search context across all your agents`.
 - Provider selector uses `BotMessageSquare`.
 - Search box is multi-line.
 - `Top`, `Project`, and `Session` are in the gray row.

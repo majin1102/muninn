@@ -148,13 +148,12 @@ export function SearchPage({
 
   return (
     <div className={submitted ? 'search-page search-page-submitted' : 'search-page'}>
-      {!submitted ? <h1 className="search-prompt-title">What do you want to know</h1> : null}
+      {!submitted ? <h1 className="search-prompt-title">Search context across all your agents</h1> : null}
       <form className="search-form" onSubmit={submit}>
         <div className="search-composer">
           <div className="search-input-shell">
             <textarea
               value={controls.query}
-              placeholder="Search memories"
               rows={3}
               onChange={(event) => patchControls({ query: event.target.value })}
               onInput={resizeTextarea}

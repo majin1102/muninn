@@ -33,7 +33,7 @@ Out of scope:
 The empty Search page centers a composer slightly above the page midpoint. The slogan is:
 
 ```text
-What do you want to know
+Search context across all your agents
 ```
 
 The composer mirrors the Codex interaction style:
@@ -208,7 +208,7 @@ Expansion:
 ## Acceptance Criteria
 
 - Search composer visually matches the Codex-style interaction agreed in the thread.
-- Slogan text is `What do you want to know`.
+- Slogan text is `Search context across all your agents`.
 - Provider selector uses `BotMessageSquare`.
 - Search input supports multiple lines.
 - Submit button is small and icon-only.
