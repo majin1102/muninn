@@ -2435,25 +2435,23 @@ svg {
 .pipeline-io-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-  margin-top: 3px;
+  gap: 0;
+  margin-top: 5px;
   padding-left: 16px;
 }
 
 .pipeline-io-box {
   min-width: 0;
-  min-height: 54px;
   display: grid;
-  align-content: center;
-  gap: 3px;
-  padding: 9px 12px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: #ffffff;
+  align-content: start;
+  gap: 7px;
+  padding: 2px 14px 2px 0;
 }
 
-.pipeline-io-box-failed {
-  border-color: #f0c8c8;
+.pipeline-io-box + .pipeline-io-box {
+  padding-right: 0;
+  padding-left: 16px;
+  border-left: 1px solid var(--border);
 }
 
 .pipeline-io-box span {
@@ -2471,17 +2469,13 @@ svg {
   font-weight: 400;
   line-height: 1.35;
   text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
 }
 
 .pipeline-tool-call-list {
   min-width: 0;
   display: grid;
   gap: 2px;
-}
-
-.pipeline-io-box-failed strong {
-  color: #a72525;
 }
 
 .pipeline-empty {
@@ -2728,6 +2722,14 @@ svg {
 
   .pipeline-io-grid {
     grid-template-columns: 1fr;
+  }
+
+  .pipeline-io-box + .pipeline-io-box {
+    margin-top: 8px;
+    padding-top: 10px;
+    padding-left: 0;
+    border-top: 1px solid var(--border);
+    border-left: 0;
   }
 
   .pipeline-inspector-meta {

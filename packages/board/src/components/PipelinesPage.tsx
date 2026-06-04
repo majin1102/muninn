@@ -42,7 +42,7 @@ export function PipelinesPage({ client }: PipelinesPageProps) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [taskFilter, setTaskFilter] = useState<PipelineTaskFilter>('all');
-  const [statusFilter, setStatusFilter] = useState<PipelineStatusFilter>('active');
+  const [statusFilter, setStatusFilter] = useState<PipelineStatusFilter>('all');
   const [timeFilter, setTimeFilter] = useState<PipelineTimeFilter>('last_24h');
   const [inspectedTaskId, setInspectedTaskId] = useState<string | null>(null);
 
