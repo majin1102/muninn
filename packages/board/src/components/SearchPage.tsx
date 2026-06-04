@@ -76,6 +76,7 @@ export function SearchPage({
   const [provider, setProvider] = useState(PROVIDER_OPTIONS[0]?.value ?? 'default');
   const [openMenu, setOpenMenu] = useState<SearchMenuKey | null>(null);
   const [sourceTab, setSourceTab] = useState<SearchSourceKey>('all');
+  const [composerExpanded, setComposerExpanded] = useState(false);
 
   const projectOptions = useMemo<SearchOption[]>(
     () => projects.map((project) => ({ label: project.label, value: project.projectKey })),
@@ -113,6 +114,7 @@ export function SearchPage({
       document.activeElement.blur();
     }
     setOpenMenu(null);
+    setComposerExpanded(false);
     setSubmitted(true);
     setLoading(true);
     setError(null);
@@ -140,6 +142,7 @@ export function SearchPage({
     }
     event.preventDefault();
     event.currentTarget.blur();
+    setComposerExpanded(false);
     void submit();
   }
 
@@ -162,12 +165,15 @@ export function SearchPage({
     <div className={submitted ? 'search-page search-page-submitted' : 'search-page'}>
       {!submitted ? <h1 className="search-prompt-title">Search context across all your agents</h1> : null}
       <form className="search-form" onSubmit={submit}>
-        <div className="search-composer">
+        <div className={submitted && composerExpanded ? 'search-composer search-composer-expanded' : 'search-composer'}>
           <div className="search-input-shell">
             <textarea
               value={controls.query}
               rows={3}
               onChange={(event) => patchControls({ query: event.target.value })}
+              onClick={() => setComposerExpanded(true)}
+              onFocus={() => setComposerExpanded(true)}
+              onPointerDown={() => setComposerExpanded(true)}
               onInput={resizeTextarea}
               onKeyDown={submitFromTextarea}
             />
