@@ -215,6 +215,40 @@ export interface ObservingListResponse {
   requestId: string;
 }
 
+export type PipelineTaskStatus = 'running' | 'queued' | 'failed' | 'done';
+
+export type PipelineTaskKind =
+  | 'session-observing'
+  | 'global-observing'
+  | 'wiki-compiling';
+
+export interface PipelineTask {
+  id: string;
+  kind: PipelineTaskKind;
+  title: string;
+  target: string;
+  status: PipelineTaskStatus;
+  statusText: string;
+  updatedAt: string;
+  inputSummary: string;
+  outputSummary: string;
+  inputDetails: string[];
+  outputDetails: string[];
+  trace: string[];
+  errors: string[];
+}
+
+export interface PipelineTasksResponse {
+  summary: {
+    running: number;
+    queued: number;
+    failed: number;
+    updatedAt: string | null;
+  };
+  tasks: PipelineTask[];
+  requestId: string;
+}
+
 export interface SettingsConfigResponse {
   pathLabel: string;
   content: string;
