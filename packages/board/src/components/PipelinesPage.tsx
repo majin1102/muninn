@@ -223,8 +223,7 @@ function PipelineMetricBox({ label, metric, status }: { label: string; metric: P
   return (
     <div className={`pipeline-io-box pipeline-io-box-${status}`}>
       <span>{label}</span>
-      <strong>{formatBytes(metric.bytes)}</strong>
-      <em>{formatTokens(metric.tokens)}</em>
+      <strong>{formatBytes(metric.bytes)} · {formatTokens(metric.tokens)}</strong>
     </div>
   );
 }
