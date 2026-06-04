@@ -52,3 +52,10 @@ test('sessionOptionsForProject disables sessions for all projects', async () => 
     value: 'muninn/search-design',
   }]);
 });
+
+test('normalizeSearchN keeps positive integer select values only', async () => {
+  const { normalizeSearchN } = await loadSearchState();
+  assert.equal(normalizeSearchN('5', 3), 5);
+  assert.equal(normalizeSearchN('0', 3), 3);
+  assert.equal(normalizeSearchN('abc', 3), 3);
+});

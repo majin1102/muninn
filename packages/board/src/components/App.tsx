@@ -18,6 +18,7 @@ import {
 } from '../lib/session_content_state.js';
 import { asErrorMessage } from '../lib/utils.js';
 import { PipelinesPage } from './PipelinesPage.js';
+import { SearchPage } from './SearchPage.js';
 import { SessionContentSplit } from './SessionContentSplit.js';
 import { SessionTree } from './SessionTree.js';
 import { SettingsPage } from './SettingsDialog.js';
@@ -514,6 +515,14 @@ export function App() {
                 <SettingsPage client={client} />
               ) : route.view === 'pipelines' ? (
                 <PipelinesPage client={client} />
+              ) : route.view === 'search' ? (
+                <SearchPage
+                  client={client}
+                  projects={projects}
+                  projectsLoading={projectLoading}
+                  projectError={projectError}
+                  onLoadProjects={loadProjects}
+                />
               ) : (
                 <EmptyView view={route.view} />
               )}
