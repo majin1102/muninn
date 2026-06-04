@@ -279,6 +279,36 @@ export interface PipelineTasksResponse {
   requestId: string;
 }
 
+export interface SearchResultLink {
+  kind: 'memory' | 'turn' | 'session';
+  label: string;
+  memoryId?: string;
+  sessionKey?: string;
+}
+
+export interface SearchResultItem {
+  id: string;
+  source: 'extraction' | 'conversation';
+  title?: string;
+  content: string;
+  createdAt?: string;
+  memoryId?: string;
+  links: SearchResultLink[];
+}
+
+export interface SearchSessionResult {
+  sessionKey: string;
+  sessionLabel: string;
+  projectKey: string;
+  latestUpdatedAt: string;
+  items: SearchResultItem[];
+}
+
+export interface SearchResponse {
+  results: SearchSessionResult[];
+  requestId: string;
+}
+
 export interface SettingsConfigResponse {
   pathLabel: string;
   content: string;

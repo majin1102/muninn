@@ -2,7 +2,9 @@ import type { PipelineTasksResponse } from '@muninn/types';
 import {
   demoAgents,
   demoDocuments,
+  demoObservings,
   demoPipelineTasks,
+  demoSearchResults,
   demoSessionSnapshots,
   demoSessionGroups,
   demoSessionTurns,
@@ -13,6 +15,7 @@ import {
   type DemoSessionTimelineItem,
 } from './data.js';
 import { shiftPipelineTaskTimes, summarizePipelineTasks } from '../lib/pipeline_model.js';
+import type { SearchSessionResult } from '@muninn/types';
 
 export async function getDemoSessionAgents(): Promise<DemoSessionAgentItem[]> {
   return demoAgents;
@@ -135,4 +138,30 @@ export async function getDemoDocument(memoryId: string): Promise<DemoMemoryDocum
     throw new Error(`demo memory not found: ${memoryId}`);
   }
   return document;
+}
+
+export async function getDemoSearchResults(params: {
+  query: string;
+  projectKey?: string;
+  sessionKey?: string;
+  sessionTopN: number;
+  topN: number;
+}): Promise<SearchSessionResult[]> {
+  const query = params.query.trim().toLowerCase();
+  const projectKey = params.projectKey && params.projectKey !== 'all' ? params.projectKey : undefined;
+  const sessionKey = params.sessionKey && params.sessionKey !== 'all' ? params.sessionKey : undefined;
+  return demoSearchResults
+    .filter((result) => !projectKey || result.projectKey === projectKey)
+    .filter((result) => !sessionKey || result.sessionKey === sessionKey)
+    .map((result) => ({
+      ...result,
+      items: result.items.filter((item) => (
+        !query
+        || result.sessionLabel.toLowerCase().includes(query)
+        || item.title?.toLowerCase().includes(query)
+        || item.content.toLowerCase().includes(query)
+      )).slice(0, params.sessionTopN),
+    }))
+    .filter((result) => result.items.length > 0)
+    .slice(0, params.topN);
 }

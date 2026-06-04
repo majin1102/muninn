@@ -6,6 +6,7 @@ import type {
   MemoryDocument,
   MemoryDocumentResponse,
   PipelineTasksResponse,
+  SearchResponse,
   SessionAgentsResponse,
   SessionGroupsResponse,
   SessionNode,
@@ -18,6 +19,7 @@ import type {
 import {
   getDemoDocument,
   getDemoPipelineTasks,
+  getDemoSearchResults,
   getDemoSessionAgents,
   getDemoSessionGroups,
   getDemoSessionTurns,
@@ -75,6 +77,13 @@ export type BoardClient = {
     nextOffset: number | null;
   }>;
   getDocument(memoryId: string): Promise<MemoryDocument>;
+  search(params: {
+    query: string;
+    projectKey?: string;
+    sessionKey?: string;
+    sessionTopN: number;
+    topN: number;
+  }): Promise<SearchResponse>;
   getSettingsConfig(): Promise<SettingsConfigResponse>;
   getPipelineTasks(): Promise<PipelineTasksResponse>;
   saveSettingsConfig(content: string): Promise<SettingsConfigResponse>;
@@ -224,6 +233,26 @@ export function createBoardClient(apiBase: string, usesDemoData: boolean): Board
         `/api/v1/ui/memories/${encodeURIComponent(memoryId)}/document`,
       );
       return response.document;
+    },
+    async search(params) {
+      const searchParams = new URLSearchParams({
+        query: params.query,
+        sessionTopN: String(params.sessionTopN),
+        topN: String(params.topN),
+      });
+      if (params.projectKey && params.projectKey !== 'all') {
+        searchParams.set('projectKey', params.projectKey);
+        if (params.sessionKey && params.sessionKey !== 'all') {
+          searchParams.set('sessionKey', params.sessionKey);
+        }
+      }
+      if (usesDemoData) {
+        return {
+          results: await getDemoSearchResults(params),
+          requestId: 'demo-search',
+        };
+      }
+      return fetchJson<SearchResponse>(`/api/v1/ui/search?${searchParams.toString()}`);
     },
     getSettingsConfig() {
       return fetchJson<SettingsConfigResponse>('/api/v1/ui/settings/config');

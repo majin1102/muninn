@@ -1,4 +1,4 @@
-import type { PipelineTask, ToolCall } from '@muninn/types';
+import type { PipelineTask, SearchSessionResult, ToolCall } from '@muninn/types';
 
 export type DemoSessionAgentItem = {
   agent: string;
@@ -48,6 +48,55 @@ export type DemoMemoryDocument = {
   sessionId?: string;
   updatedAt?: string;
 };
+
+export const demoSearchResults: SearchSessionResult[] = [
+  {
+    sessionKey: 'auth-refactor',
+    sessionLabel: 'auth-refactor',
+    projectKey: 'auth-refactor',
+    latestUpdatedAt: '2026-06-01T12:01:00.000Z',
+    items: [
+      {
+        id: 'demo-search-auth-conversation-1',
+        source: 'conversation',
+        title: 'Board Search contract',
+        content: 'The team decided the Search page should behave like a search engine and group results by session, with Project and Session controls shaping the request scope.',
+        createdAt: '2026-06-01T12:01:00.000Z',
+        memoryId: 'turn:1005',
+        links: [{ kind: 'turn', label: 'Open turn', memoryId: 'turn:1005', sessionKey: 'auth-refactor' }],
+      },
+      {
+        id: 'demo-search-auth-extraction-1',
+        source: 'extraction',
+        title: 'Request-level scope',
+        content: 'Project and Session filters are request-level search scope, not client-side filtering after a broad result set has already been returned.',
+        createdAt: '2026-06-01T12:05:00.000Z',
+        memoryId: 'extraction:demo-auth-search-scope',
+        links: [{ kind: 'memory', label: 'Open memory', memoryId: 'extraction:demo-auth-search-scope' }],
+      },
+    ],
+  },
+  {
+    sessionKey: 'board-mvp',
+    sessionLabel: 'board-mvp',
+    projectKey: 'board-mvp',
+    latestUpdatedAt: '2026-06-01T07:15:00.000Z',
+    items: [{
+      id: 'demo-search-board-long-1',
+      source: 'conversation',
+      title: 'Expandable result preview',
+      content: [
+        'Muninn Board Search uses a fixed-height preview for each hit item.',
+        'Long evidence remains available through expand and collapse controls.',
+        'This keeps session-level results scannable while preserving enough raw context for manual judgment.',
+        'The first version does not generate answers or summaries at the top of the page.',
+      ].join('\n'),
+      createdAt: '2026-06-01T07:15:00.000Z',
+      memoryId: 'turn:1010',
+      links: [{ kind: 'turn', label: 'Open turn', memoryId: 'turn:1010', sessionKey: 'board-mvp' }],
+    }],
+  },
+];
 
 export const demoAgents: DemoSessionAgentItem[] = [
   { agent: 'openclaw', latestUpdatedAt: '2026-06-01T12:01:00.000Z' },
