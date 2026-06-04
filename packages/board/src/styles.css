@@ -2478,7 +2478,13 @@ svg {
 .pipeline-metric-value {
   display: inline-flex;
   align-items: baseline;
-  gap: 12px;
+  justify-content: center;
+  gap: 14px;
+  text-align: center;
+}
+
+.pipeline-metric-divider {
+  color: #c8c9cc;
 }
 
 .pipeline-tool-call-list {

@@ -225,6 +225,7 @@ function PipelineMetricBox({ label, metric, status }: { label: string; metric: P
       <span>{label}</span>
       <strong className="pipeline-metric-value">
         <span>{formatBytes(metric.bytes)}</span>
+        <span className="pipeline-metric-divider">|</span>
         <span>{formatTokens(metric.tokens)}</span>
       </strong>
     </div>
@@ -232,12 +233,13 @@ function PipelineMetricBox({ label, metric, status }: { label: string; metric: P
 }
 
 function PipelineToolCallsBox({ calls, status }: { calls: PipelineTask['toolCalls']; status: PipelineTaskStatus }) {
+  const visibleCalls = calls.slice(0, 2);
   return (
     <div className={`pipeline-io-box pipeline-io-box-${status}`}>
       <span>Tool calls</span>
-      {calls.length > 0 ? (
+      {visibleCalls.length > 0 ? (
         <div className="pipeline-tool-call-list">
-          {calls.map((call) => (
+          {visibleCalls.map((call) => (
             <strong key={call.name}>{call.name} x {call.count}</strong>
           ))}
         </div>
