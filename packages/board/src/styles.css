@@ -2317,6 +2317,7 @@ svg {
 
 .pipeline-card-selected {
   border-color: #cfd6dd;
+  background: #f8f9fa;
   box-shadow: none;
 }
 
