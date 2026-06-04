@@ -2195,7 +2195,7 @@ svg {
   gap: 12px;
   color: var(--muted-foreground);
   font-size: 13px;
-  font-weight: 500;
+  font-weight: 400;
   white-space: nowrap;
 }
 
