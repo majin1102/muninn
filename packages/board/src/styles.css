@@ -2607,7 +2607,53 @@ svg {
   }
 
   .pipelines-toolbar {
-    grid-template-columns: 1fr 112px;
+    grid-template-columns: minmax(160px, 1fr) 92px 108px 84px;
+    gap: 6px;
+  }
+
+  .pipeline-select select {
+    padding-right: 24px;
+    padding-left: 9px;
+  }
+
+  .pipeline-select svg {
+    right: 8px;
+  }
+
+  .pipeline-card-title {
+    align-items: flex-start;
+  }
+
+  .pipeline-card-title span {
+    white-space: normal;
+  }
+
+  .pipeline-status-line {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    column-gap: 8px;
+    row-gap: 2px;
+    align-items: start;
+  }
+
+  .pipeline-status-line span + span::before {
+    content: "";
+    margin: 0;
+  }
+
+  .pipeline-status-line span:nth-child(3) {
+    grid-column: 2;
+    color: #8f9195;
+    font-size: 12px;
+  }
+
+  .pipeline-io-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .pipeline-io-box strong {
+    white-space: normal;
+    text-overflow: clip;
   }
 
   .pipeline-inspector {
@@ -2624,20 +2670,10 @@ svg {
     padding: 14px;
   }
 
-  .pipeline-card-title,
-  .pipeline-status-line {
+  .pipeline-card-title {
     align-items: flex-start;
     flex-direction: column;
     gap: 4px;
-  }
-
-  .pipeline-status-line span + span::before {
-    content: "";
-    margin: 0;
-  }
-
-  .pipeline-io-grid {
-    grid-template-columns: 1fr;
   }
 }
 
