@@ -242,9 +242,7 @@ function PipelineToolCallsBox({ calls, status }: { calls: PipelineTask['toolCall
             <span key={call.name}>{call.name} x {call.count}</span>
           ))}
         </strong>
-      ) : (
-        <strong>None yet</strong>
-      )}
+      ) : null}
     </div>
   );
 }
@@ -314,13 +312,13 @@ function kindLabel(kind: PipelineTaskKind): string {
 function statusLabel(status: PipelineTaskStatus): string {
   switch (status) {
     case 'running':
-      return 'running';
+      return 'Running';
     case 'queued':
-      return 'queued';
+      return 'Queued';
     case 'failed':
-      return 'failed';
+      return 'Failed';
     case 'done':
-      return 'done';
+      return 'Done';
   }
 }
 
@@ -355,16 +353,11 @@ function formatNumber(value: number): string {
 }
 
 function pipelineLifecycleSummary(task: PipelineTask): string {
-  if (task.status === 'queued') {
-    return `Queued at ${formatTime(task.updatedAt)} · waiting for ${formatDuration(task.updatedAt, null)}`;
+  const summary = `Duration ${durationForTask(task)}`;
+  if (task.status === 'done' && task.toolCalls.length > 0) {
+    return `${summary} · Tool calls: ${toolCallItems(task.toolCalls).join(' | ')}`;
   }
-  if (task.status === 'running') {
-    return `Started at ${formatTime(task.startedAt)} · running for ${formatDuration(task.startedAt, null)}`;
-  }
-  if (task.status === 'failed') {
-    return `Started at ${formatTime(task.startedAt)} · failed at ${formatTime(task.endedAt ?? task.updatedAt)} · duration ${formatDuration(task.startedAt, task.endedAt ?? task.updatedAt)}`;
-  }
-  return `Started at ${formatTime(task.startedAt)} · ended at ${formatTime(task.endedAt ?? task.updatedAt)} · duration ${formatDuration(task.startedAt, task.endedAt ?? task.updatedAt)}`;
+  return summary;
 }
 
 function pipelineLifecycleDetails(task: PipelineTask): Array<{ label: string; value: string }> {
@@ -372,31 +365,21 @@ function pipelineLifecycleDetails(task: PipelineTask): Array<{ label: string; va
   const endValue = task.status === 'running' || task.status === 'queued'
     ? 'In progress'
     : formatDateTime(task.endedAt ?? task.updatedAt);
-  const durationEnd = task.status === 'running' || task.status === 'queued'
-    ? null
-    : task.endedAt ?? task.updatedAt;
 
   return [
     { label: task.status === 'queued' ? 'Queued' : 'Started', value: formatDateTime(task.status === 'queued' ? task.updatedAt : task.startedAt) },
     { label: endLabel, value: endValue },
-    { label: 'Duration', value: formatDuration(task.status === 'queued' ? task.updatedAt : task.startedAt, durationEnd) },
+    { label: 'Duration', value: durationForTask(task) },
     { label: 'Updated', value: formatDateTime(task.updatedAt) },
   ];
 }
 
-function formatTime(value: string | undefined | null): string {
-  if (!value) {
-    return 'unknown';
-  }
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return 'unknown';
-  }
-  return new Intl.DateTimeFormat(undefined, {
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  }).format(date);
+function durationForTask(task: PipelineTask): string {
+  const start = task.status === 'queued' ? task.updatedAt : task.startedAt;
+  const end = task.status === 'running' || task.status === 'queued'
+    ? null
+    : task.endedAt ?? task.updatedAt;
+  return formatDuration(start, end);
 }
 
 function formatDateTime(value: string | undefined | null): string {
