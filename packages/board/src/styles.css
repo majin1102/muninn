@@ -2409,12 +2409,6 @@ svg {
   text-align: right;
 }
 
-.pipeline-status-line span + span::before {
-  content: "·";
-  margin-right: 7px;
-  color: #8f9195;
-}
-
 .pipeline-status-text {
   white-space: nowrap;
   font-weight: 600;
@@ -2728,16 +2722,6 @@ svg {
     align-items: flex-start;
     flex-direction: column;
     gap: 2px;
-  }
-
-  .pipeline-status-line span + span::before {
-    content: "";
-    margin: 0;
-  }
-
-  .pipeline-status-line span:nth-child(2) {
-    color: #8f9195;
-    font-size: 12px;
   }
 
   .pipeline-io-grid {

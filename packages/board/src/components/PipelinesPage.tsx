@@ -100,23 +100,23 @@ export function PipelinesPage({ client }: PipelinesPageProps) {
             <Circle aria-hidden="true" />
             <input type="search" placeholder="Search memories" readOnly />
           </label>
-          <PipelineSelect
-            label="Task"
+          <PipelineSelect<PipelineTaskFilter>
+            label="Type"
             value={taskFilter}
             options={TASK_FILTERS}
-            onChange={(value) => setTaskFilter(value as PipelineTaskFilter)}
+            onChange={setTaskFilter}
           />
-          <PipelineSelect
+          <PipelineSelect<PipelineStatusFilter>
             label="Status"
             value={statusFilter}
             options={STATUS_FILTERS}
-            onChange={(value) => setStatusFilter(value as PipelineStatusFilter)}
+            onChange={setStatusFilter}
           />
-          <PipelineSelect
+          <PipelineSelect<PipelineTimeFilter>
             label="Time"
             value={timeFilter}
             options={TIME_FILTERS}
-            onChange={(value) => setTimeFilter(value as PipelineTimeFilter)}
+            onChange={setTimeFilter}
           />
         </div>
 
@@ -169,12 +169,12 @@ function PipelineSelect<T extends string>(props: {
   label: string;
   value: T;
   options: Array<{ value: T; label: string }>;
-  onChange(value: string): void;
+  onChange(value: T): void;
 }) {
   return (
     <label className="pipeline-select">
       <span className="sr-only">{props.label}</span>
-      <select value={props.value} onChange={(event) => props.onChange(event.target.value)}>
+      <select value={props.value} onChange={(event) => props.onChange(event.target.value as T)}>
         {props.options.map((option) => (
           <option key={option.value} value={option.value}>{option.label}</option>
         ))}
