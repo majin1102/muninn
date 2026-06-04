@@ -86,7 +86,7 @@ export const demoPipelineTasks: DemoPipelineTask[] = [
       'commit output: pending',
       'trace ref: observer-run-42',
     ],
-    errors: ['No errors for this task.'],
+    errors: [],
   },
   {
     id: 'pipeline:session:codex-import-timeline',
@@ -111,7 +111,7 @@ export const demoPipelineTasks: DemoPipelineTask[] = [
       'extracted observations: done',
       'queued global work: done',
     ],
-    errors: ['No errors for this task.'],
+    errors: [],
   },
   {
     id: 'pipeline:wiki:memory-architecture',
@@ -129,7 +129,7 @@ export const demoPipelineTasks: DemoPipelineTask[] = [
     inputDetails: ['Memory architecture observation tree', 'Related entity summaries'],
     outputDetails: ['Wiki page draft', 'Pending source observation readiness'],
     trace: ['waiting for global observations'],
-    errors: ['No errors for this task.'],
+    errors: [],
   },
   {
     id: 'pipeline:global:prompt-design',
@@ -144,7 +144,7 @@ export const demoPipelineTasks: DemoPipelineTask[] = [
     inputDetails: ['5 session-level observations', 'Entity key: Muninn prompt design', 'Below observer threshold'],
     outputDetails: ['Waiting to produce entity observation draft'],
     trace: ['waiting for more session observations'],
-    errors: ['No errors for this task.'],
+    errors: [],
   },
   {
     id: 'pipeline:global:board-settings',
