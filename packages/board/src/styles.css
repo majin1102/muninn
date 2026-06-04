@@ -2308,7 +2308,7 @@ svg {
 
 .pipeline-card {
   display: grid;
-  gap: 9px;
+  gap: 6px;
   padding: 14px 16px 15px;
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -2436,6 +2436,7 @@ svg {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
+  margin-top: 3px;
   padding-left: 16px;
 }
 
