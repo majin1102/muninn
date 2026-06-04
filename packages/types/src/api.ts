@@ -222,6 +222,16 @@ export type PipelineTaskKind =
   | 'global-observing'
   | 'wiki-compiling';
 
+export interface PipelineDataMetric {
+  bytes: number;
+  tokens: number;
+}
+
+export interface PipelineToolCallSummary {
+  name: string;
+  count: number;
+}
+
 export interface PipelineTask {
   id: string;
   kind: PipelineTaskKind;
@@ -232,8 +242,9 @@ export interface PipelineTask {
   startedAt?: string;
   endedAt?: string;
   updatedAt: string;
-  inputSummary: string;
-  outputSummary: string;
+  input: PipelineDataMetric;
+  output?: PipelineDataMetric;
+  toolCalls: PipelineToolCallSummary[];
   inputDetails: string[];
   outputDetails: string[];
   trace: string[];

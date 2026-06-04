@@ -207,19 +207,42 @@ function PipelineCard({ task, selected, onInspect }: {
         <span>updated {relativeTime(task.updatedAt)}</span>
       </p>
       <div className="pipeline-io-grid">
-        <PipelineIoBox label="Input" value={task.inputSummary} status={task.status} />
-        <PipelineIoBox label="Output" value={task.outputSummary} status={task.status} />
+        <PipelineMetricBox label="Input" metric={task.input} status={task.status} />
+        {task.output ? (
+          <PipelineMetricBox label="Output" metric={task.output} status={task.status} />
+        ) : (
+          <PipelineToolCallsBox calls={task.toolCalls} status={task.status} />
+        )}
       </div>
       <p className="pipeline-lifecycle-line">{pipelineLifecycleSummary(task)}</p>
     </article>
   );
 }
 
-function PipelineIoBox({ label, value, status }: { label: string; value: string; status: PipelineTaskStatus }) {
+function PipelineMetricBox({ label, metric, status }: { label: string; metric: PipelineTask['input']; status: PipelineTaskStatus }) {
   return (
     <div className={`pipeline-io-box pipeline-io-box-${status}`}>
       <span>{label}</span>
-      <strong>{value}</strong>
+      <strong>{formatBytes(metric.bytes)}</strong>
+      <em>{formatTokens(metric.tokens)}</em>
+    </div>
+  );
+}
+
+function PipelineToolCallsBox({ calls, status }: { calls: PipelineTask['toolCalls']; status: PipelineTaskStatus }) {
+  const rows = groupedToolCalls(calls);
+  return (
+    <div className={`pipeline-io-box pipeline-io-box-${status}`}>
+      <span>Tool calls</span>
+      {rows.length > 0 ? (
+        <div className="pipeline-tool-call-list">
+          {rows.map((row) => (
+            <strong key={row}>{row}</strong>
+          ))}
+        </div>
+      ) : (
+        <strong>None yet</strong>
+      )}
     </div>
   );
 }
@@ -245,8 +268,11 @@ function PipelineInspector({ task, onClose }: { task: PipelineTask; onClose(): v
           </div>
         ))}
       </dl>
-      <PipelineInspectorSection title="Input" items={task.inputDetails} fallback={task.inputSummary} />
-      <PipelineInspectorSection title="Output" items={task.outputDetails} fallback={task.outputSummary} />
+      <PipelineInspectorSection title="Input" items={task.inputDetails} fallback={`${formatBytes(task.input.bytes)} · ${formatTokens(task.input.tokens)}`} />
+      <PipelineInspectorSection title="Tool calls" items={toolCallItems(task.toolCalls)} fallback="None yet" tone={task.toolCalls.length > 0 ? 'default' : 'muted'} />
+      {task.output ? (
+        <PipelineInspectorSection title="Output" items={task.outputDetails} fallback={`${formatBytes(task.output.bytes)} · ${formatTokens(task.output.tokens)}`} />
+      ) : null}
       <PipelineInspectorSection title="Trace" items={task.trace} fallback={task.statusText} />
       <PipelineInspectorSection title="Errors" items={task.errors} fallback="No errors" tone={task.errors.length > 0 ? 'error' : 'muted'} />
     </aside>
@@ -298,6 +324,41 @@ function statusLabel(status: PipelineTaskStatus): string {
 
 function capitalizeSentence(value: string): string {
   return value.length > 0 ? `${value[0]!.toUpperCase()}${value.slice(1)}` : value;
+}
+
+function groupedToolCalls(calls: PipelineTask['toolCalls']): string[] {
+  const labels = calls.map((call) => `${call.name} x ${call.count}`);
+  const rows: string[] = [];
+  for (let index = 0; index < labels.length; index += 2) {
+    rows.push(labels.slice(index, index + 2).join(' · '));
+  }
+  return rows;
+}
+
+function toolCallItems(calls: PipelineTask['toolCalls']): string[] {
+  return calls.map((call) => `${call.name} x ${call.count}`);
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) {
+    return `${bytes} B`;
+  }
+  const kb = bytes / 1024;
+  if (kb < 1024) {
+    return `${formatNumber(kb)} KB`;
+  }
+  return `${formatNumber(kb / 1024)} MB`;
+}
+
+function formatTokens(tokens: number): string {
+  if (tokens < 1000) {
+    return `${tokens} tokens`;
+  }
+  return `${formatNumber(tokens / 1000)}K tokens`;
+}
+
+function formatNumber(value: number): string {
+  return value >= 10 ? value.toFixed(0) : value.toFixed(1);
 }
 
 function pipelineLifecycleSummary(task: PipelineTask): string {

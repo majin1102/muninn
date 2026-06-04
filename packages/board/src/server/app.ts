@@ -562,8 +562,11 @@ function loadPipelineTasksSnapshot(): PipelineTask[] {
       statusText: 'generating observation draft from recent session work',
       startedAt,
       updatedAt,
-      inputSummary: 'Recent session observations',
-      outputSummary: 'Global observation draft in progress',
+      input: { bytes: 42_600, tokens: 18_400 },
+      toolCalls: [
+        { name: 'get_observation', count: 2 },
+        { name: 'get_extraction', count: 3 },
+      ],
       inputDetails: [
         'Collected session observations',
         'Recent turn summaries',
@@ -589,8 +592,12 @@ function loadPipelineTasksSnapshot(): PipelineTask[] {
       startedAt: doneStartedAt,
       endedAt: queuedAt,
       updatedAt: queuedAt,
-      inputSummary: 'Recent turn window',
-      outputSummary: 'Session observations',
+      input: { bytes: 238_000, tokens: 92_400 },
+      output: { bytes: 12_400, tokens: 4_800 },
+      toolCalls: [
+        { name: 'get_turns', count: 5 },
+        { name: 'write_observation', count: 12 },
+      ],
       inputDetails: [
         'Captured turns',
         'Tool calls and artifacts',
@@ -616,8 +623,11 @@ function loadPipelineTasksSnapshot(): PipelineTask[] {
       startedAt: failedStartedAt,
       endedAt: failedAt,
       updatedAt: failedAt,
-      inputSummary: 'Session observations',
-      outputSummary: 'Blocked by parser validation',
+      input: { bytes: 19_600, tokens: 8_200 },
+      toolCalls: [
+        { name: 'get_observation', count: 2 },
+        { name: 'validate_entity', count: 1 },
+      ],
       inputDetails: [
         'Board settings observations',
         'Parser schema constraints',
