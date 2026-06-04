@@ -17,6 +17,7 @@ import type {
   MemoryDocumentResponse,
   MemoryReference,
   PipelineTasksResponse,
+  SearchResponse,
   SessionAgentsResponse,
   SessionGroupsResponse,
   SessionNode,
@@ -29,6 +30,7 @@ import type {
 } from '@muninn/types';
 import { previewCodexImport, runCodexImport } from './codex_import.js';
 import { renderRenderedMemoryDocument } from './render.js';
+import { searchBoardMemory } from './search.js';
 import { sessionDisplayTitle } from './session_labels.js';
 
 const AGENT_DEFAULT_SESSION_PREFIX = '__agent_default__:';
@@ -842,6 +844,47 @@ boardApp.get('/api/v1/ui/memories/:memoryId/document', async (c) => {
   return c.json(response);
 });
 
+boardApp.get('/api/v1/ui/search', async (c) => {
+  const query = normalizeText(c.req.query('query'));
+  if (!query) {
+    return c.json(errorResponse('invalidRequest', 'query is required'), 400);
+  }
+
+  const rawProjectKey = normalizeText(c.req.query('projectKey'));
+  const projectKey = rawProjectKey && rawProjectKey !== 'all' ? rawProjectKey : undefined;
+  const rawSessionKey = normalizeText(c.req.query('sessionKey'));
+  const sessionKey = rawSessionKey && rawSessionKey !== 'all' ? rawSessionKey : undefined;
+  if (sessionKey && !projectKey) {
+    return c.json(errorResponse('invalidRequest', 'sessionKey requires a projectKey'), 400);
+  }
+
+  const sessionTopN = parsePositiveInteger(c.req.query('sessionTopN'), 3);
+  if (typeof sessionTopN === 'string') {
+    return c.json(errorResponse('invalidRequest', `sessionTopN ${sessionTopN}`), 400);
+  }
+  const topN = parsePositiveInteger(c.req.query('topN'), 20);
+  if (typeof topN === 'string') {
+    return c.json(errorResponse('invalidRequest', `topN ${topN}`), 400);
+  }
+
+  const results = await searchBoardMemory({
+    query,
+    projectKey,
+    sessionKey,
+    sessionTopN,
+    topN,
+  }, {
+    listTurns: turns.list,
+    recall: memories.recall,
+  });
+
+  const response: SearchResponse = {
+    results,
+    requestId: generateRequestId(),
+  };
+  return c.json(response);
+});
+
 boardApp.get(SESSION_SNAPSHOTS_ROUTE, async (c) => {
   console.log('[BOARD_UI_SESSION_SNAPSHOTS]');
 
@@ -1016,4 +1059,12 @@ function parseOptionalInteger(value: string | undefined): number | undefined {
   }
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function parsePositiveInteger(value: string | undefined, fallback: number): number | string {
+  if (value === undefined) {
+    return fallback;
+  }
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : 'must be a positive integer';
 }

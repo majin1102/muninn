@@ -914,6 +914,44 @@ test('ui session endpoints group by agent/session and return rendered turn docum
   ]);
 });
 
+test('board search groups conversation results by session and validates scope', async (t) => {
+  const { dir, homeDir, configPath } = await makeDatasetUri();
+  t.after(async () => {
+    await shutdownCoreForTests();
+    await rm(dir, { recursive: true, force: true });
+  });
+  process.env.MUNINN_HOME = homeDir;
+  await writeMuninnConfig(configPath, {
+    storageUri: defaultStorageTarget(homeDir).uri,
+    observerProvider: undefined,
+  });
+
+  await captureTurn(makeTurnContent({
+    sessionId: 'muninn/search-alpha',
+    agent: 'codex_cli',
+    prompt: 'board search should group by session',
+    response: 'Search uses Session Top N and Top N controls.',
+  }));
+  await captureTurn(makeTurnContent({
+    sessionId: 'lance/search-beta',
+    agent: 'codex_cli',
+    prompt: 'board search should also find this',
+    response: 'This result belongs to a different project.',
+  }));
+
+  const response = await app.request('/api/v1/ui/search?query=board%20search&projectKey=muninn&sessionTopN=1&topN=10');
+  assert.equal(response.status, 200);
+  const body = await json(response);
+  assert.equal(body.results.length, 1);
+  assert.equal(body.results[0].projectKey, 'muninn');
+  assert.equal(body.results[0].sessionKey, 'muninn/search-alpha');
+  assert.equal(body.results[0].items.length, 1);
+  assert.equal(body.results[0].items[0].source, 'conversation');
+
+  const invalidScope = await app.request('/api/v1/ui/search?query=board&sessionKey=muninn%2Fsearch-alpha');
+  assert.equal(invalidScope.status, 400);
+});
+
 test('ui session endpoints include native rows with indexed ownership fields', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(async () => {
