@@ -286,27 +286,27 @@ function kindLabel(kind: PipelineTaskKind): string {
 function statusLabel(status: PipelineTaskStatus): string {
   switch (status) {
     case 'running':
-      return 'running';
+      return 'Running';
     case 'queued':
-      return 'queued';
+      return 'Queued';
     case 'failed':
-      return 'failed';
+      return 'Failed';
     case 'done':
-      return 'done';
+      return 'Done';
   }
 }
 
 function pipelineLifecycleSummary(task: PipelineTask): string {
   if (task.status === 'queued') {
-    return `queued ${formatTime(task.updatedAt)} · waiting for ${formatDuration(task.updatedAt, null)}`;
+    return `Queued at ${formatTime(task.updatedAt)} · waiting for ${formatDuration(task.updatedAt, null)}`;
   }
   if (task.status === 'running') {
-    return `started ${formatTime(task.startedAt)} · running for ${formatDuration(task.startedAt, null)}`;
+    return `Started at ${formatTime(task.startedAt)} · running for ${formatDuration(task.startedAt, null)}`;
   }
   if (task.status === 'failed') {
-    return `started ${formatTime(task.startedAt)} · failed ${formatTime(task.endedAt ?? task.updatedAt)} · duration ${formatDuration(task.startedAt, task.endedAt ?? task.updatedAt)}`;
+    return `Started at ${formatTime(task.startedAt)} · failed at ${formatTime(task.endedAt ?? task.updatedAt)} · duration ${formatDuration(task.startedAt, task.endedAt ?? task.updatedAt)}`;
   }
-  return `started ${formatTime(task.startedAt)} · ended ${formatTime(task.endedAt ?? task.updatedAt)} · duration ${formatDuration(task.startedAt, task.endedAt ?? task.updatedAt)}`;
+  return `Started at ${formatTime(task.startedAt)} · ended at ${formatTime(task.endedAt ?? task.updatedAt)} · duration ${formatDuration(task.startedAt, task.endedAt ?? task.updatedAt)}`;
 }
 
 function pipelineLifecycleDetails(task: PipelineTask): Array<{ label: string; value: string }> {
