@@ -23,7 +23,7 @@ import {
 } from '../demo/provider.js';
 import { trimTrailingSlash } from './utils.js';
 
-export type PrimaryView = 'search' | 'wiki' | 'session' | 'settings';
+export type PrimaryView = 'search' | 'wiki' | 'session' | 'pipelines' | 'settings';
 
 export type ProjectTurnNode = TurnPreview & {
   agent: string;

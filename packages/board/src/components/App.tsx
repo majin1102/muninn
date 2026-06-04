@@ -1,6 +1,6 @@
 import type { MemoryDocument } from '@muninn/types';
 import { BookOpen, ChevronLeft, ChevronRight, FileText, Search, Settings } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type PointerEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType, type CSSProperties, type MouseEvent as ReactMouseEvent, type PointerEvent } from 'react';
 import logo from '../assets/muninn-raven-logo.png';
 import {
   createBoardClient,
@@ -13,6 +13,7 @@ import {
 } from '../lib/api.js';
 import { asErrorMessage } from '../lib/utils.js';
 import { ChatView } from './ChatView.js';
+import { PipelinesPage } from './PipelinesPage.js';
 import { SessionTree } from './SessionTree.js';
 import { SettingsPage } from './SettingsDialog.js';
 
@@ -21,10 +22,11 @@ type RouteState = {
   memoryId: string | null;
 };
 
-const navItems: Array<{ view: PrimaryView; label: string; icon: typeof Search }> = [
+const navItems: Array<{ view: PrimaryView; label: string; icon: ComponentType }> = [
   { view: 'search', label: 'Search', icon: Search },
   { view: 'wiki', label: 'LLM Wiki', icon: BookOpen },
   { view: 'session', label: 'Session', icon: FileText },
+  { view: 'pipelines', label: 'Pipelines', icon: PipelineIcon },
   { view: 'settings', label: 'Settings', icon: Settings },
 ];
 
@@ -342,6 +344,8 @@ export function App() {
             <section className={route.view === 'settings' ? 'single-pane settings-pane' : 'single-pane'}>
               {route.view === 'settings' ? (
                 <SettingsPage client={client} />
+              ) : route.view === 'pipelines' ? (
+                <PipelinesPage client={client} />
               ) : (
                 <EmptyView view={route.view} />
               )}
@@ -398,6 +402,16 @@ function GitHubMark() {
   );
 }
 
+function PipelineIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2">
+      <path d="M7 6v12" />
+      <path d="M13 6v12" />
+      <path d="m18 9 3 3-3 3" />
+    </svg>
+  );
+}
+
 function releaseUrl(version: string): string {
   return `${REPOSITORY_URL}/releases/tag/${encodeURIComponent(releaseTag(version))}`;
 }
@@ -429,7 +443,7 @@ function parseRoute(hash: string): RouteState {
   const parts = value.split('/').filter(Boolean);
   const view = parts[0] as PrimaryView | undefined;
 
-  if (view === 'search' || view === 'wiki' || view === 'settings') {
+  if (view === 'search' || view === 'wiki' || view === 'pipelines' || view === 'settings') {
     return { view, memoryId: null };
   }
 
