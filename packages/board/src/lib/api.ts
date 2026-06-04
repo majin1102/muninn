@@ -79,8 +79,8 @@ export type BoardClient = {
   getDocument(memoryId: string): Promise<MemoryDocument>;
   search(params: {
     query: string;
-    projectKey?: string;
-    sessionKey?: string;
+    projectKeys?: string[];
+    sessionKeys?: string[];
     sessionTopN: number;
     topN: number;
   }): Promise<SearchResponse>;
@@ -240,11 +240,11 @@ export function createBoardClient(apiBase: string, usesDemoData: boolean): Board
         sessionTopN: String(params.sessionTopN),
         topN: String(params.topN),
       });
-      if (params.projectKey && params.projectKey !== 'all') {
-        searchParams.set('projectKey', params.projectKey);
-        if (params.sessionKey && params.sessionKey !== 'all') {
-          searchParams.set('sessionKey', params.sessionKey);
-        }
+      for (const projectKey of params.projectKeys ?? []) {
+        searchParams.append('projectKey', projectKey);
+      }
+      for (const sessionKey of params.sessionKeys ?? []) {
+        searchParams.append('sessionKey', sessionKey);
       }
       if (usesDemoData) {
         return {

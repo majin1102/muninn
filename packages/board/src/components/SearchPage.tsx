@@ -1,6 +1,21 @@
 import type { SearchSessionResult } from '@muninn/types';
-import { ChevronDown, ChevronUp, Search } from 'lucide-react';
-import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import {
+  ArrowUp,
+  Bot,
+  BotMessageSquare,
+  Check,
+  ChevronDown,
+  ChevronUp,
+  File,
+  FileText,
+  Folder,
+  Image,
+  Plus,
+  SlidersHorizontal,
+  type LucideIcon,
+} from 'lucide-react';
+import { useEffect, useMemo, useState, type FormEvent, type KeyboardEvent, type ReactNode } from 'react';
+import { logoForAgent, type AgentLogo } from '../lib/agent_logo.js';
 import type { BoardClient, ProjectNode } from '../lib/api.js';
 import {
   DEFAULT_SESSION_TOP_N,
@@ -8,7 +23,7 @@ import {
   SEARCH_ALL_VALUE,
   defaultSearchControls,
   normalizeSearchN,
-  sessionOptionsForProject,
+  sessionOptionsForProjects,
   type SearchControlsState,
 } from '../lib/search_state.js';
 import { asErrorMessage } from '../lib/utils.js';
@@ -21,7 +36,22 @@ type SearchPageProps = {
   onLoadProjects: () => void;
 };
 
-const N_OPTIONS = [1, 3, 5, 10, 20];
+const PROVIDER_OPTIONS = [
+  { label: 'Default', value: 'default' },
+  { label: 'OpenAI', value: 'openai' },
+  { label: 'Local', value: 'local' },
+];
+const ADD_OPTIONS = [
+  { label: 'Image', value: 'image', icon: Image },
+  { label: 'File', value: 'file', icon: File },
+  { label: 'Agent', value: 'agent', icon: Bot },
+];
+type SearchMenuKey = 'add' | 'provider' | 'project' | 'session' | 'topN';
+type SearchOption = {
+  label: string;
+  value: string;
+  agent?: string;
+};
 
 export function SearchPage({
   client,
@@ -36,10 +66,16 @@ export function SearchPage({
   const [error, setError] = useState<string | null>(null);
   const [results, setResults] = useState<SearchSessionResult[]>([]);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const [provider, setProvider] = useState(PROVIDER_OPTIONS[0]?.value ?? 'default');
+  const [openMenu, setOpenMenu] = useState<SearchMenuKey | null>(null);
 
+  const projectOptions = useMemo<SearchOption[]>(
+    () => projects.map((project) => ({ label: project.label, value: project.projectKey })),
+    [projects],
+  );
   const sessionOptions = useMemo(
-    () => sessionOptionsForProject(projects, controls.projectKey),
-    [controls.projectKey, projects],
+    () => sessionOptionsForProjects(projects, controls.projectKeys),
+    [controls.projectKeys, projects],
   );
 
   useEffect(() => {
@@ -55,6 +91,10 @@ export function SearchPage({
     }));
   }
 
+  function toggleMenu(key: SearchMenuKey) {
+    setOpenMenu((current) => (current === key ? null : key));
+  }
+
   async function submit(event?: FormEvent<HTMLFormElement>) {
     event?.preventDefault();
     const query = controls.query.trim();
@@ -68,8 +108,8 @@ export function SearchPage({
     try {
       const response = await client.search({
         query,
-        projectKey: controls.projectKey,
-        sessionKey: controls.sessionKey,
+        projectKeys: controls.projectKeys,
+        sessionKeys: controls.sessionKeys,
         sessionTopN: controls.sessionTopN,
         topN: controls.topN,
       });
@@ -82,54 +122,108 @@ export function SearchPage({
     }
   }
 
+  function submitFromTextarea(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) {
+      return;
+    }
+    event.preventDefault();
+    void submit();
+  }
+
+  function resizeTextarea(event: FormEvent<HTMLTextAreaElement>) {
+    const target = event.currentTarget;
+    target.style.height = 'auto';
+    target.style.height = `${Math.min(target.scrollHeight, 188)}px`;
+  }
+
+  function patchProjectKeys(projectKeys: string[]) {
+    const allowedSessions = new Set(sessionOptionsForProjects(projects, projectKeys).map((option) => option.value));
+    setControls((current) => ({
+      ...current,
+      projectKeys,
+      sessionKeys: current.sessionKeys.filter((sessionKey) => allowedSessions.has(sessionKey)),
+    }));
+  }
+
   return (
     <div className={submitted ? 'search-page search-page-submitted' : 'search-page'}>
+      {!submitted ? <h1 className="search-prompt-title">What do you want to know</h1> : null}
       <form className="search-form" onSubmit={submit}>
-        <label className="search-input-shell">
-          <Search />
-          <input
-            type="search"
-            value={controls.query}
-            placeholder="Search memories"
-            onChange={(event) => patchControls({ query: event.target.value })}
-          />
-          <button type="submit" disabled={!controls.query.trim() || loading}>
-            Search
-          </button>
-        </label>
-        <div className="search-controls" aria-label="Search controls">
-          <SearchSelect
-            label="Project"
-            value={controls.projectKey}
-            disabled={projectsLoading}
-            onChange={(value) => patchControls({ projectKey: value, sessionKey: SEARCH_ALL_VALUE })}
-            options={[
-              { label: 'All', value: SEARCH_ALL_VALUE },
-              ...projects.map((project) => ({ label: project.label, value: project.projectKey })),
-            ]}
-          />
-          <SearchSelect
-            label="Session"
-            value={controls.sessionKey}
-            disabled={controls.projectKey === SEARCH_ALL_VALUE}
-            onChange={(value) => patchControls({ sessionKey: value })}
-            options={[
-              { label: 'All', value: SEARCH_ALL_VALUE },
-              ...sessionOptions,
-            ]}
-          />
-          <SearchSelect
-            label="Session Top N"
-            value={String(controls.sessionTopN)}
-            onChange={(value) => patchControls({ sessionTopN: normalizeSearchN(value, DEFAULT_SESSION_TOP_N) })}
-            options={N_OPTIONS.map((value) => ({ label: String(value), value: String(value) }))}
-          />
-          <SearchSelect
-            label="Top N"
-            value={String(controls.topN)}
-            onChange={(value) => patchControls({ topN: normalizeSearchN(value, DEFAULT_TOP_N) })}
-            options={N_OPTIONS.map((value) => ({ label: String(value), value: String(value) }))}
-          />
+        <div className="search-composer">
+          <div className="search-input-shell">
+            <textarea
+              value={controls.query}
+              placeholder="Search memories"
+              rows={3}
+              onChange={(event) => patchControls({ query: event.target.value })}
+              onInput={resizeTextarea}
+              onKeyDown={submitFromTextarea}
+            />
+            <div className="search-main-toolbar">
+              <div className="search-main-tools">
+                <SearchActionMenu
+                  icon={Plus}
+                  label="Add"
+                  open={openMenu === 'add'}
+                  onToggle={() => toggleMenu('add')}
+                  onClose={() => setOpenMenu(null)}
+                />
+                <SearchSelectMenu
+                  icon={BotMessageSquare}
+                  label="Provider"
+                  value={provider}
+                  options={PROVIDER_OPTIONS}
+                  open={openMenu === 'provider'}
+                  hideLabel
+                  onToggle={() => toggleMenu('provider')}
+                  onChange={(value) => {
+                    setProvider(value);
+                    setOpenMenu(null);
+                  }}
+                />
+              </div>
+              <button className="search-submit-button" type="submit" aria-label="Search" disabled={!controls.query.trim() || loading}>
+                <ArrowUp />
+              </button>
+            </div>
+          </div>
+          <div className="search-controls" aria-label="Search controls">
+            <SearchTopMenu
+              icon={SlidersHorizontal}
+              globalValue={controls.topN}
+              sessionValue={controls.sessionTopN}
+              open={openMenu === 'topN'}
+              onToggle={() => toggleMenu('topN')}
+              onGlobalChange={(value) => {
+                patchControls({ topN: normalizeSearchN(value, DEFAULT_TOP_N) });
+                setOpenMenu(null);
+              }}
+              onSessionChange={(value) => {
+                patchControls({ sessionTopN: normalizeSearchN(value, DEFAULT_SESSION_TOP_N) });
+                setOpenMenu(null);
+              }}
+            />
+            <SearchMultiSelectMenu
+              icon={<Folder className="search-control-icon" />}
+              label="Project"
+              values={controls.projectKeys}
+              disabled={projectsLoading}
+              open={openMenu === 'project'}
+              onToggle={() => toggleMenu('project')}
+              onChange={patchProjectKeys}
+              options={projectOptions}
+            />
+            <SearchMultiSelectMenu
+              icon={<FileText className="search-control-icon" />}
+              label="Session"
+              values={controls.sessionKeys}
+              open={openMenu === 'session'}
+              onToggle={() => toggleMenu('session')}
+              onChange={(sessionKeys) => patchControls({ sessionKeys })}
+              options={sessionOptions}
+              optionIcon={(option) => (option.agent ? <AgentLogoMark logo={logoForAgent(option.agent)} /> : null)}
+            />
+          </div>
         </div>
       </form>
       {projectError ? <div className="search-error">{projectError}</div> : null}
@@ -146,26 +240,307 @@ export function SearchPage({
   );
 }
 
-function SearchSelect({
+function SearchTopMenu({
+  icon: Icon,
+  globalValue,
+  sessionValue,
+  open,
+  onToggle,
+  onGlobalChange,
+  onSessionChange,
+}: {
+  icon: LucideIcon;
+  globalValue: number;
+  sessionValue: number;
+  open: boolean;
+  onToggle: () => void;
+  onGlobalChange: (value: string) => void;
+  onSessionChange: (value: string) => void;
+}) {
+  const [globalDraft, setGlobalDraft] = useState(String(globalValue));
+  const [sessionDraft, setSessionDraft] = useState(String(sessionValue));
+
+  useEffect(() => {
+    setGlobalDraft(String(globalValue));
+  }, [globalValue]);
+
+  useEffect(() => {
+    setSessionDraft(String(sessionValue));
+  }, [sessionValue]);
+
+  function commitGlobal() {
+    const next = normalizeSearchN(globalDraft, globalValue);
+    setGlobalDraft(String(next));
+    onGlobalChange(String(next));
+  }
+
+  function commitSession() {
+    const next = normalizeSearchN(sessionDraft, sessionValue);
+    setSessionDraft(String(next));
+    onSessionChange(String(next));
+  }
+
+  return (
+    <div className="search-control-wrap">
+      <button
+        className="search-control"
+        type="button"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={onToggle}
+      >
+        <Icon className="search-control-icon" />
+        <span className="search-control-value">Top {globalValue}</span>
+        <ChevronDown className="search-control-chevron" />
+      </button>
+      {open ? (
+        <SearchPopover title="Top">
+          <label className="search-number-row">
+            <span>Global</span>
+            <input
+              type="number"
+              min="1"
+              step="1"
+              value={globalDraft}
+              onBlur={commitGlobal}
+              onChange={(event) => setGlobalDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault();
+                  commitGlobal();
+                }
+              }}
+            />
+          </label>
+          <label className="search-number-row">
+            <span>Session</span>
+            <input
+              type="number"
+              min="1"
+              step="1"
+              value={sessionDraft}
+              onBlur={commitSession}
+              onChange={(event) => setSessionDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault();
+                  commitSession();
+                }
+              }}
+            />
+          </label>
+        </SearchPopover>
+      ) : null}
+    </div>
+  );
+}
+
+function SearchMultiSelectMenu({
+  icon,
+  label,
+  values,
+  options,
+  open,
+  disabled = false,
+  onToggle,
+  onChange,
+  optionIcon,
+}: {
+  icon: ReactNode;
+  label: string;
+  values: string[];
+  options: SearchOption[];
+  open: boolean;
+  disabled?: boolean;
+  onToggle: () => void;
+  onChange: (values: string[]) => void;
+  optionIcon?: (option: SearchOption) => ReactNode;
+}) {
+  const selected = new Set(values);
+  return (
+    <div className="search-control-wrap">
+      <button
+        className={disabled ? 'search-control search-control-disabled' : 'search-control'}
+        type="button"
+        disabled={disabled}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={onToggle}
+      >
+        {icon}
+        <span className="search-control-label">{label}</span>
+        <span className="search-control-value">{multiValueLabel(values, options)}</span>
+        <ChevronDown className="search-control-chevron" />
+      </button>
+      {open && !disabled ? (
+        <SearchPopover title={label}>
+          <button
+            className={values.length === 0 ? 'search-menu-item search-menu-item-active' : 'search-menu-item'}
+            type="button"
+            onClick={() => onChange([])}
+          >
+            <span className={values.length === 0 ? 'search-menu-check search-menu-check-active' : 'search-menu-check'}>
+              {values.length === 0 ? <Check /> : null}
+            </span>
+            <span className="search-menu-label">All</span>
+          </button>
+          {options.map((option) => {
+            const isSelected = selected.has(option.value);
+            return (
+              <button
+                key={option.value}
+                className={isSelected ? 'search-menu-item search-menu-item-active' : 'search-menu-item'}
+                type="button"
+                onClick={() => onChange(toggleValue(values, option.value))}
+              >
+                <span className={isSelected ? 'search-menu-check search-menu-check-active' : 'search-menu-check'}>
+                  {isSelected ? <Check /> : null}
+                </span>
+                {optionIcon?.(option)}
+                <span className="search-menu-label">{option.label}</span>
+              </button>
+            );
+          })}
+        </SearchPopover>
+      ) : null}
+    </div>
+  );
+}
+
+function SearchActionMenu({
+  icon: Icon,
+  label,
+  open,
+  onToggle,
+  onClose,
+}: {
+  icon: LucideIcon;
+  label: string;
+  open: boolean;
+  onToggle: () => void;
+  onClose: () => void;
+}) {
+  return (
+    <div className="search-control-wrap">
+      <button
+        className="search-icon-control"
+        type="button"
+        aria-label={label}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={onToggle}
+      >
+        <Icon />
+      </button>
+      {open ? (
+        <SearchPopover title={label}>
+          {ADD_OPTIONS.map((option) => {
+            const OptionIcon = option.icon;
+            return (
+              <button key={option.value} className="search-menu-item" type="button" onClick={onClose}>
+                <OptionIcon />
+                <span className="search-menu-label">{option.label}</span>
+              </button>
+            );
+          })}
+        </SearchPopover>
+      ) : null}
+    </div>
+  );
+}
+
+function SearchSelectMenu({
+  icon: Icon,
   label,
   value,
   options,
+  open,
+  hideLabel = false,
   disabled = false,
+  onToggle,
   onChange,
 }: {
+  icon: LucideIcon;
   label: string;
   value: string;
   options: Array<{ label: string; value: string }>;
+  open: boolean;
+  hideLabel?: boolean;
   disabled?: boolean;
+  onToggle: () => void;
   onChange: (value: string) => void;
 }) {
+  const selected = options.find((option) => option.value === value) ?? options[0];
   return (
-    <label className={disabled ? 'search-control search-control-disabled' : 'search-control'}>
-      <span>{label}</span>
-      <select value={value} disabled={disabled} onChange={(event) => onChange(event.target.value)}>
-        {options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-      </select>
-    </label>
+    <div className="search-control-wrap">
+      <button
+        className={disabled ? 'search-control search-control-disabled' : 'search-control'}
+        type="button"
+        disabled={disabled}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={onToggle}
+      >
+        <Icon className="search-control-icon" />
+        {hideLabel ? null : <span className="search-control-label">{label}</span>}
+        <span className="search-control-value">{selected?.label ?? value}</span>
+        <ChevronDown className="search-control-chevron" />
+      </button>
+      {open && !disabled ? (
+        <SearchPopover title={label}>
+          {options.map((option) => (
+            <button
+              key={option.value}
+              className={option.value === value ? 'search-menu-item search-menu-item-active' : 'search-menu-item'}
+              type="button"
+              onClick={() => onChange(option.value)}
+            >
+              <span className={option.value === value ? 'search-menu-check search-menu-check-active' : 'search-menu-check'}>
+                {option.value === value ? <Check /> : null}
+              </span>
+              <span className="search-menu-label">{option.label}</span>
+            </button>
+          ))}
+        </SearchPopover>
+      ) : null}
+    </div>
+  );
+}
+
+function SearchPopover({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <div className="search-popover" role="menu" aria-label={title}>
+      <div className="search-popover-title">{title}</div>
+      {children}
+    </div>
+  );
+}
+
+function toggleValue(values: string[], value: string): string[] {
+  return values.includes(value)
+    ? values.filter((item) => item !== value)
+    : [...values, value];
+}
+
+function multiValueLabel(values: string[], options: SearchOption[]): string {
+  if (values.length === 0) {
+    return 'All';
+  }
+  if (values.length === 1) {
+    return options.find((option) => option.value === values[0])?.label ?? values[0]!;
+  }
+  return `${values.length}`;
+}
+
+function AgentLogoMark({ logo }: { logo: AgentLogo }) {
+  return (
+    <span className="search-session-agent-icon" title={logo.label}>
+      {logo.fallback ? (
+        <Bot className="agent-logo-fallback" aria-label={logo.label} />
+      ) : (
+        <img src={logo.src} alt={logo.label} className="agent-logo-image" />
+      )}
+    </span>
   );
 }
 

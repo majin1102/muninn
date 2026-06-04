@@ -49,7 +49,25 @@ export type DemoMemoryDocument = {
   updatedAt?: string;
 };
 
+const LONG_DEMO_PROJECT = 'memory-inbox-with-a-very-long-project-name-for-cross-agent-recall';
+const LONG_DEMO_SESSION = 'memory-inbox/daily-recall-and-cross-agent-search-regression-review-session';
+
 export const demoSearchResults: SearchSessionResult[] = [
+  {
+    sessionKey: 'memory-inbox/daily-recall',
+    sessionLabel: LONG_DEMO_SESSION,
+    projectKey: LONG_DEMO_PROJECT,
+    latestUpdatedAt: '2026-06-01T13:32:00.000Z',
+    items: [{
+      id: 'demo-search-memory-long-1',
+      source: 'conversation',
+      title: 'Long project and session title preview',
+      content: 'This demo result keeps a long project and session title visible in search filters so menu width, truncation, and single-line behavior can be checked directly.',
+      createdAt: '2026-06-01T13:32:00.000Z',
+      memoryId: 'turn:1601',
+      links: [{ kind: 'turn', label: 'Open turn', memoryId: 'turn:1601', sessionKey: 'memory-inbox/daily-recall' }],
+    }],
+  },
   {
     sessionKey: 'auth-refactor',
     sessionLabel: 'auth-refactor',
@@ -237,7 +255,12 @@ export const demoSessionGroups: Record<string, DemoSessionGroupItem[]> = {
     { sessionKey: 'sdk-cleanup', displaySessionId: 'sdk-cleanup', projectKey: 'sdk-cleanup', latestUpdatedAt: '2026-05-18T12:00:00.000Z' },
   ],
   memory_agent: [
-    { sessionKey: 'memory-inbox/daily-recall', displaySessionId: 'memory-inbox/daily-recall', projectKey: 'memory-inbox', latestUpdatedAt: '2026-06-01T13:32:00.000Z' },
+    {
+      sessionKey: 'memory-inbox/daily-recall',
+      displaySessionId: LONG_DEMO_SESSION,
+      projectKey: LONG_DEMO_PROJECT,
+      latestUpdatedAt: '2026-06-01T13:32:00.000Z',
+    },
     { sessionKey: 'auth-refactor', displaySessionId: 'auth-refactor', projectKey: 'auth-refactor', latestUpdatedAt: '2026-05-18T12:00:00.000Z' },
   ],
 };

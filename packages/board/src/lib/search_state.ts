@@ -2,10 +2,16 @@ import type { ProjectNode } from './api.js';
 
 export type SearchControlsState = {
   query: string;
-  projectKey: string;
-  sessionKey: string;
+  projectKeys: string[];
+  sessionKeys: string[];
   sessionTopN: number;
   topN: number;
+};
+
+export type SearchSessionOption = {
+  label: string;
+  value: string;
+  agent: string;
 };
 
 export const SEARCH_ALL_VALUE = 'all';
@@ -15,8 +21,8 @@ export const DEFAULT_TOP_N = 20;
 export function defaultSearchControls(): SearchControlsState {
   return {
     query: '',
-    projectKey: SEARCH_ALL_VALUE,
-    sessionKey: SEARCH_ALL_VALUE,
+    projectKeys: [],
+    sessionKeys: [],
     sessionTopN: DEFAULT_SESSION_TOP_N,
     topN: DEFAULT_TOP_N,
   };
@@ -29,31 +35,35 @@ export function buildSearchParams(state: SearchControlsState): URLSearchParams {
     topN: String(state.topN),
   });
 
-  if (state.projectKey !== SEARCH_ALL_VALUE) {
-    params.set('projectKey', state.projectKey);
-    if (state.sessionKey !== SEARCH_ALL_VALUE) {
-      params.set('sessionKey', state.sessionKey);
-    }
+  for (const projectKey of state.projectKeys) {
+    params.append('projectKey', projectKey);
+  }
+  for (const sessionKey of state.sessionKeys) {
+    params.append('sessionKey', sessionKey);
   }
 
   return params;
 }
 
+export function sessionOptionsForProjects(
+  projects: ProjectNode[],
+  projectKeys: string[],
+): SearchSessionOption[] {
+  const selected = new Set(projectKeys);
+  return projects
+    .filter((project) => selected.size === 0 || selected.has(project.projectKey))
+    .flatMap((project) => project.sessions.map((session) => ({
+      label: session.displaySessionId,
+      value: session.sessionKey,
+      agent: session.agent,
+    })));
+}
+
 export function sessionOptionsForProject(
   projects: ProjectNode[],
   projectKey: string,
-): Array<{ label: string; value: string }> {
-  if (projectKey === SEARCH_ALL_VALUE) {
-    return [];
-  }
-  const project = projects.find((item) => item.projectKey === projectKey);
-  if (!project) {
-    return [];
-  }
-  return project.sessions.map((session) => ({
-    label: session.displaySessionId,
-    value: session.sessionKey,
-  }));
+): SearchSessionOption[] {
+  return sessionOptionsForProjects(projects, projectKey === SEARCH_ALL_VALUE ? [] : [projectKey]);
 }
 
 export function normalizeSearchN(value: string, fallback: number): number {

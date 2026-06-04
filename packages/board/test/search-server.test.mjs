@@ -36,8 +36,8 @@ test('conversationCandidates respects query, project, and session scope', async 
     turn({ sessionId: 'lance/search-a', prompt: 'board search contract', response: 'response' }),
   ], {
     query: 'board search',
-    projectKey: 'muninn',
-    sessionKey: 'muninn/search-a',
+    projectKeys: ['muninn'],
+    sessionKeys: ['muninn/search-a'],
   });
 
   assert.equal(candidates.length, 1);

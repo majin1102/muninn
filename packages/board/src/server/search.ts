@@ -12,8 +12,8 @@ type BoardTurn = Turn & { memoryId?: string };
 
 export type BoardSearchParams = {
   query: string;
-  projectKey?: string;
-  sessionKey?: string;
+  projectKeys?: string[];
+  sessionKeys?: string[];
   sessionTopN: number;
   topN: number;
 };
@@ -48,8 +48,8 @@ export async function searchBoardMemory(params: BoardSearchParams, deps: SearchD
   });
   const conversations = conversationCandidates(allTurns, {
     query,
-    projectKey: params.projectKey,
-    sessionKey: params.sessionKey,
+    projectKeys: params.projectKeys,
+    sessionKeys: params.sessionKeys,
   });
 
   const extractionHits = await deps.recall(query, Math.max(params.topN * params.sessionTopN, params.topN), {
@@ -57,8 +57,8 @@ export async function searchBoardMemory(params: BoardSearchParams, deps: SearchD
     budget: 0,
   });
   const extractions = extractionCandidates(extractionHits, allTurns, {
-    projectKey: params.projectKey,
-    sessionKey: params.sessionKey,
+    projectKeys: params.projectKeys,
+    sessionKeys: params.sessionKeys,
   });
 
   return groupCandidates([...conversations, ...extractions], {
@@ -69,7 +69,7 @@ export async function searchBoardMemory(params: BoardSearchParams, deps: SearchD
 
 function conversationCandidates(
   turns: BoardTurn[],
-  scope: { query: string; projectKey?: string; sessionKey?: string },
+  scope: { query: string; projectKeys?: string[]; sessionKeys?: string[] },
 ): SearchCandidate[] {
   const query = scope.query.trim().toLowerCase();
   return turns.flatMap((turn) => {
@@ -116,7 +116,7 @@ function conversationCandidates(
 function extractionCandidates(
   hits: RecallHit[],
   turns: BoardTurn[],
-  scope: { projectKey?: string; sessionKey?: string },
+  scope: { projectKeys?: string[]; sessionKeys?: string[] },
 ): SearchCandidate[] {
   const turnsById = new Map(turns.map((turn) => [turnMemoryId(turn), turn]));
   return hits.flatMap((hit, index) => {
@@ -217,12 +217,14 @@ function scoreText(text: string, query: string): number {
 function matchesScope(
   projectKey: string,
   sessionKey: string,
-  scope: { projectKey?: string; sessionKey?: string },
+  scope: { projectKeys?: string[]; sessionKeys?: string[] },
 ): boolean {
-  if (scope.projectKey && projectKey !== scope.projectKey) {
+  const projectKeys = new Set(scope.projectKeys ?? []);
+  const sessionKeys = new Set(scope.sessionKeys ?? []);
+  if (projectKeys.size > 0 && !projectKeys.has(projectKey)) {
     return false;
   }
-  if (scope.sessionKey && sessionKey !== scope.sessionKey) {
+  if (sessionKeys.size > 0 && !sessionKeys.has(sessionKey)) {
     return false;
   }
   return true;

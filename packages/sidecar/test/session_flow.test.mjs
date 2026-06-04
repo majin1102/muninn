@@ -948,8 +948,11 @@ test('board search groups conversation results by session and validates scope', 
   assert.equal(body.results[0].items.length, 1);
   assert.equal(body.results[0].items[0].source, 'conversation');
 
-  const invalidScope = await app.request('/api/v1/ui/search?query=board&sessionKey=muninn%2Fsearch-alpha');
-  assert.equal(invalidScope.status, 400);
+  const sessionScope = await app.request('/api/v1/ui/search?query=board&sessionKey=muninn%2Fsearch-alpha');
+  assert.equal(sessionScope.status, 200);
+  const sessionScopeBody = await json(sessionScope);
+  assert.equal(sessionScopeBody.results.length, 1);
+  assert.equal(sessionScopeBody.results[0].sessionKey, 'muninn/search-alpha');
 });
 
 test('ui session endpoints include native rows with indexed ownership fields', async (t) => {

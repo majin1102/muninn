@@ -142,17 +142,17 @@ export async function getDemoDocument(memoryId: string): Promise<DemoMemoryDocum
 
 export async function getDemoSearchResults(params: {
   query: string;
-  projectKey?: string;
-  sessionKey?: string;
+  projectKeys?: string[];
+  sessionKeys?: string[];
   sessionTopN: number;
   topN: number;
 }): Promise<SearchSessionResult[]> {
   const query = params.query.trim().toLowerCase();
-  const projectKey = params.projectKey && params.projectKey !== 'all' ? params.projectKey : undefined;
-  const sessionKey = params.sessionKey && params.sessionKey !== 'all' ? params.sessionKey : undefined;
+  const projectKeys = new Set(params.projectKeys ?? []);
+  const sessionKeys = new Set(params.sessionKeys ?? []);
   return demoSearchResults
-    .filter((result) => !projectKey || result.projectKey === projectKey)
-    .filter((result) => !sessionKey || result.sessionKey === sessionKey)
+    .filter((result) => projectKeys.size === 0 || projectKeys.has(result.projectKey))
+    .filter((result) => sessionKeys.size === 0 || sessionKeys.has(result.sessionKey))
     .map((result) => ({
       ...result,
       items: result.items.filter((item) => (

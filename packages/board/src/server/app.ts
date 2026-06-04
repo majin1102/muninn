@@ -850,13 +850,8 @@ boardApp.get('/api/v1/ui/search', async (c) => {
     return c.json(errorResponse('invalidRequest', 'query is required'), 400);
   }
 
-  const rawProjectKey = normalizeText(c.req.query('projectKey'));
-  const projectKey = rawProjectKey && rawProjectKey !== 'all' ? rawProjectKey : undefined;
-  const rawSessionKey = normalizeText(c.req.query('sessionKey'));
-  const sessionKey = rawSessionKey && rawSessionKey !== 'all' ? rawSessionKey : undefined;
-  if (sessionKey && !projectKey) {
-    return c.json(errorResponse('invalidRequest', 'sessionKey requires a projectKey'), 400);
-  }
+  const projectKeys = normalizeTextList(c.req.queries('projectKey'));
+  const sessionKeys = normalizeTextList(c.req.queries('sessionKey'));
 
   const sessionTopN = parsePositiveInteger(c.req.query('sessionTopN'), 3);
   if (typeof sessionTopN === 'string') {
@@ -869,8 +864,8 @@ boardApp.get('/api/v1/ui/search', async (c) => {
 
   const results = await searchBoardMemory({
     query,
-    projectKey,
-    sessionKey,
+    projectKeys,
+    sessionKeys,
     sessionTopN,
     topN,
   }, {
@@ -884,6 +879,12 @@ boardApp.get('/api/v1/ui/search', async (c) => {
   };
   return c.json(response);
 });
+
+function normalizeTextList(values: string[] | undefined): string[] {
+  return [...new Set((values ?? [])
+    .map((value) => normalizeText(value))
+    .filter((value): value is string => Boolean(value) && value !== 'all'))];
+}
 
 boardApp.get(SESSION_SNAPSHOTS_ROUTE, async (c) => {
   console.log('[BOARD_UI_SESSION_SNAPSHOTS]');
