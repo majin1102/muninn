@@ -1,6 +1,6 @@
 import type { PipelineTask, PipelineTaskKind, PipelineTaskStatus, PipelineTasksResponse } from '@muninn/types';
 import { ChevronDown, Circle, Eye, X } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { BoardClient } from '../lib/api.js';
 import {
   defaultSelectedPipelineTaskId,
@@ -46,8 +46,13 @@ export function PipelinesPage({ client }: PipelinesPageProps) {
   const [statusFilter, setStatusFilter] = useState<PipelineStatusFilter>('all');
   const [timeFilter, setTimeFilter] = useState<PipelineTimeFilter>('last_24h');
   const [inspectedTaskId, setInspectedTaskId] = useState<string | null>(null);
+  const requestSeqRef = useRef(0);
 
   const loadPipelineTasks = useCallback(async (options: { silent: boolean }, isCancelled: () => boolean) => {
+    const requestSeq = requestSeqRef.current + 1;
+    requestSeqRef.current = requestSeq;
+    const isStale = () => isCancelled() || requestSeq !== requestSeqRef.current;
+
     if (!options.silent) {
       setLoading(true);
     }
@@ -55,7 +60,7 @@ export function PipelinesPage({ client }: PipelinesPageProps) {
 
     try {
       const nextResponse = await client.getPipelineTasks();
-      if (isCancelled()) {
+      if (isStale()) {
         return;
       }
       setResponse(nextResponse);
@@ -65,7 +70,7 @@ export function PipelinesPage({ client }: PipelinesPageProps) {
           : currentTaskId
       ));
     } catch (loadError: unknown) {
-      if (isCancelled()) {
+      if (isStale()) {
         return;
       }
       if (!options.silent) {
@@ -73,7 +78,7 @@ export function PipelinesPage({ client }: PipelinesPageProps) {
       }
       setError(asErrorMessage(loadError));
     } finally {
-      if (!isCancelled() && !options.silent) {
+      if (!isStale() && !options.silent) {
         setLoading(false);
       }
     }
@@ -81,15 +86,22 @@ export function PipelinesPage({ client }: PipelinesPageProps) {
 
   useEffect(() => {
     let cancelled = false;
+    let refreshId: number | null = null;
     const isCancelled = () => cancelled;
-    void loadPipelineTasks({ silent: false }, isCancelled);
-    const refreshId = window.setInterval(() => {
-      void loadPipelineTasks({ silent: true }, isCancelled);
-    }, PIPELINE_REFRESH_INTERVAL_MS);
+    void loadPipelineTasks({ silent: false }, isCancelled).then(() => {
+      if (cancelled) {
+        return;
+      }
+      refreshId = window.setInterval(() => {
+        void loadPipelineTasks({ silent: true }, isCancelled);
+      }, PIPELINE_REFRESH_INTERVAL_MS);
+    });
 
     return () => {
       cancelled = true;
-      window.clearInterval(refreshId);
+      if (refreshId !== null) {
+        window.clearInterval(refreshId);
+      }
     };
   }, [loadPipelineTasks]);
 
