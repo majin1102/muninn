@@ -1,4 +1,4 @@
-import type { ToolCall } from '@muninn/types';
+import type { PipelineTask, ToolCall } from '@muninn/types';
 
 export type DemoSessionAgentItem = {
   agent: string;
@@ -36,6 +36,8 @@ export type DemoObservingListItem = {
   references: DemoObservingReferenceItem[];
 };
 
+export type DemoPipelineTask = PipelineTask;
+
 export type DemoMemoryDocument = {
   memoryId: string;
   kind: 'turn' | 'session';
@@ -51,6 +53,124 @@ export const demoAgents: DemoSessionAgentItem[] = [
   { agent: 'claude_code', latestUpdatedAt: '2026-05-29T12:00:00.000Z' },
   { agent: 'codex_cli', latestUpdatedAt: '2026-05-25T12:00:00.000Z' },
   { agent: 'memory_agent', latestUpdatedAt: '2026-06-01T13:32:00.000Z' },
+];
+
+export const demoPipelineTasks: DemoPipelineTask[] = [
+  {
+    id: 'pipeline:global:lance-row-id',
+    kind: 'global-observing',
+    title: 'Global observing',
+    target: 'Entity: Lance row id',
+    status: 'running',
+    statusText: 'generating draft from 16 session observations',
+    startedAt: '2026-06-04T08:12:12.000Z',
+    updatedAt: '2026-06-04T08:38:12.000Z',
+    input: { bytes: 43600, tokens: 18400 },
+    toolCalls: [
+      { name: 'get_observation', count: 2 },
+      { name: 'get_extraction', count: 3 },
+      { name: 'validate_entity', count: 1 },
+    ],
+    inputDetails: [
+      '16 session-level observations',
+      '3 source turns from Lance discussions',
+      'Entity key: Lance row id',
+    ],
+    outputDetails: [
+      'Entity-level observation draft',
+      'Pending parser validation before commit',
+    ],
+    trace: [
+      'selected input: done',
+      'generating draft: running',
+      'commit output: pending',
+      'trace ref: observer-run-42',
+    ],
+    errors: [],
+  },
+  {
+    id: 'pipeline:session:codex-import-timeline',
+    kind: 'session-observing',
+    title: 'Session observing',
+    target: 'codex session import timeline',
+    status: 'done',
+    statusText: 'produced 12 session observations and queued global work',
+    startedAt: '2026-06-04T08:24:12.000Z',
+    endedAt: '2026-06-04T08:36:12.000Z',
+    updatedAt: '2026-06-04T08:36:12.000Z',
+    input: { bytes: 238000, tokens: 92400 },
+    output: { bytes: 12400, tokens: 4800 },
+    toolCalls: [
+      { name: 'get_turns', count: 5 },
+      { name: 'write_observation', count: 12 },
+    ],
+    inputDetails: ['100 imported turns', 'agent: codex', 'session: import timeline'],
+    outputDetails: ['12 session-level observations', 'global observing work queued'],
+    trace: [
+      'read turns: done',
+      'extracted observations: done',
+      'queued global work: done',
+    ],
+    errors: [],
+  },
+  {
+    id: 'pipeline:wiki:memory-architecture',
+    kind: 'wiki-compiling',
+    title: 'Wiki compiling',
+    target: 'LLM Wiki: Memory architecture',
+    status: 'queued',
+    statusText: 'waiting for global observations before compiling wiki draft',
+    updatedAt: '2026-06-04T08:35:12.000Z',
+    input: { bytes: 68200, tokens: 27100 },
+    toolCalls: [
+      { name: 'get_observation', count: 4 },
+      { name: 'get_wiki_context', count: 1 },
+    ],
+    inputDetails: ['Memory architecture observation tree', 'Related entity summaries'],
+    outputDetails: ['Wiki page draft', 'Pending source observation readiness'],
+    trace: ['waiting for global observations'],
+    errors: [],
+  },
+  {
+    id: 'pipeline:global:prompt-design',
+    kind: 'global-observing',
+    title: 'Global observing',
+    target: 'Entity: Muninn prompt design',
+    status: 'queued',
+    statusText: 'waiting for session observations before global rewrite',
+    updatedAt: '2026-06-04T08:34:12.000Z',
+    input: { bytes: 14800, tokens: 6100 },
+    toolCalls: [],
+    inputDetails: ['5 session-level observations', 'Entity key: Muninn prompt design', 'Below observer threshold'],
+    outputDetails: ['Waiting to produce entity observation draft'],
+    trace: ['waiting for more session observations'],
+    errors: [],
+  },
+  {
+    id: 'pipeline:global:board-settings',
+    kind: 'global-observing',
+    title: 'Global observing',
+    target: 'Entity: Board settings',
+    status: 'failed',
+    statusText: 'parser validation failed after 8 session observations · retry retained',
+    startedAt: '2026-06-04T08:29:12.000Z',
+    endedAt: '2026-06-04T08:32:12.000Z',
+    updatedAt: '2026-06-04T08:32:12.000Z',
+    input: { bytes: 19600, tokens: 8200 },
+    toolCalls: [
+      { name: 'get_observation', count: 2 },
+      { name: 'validate_entity', count: 1 },
+      { name: 'retry_commit', count: 1 },
+    ],
+    inputDetails: ['8 session-level observations', 'Entity key: Board settings', 'Retry retained'],
+    outputDetails: ['Draft failed parser validation', 'No committed observation'],
+    trace: [
+      'selected input: done',
+      'generated draft: done',
+      'parser validation: failed',
+    ],
+    errors: ['parser validation failed'],
+  },
 ];
 
 export const demoSessionGroups: Record<string, DemoSessionGroupItem[]> = {

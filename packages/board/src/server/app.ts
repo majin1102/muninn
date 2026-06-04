@@ -17,6 +17,7 @@ import type {
   MemoryDocumentResponse,
   MemoryReference,
   ObservingListResponse,
+  PipelineTasksResponse,
   SessionAgentsResponse,
   SessionGroupsResponse,
   SessionNode,
@@ -754,6 +755,23 @@ boardApp.get('/api/v1/ui/observing', async (c) => {
 
   const response: ObservingListResponse = {
     extractions: extractionCards,
+    requestId: generateRequestId(),
+  };
+
+  return c.json(response);
+});
+
+boardApp.get('/api/v1/ui/pipelines', async (c) => {
+  console.log('[BOARD_UI_PIPELINES]');
+
+  const response: PipelineTasksResponse = {
+    summary: {
+      running: 0,
+      queued: 0,
+      failed: 0,
+      updatedAt: null,
+    },
+    tasks: [],
     requestId: generateRequestId(),
   };
 
