@@ -53,6 +53,7 @@ const SOURCE_TABS: Array<{ label: string; value: SearchSourceKey }> = [
   { label: 'Conversation', value: 'conversation' },
   { label: 'LLM Wiki', value: 'llmWiki' },
 ];
+const SEARCH_FILTER_SINGLE_NAME_LIMIT = 24;
 type SearchMenuKey = 'add' | 'provider' | 'project' | 'session' | 'topN';
 type SearchOption = {
   label: string;
@@ -271,6 +272,7 @@ export function SearchPage({
               values={controls.projectKeys}
               disabled={projectsLoading}
               hideLabelWhenSingle
+              singleNameLimit={SEARCH_FILTER_SINGLE_NAME_LIMIT}
               open={openMenu === 'project'}
               onToggle={() => toggleMenu('project')}
               onChange={patchProjectKeys}
@@ -281,6 +283,7 @@ export function SearchPage({
               label="Session"
               values={controls.sessionKeys}
               hideLabelWhenSingle
+              singleNameLimit={SEARCH_FILTER_SINGLE_NAME_LIMIT}
               open={openMenu === 'session'}
               onToggle={() => toggleMenu('session')}
               onChange={(sessionKeys) => patchControls({ sessionKeys })}
@@ -433,6 +436,7 @@ function SearchMultiSelectMenu({
   open,
   disabled = false,
   hideLabelWhenSingle = false,
+  singleNameLimit,
   onToggle,
   onChange,
   optionIcon,
@@ -444,13 +448,16 @@ function SearchMultiSelectMenu({
   open: boolean;
   disabled?: boolean;
   hideLabelWhenSingle?: boolean;
+  singleNameLimit?: number;
   onToggle: () => void;
   onChange: (values: string[]) => void;
   optionIcon?: (option: SearchOption) => ReactNode;
 }) {
   const selected = new Set(values);
-  const hideLabel = hideLabelWhenSingle && values.length === 1;
-  const valueLabel = multiValueLabel(values, options);
+  const rawValueLabel = multiValueLabel(values, options);
+  const singleNameIsLong = values.length === 1 && singleNameLimit !== undefined && rawValueLabel.length > singleNameLimit;
+  const hideLabel = hideLabelWhenSingle && values.length === 1 && !singleNameIsLong;
+  const valueLabel = singleNameIsLong ? '1' : rawValueLabel;
   return (
     <div className="search-control-wrap">
       <button

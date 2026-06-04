@@ -2540,7 +2540,7 @@ svg {
 
 .search-controls {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   gap: 3px;
   min-height: 37px;
@@ -2551,6 +2551,7 @@ svg {
   padding: 4px 10px;
   color: #7a7d84;
   font-size: 12px;
+  overflow-x: hidden;
 }
 
 .search-page-submitted .search-controls {
@@ -2564,6 +2565,8 @@ svg {
 .search-control-wrap {
   position: relative;
   display: inline-flex;
+  flex: 0 1 auto;
+  min-width: 0;
 }
 
 .search-icon-control,
@@ -2591,7 +2594,9 @@ svg {
 
 .search-control {
   gap: 5px;
+  min-width: 86px;
   min-height: 27px;
+  max-width: 230px;
   padding: 0 22px 0 8px;
 }
 
@@ -2612,6 +2617,7 @@ svg {
 }
 
 .search-control-value {
+  min-width: 0;
   max-width: 146px;
   color: #61646b;
   overflow: hidden;
