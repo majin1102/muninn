@@ -2514,17 +2514,17 @@ svg {
 .search-submit-button {
   display: grid;
   place-items: center;
-  width: 27px;
-  height: 27px;
+  width: 28px;
+  height: 28px;
   border: 0;
-  border-radius: 999px;
+  border-radius: 6px;
   padding: 0;
-  background: #3f4248;
+  background: #339cff;
   color: #fff;
 }
 
 .search-submit-button:hover:not(:disabled) {
-  background: #303236;
+  background: #1d8ff0;
 }
 
 .search-submit-button:disabled {
@@ -2772,46 +2772,36 @@ button.search-menu-item:hover,
 }
 
 .search-source-tabs {
-  display: flex;
-  align-items: flex-end;
-  gap: 28px;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
   width: min(720px, 100%);
-  min-height: 42px;
-  margin: 8px auto 0;
-  border-bottom: 1px solid #ececec;
+  min-height: 34px;
+  margin: 10px auto 0;
 }
 
 .search-source-tab {
-  position: relative;
-  height: 38px;
+  height: 28px;
   border: 0;
+  border-radius: 6px;
   background: transparent;
   color: #5f6062;
   font: inherit;
   font-size: 13px;
-  font-weight: 400;
+  font-weight: 500;
   letter-spacing: 0;
-  padding: 0;
+  padding: 0 10px;
 }
 
 .search-source-tab:hover {
+  background: #f0f0f0;
   color: #1a1c1f;
 }
 
 .search-source-tab-active {
+  background: #f0f0f0;
   color: #1a1c1f;
-  font-weight: 500;
-}
-
-.search-source-tab-active::after {
-  content: "";
-  position: absolute;
-  right: 0;
-  bottom: -1px;
-  left: 0;
-  height: 2px;
-  border-radius: 999px;
-  background: #1a1c1f;
+  font-weight: 600;
 }
 
 .search-result {
