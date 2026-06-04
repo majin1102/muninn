@@ -2466,8 +2466,8 @@ svg {
   border-color: #f0c8c8;
 }
 
-.pipeline-io-box span {
-  color: #8f9195;
+.pipeline-io-box > span {
+  color: var(--foreground);
   font-size: 12px;
   font-weight: 600;
   line-height: 1.2;

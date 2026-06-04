@@ -223,7 +223,7 @@ function PipelineLifecycleLine({ task }: { task: PipelineTask }) {
     <p className="pipeline-lifecycle-line">
       <span>Duration {durationForTask(task)}</span>
       {task.status === 'done' && task.toolCalls.length > 0 ? (
-        <span>Tool calls: {toolCallItems(task.toolCalls).join(' | ')}</span>
+        <span>Tool calls: {toolCallItems(task.toolCalls).join(' · ')}</span>
       ) : null}
     </p>
   );
