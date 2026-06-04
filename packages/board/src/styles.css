@@ -2730,6 +2730,10 @@ button.search-menu-item:hover,
   max-height: none;
 }
 
+.search-hit-content-complete {
+  max-height: none;
+}
+
 .search-hit-toggle {
   display: inline-flex;
   align-items: center;

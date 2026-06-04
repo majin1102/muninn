@@ -196,11 +196,9 @@ export function SearchPage({
               onToggle={() => toggleMenu('topN')}
               onGlobalChange={(value) => {
                 patchControls({ topN: normalizeSearchN(value, DEFAULT_TOP_N) });
-                setOpenMenu(null);
               }}
               onSessionChange={(value) => {
                 patchControls({ sessionTopN: normalizeSearchN(value, DEFAULT_SESSION_TOP_N) });
-                setOpenMenu(null);
               }}
             />
             <SearchMultiSelectMenu
@@ -574,18 +572,21 @@ function SearchResults({
           <div className="search-result-meta">Project: {result.projectKey}</div>
           <div className="search-result-items">
             {result.items.map((item) => {
+              const isExpandable = shouldPreview(item.content);
               const isExpanded = Boolean(expanded[item.id]);
               return (
                 <section key={item.id} className="search-hit">
                   <div className="search-hit-source">Source: {item.source}</div>
                   {item.title ? <h3>{item.title}</h3> : null}
-                  <div className={isExpanded ? 'search-hit-content search-hit-content-expanded' : 'search-hit-content'}>
+                  <div className={hitContentClass(isExpandable, isExpanded)}>
                     {item.content}
                   </div>
-                  <button className="search-hit-toggle" type="button" onClick={() => onToggle(item.id)}>
-                    {isExpanded ? <ChevronUp /> : <ChevronDown />}
-                    <span>{isExpanded ? 'Collapse' : 'Expand'}</span>
-                  </button>
+                  {isExpandable ? (
+                    <button className="search-hit-toggle" type="button" onClick={() => onToggle(item.id)}>
+                      {isExpanded ? <ChevronUp /> : <ChevronDown />}
+                      <span>{isExpanded ? 'Collapse' : 'Expand'}</span>
+                    </button>
+                  ) : null}
                 </section>
               );
             })}
@@ -594,4 +595,15 @@ function SearchResults({
       ))}
     </div>
   );
+}
+
+function shouldPreview(content: string): boolean {
+  return content.length > 220 || content.split('\n').length > 3;
+}
+
+function hitContentClass(isExpandable: boolean, isExpanded: boolean): string {
+  if (!isExpandable) {
+    return 'search-hit-content search-hit-content-complete';
+  }
+  return isExpanded ? 'search-hit-content search-hit-content-expanded' : 'search-hit-content';
 }
