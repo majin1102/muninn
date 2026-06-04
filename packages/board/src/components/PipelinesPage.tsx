@@ -206,11 +206,11 @@ function PipelineCard({ task, selected, onInspect }: {
         <span>{task.statusText}</span>
         <span>updated {relativeTime(task.updatedAt)}</span>
       </p>
-      <p className="pipeline-lifecycle-line">{pipelineLifecycleSummary(task)}</p>
       <div className="pipeline-io-grid">
         <PipelineIoBox label="Input" value={task.inputSummary} status={task.status} />
         <PipelineIoBox label="Output" value={task.outputSummary} status={task.status} />
       </div>
+      <p className="pipeline-lifecycle-line">{pipelineLifecycleSummary(task)}</p>
     </article>
   );
 }

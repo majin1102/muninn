@@ -2393,7 +2393,7 @@ svg {
 }
 
 .pipeline-lifecycle-line {
-  margin: -2px 0 0;
+  margin: 0;
   padding-left: 16px;
   color: #8f9195;
   font-size: 12px;
