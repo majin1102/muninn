@@ -546,7 +546,10 @@ export function buildSessionTurnPageForTests(params: {
 function loadPipelineTasksSnapshot(): PipelineTask[] {
   const now = new Date();
   const updatedAt = now.toISOString();
+  const startedAt = new Date(now.getTime() - 9 * 60_000).toISOString();
+  const doneStartedAt = new Date(now.getTime() - 24 * 60_000).toISOString();
   const queuedAt = new Date(now.getTime() - 20_000).toISOString();
+  const failedStartedAt = new Date(now.getTime() - 5 * 60_000).toISOString();
   const failedAt = new Date(now.getTime() - 75_000).toISOString();
 
   return [
@@ -557,6 +560,7 @@ function loadPipelineTasksSnapshot(): PipelineTask[] {
       target: 'Entity: Session snapshot',
       status: 'running',
       statusText: 'generating observation draft from recent session work',
+      startedAt,
       updatedAt,
       inputSummary: 'Recent session observations',
       outputSummary: 'Global observation draft in progress',
@@ -582,6 +586,8 @@ function loadPipelineTasksSnapshot(): PipelineTask[] {
       target: 'codex session import timeline',
       status: 'done',
       statusText: 'produced session observations and queued global work',
+      startedAt: doneStartedAt,
+      endedAt: queuedAt,
       updatedAt: queuedAt,
       inputSummary: 'Recent turn window',
       outputSummary: 'Session observations',
@@ -607,6 +613,8 @@ function loadPipelineTasksSnapshot(): PipelineTask[] {
       target: 'Entity: Board settings',
       status: 'failed',
       statusText: 'parser validation failed after session observations',
+      startedAt: failedStartedAt,
+      endedAt: failedAt,
       updatedAt: failedAt,
       inputSummary: 'Session observations',
       outputSummary: 'Blocked by parser validation',

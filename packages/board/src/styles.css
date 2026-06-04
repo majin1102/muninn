@@ -2146,7 +2146,7 @@ svg {
 }
 
 .pipelines-page-inspecting {
-  grid-template-columns: minmax(0, 1fr) 360px;
+  grid-template-columns: minmax(420px, 1fr) minmax(460px, 520px);
 }
 
 .pipelines-content {
@@ -2392,6 +2392,14 @@ svg {
   line-height: 1.4;
 }
 
+.pipeline-lifecycle-line {
+  margin: -2px 0 0;
+  padding-left: 16px;
+  color: #8f9195;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
 .pipeline-status-line span + span::before {
   content: "·";
   margin-right: 7px;
@@ -2483,10 +2491,42 @@ svg {
   display: grid;
   align-content: start;
   gap: 12px;
-  padding: 28px 20px;
+  padding: 28px 24px;
   border-left: 1px solid var(--border);
   background: #fbfbfb;
   overflow-y: auto;
+}
+
+.pipeline-inspector-meta {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0;
+}
+
+.pipeline-inspector-meta div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.pipeline-inspector-meta dt {
+  color: #8f9195;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.pipeline-inspector-meta dd {
+  margin: 0;
+  min-width: 0;
+  color: var(--foreground);
+  font-size: 13px;
+  line-height: 1.35;
 }
 
 .pipeline-inspector-header {
@@ -2647,6 +2687,10 @@ svg {
     font-size: 12px;
   }
 
+  .pipeline-lifecycle-line {
+    padding-left: 16px;
+  }
+
   .pipeline-io-grid {
     grid-template-columns: 1fr;
   }
@@ -2660,7 +2704,7 @@ svg {
     position: absolute;
     top: 0;
     right: 0;
-    width: min(360px, calc(100vw - 52px));
+    width: min(520px, calc(100vw - 52px));
     box-shadow: -8px 0 24px rgba(0, 0, 0, 0.08);
   }
 }
@@ -2674,6 +2718,10 @@ svg {
     align-items: flex-start;
     flex-direction: column;
     gap: 4px;
+  }
+
+  .pipeline-inspector-meta {
+    grid-template-columns: 1fr;
   }
 }
 

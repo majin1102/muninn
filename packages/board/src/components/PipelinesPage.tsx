@@ -206,6 +206,7 @@ function PipelineCard({ task, selected, onInspect }: {
         <span>{task.statusText}</span>
         <span>updated {relativeTime(task.updatedAt)}</span>
       </p>
+      <p className="pipeline-lifecycle-line">{pipelineLifecycleSummary(task)}</p>
       <div className="pipeline-io-grid">
         <PipelineIoBox label="Input" value={task.inputSummary} status={task.status} />
         <PipelineIoBox label="Output" value={task.outputSummary} status={task.status} />
@@ -236,6 +237,14 @@ function PipelineInspector({ task, onClose }: { task: PipelineTask; onClose(): v
           <X />
         </button>
       </div>
+      <dl className="pipeline-inspector-meta">
+        {pipelineLifecycleDetails(task).map((item) => (
+          <div key={item.label}>
+            <dt>{item.label}</dt>
+            <dd>{item.value}</dd>
+          </div>
+        ))}
+      </dl>
       <PipelineInspectorSection title="Input" items={task.inputDetails} fallback={task.inputSummary} />
       <PipelineInspectorSection title="Output" items={task.outputDetails} fallback={task.outputSummary} />
       <PipelineInspectorSection title="Trace" items={task.trace} fallback={task.statusText} />
@@ -285,6 +294,89 @@ function statusLabel(status: PipelineTaskStatus): string {
     case 'done':
       return 'done';
   }
+}
+
+function pipelineLifecycleSummary(task: PipelineTask): string {
+  if (task.status === 'queued') {
+    return `queued ${formatTime(task.updatedAt)} · waiting for ${formatDuration(task.updatedAt, null)}`;
+  }
+  if (task.status === 'running') {
+    return `started ${formatTime(task.startedAt)} · running for ${formatDuration(task.startedAt, null)}`;
+  }
+  if (task.status === 'failed') {
+    return `started ${formatTime(task.startedAt)} · failed ${formatTime(task.endedAt ?? task.updatedAt)} · duration ${formatDuration(task.startedAt, task.endedAt ?? task.updatedAt)}`;
+  }
+  return `started ${formatTime(task.startedAt)} · ended ${formatTime(task.endedAt ?? task.updatedAt)} · duration ${formatDuration(task.startedAt, task.endedAt ?? task.updatedAt)}`;
+}
+
+function pipelineLifecycleDetails(task: PipelineTask): Array<{ label: string; value: string }> {
+  const endLabel = task.status === 'failed' ? 'Failed' : 'Ended';
+  const endValue = task.status === 'running' || task.status === 'queued'
+    ? 'In progress'
+    : formatDateTime(task.endedAt ?? task.updatedAt);
+  const durationEnd = task.status === 'running' || task.status === 'queued'
+    ? null
+    : task.endedAt ?? task.updatedAt;
+
+  return [
+    { label: task.status === 'queued' ? 'Queued' : 'Started', value: formatDateTime(task.status === 'queued' ? task.updatedAt : task.startedAt) },
+    { label: endLabel, value: endValue },
+    { label: 'Duration', value: formatDuration(task.status === 'queued' ? task.updatedAt : task.startedAt, durationEnd) },
+    { label: 'Updated', value: formatDateTime(task.updatedAt) },
+  ];
+}
+
+function formatTime(value: string | undefined | null): string {
+  if (!value) {
+    return 'unknown';
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return 'unknown';
+  }
+  return new Intl.DateTimeFormat(undefined, {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).format(date);
+}
+
+function formatDateTime(value: string | undefined | null): string {
+  if (!value) {
+    return 'unknown';
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return 'unknown';
+  }
+  return new Intl.DateTimeFormat(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).format(date);
+}
+
+function formatDuration(start: string | undefined | null, end: string | undefined | null): string {
+  if (!start) {
+    return 'unknown';
+  }
+  const startMs = new Date(start).getTime();
+  const endMs = end ? new Date(end).getTime() : Date.now();
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs < startMs) {
+    return 'unknown';
+  }
+  const totalMinutes = Math.max(1, Math.round((endMs - startMs) / 60_000));
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  if (hours === 0) {
+    return `${minutes}m`;
+  }
+  if (minutes === 0) {
+    return `${hours}h`;
+  }
+  return `${hours}h ${minutes}m`;
 }
 
 function relativeTime(value: string | null): string {

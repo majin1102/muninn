@@ -229,6 +229,8 @@ export interface PipelineTask {
   target: string;
   status: PipelineTaskStatus;
   statusText: string;
+  startedAt?: string;
+  endedAt?: string;
   updatedAt: string;
   inputSummary: string;
   outputSummary: string;
