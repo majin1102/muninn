@@ -1,129 +1,108 @@
-# Board Search Session-Grouped Results
+# Board Search Experience Design
 
 ## Goal
 
-Add a product-driven Search page to Muninn Board that behaves like a focused search engine for historical agent memory. Users should be able to enter a query, scope it by project and session, and receive a unified result structure organized by session.
+Build a product-driven Search page for Muninn Board that behaves like a focused search engine for historical agent memory. Users enter a multi-line query, optionally scope it by project/session, and receive evidence grouped by session.
 
-The first version optimizes for this task:
-
-- "I remember we discussed something before; help me find the relevant memory and original context."
-
-It should not become an answer-generation surface in this version. It should return searchable evidence and context with clear provenance.
+The first version optimizes for finding prior context, not generating an answer. Search should return provenance-rich results that can later link into a right-pane detail view.
 
 ## Scope
 
 In scope:
 
-- Replace the current Search empty state with a usable search page.
-- Keep `#/search` as the route.
-- Add a Board UI search API that returns one unified result shape.
-- Support request-level scoping by project and session.
-- Render results grouped by session name.
-- Show per-item source labels such as `extraction` and `conversation`.
-- Support expandable result item bodies with a fixed preview height.
-- Add demo data that exercises project, session, source, and expansion behavior.
+- Keep `#/search` as the Board route.
+- Replace the placeholder search view with a Codex-style composer.
+- Add a Board UI search API with one unified session-grouped result shape.
+- Support request-level scope by multiple projects and multiple sessions.
+- Support configurable global Top and per-session Top values.
+- Render results grouped by session.
+- Render each hit with one source label, such as `conversation` or `extraction`.
+- Render fixed-height previews with per-item expand/collapse.
+- Add `demo=1` data that covers long project/session titles, multiple agents, and expandable result content.
 
 Out of scope:
 
-- No generated answer or summary at the top of results.
-- No right-pane detail view for result links in this version.
+- No generated answer summary.
+- No right-pane link target UI in this version.
 - No edit workflow.
-- No forward-compatible result schema variants.
-- No front-end-only filtering after a broad global search.
+- No schema compatibility layer for obsolete search shapes.
+- No front-end-only filtering after a broad backend search.
 
-## Search Page Interaction
+## Composer
 
-The Search page has two layout states.
+The empty Search page centers a composer slightly above the page midpoint. The slogan is:
 
-Initial state:
+```text
+What do you want to know
+```
 
-- Search input is centered slightly above the middle of the content area.
-- A compact gray configuration row sits under the input.
-- No result list is shown.
+The composer mirrors the Codex interaction style:
 
-Submitted state:
+- A white multi-line textarea.
+- A compact lower row with a `+` menu, provider selector, and a small circular submit button.
+- A gray configuration row below the input.
+- Enter submits the query unless Shift is held or the input is composing text.
+- Empty query disables submit.
+- Typing alone does not issue requests.
 
-- Search input moves to the top of the result area.
-- The same configuration row remains under the input.
-- Results render below the configuration row.
+The provider selector is visual-only in this version. It displays `Default` and uses the `BotMessageSquare` icon because it reads better than hardware-style icons at the current small size and matches the future model/provider use case.
 
-Search is explicit:
+The `+` menu is reserved for future multi-modal search. It exposes placeholder options for `Image`, `File`, and `Agent`.
 
-- Pressing Enter submits the search.
-- Clicking the search button submits the search.
-- Typing does not automatically issue search requests.
-- Empty query does not submit.
+## Controls
 
-## Search Controls
+The gray configuration row contains exactly these controls, in this order:
 
-The configuration row contains these controls, with these exact labels:
+1. `Top <n>`
+2. `Project <value>`
+3. `Session <value>`
 
-- `Project`
-- `Session`
-- `Session Top N`
-- `Top N`
+`Top <n>`:
+
+- Opens a small menu with numeric inputs for `Global` and `Session`.
+- `Global` controls how many session groups are returned.
+- `Session` controls how many hit items may be returned inside each session group.
+- Values must be positive integers.
+- The collapsed label only shows the global value, for example `Top 20`.
 
 `Project`:
 
 - Defaults to `All`.
-- Scopes the search request when a specific project is selected.
+- Supports multi-select.
+- Empty selection means all projects.
+- A single selected project shows its label.
+- Multiple selected projects show the selected count.
+- Long project names stay on one line in the menu, with width expanding to content up to a viewport cap.
 
 `Session`:
 
 - Defaults to `All`.
-- Disabled when `Project` is `All`.
-- Shows only sessions from the selected project when a specific project is selected.
-- Scopes the search request when a specific session is selected.
-
-`Session Top N`:
-
-- Controls how many hit items each session result may contain.
-- Must be a positive integer.
-- Should be exposed as a compact select or equivalent constrained control.
-
-`Top N`:
-
-- Controls how many session results the API returns.
-- Must be a positive integer.
-- Should be exposed as a compact select or equivalent constrained control.
-
-## Result Rendering
-
-Results are rendered as a list of session results.
-
-Each session result:
-
-- Uses the session name as the title.
-- Shows a gray metadata line with `Project: <project>`.
-- Contains up to `Session Top N` hit items.
-
-Each hit item:
-
-- Shows exactly one `Source` label, such as `Source: extraction` or `Source: conversation`.
-- Shows the matched content as evidence-first text, not generated answer prose.
-- Uses a fixed preview height by default.
-- Shows an expand/collapse affordance when content exceeds the preview height.
-- May carry link/reference data for future right-pane detail behavior.
-
-The UI should not split rendering by underlying storage type. All results should flow through the same `session result -> hit items` structure.
+- Supports multi-select.
+- Empty selection means all sessions.
+- The menu shows sessions from all selected projects; if no project is selected, it shows all sessions.
+- The control button uses the same session icon as the left navigation.
+- Session menu rows retain agent icons to help distinguish duplicate session names across agents.
+- Long session names stay on one line in the menu, with width expanding to content up to a viewport cap.
 
 ## API
 
-Add a Board-specific UI endpoint:
+Add a Board UI endpoint:
 
 ```http
 GET /api/v1/ui/search
 ```
 
-Request query parameters:
+Query parameters:
 
 - `query`: required non-empty string.
-- `projectKey`: optional. Missing or `all` means all projects.
-- `sessionKey`: optional. Valid only when `projectKey` selects a specific project.
+- `projectKey`: optional repeated parameter. Missing or `all` means all projects.
+- `sessionKey`: optional repeated parameter. Missing or `all` means all sessions.
 - `sessionTopN`: optional positive integer. Defaults to `3`.
 - `topN`: optional positive integer. Defaults to `20`.
 
-The endpoint returns:
+The API accepts session-only scoping. A session filter does not require a project filter.
+
+Response:
 
 ```ts
 type SearchResponse = {
@@ -157,11 +136,9 @@ type SearchResultLink = {
 };
 ```
 
-The API is intentionally separate from the existing recall API. Existing recall behavior may be used internally, but it must not define the product-facing result structure.
-
 ## Retrieval And Aggregation
 
-Search backends should normalize raw hits into candidates before grouping:
+Search normalizes raw matches into a single candidate structure before grouping:
 
 ```ts
 type SearchCandidate = {
@@ -179,73 +156,78 @@ type SearchCandidate = {
 };
 ```
 
-The first version should cover two source classes:
+Sources:
 
-- `conversation`: session or turn title, summary, prompt, response, and rendered conversation content.
+- `conversation`: title, summary, prompt, response, and rendered turn content.
 - `extraction`: distilled memory extraction content.
 
 Aggregation rules:
 
-1. Apply project and session scope during retrieval.
+1. Apply project/session scope during candidate construction.
 2. Rank candidates by relevance.
 3. Group candidates by `sessionKey`.
-4. Sort each session's items by score and keep `Session Top N`.
-5. Sort session results by the best score in each session.
-6. Use `latestUpdatedAt` as a deterministic tie-breaker.
-7. Return only `Top N` session results.
+4. Sort each session's hit items by score and keep `sessionTopN`.
+5. Sort session groups by best item score.
+6. Use `latestUpdatedAt` as deterministic tie-breaker.
+7. Return only `topN` session groups.
 
-This design treats the returned session result as the primary search unit. Multiple matching topics inside the same session remain one session result with multiple hit items.
+The UI always renders the same structure regardless of whether a hit came from conversation text or extraction text.
 
-## States And Errors
+## States
 
-UI states:
+Initial:
 
-- Initial: centered search input and configuration row.
-- Loading: keep the input and controls visible; show loading in the result area.
-- Results: show session-grouped results.
-- No results: show `No results found.` and preserve the current query and controls.
-- Error: show the backend error message and preserve the current query and controls.
+- Centered slogan and composer.
+- No result list.
 
-Validation:
+Loading:
 
-- Empty query does not send a request.
-- `Session` is disabled when `Project` is `All`.
-- `sessionKey` is not sent when `Project` is `All`.
-- The API rejects `sessionKey` when `projectKey` is missing or `all`.
-- Invalid `Session Top N` or `Top N` values are prevented by constrained UI controls and rejected by the API if received.
+- Composer remains visible.
+- Result area shows a loading state.
 
-Expansion state:
+Results:
 
-- Each hit item expands and collapses independently.
-- A new search response resets prior expansion state.
+- Composer remains at the top.
+- Results render as session groups.
 
-## Testing And Acceptance Criteria
+No results:
 
-API tests:
+- Show `No results found.`.
+- Preserve query and controls.
 
-- `GET /api/v1/ui/search` rejects missing or blank `query`.
-- Invalid `sessionTopN` and `topN` values are rejected.
-- `sessionKey` without a specific `projectKey` is rejected.
-- Scoped project search returns only results from that project.
-- Scoped session search returns only results from that session.
-- Results are grouped by session.
-- Each session result contains no more than `Session Top N` items.
-- The response contains no more than `Top N` session results.
+Error:
 
-Board client and UI tests:
+- Show backend error text.
+- Preserve query and controls.
 
-- The client parses `SearchResponse`.
-- Initial state renders centered search input and controls.
-- Enter and search button submit the query.
-- Typing alone does not submit the query.
-- `Project = All` disables `Session`.
-- Selecting a project enables `Session` and narrows its options to that project.
-- Result cards render session title, `Project` metadata, hit item `Source`, preview content, and expand/collapse behavior.
-- No-results, loading, and error states are visible and stable.
+Expansion:
 
-Demo data:
+- Each hit expands/collapses independently.
+- New search response resets expansion state.
 
-- At least two projects.
-- At least one project with multiple sessions.
-- At least one session with both `extraction` and `conversation` hit items.
-- At least one long hit item that exercises expansion.
+## Acceptance Criteria
+
+- Search composer visually matches the Codex-style interaction agreed in the thread.
+- Slogan text is `What do you want to know`.
+- Provider selector uses `BotMessageSquare`.
+- Search input supports multiple lines.
+- Submit button is small and icon-only.
+- Top menu supports user-entered global and session numeric values.
+- Project and Session support multi-select with `All` as empty selection.
+- Project and Session menus expand for long labels and do not wrap labels.
+- Session menu items show agent icons.
+- API supports repeated `projectKey` and `sessionKey`.
+- API supports session-only scope.
+- Results are grouped by session with unified hit item rendering.
+- Each hit shows exactly one source.
+- Demo mode exercises long project/session names and expandable content.
+
+## Verification
+
+Run:
+
+```sh
+source ~/.zprofile && node --test packages/board/test/search-state.test.mjs packages/board/test/search-server.test.mjs
+source ~/.zprofile && node --test --test-name-pattern "board search" packages/sidecar/test/session_flow.test.mjs
+source ~/.zprofile && pnpm --filter @muninn/board build
+```
