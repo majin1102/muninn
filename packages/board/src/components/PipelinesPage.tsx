@@ -204,7 +204,6 @@ function PipelineCard({ task, selected, onInspect }: {
       </div>
       <p className="pipeline-status-line">
         <span>{capitalizeSentence(task.statusText)}</span>
-        <span>updated {relativeTime(task.updatedAt)}</span>
       </p>
       <div className="pipeline-io-grid">
         <PipelineMetricBox label="Input" metric={task.input} status={task.status} />
