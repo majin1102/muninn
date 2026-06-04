@@ -197,13 +197,13 @@ function PipelineCard({ task, selected, onInspect }: {
           <strong>{kindLabel(task.kind)}</strong>
           <span>{task.target}</span>
         </div>
+        <span className={`pipeline-status-text pipeline-status-text-${task.status}`}>{statusLabel(task.status)}</span>
         <button className="pipeline-inspect-button" type="button" aria-label={`Inspect ${task.title}`} onClick={onInspect}>
           <Eye />
         </button>
       </div>
       <p className="pipeline-status-line">
-        <span className={`pipeline-status-text pipeline-status-text-${task.status}`}>{statusLabel(task.status)}</span>
-        <span>{task.statusText}</span>
+        <span>{capitalizeSentence(task.statusText)}</span>
         <span>updated {relativeTime(task.updatedAt)}</span>
       </p>
       <div className="pipeline-io-grid">
@@ -286,14 +286,18 @@ function kindLabel(kind: PipelineTaskKind): string {
 function statusLabel(status: PipelineTaskStatus): string {
   switch (status) {
     case 'running':
-      return 'Running';
+      return 'running';
     case 'queued':
-      return 'Queued';
+      return 'queued';
     case 'failed':
-      return 'Failed';
+      return 'failed';
     case 'done':
-      return 'Done';
+      return 'done';
   }
+}
+
+function capitalizeSentence(value: string): string {
+  return value.length > 0 ? `${value[0]!.toUpperCase()}${value.slice(1)}` : value;
 }
 
 function pipelineLifecycleSummary(task: PipelineTask): string {
