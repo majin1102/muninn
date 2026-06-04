@@ -2308,21 +2308,21 @@ svg {
 
 .pipeline-card {
   display: grid;
-  gap: 6px;
-  padding: 14px 16px 15px;
-  border: 1px solid var(--border);
+  gap: 9px;
+  padding: 16px 18px 17px;
+  border: 1px solid #e6e6e6;
   border-radius: 8px;
   background: #ffffff;
 }
 
 .pipeline-card-selected {
-  border-color: #cbd3dc;
-  box-shadow: 0 0 0 1px #eef1f4;
+  border-color: #cfd6dd;
+  box-shadow: none;
 }
 
 .pipeline-card-failed {
-  border-color: #f1c8c8;
-  background: #fffafa;
+  border-color: #f0cccc;
+  background: #fffdfd;
 }
 
 .pipeline-card-top {
