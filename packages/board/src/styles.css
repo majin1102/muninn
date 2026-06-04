@@ -2455,8 +2455,8 @@ svg {
   display: grid;
   grid-template-rows: auto minmax(18px, auto);
   align-content: start;
-  gap: 8px;
-  padding: 10px 12px;
+  gap: 7px;
+  padding: 11px 12px 10px;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: #ffffff;
@@ -2468,9 +2468,9 @@ svg {
 
 .pipeline-io-box > span {
   color: var(--foreground);
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 600;
-  line-height: 1.2;
+  line-height: 1.25;
 }
 
 .pipeline-io-box strong {
