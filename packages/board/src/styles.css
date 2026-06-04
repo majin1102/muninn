@@ -2411,6 +2411,11 @@ svg {
   font-weight: 600;
 }
 
+.pipeline-card-top .pipeline-status-text {
+  font-size: 12px;
+  font-weight: 400;
+}
+
 .pipeline-status-text-running {
   color: #237a3b;
 }
