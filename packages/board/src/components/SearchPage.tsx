@@ -127,6 +127,7 @@ export function SearchPage({
       return;
     }
     event.preventDefault();
+    event.currentTarget.blur();
     void submit();
   }
 

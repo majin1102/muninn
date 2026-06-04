@@ -2352,7 +2352,7 @@ svg {
 
 .search-page-submitted {
   align-items: stretch;
-  padding-top: 34px;
+  padding-top: 28px;
 }
 
 .search-form {
@@ -2376,7 +2376,7 @@ svg {
   border: 1px solid #dedede;
   border-radius: 16px;
   background: #fff;
-  box-shadow: 0 18px 46px rgba(15, 18, 22, 0.08);
+  box-shadow: none;
 }
 
 .search-input-shell {
@@ -2405,6 +2405,32 @@ svg {
 
 .search-input-shell textarea::placeholder {
   color: #8b8e94;
+}
+
+.search-page-submitted .search-input-shell {
+  min-height: 62px;
+  padding-top: 10px;
+}
+
+.search-page-submitted .search-input-shell textarea {
+  height: 24px !important;
+  min-height: 24px;
+  max-height: 24px;
+  overflow: hidden;
+  line-height: 1.45;
+}
+
+.search-page-submitted .search-input-shell:focus-within {
+  min-height: 104px;
+  padding-top: 14px;
+}
+
+.search-page-submitted .search-input-shell:focus-within textarea {
+  height: auto !important;
+  min-height: 66px;
+  max-height: 188px;
+  overflow: auto;
+  line-height: 1.48;
 }
 
 .search-main-toolbar {
@@ -2690,7 +2716,7 @@ button.search-menu-item:hover,
 
 .search-results {
   width: min(780px, 100%);
-  margin: 28px auto 0;
+  margin: 24px auto 0;
 }
 
 .search-result {
@@ -3909,7 +3935,7 @@ button.search-menu-item:hover,
   }
 
   .search-page-submitted {
-    padding-top: 28px;
+    padding-top: 24px;
   }
 
   .search-form,
