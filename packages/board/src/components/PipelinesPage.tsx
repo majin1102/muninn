@@ -1,6 +1,6 @@
 import type { PipelineTask, PipelineTaskKind, PipelineTaskStatus, PipelineTasksResponse } from '@muninn/types';
 import { ChevronDown, Circle, Eye, X } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { BoardClient } from '../lib/api.js';
 import {
   defaultSelectedPipelineTaskId,
@@ -36,6 +36,7 @@ const TIME_FILTERS: Array<{ value: PipelineTimeFilter; label: string }> = [
   { value: 'last_7d', label: 'Last 7d' },
   { value: 'all', label: 'All time' },
 ];
+const PIPELINE_REFRESH_INTERVAL_MS = 10_000;
 
 export function PipelinesPage({ client }: PipelinesPageProps) {
   const [response, setResponse] = useState<PipelineTasksResponse | null>(null);
@@ -46,35 +47,51 @@ export function PipelinesPage({ client }: PipelinesPageProps) {
   const [timeFilter, setTimeFilter] = useState<PipelineTimeFilter>('last_24h');
   const [inspectedTaskId, setInspectedTaskId] = useState<string | null>(null);
 
+  const loadPipelineTasks = useCallback(async (options: { silent: boolean }, isCancelled: () => boolean) => {
+    if (!options.silent) {
+      setLoading(true);
+    }
+    setError(null);
+
+    try {
+      const nextResponse = await client.getPipelineTasks();
+      if (isCancelled()) {
+        return;
+      }
+      setResponse(nextResponse);
+      setInspectedTaskId((currentTaskId) => (
+        currentTaskId !== null && !nextResponse.tasks.some((task) => task.id === currentTaskId)
+          ? null
+          : currentTaskId
+      ));
+    } catch (loadError: unknown) {
+      if (isCancelled()) {
+        return;
+      }
+      if (!options.silent) {
+        setResponse(null);
+      }
+      setError(asErrorMessage(loadError));
+    } finally {
+      if (!isCancelled() && !options.silent) {
+        setLoading(false);
+      }
+    }
+  }, [client]);
+
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
-    setError(null);
-    client.getPipelineTasks()
-      .then((nextResponse) => {
-        if (cancelled) {
-          return;
-        }
-        setResponse(nextResponse);
-        setInspectedTaskId(null);
-      })
-      .catch((loadError: unknown) => {
-        if (cancelled) {
-          return;
-        }
-        setResponse(null);
-        setError(asErrorMessage(loadError));
-      })
-      .finally(() => {
-        if (!cancelled) {
-          setLoading(false);
-        }
-      });
+    const isCancelled = () => cancelled;
+    void loadPipelineTasks({ silent: false }, isCancelled);
+    const refreshId = window.setInterval(() => {
+      void loadPipelineTasks({ silent: true }, isCancelled);
+    }, PIPELINE_REFRESH_INTERVAL_MS);
 
     return () => {
       cancelled = true;
+      window.clearInterval(refreshId);
     };
-  }, [client]);
+  }, [loadPipelineTasks]);
 
   const tasks = response?.tasks ?? [];
   const visibleTasks = useMemo(

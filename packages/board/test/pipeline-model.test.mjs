@@ -22,6 +22,8 @@ function task(patch) {
     target: patch.target ?? 'Entity: Memory',
     status: patch.status,
     statusText: patch.statusText ?? 'processing memory work',
+    startedAt: patch.startedAt,
+    endedAt: patch.endedAt,
     updatedAt: patch.updatedAt,
     input: patch.input ?? { bytes: 1024, tokens: 320 },
     output: patch.output,
@@ -77,4 +79,31 @@ test('selects running task before failed, queued, and done tasks', async () => {
   ];
 
   assert.equal(defaultSelectedPipelineTaskId(tasks), 'running');
+});
+
+test('shifts pipeline task times relative to the newest update', async () => {
+  const { shiftPipelineTaskTimes } = await loadPipelineModel();
+  const tasks = [
+    task({
+      id: 'older',
+      status: 'done',
+      startedAt: '2026-06-04T08:00:00.000Z',
+      endedAt: '2026-06-04T08:10:00.000Z',
+      updatedAt: '2026-06-04T08:10:00.000Z',
+    }),
+    task({
+      id: 'latest',
+      status: 'running',
+      startedAt: '2026-06-04T08:20:00.000Z',
+      updatedAt: '2026-06-04T08:40:00.000Z',
+    }),
+  ];
+
+  const shifted = shiftPipelineTaskTimes(tasks, new Date('2026-06-05T08:40:00.000Z').getTime());
+
+  assert.equal(shifted[0].startedAt, '2026-06-05T08:00:00.000Z');
+  assert.equal(shifted[0].endedAt, '2026-06-05T08:10:00.000Z');
+  assert.equal(shifted[0].updatedAt, '2026-06-05T08:10:00.000Z');
+  assert.equal(shifted[1].startedAt, '2026-06-05T08:20:00.000Z');
+  assert.equal(shifted[1].updatedAt, '2026-06-05T08:40:00.000Z');
 });

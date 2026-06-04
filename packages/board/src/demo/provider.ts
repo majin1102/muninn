@@ -12,7 +12,7 @@ import {
   type DemoSessionGroupItem,
   type DemoSessionTimelineItem,
 } from './data.js';
-import { summarizePipelineTasks } from '../lib/pipeline_model.js';
+import { shiftPipelineTaskTimes, summarizePipelineTasks } from '../lib/pipeline_model.js';
 
 export async function getDemoSessionAgents(): Promise<DemoSessionAgentItem[]> {
   return demoAgents;
@@ -103,9 +103,10 @@ export async function getDemoObservings(): Promise<DemoObservingListItem[]> {
 }
 
 export async function getDemoPipelineTasks(): Promise<PipelineTasksResponse> {
+  const tasks = shiftPipelineTaskTimes(demoPipelineTasks);
   return {
-    summary: summarizePipelineTasks(demoPipelineTasks),
-    tasks: demoPipelineTasks,
+    summary: summarizePipelineTasks(tasks),
+    tasks,
     requestId: 'demo-pipelines',
   };
 }

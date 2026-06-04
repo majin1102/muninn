@@ -63,3 +63,35 @@ export function filterPipelineTasks(
     .filter((task) => cutoff === null || new Date(task.updatedAt).getTime() >= cutoff)
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
 }
+
+export function shiftPipelineTaskTimes(tasks: PipelineTask[], nowMs = Date.now()): PipelineTask[] {
+  const latestUpdatedMs = tasks.reduce<number | null>((latest, task) => {
+    const updatedMs = new Date(task.updatedAt).getTime();
+    if (!Number.isFinite(updatedMs)) {
+      return latest;
+    }
+    return latest === null || updatedMs > latest ? updatedMs : latest;
+  }, null);
+  if (latestUpdatedMs === null) {
+    return tasks;
+  }
+
+  const offsetMs = nowMs - latestUpdatedMs;
+  return tasks.map((task) => ({
+    ...task,
+    startedAt: shiftTimestamp(task.startedAt, offsetMs),
+    endedAt: shiftTimestamp(task.endedAt, offsetMs),
+    updatedAt: shiftTimestamp(task.updatedAt, offsetMs) ?? task.updatedAt,
+  }));
+}
+
+function shiftTimestamp(value: string | undefined, offsetMs: number): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const timestampMs = new Date(value).getTime();
+  if (!Number.isFinite(timestampMs)) {
+    return value;
+  }
+  return new Date(timestampMs + offsetMs).toISOString();
+}
