@@ -2517,7 +2517,7 @@ svg {
   width: 28px;
   height: 28px;
   border: 0;
-  border-radius: 6px;
+  border-radius: 999px;
   padding: 0;
   background: #339cff;
   color: #fff;
@@ -2767,7 +2767,7 @@ button.search-menu-item:hover,
 }
 
 .search-results {
-  width: min(680px, 100%);
+  width: min(640px, 100%);
   margin: 8px auto 0;
 }
 
@@ -2775,12 +2775,13 @@ button.search-menu-item:hover,
   display: inline-flex;
   align-items: center;
   gap: 2px;
-  width: min(680px, 100%);
+  width: min(640px, 100%);
   min-height: 30px;
   margin: 8px auto 0;
 }
 
 .search-source-tab {
+  box-sizing: border-box;
   height: 28px;
   border: 0;
   border-radius: 6px;
@@ -2791,6 +2792,7 @@ button.search-menu-item:hover,
   font-weight: 500;
   letter-spacing: 0;
   padding: 0 10px;
+  white-space: nowrap;
 }
 
 .search-source-tab:hover {
@@ -2801,7 +2803,6 @@ button.search-menu-item:hover,
 .search-source-tab-active {
   background: #f0f0f0;
   color: #1a1c1f;
-  font-weight: 600;
 }
 
 .search-result {
@@ -2876,7 +2877,7 @@ button.search-menu-item:hover,
 
 .search-status,
 .search-error {
-  width: min(680px, 100%);
+  width: min(640px, 100%);
   margin: 28px auto 0;
   color: var(--muted-foreground);
 }
@@ -4035,7 +4036,7 @@ button.search-menu-item:hover,
   .search-results,
   .search-status,
   .search-error {
-    width: min(680px, 100%);
+    width: min(640px, 100%);
   }
 
   .search-source-tabs {
