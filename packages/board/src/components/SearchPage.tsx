@@ -20,9 +20,9 @@ import type { BoardClient, ProjectNode } from '../lib/api.js';
 import {
   DEFAULT_SESSION_TOP_N,
   DEFAULT_TOP_N,
-  SEARCH_ALL_VALUE,
   defaultSearchControls,
   normalizeSearchN,
+  sessionKeysForRequest,
   sessionOptionsForProjects,
   type SearchControlsState,
 } from '../lib/search_state.js';
@@ -163,7 +163,7 @@ export function SearchPage({
       const response = await client.search({
         query,
         projectKeys: controls.projectKeys,
-        sessionKeys: requestSessionKeys(controls.sessionKeys, sessionOptions),
+        sessionKeys: sessionKeysForRequest(controls.sessionKeys, sessionOptions),
         sessionTopN: controls.sessionTopN,
         topN: controls.topN,
       });
@@ -455,8 +455,11 @@ function SearchMultiSelectMenu({
 }) {
   const selected = new Set(values);
   const rawValueLabel = multiValueLabel(values, options);
-  const singleNameIsLong = values.length === 1 && singleNameLimit !== undefined && rawValueLabel.length > singleNameLimit;
-  const hideLabel = hideLabelWhenSingle && values.length === 1 && !singleNameIsLong;
+  const isSingleValue = values.length === 1;
+  const singleNameIsLong = isSingleValue
+    && singleNameLimit !== undefined
+    && rawValueLabel.length > singleNameLimit;
+  const hideLabel = hideLabelWhenSingle && isSingleValue && !singleNameIsLong;
   const valueLabel = singleNameIsLong ? '1' : rawValueLabel;
   return (
     <div className="search-control-wrap">
@@ -629,11 +632,6 @@ function toggleValue(values: string[], value: string): string[] {
   return values.includes(value)
     ? values.filter((item) => item !== value)
     : [...values, value];
-}
-
-function requestSessionKeys(values: string[], options: SearchOption[]): string[] {
-  const optionByValue = new Map(options.map((option) => [option.value, option]));
-  return [...new Set(values.map((value) => optionByValue.get(value)?.sessionKey ?? value))];
 }
 
 function multiValueLabel(values: string[], options: SearchOption[]): string {

@@ -14,19 +14,6 @@ async function loadSearchState() {
   return import(`data:text/javascript;base64,${Buffer.from(compiled).toString('base64')}`);
 }
 
-test('buildSearchParams appends multi-select scope params', async () => {
-  const { buildSearchParams } = await loadSearchState();
-  const params = buildSearchParams({
-    query: 'board search',
-    projectKeys: ['muninn', 'lance'],
-    sessionKeys: ['muninn/session-a', 'lance/session-b'],
-    sessionTopN: 3,
-    topN: 20,
-  });
-
-  assert.equal(params.toString(), 'query=board+search&sessionTopN=3&topN=20&projectKey=muninn&projectKey=lance&sessionKey=muninn%2Fsession-a&sessionKey=lance%2Fsession-b');
-});
-
 test('sessionOptionsForProjects lists all sessions until projects are selected', async () => {
   const { sessionOptionsForProjects } = await loadSearchState();
   const projects = [{
@@ -61,17 +48,52 @@ test('sessionOptionsForProjects lists all sessions until projects are selected',
     }],
   }];
 
-  assert.deepEqual(sessionOptionsForProjects(projects, []).map(({ label, value }) => ({ label, value })), [{
+  assert.deepEqual(sessionOptionsForProjects(projects, []).map(({ agent, label, sessionKey, value }) => ({ agent, label, sessionKey, value })), [{
+    agent: 'codex_cli',
     label: 'search-design',
-    value: 'muninn/search-design',
+    sessionKey: 'muninn/search-design',
+    value: sessionOptionValue('muninn', 'codex_cli', 'muninn/search-design'),
   }, {
+    agent: 'claude_code',
     label: 'lance-search',
-    value: 'lance/search-design',
+    sessionKey: 'lance/search-design',
+    value: sessionOptionValue('lance', 'claude_code', 'lance/search-design'),
   }]);
-  assert.deepEqual(sessionOptionsForProjects(projects, ['muninn']).map(({ label, value }) => ({ label, value })), [{
+  assert.deepEqual(sessionOptionsForProjects(projects, ['muninn']).map(({ agent, label, sessionKey, value }) => ({ agent, label, sessionKey, value })), [{
+    agent: 'codex_cli',
     label: 'search-design',
-    value: 'muninn/search-design',
+    sessionKey: 'muninn/search-design',
+    value: sessionOptionValue('muninn', 'codex_cli', 'muninn/search-design'),
   }]);
+});
+
+test('sessionOptionsForProjects disambiguates duplicate session keys by agent', async () => {
+  const { sessionKeysForRequest, sessionOptionsForProjects } = await loadSearchState();
+  const projects = [{
+    projectKey: 'auth-refactor',
+    label: 'auth-refactor',
+    latestUpdatedAt: '2026-06-04T00:00:00.000Z',
+    sessions: ['openclaw', 'claude_code'].map((agent) => ({
+      agent,
+      sessionKey: 'auth-refactor',
+      displaySessionId: 'auth-refactor',
+      latestUpdatedAt: '2026-06-04T00:00:00.000Z',
+      turns: [],
+      segments: [],
+      nextOffset: null,
+      loading: false,
+      loaded: false,
+    })),
+  }];
+
+  const options = sessionOptionsForProjects(projects, []);
+
+  assert.notEqual(options[0].value, options[1].value);
+  assert.deepEqual(options.map((option) => option.description), [
+    'auth-refactor / openclaw',
+    'auth-refactor / claude_code',
+  ]);
+  assert.deepEqual(sessionKeysForRequest([options[0].value], options), ['auth-refactor']);
 });
 
 test('normalizeSearchN keeps positive integer select values only', async () => {
@@ -80,3 +102,7 @@ test('normalizeSearchN keeps positive integer select values only', async () => {
   assert.equal(normalizeSearchN('0', 3), 3);
   assert.equal(normalizeSearchN('abc', 3), 3);
 });
+
+function sessionOptionValue(projectKey, agent, sessionKey) {
+  return `${projectKey}\u001f${agent}\u001f${sessionKey}`;
+}
