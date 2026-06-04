@@ -2478,26 +2478,15 @@ svg {
 .pipeline-metric-value {
   display: inline-flex;
   align-items: baseline;
-  justify-content: center;
+  justify-content: flex-start;
   gap: 14px;
-  text-align: center;
+  text-align: left;
 }
 
-.pipeline-metric-divider {
+.pipeline-metric-value span + span::before {
+  content: "|";
+  margin-right: 14px;
   color: #c8c9cc;
-}
-
-.pipeline-tool-call-list {
-  min-width: 0;
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  column-gap: 18px;
-  row-gap: 3px;
-  align-items: baseline;
-}
-
-.pipeline-tool-call-list strong {
-  min-width: 0;
 }
 
 .pipeline-io-box-failed strong {
