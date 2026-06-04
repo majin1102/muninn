@@ -213,8 +213,19 @@ function PipelineCard({ task, selected, onInspect }: {
           <PipelineToolCallsBox calls={task.toolCalls} status={task.status} />
         )}
       </div>
-      <p className="pipeline-lifecycle-line">{pipelineLifecycleSummary(task)}</p>
+      <PipelineLifecycleLine task={task} />
     </article>
+  );
+}
+
+function PipelineLifecycleLine({ task }: { task: PipelineTask }) {
+  return (
+    <p className="pipeline-lifecycle-line">
+      <span>Duration {durationForTask(task)}</span>
+      {task.status === 'done' && task.toolCalls.length > 0 ? (
+        <span>Tool calls: {toolCallItems(task.toolCalls).join(' | ')}</span>
+      ) : null}
+    </p>
   );
 }
 
@@ -349,14 +360,6 @@ function formatTokens(tokens: number): string {
 
 function formatNumber(value: number): string {
   return value >= 10 ? value.toFixed(0) : value.toFixed(1);
-}
-
-function pipelineLifecycleSummary(task: PipelineTask): string {
-  const summary = `Duration ${durationForTask(task)}`;
-  if (task.status === 'done' && task.toolCalls.length > 0) {
-    return `${summary} · Tool calls: ${toolCallItems(task.toolCalls).join(' | ')}`;
-  }
-  return summary;
 }
 
 function pipelineLifecycleDetails(task: PipelineTask): Array<{ label: string; value: string }> {

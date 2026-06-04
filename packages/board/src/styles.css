@@ -2396,9 +2396,17 @@ svg {
 .pipeline-lifecycle-line {
   margin: 0;
   padding-left: 16px;
+  display: grid;
+  grid-template-columns: minmax(0, auto) minmax(0, 1fr);
+  gap: 12px;
   color: #8f9195;
   font-size: 12px;
   line-height: 1.35;
+}
+
+.pipeline-lifecycle-line span + span {
+  justify-self: end;
+  text-align: right;
 }
 
 .pipeline-status-line span + span::before {
