@@ -223,20 +223,22 @@ function PipelineMetricBox({ label, metric, status }: { label: string; metric: P
   return (
     <div className={`pipeline-io-box pipeline-io-box-${status}`}>
       <span>{label}</span>
-      <strong>{formatBytes(metric.bytes)} · {formatTokens(metric.tokens)}</strong>
+      <strong className="pipeline-metric-value">
+        <span>{formatBytes(metric.bytes)}</span>
+        <span>{formatTokens(metric.tokens)}</span>
+      </strong>
     </div>
   );
 }
 
 function PipelineToolCallsBox({ calls, status }: { calls: PipelineTask['toolCalls']; status: PipelineTaskStatus }) {
-  const rows = groupedToolCalls(calls);
   return (
     <div className={`pipeline-io-box pipeline-io-box-${status}`}>
       <span>Tool calls</span>
-      {rows.length > 0 ? (
+      {calls.length > 0 ? (
         <div className="pipeline-tool-call-list">
-          {rows.map((row) => (
-            <strong key={row}>{row}</strong>
+          {calls.map((call) => (
+            <strong key={call.name}>{call.name} x {call.count}</strong>
           ))}
         </div>
       ) : (
@@ -323,15 +325,6 @@ function statusLabel(status: PipelineTaskStatus): string {
 
 function capitalizeSentence(value: string): string {
   return value.length > 0 ? `${value[0]!.toUpperCase()}${value.slice(1)}` : value;
-}
-
-function groupedToolCalls(calls: PipelineTask['toolCalls']): string[] {
-  const labels = calls.map((call) => `${call.name} x ${call.count}`);
-  const rows: string[] = [];
-  for (let index = 0; index < labels.length; index += 2) {
-    rows.push(labels.slice(index, index + 2).join(' · '));
-  }
-  return rows;
 }
 
 function toolCallItems(calls: PipelineTask['toolCalls']): string[] {
