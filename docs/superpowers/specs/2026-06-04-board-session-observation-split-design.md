@@ -28,6 +28,37 @@ Recommended width:
 
 The left placement is intentional: the user enters through a summary/observation navigation model, then checks the supporting conversation on the right. This keeps the extracted memory as the primary reading object while preserving direct access to source evidence.
 
+## Resizing And Collapse
+
+The divider between Observation and Conversation should be draggable.
+
+Resize behavior:
+
+- The divider is a slim vertical line between the two panes.
+- Hovering over the divider changes the line treatment and cursor to make resizing discoverable.
+- Dragging changes the Observation pane width; Conversation fills the remaining space.
+- Observation minimum width should keep accordion headers readable, around `320px`.
+- Conversation minimum width should keep chat bubbles usable, around `520px`.
+- The last chosen split width may be kept in local UI state; persistence is optional for this iteration.
+
+Collapse behavior:
+
+- Observation can collapse, leaving Conversation full width.
+- Conversation can collapse, leaving Observation full width.
+- Both panes cannot be collapsed at the same time.
+- Collapsed state should leave a narrow restore affordance on the collapsed side instead of removing all controls.
+- The restore affordance should sit on or near the divider line, not as a heavy toolbar button.
+- Dragging is disabled while either pane is collapsed; restoring returns to the previous split width when available.
+
+Recommended controls:
+
+- Observation header has a small collapse icon for hiding Observation.
+- Conversation header has a small collapse icon for hiding Conversation.
+- When Observation is collapsed, a slim rail on the left side of the content area restores it.
+- When Conversation is collapsed, a slim rail on the right side restores it.
+
+This keeps the default split readable while still allowing focused reading of either the extracted memory document or the raw conversation.
+
 ## Session Selection Behavior
 
 When the user clicks a second-level session node:
@@ -125,6 +156,9 @@ Add or update focused tests for:
 - Snapshot extraction parsing returns title, markdown, refs, and first-turn jump target.
 - Clicking a second-level session opens full session content with all observations collapsed.
 - Clicking a third-level segment expands the matching observation and targets the first referenced turn.
+- Dragging the split divider updates pane width within min-width constraints.
+- Collapsing Observation expands Conversation and leaves a restore affordance.
+- Collapsing Conversation expands Observation and leaves a restore affordance.
 - Markdown in observation content renders lists, code, tables, and links without layout overflow.
 - No-snapshot sessions still fall back to current turn prompt navigation.
 
@@ -133,4 +167,6 @@ Manual verification should use the Board page at a local sidecar URL and confirm
 - Session click shows collapsed observations plus full conversation.
 - Segment click expands the correct observation.
 - Conversation scroll target matches the observation's first ref.
+- Divider drag feels lightweight and does not resize below usable widths.
+- Each pane can be collapsed and restored without losing the selected observation.
 - The accordion feels visually lighter than the earlier table-like mockup.
