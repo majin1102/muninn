@@ -2767,17 +2767,17 @@ button.search-menu-item:hover,
 }
 
 .search-results {
-  width: min(720px, 100%);
-  margin: 14px auto 0;
+  width: min(680px, 100%);
+  margin: 8px auto 0;
 }
 
 .search-source-tabs {
   display: inline-flex;
   align-items: center;
   gap: 2px;
-  width: min(720px, 100%);
-  min-height: 34px;
-  margin: 10px auto 0;
+  width: min(680px, 100%);
+  min-height: 30px;
+  margin: 8px auto 0;
 }
 
 .search-source-tab {
@@ -2876,7 +2876,7 @@ button.search-menu-item:hover,
 
 .search-status,
 .search-error {
-  width: min(720px, 100%);
+  width: min(680px, 100%);
   margin: 28px auto 0;
   color: var(--muted-foreground);
 }
@@ -4035,11 +4035,11 @@ button.search-menu-item:hover,
   .search-results,
   .search-status,
   .search-error {
-    width: min(720px, 100%);
+    width: min(680px, 100%);
   }
 
   .search-source-tabs {
-    gap: 18px;
+    gap: 2px;
     overflow-x: auto;
   }
 
