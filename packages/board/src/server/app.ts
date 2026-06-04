@@ -28,7 +28,6 @@ import type {
   TurnPreview,
 } from '@muninn/types';
 import { previewCodexImport, runCodexImport } from './codex_import.js';
-import { summarizePipelineTasks } from '../lib/pipeline_model.js';
 import { renderRenderedMemoryDocument } from './render.js';
 import { sessionDisplayTitle } from './session_labels.js';
 
@@ -631,6 +630,17 @@ function loadPipelineTasksSnapshot(): PipelineTask[] {
   ];
 }
 
+function summarizePipelineSnapshot(tasks: PipelineTask[]): PipelineTasksResponse['summary'] {
+  return {
+    running: tasks.filter((task) => task.status === 'running').length,
+    queued: tasks.filter((task) => task.status === 'queued').length,
+    failed: tasks.filter((task) => task.status === 'failed').length,
+    updatedAt: tasks.reduce<string | null>((latest, task) => (
+      latest === null || task.updatedAt > latest ? task.updatedAt : latest
+    ), null),
+  };
+}
+
 async function loadObservingReferences(references: string[]): Promise<MemoryReference[]> {
   const resolved = await Promise.all(
     references.map(async (memoryId) => {
@@ -855,7 +865,7 @@ boardApp.get('/api/v1/ui/pipelines', async (c) => {
 
   const tasks = loadPipelineTasksSnapshot();
   const response: PipelineTasksResponse = {
-    summary: summarizePipelineTasks(tasks),
+    summary: summarizePipelineSnapshot(tasks),
     tasks,
     requestId: generateRequestId(),
   };
