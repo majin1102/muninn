@@ -2717,11 +2717,34 @@ svg {
   white-space: nowrap;
 }
 
+.search-menu-item-with-description {
+  min-height: 42px;
+  padding-top: 5px;
+  padding-bottom: 5px;
+}
+
+.search-menu-copy {
+  display: grid;
+  flex: 1 1 auto;
+  min-width: 0;
+  gap: 2px;
+}
+
 .search-menu-label {
   display: block;
   flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.search-menu-description {
+  min-width: 0;
+  overflow: hidden;
+  color: #8f9195;
+  font-size: 11px;
+  line-height: 1.2;
   text-overflow: ellipsis;
   white-space: nowrap;
 }

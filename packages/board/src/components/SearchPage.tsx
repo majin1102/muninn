@@ -58,6 +58,8 @@ type SearchOption = {
   label: string;
   value: string;
   agent?: string;
+  description?: string;
+  sessionKey?: string;
 };
 
 export function SearchPage({
@@ -160,7 +162,7 @@ export function SearchPage({
       const response = await client.search({
         query,
         projectKeys: controls.projectKeys,
-        sessionKeys: controls.sessionKeys,
+        sessionKeys: requestSessionKeys(controls.sessionKeys, sessionOptions),
         sessionTopN: controls.sessionTopN,
         topN: controls.topN,
       });
@@ -482,7 +484,11 @@ function SearchMultiSelectMenu({
             return (
               <button
                 key={option.value}
-                className={isSelected ? 'search-menu-item search-menu-item-active' : 'search-menu-item'}
+                className={[
+                  'search-menu-item',
+                  option.description ? 'search-menu-item-with-description' : '',
+                  isSelected ? 'search-menu-item-active' : '',
+                ].filter(Boolean).join(' ')}
                 type="button"
                 onClick={() => onChange(toggleValue(values, option.value))}
               >
@@ -490,7 +496,10 @@ function SearchMultiSelectMenu({
                   {isSelected ? <Check /> : null}
                 </span>
                 {optionIcon?.(option)}
-                <span className="search-menu-label">{option.label}</span>
+                <span className="search-menu-copy">
+                  <span className="search-menu-label">{option.label}</span>
+                  {option.description ? <span className="search-menu-description">{option.description}</span> : null}
+                </span>
               </button>
             );
           })}
@@ -613,6 +622,11 @@ function toggleValue(values: string[], value: string): string[] {
   return values.includes(value)
     ? values.filter((item) => item !== value)
     : [...values, value];
+}
+
+function requestSessionKeys(values: string[], options: SearchOption[]): string[] {
+  const optionByValue = new Map(options.map((option) => [option.value, option]));
+  return [...new Set(values.map((value) => optionByValue.get(value)?.sessionKey ?? value))];
 }
 
 function multiValueLabel(values: string[], options: SearchOption[]): string {
