@@ -46,6 +46,13 @@ const ADD_OPTIONS = [
   { label: 'File', value: 'file', icon: File },
   { label: 'Agent', value: 'agent', icon: Bot },
 ];
+type SearchSourceKey = 'all' | 'observation' | 'conversation' | 'llmWiki';
+const SOURCE_TABS: Array<{ label: string; value: SearchSourceKey }> = [
+  { label: 'All', value: 'all' },
+  { label: 'Observation', value: 'observation' },
+  { label: 'Conversation', value: 'conversation' },
+  { label: 'LLM Wiki', value: 'llmWiki' },
+];
 type SearchMenuKey = 'add' | 'provider' | 'project' | 'session' | 'topN';
 type SearchOption = {
   label: string;
@@ -68,6 +75,7 @@ export function SearchPage({
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [provider, setProvider] = useState(PROVIDER_OPTIONS[0]?.value ?? 'default');
   const [openMenu, setOpenMenu] = useState<SearchMenuKey | null>(null);
+  const [sourceTab, setSourceTab] = useState<SearchSourceKey>('all');
 
   const projectOptions = useMemo<SearchOption[]>(
     () => projects.map((project) => ({ label: project.label, value: project.projectKey })),
@@ -101,6 +109,10 @@ export function SearchPage({
     if (!query) {
       return;
     }
+    if (document.activeElement instanceof HTMLElement) {
+      document.activeElement.blur();
+    }
+    setOpenMenu(null);
     setSubmitted(true);
     setLoading(true);
     setError(null);
@@ -224,6 +236,7 @@ export function SearchPage({
           </div>
         </div>
       </form>
+      {submitted ? <SearchSourceTabs value={sourceTab} onChange={setSourceTab} /> : null}
       {projectError ? <div className="search-error">{projectError}</div> : null}
       {submitted ? (
         <SearchResults
@@ -234,6 +247,31 @@ export function SearchPage({
           onToggle={(id) => setExpanded((current) => ({ ...current, [id]: !current[id] }))}
         />
       ) : null}
+    </div>
+  );
+}
+
+function SearchSourceTabs({
+  value,
+  onChange,
+}: {
+  value: SearchSourceKey;
+  onChange: (value: SearchSourceKey) => void;
+}) {
+  return (
+    <div className="search-source-tabs" role="tablist" aria-label="Search source">
+      {SOURCE_TABS.map((tab) => (
+        <button
+          key={tab.value}
+          className={tab.value === value ? 'search-source-tab search-source-tab-active' : 'search-source-tab'}
+          type="button"
+          role="tab"
+          aria-selected={tab.value === value}
+          onClick={() => onChange(tab.value)}
+        >
+          {tab.label}
+        </button>
+      ))}
     </div>
   );
 }

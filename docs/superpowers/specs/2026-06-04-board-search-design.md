@@ -49,6 +49,22 @@ The provider selector is visual-only in this version. It displays `Default` and 
 
 The `+` menu is reserved for future multi-modal search. It exposes placeholder options for `Image`, `File`, and `Agent`.
 
+After a search is submitted, the search area switches to a results-page layout:
+
+- The search box is wider than the results column, following a Google-like search results layout.
+- The default submitted state is a single-line compact search box with the query text and the submit button inside it.
+- Clicking into the query expands back to the full composer, including `+`, Provider, `Top`, `Project`, and `Session`.
+- Submitting blurs the query input and returns the search box to the compact one-line state.
+
+Below the submitted search box, render source tabs:
+
+1. `All`
+2. `Observation`
+3. `Conversation`
+4. `LLM Wiki`
+
+Only `All` is backed by real filtering in this version. The other tabs switch active UI state but return the same result set as `All`.
+
 ## Controls
 
 The gray configuration row contains exactly these controls, in this order:
@@ -211,6 +227,8 @@ Expansion:
 - Slogan text is `Search context across all your agents`.
 - Provider selector uses `BotMessageSquare`.
 - Search input supports multiple lines.
+- Submitted search defaults to a single-line compact box and expands to the full composer on focus.
+- Source tabs render as `All`, `Observation`, `Conversation`, and `LLM Wiki`; non-All tabs return the same result set as `All`.
 - Submit button is small and icon-only.
 - Top menu supports user-entered global and session numeric values.
 - Project and Session support multi-select with `All` as empty selection.

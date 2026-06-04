@@ -416,6 +416,9 @@ Expected:
 - `Top`, `Project`, and `Session` are in the gray row.
 - Project/Session menus are multi-select.
 - Long labels stay one line and do not escape the menu boundary.
+- Submitted results page shows a one-line search box wider than the results column.
+- Clicking the submitted query expands the full composer controls again.
+- Source tabs render as `All`, `Observation`, `Conversation`, and `LLM Wiki`; non-All tabs show the same results as `All` for now.
 
 ## Task 4: Demo Data And Final Verification
 
