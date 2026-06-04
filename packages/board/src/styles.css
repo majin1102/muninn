@@ -2551,7 +2551,7 @@ svg {
   padding: 4px 10px;
   color: #7a7d84;
   font-size: 12px;
-  overflow-x: hidden;
+  overflow: visible;
 }
 
 .search-page-submitted .search-controls {
