@@ -14,7 +14,7 @@ import {
   SlidersHorizontal,
   type LucideIcon,
 } from 'lucide-react';
-import { useEffect, useMemo, useState, type FormEvent, type KeyboardEvent, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from 'react';
 import { logoForAgent, type AgentLogo } from '../lib/agent_logo.js';
 import type { BoardClient, ProjectNode } from '../lib/api.js';
 import {
@@ -77,6 +77,7 @@ export function SearchPage({
   const [openMenu, setOpenMenu] = useState<SearchMenuKey | null>(null);
   const [sourceTab, setSourceTab] = useState<SearchSourceKey>('all');
   const [composerExpanded, setComposerExpanded] = useState(false);
+  const composerRef = useRef<HTMLDivElement | null>(null);
 
   const projectOptions = useMemo<SearchOption[]>(
     () => projects.map((project) => ({ label: project.label, value: project.projectKey })),
@@ -93,6 +94,24 @@ export function SearchPage({
     }
   }, [onLoadProjects, projectError, projects.length, projectsLoading]);
 
+  useEffect(() => {
+    if (!openMenu) {
+      return;
+    }
+    function closeOnOutsidePointerDown(event: PointerEvent) {
+      closeMenuOnOutsidePointer(event);
+    }
+    function closeOnOutsideClick(event: MouseEvent) {
+      closeMenuOnOutsidePointer(event);
+    }
+    document.addEventListener('pointerdown', closeOnOutsidePointerDown);
+    document.addEventListener('click', closeOnOutsideClick);
+    return () => {
+      document.removeEventListener('pointerdown', closeOnOutsidePointerDown);
+      document.removeEventListener('click', closeOnOutsideClick);
+    };
+  }, [openMenu]);
+
   function patchControls(patch: Partial<SearchControlsState>) {
     setControls((current) => ({
       ...current,
@@ -102,6 +121,24 @@ export function SearchPage({
 
   function toggleMenu(key: SearchMenuKey) {
     setOpenMenu((current) => (current === key ? null : key));
+  }
+
+  function isInsideComposer(event: Pick<Event, 'composedPath' | 'target'>) {
+    const composer = composerRef.current;
+    if (!composer) {
+      return false;
+    }
+    if (event.composedPath().includes(composer)) {
+      return true;
+    }
+    return event.target instanceof Node && composer.contains(event.target);
+  }
+
+  function closeMenuOnOutsidePointer(event: Pick<Event, 'composedPath' | 'target'>) {
+    if (!openMenu || isInsideComposer(event)) {
+      return;
+    }
+    setOpenMenu(null);
   }
 
   async function submit(event?: FormEvent<HTMLFormElement>) {
@@ -162,10 +199,17 @@ export function SearchPage({
   }
 
   return (
-    <div className={submitted ? 'search-page search-page-submitted' : 'search-page'}>
+    <div
+      className={submitted ? 'search-page search-page-submitted' : 'search-page'}
+      onPointerDownCapture={(event) => closeMenuOnOutsidePointer(event.nativeEvent)}
+      onClickCapture={(event) => closeMenuOnOutsidePointer(event.nativeEvent)}
+    >
       {!submitted ? <h1 className="search-prompt-title">Search context across all your agents</h1> : null}
       <form className="search-form" onSubmit={submit}>
-        <div className={submitted && composerExpanded ? 'search-composer search-composer-expanded' : 'search-composer'}>
+        <div
+          ref={composerRef}
+          className={submitted && composerExpanded ? 'search-composer search-composer-expanded' : 'search-composer'}
+        >
           <div className="search-input-shell">
             <textarea
               value={controls.query}
