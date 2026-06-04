@@ -2479,16 +2479,25 @@ svg {
 }
 
 .pipeline-metric-value {
-  display: inline-flex;
+  display: grid;
+  grid-template-columns: minmax(128px, 0.62fr) minmax(0, 1fr);
   align-items: baseline;
-  justify-content: flex-start;
-  gap: 14px;
+  column-gap: 30px;
   text-align: left;
+}
+
+.pipeline-metric-value span {
+  min-width: 0;
+}
+
+.pipeline-metric-value span + span {
+  position: relative;
 }
 
 .pipeline-metric-value span + span::before {
   content: "|";
-  margin-right: 14px;
+  position: absolute;
+  left: -16px;
   color: #c8c9cc;
 }
 
