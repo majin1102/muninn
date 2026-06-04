@@ -268,6 +268,7 @@ export function SearchPage({
               label="Project"
               values={controls.projectKeys}
               disabled={projectsLoading}
+              hideLabelWhenSingle
               open={openMenu === 'project'}
               onToggle={() => toggleMenu('project')}
               onChange={patchProjectKeys}
@@ -277,6 +278,7 @@ export function SearchPage({
               icon={<FileText className="search-control-icon" />}
               label="Session"
               values={controls.sessionKeys}
+              hideLabelWhenSingle
               open={openMenu === 'session'}
               onToggle={() => toggleMenu('session')}
               onChange={(sessionKeys) => patchControls({ sessionKeys })}
@@ -428,6 +430,7 @@ function SearchMultiSelectMenu({
   options,
   open,
   disabled = false,
+  hideLabelWhenSingle = false,
   onToggle,
   onChange,
   optionIcon,
@@ -438,11 +441,14 @@ function SearchMultiSelectMenu({
   options: SearchOption[];
   open: boolean;
   disabled?: boolean;
+  hideLabelWhenSingle?: boolean;
   onToggle: () => void;
   onChange: (values: string[]) => void;
   optionIcon?: (option: SearchOption) => ReactNode;
 }) {
   const selected = new Set(values);
+  const hideLabel = hideLabelWhenSingle && values.length === 1;
+  const valueLabel = multiValueLabel(values, options);
   return (
     <div className="search-control-wrap">
       <button
@@ -451,11 +457,12 @@ function SearchMultiSelectMenu({
         disabled={disabled}
         aria-haspopup="menu"
         aria-expanded={open}
+        aria-label={hideLabel ? `${label}: ${valueLabel}` : undefined}
         onClick={onToggle}
       >
         {icon}
-        <span className="search-control-label">{label}</span>
-        <span className="search-control-value">{multiValueLabel(values, options)}</span>
+        {hideLabel ? null : <span className="search-control-label">{label}</span>}
+        <span className="search-control-value">{valueLabel}</span>
         <ChevronDown className="search-control-chevron" />
       </button>
       {open && !disabled ? (
