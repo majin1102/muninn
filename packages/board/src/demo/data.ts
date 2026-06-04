@@ -1,4 +1,4 @@
-import type { ToolCall } from '@muninn/types';
+import type { PipelineTask, ToolCall } from '@muninn/types';
 
 export type DemoSessionAgentItem = {
   agent: string;
@@ -36,6 +36,8 @@ export type DemoObservingListItem = {
   references: DemoObservingReferenceItem[];
 };
 
+export type DemoPipelineTask = PipelineTask;
+
 export type DemoMemoryDocument = {
   memoryId: string;
   kind: 'turn' | 'session';
@@ -51,6 +53,104 @@ export const demoAgents: DemoSessionAgentItem[] = [
   { agent: 'claude_code', latestUpdatedAt: '2026-05-29T12:00:00.000Z' },
   { agent: 'codex_cli', latestUpdatedAt: '2026-05-25T12:00:00.000Z' },
   { agent: 'memory_agent', latestUpdatedAt: '2026-06-01T13:32:00.000Z' },
+];
+
+export const demoPipelineTasks: DemoPipelineTask[] = [
+  {
+    id: 'pipeline:global:lance-row-id',
+    kind: 'global-observing',
+    title: 'Global observing',
+    target: 'Entity: Lance row id',
+    status: 'running',
+    statusText: 'generating draft from 16 session observations',
+    updatedAt: '2026-06-04T08:38:12.000Z',
+    inputSummary: '16 session observations from 3 turns',
+    outputSummary: 'Global observation draft in progress',
+    inputDetails: [
+      '16 session observations',
+      '3 source turns',
+      'Batch: 16 / threshold 8',
+    ],
+    outputDetails: [
+      'Draft global observation markdown is being generated.',
+      'Committed ids will appear after validation.',
+    ],
+    trace: [
+      'selected input: done',
+      'generating draft: running',
+      'commit output: pending',
+      'trace ref: observer-run-42',
+    ],
+    errors: ['No errors for this task.'],
+  },
+  {
+    id: 'pipeline:session:codex-import-timeline',
+    kind: 'session-observing',
+    title: 'Session observing',
+    target: 'codex session import timeline',
+    status: 'done',
+    statusText: 'produced 12 session observations and queued global work',
+    updatedAt: '2026-06-04T08:36:12.000Z',
+    inputSummary: '100 turn window',
+    outputSummary: '12 session observations',
+    inputDetails: ['100 turn window', 'agent: codex'],
+    outputDetails: ['12 session observations', 'queued global work'],
+    trace: [
+      'read turns: done',
+      'extracted observations: done',
+      'queued global work: done',
+    ],
+    errors: ['No errors for this task.'],
+  },
+  {
+    id: 'pipeline:wiki:memory-architecture',
+    kind: 'wiki-compiling',
+    title: 'Wiki compiling',
+    target: 'LLM Wiki: Memory architecture',
+    status: 'queued',
+    statusText: 'waiting for global observations before compiling wiki draft',
+    updatedAt: '2026-06-04T08:35:12.000Z',
+    inputSummary: 'Global observation tree',
+    outputSummary: 'Wiki document draft',
+    inputDetails: ['Global observation tree'],
+    outputDetails: ['Wiki document draft will be generated after input is ready.'],
+    trace: ['waiting for global observations'],
+    errors: ['No errors for this task.'],
+  },
+  {
+    id: 'pipeline:global:prompt-design',
+    kind: 'global-observing',
+    title: 'Global observing',
+    target: 'Entity: Muninn prompt design',
+    status: 'queued',
+    statusText: 'waiting for session observations before global rewrite',
+    updatedAt: '2026-06-04T08:34:12.000Z',
+    inputSummary: '5 session observations',
+    outputSummary: 'Global observation draft',
+    inputDetails: ['5 session observations', 'below observer threshold'],
+    outputDetails: ['Global observation draft will start after threshold is reached.'],
+    trace: ['waiting for more session observations'],
+    errors: ['No errors for this task.'],
+  },
+  {
+    id: 'pipeline:global:board-settings',
+    kind: 'global-observing',
+    title: 'Global observing',
+    target: 'Entity: Board settings',
+    status: 'failed',
+    statusText: 'parser validation failed after 8 session observations · retry retained',
+    updatedAt: '2026-06-04T08:32:12.000Z',
+    inputSummary: '8 session observations',
+    outputSummary: 'Blocked by parser validation',
+    inputDetails: ['8 session observations', 'retry retained'],
+    outputDetails: ['No committed output for this attempt.'],
+    trace: [
+      'selected input: done',
+      'generated draft: done',
+      'parser validation: failed',
+    ],
+    errors: ['parser validation failed'],
+  },
 ];
 
 export const demoSessionGroups: Record<string, DemoSessionGroupItem[]> = {

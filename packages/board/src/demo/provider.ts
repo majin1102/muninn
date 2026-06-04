@@ -1,7 +1,9 @@
+import type { PipelineTasksResponse } from '@muninn/types';
 import {
   demoAgents,
   demoDocuments,
   demoObservings,
+  demoPipelineTasks,
   demoSessionGroups,
   demoSessionTurns,
   type DemoMemoryDocument,
@@ -10,6 +12,7 @@ import {
   type DemoSessionGroupItem,
   type DemoSessionTimelineItem,
 } from './data.js';
+import { summarizePipelineTasks } from '../lib/pipeline_model.js';
 
 export async function getDemoSessionAgents(): Promise<DemoSessionAgentItem[]> {
   return demoAgents;
@@ -97,6 +100,14 @@ function escapeRegExp(value: string): string {
 
 export async function getDemoObservings(): Promise<DemoObservingListItem[]> {
   return demoObservings;
+}
+
+export async function getDemoPipelineTasks(): Promise<PipelineTasksResponse> {
+  return {
+    summary: summarizePipelineTasks(demoPipelineTasks),
+    tasks: demoPipelineTasks,
+    requestId: 'demo-pipelines',
+  };
 }
 
 export async function getDemoDocument(memoryId: string): Promise<DemoMemoryDocument> {
