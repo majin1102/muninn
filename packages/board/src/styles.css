@@ -2424,24 +2424,24 @@ svg {
 
 .search-main-tools .search-control {
   gap: 6px;
-  color: #676b73;
+  color: #5f6062;
   font-size: 13px;
-  font-weight: 400;
+  font-weight: 500;
   line-height: 20px;
 }
 
 .search-main-tools .search-control-icon {
   width: 15px;
   height: 15px;
-  color: #74777f;
+  color: #5f6062;
   stroke-width: 1.8;
 }
 
 .search-main-tools .search-control-value {
   max-width: 172px;
-  color: #565a62;
+  color: #5f6062;
   font-size: 13px;
-  font-weight: 400;
+  font-weight: 500;
   letter-spacing: 0;
 }
 
