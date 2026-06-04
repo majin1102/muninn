@@ -2498,10 +2498,6 @@ svg {
   color: #c8c9cc;
 }
 
-.pipeline-io-box-failed strong {
-  color: #a72525;
-}
-
 .pipeline-empty {
   margin: 28px 0 0;
   padding: 14px;
