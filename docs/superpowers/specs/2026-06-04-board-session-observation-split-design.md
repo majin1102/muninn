@@ -28,36 +28,53 @@ Recommended width:
 
 The left placement is intentional: the user enters through a summary/observation navigation model, then checks the supporting conversation on the right. This keeps the extracted memory as the primary reading object while preserving direct access to source evidence.
 
-## Resizing And Collapse
+Pane titles should not be shown inside the content canvas. The session title at the top-left is the only visible page heading, and the three mode icons at the top-right explain the current layout state.
 
-The divider between Observation and Conversation should be draggable.
+There should be no horizontal separator under the title row. The content should feel like one continuous canvas.
 
-Resize behavior:
+## View Modes, Resizing, And Transitions
+
+The top-right of the Session content canvas has three icon controls:
+
+- Observation only.
+- Split view.
+- Conversation only.
+
+These controls are mutually exclusive. The default mode is Split view.
+
+Icon treatment:
+
+- The three mode icons float at the top-right of the content canvas.
+- The buttons have no default outer border or heavy toolbar container.
+- The active mode uses a subtle gray background.
+- The internal glyphs share one visual style: a small pane outline with an internal divider positioned left, center, or right.
+- The left and right glyph divider positions should be offset enough to distinguish Observation-only and Conversation-only at a glance.
+
+Split view resize behavior:
 
 - The divider is a slim vertical line between the two panes.
+- The divider runs from the top edge to the bottom edge of the content canvas.
 - Hovering over the divider changes the line treatment and cursor to make resizing discoverable.
 - Dragging changes the Observation pane width; Conversation fills the remaining space.
 - Observation minimum width should keep accordion headers readable, around `320px`.
 - Conversation minimum width should keep chat bubbles usable, around `520px`.
 - The last chosen split width may be kept in local UI state; persistence is optional for this iteration.
 
-Collapse behavior:
+Single-pane behavior:
 
-- Observation can collapse, leaving Conversation full width.
-- Conversation can collapse, leaving Observation full width.
-- Both panes cannot be collapsed at the same time.
-- Collapsed state should leave a narrow restore affordance on the collapsed side instead of removing all controls.
-- The restore affordance should sit on or near the divider line, not as a heavy toolbar button.
-- Dragging is disabled while either pane is collapsed; restoring returns to the previous split width when available.
+- Observation-only mode hides Conversation and the divider.
+- Conversation-only mode hides Observation and the divider.
+- Returning to Split restores the previous split width when available.
+- The mode icons remain visible in all modes.
 
-Recommended controls:
+Transitions:
 
-- Observation header has a small collapse icon for hiding Observation.
-- Conversation header has a small collapse icon for hiding Conversation.
-- When Observation is collapsed, a slim rail on the left side of the content area restores it.
-- When Conversation is collapsed, a slim rail on the right side restores it.
-
-This keeps the default split readable while still allowing focused reading of either the extracted memory document or the raw conversation.
+- Mode changes should use short, restrained transitions similar to Codex App.
+- Pane width/opacity should transition quickly, around `140-180ms`.
+- The active icon background should transition around `120ms`.
+- Divider movement during drag should be immediate, not animated.
+- Respect reduced-motion preferences by disabling non-essential transitions.
+- The animation should clarify continuity, not call attention to itself.
 
 ## Session Selection Behavior
 
@@ -157,8 +174,10 @@ Add or update focused tests for:
 - Clicking a second-level session opens full session content with all observations collapsed.
 - Clicking a third-level segment expands the matching observation and targets the first referenced turn.
 - Dragging the split divider updates pane width within min-width constraints.
-- Collapsing Observation expands Conversation and leaves a restore affordance.
-- Collapsing Conversation expands Observation and leaves a restore affordance.
+- Observation-only mode hides Conversation and divider.
+- Conversation-only mode hides Observation and divider.
+- Returning to Split restores the previous split width when available.
+- Mode icon active state updates consistently.
 - Markdown in observation content renders lists, code, tables, and links without layout overflow.
 - No-snapshot sessions still fall back to current turn prompt navigation.
 
@@ -168,5 +187,8 @@ Manual verification should use the Board page at a local sidecar URL and confirm
 - Segment click expands the correct observation.
 - Conversation scroll target matches the observation's first ref.
 - Divider drag feels lightweight and does not resize below usable widths.
-- Each pane can be collapsed and restored without losing the selected observation.
+- Three floating mode icons switch Observation-only, Split, and Conversation-only modes.
+- The Split divider runs full height and has no extra buttons.
+- Mode transitions feel restrained and do not disrupt reading.
+- Pane labels `Observation` and `Conversation` are not shown as content headings.
 - The accordion feels visually lighter than the earlier table-like mockup.
