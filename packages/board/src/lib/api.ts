@@ -5,6 +5,7 @@ import type {
   ErrorResponse,
   MemoryDocument,
   MemoryDocumentResponse,
+  PipelineTasksResponse,
   SessionAgentsResponse,
   SessionGroupsResponse,
   SessionNode,
@@ -15,6 +16,7 @@ import type {
 } from '@muninn/types';
 import {
   getDemoDocument,
+  getDemoPipelineTasks,
   getDemoSessionAgents,
   getDemoSessionGroups,
   getDemoSessionTurns,
@@ -63,6 +65,7 @@ export type BoardClient = {
   }>;
   getDocument(memoryId: string): Promise<MemoryDocument>;
   getSettingsConfig(): Promise<SettingsConfigResponse>;
+  getPipelineTasks(): Promise<PipelineTasksResponse>;
   saveSettingsConfig(content: string): Promise<SettingsConfigResponse>;
   previewCodexImport(projectLimit?: number, projectKeys?: string[]): Promise<CodexImportPreviewResponse>;
   importCodexSessions(projectLimit?: number, projectKeys?: string[]): Promise<CodexImportRunResponse>;
@@ -192,6 +195,11 @@ export function createBoardClient(apiBase: string, usesDemoData: boolean): Board
     },
     getSettingsConfig() {
       return fetchJson<SettingsConfigResponse>('/api/v1/ui/settings/config');
+    },
+    getPipelineTasks() {
+      return usesDemoData
+        ? getDemoPipelineTasks()
+        : fetchJson<PipelineTasksResponse>('/api/v1/ui/pipelines');
     },
     saveSettingsConfig(content) {
       return fetchJson<SettingsConfigResponse>('/api/v1/ui/settings/config', {

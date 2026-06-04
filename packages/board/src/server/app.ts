@@ -17,6 +17,8 @@ import type {
   MemoryDocumentResponse,
   MemoryReference,
   ObservingListResponse,
+  PipelineTask,
+  PipelineTasksResponse,
   SessionAgentsResponse,
   SessionGroupsResponse,
   SessionNode,
@@ -26,6 +28,7 @@ import type {
   TurnPreview,
 } from '@muninn/types';
 import { previewCodexImport, runCodexImport } from './codex_import.js';
+import { summarizePipelineTasks } from '../lib/pipeline_model.js';
 import { renderRenderedMemoryDocument } from './render.js';
 import { sessionDisplayTitle } from './session_labels.js';
 
@@ -541,6 +544,93 @@ export function buildSessionTurnPageForTests(params: {
   return buildSessionTurnPage(params);
 }
 
+function loadPipelineTasksSnapshot(): PipelineTask[] {
+  const now = new Date();
+  const updatedAt = now.toISOString();
+  const queuedAt = new Date(now.getTime() - 20_000).toISOString();
+  const failedAt = new Date(now.getTime() - 75_000).toISOString();
+
+  return [
+    {
+      id: 'pipeline:global:session-snapshot',
+      kind: 'global-observing',
+      title: 'Global observing',
+      target: 'Entity: Session snapshot',
+      status: 'running',
+      statusText: 'generating observation draft from recent session work',
+      updatedAt,
+      inputSummary: 'Recent session observations',
+      outputSummary: 'Global observation draft in progress',
+      inputDetails: [
+        'Collected session observations',
+        'Recent turn summaries',
+      ],
+      outputDetails: [
+        'Drafting global observation',
+        'Retaining unresolved context',
+      ],
+      trace: [
+        'Loaded session observation candidates',
+        'Merged matching entity references',
+        'Generating global observation draft',
+      ],
+      errors: [],
+    },
+    {
+      id: 'pipeline:session:turn-window',
+      kind: 'session-observing',
+      title: 'Session observing',
+      target: 'codex session import timeline',
+      status: 'done',
+      statusText: 'produced session observations and queued global work',
+      updatedAt: queuedAt,
+      inputSummary: 'Recent turn window',
+      outputSummary: 'Session observations',
+      inputDetails: [
+        'Captured turns',
+        'Tool calls and artifacts',
+      ],
+      outputDetails: [
+        'Session observations',
+        'Queued global observing task',
+      ],
+      trace: [
+        'Loaded turn window',
+        'Extracted session-level observations',
+        'Queued global observing task',
+      ],
+      errors: [],
+    },
+    {
+      id: 'pipeline:global:board-settings',
+      kind: 'global-observing',
+      title: 'Global observing',
+      target: 'Entity: Board settings',
+      status: 'failed',
+      statusText: 'parser validation failed after session observations',
+      updatedAt: failedAt,
+      inputSummary: 'Session observations',
+      outputSummary: 'Blocked by parser validation',
+      inputDetails: [
+        'Board settings observations',
+        'Parser schema constraints',
+      ],
+      outputDetails: [
+        'Validation failed',
+        'Retry retained',
+      ],
+      trace: [
+        'Loaded session observations',
+        'Generated global observation draft',
+        'Parser rejected draft shape',
+      ],
+      errors: [
+        'parser validation failed after session observations',
+      ],
+    },
+  ];
+}
+
 async function loadObservingReferences(references: string[]): Promise<MemoryReference[]> {
   const resolved = await Promise.all(
     references.map(async (memoryId) => {
@@ -754,6 +844,19 @@ boardApp.get('/api/v1/ui/observing', async (c) => {
 
   const response: ObservingListResponse = {
     extractions: extractionCards,
+    requestId: generateRequestId(),
+  };
+
+  return c.json(response);
+});
+
+boardApp.get('/api/v1/ui/pipelines', async (c) => {
+  console.log('[BOARD_UI_PIPELINES]');
+
+  const tasks = loadPipelineTasksSnapshot();
+  const response: PipelineTasksResponse = {
+    summary: summarizePipelineTasks(tasks),
+    tasks,
     requestId: generateRequestId(),
   };
 
