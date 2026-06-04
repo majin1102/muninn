@@ -1,0 +1,79 @@
+import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import test from 'node:test';
+import ts from 'typescript';
+
+async function loadPipelineModel() {
+  const source = await readFile(new URL('../src/lib/pipeline_model.ts', import.meta.url), 'utf8');
+  const compiled = ts.transpileModule(source, {
+    compilerOptions: {
+      module: ts.ModuleKind.ES2022,
+      target: ts.ScriptTarget.ES2022,
+    },
+  }).outputText;
+  return import(`data:text/javascript;base64,${Buffer.from(compiled).toString('base64')}`);
+}
+
+function task(patch) {
+  return {
+    id: patch.id,
+    kind: patch.kind ?? 'global-observing',
+    title: patch.title ?? 'Global observing',
+    target: patch.target ?? 'Entity: Memory',
+    status: patch.status,
+    statusText: patch.statusText ?? 'processing memory work',
+    updatedAt: patch.updatedAt,
+    inputSummary: patch.inputSummary ?? 'input',
+    outputSummary: patch.outputSummary ?? 'output',
+    inputDetails: patch.inputDetails ?? [],
+    outputDetails: patch.outputDetails ?? [],
+    trace: patch.trace ?? [],
+    errors: patch.errors ?? [],
+  };
+}
+
+test('summarizes pipeline task status counts and newest update', async () => {
+  const { summarizePipelineTasks } = await loadPipelineModel();
+  const summary = summarizePipelineTasks([
+    task({ id: 'a', status: 'running', updatedAt: '2026-06-04T10:00:00.000Z' }),
+    task({ id: 'b', status: 'queued', updatedAt: '2026-06-04T10:02:00.000Z' }),
+    task({ id: 'c', status: 'queued', updatedAt: '2026-06-04T10:01:00.000Z' }),
+    task({ id: 'd', status: 'failed', updatedAt: '2026-06-04T10:03:00.000Z' }),
+    task({ id: 'e', status: 'done', updatedAt: '2026-06-04T09:00:00.000Z' }),
+  ]);
+
+  assert.deepEqual(summary, {
+    running: 1,
+    queued: 2,
+    failed: 1,
+    updatedAt: '2026-06-04T10:03:00.000Z',
+  });
+});
+
+test('filters pipeline tasks by kind, status, and time', async () => {
+  const { filterPipelineTasks } = await loadPipelineModel();
+  const nowMs = new Date('2026-06-04T12:00:00.000Z').getTime();
+  const tasks = [
+    task({ id: 'running-global', kind: 'global-observing', status: 'running', updatedAt: '2026-06-04T11:00:00.000Z' }),
+    task({ id: 'queued-global', kind: 'global-observing', status: 'queued', updatedAt: '2026-06-04T10:00:00.000Z' }),
+    task({ id: 'done-global', kind: 'global-observing', status: 'done', updatedAt: '2026-06-04T09:00:00.000Z' }),
+    task({ id: 'old-session', kind: 'session-observing', status: 'running', updatedAt: '2026-06-02T09:00:00.000Z' }),
+  ];
+
+  assert.deepEqual(
+    filterPipelineTasks(tasks, 'global-observing', 'active', 'last_24h', nowMs).map((item) => item.id),
+    ['running-global', 'queued-global'],
+  );
+});
+
+test('selects running task before failed, queued, and done tasks', async () => {
+  const { defaultSelectedPipelineTaskId } = await loadPipelineModel();
+  const tasks = [
+    task({ id: 'done', status: 'done', updatedAt: '2026-06-04T12:00:00.000Z' }),
+    task({ id: 'failed', status: 'failed', updatedAt: '2026-06-04T11:00:00.000Z' }),
+    task({ id: 'running', status: 'running', updatedAt: '2026-06-04T10:00:00.000Z' }),
+    task({ id: 'queued', status: 'queued', updatedAt: '2026-06-04T09:00:00.000Z' }),
+  ];
+
+  assert.equal(defaultSelectedPipelineTaskId(tasks), 'running');
+});
