@@ -2231,7 +2231,7 @@ svg {
 
 .pipelines-toolbar {
   display: grid;
-  grid-template-columns: minmax(220px, 1fr) 104px 124px 92px;
+  grid-template-columns: minmax(180px, 1fr) 128px 136px 116px;
   gap: 8px;
   width: 100%;
   margin-bottom: 12px;
@@ -2648,7 +2648,7 @@ svg {
   }
 
   .pipelines-toolbar {
-    grid-template-columns: minmax(160px, 1fr) 92px 108px 84px;
+    grid-template-columns: minmax(140px, 1fr) 112px 126px 108px;
     gap: 6px;
   }
 

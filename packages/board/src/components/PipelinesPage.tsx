@@ -16,7 +16,7 @@ type PipelinesPageProps = {
 };
 
 const TASK_FILTERS: Array<{ value: PipelineTaskFilter; label: string }> = [
-  { value: 'all', label: 'Task: All' },
+  { value: 'all', label: 'Type: All' },
   { value: 'session-observing', label: 'Session observing' },
   { value: 'global-observing', label: 'Global observing' },
   { value: 'wiki-compiling', label: 'Wiki compiling' },
