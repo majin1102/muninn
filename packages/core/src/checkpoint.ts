@@ -19,6 +19,8 @@ export type RecentTurn = {
 export type RecentSessionCheckpoint = {
   sessionId?: string | null;
   agent: string;
+  project: string;
+  cwd: string;
   turns: RecentTurn[];
 };
 
@@ -415,6 +417,8 @@ function parseRecentSessions(value: unknown): RecentSessionCheckpoint[] | null {
     if (
       (session.sessionId != null && typeof session.sessionId !== 'string')
       || typeof session.agent !== 'string'
+      || typeof session.project !== 'string'
+      || typeof session.cwd !== 'string'
     ) {
       return null;
     }
@@ -425,6 +429,8 @@ function parseRecentSessions(value: unknown): RecentSessionCheckpoint[] | null {
     sessions.push({
       sessionId: session.sessionId ?? null,
       agent: session.agent,
+      project: session.project,
+      cwd: session.cwd,
       turns,
     });
   }

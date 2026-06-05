@@ -172,18 +172,16 @@ test('session turn page segments use snapshot content when available', async () 
     'snapshot segment b',
   ]);
   assert.equal(page.turns.length, 1);
-  assert.equal(page.nextOffset, null);
+  assert.equal(page.nextOffset, 1);
 });
 
-test('session tree pagination ignores turn nextOffset when snapshot segments exist', () => {
+test('session tree pagination follows turn pages even when snapshot segments exist', () => {
   assert.equal(resolveSessionTreeNextOffsetForTests({
-    segmentCount: 1,
     offset: 0,
     limit: 20,
     turnCount: 80,
-  }), null);
+  }), 20);
   assert.equal(resolveSessionTreeNextOffsetForTests({
-    segmentCount: 0,
     offset: 0,
     limit: 20,
     turnCount: 80,

@@ -458,7 +458,6 @@ function buildSessionTurnPage(params: {
     observations,
     sessionSummary: parseSnapshotSummary(params.snapshotContent),
     nextOffset: resolveSessionTreeNextOffset({
-      segmentCount: segments.length,
       offset: params.offset,
       limit: params.limit,
       turnCount: params.turns.length,
@@ -467,19 +466,14 @@ function buildSessionTurnPage(params: {
 }
 
 function resolveSessionTreeNextOffset(params: {
-  segmentCount: number;
   offset: number;
   limit: number;
   turnCount: number;
 }): number | null {
-  if (params.segmentCount > 0) {
-    return null;
-  }
   return params.offset + params.limit < params.turnCount ? params.offset + params.limit : null;
 }
 
 export function resolveSessionTreeNextOffsetForTests(params: {
-  segmentCount: number;
   offset: number;
   limit: number;
   turnCount: number;

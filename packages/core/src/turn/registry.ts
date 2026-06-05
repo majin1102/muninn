@@ -11,6 +11,11 @@ type SessionEntry = {
   resolved?: Session;
 };
 
+type SessionOwnership = {
+  project: string;
+  cwd: string;
+};
+
 export class SessionRegistry {
   private readonly sessions = new Map<string, SessionEntry>();
 
@@ -19,13 +24,20 @@ export class SessionRegistry {
     readonly extractorName: string,
   ) {}
 
-  restoreSession(sessionId: string | undefined, agent: string, recentTurns: RecentTurn[]): void {
+  restoreSession(
+    sessionId: string | undefined,
+    agent: string,
+    ownership: SessionOwnership,
+    recentTurns: RecentTurn[],
+  ): void {
     const normalizedSessionId = normalizeSessionId(sessionId);
-    const key = sessionKey(normalizedSessionId, agent, this.extractorName);
+    const key = sessionKey(normalizedSessionId, agent, this.extractorName, ownership);
     const session = new Session(this.client, {
       sessionId: normalizedSessionId,
       agent,
       observer: this.extractorName,
+      project: ownership.project,
+      cwd: ownership.cwd,
       recentTurns,
     });
     this.sessions.set(key, {
@@ -36,7 +48,8 @@ export class SessionRegistry {
 
   rememberTurn(turn: Turn): void {
     const normalizedSessionId = normalizeSessionId(turn.sessionId ?? undefined);
-    const key = sessionKey(normalizedSessionId, turn.agent, this.extractorName);
+    const ownership = { project: turn.project, cwd: turn.cwd };
+    const key = sessionKey(normalizedSessionId, turn.agent, this.extractorName, ownership);
     const existing = this.sessions.get(key)?.resolved;
     if (existing) {
       existing.rememberTurn(turn);
@@ -46,6 +59,8 @@ export class SessionRegistry {
       sessionId: normalizedSessionId,
       agent: turn.agent,
       observer: this.extractorName,
+      project: ownership.project,
+      cwd: ownership.cwd,
     });
     session.rememberTurn(turn);
     this.sessions.set(key, {
@@ -54,10 +69,10 @@ export class SessionRegistry {
     });
   }
 
-  async load(sessionId: string | undefined, agent: string): Promise<Session> {
+  async load(sessionId: string | undefined, agent: string, ownership: SessionOwnership): Promise<Session> {
     this.evictExpired();
     const normalizedSessionId = normalizeSessionId(sessionId);
-    const key = sessionKey(normalizedSessionId, agent, this.extractorName);
+    const key = sessionKey(normalizedSessionId, agent, this.extractorName, ownership);
     const existing = this.sessions.get(key);
     if (existing) {
       const session = await existing.promise;
@@ -71,6 +86,8 @@ export class SessionRegistry {
           sessionId: normalizedSessionId,
           agent,
           observer: this.extractorName,
+          project: ownership.project,
+          cwd: ownership.cwd,
         });
         entry.resolved = session;
         return session;

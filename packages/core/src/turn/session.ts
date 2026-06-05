@@ -25,6 +25,8 @@ export class Session {
       sessionId?: string;
       agent: string;
       observer: string;
+      project: string;
+      cwd: string;
       recentTurns?: RecentTurn[];
     },
   ) {
@@ -90,6 +92,8 @@ export class Session {
     return {
       sessionId: this.config.sessionId ?? null,
       agent: this.config.agent,
+      project: this.config.project,
+      cwd: this.config.cwd,
       turns: [...this.recentTurns],
     };
   }
@@ -180,7 +184,7 @@ async function buildTurn(
 }
 
 function validateTurnContent(
-  config: { sessionId?: string; agent: string; observer: string },
+  config: { sessionId?: string; agent: string; observer: string; project: string; cwd: string },
   content: TurnContent,
   sessionId: string | undefined,
 ): void {
@@ -226,6 +230,10 @@ function validateTurnContent(
   }
   if (sessionId !== config.sessionId) {
     throw new Error('turn session does not match loaded session');
+  }
+  const ownership = resolveTurnOwnership(content);
+  if (ownership.project !== config.project || ownership.cwd !== config.cwd) {
+    throw new Error('turn ownership does not match loaded session');
   }
 }
 

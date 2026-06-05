@@ -116,6 +116,16 @@ function turnGroupKey(turn: Turn, sessionId: string): string {
   return `${turn.agent}\0${turn.project}\0${turn.cwd}\0${sessionId}`;
 }
 
+function threadIdentityKey(value: {
+  agent: string;
+  project: string;
+  cwd: string;
+  sessionId?: string | null;
+  threadId?: string;
+}): string {
+  return `${value.agent}\0${value.project}\0${value.cwd}\0${value.sessionId ?? value.threadId ?? DEFAULT_SESSION_ID}`;
+}
+
 function ownershipForTurns(turns: Turn[]): { agent: string; project: string; cwd: string } {
   const first = turns[0];
   if (!first) {
@@ -235,7 +245,7 @@ async function extractSessionThread(params: ExtractSessionThreadParams): Promise
     turns,
   }, signal, { memories, database: params.database });
   applySessionObservationResult(thread, result, extractionEpoch, applySessionObservationChanges);
-  touchedIds.add(thread.threadId);
+  touchedIds.add(threadIdentityKey(thread));
   return touchedIds;
 }
 
@@ -245,7 +255,7 @@ async function flushThreads(
   touchedIds: Set<string>,
 ): Promise<void> {
   const touched = threads
-    .filter((thread) => touchedIds.has(thread.threadId))
+    .filter((thread) => touchedIds.has(threadIdentityKey(thread)))
     .filter((thread) => thread.snapshots.length > 0);
   if (touched.length === 0) {
     return;
@@ -342,7 +352,7 @@ export async function buildTouchedIndex(
   const queued: QueuedSessionObservationChange[] = [];
   for (const thread of threads) {
     throwIfAborted(signal);
-    if (!touchedIds.has(thread.threadId) || !getPendingIndex(thread)) {
+    if (!touchedIds.has(threadIdentityKey(thread)) || !getPendingIndex(thread)) {
       continue;
     }
     try {
@@ -361,9 +371,9 @@ function updateThreadsFromRows(
   threads: SessionMemoryThread[],
   rows: Array<import('./types.js').SessionSnapshot>,
 ): void {
-  const rowsById = new Map(rows.map((row) => [row.sessionId, row]));
+  const rowsById = new Map(rows.map((row) => [threadIdentityKey(row), row]));
   for (const thread of threads) {
-    const row = rowsById.get(thread.threadId);
+    const row = rowsById.get(threadIdentityKey(thread));
     if (!row) {
       continue;
     }

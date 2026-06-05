@@ -516,6 +516,7 @@ export class MuninnBackend {
       this.sessionRegistry.restoreSession(
         session.sessionId ?? undefined,
         session.agent,
+        { project: session.project, cwd: session.cwd },
         session.turns,
       );
     }

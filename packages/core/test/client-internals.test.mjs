@@ -459,7 +459,7 @@ test('memories.get accepts observation paths containing colons', async () => {
 });
 
 test('observation memory id parser rejects empty and wrong prefixes', async () => {
-  const { parseGlobalObservationMemoryId } = await import('../dist/memories/observations.js');
+  const { parseGlobalObservationMemoryId } = await import('../dist/memories/global-observations.js');
 
   assert.throws(() => parseGlobalObservationMemoryId('global_observation:'), /invalid observation memory id/);
   assert.throws(() => parseGlobalObservationMemoryId('session_observation:Caroline / Work: schedule'), /invalid observation memory id/);
@@ -685,6 +685,8 @@ function makePersistedTurn(turnId, text = turnId) {
     createdAt: '2024-01-01T00:00:00Z',
     updatedAt: '2024-01-01T00:00:00Z',
     sessionId: 'group-a',
+    project: 'project-a',
+    cwd: '/workspace/project-a',
     agent: 'agent-a',
     observer: 'default-observer',
     events: [
@@ -699,6 +701,8 @@ function makePersistedTurn(turnId, text = turnId) {
 function makeTurnContent(prompt, response, overrides = {}) {
   return {
     sessionId: 'group-a',
+    project: 'project-a',
+    cwd: '/workspace/project-a',
     agent: 'agent-a',
     prompt,
     response,
@@ -738,6 +742,8 @@ function makeRecentSessionCheckpoint(turns, sessionId = 'group-a', agent = 'agen
   return {
     sessionId,
     agent,
+    project: 'project-a',
+    cwd: '/workspace/project-a',
     turns,
   };
 }
@@ -3530,8 +3536,8 @@ test('session registry reuses one in-flight session load per key', async () => {
     turnTable: {},
   }, 'default-observer');
 
-  const first = registry.load('group-a', 'agent-a');
-  const second = registry.load('group-a', 'agent-a');
+  const first = registry.load('group-a', 'agent-a', { project: 'project-a', cwd: '/workspace/project-a' });
+  const second = registry.load('group-a', 'agent-a', { project: 'project-a', cwd: '/workspace/project-a' });
   await Promise.resolve();
 
   const [firstSession, secondSession] = await Promise.all([first, second]);
@@ -3552,11 +3558,23 @@ test('session registry reuses the same load for trimmed session ids', async () =
     turnTable: {},
   }, 'default-observer');
 
-  const first = registry.load('group-a', 'agent-a');
-  const second = registry.load(' group-a ', 'agent-a');
+  const first = registry.load('group-a', 'agent-a', { project: 'project-a', cwd: '/workspace/project-a' });
+  const second = registry.load(' group-a ', 'agent-a', { project: 'project-a', cwd: '/workspace/project-a' });
   const [firstSession, secondSession] = await Promise.all([first, second]);
 
   assert.strictEqual(firstSession, secondSession);
+});
+
+test('session registry separates same raw session id across project ownership', async () => {
+  const registry = new SessionRegistry({
+    turnTable: {},
+  }, 'default-observer');
+
+  const first = registry.load('group-a', 'agent-a', { project: 'project-a', cwd: '/workspace/project-a' });
+  const second = registry.load('group-a', 'agent-a', { project: 'project-b', cwd: '/workspace/project-b' });
+  const [firstSession, secondSession] = await Promise.all([first, second]);
+
+  assert.notStrictEqual(firstSession, secondSession);
 });
 
 test('session registry restores live sessions for checkpoint recent turns', async () => {
@@ -3564,14 +3582,14 @@ test('session registry restores live sessions for checkpoint recent turns', asyn
     turnTable: {},
   }, 'default-observer');
 
-  registry.restoreSession('group-a', 'agent-a', [{
+  registry.restoreSession('group-a', 'agent-a', { project: 'project-a', cwd: '/workspace/project-a' }, [{
     turnId: 'turn:101',
     updatedAt: '2024-01-01T00:00:00Z',
     prompt: 'pending prompt',
     response: '',
   }]);
 
-  const session = await registry.load('group-a', 'agent-a');
+  const session = await registry.load('group-a', 'agent-a', { project: 'project-a', cwd: '/workspace/project-a' });
   const exported = session.exportRecentSession();
   assert.deepEqual(exported?.turns.map((turn) => turn.turnId), ['turn:101']);
 });
@@ -3581,10 +3599,10 @@ test('session registry replays persisted turns into recent windows', async () =>
     turnTable: {},
   }, 'default-observer');
 
-  registry.restoreSession('group-a', 'agent-a', [makeRecentTurn('turn:101', 'checkpoint')]);
+  registry.restoreSession('group-a', 'agent-a', { project: 'project-a', cwd: '/workspace/project-a' }, [makeRecentTurn('turn:101', 'checkpoint')]);
   registry.rememberTurn(makePersistedTurn('turn:102', 'delta'));
 
-  const exported = (await registry.load('group-a', 'agent-a')).exportRecentSession();
+  const exported = (await registry.load('group-a', 'agent-a', { project: 'project-a', cwd: '/workspace/project-a' })).exportRecentSession();
   assert.deepEqual(
     exported?.turns.map((turn) => turn.turnId),
     ['turn:101', 'turn:102'],
@@ -3613,6 +3631,8 @@ test('session.accept serializes concurrent inserts for the same session', async 
     sessionId: 'group-a',
     agent: 'agent-a',
     observer: 'default-observer',
+    project: 'project-a',
+    cwd: '/workspace/project-a',
   });
 
   const first = session.accept(makeTurnContent('first prompt', 'first response'), 1);
@@ -3647,6 +3667,8 @@ test('session.accept dedupes against the recent three turns', async () => {
     sessionId: 'group-a',
     agent: 'agent-a',
     observer: 'default-observer',
+    project: 'project-a',
+    cwd: '/workspace/project-a',
   });
 
   const accepted = [];
@@ -3679,6 +3701,8 @@ test('session.accept attaches recent three turns as transient extraction context
     sessionId: 'group-a',
     agent: 'agent-a',
     observer: 'default-observer',
+    project: 'project-a',
+    cwd: '/workspace/project-a',
   });
 
   for (const prompt of ['A', 'B', 'C']) {
@@ -3717,6 +3741,8 @@ test('session.accept drops stale recent turns before inserting a new turn', asyn
     sessionId: 'group-a',
     agent: 'agent-a',
     observer: 'default-observer',
+    project: 'project-a',
+    cwd: '/workspace/project-a',
     recentTurns: [
       makeRecentTurn('turn:stale-1', 'stale'),
       makeRecentTurn('turn:stale-2', 'stale'),
@@ -5725,6 +5751,9 @@ test('buildTouchedIndex immediately advances extraction index for touched thread
   const threads = [{
     threadId: 'session-a',
     sessionId: 'session-a',
+    project: 'alpha',
+    cwd: '/workspace/alpha',
+    agent: 'codex',
     kind: 'session',
     snapshotId: 'snapshot-1',
     snapshotIds: ['snapshot-0', 'snapshot-1'],
@@ -5732,8 +5761,20 @@ test('buildTouchedIndex immediately advances extraction index for touched thread
     title: 'Existing title',
     summary: 'Existing summary',
     snapshots: [
-      { extractions: [], contextRefs: [], openQuestions: [], nextSteps: [], extractionChanges: [] },
       {
+        project: 'alpha',
+        cwd: '/workspace/alpha',
+        agent: 'codex',
+        extractions: [],
+        contextRefs: [],
+        openQuestions: [],
+        nextSteps: [],
+        extractionChanges: [],
+      },
+      {
+        project: 'alpha',
+        cwd: '/workspace/alpha',
+        agent: 'codex',
         extractions: [{ id: 'memory-1', text: 'remember this', category: 'Fact', references: ['turn:existing'], updatedMemory: null }],
         contextRefs: [],
         openQuestions: [],
@@ -5765,7 +5806,7 @@ test('buildTouchedIndex immediately advances extraction index for touched thread
         semanticUpserts += 1;
       },
     },
-  }, threads, new Set(['session-a']));
+  }, threads, new Set(['codex\0alpha\0/workspace/alpha\0session-a']));
 
   assert.equal(semanticUpserts, 1);
   assert.equal(threads[0].indexedSnapshotSequence, 1);
@@ -6362,6 +6403,9 @@ test('flushThreads persists session state without inline ref or index builders',
     {
       threadId: 'session-child',
       sessionId: 'session-child',
+      project: 'alpha',
+      cwd: '/workspace/alpha',
+      agent: 'codex',
       kind: 'session',
       snapshotId: undefined,
       snapshotIds: [],
@@ -6370,14 +6414,17 @@ test('flushThreads persists session state without inline ref or index builders',
       summary: 'Child summary',
       snapshots: [
         {
+          threadKind: 'session',
+          sessionId: 'session-child',
+          project: 'alpha',
+          cwd: '/workspace/alpha',
+          agent: 'codex',
+          snapshotContent: '',
           extractions: [],
           contextRefs: [],
           openQuestions: [],
           nextSteps: [],
-          extractionDelta: {
-            before: [],
-            after: [{ id: null, text: 'remember this', category: 'Fact', updatedMemory: null }],
-          },
+          extractionChanges: [],
         },
       ],
       references: [],
@@ -6397,8 +6444,69 @@ test('flushThreads persists session state without inline ref or index builders',
         }));
       },
     },
-  }, threads, new Set(['session-child']));
+  }, threads, new Set(['codex\0alpha\0/workspace/alpha\0session-child']));
 
   assert.equal(threads[0].snapshotId, 'snapshot-child');
   assert.equal(threads[0].indexedSnapshotSequence, null);
+});
+
+test('flushThreads keeps same raw session id isolated by project and cwd', async (t) => {
+  const { dir, homeDir, configPath } = await makeConfigHome();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+
+  process.env.MUNINN_HOME = homeDir;
+  await writeObserverConfig(configPath);
+
+  const makeThread = (project, cwd) => ({
+    threadId: 'shared-session',
+    sessionId: 'shared-session',
+    project,
+    cwd,
+    agent: 'codex',
+    kind: 'session',
+    snapshotId: undefined,
+    snapshotIds: [],
+    extractionEpoch: 1,
+    title: `${project} session`,
+    summary: `${project} summary`,
+    snapshots: [
+      {
+        threadKind: 'session',
+        sessionId: 'shared-session',
+        project,
+        cwd,
+        agent: 'codex',
+        snapshotContent: '',
+        extractions: [],
+        contextRefs: [],
+        openQuestions: [],
+        nextSteps: [],
+        extractionChanges: [],
+      },
+    ],
+    references: [],
+    indexedSnapshotSequence: null,
+    observer: 'default-observer',
+    createdAt: '2024-01-01T00:00:00Z',
+    updatedAt: '2024-01-01T00:00:00Z',
+  });
+  const threads = [
+    makeThread('alpha', '/workspace/alpha'),
+    makeThread('beta', '/workspace/beta'),
+  ];
+
+  await updateTesting.flushThreads({
+    sessionTable: {
+      insert: async ({ snapshots }) => snapshots.map((snapshot) => ({
+        ...snapshot,
+        snapshotId: `snapshot-${snapshot.project}`,
+      })),
+    },
+  }, threads, new Set([
+    'codex\0alpha\0/workspace/alpha\0shared-session',
+    'codex\0beta\0/workspace/beta\0shared-session',
+  ]));
+
+  assert.equal(threads[0].snapshotId, 'snapshot-alpha');
+  assert.equal(threads[1].snapshotId, 'snapshot-beta');
 });
