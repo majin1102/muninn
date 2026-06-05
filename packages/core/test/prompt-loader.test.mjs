@@ -4,8 +4,8 @@ import assert from 'node:assert/strict';
 import { loadDomainPrompt, loadGatewayDomainPrompt } from '../dist/llm/domain-prompt.js';
 import { loadPromptTemplate } from '../dist/llm/prompt-loader.js';
 
-test('extraction extraction prompt exists and describes grounded extractions', () => {
-  const prompt = loadPromptTemplate('extraction_extraction');
+test('session observation extraction prompt exists and describes grounded observations', () => {
+  const prompt = loadPromptTemplate('extraction_session_observation');
   assert.match(prompt.system, /durable memory extractions/i);
   assert.match(prompt.system, /domain-specific extraction guidance/i);
   assert.match(prompt.system, /domain_prompt/);
@@ -104,7 +104,7 @@ test('thread session memory prompt organizes entity extractions by questions', (
   assert.doesNotMatch(prompt.system, /memory-get/);
   assert.doesNotMatch(prompt.userTemplate, /Root anchor:/);
   assert.doesNotMatch(prompt.userTemplate, /Rewrite content:/);
-  assert.doesNotMatch(prompt.userTemplate, /Observation outline:/);
+  assert.doesNotMatch(prompt.userTemplate, /GlobalObservation outline:/);
   assert.match(prompt.userTemplate, /Observed document:/);
   assert.match(prompt.userTemplate, /Extraction units:/);
 });
@@ -120,7 +120,7 @@ test('chat domain prompt provides category guidance without session memory workf
   assert.match(system, /Route a new span to a subject thread only when it updates, answers, clarifies, corrects, supports, or directly continues that subject/);
   assert.doesNotMatch(system, /Use `update` plus `add`/);
   assert.doesNotMatch(system, /Chat filtering/);
-  assert.doesNotMatch(system, /Extraction granularity/);
+  assert.doesNotMatch(system, /SessionObservation granularity/);
   assert.match(system, /Use categories only to organize snapshot content/);
   assert.match(system, /First write the memory content, then choose one or more categories/);
   assert.match(system, /Store useful conclusions, answers, states, plans, preferences, or reusable facts, not conversation acts/);
@@ -140,7 +140,7 @@ test('chat domain prompt provides category guidance without session memory workf
   assert.doesNotMatch(system, /memory-get/);
   assert.doesNotMatch(system, /If an extraction or `contextRefs\.summary` would still contain unresolved relative time/);
   assert.match(system, /useful memory that does not fit above/);
-  assert.doesNotMatch(system, /Extraction definition/);
+  assert.doesNotMatch(system, /SessionObservation definition/);
   assert.doesNotMatch(system, /Thread title/);
   assert.doesNotMatch(system, /Thread summary/);
   assert.doesNotMatch(system, /memory_get/);
@@ -159,13 +159,13 @@ test('chat domain prompt sections are loaded by session memory stage', () => {
   assert.doesNotMatch(gateway, /Chat memory categories/);
   assert.doesNotMatch(gateway, /`Fact`/);
   assert.doesNotMatch(gateway, /`Preference`/);
-  assert.doesNotMatch(gateway, /Extraction granularity/);
+  assert.doesNotMatch(gateway, /SessionObservation granularity/);
 
   assert.match(observing, /Chat memory categories/);
   assert.match(observing, /`Fact`/);
   assert.match(observing, /`Preference`/);
   assert.doesNotMatch(observing, /Same vs separate routing/);
-  assert.doesNotMatch(observing, /Extraction granularity/);
+  assert.doesNotMatch(observing, /SessionObservation granularity/);
   assert.doesNotMatch(observing, /Chat filtering/);
   assert.doesNotMatch(observing, /memory-get/);
 });
@@ -174,7 +174,7 @@ test('thread session memory prompt uses generic recall-ready memory guidance', (
   const template = loadPromptTemplate('thread_extracting');
   const system = template.system;
 
-  assert.doesNotMatch(system, /Extraction state: the complete current list of extractions this thread should keep/);
+  assert.doesNotMatch(system, /SessionObservation state: the complete current list of extractions this thread should keep/);
   assert.match(system, /Memory unit rules/);
   assert.match(system, /organizes related session content for future recall/);
   assert.match(system, /durable topic: a decision, requirement, preference, correction, finding, problem, solution, risk, task state, or open question/);
@@ -186,8 +186,8 @@ test('thread session memory prompt uses generic recall-ready memory guidance', (
   assert.match(system, /Return a Markdown snapshot patch, not a full snapshot/);
   assert.match(system, /# <Session Title>/);
   assert.match(system, /### Title/);
-  assert.match(system, /Session title target: 3-8 English words or 3-8 Chinese chars/);
-  assert.match(system, /Extraction title target: 3-10 English words or 6-24 Chinese chars/);
+  assert.match(system, /Session title target: 4-10 tokens/);
+  assert.match(system, /Extraction title target: 4-24 tokens/);
   assert.match(system, /## Summary/);
   assert.match(system, /## Extractions/);
   assert.doesNotMatch(system, /Routing has already selected the fragments for this thread/);
@@ -202,7 +202,7 @@ test('thread session memory prompt uses generic recall-ready memory guidance', (
   assert.match(system, /Create or update a unit for a durable topic/);
   assert.doesNotMatch(system, /Remove or rewrite units that are outdated, wrong, or duplicated/);
   assert.doesNotMatch(system, /When normalizing a time expression/);
-  assert.doesNotMatch(system, /Keep the original remembered object in `\[Extraction\]`/);
+  assert.doesNotMatch(system, /Keep the original remembered object in `\[SessionObservation\]`/);
   assert.doesNotMatch(system, /do not replace it with a broader summary or leave it only in `\[Context\]`/);
   assert.match(system, /store facts, decisions, constraints, and current state/);
   assert.match(system, /Do not retell the conversation step by step/);
@@ -217,7 +217,7 @@ test('thread session memory prompt uses generic recall-ready memory guidance', (
   assert.doesNotMatch(system, /domain_prompt/);
   assert.doesNotMatch(system, /Category selection:/);
   assert.doesNotMatch(system, /Prefer the most specific category over `Fact` when an extraction describes/);
-  assert.doesNotMatch(system, /Extraction definition/);
+  assert.doesNotMatch(system, /SessionObservation definition/);
   assert.doesNotMatch(system, /Recall-ready writing/);
   assert.doesNotMatch(system, /Derivation style/);
   assert.doesNotMatch(system, /Fact quality/);
@@ -228,7 +228,7 @@ test('thread session memory prompt uses generic recall-ready memory guidance', (
   assert.doesNotMatch(system, /stay neutral and concrete without overstating long-term meaning/);
   assert.doesNotMatch(system, /meta labels/);
   assert.doesNotMatch(system, /Prefer 6-14 words/);
-  assert.match(system, /3-8 English words/);
+  assert.match(system, /4-10 tokens/);
   assert.match(system, /Summary/);
   assert.doesNotMatch(system, /Thread state/);
   assert.doesNotMatch(system, /contextRefs/);
@@ -260,16 +260,17 @@ test('session memory prompt preserves the current extraction schema', () => {
   assert.doesNotMatch(system, /`Goal`/);
   assert.match(system, /snapshot patch/i);
   assert.match(system, /Memory unit/);
-  assert.match(system, /<!-- sequence: N; refs: \[turn:x, turn:y\] -->/);
-  assert.match(system, /<!-- refs: \[turn:x, turn:y\] -->/);
-  assert.match(system, /Metadata refs must only include supporting turn ids from the current batch/);
+  assert.match(system, /Existing extraction updates must start with metadata containing the existing `sequence` number and `refs`/);
+  assert.match(system, /Metadata refs must only include actual supporting turn ids from the current batch/);
+  assert.match(system, /Never output placeholder or copied example refs/);
+  assert.doesNotMatch(system, /refs: \[turn:x/);
   assert.doesNotMatch(system, /1-3 memory anchor lines/);
   assert.doesNotMatch(system, /\[Entity\] Alex/);
-  assert.doesNotMatch(system, /\[Extraction\]/);
+  assert.doesNotMatch(system, /\[SessionObservation\]/);
   assert.doesNotMatch(system, /updates:/);
   assert.doesNotMatch(system, /increment its `updates` count/);
   assert.match(system, /Use the current snapshot title, summaries, and current batch turns/);
-  assert.doesNotMatch(system, /Keep the original remembered object in `\[Extraction\]`/);
+  assert.doesNotMatch(system, /Keep the original remembered object in `\[SessionObservation\]`/);
   assert.doesNotMatch(system, /do not replace it with a broader summary or leave it only in `\[Context\]`/);
   assert.match(system, /preserve code and project identifiers/i);
   assert.doesNotMatch(system, /Keep the target object and key wording/);
@@ -386,7 +387,7 @@ test('session memory prompt uses raw turns and returns snapshot content document
   assert.doesNotMatch(system, /memory-get/);
   assert.doesNotMatch(system, /memory_get/);
   assert.match(system, /Current snapshot/);
-  assert.match(system, /existing extraction summaries/i);
+  assert.match(system, /existing extraction titles\/summaries/i);
   assert.match(system, /Return a Markdown snapshot patch, not a full snapshot/);
   assert.match(system, /do not wrap the whole response in a code fence or add prose outside the document/);
   assert.doesNotMatch(system, /one `# <session title>`/);
@@ -395,15 +396,19 @@ test('session memory prompt uses raw turns and returns snapshot content document
   assert.doesNotMatch(system, /extraction rows, or extraction ids/);
   assert.doesNotMatch(system, /contextRefs/);
   assert.doesNotMatch(system, /sourceReferences/);
-  assert.match(system, /Only request sequences that appear in the current snapshot/);
-  assert.doesNotMatch(system, /Extraction Index/);
+  assert.match(system, /Compare current batch turns with existing extraction titles and summaries/);
+  assert.match(system, /Do not split related content into a new extraction just to avoid calling `getExtraction`/);
+  assert.match(system, /at most 5 times/);
+  assert.doesNotMatch(system, /MUST call `getExtraction` at least once/);
+  assert.doesNotMatch(system, /SessionObservation Index/);
   assert.match(system, /Example input/);
   assert.match(system, /Example input\n----------------/);
   assert.match(system, /Example output/);
   assert.match(system, /Example output\n-----------------/);
-  assert.match(system, /Example output\n-----------------\n# Report export defaults\n\n## Summary\n\n本会话继续收敛报表导出功能/);
+  assert.match(system, /Example output\n-----------------\n# 报表导出默认设置\n\n## Summary\n\n本会话继续收敛报表导出功能/);
   assert.match(system, /## Current Snapshot/);
-  assert.match(system, /# Report export defaults/);
+  assert.match(system, /# 报表导出默认设置/);
+  assert.doesNotMatch(system, /# Report export defaults/);
   assert.match(system, /## Current Batch Turns/);
   assert.match(system, /<!-- sequence: 0 -->/);
   assert.match(system, /<!-- sequence: 0; refs: \[turn:102\] -->/);

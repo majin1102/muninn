@@ -8,6 +8,7 @@ export type DemoSessionAgentItem = {
 export type DemoSessionGroupItem = {
   sessionKey: string;
   displaySessionId: string;
+  projectKey: string;
   latestUpdatedAt: string;
 };
 
@@ -175,20 +176,20 @@ export const demoPipelineTasks: DemoPipelineTask[] = [
 
 export const demoSessionGroups: Record<string, DemoSessionGroupItem[]> = {
   openclaw: [
-    { sessionKey: 'auth-refactor', displaySessionId: 'auth-refactor', latestUpdatedAt: '2026-06-01T12:01:00.000Z' },
-    { sessionKey: 'board-mvp', displaySessionId: 'board-mvp', latestUpdatedAt: '2026-06-01T07:15:00.000Z' },
+    { sessionKey: 'auth-refactor', displaySessionId: 'auth-refactor', projectKey: 'auth-refactor', latestUpdatedAt: '2026-06-01T12:01:00.000Z' },
+    { sessionKey: 'board-mvp', displaySessionId: 'board-mvp', projectKey: 'board-mvp', latestUpdatedAt: '2026-06-01T07:15:00.000Z' },
   ],
   claude_code: [
-    { sessionKey: 'auth-refactor', displaySessionId: 'auth-refactor', latestUpdatedAt: '2026-05-29T12:00:00.000Z' },
-    { sessionKey: 'release-check', displaySessionId: 'release-check', latestUpdatedAt: '2026-05-26T12:00:00.000Z' },
+    { sessionKey: 'auth-refactor', displaySessionId: 'auth-refactor', projectKey: 'auth-refactor', latestUpdatedAt: '2026-05-29T12:00:00.000Z' },
+    { sessionKey: 'release-check', displaySessionId: 'release-check', projectKey: 'release-check', latestUpdatedAt: '2026-05-26T12:00:00.000Z' },
   ],
   codex_cli: [
-    { sessionKey: 'auth-refactor', displaySessionId: 'auth-refactor', latestUpdatedAt: '2026-05-25T12:00:00.000Z' },
-    { sessionKey: 'sdk-cleanup', displaySessionId: 'sdk-cleanup', latestUpdatedAt: '2026-05-18T12:00:00.000Z' },
+    { sessionKey: 'auth-refactor', displaySessionId: 'auth-refactor', projectKey: 'auth-refactor', latestUpdatedAt: '2026-05-25T12:00:00.000Z' },
+    { sessionKey: 'sdk-cleanup', displaySessionId: 'sdk-cleanup', projectKey: 'sdk-cleanup', latestUpdatedAt: '2026-05-18T12:00:00.000Z' },
   ],
   memory_agent: [
-    { sessionKey: 'memory-inbox/daily-recall', displaySessionId: 'memory-inbox/daily-recall', latestUpdatedAt: '2026-06-01T13:32:00.000Z' },
-    { sessionKey: 'auth-refactor', displaySessionId: 'auth-refactor', latestUpdatedAt: '2026-05-18T12:00:00.000Z' },
+    { sessionKey: 'memory-inbox/daily-recall', displaySessionId: 'memory-inbox/daily-recall', projectKey: 'memory-inbox', latestUpdatedAt: '2026-06-01T13:32:00.000Z' },
+    { sessionKey: 'auth-refactor', displaySessionId: 'auth-refactor', projectKey: 'auth-refactor', latestUpdatedAt: '2026-05-18T12:00:00.000Z' },
   ],
 };
 

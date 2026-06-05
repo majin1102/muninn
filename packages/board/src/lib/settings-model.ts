@@ -48,7 +48,7 @@ export const SAMPLE_SETTINGS: JsonObject = {
     enabled: true,
     intervalMs: 60000,
     compactMinFragments: 8,
-    extraction: {
+    session_observation: {
       targetPartitionSize: 1024,
       optimizeMergeCount: 4,
     },

@@ -13,8 +13,8 @@ test('observe queue groups by entity anchor and replaces duplicate extraction ro
   const { enqueueChanges } = await import('../dist/observer/queue.js');
   const first = extractionRow('ex-1', ['Entity: Caroline'], 'old text');
   const latest = extractionRow('ex-1', ['Entity: Caroline'], 'latest text');
-  const queue = enqueueChanges({ anchors: [] }, [{ type: 'upsert', extraction: first }]);
-  const next = enqueueChanges(queue, [{ type: 'upsert', extraction: latest }]);
+  const queue = enqueueChanges({ anchors: [] }, [{ type: 'upsert', session_observation: first }]);
+  const next = enqueueChanges(queue, [{ type: 'upsert', session_observation: latest }]);
 
   assert.equal(next.anchors.length, 1);
   assert.equal(next.anchors[0].key, 'caroline');
@@ -26,8 +26,8 @@ test('observe queue preserves old bucket when extraction anchor changes', async 
   const { enqueueChanges } = await import('../dist/observer/queue.js');
   const oldRow = extractionRow('ex-1', ['Entity: Caroline'], 'old');
   const newRow = extractionRow('ex-1', ['Entity: Melanie'], 'new');
-  const queue = enqueueChanges({ anchors: [] }, [{ type: 'upsert', extraction: oldRow }]);
-  const next = enqueueChanges(queue, [{ type: 'upsert', extraction: newRow }]);
+  const queue = enqueueChanges({ anchors: [] }, [{ type: 'upsert', session_observation: oldRow }]);
+  const next = enqueueChanges(queue, [{ type: 'upsert', session_observation: newRow }]);
 
   assert.deepEqual(next.anchors.map((bucket) => bucket.key), ['caroline', 'melanie']);
   assert.equal(next.anchors[0].extractionChanges[0].extraction.text, 'new');
@@ -40,7 +40,7 @@ test('observe queue batches and acks one anchor bucket', async () => {
   for (let index = 0; index < 9; index += 1) {
     queue = enqueueChanges(queue, [{
       type: 'upsert',
-      extraction: extractionRow(`ex-${index}`, ['Entity: Caroline'], `text ${index}`),
+      session_observation: extractionRow(`ex-${index}`, ['Entity: Caroline'], `text ${index}`),
     }]);
   }
 
@@ -54,7 +54,7 @@ test('observe queue batches and acks one anchor bucket', async () => {
 
 test('hasPendingObserverWork waits for threshold without advancing baseline', async () => {
   const client = makeClient({
-    extractions: makeExtractions(4),
+    extractions: makeSessionObservations(4),
   });
 
   assert.equal(await hasPendingObserverWork({ client, baselineVersion: 0, anchorThreshold: 5 }), false);
@@ -66,7 +66,7 @@ test('hasPendingObserverWork waits for threshold without advancing baseline', as
 
 test('hasPendingObserverWork reports pending when incremental threshold is reached', async () => {
   const client = makeClient({
-    extractions: makeExtractions(5),
+    extractions: makeSessionObservations(5),
   });
 
   assert.equal(await hasPendingObserverWork({ client, baselineVersion: 0, anchorThreshold: 5 }), true);
@@ -74,7 +74,7 @@ test('hasPendingObserverWork reports pending when incremental threshold is reach
 
 test('getObserverWorkStatus advances baseline when delta has no eligible entity anchors', async () => {
   const client = makeClient({
-    extractions: makeExtractions(2, { anchors: ['Fact: support group'] }),
+    extractions: makeSessionObservations(2, { anchors: ['Fact: support group'] }),
   });
 
   assert.deepEqual(
@@ -85,7 +85,7 @@ test('getObserverWorkStatus advances baseline when delta has no eligible entity 
 
 test('getObserverWorkStatus sees below-threshold work during finalize', async () => {
   const client = makeClient({
-    extractions: makeExtractions(4),
+    extractions: makeSessionObservations(4),
   });
 
   assert.deepEqual(
@@ -96,7 +96,7 @@ test('getObserverWorkStatus sees below-threshold work during finalize', async ()
 
 test('runObserver skips until anchor threshold is reached', async () => {
   const client = makeClient({
-    extractions: makeExtractions(4),
+    extractions: makeSessionObservations(4),
   });
 
   const result = await runObserver({
@@ -115,7 +115,7 @@ test('runObserver skips until anchor threshold is reached', async () => {
 test('runObserver finalizes pending extractions below threshold', async () => {
   let observedInput = null;
   const client = makeClient({
-    extractions: makeExtractions(4),
+    extractions: makeSessionObservations(4),
   });
 
   const result = await runObserver({
@@ -188,11 +188,11 @@ test('runObserver renders existing leaf refs from observation rows', async () =>
       observingPath: 'Caroline / Who is Caroline? / Support group',
       text: 'Caroline attended a support group.',
       vector: [],
-      extractionRefs: ['extraction:old'],
+      extractionRefs: ['session_observation:old'],
       createdAt: '2024-01-01T00:00:00Z',
       updatedAt: '2024-01-01T00:00:00Z',
     }],
-    extractions: [{ ...makeExtractions(1)[0], observationPaths: ['Caroline / Who is Caroline? / Support group'] }],
+    extractions: [{ ...makeSessionObservations(1)[0], observationPaths: ['Caroline / Who is Caroline? / Support group'] }],
   });
 
   await runObserver({
@@ -216,7 +216,7 @@ test('runObserver renders existing leaf refs from observation rows', async () =>
             level: 3,
             heading: 'Support group',
             observingPath: 'Caroline / Who is Caroline? / Support group',
-            sourceRefs: ['extraction:old'],
+            sourceRefs: ['session_observation:old'],
             expandRefs: [],
             body: '',
             children: [],
@@ -228,7 +228,7 @@ test('runObserver renders existing leaf refs from observation rows', async () =>
 
   assert.match(observedInput.outline, /leaf: Caroline \/ Who is Caroline\? \/ Support group/);
   assert.match(observedInput.observedDocument, /### Support group <!-- path: Caroline \/ Who is Caroline\? \/ Support group -->/);
-  assert.match(observedInput.observedDocument, /Source extractions:\n- \[extraction:old\]/);
+  assert.match(observedInput.observedDocument, /Source extractions:\n- \[session_observation:old\]/);
 });
 
 test('runObserver removes changed extraction refs from existing leaf hints', async () => {
@@ -261,11 +261,11 @@ test('runObserver removes changed extraction refs from existing leaf hints', asy
       observingPath: 'Caroline / Who is Caroline? / Support group',
       text: 'Caroline attended a support group.',
       vector: [],
-      extractionRefs: ['extraction:old', 'pending-1'],
+      extractionRefs: ['session_observation:old', 'pending-1'],
       createdAt: '2024-01-01T00:00:00Z',
       updatedAt: '2024-01-01T00:00:00Z',
     }],
-    extractions: [{ ...makeExtractions(1)[0], observationPaths: ['Caroline / Who is Caroline? / Support group'] }],
+    extractions: [{ ...makeSessionObservations(1)[0], observationPaths: ['Caroline / Who is Caroline? / Support group'] }],
   });
 
   await runObserver({
@@ -289,7 +289,7 @@ test('runObserver removes changed extraction refs from existing leaf hints', asy
             level: 3,
             heading: 'Support group',
             observingPath: 'Caroline / Who is Caroline? / Support group',
-            sourceRefs: ['extraction:old', input.extractions[0].id],
+            sourceRefs: ['session_observation:old', input.extractions[0].id],
             expandRefs: [],
             body: '',
             children: [],
@@ -300,8 +300,8 @@ test('runObserver removes changed extraction refs from existing leaf hints', asy
   });
 
   assert.match(observedInput.observedDocument, /Support group <!-- path: Caroline \/ Who is Caroline\? \/ Support group -->/);
-  assert.match(observedInput.observedDocument, /Source extractions:\n- \[extraction:old\]/);
-  assert.doesNotMatch(observedInput.observedDocument, /- \[extraction:old, pending-1\]/);
+  assert.match(observedInput.observedDocument, /Source extractions:\n- \[session_observation:old\]/);
+  assert.doesNotMatch(observedInput.observedDocument, /- \[session_observation:old, pending-1\]/);
   assert.deepEqual(observedInput.extractions.map((extraction) => extraction.id), ['pending-1']);
 });
 
@@ -311,7 +311,7 @@ test('runObserver sends full outline but only linked rewrite content', async () 
     contexts: existingCarolineContexts(),
     observations: [
       observationRow('Caroline / Support / Support group', 'Caroline / Support / Support group', ['pending-1']),
-      observationRow('Caroline / Art / Painting', 'Caroline / Art / Painting', ['extraction:painting']),
+      observationRow('Caroline / Art / Painting', 'Caroline / Art / Painting', ['session_observation:painting']),
     ],
     extractions: [
       {
@@ -365,7 +365,7 @@ test('runObserver preserves sibling branches outside returned subtree', async ()
     contexts: existingCarolineContexts(),
     observations: [
       observationRow('support-leaf', 'Caroline / Support / Support group', ['pending-1']),
-      observationRow('painting-leaf', 'Caroline / Art / Painting', ['extraction:painting']),
+      observationRow('painting-leaf', 'Caroline / Art / Painting', ['session_observation:painting']),
     ],
     extractions: [
       {
@@ -404,7 +404,7 @@ test('runObserver preserves sibling branches outside returned subtree', async ()
     }),
   });
 
-  assert.equal(client.writes.deletedObservationIds.includes('Caroline / Art / Painting'), false);
+  assert.equal(client.writes.deletedGlobalObservationIds.includes('Caroline / Art / Painting'), false);
   assert.equal(client.writes.observationContexts.some((row) => row.id === 'Caroline / Art / Painting'), false);
 });
 
@@ -426,7 +426,7 @@ test('runObserver deletes omitted descendants inside a returned subtree scope', 
     ],
     observations: [
       observationRow('Caroline / Support / Support group', 'Caroline / Support / Support group', ['pending-1']),
-      observationRow(siblingPath, siblingPath, ['extraction:family']),
+      observationRow(siblingPath, siblingPath, ['session_observation:family']),
     ],
     extractions: [
       {
@@ -466,7 +466,7 @@ test('runObserver deletes omitted descendants inside a returned subtree scope', 
   });
 
   assert.equal(client.writes.deletedContextIds.includes(siblingPath), true);
-  assert.equal(client.writes.deletedObservationIds.includes(siblingPath), true);
+  assert.equal(client.writes.deletedGlobalObservationIds.includes(siblingPath), true);
 });
 
 test('runObserver keeps heading-only existing descendants under a rewritten parent', async () => {
@@ -487,7 +487,7 @@ test('runObserver keeps heading-only existing descendants under a rewritten pare
     ],
     observations: [
       observationRow('Caroline / Support / Support group', 'Caroline / Support / Support group', ['pending-1']),
-      observationRow(siblingPath, siblingPath, ['extraction:family']),
+      observationRow(siblingPath, siblingPath, ['session_observation:family']),
     ],
     extractions: [
       {
@@ -537,7 +537,7 @@ test('runObserver keeps heading-only existing descendants under a rewritten pare
   });
 
   assert.equal(client.writes.deletedContextIds.includes(siblingPath), false);
-  assert.equal(client.writes.deletedObservationIds.includes(siblingPath), false);
+  assert.equal(client.writes.deletedGlobalObservationIds.includes(siblingPath), false);
   assert.equal(client.writes.observationContexts.some((row) => row.id === siblingPath), false);
 });
 
@@ -553,7 +553,7 @@ test('runObserver clears stale leaf content when a heading-only leaf is promoted
         parentId: 'Caroline / Support',
         position: 1,
         content: 'Caroline has family support.',
-        sourceRefs: ['extraction:family-old'],
+        sourceRefs: ['session_observation:family-old'],
         expandRefs: [],
         observer: 'test-observer',
         createdAt: '2024-01-01T00:00:00Z',
@@ -561,7 +561,7 @@ test('runObserver clears stale leaf content when a heading-only leaf is promoted
       },
     ],
     observations: [
-      observationRow(familyPath, familyPath, ['extraction:family-old']),
+      observationRow(familyPath, familyPath, ['session_observation:family-old']),
     ],
     extractions: [
       {
@@ -614,7 +614,7 @@ test('runObserver clears stale leaf content when a heading-only leaf is promoted
   assert.equal(promoted?.content, '');
   assert.deepEqual(promoted?.sourceRefs, []);
   assert.deepEqual(promoted?.expandRefs, []);
-  assert.equal(client.writes.deletedObservationIds.includes(familyPath), true);
+  assert.equal(client.writes.deletedGlobalObservationIds.includes(familyPath), true);
   assert.equal(client.writes.deletedContextIds.includes(familyPath), false);
 });
 
@@ -699,7 +699,7 @@ test('runObserver deletes a linked leaf omitted from the returned rewrite scope'
   });
 
   assert.equal(client.writes.deletedContextIds.includes('Caroline / Support / Support group'), true);
-  assert.equal(client.writes.deletedObservationIds.includes('Caroline / Support / Support group'), true);
+  assert.equal(client.writes.deletedGlobalObservationIds.includes('Caroline / Support / Support group'), true);
 });
 
 test('runObserver does not upsert deleted extraction changes when updating links', async (t) => {
@@ -718,7 +718,7 @@ test('runObserver does not upsert deleted extraction changes when updating links
     await rm(dir, { recursive: true, force: true });
   });
 
-  const deletedExtraction = {
+  const deletedSessionObservation = {
     ...extractionRow('pending-1', ['Entity: Caroline'], 'Caroline removed old support group details.'),
     observationPaths: ['Caroline / Support / Support group'],
   };
@@ -734,7 +734,7 @@ test('runObserver does not upsert deleted extraction changes when updating links
     client,
     observerName: 'test-observer',
     anchor: 'Caroline',
-    extractionChanges: [{ type: 'delete', extraction: deletedExtraction }],
+    extractionChanges: [{ type: 'delete', session_observation: deletedSessionObservation }],
     observeAnchorImpl: async () => ({
       title: 'Caroline',
       sections: [{
@@ -751,7 +751,7 @@ test('runObserver does not upsert deleted extraction changes when updating links
   });
 
   assert.equal(client.writes.deletedContextIds.includes('Caroline / Support / Support group'), true);
-  assert.equal(client.writes.deletedObservationIds.includes('Caroline / Support / Support group'), true);
+  assert.equal(client.writes.deletedGlobalObservationIds.includes('Caroline / Support / Support group'), true);
   assert.deepEqual(client.writes.extractions, []);
 });
 
@@ -760,10 +760,10 @@ test('runObserver get_observation returns selected subtree without siblings', as
   const client = makeClient({
     contexts: existingCarolineContexts(),
     observations: [
-      observationRow('Caroline / Support / Support group', 'Caroline / Support / Support group', ['extraction:support']),
-      observationRow('Caroline / Art / Painting', 'Caroline / Art / Painting', ['extraction:painting']),
+      observationRow('Caroline / Support / Support group', 'Caroline / Support / Support group', ['session_observation:support']),
+      observationRow('Caroline / Art / Painting', 'Caroline / Art / Painting', ['session_observation:painting']),
     ],
-    extractions: makeExtractions(1),
+    extractions: makeSessionObservations(1),
   });
 
   await runObserver({
@@ -773,7 +773,7 @@ test('runObserver get_observation returns selected subtree without siblings', as
     anchorThreshold: 5,
     finalize: true,
     observeAnchorImpl: async (input) => {
-      toolContent = await input.getObservation(['Caroline / Art / Painting']);
+      toolContent = await input.getGlobalObservation(['Caroline / Art / Painting']);
       return {
         title: 'Caroline',
         sections: [{
@@ -787,7 +787,7 @@ test('runObserver get_observation returns selected subtree without siblings', as
             level: 3,
             heading: 'Painting',
             observingPath: 'Caroline / Art / Painting',
-            sourceRefs: ['extraction:painting', input.extractions[0].id],
+            sourceRefs: ['session_observation:painting', input.extractions[0].id],
             expandRefs: [],
             body: '',
             children: [],
@@ -800,7 +800,7 @@ test('runObserver get_observation returns selected subtree without siblings', as
   assert.match(toolContent, /# Caroline/);
   assert.match(toolContent, /## Art/);
   assert.match(toolContent, /### Painting <!-- path: Caroline \/ Art \/ Painting -->/);
-  assert.match(toolContent, /Source extractions:\n- \[extraction:painting\]/);
+  assert.match(toolContent, /Source extractions:\n- \[session_observation:painting\]/);
   assert.doesNotMatch(toolContent, /Support group/);
 });
 
@@ -821,11 +821,11 @@ test('runObserver get_observation returns non-leaf subtree without sibling branc
       },
     ],
     observations: [
-      observationRow('Caroline / Support / Support group', 'Caroline / Support / Support group', ['extraction:support']),
-      observationRow('Caroline / Art / Painting', 'Caroline / Art / Painting', ['extraction:painting']),
-      observationRow('Caroline / Art / Music', 'Caroline / Art / Music', ['extraction:music']),
+      observationRow('Caroline / Support / Support group', 'Caroline / Support / Support group', ['session_observation:support']),
+      observationRow('Caroline / Art / Painting', 'Caroline / Art / Painting', ['session_observation:painting']),
+      observationRow('Caroline / Art / Music', 'Caroline / Art / Music', ['session_observation:music']),
     ],
-    extractions: makeExtractions(1),
+    extractions: makeSessionObservations(1),
   });
 
   await runObserver({
@@ -835,7 +835,7 @@ test('runObserver get_observation returns non-leaf subtree without sibling branc
     anchorThreshold: 5,
     finalize: true,
     observeAnchorImpl: async (input) => {
-      toolContent = await input.getObservation(['Caroline / Art']);
+      toolContent = await input.getGlobalObservation(['Caroline / Art']);
       return {
         title: 'Caroline',
         sections: [{
@@ -849,7 +849,7 @@ test('runObserver get_observation returns non-leaf subtree without sibling branc
             level: 3,
             heading: 'Painting',
             observingPath: 'Caroline / Art / Painting',
-            sourceRefs: ['extraction:painting'],
+            sourceRefs: ['session_observation:painting'],
             expandRefs: [],
             body: '',
             children: [],
@@ -857,7 +857,7 @@ test('runObserver get_observation returns non-leaf subtree without sibling branc
             level: 3,
             heading: 'Music',
             observingPath: 'Caroline / Art / Music',
-            sourceRefs: ['extraction:music'],
+            sourceRefs: ['session_observation:music'],
             expandRefs: [],
             body: '',
             children: [],
@@ -870,9 +870,9 @@ test('runObserver get_observation returns non-leaf subtree without sibling branc
   assert.match(toolContent, /# Caroline/);
   assert.match(toolContent, /## Art/);
   assert.match(toolContent, /### Painting <!-- path: Caroline \/ Art \/ Painting -->/);
-  assert.match(toolContent, /Source extractions:\n- \[extraction:painting\]/);
+  assert.match(toolContent, /Source extractions:\n- \[session_observation:painting\]/);
   assert.match(toolContent, /### Music <!-- path: Caroline \/ Art \/ Music -->/);
-  assert.match(toolContent, /Source extractions:\n- \[extraction:music\]/);
+  assert.match(toolContent, /Source extractions:\n- \[session_observation:music\]/);
   assert.doesNotMatch(toolContent, /Support group/);
 });
 
@@ -954,7 +954,7 @@ test('observeAnchor accepts path-based subtree markdown', async (t) => {
       anchors: ['Entity: Caroline'],
       turnRefs: ['turn:1'],
     }],
-    getObservation: () => '# Caroline',
+    getGlobalObservation: () => '# Caroline',
     maxAttempts: 1,
     model: async () => ({
       type: 'final',
@@ -994,7 +994,7 @@ test('runObserver upserts each observation id once', async (t) => {
   });
 
   const client = makeClient({
-    extractions: makeExtractions(1),
+    extractions: makeSessionObservations(1),
   });
 
   await runObserver({
@@ -1049,7 +1049,7 @@ test('runObserver indexes only expandable refs while linking all source refs', a
   });
 
   const client = makeClient({
-    extractions: makeExtractions(2),
+    extractions: makeSessionObservations(2),
   });
 
   await runObserver({
@@ -1123,7 +1123,7 @@ test('runObserver skips extraction path upsert when observation paths are unchan
       updatedAt: '2024-01-01T00:00:00Z',
     }],
     extractions: [{
-      ...makeExtractions(1)[0],
+      ...makeSessionObservations(1)[0],
       observationPaths: [pathId],
     }],
   });
@@ -1163,11 +1163,11 @@ test('runObserver updates stored extraction links when old refs move to a new le
   await useMockHome(t, 'muninn-observer-link-move-');
   const oldPath = 'Caroline / Support / Support group';
   const newPath = 'Caroline / Support / Community support';
-  const oldExtraction = {
-    ...extractionRow('extraction:old', ['Entity: Caroline'], 'Caroline previously attended a support group.'),
+  const oldSessionObservation = {
+    ...extractionRow('session_observation:old', ['Entity: Caroline'], 'Caroline previously attended a support group.'),
     observationPaths: [oldPath],
   };
-  const pendingExtraction = {
+  const pendingSessionObservation = {
     ...extractionRow('pending-1', ['Entity: Caroline'], 'Caroline joined a broader community support circle.'),
     observationPaths: [oldPath],
   };
@@ -1187,20 +1187,20 @@ test('runObserver updates stored extraction links when old refs move to a new le
       parentId: 'Caroline / Support',
       position: 0,
       content: 'Caroline previously attended a support group.',
-      sourceRefs: ['extraction:old'],
+      sourceRefs: ['session_observation:old'],
       expandRefs: [],
       observer: 'test-observer',
       createdAt: '2024-01-01T00:00:00Z',
       updatedAt: '2024-01-01T00:00:00Z',
     }],
-    extractions: [oldExtraction, pendingExtraction],
+    extractions: [oldSessionObservation, pendingSessionObservation],
   });
 
   await runObserver({
     client,
     observerName: 'test-observer',
     anchor: 'Caroline',
-    extractionChanges: [{ type: 'upsert', extraction: pendingExtraction }],
+    extractionChanges: [{ type: 'upsert', session_observation: pendingSessionObservation }],
     observeAnchorImpl: async () => ({
       title: 'Caroline',
       sections: [{
@@ -1215,7 +1215,7 @@ test('runObserver updates stored extraction links when old refs move to a new le
           level: 3,
           heading: 'Community support',
           observingPath: newPath,
-          sourceRefs: ['extraction:old', 'pending-1'],
+          sourceRefs: ['session_observation:old', 'pending-1'],
           expandRefs: [],
           body: 'Caroline moved from a prior support group into broader community support.',
           rewritten: true,
@@ -1228,18 +1228,18 @@ test('runObserver updates stored extraction links when old refs move to a new le
   assert.equal(client.writes.deletedContextIds.includes(oldPath), true);
   assert.deepEqual(
     client.writes.extractions.map((row) => [row.id, row.observationPaths]).sort(),
-    [['extraction:old', [newPath]], ['pending-1', [newPath]]],
+    [['session_observation:old', [newPath]], ['pending-1', [newPath]]],
   );
 });
 
 test('runObserver clears stored extraction links when old refs are removed from rewritten scope', async (t) => {
   await useMockHome(t, 'muninn-observer-link-remove-');
   const oldPath = 'Caroline / Support / Support group';
-  const oldExtraction = {
-    ...extractionRow('extraction:old', ['Entity: Caroline'], 'Caroline previously attended a support group.'),
+  const oldSessionObservation = {
+    ...extractionRow('session_observation:old', ['Entity: Caroline'], 'Caroline previously attended a support group.'),
     observationPaths: [oldPath],
   };
-  const pendingExtraction = {
+  const pendingSessionObservation = {
     ...extractionRow('pending-1', ['Entity: Caroline'], 'Caroline removed outdated support details.'),
     observationPaths: [oldPath],
   };
@@ -1259,20 +1259,20 @@ test('runObserver clears stored extraction links when old refs are removed from 
       parentId: 'Caroline / Support',
       position: 0,
       content: 'Caroline previously attended a support group.',
-      sourceRefs: ['extraction:old'],
+      sourceRefs: ['session_observation:old'],
       expandRefs: [],
       observer: 'test-observer',
       createdAt: '2024-01-01T00:00:00Z',
       updatedAt: '2024-01-01T00:00:00Z',
     }],
-    extractions: [oldExtraction, pendingExtraction],
+    extractions: [oldSessionObservation, pendingSessionObservation],
   });
 
   await runObserver({
     client,
     observerName: 'test-observer',
     anchor: 'Caroline',
-    extractionChanges: [{ type: 'upsert', extraction: pendingExtraction }],
+    extractionChanges: [{ type: 'upsert', session_observation: pendingSessionObservation }],
     observeAnchorImpl: async () => ({
       title: 'Caroline',
       sections: [{
@@ -1291,7 +1291,7 @@ test('runObserver clears stored extraction links when old refs are removed from 
   assert.equal(client.writes.deletedContextIds.includes(oldPath), true);
   assert.deepEqual(
     client.writes.extractions.map((row) => [row.id, row.observationPaths]).sort(),
-    [['extraction:old', []], ['pending-1', []]],
+    [['session_observation:old', []], ['pending-1', []]],
   );
 });
 
@@ -1315,7 +1315,7 @@ test('runObserver stores only current section content in observation text', asyn
   });
 
   const client = makeClient({
-    extractions: makeExtractions(1),
+    extractions: makeSessionObservations(1),
   });
 
   await runObserver({
@@ -1391,7 +1391,7 @@ test('runObserver deletes stale non-leaf observation rows', async (t) => {
       createdAt: '2024-01-01T00:00:00Z',
       updatedAt: '2024-01-01T00:00:00Z',
     }],
-    extractions: makeExtractions(1),
+    extractions: makeSessionObservations(1),
   });
 
   await runObserver({
@@ -1422,12 +1422,12 @@ test('runObserver deletes stale non-leaf observation rows', async (t) => {
     }),
   });
 
-  assert.deepEqual(client.writes.deletedObservationIds, ['Caroline / Who is Caroline?']);
+  assert.deepEqual(client.writes.deletedGlobalObservationIds, ['Caroline / Who is Caroline?']);
 });
 
 test('getObserverWorkStatus reports no work when extraction baseline is current', async () => {
   const client = makeClient({
-    extractions: makeExtractions(5),
+    extractions: makeSessionObservations(5),
     extractionVersion: 7,
   });
 
@@ -1485,7 +1485,7 @@ test('observeAnchor writes observer trace with input, prompt, and parsed documen
   assert.match(trace.prompt.system, /observer that maintains parts of a cross-session observation tree/);
   assert.match(trace.prompt.system, /get_observation\(paths\)/);
   assert.match(trace.prompt.user, /Observed document:/);
-  assert.match(trace.prompt.user, /Extraction units:/);
+  assert.match(trace.prompt.user, /SessionObservation units:/);
   assert.match(trace.finalText, /# Mock entity/);
   assert.equal(trace.document.title, 'Mock entity');
   assert.equal(trace.document.sections[0].children[0].sourceRefs[0], 'ext-a');
@@ -1524,7 +1524,7 @@ test('observeAnchor exposes get_observation tool without memory-get', async (t) 
       anchors: ['Entity: Caroline'],
       turnRefs: ['turn:1'],
     }],
-    getObservation: (paths) => `# Caroline
+    getGlobalObservation: (paths) => `# Caroline
 
 ## Support
 
@@ -1600,7 +1600,7 @@ test('observeAnchor rejects more than two get_observation calls', async (t) => {
       anchors: ['Entity: Caroline'],
       turnRefs: ['turn:1'],
     }],
-    getObservation: () => `# Caroline
+    getGlobalObservation: () => `# Caroline
 
 ## Support
 
@@ -1675,7 +1675,7 @@ test('observeAnchor recovers when get_observation is called with an unavailable 
       anchors: ['Entity: Caroline'],
       turnRefs: ['turn:1'],
     }],
-    getObservation: (paths) => {
+    getGlobalObservation: (paths) => {
       if (paths[0] !== 'Caroline / Support / Support group') {
         throw new Error(`get_observation path is not visible in the outline: ${paths[0]}`);
       }
@@ -1740,11 +1740,11 @@ function makeClient({ extractions, contexts = [], observations = [], extractionV
     observations: [],
     extractions: [],
     deletedContextIds: [],
-    deletedObservationIds: [],
+    deletedGlobalObservationIds: [],
   };
   return {
     writes,
-    extractionTable: {
+    sessionObservationTable: {
       stats: async () => ({
         version: extractionVersion,
         fragmentCount: 1,
@@ -1758,7 +1758,7 @@ function makeClient({ extractions, contexts = [], observations = [], extractionV
         writes.extractions.push(...rows);
       },
     },
-    observationContextTable: {
+    globalObservationContextTable: {
       list: async () => normalizedContexts,
       get: async ({ ids }) => normalizedContexts.filter((row) => ids.includes(row.id)),
       upsert: async ({ rows }) => {
@@ -1769,13 +1769,13 @@ function makeClient({ extractions, contexts = [], observations = [], extractionV
         return { deleted: ids.length };
       },
     },
-    observationTable: {
+    globalObservationTable: {
       get: async ({ ids }) => observations.filter((row) => ids.includes(row.id)),
       upsert: async ({ rows }) => {
         writes.observations.push(...rows);
       },
       delete: async ({ ids }) => {
-        writes.deletedObservationIds.push(...ids);
+        writes.deletedGlobalObservationIds.push(...ids);
         return { deleted: ids.length };
       },
     },
@@ -1809,7 +1809,6 @@ function extractionRow(id, anchors, text) {
     context: null,
     anchors,
     vector: [0.1, 0.2],
-    importance: 0.5,
     category: 'Fact',
     turnRefs: ['turn:1'],
     observationPaths: [],
@@ -1819,7 +1818,7 @@ function extractionRow(id, anchors, text) {
   };
 }
 
-function makeExtractions(count, options = {}) {
+function makeSessionObservations(count, options = {}) {
   const offset = options.offset ?? 0;
   const anchors = options.anchors ?? ['Entity: Caroline'];
   return Array.from({ length: count }, (_, index) => ({
@@ -1882,7 +1881,7 @@ function observationRow(id, observingPath, extractionRefs) {
   return {
     id,
     observingPath,
-    text: `${observingPath.split('/').at(-1)?.trim() ?? id}\n\nObservation text.`,
+    text: `${observingPath.split('/').at(-1)?.trim() ?? id}\n\nGlobalObservation text.`,
     vector: [],
     extractionRefs,
     createdAt: '2024-01-01T00:00:00Z',

@@ -14,13 +14,11 @@ system: |
   - The `getExtraction` tool for reading full extraction details by sequence.
 
   Tool use
-  - You MUST call `getExtraction` at least once before producing the final patch when the current snapshot has existing extraction summaries.
-  - You may call `getExtraction` at most 3 times.
-  - `getExtraction` accepts `{ sequences: number[] }`.
-  - Batch related sequences in one call.
-  - Only request sequences that appear in the current snapshot.
-  - Use the tool when the compressed summary is not enough to safely update an existing extraction.
-  - Do not request an extraction just to copy it unchanged.
+  - Compare current batch turns with existing extraction titles and summaries before creating new memory units.
+  - If an existing extraction may cover the same topic, call `getExtraction({ sequences })` and update that extraction instead of creating a duplicate.
+  - Do not split related content into a new extraction just to avoid calling `getExtraction`.
+  - Split only when the existing unit would exceed budget and the new content can stand as an independent durable topic.
+  - You may call `getExtraction` at most 5 times.
 
   Memory unit rules
   - A memory unit is one stored entry that organizes related session content for future recall.
@@ -31,9 +29,9 @@ system: |
   - Write in the conversation's primary language; preserve code and project identifiers.
 
   Budget
-  - Session title target: 3-8 English words or 3-8 Chinese chars.
+  - Session title target: 4-10 tokens.
   - Session summary target: 180-300 tokens.
-  - Extraction title target: 3-10 English words or 6-24 Chinese chars.
+  - Extraction title target: 4-24 tokens.
   - Extraction summary target: 80-160 tokens.
   - Extraction content target: 800-1600 tokens when content is needed.
   - Titles are UI labels; keep them concrete, readable, and short.
@@ -45,14 +43,14 @@ system: |
   - Include `# <Session Title>` only when the session title should change.
   - Include `## Summary` only when the session summary should change.
   - Include `## Extractions` only when any extraction changes or new extraction is created.
-  - Existing extraction updates must start with:
-    `<!-- sequence: N; refs: [turn:x, turn:y] -->`
-  - New extractions must start with:
-    `<!-- refs: [turn:x, turn:y] -->`
-  - Metadata refs must only include supporting turn ids from the current batch.
+  - Existing extraction updates must start with metadata containing the existing `sequence` number and `refs`.
+  - New extractions must start with metadata containing `refs`.
+  - Metadata refs must only include actual supporting turn ids from the current batch.
+  - Never output placeholder or copied example refs such as `turn:x`, `turn:y`, or an example turn id that is not in the current batch.
   - Do not include old refs. Runtime will merge metadata refs with stored refs.
   - Each extraction must include `### Title` and `### Summary`.
   - `### Content` is optional.
+  - Separate multiple extraction blocks with a line containing exactly `----`.
 
   Content guidance
   - Use `### Content` for structured details that would make Summary too dense.
@@ -63,7 +61,7 @@ system: |
   ----------------
   ## Current Snapshot
 
-  # Report export defaults
+  # 报表导出默认设置
 
   ### Summary
   本会话在讨论报表导出功能的默认格式、文件命名和交付约束。
@@ -87,7 +85,7 @@ system: |
 
   Example output
   -----------------
-  # Report export defaults
+  # 报表导出默认设置
 
   ## Summary
 
@@ -108,6 +106,17 @@ system: |
 
   - 文件名格式为 `project-env-YYYYMMDD.csv`。
   - 环境名示例包括 `staging` 和 `production`。
+
+  ----
+
+  <!-- refs: [turn:102] -->
+  ### Title
+
+  CSV 默认导出格式
+
+  ### Summary
+
+  报表导出继续保留 CSV 作为默认格式。
 
 user_template: |
   Input Markdown

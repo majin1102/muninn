@@ -35,24 +35,22 @@ export interface EnsureVectorIndexResult {
   created: boolean;
 }
 
-export type Extraction = {
+export type SessionObservation = {
   id: string;
-  text: string;
-  context?: string | null;
-  anchors: string[];
+  title: string;
+  summary: string;
+  content: string;
+  cwd: string;
   vector: number[];
-  importance: number;
-  category: string;
   turnRefs: string[];
-  observationPaths: string[];
-  observedRootAnchors: string[];
+  globalObservationPaths: string[];
   createdAt: string;
   updatedAt: string;
 };
 
-export type ObservationContext = {
+export type GlobalObservationContext = {
   id: string;
-  observingPath: string;
+  globalPath: string;
   parentId?: string | null;
   position: number;
   content: string;
@@ -63,12 +61,12 @@ export type ObservationContext = {
   updatedAt: string;
 };
 
-export type Observation = {
+export type GlobalObservation = {
   id: string;
-  observingPath: string;
+  globalPath: string;
   text: string;
   vector: number[];
-  extractionRefs: string[];
+  sessionObservationRefs: string[];
   createdAt: string;
   updatedAt: string;
 };
@@ -122,96 +120,96 @@ type NativeCoreBinding = {
   sessionCleanup(params: {
     floorVersion: number;
   }): MaybePromise<CompactResult>;
-  extractionNearest(params: {
+  sessionObservationNearest(params: {
     vector: number[];
     limit: number;
-  }): MaybePromise<Extraction[]>;
-  extractionSearch(params: {
+  }): MaybePromise<SessionObservation[]>;
+  sessionObservationSearch(params: {
     query: string;
     vector: number[];
     limit: number;
     mode: RecallMode;
-  }): MaybePromise<Extraction[]>;
-  extractionGet(params: {
+  }): MaybePromise<SessionObservation[]>;
+  sessionObservationGet(params: {
     ids: string[];
-  }): MaybePromise<Extraction[]>;
-  extractionList(params: {
+  }): MaybePromise<SessionObservation[]>;
+  sessionObservationList(params: {
     limit?: number;
-  }): MaybePromise<Extraction[]>;
-  extractionDelta(params: {
+  }): MaybePromise<SessionObservation[]>;
+  sessionObservationDelta(params: {
     baselineVersion: number;
-  }): MaybePromise<Extraction[]>;
-  extractionUpsert(params: {
-    rows: Extraction[];
+  }): MaybePromise<SessionObservation[]>;
+  sessionObservationUpsert(params: {
+    rows: SessionObservation[];
   }): MaybePromise<void>;
-  extractionDelete(params: {
+  sessionObservationDelete(params: {
     ids: string[];
   }): MaybePromise<{ deleted: number }>;
-  extractionValidateDimensions(params: {
+  sessionObservationValidateDimensions(params: {
     expected: number;
   }): MaybePromise<void>;
-  extractionTableStats(): MaybePromise<TableStats | null>;
-  extractionEnsureVectorIndex(params: {
+  sessionObservationTableStats(): MaybePromise<TableStats | null>;
+  sessionObservationEnsureVectorIndex(params: {
     targetPartitionSize: number;
   }): MaybePromise<EnsureVectorIndexResult>;
-  extractionCompact(): MaybePromise<CompactResult>;
-  extractionCleanup(params: {
+  sessionObservationCompact(): MaybePromise<CompactResult>;
+  sessionObservationCleanup(params: {
     floorVersion: number;
   }): MaybePromise<CompactResult>;
-  extractionOptimize(params: {
+  sessionObservationOptimize(params: {
     mergeCount: number;
   }): MaybePromise<CompactResult>;
-  observationContextUpsert(params: {
-    rows: ObservationContext[];
+  globalObservationContextUpsert(params: {
+    rows: GlobalObservationContext[];
   }): MaybePromise<void>;
-  observationContextList(params: {
+  globalObservationContextList(params: {
     observer?: string;
-  }): MaybePromise<ObservationContext[]>;
-  observationContextGet(params: {
+  }): MaybePromise<GlobalObservationContext[]>;
+  globalObservationContextGet(params: {
     ids: string[];
-  }): MaybePromise<ObservationContext[]>;
-  observationContextDelete(params: {
+  }): MaybePromise<GlobalObservationContext[]>;
+  globalObservationContextDelete(params: {
     ids: string[];
   }): MaybePromise<{ deleted: number }>;
-  observationContextTableStats(): MaybePromise<TableStats | null>;
-  observationContextEnsureIdIndex(): MaybePromise<EnsureVectorIndexResult>;
-  observationContextOptimize(params: {
+  globalObservationContextTableStats(): MaybePromise<TableStats | null>;
+  globalObservationContextEnsureIdIndex(): MaybePromise<EnsureVectorIndexResult>;
+  globalObservationContextOptimize(params: {
     mergeCount: number;
   }): MaybePromise<CompactResult>;
-  observationUpsert(params: {
-    rows: Observation[];
+  globalObservationUpsert(params: {
+    rows: GlobalObservation[];
   }): MaybePromise<void>;
-  observationDelete(params: {
+  globalObservationDelete(params: {
     ids: string[];
   }): MaybePromise<{ deleted: number }>;
-  observationSearch(params: {
+  globalObservationSearch(params: {
     query: string;
     vector: number[];
     limit: number;
     mode: RecallMode;
-  }): MaybePromise<Observation[]>;
-  observationGet(params: {
+  }): MaybePromise<GlobalObservation[]>;
+  globalObservationGet(params: {
     ids: string[];
-  }): MaybePromise<Observation[]>;
-  observationTableStats(): MaybePromise<TableStats | null>;
-  observationEnsureVectorIndex(params: {
+  }): MaybePromise<GlobalObservation[]>;
+  globalObservationTableStats(): MaybePromise<TableStats | null>;
+  globalObservationEnsureVectorIndex(params: {
     targetPartitionSize: number;
   }): MaybePromise<EnsureVectorIndexResult>;
-  observationCompact(): MaybePromise<CompactResult>;
-  observationCleanup(params: {
+  globalObservationCompact(): MaybePromise<CompactResult>;
+  globalObservationCleanup(params: {
     floorVersion: number;
   }): MaybePromise<CompactResult>;
-  observationOptimize(params: {
+  globalObservationOptimize(params: {
     mergeCount: number;
   }): MaybePromise<CompactResult>;
   describeTurnTable(): MaybePromise<TableDescription | null>;
   describeSessionTable(): MaybePromise<TableDescription | null>;
-  describeExtractionTable(): MaybePromise<TableDescription | null>;
+  describeSessionObservationTable(): MaybePromise<TableDescription | null>;
 };
 
 type NativeModule = {
   createCoreBinding(storageTarget?: StorageTarget | null): MaybePromise<NativeCoreBinding>;
-  describeExtractionForStorage(storageTarget: StorageTarget | null): MaybePromise<TableDescription | null>;
+  describeSessionObservationForStorage(storageTarget: StorageTarget | null): MaybePromise<TableDescription | null>;
 };
 
 export interface TurnTableBinding {
@@ -269,28 +267,28 @@ export interface SessionTableBinding {
   describe(): Promise<TableDescription | null>;
 }
 
-export interface ExtractionTableBinding {
+export interface SessionObservationTableBinding {
   nearest(params: {
     vector: number[];
     limit: number;
-  }): Promise<Extraction[]>;
+  }): Promise<SessionObservation[]>;
   search(params: {
     query: string;
     vector: number[];
     limit: number;
     mode: RecallMode;
-  }): Promise<Extraction[]>;
+  }): Promise<SessionObservation[]>;
   get(params: {
     ids: string[];
-  }): Promise<Extraction[]>;
+  }): Promise<SessionObservation[]>;
   list(params: {
     limit?: number;
-  }): Promise<Extraction[]>;
+  }): Promise<SessionObservation[]>;
   delta(params: {
     baselineVersion: number;
-  }): Promise<Extraction[]>;
+  }): Promise<SessionObservation[]>;
   upsert(params: {
-    rows: Extraction[];
+    rows: SessionObservation[];
   }): Promise<void>;
   delete(params: {
     ids: string[];
@@ -312,16 +310,16 @@ export interface ExtractionTableBinding {
   describe(): Promise<TableDescription | null>;
 }
 
-export interface ObservationContextTableBinding {
+export interface GlobalObservationContextTableBinding {
   upsert(params: {
-    rows: ObservationContext[];
+    rows: GlobalObservationContext[];
   }): Promise<void>;
   list(params: {
     observer?: string;
-  }): Promise<ObservationContext[]>;
+  }): Promise<GlobalObservationContext[]>;
   get(params: {
     ids: string[];
-  }): Promise<ObservationContext[]>;
+  }): Promise<GlobalObservationContext[]>;
   delete(params: {
     ids: string[];
   }): Promise<{ deleted: number }>;
@@ -332,9 +330,9 @@ export interface ObservationContextTableBinding {
   }): Promise<CompactResult>;
 }
 
-export interface ObservationTableBinding {
+export interface GlobalObservationTableBinding {
   upsert(params: {
-    rows: Observation[];
+    rows: GlobalObservation[];
   }): Promise<void>;
   delete(params: {
     ids: string[];
@@ -344,10 +342,10 @@ export interface ObservationTableBinding {
     vector: number[];
     limit: number;
     mode: RecallMode;
-  }): Promise<Observation[]>;
+  }): Promise<GlobalObservation[]>;
   get(params: {
     ids: string[];
-  }): Promise<Observation[]>;
+  }): Promise<GlobalObservation[]>;
   stats(): Promise<TableStats | null>;
   ensureVectorIndex(params: {
     targetPartitionSize: number;
@@ -365,9 +363,9 @@ export interface NativeTables {
   close(): Promise<void>;
   turnTable: TurnTableBinding;
   sessionTable: SessionTableBinding;
-  extractionTable: ExtractionTableBinding;
-  observationContextTable: ObservationContextTableBinding;
-  observationTable: ObservationTableBinding;
+  sessionObservationTable: SessionObservationTableBinding;
+  globalObservationContextTable: GlobalObservationContextTableBinding;
+  globalObservationTable: GlobalObservationTableBinding;
 }
 
 const singletons = new Map<string, NativeTables>();
@@ -407,11 +405,11 @@ export async function shutdownNativeTablesForTests(): Promise<void> {
   singletonPromises.clear();
 }
 
-export async function describeExtractionForStorage(
+export async function describeSessionObservationForStorage(
   storageTarget: StorageTarget | null,
 ): Promise<TableDescription | null> {
   const native = loadNativeModule();
-  return resolveNativeResult(native.describeExtractionForStorage(storageTarget));
+  return resolveNativeResult(native.describeSessionObservationForStorage(storageTarget));
 }
 
 function wrapBinding(native: NativeCoreBinding): NativeTables {
@@ -448,41 +446,41 @@ function wrapBinding(native: NativeCoreBinding): NativeTables {
       cleanup: async (params) => resolveNativeResult(native.sessionCleanup(params)),
       describe: async () => resolveNativeResult(native.describeSessionTable()),
     },
-    extractionTable: {
-      nearest: async (params) => resolveNativeResult(native.extractionNearest(params)),
-      search: async (params) => resolveNativeResult(native.extractionSearch(params)),
-      get: async (params) => resolveNativeResult(native.extractionGet(params)),
-      list: async (params) => resolveNativeResult(native.extractionList(params)),
-      delta: async (params) => resolveNativeResult(native.extractionDelta(params)),
-      upsert: async (params) => resolveNativeResult(native.extractionUpsert(params)),
-      delete: async (params) => resolveNativeResult(native.extractionDelete(params)),
-      validateDimensions: async (params) => resolveNativeResult(native.extractionValidateDimensions(params)),
-      stats: async () => resolveNativeResult(native.extractionTableStats()),
-      ensureVectorIndex: async (params) => resolveNativeResult(native.extractionEnsureVectorIndex(params)),
-      compact: async () => resolveNativeResult(native.extractionCompact()),
-      cleanup: async (params) => resolveNativeResult(native.extractionCleanup(params)),
-      optimize: async (params) => resolveNativeResult(native.extractionOptimize(params)),
-      describe: async () => resolveNativeResult(native.describeExtractionTable()),
+    sessionObservationTable: {
+      nearest: async (params) => resolveNativeResult(native.sessionObservationNearest(params)),
+      search: async (params) => resolveNativeResult(native.sessionObservationSearch(params)),
+      get: async (params) => resolveNativeResult(native.sessionObservationGet(params)),
+      list: async (params) => resolveNativeResult(native.sessionObservationList(params)),
+      delta: async (params) => resolveNativeResult(native.sessionObservationDelta(params)),
+      upsert: async (params) => resolveNativeResult(native.sessionObservationUpsert(params)),
+      delete: async (params) => resolveNativeResult(native.sessionObservationDelete(params)),
+      validateDimensions: async (params) => resolveNativeResult(native.sessionObservationValidateDimensions(params)),
+      stats: async () => resolveNativeResult(native.sessionObservationTableStats()),
+      ensureVectorIndex: async (params) => resolveNativeResult(native.sessionObservationEnsureVectorIndex(params)),
+      compact: async () => resolveNativeResult(native.sessionObservationCompact()),
+      cleanup: async (params) => resolveNativeResult(native.sessionObservationCleanup(params)),
+      optimize: async (params) => resolveNativeResult(native.sessionObservationOptimize(params)),
+      describe: async () => resolveNativeResult(native.describeSessionObservationTable()),
     },
-    observationContextTable: {
-      upsert: async (params) => resolveNativeResult(native.observationContextUpsert(params)),
-      list: async (params) => resolveNativeResult(native.observationContextList(params)),
-      get: async (params) => resolveNativeResult(native.observationContextGet(params)),
-      delete: async (params) => resolveNativeResult(native.observationContextDelete(params)),
-      stats: async () => resolveNativeResult(native.observationContextTableStats()),
-      ensureIdIndex: async () => resolveNativeResult(native.observationContextEnsureIdIndex()),
-      optimize: async (params) => resolveNativeResult(native.observationContextOptimize(params)),
+    globalObservationContextTable: {
+      upsert: async (params) => resolveNativeResult(native.globalObservationContextUpsert(params)),
+      list: async (params) => resolveNativeResult(native.globalObservationContextList(params)),
+      get: async (params) => resolveNativeResult(native.globalObservationContextGet(params)),
+      delete: async (params) => resolveNativeResult(native.globalObservationContextDelete(params)),
+      stats: async () => resolveNativeResult(native.globalObservationContextTableStats()),
+      ensureIdIndex: async () => resolveNativeResult(native.globalObservationContextEnsureIdIndex()),
+      optimize: async (params) => resolveNativeResult(native.globalObservationContextOptimize(params)),
     },
-    observationTable: {
-      upsert: async (params) => resolveNativeResult(native.observationUpsert(params)),
-      delete: async (params) => resolveNativeResult(native.observationDelete(params)),
-      search: async (params) => resolveNativeResult(native.observationSearch(params)),
-      get: async (params) => resolveNativeResult(native.observationGet(params)),
-      stats: async () => resolveNativeResult(native.observationTableStats()),
-      ensureVectorIndex: async (params) => resolveNativeResult(native.observationEnsureVectorIndex(params)),
-      compact: async () => resolveNativeResult(native.observationCompact()),
-      cleanup: async (params) => resolveNativeResult(native.observationCleanup(params)),
-      optimize: async (params) => resolveNativeResult(native.observationOptimize(params)),
+    globalObservationTable: {
+      upsert: async (params) => resolveNativeResult(native.globalObservationUpsert(params)),
+      delete: async (params) => resolveNativeResult(native.globalObservationDelete(params)),
+      search: async (params) => resolveNativeResult(native.globalObservationSearch(params)),
+      get: async (params) => resolveNativeResult(native.globalObservationGet(params)),
+      stats: async () => resolveNativeResult(native.globalObservationTableStats()),
+      ensureVectorIndex: async (params) => resolveNativeResult(native.globalObservationEnsureVectorIndex(params)),
+      compact: async () => resolveNativeResult(native.globalObservationCompact()),
+      cleanup: async (params) => resolveNativeResult(native.globalObservationCleanup(params)),
+      optimize: async (params) => resolveNativeResult(native.globalObservationOptimize(params)),
     },
   };
 }

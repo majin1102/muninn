@@ -1,13 +1,13 @@
 import type { Turn } from '../client.js';
-import type { QueuedExtractionChange } from '../checkpoint.js';
+import type { QueuedSessionObservationChange } from '../checkpoint.js';
 import { Memories } from '../memories/memories.js';
 import type { NativeTables } from '../native.js';
 import { extractSessionMemory } from '../llm/extracting.js';
-import { applyExtractionChanges, applyExtractionTableChanges } from './memory-delta.js';
+import { applySessionObservationChanges, applySessionObservationTableChanges } from './memory-delta.js';
 import type { SealedEpoch } from './epoch.js';
 import {
   isActiveThread,
-  applyExtractionResult,
+  applySessionObservationResult,
   createSessionMemoryThread,
   currentSessionMemoryContent,
   getPendingIndex,
@@ -85,7 +85,7 @@ function groupTurnsBySession(turns: Turn[]): Turn[][] {
   const order: string[] = [];
   for (const turn of turns) {
     const sessionId = normalizedSessionId(turn);
-    const key = sessionId ?? DEFAULT_SESSION_ID;
+    const key = turnGroupKey(turn, sessionId ?? DEFAULT_SESSION_ID);
     let group = groups.get(key);
     if (!group) {
       group = [];
@@ -110,6 +110,27 @@ function sessionIdForTurns(turns: Turn[]): string {
     }
   }
   return expected ?? DEFAULT_SESSION_ID;
+}
+
+function turnGroupKey(turn: Turn, sessionId: string): string {
+  return `${turn.agent}\0${turn.project}\0${turn.cwd}\0${sessionId}`;
+}
+
+function ownershipForTurns(turns: Turn[]): { agent: string; project: string; cwd: string } {
+  const first = turns[0];
+  if (!first) {
+    throw new Error('missing turns for session ownership');
+  }
+  for (const turn of turns) {
+    if (turn.agent !== first.agent || turn.project !== first.project || turn.cwd !== first.cwd) {
+      throw new Error('extractSessionThread requires pendingTurns from a single project/cwd/agent');
+    }
+  }
+  return {
+    agent: first.agent,
+    project: first.project,
+    cwd: first.cwd,
+  };
 }
 
 function activeThreadInputs(
@@ -143,10 +164,14 @@ function ensureSessionThread(
   extractionEpoch: number,
 ): SessionMemoryThread | null {
   const sessionId = sessionIdForTurns(pendingTurns);
+  const ownership = ownershipForTurns(pendingTurns);
   const existing = threads.find((thread) => (
     thread.observer === extractorName
     && thread.kind === 'session'
     && (thread.sessionId ?? null) === sessionId
+    && thread.agent === ownership.agent
+    && thread.project === ownership.project
+    && thread.cwd === ownership.cwd
   ));
   if (existing) {
     return existing;
@@ -164,6 +189,7 @@ function ensureSessionThread(
     new Date().toISOString(),
     'session',
     sessionId,
+    ownership,
   );
   threads.push(thread);
   return thread;
@@ -183,10 +209,14 @@ async function extractSessionThread(params: ExtractSessionThreadParams): Promise
   const touchedIds = new Set<string>();
   const now = new Date().toISOString();
   const sessionId = sessionIdForTurns(pendingTurns);
+  const ownership = ownershipForTurns(pendingTurns);
   const thread = threads.find((candidate) => (
     candidate.observer === extractorName
     && candidate.kind === 'session'
     && (candidate.sessionId ?? null) === sessionId
+    && candidate.agent === ownership.agent
+    && candidate.project === ownership.project
+    && candidate.cwd === ownership.cwd
   ));
   if (!thread || pendingTurns.length === 0) {
     return touchedIds;
@@ -204,7 +234,7 @@ async function extractSessionThread(params: ExtractSessionThreadParams): Promise
     sessionMemoryContent: currentSessionMemoryContent(thread),
     turns,
   }, signal, { memories, database: params.database });
-  applyExtractionResult(thread, result, extractionEpoch, applyExtractionChanges);
+  applySessionObservationResult(thread, result, extractionEpoch, applySessionObservationChanges);
   touchedIds.add(thread.threadId);
   return touchedIds;
 }
@@ -231,14 +261,14 @@ async function catchUpIndex(
   client: NativeTables,
   thread: SessionMemoryThread,
   signal?: AbortSignal,
-): Promise<QueuedExtractionChange[]> {
+): Promise<QueuedSessionObservationChange[]> {
   const pending = getPendingIndex(thread);
   if (!pending) {
     return [];
   }
 
   let latestIndexedSequence = thread.indexedSnapshotSequence ?? null;
-  const queued: QueuedExtractionChange[] = [];
+  const queued: QueuedSessionObservationChange[] = [];
   for (let snapshotIndex = pending.start; snapshotIndex <= pending.end; snapshotIndex += 1) {
     throwIfAborted(signal);
     const current = thread.snapshots[snapshotIndex];
@@ -246,7 +276,7 @@ async function catchUpIndex(
     const previousIds = new Set((previous?.extractions ?? [])
       .map((extraction) => extraction.id)
       .filter((id): id is string => Boolean(id)));
-    const diff = applyExtractionChanges(previous?.extractions ?? [], {
+    const diff = applySessionObservationChanges(previous?.extractions ?? [], {
       title: thread.title,
       summary: thread.summary,
       snapshotContent: current.snapshotContent,
@@ -259,7 +289,7 @@ async function catchUpIndex(
       nextSteps: current.nextSteps ?? [],
       contextRefs: current.contextRefs,
     });
-    queued.push(...await applyExtractionTableChanges(
+    queued.push(...await applySessionObservationTableChanges(
       client,
       {
         ...current,
@@ -278,13 +308,13 @@ async function catchUpIndex(
   return queued;
 }
 
-export async function buildExtraction(
+export async function buildSessionObservation(
   client: NativeTables,
   threads: SessionMemoryThread[],
   signal?: AbortSignal,
-): Promise<QueuedExtractionChange[]> {
+): Promise<QueuedSessionObservationChange[]> {
   let firstError: unknown = null;
-  const queued: QueuedExtractionChange[] = [];
+  const queued: QueuedSessionObservationChange[] = [];
   for (const thread of threads) {
     throwIfAborted(signal);
     if (!getPendingIndex(thread)) {
@@ -307,9 +337,9 @@ export async function buildTouchedIndex(
   threads: SessionMemoryThread[],
   touchedIds: Set<string>,
   signal?: AbortSignal,
-): Promise<QueuedExtractionChange[]> {
+): Promise<QueuedSessionObservationChange[]> {
   let firstError: unknown = null;
-  const queued: QueuedExtractionChange[] = [];
+  const queued: QueuedSessionObservationChange[] = [];
   for (const thread of threads) {
     throwIfAborted(signal);
     if (!touchedIds.has(thread.threadId) || !getPendingIndex(thread)) {
@@ -349,7 +379,7 @@ function updateThreadsFromRows(
 export const __testing = {
   flushThreads,
   buildTouchedIndex,
-  buildExtraction,
+  buildSessionObservation,
   extractEpoch,
   activeThreadInputsForTests: activeThreadInputs,
   extractSessionThreadForTests: extractSessionThread,

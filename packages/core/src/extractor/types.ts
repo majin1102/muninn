@@ -1,22 +1,16 @@
-export type ExtractionCategory = 'Preference' | 'Fact' | 'Decision' | 'Entity' | 'Concept' | 'Other';
-
-export type Extraction = {
+export type SessionObservation = {
   id?: string | null;
   title?: string | null;
   text: string;
   context?: string | null;
-  anchors?: string[];
-  category: ExtractionCategory;
   references: string[];
   updatedMemory?: string | null;
 };
 
-export type ExtractionInput = {
+export type SessionObservationInput = {
   title?: string | null;
   text: string;
   context?: string | null;
-  anchors?: string[];
-  category: ExtractionCategory;
   references: string[];
 };
 
@@ -25,13 +19,11 @@ export type ContextRef = {
   summary: string;
 };
 
-export type ExtractionChange =
+export type SessionObservationChange =
   | {
     type: 'add';
     text: string;
     context?: string | null;
-    anchors?: string[];
-    category: ExtractionCategory;
     references: string[];
     reason: string;
   }
@@ -40,8 +32,6 @@ export type ExtractionChange =
     extractionIds: string[];
     text: string;
     context?: string | null;
-    anchors?: string[];
-    category: ExtractionCategory;
     reason: string;
   }
   | {
@@ -49,8 +39,6 @@ export type ExtractionChange =
     extractionId: string;
     text: string;
     context?: string | null;
-    anchors?: string[];
-    category?: ExtractionCategory;
     references?: string[];
     reason: string;
   }
@@ -63,12 +51,15 @@ export type ExtractionChange =
 export type SnapshotContent = {
   threadKind?: SessionMemoryThreadKind;
   sessionId?: string | null;
+  project?: string;
+  cwd?: string;
+  agent?: string;
   snapshotContent: string;
-  extractions: Extraction[];
+  extractions: SessionObservation[];
   contextRefs: ContextRef[];
   openQuestions?: string[];
   nextSteps?: string[];
-  extractionChanges: ExtractionChange[];
+  extractionChanges: SessionObservationChange[];
 };
 
 export type SessionMemoryThreadKind = 'session' | 'subject';
@@ -77,6 +68,9 @@ export type SessionMemoryThread = {
   threadId: string;
   kind: SessionMemoryThreadKind;
   sessionId?: string | null;
+  project: string;
+  cwd: string;
+  agent: string;
   snapshotId?: string;
   snapshotIds: string[];
   snapshotEpochs?: number[];
@@ -94,10 +88,13 @@ export type SessionMemoryThread = {
 export type SessionSnapshot = {
   snapshotId: string;
   sessionId: string;
+  project: string;
+  cwd: string;
+  agent: string;
   snapshotSequence: number;
   createdAt: string;
   updatedAt: string;
-  observer: string;
+  extractor: string;
   title: string;
   summary: string;
   content: string;
@@ -127,7 +124,7 @@ export type SessionMemoryContent = {
   title: string;
   summary: string;
   snapshotContent?: string;
-  extractions: Extraction[];
+  extractions: SessionObservation[];
   openQuestions: string[];
   nextSteps: string[];
 };
@@ -143,7 +140,7 @@ export type ExtractSessionMemoryResult = {
   title: string;
   summary: string;
   snapshotContent: string;
-  extractions: Extraction[];
+  extractions: SessionObservation[];
   openQuestions: string[];
   nextSteps: string[];
   contextRefs: ContextRef[];
@@ -182,5 +179,5 @@ export type ThreadPreparationWorkItem = {
 
 export type ThreadPreparationResult = {
   workItems: ThreadPreparationWorkItem[];
-  unthreadedExtractionIds: string[];
+  unthreadedSessionObservationIds: string[];
 };

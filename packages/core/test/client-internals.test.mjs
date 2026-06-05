@@ -23,7 +23,7 @@ import { Watchdog } from '../dist/watchdog.js';
 import updateModule from '../dist/extractor/update.js';
 import threadModule from '../dist/extractor/thread.js';
 import observingGatewayModule from '../dist/llm/extracting.js';
-import { applyExtractionChanges, applyExtractionTableChanges } from '../dist/extractor/memory-delta.js';
+import { applySessionObservationChanges, applySessionObservationTableChanges } from '../dist/extractor/memory-delta.js';
 import { recallMemories } from '../dist/memories/recall.js';
 import { validateMemoryRecallResult } from '../dist/memories/memory-recaller.js';
 import { getNativeTables } from '../dist/native.js';
@@ -46,8 +46,8 @@ function makeExtractorCheckpoint(overrides = {}) {
   const baseline = {
     turn: 10,
     session: 21,
-    extraction: 8,
-    observation: 0,
+    session_observation: 8,
+    global_observation: 0,
     ...(overrides.baseline ?? {}),
   };
   return {
@@ -57,7 +57,7 @@ function makeExtractorCheckpoint(overrides = {}) {
     recentSessions: [],
     threads: [],
     runs: [],
-    pendingExtractionChanges: [],
+    pendingSessionObservationChanges: [],
     ...overrides,
     baseline,
   };
@@ -66,7 +66,7 @@ function makeExtractorCheckpoint(overrides = {}) {
 function makeObserverCheckpoint(overrides = {}) {
   const baseline = {
     observationContext: 0,
-    observation: 0,
+    global_observation: 0,
     ...(overrides.baseline ?? {}),
   };
   return {
@@ -254,25 +254,25 @@ test('checkpoint preserves observer runs', () => {
     writtenAt: new Date(0).toISOString(),
     writerPid: 1,
     extractor: {
-      baseline: { turn: 0, session: 0, extraction: 0, observation: 0 },
+      baseline: { turn: 0, session: 0, session_observation: 0, global_observation: 0 },
       nextEpoch: 1,
       recentSessions: [],
       threads: [],
       runs: [],
-      pendingExtractionChanges: [],
+      pendingSessionObservationChanges: [],
     },
     observer: {
-      baseline: { observationContext: 0, observation: 0 },
+      baseline: { observationContext: 0, global_observation: 0 },
       observeQueue: { anchors: [] },
       runs: [{
         runId: 'run-1',
         observeId: 'entity:caroline',
         anchor: 'Caroline',
-        stage: 'generatingObservation',
-        pendingExtractionIds: ['abc'],
+        stage: 'generatingGlobalObservation',
+        pendingSessionObservationIds: ['abc'],
         errors: [],
       }],
-      pendingExtractionChanges: [],
+      pendingSessionObservationChanges: [],
     },
     sessionIndex: { baseline: { turn: 0, session: 0 }, entries: [] },
   }));
@@ -281,21 +281,21 @@ test('checkpoint preserves observer runs', () => {
 
 test('native bindings expose observation context and observation tables', async () => {
   const tables = await getNativeTables();
-  assert.equal(typeof tables.extractionTable.list, 'function');
-  assert.equal(typeof tables.extractionTable.delta, 'function');
-  assert.equal(typeof tables.observationContextTable.upsert, 'function');
-  assert.equal(typeof tables.observationContextTable.list, 'function');
-  assert.equal(typeof tables.observationContextTable.stats, 'function');
-  assert.equal(typeof tables.observationContextTable.ensureIdIndex, 'function');
-  assert.equal(typeof tables.observationContextTable.optimize, 'function');
-  assert.equal(typeof tables.observationTable.upsert, 'function');
-  assert.equal(typeof tables.observationTable.delete, 'function');
-  assert.equal(typeof tables.observationTable.search, 'function');
-  assert.equal(typeof tables.observationTable.stats, 'function');
-  assert.equal(typeof tables.observationTable.ensureVectorIndex, 'function');
-  assert.equal(typeof tables.observationTable.compact, 'function');
-  assert.equal(typeof tables.observationTable.cleanup, 'function');
-  assert.equal(typeof tables.observationTable.optimize, 'function');
+  assert.equal(typeof tables.sessionObservationTable.list, 'function');
+  assert.equal(typeof tables.sessionObservationTable.delta, 'function');
+  assert.equal(typeof tables.globalObservationContextTable.upsert, 'function');
+  assert.equal(typeof tables.globalObservationContextTable.list, 'function');
+  assert.equal(typeof tables.globalObservationContextTable.stats, 'function');
+  assert.equal(typeof tables.globalObservationContextTable.ensureIdIndex, 'function');
+  assert.equal(typeof tables.globalObservationContextTable.optimize, 'function');
+  assert.equal(typeof tables.globalObservationTable.upsert, 'function');
+  assert.equal(typeof tables.globalObservationTable.delete, 'function');
+  assert.equal(typeof tables.globalObservationTable.search, 'function');
+  assert.equal(typeof tables.globalObservationTable.stats, 'function');
+  assert.equal(typeof tables.globalObservationTable.ensureVectorIndex, 'function');
+  assert.equal(typeof tables.globalObservationTable.compact, 'function');
+  assert.equal(typeof tables.globalObservationTable.cleanup, 'function');
+  assert.equal(typeof tables.globalObservationTable.optimize, 'function');
 });
 
 test('table mutation locks serialize writes on the same table', async () => {
@@ -358,7 +358,7 @@ test('lockNativeTables serializes same-table mutations without locking reads', a
   const optimizeEntered = deferred();
   let searchCalls = 0;
   const tables = lockNativeTables({
-    observationTable: {
+    globalObservationTable: {
       upsert: async () => {
         upsertEntered.resolve();
         await releaseUpsert.promise;
@@ -374,10 +374,10 @@ test('lockNativeTables serializes same-table mutations without locking reads', a
     },
   }, locks);
 
-  const upsert = tables.observationTable.upsert({ rows: [] });
+  const upsert = tables.globalObservationTable.upsert({ rows: [] });
   await upsertEntered.promise;
-  const optimize = tables.observationTable.optimize({ mergeCount: 1 });
-  await tables.observationTable.search({ query: 'q', vector: [], limit: 1, mode: 'hybrid' });
+  const optimize = tables.globalObservationTable.optimize({ mergeCount: 1 });
+  await tables.globalObservationTable.search({ query: 'q', vector: [], limit: 1, mode: 'hybrid' });
   assert.equal(searchCalls, 1);
 
   const optimizeStartedEarly = await Promise.race([
@@ -393,7 +393,7 @@ test('lockNativeTables serializes same-table mutations without locking reads', a
 
 test('memories.get renders curated observation memories', async () => {
   const client = {
-    observationTable: {
+    globalObservationTable: {
       get: async ({ ids }) => ids.includes('obs-1')
         ? [{
             id: 'obs-1',
@@ -406,35 +406,35 @@ test('memories.get renders curated observation memories', async () => {
           }]
         : [],
     },
-    extractionTable: { get: async () => [] },
+    sessionObservationTable: { get: async () => [] },
     sessionTable: { get: async () => null },
     turnTable: { get: async () => null },
   };
   const { Memories } = await import('../dist/memories/memories.js');
-  const memory = await new Memories(client).get('observation:obs-1');
+  const memory = await new Memories(client).get('global_observation:obs-1');
 
-  assert.equal(memory.memoryId, 'observation:obs-1');
+  assert.equal(memory.memoryId, 'global_observation:obs-1');
   assert.equal(memory.title, 'Caroline researched adoption agencies.');
   assert.equal(memory.summary, 'Caroline researched adoption agencies.');
   assert.match(memory.detail, /References:/);
-  assert.match(memory.detail, /extraction:ext-1/);
+  assert.match(memory.detail, /session_observation:ext-1/);
 });
 
 test('memories.get returns null for unknown curated observation memories', async () => {
   const client = {
-    observationTable: { get: async () => [] },
-    extractionTable: { get: async () => [] },
+    globalObservationTable: { get: async () => [] },
+    sessionObservationTable: { get: async () => [] },
     sessionTable: { get: async () => null },
     turnTable: { get: async () => null },
   };
   const { Memories } = await import('../dist/memories/memories.js');
-  assert.equal(await new Memories(client).get('observation:missing'), null);
+  assert.equal(await new Memories(client).get('global_observation:missing'), null);
 });
 
 test('memories.get accepts observation paths containing colons', async () => {
   const pathId = 'Caroline / Work: schedule';
   const client = {
-    observationTable: {
+    globalObservationTable: {
       get: async ({ ids }) => ids.includes(pathId)
         ? [{
             id: pathId,
@@ -447,22 +447,22 @@ test('memories.get accepts observation paths containing colons', async () => {
           }]
         : [],
     },
-    extractionTable: { get: async () => [] },
+    sessionObservationTable: { get: async () => [] },
     sessionTable: { get: async () => null },
     turnTable: { get: async () => null },
   };
   const { Memories } = await import('../dist/memories/memories.js');
-  const memory = await new Memories(client).get(`observation:${pathId}`);
+  const memory = await new Memories(client).get(`global_observation:${pathId}`);
 
-  assert.equal(memory.memoryId, `observation:${pathId}`);
+  assert.equal(memory.memoryId, `global_observation:${pathId}`);
   assert.equal(memory.title, 'Caroline adjusted her work schedule.');
 });
 
 test('observation memory id parser rejects empty and wrong prefixes', async () => {
-  const { parseObservationMemoryId } = await import('../dist/memories/observations.js');
+  const { parseGlobalObservationMemoryId } = await import('../dist/memories/observations.js');
 
-  assert.throws(() => parseObservationMemoryId('observation:'), /invalid observation memory id/);
-  assert.throws(() => parseObservationMemoryId('extraction:Caroline / Work: schedule'), /invalid observation memory id/);
+  assert.throws(() => parseGlobalObservationMemoryId('global_observation:'), /invalid observation memory id/);
+  assert.throws(() => parseGlobalObservationMemoryId('session_observation:Caroline / Work: schedule'), /invalid observation memory id/);
 });
 
 test('observer markdown parser derives parent and child observations', async () => {
@@ -479,14 +479,14 @@ test('observer markdown parser derives parent and child observations', async () 
     'Alex moved the onboarding review to Thursday.',
     '',
     'Source extractions:',
-    '- [extraction:c]',
-  ].join('\n'), new Set(['extraction:c']));
+    '- [session_observation:c]',
+  ].join('\n'), new Set(['session_observation:c']));
 
   assert.equal(parsed.title, 'Alex');
   assert.equal(parsed.sections.length, 1);
   assert.equal(parsed.sections[0].heading, 'Who is Alex?');
   assert.equal(parsed.sections[0].children[0].heading, 'What changed recently?');
-  assert.deepEqual(parsed.sections[0].children[0].sourceRefs, ['extraction:c']);
+  assert.deepEqual(parsed.sections[0].children[0].sourceRefs, ['session_observation:c']);
 });
 
 test('observer markdown parser normalizes unique extraction id prefixes', async () => {
@@ -516,7 +516,7 @@ test('observer markdown parser rejects invalid refs and missing refs', async () 
     '',
     'Source extractions:',
     '- [session:a]',
-  ].join('\n'), new Set(['extraction:a'])), /unknown extraction id|unknown extraction/i);
+  ].join('\n'), new Set(['session_observation:a'])), /unknown extraction id|unknown extraction/i);
 
   assert.throws(() => parseObserverDocument([
     '# Alex',
@@ -524,7 +524,7 @@ test('observer markdown parser rejects invalid refs and missing refs', async () 
     '## Who is Alex?',
     '',
     'Alex is a product lead.',
-  ].join('\n'), new Set(['extraction:a'])), /leaf observer section must include Source extractions/i);
+  ].join('\n'), new Set(['session_observation:a'])), /leaf observer section must include Source extractions/i);
 
   assert.throws(() => parseObserverDocument([
     '# Alex',
@@ -534,13 +534,13 @@ test('observer markdown parser rejects invalid refs and missing refs', async () 
     'Alex is a product lead.',
     '',
     'Source extractions:',
-    '- [extraction:missing]',
-  ].join('\n'), new Set(['extraction:a'])), /unknown extraction id|unknown extraction/i);
+    '- [session_observation:missing]',
+  ].join('\n'), new Set(['session_observation:a'])), /unknown extraction id|unknown extraction/i);
 });
 
 test('observer prompt renders status and extraction inputs', async () => {
   const { __testing: observingTesting } = await import('../dist/llm/observing.js');
-  const rendered = observingTesting.renderExtractions([{
+  const rendered = observingTesting.renderSessionObservations([{
     id: 'abc',
     status: 'new',
     text: 'Alex moved onboarding review to Thursday.',
@@ -553,7 +553,7 @@ test('observer prompt renders status and extraction inputs', async () => {
   assert.match(rendered, /Status: new/);
   assert.match(rendered, /Anchors: Entity: Alex; Decision: review day/);
   assert.match(rendered, /Context: The team compared review days\./);
-  assert.match(rendered, /Extraction: Alex moved onboarding review to Thursday\./);
+  assert.match(rendered, /SessionObservation: Alex moved onboarding review to Thursday\./);
   assert.match(rendered, /Source refs: session:1/);
 });
 
@@ -566,7 +566,6 @@ test('observer runner groups extractions by entity anchor', async () => {
       context: null,
       anchors: ['Entity: Alex', 'Decision: review day'],
       vector: [1, 0],
-      importance: 1,
       category: 'decision',
       turnRefs: ['session:1'],
       observationPaths: [],
@@ -580,7 +579,6 @@ test('observer runner groups extractions by entity anchor', async () => {
       context: null,
       anchors: ['Entity:  alex '],
       vector: [1, 0],
-      importance: 1,
       category: 'fact',
       turnRefs: ['session:2'],
       observationPaths: [],
@@ -594,7 +592,6 @@ test('observer runner groups extractions by entity anchor', async () => {
       context: null,
       anchors: ['Fact: no entity'],
       vector: [1, 0],
-      importance: 1,
       category: 'fact',
       turnRefs: ['session:3'],
       observationPaths: [],
@@ -647,17 +644,24 @@ function makeRecentTurn(turnId, text = turnId) {
   };
 }
 
-function storedExtraction(id) {
+function storedSessionObservation(id) {
+  const title = `${id} title`;
+  const summary = `${id} summary`;
   return {
     id,
-    text: `${id} text`,
+    title,
+    summary: `${title}\n\n${summary}`,
+    content: extractionContent(title, summary, `${id} content`),
     anchors: [],
     vector: [1, 0, 0, 0],
-    importance: 1,
     category: 'fact',
     references: ['turn:1'],
     createdAt: '2024-01-01T00:00:00Z',
   };
+}
+
+function extractionContent(title, summary, content = '') {
+  return `## Title\n\n${title}\n\n## Summary\n\n${summary}\n\n## Content\n\n${content}`;
 }
 
 function snapshotContentFixture(units, {
@@ -670,7 +674,7 @@ function snapshotContentFixture(units, {
     '## Summary',
     summary,
     '',
-    '## Extractions',
+    '## SessionObservations',
     typeof units === 'string' ? units : units.join('\n'),
   ].join('\n');
 }
@@ -748,7 +752,7 @@ function makeObserverClient() {
       })),
       update: async ({ snapshots }) => snapshots,
     },
-    extractionTable: {
+    sessionObservationTable: {
       delete: async () => ({ deleted: 0 }),
       get: async () => [],
       upsert: async () => undefined,
@@ -791,7 +795,7 @@ function createWatchdogConfig(overrides = {}) {
     enabled: true,
     intervalMs: 30,
     compactMinFragments: 2,
-    extraction: {
+    session_observation: {
       targetPartitionSize: 16,
       optimizeMergeCount: 4,
     },
@@ -888,7 +892,7 @@ test('watchdog.start waits for the first interval before maintenance', async (t)
       stats: async () => null,
       compact: async () => ({ changed: false }),
     },
-    extractionTable: {
+    sessionObservationTable: {
       ensureVectorIndex: async () => ({ created: false }),
       stats: async () => null,
       compact: async () => ({ changed: false }),
@@ -933,7 +937,7 @@ test('watchdog compacts turn data once per observed version without logging skip
       stats: async () => null,
       compact: async () => ({ changed: false }),
     },
-    extractionTable: {
+    sessionObservationTable: {
       ensureVectorIndex: async () => ({ created: false }),
       stats: async () => null,
       compact: async () => ({ changed: false }),
@@ -980,7 +984,7 @@ test('watchdog creates and optimizes extraction index only once for an unchanged
       stats: async () => null,
       compact: async () => ({ changed: false }),
     },
-    extractionTable: {
+    sessionObservationTable: {
       ensureVectorIndex: async () => {
         ensureCalls += 1;
         return { created: ensureCalls === 1 };
@@ -1034,13 +1038,13 @@ test('watchdog creates and optimizes observation index only once for an unchange
       stats: async () => null,
       compact: async () => ({ changed: false }),
     },
-    extractionTable: {
+    sessionObservationTable: {
       ensureVectorIndex: async () => ({ created: false }),
       stats: async () => null,
       compact: async () => ({ changed: false }),
       optimize: async () => ({ changed: false }),
     },
-    observationTable: {
+    globalObservationTable: {
       ensureVectorIndex: async () => {
         ensureCalls += 1;
         return { created: ensureCalls === 1 };
@@ -1094,13 +1098,13 @@ test('watchdog creates and optimizes observation context id index only once for 
       stats: async () => null,
       compact: async () => ({ changed: false }),
     },
-    extractionTable: {
+    sessionObservationTable: {
       ensureVectorIndex: async () => ({ created: false }),
       stats: async () => null,
       compact: async () => ({ changed: false }),
       optimize: async () => ({ changed: false }),
     },
-    observationContextTable: {
+    globalObservationContextTable: {
       ensureIdIndex: async () => {
         ensureCalls += 1;
         return { created: ensureCalls === 1 };
@@ -1163,7 +1167,7 @@ test('watchdog below-threshold cycles do not compact or write logs', async (t) =
       stats: async () => null,
       compact: async () => ({ changed: false }),
     },
-    extractionTable: {
+    sessionObservationTable: {
       ensureVectorIndex: async () => ({ created: false }),
       stats: async () => null,
       compact: async () => ({ changed: false }),
@@ -1210,7 +1214,7 @@ test('watchdog logs dataset failures to file and stderr', async (t) => {
         throw new Error('session compact failed');
       },
     },
-    extractionTable: {
+    sessionObservationTable: {
       ensureVectorIndex: async () => ({ created: false }),
       stats: async () => null,
       compact: async () => ({ changed: false }),
@@ -1247,7 +1251,7 @@ test('watchdog logs extraction optimize failures with the current stats version'
       stats: async () => null,
       compact: async () => ({ changed: false }),
     },
-    extractionTable: {
+    sessionObservationTable: {
       ensureVectorIndex: async () => ({ created: false }),
       stats: async () => ({
         version: 13,
@@ -1300,7 +1304,7 @@ test('watchdog logs null version when stats fails before reading the current dat
       stats: async () => null,
       compact: async () => ({ changed: false }),
     },
-    extractionTable: {
+    sessionObservationTable: {
       ensureVectorIndex: async () => ({ created: false }),
       stats: async () => null,
       compact: async () => ({ changed: false }),
@@ -1343,7 +1347,7 @@ test('watchdog writes observer checkpoint files', async (t) => {
       stats: async () => null,
       compact: async () => ({ changed: false }),
     },
-    extractionTable: {
+    sessionObservationTable: {
       ensureVectorIndex: async () => ({ created: false }),
       stats: async () => null,
       compact: async () => ({ changed: false }),
@@ -1379,8 +1383,8 @@ test('watchdog writes observer checkpoint files', async (t) => {
     baseline: {
       turn: 10,
       session: 21,
-      extraction: 8,
-      observation: 0,
+      session_observation: 8,
+      global_observation: 0,
     },
     committedEpoch: 12,
     nextEpoch: 13,
@@ -1393,7 +1397,7 @@ test('watchdog writes observer checkpoint files', async (t) => {
       updatedAt: '2024-01-01T00:00:00Z',
     }],
     runs: [],
-    pendingExtractionChanges: [],
+    pendingSessionObservationChanges: [],
   });
 });
 
@@ -1459,7 +1463,7 @@ test('watchdog skips checkpoint writes when contributors return no observer stat
       stats: async () => null,
       compact: async () => ({ changed: false }),
     },
-    extractionTable: {
+    sessionObservationTable: {
       ensureVectorIndex: async () => ({ created: false }),
       stats: async () => null,
       compact: async () => ({ changed: false }),
@@ -1518,7 +1522,7 @@ test('watchdog skips checkpoint writes when observer content is unchanged', asyn
       stats: async () => null,
       compact: async () => ({ changed: false }),
     },
-    extractionTable: {
+    sessionObservationTable: {
       ensureVectorIndex: async () => ({ created: false }),
       stats: async () => null,
       compact: async () => ({ changed: false }),
@@ -1576,7 +1580,7 @@ test('watchdog rewrites checkpoint when the file is deleted after startup', asyn
       stats: async () => null,
       compact: async () => ({ changed: false }),
     },
-    extractionTable: {
+    sessionObservationTable: {
       ensureVectorIndex: async () => ({ created: false }),
       stats: async () => null,
       compact: async () => ({ changed: false }),
@@ -1642,7 +1646,7 @@ test('readCheckpointFile rejects the legacy observers checkpoint schema', async 
         baseline: {
           turn: 10,
           session: 21,
-          extraction: 8,
+          session_observation: 8,
         },
         committedEpoch: 12,
         nextEpoch: 13,
@@ -1679,7 +1683,7 @@ test('checkpoint preserves session runs', async () => {
     writtenAt: new Date().toISOString(),
     writerPid: 1,
     extractor: {
-      baseline: { turn: 1, session: 1, extraction: 1, observation: 0 },
+      baseline: { turn: 1, session: 1, session_observation: 1, global_observation: 0 },
       nextEpoch: 2,
       recentSessions: [],
       threads: [],
@@ -1701,9 +1705,9 @@ test('checkpoint preserves session runs', async () => {
         traceRefs: [],
         errors: [],
       }],
-      pendingExtractionChanges: [],
+      pendingSessionObservationChanges: [],
     },
-    observer: makeObserverCheckpoint({ baseline: { observationContext: 0, observation: 0 } }),
+    observer: makeObserverCheckpoint({ baseline: { observationContext: 0, global_observation: 0 } }),
     sessionIndex: { baseline: { turn: 1, session: 1 }, entries: [] },
   };
 
@@ -1740,7 +1744,7 @@ test('watchdog rewrites checkpoint when observer content changes', async (t) => 
       stats: async () => null,
       compact: async () => ({ changed: false }),
     },
-    extractionTable: {
+    sessionObservationTable: {
       ensureVectorIndex: async () => ({ created: false }),
       stats: async () => null,
       compact: async () => ({ changed: false }),
@@ -2057,7 +2061,7 @@ test('observer bootstrap without checkpoint derives committedEpoch from session 
       listSnapshots: async () => rows,
       threadSnapshots: async () => rows,
     },
-    extractionTable: {},
+    sessionObservationTable: {},
   });
   t.after(async () => observer.shutdown());
 
@@ -2085,7 +2089,7 @@ test('observer bootstrap publishes pending turns by their extractionEpoch', asyn
     sessionTable: {
       listSnapshots: async () => [],
     },
-    extractionTable: {},
+    sessionObservationTable: {},
   });
   t.after(async () => observer.shutdown());
 
@@ -2183,7 +2187,7 @@ test('observer bootstrap restores committed state from checkpoint when baselines
         ];
       },
     },
-    extractionTable: {
+    sessionObservationTable: {
       stats: async () => ({
         version: 8,
         fragmentCount: 1,
@@ -2201,7 +2205,7 @@ test('observer bootstrap restores committed state from checkpoint when baselines
     committedEpoch: 12,
     nextEpoch: 13,
     runs: [],
-    pendingExtractionChanges: [],
+    pendingSessionObservationChanges: [],
     threads: [{
       sessionId: 'obs-1',
       latestSnapshotId: 'turn:42',
@@ -2284,7 +2288,7 @@ test('observer checkpoint restore keeps full history for active threads', async 
         ];
       },
     },
-    extractionTable: {
+    sessionObservationTable: {
       stats: async () => ({
         version: 8,
         fragmentCount: 1,
@@ -2400,7 +2404,7 @@ test('observer restoreCheckpointState advances committedEpoch and excludes obser
         },
       ],
     },
-    extractionTable: {},
+    sessionObservationTable: {},
   }, checkpoint);
   t.after(async () => observer.shutdown());
 
@@ -2468,7 +2472,7 @@ test('observer restoreCheckpointState falls back when session delta refs are mis
         },
       ],
     },
-    extractionTable: {},
+    sessionObservationTable: {},
   }, checkpoint);
   t.after(async () => observer.shutdown());
 
@@ -2512,7 +2516,7 @@ test('observer restoreCheckpointState skips stale threads resource only from ses
       delta: async () => [staleRow],
       threadSnapshots: async () => [staleRow],
     },
-    extractionTable: {},
+    sessionObservationTable: {},
   }, checkpoint);
   t.after(async () => observer.shutdown());
 
@@ -2567,7 +2571,7 @@ test('observer restoreCheckpointState rebuilds delta-only threads from full hist
       delta: async () => [fullRows[6], fullRows[7]],
       threadSnapshots: async () => fullRows,
     },
-    extractionTable: {},
+    sessionObservationTable: {},
   }, checkpoint);
   t.after(async () => observer.shutdown());
 
@@ -2625,7 +2629,7 @@ test('observer bootstrap skips stale checkpoint threads', async (t) => {
         throw new Error('stale checkpoint thread should not be loaded');
       },
     },
-    extractionTable: {
+    sessionObservationTable: {
       stats: async () => ({
         version: 8,
         fragmentCount: 1,
@@ -2663,7 +2667,7 @@ test('observer exportCheckpoint keeps the last committed snapshot while observeC
         rowCount: 2,
       }),
     },
-    extractionTable: {
+    sessionObservationTable: {
       delete: async () => ({ deleted: 0 }),
       get: async () => [],
       upsert: async () => undefined,
@@ -2715,7 +2719,7 @@ test('observer exportCheckpoint keeps the last committed snapshot while observeC
     committedEpoch: 0,
     nextEpoch: 2,
     runs: [],
-    pendingExtractionChanges: [],
+    pendingSessionObservationChanges: [],
     threads: [{
       sessionId: 'session-a',
       latestSnapshotId: 'snapshot-0',
@@ -2810,7 +2814,7 @@ test('observer bootstrap ignores extraction version mismatches when session base
         },
       ],
     },
-    extractionTable: {
+    sessionObservationTable: {
       stats: async () => ({
         version: 99,
         fragmentCount: 1,
@@ -2916,7 +2920,7 @@ test('muninn.memoryFinalize triggers drain and returns pending watermark without
     finalize: async () => {
       observerFinalizeCalls += 1;
       return {
-        pending: { turns: [], extractions: ['extraction:pending'] },
+        pending: { turns: [], extractions: ['session_observation:pending'] },
         phases: { extractor: 'idle', observer: 'draining' },
       };
     },
@@ -2941,7 +2945,7 @@ test('muninn.memoryFinalize triggers drain and returns pending watermark without
   assert.equal(observerFinalizeCalls, 1);
   assert.equal(extractorFlushCalls, 0);
   assert.deepEqual(watermark.pending.turns, ['turn:pending']);
-  assert.deepEqual(watermark.pending.extractions, ['extraction:pending']);
+  assert.deepEqual(watermark.pending.extractions, ['session_observation:pending']);
   assert.equal(watermark.phases.extractor, 'running');
   assert.equal(watermark.phases.observer, 'draining');
 
@@ -2953,7 +2957,7 @@ test('muninn.memoryFinalize triggers drain and returns pending watermark without
 test('recallMemories searches curated and raw routes then returns curated-first hits', async () => {
   const calls = [];
   const client = {
-    observationTable: {
+    globalObservationTable: {
       search: async (params) => {
         calls.push(['observation', params]);
         return [{
@@ -2961,22 +2965,24 @@ test('recallMemories searches curated and raw routes then returns curated-first 
           observingPath: 'Caroline / Plans',
           text: 'Caroline plans to research adoption agencies.',
           vector: [],
-          extractionRefs: ['extraction:raw-1'],
+          extractionRefs: ['session_observation:raw-1'],
           createdAt: '2024-01-01T00:00:00Z',
           updatedAt: '2024-01-01T00:00:00Z',
         }];
       },
     },
-    extractionTable: {
+    sessionObservationTable: {
       search: async (params) => {
         calls.push(['extraction', params]);
+        const title = 'Counseling work';
+        const summary = 'Caroline is interested in counseling work.';
         return [{
           id: 'raw-2',
-          text: 'Caroline is interested in counseling work.',
-          context: null,
+          title,
+          summary: `${title}\n\n${summary}`,
+          content: extractionContent(title, summary),
           anchors: [],
           vector: [],
-          importance: 1,
           category: 'Fact',
           turnRefs: ['session:2'],
           observationPaths: [],
@@ -2992,13 +2998,13 @@ test('recallMemories searches curated and raw routes then returns curated-first 
 
   assert.deepEqual(hits, [
     {
-      memoryId: 'observation:curated-1',
+      memoryId: 'global_observation:curated-1',
       text: 'OBSERVATION: Caroline plans to research adoption agencies.',
-      references: ['extraction:raw-1'],
+      references: ['session_observation:raw-1'],
     },
     {
-      memoryId: 'extraction:raw-2',
-      text: 'Caroline is interested in counseling work.',
+      memoryId: 'session_observation:raw-2',
+      text: extractionContent('Counseling work', 'Caroline is interested in counseling work.'),
       references: ['session:2'],
     },
   ]);
@@ -3019,7 +3025,7 @@ test('recallMemories searches curated and raw routes then returns curated-first 
 
 test('recallMemories filters raw hits source by selected curated hits', async () => {
   const client = {
-    observationTable: {
+    globalObservationTable: {
       search: async () => [
         {
           id: 'curated-1',
@@ -3032,7 +3038,7 @@ test('recallMemories filters raw hits source by selected curated hits', async ()
         },
       ],
     },
-    observationContextTable: {
+    globalObservationContextTable: {
       get: async ({ ids }) => ids.includes('curated-1')
         ? [{
             id: 'curated-1',
@@ -3040,7 +3046,7 @@ test('recallMemories filters raw hits source by selected curated hits', async ()
             parentId: null,
             position: 0,
             content: 'Caroline researched adoption agencies.',
-            sourceRefs: ['extraction:raw-1'],
+            sourceRefs: ['session_observation:raw-1'],
             expandRefs: [],
             observer: 'test-observer',
             createdAt: '2024-01-01T00:00:00Z',
@@ -3048,7 +3054,7 @@ test('recallMemories filters raw hits source by selected curated hits', async ()
           }]
         : [],
     },
-    extractionTable: {
+    sessionObservationTable: {
       search: async () => [
         {
           id: 'raw-1',
@@ -3056,7 +3062,6 @@ test('recallMemories filters raw hits source by selected curated hits', async ()
           context: null,
           anchors: [],
           vector: [],
-          importance: 1,
           category: 'Fact',
           turnRefs: ['session:1'],
           observationPaths: [],
@@ -3070,7 +3075,6 @@ test('recallMemories filters raw hits source by selected curated hits', async ()
           context: null,
           anchors: [],
           vector: [],
-          importance: 1,
           category: 'Fact',
           turnRefs: ['session:2'],
           observationPaths: [],
@@ -3083,13 +3087,13 @@ test('recallMemories filters raw hits source by selected curated hits', async ()
   };
 
   const hits = await recallMemories(client, 'Caroline research', 2, { embed: async () => [1, 0] });
-  assert.deepEqual(hits.map((hit) => hit.memoryId), ['observation:curated-1', 'extraction:raw-2']);
+  assert.deepEqual(hits.map((hit) => hit.memoryId), ['global_observation:curated-1', 'session_observation:raw-2']);
 });
 
 test('recallMemories includes referenced extraction text for observation hits', async () => {
   const calls = [];
   const client = {
-    observationTable: {
+    globalObservationTable: {
       search: async () => [
         {
           id: 'curated-1',
@@ -3109,18 +3113,20 @@ test('recallMemories includes referenced extraction text for observation hits', 
         },
       ],
     },
-    extractionTable: {
+    sessionObservationTable: {
       search: async (params) => {
         calls.push(['extraction', params]);
+        const title = 'Adoption agency research';
+        const summary = 'Caroline researched adoption agencies.';
         return [
           {
             id: 'raw-1',
-            text: 'Caroline researched adoption agencies.',
-            context: null,
+            title,
+            summary: `${title}\n\n${summary}`,
+            content: extractionContent(title, summary),
             anchors: [],
             turnRefs: ['turn:1'],
             vector: [],
-            importance: 1,
             category: 'Fact',
             observationPaths: [],
             observedRootAnchors: [],
@@ -3131,15 +3137,20 @@ test('recallMemories includes referenced extraction text for observation hits', 
       },
       get: async ({ ids }) => {
         calls.push(['get', ids]);
+        const raw1Title = 'Adoption agency research';
+        const raw1Summary = 'Caroline researched adoption agencies.\nShe compared options.';
+        const raw1Content = 'Melanie asked Caroline about her summer plans.\nThe discussion focused on next steps.';
+        const raw2Title = 'Inclusive adoption agency';
+        const raw2Summary = 'Caroline chose an LGBTQ+ inclusive adoption agency.';
         return [
         {
           id: 'raw-1',
-          text: 'Caroline researched adoption agencies.\nShe compared options.',
-          context: 'Melanie asked Caroline about her summer plans.\nThe discussion focused on next steps.',
+          title: raw1Title,
+          summary: `${raw1Title}\n\n${raw1Summary}`,
+          content: extractionContent(raw1Title, raw1Summary, raw1Content),
           anchors: ['Entity: Caroline'],
           turnRefs: ['turn:1'],
           vector: [],
-          importance: 1,
           category: 'Fact',
           observationPaths: [],
           observedRootAnchors: [],
@@ -3148,12 +3159,12 @@ test('recallMemories includes referenced extraction text for observation hits', 
         },
         {
           id: 'raw-2',
-          text: 'Caroline chose an LGBTQ+ inclusive adoption agency.',
-          context: null,
+          title: raw2Title,
+          summary: `${raw2Title}\n\n${raw2Summary}`,
+          content: extractionContent(raw2Title, raw2Summary),
           anchors: [],
           turnRefs: ['turn:2'],
           vector: [],
-          importance: 1,
           category: 'Fact',
           observationPaths: [],
           observedRootAnchors: [],
@@ -3167,19 +3178,21 @@ test('recallMemories includes referenced extraction text for observation hits', 
 
   const hits = await recallMemories(client, 'Caroline summer plans', 1, { embed: async () => [1, 0] });
 
-  assert.equal(hits[0].memoryId, 'observation:curated-1');
+  assert.equal(hits[0].memoryId, 'global_observation:curated-1');
   assert.match(hits[0].text, /OBSERVATION: Caroline is working on summer plans/);
   assert.match(hits[0].text, /- \[priority\] adoption research/);
-  assert.match(hits[0].text, /- context: Melanie asked Caroline about her summer plans\./);
+  assert.match(hits[0].text, /- session_observation: ## Title/);
+  assert.match(hits[0].text, /^  Adoption agency research$/m);
+  assert.match(hits[0].text, /^  ## Content$/m);
+  assert.match(hits[0].text, /^  Melanie asked Caroline about her summer plans\.$/m);
   assert.match(hits[0].text, /^  The discussion focused on next steps\.$/m);
-  assert.match(hits[0].text, /^  extraction: Caroline researched adoption agencies\.$/m);
-  assert.match(hits[0].text, /^  She compared options\.$/m);
   assert.match(hits[0].text, /- Caroline compared multiple adoption options\./);
   assert.doesNotMatch(hits[0].text, /\[raw-2, raw-3\]/);
   assert.doesNotMatch(hits[0].text, /\[raw-1\]/);
   assert.doesNotMatch(hits[0].text, /^CONTEXT: Melanie asked Caroline about her summer plans\.$/m);
   assert.doesNotMatch(hits[0].text, /^EXTRACTION: Caroline researched adoption agencies\.$/m);
-  assert.match(hits[0].text, /^EXTRACTION: Caroline chose an LGBTQ\+ inclusive adoption agency\.$/m);
+  assert.match(hits[0].text, /^EXTRACTION: ## Title$/m);
+  assert.match(hits[0].text, /^Inclusive adoption agency$/m);
   assert.match(hits[0].text, /Source extractions:/);
   assert.deepEqual(hits[0].references, ['raw-1', 'raw-2']);
   assert.deepEqual(calls, [
@@ -3196,7 +3209,7 @@ test('recallMemories includes referenced extraction text for observation hits', 
 test('recallMemories filters parent observation contexts from curated hits', async () => {
   const calls = [];
   const client = {
-    observationContextTable: {
+    globalObservationContextTable: {
       list: async () => [
         {
           id: 'parent-1',
@@ -3230,7 +3243,7 @@ test('recallMemories filters parent observation contexts from curated hits', asy
         },
       ],
     },
-    observationTable: {
+    globalObservationTable: {
       search: async (params) => {
         calls.push(params);
         return [
@@ -3239,7 +3252,7 @@ test('recallMemories filters parent observation contexts from curated hits', asy
             observingPath: 'Caroline / Family plans',
             text: 'Caroline is pursuing adoption.',
             vector: [],
-            extractionRefs: ['extraction:raw-parent'],
+            extractionRefs: ['session_observation:raw-parent'],
             createdAt: '2024-01-01T00:00:00Z',
             updatedAt: '2024-01-01T00:00:00Z',
           },
@@ -3248,7 +3261,7 @@ test('recallMemories filters parent observation contexts from curated hits', asy
             observingPath: 'Caroline / Family plans / Summer plans',
             text: 'Caroline researched adoption agencies.',
             vector: [],
-            extractionRefs: ['extraction:raw-1'],
+            extractionRefs: ['session_observation:raw-1'],
             createdAt: '2024-01-01T00:00:00Z',
             updatedAt: '2024-01-01T00:00:00Z',
           },
@@ -3257,21 +3270,21 @@ test('recallMemories filters parent observation contexts from curated hits', asy
             observingPath: 'Caroline / Family plans / Agency choice',
             text: 'Caroline chose an LGBTQ-supportive adoption agency.',
             vector: [],
-            extractionRefs: ['extraction:raw-2'],
+            extractionRefs: ['session_observation:raw-2'],
             createdAt: '2024-01-01T00:00:00Z',
             updatedAt: '2024-01-01T00:00:00Z',
           },
         ];
       },
     },
-    extractionTable: {
+    sessionObservationTable: {
       search: async () => [],
     },
   };
 
   const hits = await recallMemories(client, 'Caroline summer plans', 2, { embed: async () => [1, 0] });
 
-  assert.deepEqual(hits.map((hit) => hit.memoryId), ['observation:leaf-1', 'observation:leaf-2']);
+  assert.deepEqual(hits.map((hit) => hit.memoryId), ['global_observation:leaf-1', 'global_observation:leaf-2']);
   assert.equal(calls[0].limit, 8);
 });
 
@@ -3281,15 +3294,15 @@ test('recallMemories does not filter raw hits source only by unselected curated 
     observingPath: `Entity ${index + 1}`,
     text: `Curated memory ${index + 1}.`,
     vector: [],
-    extractionRefs: [`extraction:raw-${index + 1}`],
+    extractionRefs: [`session_observation:raw-${index + 1}`],
     createdAt: '2024-01-01T00:00:00Z',
     updatedAt: '2024-01-01T00:00:00Z',
   }));
   const client = {
-    observationTable: {
+    globalObservationTable: {
       search: async () => curated,
     },
-    extractionTable: {
+    sessionObservationTable: {
       search: async () => [
         {
           id: 'raw-5',
@@ -3297,7 +3310,6 @@ test('recallMemories does not filter raw hits source only by unselected curated 
           context: null,
           anchors: [],
           vector: [],
-          importance: 1,
           category: 'Fact',
           turnRefs: ['session:5'],
           observationPaths: [],
@@ -3311,11 +3323,11 @@ test('recallMemories does not filter raw hits source only by unselected curated 
 
   const hits = await recallMemories(client, 'query', 5, { embed: async () => [1, 0] });
   assert.deepEqual(hits.map((hit) => hit.memoryId), [
-    'observation:curated-1',
-    'observation:curated-2',
-    'observation:curated-3',
-    'observation:curated-4',
-    'extraction:raw-5',
+    'global_observation:curated-1',
+    'global_observation:curated-2',
+    'global_observation:curated-3',
+    'global_observation:curated-4',
+    'session_observation:raw-5',
   ]);
 });
 
@@ -3323,13 +3335,13 @@ test('recallMemories supports fts mode without embedding the query', async () =>
   let embedCalls = 0;
   const calls = [];
   const client = {
-    observationTable: {
+    globalObservationTable: {
       search: async (params) => {
         calls.push(['observation', params]);
         return [];
       },
     },
-    extractionTable: {
+    sessionObservationTable: {
       search: async (params) => {
         calls.push(['extraction', params]);
         return [];
@@ -3359,18 +3371,18 @@ test('recallMemories returns recalled memory when budget is positive', async () 
   const calls = [];
   let seenCandidates = [];
   const client = {
-    observationTable: {
+    globalObservationTable: {
       search: async () => [{
         id: 'curated-1',
         observingPath: 'Caroline / Research',
         text: 'Caroline plans to research adoption agencies.',
         vector: [],
-        extractionRefs: ['extraction:obs-2'],
+        extractionRefs: ['session_observation:obs-2'],
         createdAt: '2024-01-01T00:00:00Z',
         updatedAt: '2024-01-01T00:00:00Z',
       }],
     },
-    extractionTable: {
+    sessionObservationTable: {
       search: async (params) => {
         calls.push(params);
         return [
@@ -3379,7 +3391,6 @@ test('recallMemories returns recalled memory when budget is positive', async () 
             text: 'Caroline and Melanie planned a summer outing.',
             context: 'They discussed summer plans together.',
             vector: [],
-            importance: 1,
             category: 'Fact',
             anchors: [],
             turnRefs: ['D12:17'],
@@ -3393,7 +3404,6 @@ test('recallMemories returns recalled memory when budget is positive', async () 
             text: 'Caroline researched adoption agencies.',
             context: 'Melanie asked Caroline about her summer plans.',
             vector: [],
-            importance: 1,
             category: 'Fact',
             anchors: [],
             turnRefs: ['D2:8'],
@@ -3425,36 +3435,35 @@ test('recallMemories returns recalled memory when budget is positive', async () 
   assert.deepEqual(hits, [{
     memoryId: 'recalled:memory',
     text: 'Caroline researched adoption agencies.',
-    references: ['extraction:obs-2', 'D12:17'],
+    references: ['session_observation:obs-2', 'D12:17'],
   }]);
   assert.equal(calls[0].limit, 20);
   assert.deepEqual(seenCandidates.map((candidate) => candidate.memoryId), [
-    'observation:curated-1',
-    'extraction:obs-1',
+    'global_observation:curated-1',
+    'session_observation:obs-1',
   ]);
 });
 
 test('recallMemories uses candidate refs for recalled memory', async () => {
   const client = {
-    observationTable: {
+    globalObservationTable: {
       search: async () => [{
         id: 'curated-1',
         observingPath: 'Caroline / Research',
         text: 'Caroline plans to research adoption agencies.',
         vector: [],
-        extractionRefs: ['extraction:curated-source'],
+        extractionRefs: ['session_observation:curated-source'],
         createdAt: '2024-01-01T00:00:00Z',
         updatedAt: '2024-01-01T00:00:00Z',
       }],
     },
-    extractionTable: {
+    sessionObservationTable: {
       search: async () => [
         {
           id: 'obs-1',
           text: 'Caroline researched adoption agencies.',
           context: null,
           vector: [],
-          importance: 1,
           category: 'Fact',
           anchors: [],
           turnRefs: ['D2:8'],
@@ -3482,7 +3491,7 @@ test('recallMemories uses candidate refs for recalled memory', async () => {
   assert.deepEqual(hits, [{
     memoryId: 'recalled:memory',
     text: 'Caroline researched adoption agencies.',
-    references: ['extraction:curated-source', 'D2:8'],
+    references: ['session_observation:curated-source', 'D2:8'],
   }]);
 });
 
@@ -3774,7 +3783,7 @@ test('observer.observeCurrentEpoch keeps thread state unchanged when pre-commit 
           throw new Error('persist failed');
         },
       },
-      extractionTable: {
+      sessionObservationTable: {
         delete: async () => ({ deleted: 0 }),
         get: async () => [],
         upsert: async () => {
@@ -3835,10 +3844,12 @@ test('snapshot extraction state rewrite updates and deletes extraction rows', as
   const rows = [];
   const deleted = [];
   const client = {
-    extractionTable: {
+    sessionObservationTable: {
       get: async ({ ids }) => ids.map((id) => ({
-        ...storedExtraction(id),
-        text: `${id} old text`,
+        ...storedSessionObservation(id),
+        title: `${id} old title`,
+        summary: `${id} old summary`,
+        content: `## Title\n\n${id} old title\n\n## Summary\n\n${id} old summary\n\n## Content\n\nold context`,
         createdAt: '2024-01-01T00:00:00Z',
       })),
       delete: async ({ ids }) => {
@@ -3848,21 +3859,21 @@ test('snapshot extraction state rewrite updates and deletes extraction rows', as
       upsert: async ({ rows: next }) => rows.push(...next),
     },
   };
-  const state = applyExtractionChanges([
+  const state = applySessionObservationChanges([
     { id: 'obs-a', text: 'obs-a old text', context: 'old context', anchors: ['Fact: old career'], category: 'Fact', references: ['turn:1'] },
     { id: 'obs-b', text: 'obs-b old text', category: 'Fact', references: ['turn:2'] },
   ], {
     title: 'T',
     snapshotContent: 'S',
     extractions: [
-      { id: 'obs-a', text: 'updated career memory', context: 'updated context', anchors: ['Decision: career plan'], category: 'Decision', references: ['turn:2'] },
-      { text: 'new painting memory', context: 'new context', anchors: ['Preference: painting'], category: 'Preference', references: ['turn:3'] },
+      { id: 'obs-a', title: 'Career plan', text: 'updated career memory', context: 'updated context', anchors: ['Decision: career plan'], category: 'Decision', references: ['turn:2'] },
+      { title: 'Painting preference', text: 'new painting memory', context: 'new context', anchors: ['Preference: painting'], category: 'Preference', references: ['turn:3'] },
     ],
     openQuestions: [],
     nextSteps: [],
     contextRefs: [],
   });
-  await applyExtractionTableChanges(client, {
+  await applySessionObservationTableChanges(client, {
     extractions: state.extractions,
     contextRefs: [],
     extractionChanges: state.extractionChanges,
@@ -3871,13 +3882,19 @@ test('snapshot extraction state rewrite updates and deletes extraction rows', as
   assert.deepEqual(deleted.sort(), ['obs-b']);
   assert.equal(rows.length, 2);
   const updatedRow = rows.find((row) => row.id === 'obs-a');
-  const addedRow = rows.find((row) => row.text === 'new painting memory');
+  const addedRow = rows.find((row) => row.title === 'Painting preference');
+  assert.equal(updatedRow.title, 'Career plan');
+  assert.equal(updatedRow.summary, 'Career plan\n\nupdated career memory');
+  assert.equal(updatedRow.content, '## Title\n\nCareer plan\n\n## Summary\n\nupdated career memory\n\n## Content\n\nupdated context');
+  assert.equal(updatedRow.text, undefined);
+  assert.equal(updatedRow.context, undefined);
   assert.equal(updatedRow.category, 'decision');
-  assert.equal(updatedRow.context, 'updated context');
   assert.deepEqual(updatedRow.anchors, ['Decision: career plan']);
   assert.deepEqual(updatedRow.turnRefs, ['turn:2']);
+  assert.equal(addedRow.title, 'Painting preference');
+  assert.equal(addedRow.summary, 'Painting preference\n\nnew painting memory');
+  assert.equal(addedRow.content, '## Title\n\nPainting preference\n\n## Summary\n\nnew painting memory\n\n## Content\n\nnew context');
   assert.equal(addedRow.category, 'preference');
-  assert.equal(addedRow.context, 'new context');
   assert.deepEqual(addedRow.anchors, ['Preference: painting']);
   assert.deepEqual(addedRow.turnRefs, ['turn:3']);
 });
@@ -3888,7 +3905,7 @@ test('extraction state rewrite computes update add and delete changes', () => {
     { id: 'obs-b', text: 'old low value memory', category: 'Fact', references: ['turn:2'] },
   ];
 
-  const result = applyExtractionChanges(current, {
+  const result = applySessionObservationChanges(current, {
     title: 'T',
     snapshotContent: 'S',
     extractions: [
@@ -3912,7 +3929,7 @@ test('extraction state rewrite rejects unknown and duplicate ids', () => {
   const current = [{ id: 'obs-a', text: 'A', category: 'Fact', references: ['turn:1'] }];
 
   assert.throws(
-    () => applyExtractionChanges(current, {
+    () => applySessionObservationChanges(current, {
       title: 'T',
       snapshotContent: 'S',
       extractions: [{ id: 'missing', text: 'updated', category: 'Fact', references: ['turn:1'] }],
@@ -3924,7 +3941,7 @@ test('extraction state rewrite rejects unknown and duplicate ids', () => {
   );
 
   assert.throws(
-    () => applyExtractionChanges(current, {
+    () => applySessionObservationChanges(current, {
       title: 'T',
       snapshotContent: 'S',
       extractions: [
@@ -3942,7 +3959,7 @@ test('extraction state rewrite rejects unknown and duplicate ids', () => {
 test('extraction extraction validation rejects invalid category', async () => {
   const { __testing: extractionTesting } = await import('../dist/extractor/extraction-extraction.js');
   assert.throws(
-    () => extractionTesting.validateExtraction({
+    () => extractionTesting.validateSessionObservation({
       extractions: [{ text: 'Caroline joined a support group.', category: 'Goal', references: ['turn:1'] }],
     }),
     /invalid extraction category/i,
@@ -3952,7 +3969,7 @@ test('extraction extraction validation rejects invalid category', async () => {
 test('extraction extraction validation rejects empty text', async () => {
   const { __testing: extractionTesting } = await import('../dist/extractor/extraction-extraction.js');
   assert.throws(
-    () => extractionTesting.validateExtraction({
+    () => extractionTesting.validateSessionObservation({
       extractions: [{ text: ' ', category: 'Fact', references: ['turn:1'] }],
     }),
     /text must be a non-empty string/i,
@@ -3962,7 +3979,7 @@ test('extraction extraction validation rejects empty text', async () => {
 test('extraction extraction validation rejects missing references', async () => {
   const { __testing: extractionTesting } = await import('../dist/extractor/extraction-extraction.js');
   assert.throws(
-    () => extractionTesting.validateExtraction({
+    () => extractionTesting.validateSessionObservation({
       extractions: [{ text: 'Caroline joined a support group.', category: 'Fact', references: [] }],
     }),
     /references must include at least one reference/i,
@@ -3971,7 +3988,7 @@ test('extraction extraction validation rejects missing references', async () => 
 
 test('extraction extraction prompt can include a domain prompt supplement', async () => {
   const { __testing: extractionTesting } = await import('../dist/extractor/extraction-extraction.js');
-  const rendered = extractionTesting.renderExtractionPrompt({
+  const rendered = extractionTesting.renderSessionObservationPrompt({
     inputJson: JSON.stringify({ turns: [] }),
     domainPrompt: 'Category guide:\n- `Fact`: concrete answerable detail.',
   });
@@ -3984,7 +4001,7 @@ test('extraction extraction prompt can include a domain prompt supplement', asyn
 
 test('extraction extraction input includes recent context turns', async () => {
   const { __testing: extractionTesting } = await import('../dist/extractor/extraction-extraction.js');
-  const turn = extractionTesting.toExtractionTurn({
+  const turn = extractionTesting.toSessionObservationTurn({
     turnId: 'turn:4',
     createdAt: '2026-01-01T00:00:04.000Z',
     updatedAt: '2026-01-01T00:00:04.000Z',
@@ -4005,15 +4022,38 @@ test('extraction extraction input includes recent context turns', async () => {
   assert.equal(turn.prompt, 'I am off to research that.');
 });
 
+test('session extraction batch input uses turn headings without horizontal rules', () => {
+  const rendered = observingGatewayTesting.renderNewTurnsForTests([
+    {
+      turnId: 'turn:1',
+      prompt: 'First prompt',
+      response: 'First response',
+      summary: 'First summary should not be rendered',
+    },
+    {
+      turnId: 'turn:2',
+      prompt: 'Second prompt',
+      response: 'Second response',
+      summary: 'Second summary should not be rendered',
+    },
+  ]);
+
+  assert.match(rendered, /## Current Batch Turns/);
+  assert.match(rendered, /### turn:1/);
+  assert.match(rendered, /### turn:2/);
+  assert.doesNotMatch(rendered, /^----$/m);
+  assert.doesNotMatch(rendered, /Summary:/);
+});
+
 test('extraction review validation requires every new extraction to be reviewed', async () => {
   const { __testing: reviewTesting } = await import('../dist/extractor/extraction-review.js');
   assert.throws(
     () => reviewTesting.validateReview({
-      newExtractions: [storedExtraction('obs-1')],
-      candidateExtractions: [],
+      newSessionObservations: [storedSessionObservation('obs-1')],
+      candidateSessionObservations: [],
     }, {
-      removeExtractionIds: [],
-      reviewedExtractionIds: [],
+      removeSessionObservationIds: [],
+      reviewedSessionObservationIds: [],
     }),
     /not reviewed/i,
   );
@@ -4023,11 +4063,11 @@ test('extraction review validation rejects unknown removals', async () => {
   const { __testing: reviewTesting } = await import('../dist/extractor/extraction-review.js');
   assert.throws(
     () => reviewTesting.validateReview({
-      newExtractions: [storedExtraction('obs-1')],
-      candidateExtractions: [],
+      newSessionObservations: [storedSessionObservation('obs-1')],
+      candidateSessionObservations: [],
     }, {
-      removeExtractionIds: ['obs-missing'],
-      reviewedExtractionIds: ['obs-1'],
+      removeSessionObservationIds: ['obs-missing'],
+      reviewedSessionObservationIds: ['obs-1'],
     }),
     /unknown extraction id/i,
   );
@@ -4036,7 +4076,7 @@ test('extraction review validation rejects unknown removals', async () => {
 test('thread preparation validation rejects duplicate extraction coverage', async () => {
   const { __testing: preparationTesting } = await import('../dist/extractor/thread-preparation.js');
   const input = {
-    reviewedExtractions: [storedExtraction('obs-1'), storedExtraction('obs-2')],
+    reviewedSessionObservations: [storedSessionObservation('obs-1'), storedSessionObservation('obs-2')],
     activeThreads: [{ threadId: 'thread-1', title: 'Thread one' }],
   };
   assert.throws(
@@ -4046,7 +4086,7 @@ test('thread preparation validation rejects duplicate extraction coverage', asyn
         targetThreadId: 'thread-1',
         rationale: 'same topic',
       }],
-      unthreadedExtractionIds: ['obs-1', 'obs-2'],
+      unthreadedSessionObservationIds: ['obs-1', 'obs-2'],
     }),
     /exactly once/i,
   );
@@ -4055,7 +4095,7 @@ test('thread preparation validation rejects duplicate extraction coverage', asyn
 test('thread preparation validation rejects single-extraction new threads', async () => {
   const { __testing: preparationTesting } = await import('../dist/extractor/thread-preparation.js');
   const input = {
-    reviewedExtractions: [storedExtraction('obs-1')],
+    reviewedSessionObservations: [storedSessionObservation('obs-1')],
     activeThreads: [],
   };
   assert.throws(
@@ -4065,7 +4105,7 @@ test('thread preparation validation rejects single-extraction new threads', asyn
         newThreadTitle: 'Caroline support group',
         rationale: 'new durable subject',
       }],
-      unthreadedExtractionIds: [],
+      unthreadedSessionObservationIds: [],
     }),
     /at least two/i,
   );
@@ -4074,7 +4114,7 @@ test('thread preparation validation rejects single-extraction new threads', asyn
 test('thread preparation validation rejects unknown target threads', async () => {
   const { __testing: preparationTesting } = await import('../dist/extractor/thread-preparation.js');
   const input = {
-    reviewedExtractions: [storedExtraction('obs-1')],
+    reviewedSessionObservations: [storedSessionObservation('obs-1')],
     activeThreads: [{ threadId: 'thread-1', title: 'Thread one' }],
   };
   assert.throws(
@@ -4084,7 +4124,7 @@ test('thread preparation validation rejects unknown target threads', async () =>
         targetThreadId: 'thread-missing',
         rationale: 'same topic',
       }],
-      unthreadedExtractionIds: [],
+      unthreadedSessionObservationIds: [],
     }),
     /unknown targetThreadId/i,
   );
@@ -4099,9 +4139,9 @@ test('thread preparation model validation failure falls back to unthreaded extra
 
   const { __testing: preparationTesting } = await import('../dist/extractor/thread-preparation.js');
   const input = {
-    reviewedExtractions: [storedExtraction('obs-1'), storedExtraction('obs-2')],
+    reviewedSessionObservations: [storedSessionObservation('obs-1'), storedSessionObservation('obs-2')],
     activeThreads: [],
-    candidateMemories: [{ memoryId: 'extraction:candidate-1', title: 'Candidate', summary: 'Candidate' }],
+    candidateMemories: [{ memoryId: 'session_observation:candidate-1', title: 'Candidate', summary: 'Candidate' }],
   };
 
   const result = await preparationTesting.prepareThreadsWithModel(input, {
@@ -4113,18 +4153,18 @@ test('thread preparation model validation failure falls back to unthreaded extra
           newThreadTitle: 'Candidate thread',
           rationale: 'mistaken candidate id',
         }],
-        unthreadedExtractionIds: ['obs-1', 'obs-2'],
+        unthreadedSessionObservationIds: ['obs-1', 'obs-2'],
       }),
     }),
   });
 
   assert.deepEqual(result, {
     workItems: [],
-    unthreadedExtractionIds: ['obs-1', 'obs-2'],
+    unthreadedSessionObservationIds: ['obs-1', 'obs-2'],
   });
 });
 
-test('buildExtraction surfaces extraction write failures and leaves work pending', async (t) => {
+test('buildSessionObservation surfaces extraction write failures and leaves work pending', async (t) => {
   const { dir, homeDir, configPath } = await makeConfigHome();
   t.after(async () => rm(dir, { recursive: true, force: true }));
 
@@ -4171,11 +4211,11 @@ test('buildExtraction surfaces extraction write failures and leaves work pending
   let semanticUpserts = 0;
 
   await assert.rejects(
-    () => updateTesting.buildExtraction({
+    () => updateTesting.buildSessionObservation({
       sessionTable: {
         update: async ({ snapshots }) => snapshots,
       },
-      extractionTable: {
+      sessionObservationTable: {
         delete: async () => ({ deleted: 0 }),
         get: async () => [],
         upsert: async () => {
@@ -4317,6 +4357,8 @@ test('observer validation derives extractions from titled snapshot content', () 
       },
       turns: [{
         turnId: 'turn:13',
+        prompt: 'Did Melanie paint the lake sunrise herself?',
+        response: 'Melanie says she painted the lake sunrise in 2022, described as last year relative to 8 May 2023.',
         summary: 'Melanie says she painted the lake sunrise in 2022, described as last year relative to 8 May 2023.',
       }],
     },
@@ -4326,7 +4368,7 @@ test('observer validation derives extractions from titled snapshot content', () 
   assert.equal(result.summary, 'Melanie painted a lake sunrise in 2022.');
   assert.deepEqual(result.contextRefs, [{
     turnId: 'turn:13',
-    summary: 'Summary: Melanie says she painted the lake sunrise in 2022, described as last year relative to 8 May 2023.',
+    summary: 'Prompt: Did Melanie paint the lake sunrise herself? Response: Melanie says she painted the lake sunrise in 2022, described as last year relative to 8 May 2023.',
   }]);
   assert.equal(result.snapshotContent, snapshotContentFixture([
     '<!-- refs: [turn:13] -->',
@@ -4412,6 +4454,67 @@ test('observer validation keeps independent refs per snapshot content unit', () 
   ]);
 });
 
+test('observer validation splits adjacent metadata snapshot units without separators', () => {
+  const result = observingGatewayTesting.validateExtractSessionMemoryResultForTests(
+    snapshotContentFixture([
+      '<!-- refs: [turn:13] -->',
+      '### Title',
+      'Lake sunrise painting',
+      '',
+      '### Summary',
+      'Melanie painted a lake sunrise in 2022.',
+      '',
+      '<!-- refs: [turn:14, turn:15] -->',
+      '### Title',
+      'Counseling work',
+      '',
+      '### Summary',
+      'Caroline plans to explore counseling work.',
+    ].join('\n'), {
+      title: 'Session',
+      summary: 'Session memory.',
+    }),
+    {
+      sessionMemoryContent: {
+        title: 'Session',
+        summary: '',
+        extractions: [],
+        openQuestions: [],
+        nextSteps: [],
+      },
+      turns: [
+        { turnId: 'turn:13', summary: 'Melanie discussed painting.' },
+        { turnId: 'turn:14', summary: 'Caroline discussed education.' },
+        { turnId: 'turn:15', summary: 'Caroline discussed counseling.' },
+      ],
+    },
+  );
+
+  assert.deepEqual(result.extractions.map((extraction) => extraction.title), [
+    'Lake sunrise painting',
+    'Counseling work',
+  ]);
+  assert.deepEqual(result.extractions.map((extraction) => extraction.references), [
+    ['turn:13'],
+    ['turn:14', 'turn:15'],
+  ]);
+});
+
+test('session extraction turn input omits turn summary when prompt and response are present', () => {
+  const markdown = observingGatewayTesting.renderNewTurnsForTests([{
+    turnId: 'turn:13',
+    prompt: 'User asked whether board session rows should use snapshot titles.',
+    response: 'Agent confirmed the session index should cache the latest snapshot title.',
+    summary: 'This old turn summary repeats the prompt and response and should not be sent.',
+  }]);
+
+  assert.match(markdown, /## Current Batch Turns/);
+  assert.match(markdown, /Prompt:\nUser asked whether board session rows should use snapshot titles\./);
+  assert.match(markdown, /Response:\nAgent confirmed the session index should cache the latest snapshot title\./);
+  assert.doesNotMatch(markdown, /Summary:/);
+  assert.doesNotMatch(markdown, /This old turn summary repeats/);
+});
+
 test('observer validation accepts markdown fenced snapshot content', () => {
   const result = observingGatewayTesting.validateExtractSessionMemoryResultForTests(
     [
@@ -4421,7 +4524,7 @@ test('observer validation accepts markdown fenced snapshot content', () => {
       '## Summary',
       'Melanie discussed a lake sunrise painting.',
       '',
-      '## Extractions',
+      '## SessionObservations',
       '<!-- refs: [turn:13] -->',
       '### Title',
       'Lake sunrise painting',
@@ -4471,7 +4574,7 @@ test('observer validation rejects snapshot content units without metadata', () =
 test('observer validation rejects legacy snapshot content format', () => {
   assert.throws(
     () => observingGatewayTesting.validateExtractSessionMemoryResultForTests(
-      snapshotContentFixture('<!-- categories: [Fact]; refs: [turn:13] -->\n[Entity] Melanie\n[Extraction] Melanie painted a lake sunrise in 2022.'),
+      snapshotContentFixture('<!-- categories: [Fact]; refs: [turn:13] -->\n[Entity] Melanie\n[SessionObservation] Melanie painted a lake sunrise in 2022.'),
       {
         sessionMemoryContent: {
           title: 'Painting',
@@ -4589,7 +4692,7 @@ test('observer validation rejects snapshot content units without summary', () =>
   );
 });
 
-test('thread session getExtraction expands visible extraction sequences only', async (t) => {
+test('thread session getSessionObservation expands visible extraction sequences only', async (t) => {
   const { dir, homeDir, configPath } = await makeConfigHome();
   t.after(async () => rm(dir, { recursive: true, force: true }));
 
@@ -4612,7 +4715,7 @@ test('thread session getExtraction expands visible extraction sequences only', a
         '## Summary',
         'Caroline discussed a support group.',
         '',
-        '## Extractions',
+        '## SessionObservations',
         '<!-- refs: [turn:0] -->',
         '### Title',
         'Support group attendance',
@@ -4647,7 +4750,7 @@ test('thread session getExtraction expands visible extraction sequences only', a
           type: 'tool_calls',
           toolCalls: [{
             id: 'call-1',
-            name: 'getExtraction',
+            name: 'getSessionObservation',
             arguments: {
               sequences: [0, 0, 42],
             },
@@ -4660,7 +4763,7 @@ test('thread session getExtraction expands visible extraction sequences only', a
           '## Summary',
           'Caroline attended an LGBTQ support group.',
           '',
-          '## Extractions',
+          '## SessionObservations',
           '<!-- sequence: 0; refs: [turn:1] -->',
           '### Title',
           'LGBTQ support group',
@@ -4675,7 +4778,7 @@ test('thread session getExtraction expands visible extraction sequences only', a
     },
   });
 
-  assert.equal(requests[0].tools[0].name, 'getExtraction');
+  assert.equal(requests[0].tools[0].name, 'getSessionObservation');
   assert.match(requests[0].tools[0].description, /full extraction details/i);
   assert.equal(requests[0].tools[0].parameters.properties.sequences.items.type, 'number');
   const firstUserMessage = requests[0].messages.find((message) => message.role === 'user');
@@ -4684,8 +4787,8 @@ test('thread session getExtraction expands visible extraction sequences only', a
   assert.match(firstUserMessage.content, /# Caroline support group/);
   assert.match(firstUserMessage.content, /### Title/);
   assert.match(firstUserMessage.content, /### Summary/);
-  assert.match(firstUserMessage.content, /### Extractions/);
-  assert.doesNotMatch(firstUserMessage.content, /Extraction Index/);
+  assert.match(firstUserMessage.content, /### SessionObservations/);
+  assert.doesNotMatch(firstUserMessage.content, /SessionObservation Index/);
   assert.match(firstUserMessage.content, /<!-- sequence: 0 -->/);
   assert.match(firstUserMessage.content, /Support group attendance/);
   assert.match(firstUserMessage.content, /Existing support extraction\./);
@@ -4705,10 +4808,248 @@ test('thread session getExtraction expands visible extraction sequences only', a
   assert.equal(result.extractions[0].category, 'Other');
   assert.deepEqual(result.extractions[0].references, ['turn:0', 'turn:1']);
   const trace = JSON.parse(await readFile(tracePath, 'utf8'));
-  assert.equal(trace.toolCalls[0].name, 'getExtraction');
+  assert.equal(trace.toolCalls[0].name, 'getSessionObservation');
   assert.equal(trace.extractions[0].text, 'Caroline attended an LGBTQ support group on 7 May 2023.');
   assert.match(trace.finalText, /## Summary/);
   assert.match(trace.finalText, /Caroline attended an LGBTQ support group on 7 May 2023/);
+});
+
+test('thread session can create unrelated extraction without getSessionObservation', async (t) => {
+  const { dir, homeDir, configPath } = await makeConfigHome();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+
+  process.env.MUNINN_HOME = homeDir;
+  await writeOpenAiObserverConfig(configPath);
+
+  const requests = [];
+  const result = await observingGatewayModule.extractSessionMemory({
+    sessionMemoryContent: {
+      title: 'Caroline support group',
+      summary: 'Caroline discussed a support group.',
+      snapshotContent: [
+        '# Caroline support group',
+        '',
+        '## Summary',
+        'Caroline discussed a support group.',
+        '',
+        '## SessionObservations',
+        '<!-- refs: [turn:0] -->',
+        '### Title',
+        'Support group attendance',
+        '',
+        '### Summary',
+        'Existing support extraction.',
+      ].join('\n'),
+      extractions: [{
+        id: 'obs-1',
+        title: 'Support group attendance',
+        text: 'Existing support extraction.',
+        context: null,
+        category: 'Other',
+        references: ['turn:0'],
+      }],
+      openQuestions: [],
+      nextSteps: [],
+    },
+    turns: [{
+      turnId: 'turn:1',
+      prompt: 'Caroline asked to save her preferred report filename pattern.',
+      response: 'The preferred report filename pattern is project-env-YYYYMMDD.csv.',
+    }],
+  }, undefined, {
+    model: async (_task, request) => {
+      requests.push(request);
+      return {
+        type: 'final',
+        text: [
+          '## SessionObservations',
+          '<!-- refs: [turn:1] -->',
+          '### Title',
+          'Report filename pattern',
+          '',
+          '### Summary',
+          'Caroline prefers report filenames to use project-env-YYYYMMDD.csv.',
+        ].join('\n'),
+      };
+    },
+  });
+
+  assert.equal(requests.length, 1);
+  assert.equal(result.extractions.length, 2);
+  assert.equal(result.extractions[1].title, 'Report filename pattern');
+});
+
+test('thread session requires getSessionObservation before updating an existing sequence', async (t) => {
+  const { dir, homeDir, configPath } = await makeConfigHome();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+
+  process.env.MUNINN_HOME = homeDir;
+  await writeOpenAiObserverConfig(configPath);
+  const tracePath = path.join(dir, 'thread-session-sequence-read-trace.jsonl');
+  process.env.MUNINN_SESSION_MEMORY_TRACE_FILE = tracePath;
+  t.after(() => {
+    delete process.env.MUNINN_SESSION_MEMORY_TRACE_FILE;
+  });
+
+  const requests = [];
+  const result = await observingGatewayModule.extractSessionMemory({
+    sessionMemoryContent: {
+      title: 'Caroline support group',
+      summary: 'Caroline discussed a support group.',
+      snapshotContent: '',
+      extractions: [{
+        id: 'obs-1',
+        title: 'Support group attendance',
+        text: 'Existing support extraction.',
+        context: '- Existing full detail.',
+        category: 'Other',
+        references: ['turn:0'],
+      }],
+      openQuestions: [],
+      nextSteps: [],
+    },
+    turns: [{
+      turnId: 'turn:1',
+      prompt: 'Caroline clarified the support group was on Sunday.',
+      response: 'Update the support group memory with the Sunday timing.',
+    }],
+  }, undefined, {
+    model: async (_task, request) => {
+      requests.push(request);
+      if (requests.length === 1) {
+        return {
+          type: 'final',
+          text: [
+            '## SessionObservations',
+            '<!-- sequence: 0; refs: [turn:1] -->',
+            '### Title',
+            'Support group attendance',
+            '',
+            '### Summary',
+            'Caroline attended a support group on Sunday.',
+          ].join('\n'),
+        };
+      }
+      if (requests.length === 2) {
+        return {
+          type: 'tool_calls',
+          toolCalls: [{
+            id: 'call-1',
+            name: 'getSessionObservation',
+            arguments: { sequences: [0] },
+          }],
+        };
+      }
+      return {
+        type: 'final',
+        text: [
+          '## SessionObservations',
+          '<!-- sequence: 0; refs: [turn:1] -->',
+          '### Title',
+          'Support group attendance',
+          '',
+          '### Summary',
+          'Caroline attended a support group on Sunday.',
+        ].join('\n'),
+      };
+    },
+  });
+
+  assert.equal(result.extractions[0].text, 'Caroline attended a support group on Sunday.');
+  assert.equal(requests.length, 3);
+  const traceLines = (await readFile(tracePath, 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
+  assert.match(traceLines[0].validationError, /sequence 0 must be read with getSessionObservation/i);
+});
+
+test('thread session allows at most five getSessionObservation calls', async (t) => {
+  const { dir, homeDir, configPath } = await makeConfigHome();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+
+  process.env.MUNINN_HOME = homeDir;
+  await writeOpenAiObserverConfig(configPath);
+
+  let calls = 0;
+  await assert.rejects(
+    observingGatewayModule.extractSessionMemory({
+      sessionMemoryContent: {
+        title: 'Caroline support group',
+        summary: 'Caroline discussed a support group.',
+        extractions: [{
+          id: 'obs-1',
+          title: 'Support group attendance',
+          text: 'Existing support extraction.',
+          context: null,
+          category: 'Other',
+          references: ['turn:0'],
+        }],
+        openQuestions: [],
+        nextSteps: [],
+      },
+      turns: [{
+        turnId: 'turn:1',
+        prompt: 'Caroline clarified more support group details.',
+        response: 'Update the support group memory.',
+      }],
+    }, undefined, {
+      model: async () => {
+        calls += 1;
+        return {
+          type: 'tool_calls',
+          toolCalls: [{
+            id: `call-${calls}`,
+            name: 'getSessionObservation',
+            arguments: { sequences: [0] },
+          }],
+        };
+      },
+    }),
+    /getSessionObservation exceeded max calls: 5|tool loop exceeded maxSteps=6/i,
+  );
+  assert.ok(calls >= 6);
+});
+
+test('thread session omits generated default session title from memory input', async (t) => {
+  const { dir, homeDir, configPath } = await makeConfigHome();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+
+  process.env.MUNINN_HOME = homeDir;
+  await writeOpenAiObserverConfig(configPath);
+
+  const requests = [];
+  await observingGatewayModule.extractSessionMemory({
+    sessionMemoryContent: {
+      title: 'Session group-a',
+      summary: 'Default session memory thread for session group-a.',
+      snapshotContent: '',
+      extractions: [],
+      openQuestions: [],
+      nextSteps: [],
+    },
+    turns: [{
+      turnId: 'turn:1',
+      prompt: '我们要让 session 标题使用文档里的语言。',
+      response: '可以，把 prompt 示例和默认标题锚点一起调整。',
+    }],
+  }, undefined, {
+    model: async (_task, request) => {
+      requests.push(request);
+      return {
+        type: 'final',
+        text: [
+          '# 标题语言对齐',
+          '',
+          '## Summary',
+          '本轮确定 session 标题应使用文档主语言。',
+        ].join('\n'),
+      };
+    },
+  });
+
+  const firstUserMessage = requests[0].messages.find((message) => message.role === 'user');
+  assert.ok(firstUserMessage);
+  assert.match(firstUserMessage.content, /## Current Snapshot/);
+  assert.match(firstUserMessage.content, /# \(empty\)/);
+  assert.doesNotMatch(firstUserMessage.content, /# Session group-a/);
 });
 
 test('thread session traces invalid markdown attempts without JSON retry instructions', async (t) => {
@@ -4743,7 +5084,7 @@ test('thread session traces invalid markdown attempts without JSON retry instruc
       if (requests.length === 1) {
         return {
           type: 'final',
-          text: '{"snapshotContent":"<!-- refs: [turn:1] -->\\n[Entity] Caroline\\n[Extraction] Caroline attended an LGBTQ support group."}',
+          text: '{"snapshotContent":"<!-- refs: [turn:1] -->\\n[Entity] Caroline\\n[SessionObservation] Caroline attended an LGBTQ support group."}',
         };
       }
       return {
@@ -4874,7 +5215,7 @@ test('thread session inlines chat memory categories', async (t) => {
   assert.match(requests[0].messages[0].content, /durable topic: a decision, requirement, preference, correction/);
   assert.doesNotMatch(requests[0].messages[0].content, /Domain guidance/);
   assert.doesNotMatch(requests[0].messages[0].content, /domain_prompt/);
-  assert.doesNotMatch(requests[0].messages[0].content, /Extraction granularity/);
+  assert.doesNotMatch(requests[0].messages[0].content, /SessionObservation granularity/);
   assert.doesNotMatch(requests[0].messages[0].content, /Chat filtering/);
   assert.doesNotMatch(requests[0].messages[0].content, /Use `update` plus `add`/);
 });
@@ -4898,11 +5239,11 @@ test('session snapshots keep complete cumulative context refs', () => {
   });
 
   for (let index = 1; index <= 10; index += 1) {
-    threadTesting.applyExtractionResultForTests(
+    threadTesting.applySessionObservationResultForTests(
       thread,
       result(`slice ${index}`, `turn:${index}`),
       index,
-      applyExtractionChanges,
+      applySessionObservationChanges,
       '2026-01-01T00:00:00.000Z',
     );
   }
@@ -4953,18 +5294,18 @@ test('session context refs update duplicate turn summaries without duplicates', 
     contextRefs: [{ turnId: 'turn:1', summary }],
   });
 
-  threadTesting.applyExtractionResultForTests(
+  threadTesting.applySessionObservationResultForTests(
     thread,
     observeResult('initial summary'),
     1,
-    applyExtractionChanges,
+    applySessionObservationChanges,
     '2026-01-01T00:00:00.000Z',
   );
-  threadTesting.applyExtractionResultForTests(
+  threadTesting.applySessionObservationResultForTests(
     thread,
     observeResult('updated summary'),
     2,
-    applyExtractionChanges,
+    applySessionObservationChanges,
     '2026-01-01T00:00:01.000Z',
   );
 
@@ -4999,7 +5340,7 @@ test('session snapshot persists markdown content with parsed title and summary',
     },
   );
 
-  threadTesting.applyExtractionResultForTests(
+  threadTesting.applySessionObservationResultForTests(
     thread,
     {
       title: 'Melanie Painting',
@@ -5015,7 +5356,7 @@ test('session snapshot persists markdown content with parsed title and summary',
       contextRefs: [{ turnId: 'turn:1', summary: 'Melanie discussed a lake sunrise painting.' }],
     },
     1,
-    applyExtractionChanges,
+    applySessionObservationChanges,
     '2026-01-01T00:00:00.000Z',
   );
 
@@ -5417,7 +5758,7 @@ test('buildTouchedIndex immediately advances extraction index for touched thread
     sessionTable: {
       update: async ({ snapshots }) => snapshots,
     },
-    extractionTable: {
+    sessionObservationTable: {
       delete: async () => ({ deleted: 0 }),
       get: async () => [],
       upsert: async () => {
@@ -5431,7 +5772,7 @@ test('buildTouchedIndex immediately advances extraction index for touched thread
   assert.equal(getPendingIndex(threads[0]), null);
 });
 
-test('observer.retryExtraction refreshes the committed checkpoint snapshot after session rows are updated', async (t) => {
+test('observer.retrySessionObservation refreshes the committed checkpoint snapshot after session rows are updated', async (t) => {
   const { dir, homeDir, configPath } = await makeConfigHome();
   t.after(async () => rm(dir, { recursive: true, force: true }));
 
@@ -5447,7 +5788,7 @@ test('observer.retryExtraction refreshes the committed checkpoint snapshot after
         rowCount: 1,
       }),
     },
-    extractionTable: {
+    sessionObservationTable: {
       delete: async () => ({ deleted: 0 }),
       get: async () => [],
       upsert: async () => undefined,
@@ -5491,13 +5832,13 @@ test('observer.retryExtraction refreshes the committed checkpoint snapshot after
   }];
   observer.refreshCheckpointSnapshot();
 
-  await observer.retryExtraction();
+  await observer.retrySessionObservation();
 
   assert.deepEqual(observer.exportCheckpoint(), {
     committedEpoch: 1,
     nextEpoch: 2,
     runs: [],
-    pendingExtractionChanges: [],
+    pendingSessionObservationChanges: [],
     threads: [{
       sessionId: 'session-a',
       latestSnapshotId: 'snapshot-1',
@@ -5525,7 +5866,7 @@ test('observer.observeCurrentEpoch commits session rows before retrying extracti
       })),
       update: async ({ snapshots }) => snapshots,
     },
-    extractionTable: {
+    sessionObservationTable: {
       delete: async () => ({ deleted: 0 }),
       get: async () => [],
       upsert: async () => {
@@ -5585,7 +5926,7 @@ test('observer.run retries pending extraction index before queued epochs when du
     sessionTable: {
       update: async ({ snapshots }) => snapshots,
     },
-    extractionTable: {
+    sessionObservationTable: {
       delete: async () => ({ deleted: 0 }),
       get: async () => [],
       upsert: async () => {
@@ -5647,7 +5988,7 @@ test('observer.run retries pending extraction index before queued epochs when du
     ],
   });
 
-  observer.retryExtraction = async () => {
+  observer.retrySessionObservation = async () => {
     calls.push('index');
     observer.nextIndexRetryAt = undefined;
     observer.threads = [];

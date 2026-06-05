@@ -1,6 +1,6 @@
 import type {
   ExtractSessionMemoryResult,
-  Extraction,
+  SessionObservation,
   SessionMemoryContent,
   SessionSnapshot,
   SessionMemoryThread,
@@ -26,6 +26,15 @@ export function isActiveThread(
   return Date.parse(updatedAt) >= nowMs - activeWindowMs(activeWindowDays);
 }
 
+function threadKey(value: {
+  sessionId: string;
+  agent: string;
+  project: string;
+  cwd: string;
+}): string {
+  return `${value.agent}\0${value.project}\0${value.cwd}\0${value.sessionId}`;
+}
+
 export function createSessionMemoryThread(
   observer: string,
   title: string,
@@ -35,12 +44,20 @@ export function createSessionMemoryThread(
   now = new Date().toISOString(),
   kind: SessionMemoryThreadKind = 'subject',
   sessionId: string | null = null,
+  ownership: { agent: string; project: string; cwd: string } = {
+    agent: 'unknown',
+    project: 'default',
+    cwd: process.cwd(),
+  },
 ): SessionMemoryThread {
   const threadSessionId = sessionId ?? 'default';
   return {
     threadId: threadSessionId,
     kind,
     sessionId: threadSessionId,
+    project: ownership.project,
+    cwd: ownership.cwd,
+    agent: ownership.agent,
     snapshotIds: [],
     snapshotEpochs: [],
     extractionEpoch,
@@ -65,14 +82,15 @@ export function cloneSessionMemoryThread(thread: SessionMemoryThread): SessionMe
     snapshots: thread.snapshots.map((snapshot) => ({
       threadKind: snapshot.threadKind ?? thread.kind,
       sessionId: snapshot.sessionId ?? thread.sessionId ?? null,
+      project: snapshot.project ?? thread.project,
+      cwd: snapshot.cwd ?? thread.cwd,
+      agent: snapshot.agent ?? thread.agent,
       snapshotContent: snapshot.snapshotContent,
       extractions: snapshot.extractions.map((extraction) => ({
         id: extraction.id ?? null,
         title: extraction.title ?? null,
         text: extraction.text,
         context: extraction.context ?? null,
-        anchors: [...(extraction.anchors ?? [])],
-        category: extraction.category,
         references: [...(extraction.references ?? [])],
         updatedMemory: extraction.updatedMemory ?? null,
       })),
@@ -97,12 +115,13 @@ export function loadThreads(
 ): SessionMemoryThread[] {
   const grouped = new Map<string, SessionSnapshot[]>();
   for (const snapshot of snapshots) {
-    if (snapshot.observer !== observer) {
+    if (snapshot.extractor !== observer) {
       continue;
     }
-    const rows = grouped.get(snapshot.sessionId) ?? [];
+    const key = threadKey(snapshot);
+    const rows = grouped.get(key) ?? [];
     rows.push(snapshot);
-    grouped.set(snapshot.sessionId, rows);
+    grouped.set(key, rows);
   }
   return [...grouped.values()]
     .map((rows) => threadFromSnapshots(rows, extractionEpoch))
@@ -128,6 +147,9 @@ export function threadFromSnapshots(
     threadId: latest.sessionId,
     kind: latestContent.threadKind ?? 'subject',
     sessionId: latest.sessionId,
+    project: latest.project,
+    cwd: latest.cwd,
+    agent: latest.agent,
     snapshotId: latest.snapshotId,
     snapshotIds: ordered.map((row) => row.snapshotId),
     snapshotEpochs: ordered.map(() => extractionEpoch),
@@ -137,7 +159,7 @@ export function threadFromSnapshots(
     snapshots: ordered.map(deserializeSnapshot),
     references: [...latest.references],
     indexedSnapshotSequence,
-    observer: latest.observer,
+    observer: latest.extractor,
     createdAt: ordered[0]?.createdAt ?? latest.createdAt,
     updatedAt: latest.updatedAt,
   };
@@ -168,6 +190,9 @@ export function replaySnapshots(
     const snapshot = deserializeSnapshot(row);
     thread.kind = snapshot.threadKind ?? thread.kind;
     thread.sessionId = snapshot.sessionId ?? thread.sessionId ?? null;
+    thread.project = snapshot.project ?? thread.project;
+    thread.cwd = snapshot.cwd ?? thread.cwd;
+    thread.agent = snapshot.agent ?? thread.agent;
     thread.snapshots.push(snapshot);
     thread.references = [...row.references];
     thread.updatedAt = row.updatedAt;
@@ -186,24 +211,27 @@ export function currentSessionMemoryContent(thread: SessionMemoryThread): Sessio
   };
 }
 
-export function applyExtractionResult(
+export function applySessionObservationResult(
   thread: SessionMemoryThread,
   result: ExtractSessionMemoryResult,
   extractionEpoch: number,
-  applyExtractionChanges: (
-    extractions: Extraction[],
+  applySessionObservationChanges: (
+    extractions: SessionObservation[],
     result: ExtractSessionMemoryResult,
-  ) => { extractionChanges: SnapshotContent['extractionChanges']; extractions: Extraction[] },
+  ) => { extractionChanges: SnapshotContent['extractionChanges']; extractions: SessionObservation[] },
   now = new Date().toISOString(),
 ): void {
   const current = latestSnapshot(thread) ?? emptySnapshot();
-  const patched = applyExtractionChanges(current.extractions, result);
+  const patched = applySessionObservationChanges(current.extractions, result);
   thread.title = result.title;
   thread.summary = result.summary ?? thread.summary;
   thread.extractionEpoch = extractionEpoch;
   thread.snapshots.push({
     threadKind: thread.kind,
     sessionId: thread.sessionId ?? null,
+    project: thread.project,
+    cwd: thread.cwd,
+    agent: thread.agent,
     snapshotContent: result.snapshotContent ?? '',
     extractions: patched.extractions,
     contextRefs: mergeContextRefs(
@@ -235,10 +263,13 @@ export function toSessionSnapshot(thread: SessionMemoryThread): SessionSnapshot 
   return {
     snapshotId: thread.snapshotId ?? PENDING_SNAPSHOT_ID,
     sessionId: thread.sessionId ?? thread.threadId,
+    project: thread.project,
+    cwd: thread.cwd,
+    agent: thread.agent,
     snapshotSequence: thread.snapshots.length - 1,
     createdAt: thread.updatedAt,
     updatedAt: thread.updatedAt,
-    observer: thread.observer,
+    extractor: thread.observer,
     title: thread.title,
     summary: thread.summary,
     content: snapshot.snapshotContent,
@@ -304,6 +335,9 @@ function deserializeSnapshot(row: SessionSnapshot): SnapshotContent {
   return {
     threadKind: 'session',
     sessionId: row.sessionId,
+    project: row.project,
+    cwd: row.cwd,
+    agent: row.agent,
     snapshotContent: parsed.snapshotContent,
     extractions: parsed.extractions,
     contextRefs: row.references.map((turnId) => ({ turnId, summary: turnId })),
@@ -317,6 +351,9 @@ function emptySnapshot(): SnapshotContent {
   return {
     threadKind: 'subject',
     sessionId: null,
+    project: 'default',
+    cwd: process.cwd(),
+    agent: 'unknown',
     snapshotContent: '',
     extractions: [],
     contextRefs: [],
@@ -384,5 +421,5 @@ function trimReferences(references: string[]): void {
 }
 
 export const __testing = {
-  applyExtractionResultForTests: applyExtractionResult,
+  applySessionObservationResultForTests: applySessionObservationResult,
 };

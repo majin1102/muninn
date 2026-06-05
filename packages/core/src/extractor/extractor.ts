@@ -1,7 +1,7 @@
 import {
   type ExtractorCheckpoint,
   type ExtractorRun,
-  type QueuedExtractionChange,
+  type QueuedSessionObservationChange,
   type ThreadRef,
 } from '../checkpoint.js';
 import type { CheckpointLock } from '../backend.js';
@@ -21,7 +21,7 @@ import {
   threadFromSnapshots,
 } from './thread.js';
 import type { SessionMemoryThread } from './types.js';
-import { buildExtraction, buildTouchedIndex, extractEpoch } from './update.js';
+import { buildSessionObservation, buildTouchedIndex, extractEpoch } from './update.js';
 import { resolveDatabaseName } from '../config.js';
 import { writeMuninnLog } from '../logging.js';
 
@@ -34,7 +34,7 @@ export type ExtractorCheckpointState = {
   nextEpoch: number;
   threads: ThreadRef[];
   runs: ExtractorRun[];
-  pendingExtractionChanges: QueuedExtractionChange[];
+  pendingSessionObservationChanges: QueuedSessionObservationChange[];
 };
 
 const noopCheckpointLock: CheckpointLock = {
@@ -53,7 +53,7 @@ export class Extractor {
   private publishingEpochs: OpenEpoch[] = [];
   private threads: SessionMemoryThread[] = [];
   private nextIndexRetryAt?: number;
-  private pendingExtractionChanges: QueuedExtractionChange[] = [];
+  private pendingSessionObservationChanges: QueuedSessionObservationChange[] = [];
   private shuttingDown = false;
   private bootstrapped = false;
   private bootstrapPromise: Promise<void> | null = null;
@@ -74,7 +74,7 @@ export class Extractor {
     private readonly client: NativeTables,
     private readonly checkpoint: ExtractorCheckpoint | null = null,
     private readonly checkpointLock: CheckpointLock = noopCheckpointLock,
-    private readonly onExtractionCommitted: ((changes: QueuedExtractionChange[]) => void) | null = null,
+    private readonly onSessionObservationCommitted: ((changes: QueuedSessionObservationChange[]) => void) | null = null,
     database: string = 'main',
   ) {
     this.database = resolveDatabaseName(database);
@@ -86,7 +86,7 @@ export class Extractor {
     this.activeWindowDays = config.activeWindowDays;
     this.epochTurns = config.epochTurns;
     this.epochWindowMs = config.epochWindowMs;
-    this.pendingExtractionChanges = checkpoint?.pendingExtractionChanges.map(cloneQueuedExtractionChange) ?? [];
+    this.pendingSessionObservationChanges = checkpoint?.pendingSessionObservationChanges.map(cloneQueuedSessionObservationChange) ?? [];
     this.checkpointRuns = checkpoint?.runs.filter((run) => run.status === 'running').map(cloneExtractorRun) ?? [];
   }
 
@@ -150,7 +150,7 @@ export class Extractor {
     const pendingTurnIds = [...pendingById.values()]
       .sort(compareTurns)
       .map((turn) => turn.turnId);
-    const phase = this.currentEpoch || this.hasPendingExtraction()
+    const phase = this.currentEpoch || this.hasPendingSessionObservation()
       ? 'running'
       : pendingTurnIds.length > 0
         ? 'pending'
@@ -188,7 +188,7 @@ export class Extractor {
       nextEpoch: this.checkpointNextEpoch,
       threads: this.checkpointThreads.map((thread) => ({ ...thread })),
       runs: this.checkpointRuns.map(cloneExtractorRun),
-      pendingExtractionChanges: this.pendingExtractionChanges.map(cloneQueuedExtractionChange),
+      pendingSessionObservationChanges: this.pendingSessionObservationChanges.map(cloneQueuedSessionObservationChange),
     };
   }
 
@@ -203,7 +203,7 @@ export class Extractor {
     const barrierRequiresObserve = sealedEpoch.turns.length > 0;
     const barrierComplete = () => {
       const observed = !barrierRequiresObserve || (this.committedEpoch ?? -1) >= barrier.epoch;
-      return observed && !this.hasPendingExtractionUpTo(barrier.epoch);
+      return observed && !this.hasPendingSessionObservationUpTo(barrier.epoch);
     };
 
     while (true) {
@@ -247,14 +247,14 @@ export class Extractor {
         baseline: {
           turn: 0,
           session: 0,
-          extraction: 0,
-          observation: 0,
+          session_observation: 0,
+          global_observation: 0,
         },
         nextEpoch: 0,
         recentSessions: [],
         threads: [],
         runs: [],
-        pendingExtractionChanges: [],
+        pendingSessionObservationChanges: [],
       }, snapshots, new Map(turns.map((turn) => [turn.turnId, turn])));
       if (fallback) {
         this.threads = fallback.threads;
@@ -303,7 +303,7 @@ export class Extractor {
     }
     this.refreshCheckpointSnapshot();
     this.bootstrapped = true;
-    this.handoffPendingExtractionChanges();
+    this.handoffPendingSessionObservationChanges();
     this.refreshCheckpointSnapshot();
     this.start();
     this.notifyChange();
@@ -325,8 +325,8 @@ export class Extractor {
           continue;
         }
 
-        if (this.shouldRetryExtraction()) {
-          await this.retryExtraction();
+        if (this.shouldRetrySessionObservation()) {
+          await this.retrySessionObservation();
           retryDelayMs = BASE_RETRY_DELAY_MS;
           continue;
         }
@@ -338,7 +338,7 @@ export class Extractor {
           continue;
         }
 
-        if (this.hasPendingExtraction()) {
+        if (this.hasPendingSessionObservation()) {
           await this.waitForIndexRetryOrChange();
           retryDelayMs = BASE_RETRY_DELAY_MS;
           continue;
@@ -381,9 +381,9 @@ export class Extractor {
       this.threads = result.threads;
       try {
         const extractionChanges = await this.buildCurrentEpochIndex(result.touchedIds);
-        this.mergePendingExtractionChanges(extractionChanges);
-        this.handoffPendingExtractionChanges();
-        if (!this.hasPendingExtraction()) {
+        this.mergePendingSessionObservationChanges(extractionChanges);
+        this.handoffPendingSessionObservationChanges();
+        if (!this.hasPendingSessionObservation()) {
           this.nextIndexRetryAt = undefined;
         }
       } catch (error) {
@@ -402,7 +402,7 @@ export class Extractor {
     });
   }
 
-  private buildCurrentEpochIndex(touchedIds: Set<string>): Promise<QueuedExtractionChange[]> {
+  private buildCurrentEpochIndex(touchedIds: Set<string>): Promise<QueuedSessionObservationChange[]> {
     return buildTouchedIndex(
       this.client,
       this.threads,
@@ -489,25 +489,25 @@ export class Extractor {
     };
   }
 
-  private hasPendingExtraction(): boolean {
+  private hasPendingSessionObservation(): boolean {
     return this.threads.some((thread) => getPendingIndex(thread) !== null);
   }
 
-  private hasPendingExtractionUpTo(maxEpoch: number): boolean {
+  private hasPendingSessionObservationUpTo(maxEpoch: number): boolean {
     return this.threads.some((thread) => getPendingIndexUpTo(thread, maxEpoch) !== null);
   }
 
-  private shouldRetryExtraction(): boolean {
-    return this.hasPendingExtraction()
+  private shouldRetrySessionObservation(): boolean {
+    return this.hasPendingSessionObservation()
       && (this.nextIndexRetryAt == null || Date.now() >= this.nextIndexRetryAt);
   }
 
-  private async retryExtraction(): Promise<void> {
+  private async retrySessionObservation(): Promise<void> {
     try {
       await this.checkpointLock.shared(async () => {
-        const extractionChanges = await buildExtraction(this.client, this.threads, this.shutdownController.signal);
-        this.mergePendingExtractionChanges(extractionChanges);
-        this.handoffPendingExtractionChanges();
+        const extractionChanges = await buildSessionObservation(this.client, this.threads, this.shutdownController.signal);
+        this.mergePendingSessionObservationChanges(extractionChanges);
+        this.handoffPendingSessionObservationChanges();
         this.refreshCheckpointSnapshot();
         this.nextIndexRetryAt = undefined;
       });
@@ -520,31 +520,32 @@ export class Extractor {
       await writeMuninnLog(this.database, 'error', 'extractor', 'index_retry_failed', { message });
       this.nextIndexRetryAt = Date.now() + INDEX_RETRY_DELAY_MS;
     } finally {
-      if (!this.hasPendingExtraction()) {
+      if (!this.hasPendingSessionObservation()) {
         this.nextIndexRetryAt = undefined;
       }
       this.notifyChange();
     }
   }
 
-  private mergePendingExtractionChanges(changes: QueuedExtractionChange[] | undefined): void {
+  private mergePendingSessionObservationChanges(changes: QueuedSessionObservationChange[] | undefined): void {
     for (const change of changes ?? []) {
-      const index = this.pendingExtractionChanges.findIndex((pending) => pending.extraction.id === change.extraction.id);
+      const index = this.pendingSessionObservationChanges
+        .findIndex((pending) => pending.sessionObservation.id === change.sessionObservation.id);
       if (index < 0) {
-        this.pendingExtractionChanges.push(cloneQueuedExtractionChange(change));
+        this.pendingSessionObservationChanges.push(cloneQueuedSessionObservationChange(change));
       } else {
-        this.pendingExtractionChanges[index] = cloneQueuedExtractionChange(change);
+        this.pendingSessionObservationChanges[index] = cloneQueuedSessionObservationChange(change);
       }
     }
   }
 
-  private handoffPendingExtractionChanges(): void {
-    if (this.pendingExtractionChanges.length === 0) {
+  private handoffPendingSessionObservationChanges(): void {
+    if (this.pendingSessionObservationChanges.length === 0) {
       return;
     }
-    const changes = this.pendingExtractionChanges.map(cloneQueuedExtractionChange);
-    this.onExtractionCommitted?.(changes);
-    this.pendingExtractionChanges = [];
+    const changes = this.pendingSessionObservationChanges.map(cloneQueuedSessionObservationChange);
+    this.onSessionObservationCommitted?.(changes);
+    this.pendingSessionObservationChanges = [];
   }
 
   private exportCheckpointThreads(): ThreadRef[] {
@@ -841,16 +842,14 @@ function cloneExtractorRun(run: ExtractorRun): ExtractorRun {
   };
 }
 
-function cloneQueuedExtractionChange(change: QueuedExtractionChange): QueuedExtractionChange {
+function cloneQueuedSessionObservationChange(change: QueuedSessionObservationChange): QueuedSessionObservationChange {
   return {
     type: change.type,
-    extraction: {
-      ...change.extraction,
-      anchors: [...change.extraction.anchors],
-      vector: [...change.extraction.vector],
-      turnRefs: [...change.extraction.turnRefs],
-      observationPaths: [...change.extraction.observationPaths],
-      observedRootAnchors: [...change.extraction.observedRootAnchors],
+    sessionObservation: {
+      ...change.sessionObservation,
+      vector: [...change.sessionObservation.vector],
+      turnRefs: [...change.sessionObservation.turnRefs],
+      globalObservationPaths: [...change.sessionObservation.globalObservationPaths],
     },
   };
 }

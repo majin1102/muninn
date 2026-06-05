@@ -13,15 +13,14 @@ const DEFAULT_EXTRACTOR_CONTINUITY_HINTS = 1;
 const DEFAULT_EXTRACTOR_EPOCH_TURNS = 3;
 const DEFAULT_EXTRACTOR_EPOCH_WINDOW_MS = 10_000;
 const DEFAULT_OBSERVER_MAX_ATTEMPTS = 3;
-const DEFAULT_IMPORTANCE = 0.7;
 const DEFAULT_WATCHDOG_INTERVAL_MS = 60_000;
 const DEFAULT_WATCHDOG_COMPACT_MIN_FRAGMENTS = 8;
 const DEFAULT_WATCHDOG_TARGET_PARTITION_SIZE = 1_024;
 const DEFAULT_WATCHDOG_OPTIMIZE_MERGE_COUNT = 4;
-const DEFAULT_EXTRACTION_DIMENSIONS = 8;
+const DEFAULT_SESSION_OBSERVATION_DIMENSIONS = 8;
 const DEFAULT_RECALL_MODE = 'hybrid';
-const DEFAULT_OBSERVER_ANCHOR_THRESHOLD = 8;
-const DEFAULT_OBSERVER_ANCHOR_BATCH_SIZE = 16;
+const DEFAULT_OBSERVER_CWD_THRESHOLD = 8;
+const DEFAULT_OBSERVER_CWD_BATCH_SIZE = 16;
 const DEFAULT_OBSERVER_CONTENT_BUDGET_CHARS = 24_000;
 
 export type RecallMode = 'vector' | 'fts' | 'hybrid';
@@ -58,8 +57,8 @@ type ObserverConfigRecord = {
   name?: string;
   llmProvider?: string;
   maxAttempts?: number;
-  anchorThreshold?: number;
-  anchorBatchSize?: number;
+  cwdThreshold?: number;
+  cwdBatchSize?: number;
   contentBudgetChars?: number;
 };
 
@@ -119,7 +118,6 @@ export type EmbeddingConfig = {
   apiKey?: string;
   baseUrl?: string;
   dimensions: number;
-  defaultImportance: number;
 };
 
 export type RecallConfig = {
@@ -127,8 +125,8 @@ export type RecallConfig = {
 };
 
 export type ObserverRuntimeConfig = {
-  anchorThreshold: number;
-  anchorBatchSize: number;
+  cwdThreshold: number;
+  cwdBatchSize: number;
   contentBudgetChars: number;
 };
 
@@ -136,7 +134,7 @@ export type WatchdogConfig = {
   enabled: boolean;
   intervalMs: number;
   compactMinFragments: number;
-  extraction: {
+  session_observation: {
     targetPartitionSize: number;
     optimizeMergeCount: number;
   };
@@ -250,7 +248,6 @@ export function getEmbeddingConfig(): EmbeddingConfig {
     apiKey: embedding.apiKey,
     baseUrl: embedding.baseUrl,
     dimensions: embedding.dimensions,
-    defaultImportance: DEFAULT_IMPORTANCE,
   };
 }
 
@@ -274,15 +271,15 @@ export function getObserverRuntimeConfigFromConfigForTests(config: MuninnConfigR
 
 function getObserverRuntimeConfigFromConfig(config: MuninnConfigRecord | null): ObserverRuntimeConfig {
   return {
-    anchorThreshold: config?.observer?.anchorThreshold ?? DEFAULT_OBSERVER_ANCHOR_THRESHOLD,
-    anchorBatchSize: config?.observer?.anchorBatchSize ?? DEFAULT_OBSERVER_ANCHOR_BATCH_SIZE,
+    cwdThreshold: config?.observer?.cwdThreshold ?? DEFAULT_OBSERVER_CWD_THRESHOLD,
+    cwdBatchSize: config?.observer?.cwdBatchSize ?? DEFAULT_OBSERVER_CWD_BATCH_SIZE,
     contentBudgetChars: config?.observer?.contentBudgetChars ?? DEFAULT_OBSERVER_CONTENT_BUDGET_CHARS,
   };
 }
 
 export function getWatchdogConfig(): WatchdogConfig {
   const watchdog = loadMuninnConfig()?.watchdog as Record<string, unknown> | undefined;
-  const extraction = watchdog?.extraction as Record<string, unknown> | undefined;
+  const sessionObservation = watchdog?.session_observation as Record<string, unknown> | undefined;
   return {
     enabled: typeof watchdog?.enabled === 'boolean' ? watchdog.enabled : true,
     intervalMs: typeof watchdog?.intervalMs === 'number'
@@ -291,12 +288,12 @@ export function getWatchdogConfig(): WatchdogConfig {
     compactMinFragments: typeof watchdog?.compactMinFragments === 'number'
       ? watchdog.compactMinFragments
       : DEFAULT_WATCHDOG_COMPACT_MIN_FRAGMENTS,
-    extraction: {
-      targetPartitionSize: typeof extraction?.targetPartitionSize === 'number'
-        ? extraction.targetPartitionSize
+    session_observation: {
+      targetPartitionSize: typeof sessionObservation?.targetPartitionSize === 'number'
+        ? sessionObservation.targetPartitionSize
         : DEFAULT_WATCHDOG_TARGET_PARTITION_SIZE,
-      optimizeMergeCount: typeof extraction?.optimizeMergeCount === 'number'
-        ? extraction.optimizeMergeCount
+      optimizeMergeCount: typeof sessionObservation?.optimizeMergeCount === 'number'
+        ? sessionObservation.optimizeMergeCount
         : DEFAULT_WATCHDOG_OPTIMIZE_MERGE_COUNT,
     },
   };
@@ -358,7 +355,7 @@ export async function validateMuninnConfigStorage(
   }
   if (actualDimensions !== expectedDimensions) {
     throw new Error(
-      `extraction dimension mismatch: muninn.json expects ${expectedDimensions}, but the existing extraction table stores ${actualDimensions}; update providers.embedding.${config.extractor?.embeddingProvider}.dimensions or rebuild the extraction table`,
+      `session observation dimension mismatch: muninn.json expects ${expectedDimensions}, but the existing session_observation table stores ${actualDimensions}; update providers.embedding.${config.extractor?.embeddingProvider}.dimensions or rebuild the session_observation table`,
     );
   }
 }
@@ -513,7 +510,7 @@ function validateExtractorConfig(extractor: unknown): void {
     throw new Error('extractor.llm is no longer supported; use extractor.llmProvider instead.');
   }
   if (config.defaultImportance !== undefined) {
-    throw new Error('extractor.defaultImportance is not supported; Muninn uses an internal default importance.');
+    throw new Error('extractor.defaultImportance is not supported; extraction importance has been removed.');
   }
   requireNonEmptyString(config.name, 'extractor.name');
   requireNonEmptyString(config.llmProvider, 'extractor.llmProvider');
@@ -546,8 +543,8 @@ function validateObserverConfig(observer: unknown): void {
   requireNonEmptyString(config.name, 'observer.name');
   requireNonEmptyString(config.llmProvider, 'observer.llmProvider');
   validateOptionalPositiveInteger(config.maxAttempts, 'observer.maxAttempts');
-  validateOptionalPositiveInteger(config.anchorThreshold, 'observer.anchorThreshold');
-  validateOptionalPositiveInteger(config.anchorBatchSize, 'observer.anchorBatchSize');
+  validateOptionalPositiveInteger(config.cwdThreshold, 'observer.cwdThreshold');
+  validateOptionalPositiveInteger(config.cwdBatchSize, 'observer.cwdBatchSize');
   validateOptionalPositiveInteger(config.contentBudgetChars, 'observer.contentBudgetChars');
 }
 
@@ -607,7 +604,7 @@ function effectiveEmbeddingDimensions(config: MuninnConfigRecord | null): number
   const embeddingName = config?.extractor?.embeddingProvider;
   const dimensions = embeddingName ? config?.providers?.embedding?.[embeddingName]?.dimensions : undefined;
   if (dimensions === undefined) {
-    return DEFAULT_EXTRACTION_DIMENSIONS;
+    return DEFAULT_SESSION_OBSERVATION_DIMENSIONS;
   }
   return requirePositiveInteger(dimensions, `providers.embedding.${embeddingName}.dimensions`);
 }
@@ -621,14 +618,17 @@ function validateWatchdogConfig(watchdog: unknown): void {
   validateOptionalPositiveInteger(config.intervalMs, 'watchdog.intervalMs');
   validateOptionalPositiveInteger(config.compactMinFragments, 'watchdog.compactMinFragments');
   if (config.extraction !== undefined) {
-    const extraction = expectRecord(config.extraction, 'watchdog.extraction');
+    throw new Error('watchdog.extraction is no longer supported; use watchdog.session_observation instead.');
+  }
+  if (config.session_observation !== undefined) {
+    const sessionObservation = expectRecord(config.session_observation, 'watchdog.session_observation');
     validateOptionalPositiveInteger(
-      extraction.targetPartitionSize,
-      'watchdog.extraction.targetPartitionSize',
+      sessionObservation.targetPartitionSize,
+      'watchdog.session_observation.targetPartitionSize',
     );
     validateOptionalPositiveInteger(
-      extraction.optimizeMergeCount,
-      'watchdog.extraction.optimizeMergeCount',
+      sessionObservation.optimizeMergeCount,
+      'watchdog.session_observation.optimizeMergeCount',
     );
   }
 }

@@ -1,7 +1,7 @@
 import {
   __testing as nativeTesting,
   createNativeTables,
-  describeExtractionForStorage,
+  describeSessionObservationForStorage,
   getNativeTables,
   shutdownNativeTablesForTests,
   type NativeTables,
@@ -43,12 +43,15 @@ export interface Turn {
   createdAt: string;
   updatedAt: string;
   sessionId?: string | null;
+  project: string;
+  cwd: string;
   agent: string;
   observer: string;
   title?: string | null;
   summary?: string | null;
   events: TurnEvent[];
   artifacts?: Artifact[] | null;
+  metadata?: Record<string, unknown> | null;
   prompt?: string | null;
   response?: string | null;
   observingEpoch?: number | null;
@@ -59,10 +62,13 @@ export interface Turn {
 export interface SessionSnapshot {
   snapshotId: string;
   sessionId: string;
+  project: string;
+  cwd: string;
+  agent: string;
   snapshotSequence: number;
   createdAt: string;
   updatedAt: string;
-  observer: string;
+  extractor: string;
   title: string;
   summary: string;
   content: string;
@@ -375,23 +381,23 @@ export class MuninnBackend {
       const [turnStats, sessionStats, extractionStats, observationContextStats, observationStats] = await Promise.all([
         this.client.turnTable.stats(),
         this.client.sessionTable.stats(),
-        this.client.extractionTable.stats(),
-        this.client.observationContextTable.stats(),
-        this.client.observationTable.stats(),
+        this.client.sessionObservationTable.stats(),
+        this.client.globalObservationContextTable.stats(),
+        this.client.globalObservationTable.stats(),
       ]);
       const extractorSection: ExtractorCheckpoint = {
         baseline: {
           turn: turnStats?.version ?? 0,
           session: sessionStats?.version ?? 0,
-          extraction: extractionStats?.version ?? 0,
-          observation: observationStats?.version ?? 0,
+          session_observation: extractionStats?.version ?? 0,
+          global_observation: observationStats?.version ?? 0,
         },
         committedEpoch: extractorCheckpoint.committedEpoch,
         nextEpoch: extractorCheckpoint.nextEpoch,
         recentSessions: this.sessionRegistry?.exportRecentSessions() ?? [],
         threads: extractorCheckpoint.threads,
         runs: extractorCheckpoint.runs,
-        pendingExtractionChanges: extractorCheckpoint.pendingExtractionChanges,
+        pendingSessionObservationChanges: extractorCheckpoint.pendingSessionObservationChanges,
       };
       const observerSection: ObserverCheckpoint = observerCheckpoint ? {
         baseline: observerCheckpoint.baseline,
@@ -399,10 +405,10 @@ export class MuninnBackend {
         runs: observerCheckpoint.runs,
       } : {
         baseline: {
-          observationContext: observationContextStats?.version ?? 0,
-          observation: observationStats?.version ?? 0,
+          globalObservationContext: observationContextStats?.version ?? 0,
+          global_observation: observationStats?.version ?? 0,
         },
-        observeQueue: { anchors: [] },
+        observeQueue: { cwdBuckets: [] },
         runs: [],
       };
       return {
@@ -547,7 +553,7 @@ async function ensureBootstrapped(database?: string | null) {
 async function bootstrap(tables: Awaited<ReturnType<typeof getNativeTables>>): Promise<void> {
   if (loadMuninnConfig()?.extractor) {
     const embedding = getEmbeddingConfig();
-    await tables.extractionTable.validateDimensions({ expected: embedding.dimensions });
+    await tables.sessionObservationTable.validateDimensions({ expected: embedding.dimensions });
   }
 }
 
@@ -587,7 +593,7 @@ export async function addMessage(turnContent: TurnContent, database?: string | n
 export async function validateSettings(content: string): Promise<void> {
   const config = validateMuninnConfigInput(content);
   const storage = resolveStorageTarget(config);
-  const description = await describeExtractionForStorage(storage);
+  const description = await describeSessionObservationForStorage(storage);
   await validateMuninnConfigStorage(config, description);
 }
 

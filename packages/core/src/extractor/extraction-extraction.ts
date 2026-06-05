@@ -1,42 +1,33 @@
 import { randomUUID } from 'node:crypto';
 
 import type { Turn } from '../client.js';
-import { getEmbeddingConfig, getExtractorLlmConfig } from '../config.js';
+import { getExtractorLlmConfig } from '../config.js';
 import { loadDomainPrompt } from '../llm/domain-prompt.js';
 import { embedText } from '../llm/embedding-provider.js';
 import { generateText } from '../llm/provider.js';
 import { loadPromptTemplate, renderPromptTemplate } from '../llm/prompt-loader.js';
-import type { NativeTables, Extraction as StoredExtraction } from '../native.js';
-import type { ExtractionCategory, ExtractionInput } from './types.js';
+import type { NativeTables, SessionObservation as StoredSessionObservation } from '../native.js';
+import type { SessionObservationInput } from './types.js';
 
-const CATEGORIES = new Set<ExtractionCategory>([
-  'Preference',
-  'Fact',
-  'Decision',
-  'Entity',
-  'Concept',
-  'Other',
-]);
-
-export type ExtractionExtractionResult = {
-  extractions: ExtractionInput[];
+export type SessionObservationSessionObservationResult = {
+  extractions: SessionObservationInput[];
 };
 
-export async function extractExtractions(
+export async function extractSessionObservations(
   turns: Turn[],
   signal?: AbortSignal,
-): Promise<ExtractionExtractionResult> {
+): Promise<SessionObservationSessionObservationResult> {
   throwIfAborted(signal);
   const config = getExtractorLlmConfig();
   if (!config) {
     throw new Error('observer is not configured');
   }
   if (config.provider === 'mock') {
-    return buildMockExtraction(turns);
+    return buildMockSessionObservation(turns);
   }
 
-  const inputJson = JSON.stringify({ turns: turns.map(toExtractionTurn) }, null, 2);
-  const rendered = renderExtractionPrompt({
+  const inputJson = JSON.stringify({ turns: turns.map(toSessionObservationTurn) }, null, 2);
+  const rendered = renderSessionObservationPrompt({
     inputJson,
     domainPrompt: loadDomainPrompt(config.domainPrompt),
   });
@@ -48,43 +39,67 @@ export async function extractExtractions(
   if (!raw) {
     throw new Error('observer is not configured');
   }
-  return validateExtraction(parseJson<ExtractionExtractionResult>(raw));
+  return validateSessionObservation(parseJson<SessionObservationSessionObservationResult>(raw));
 }
 
-export async function commitExtractions(
+export async function commitSessionObservations(
   client: NativeTables,
-  inputs: ExtractionInput[],
+  inputs: SessionObservationInput[],
+  cwd: string,
   signal?: AbortSignal,
-): Promise<StoredExtraction[]> {
+): Promise<StoredSessionObservation[]> {
   throwIfAborted(signal);
-  const embeddingConfig = getEmbeddingConfig();
-  const rows: StoredExtraction[] = [];
-  for (const input of validateExtraction({ extractions: inputs }).extractions) {
+  const normalizedCwd = cwd.trim();
+  if (!normalizedCwd) {
+    throw new Error('cwd is required to commit session observations');
+  }
+  const rows: StoredSessionObservation[] = [];
+  for (const input of validateSessionObservation({ extractions: inputs }).extractions) {
     const text = input.text.trim();
+    const title = normalizeText(input.title ?? '') || text.slice(0, 80);
+    const summary = [title, text].filter(Boolean).join('\n\n');
     const now = new Date().toISOString();
     rows.push({
       id: randomUUID(),
-      text,
-      context: input.context ?? null,
-      anchors: [],
-      vector: await embedText(text, signal),
-      importance: embeddingConfig.defaultImportance,
-      category: extractionCategory(input.category),
+      title,
+      summary,
+      content: renderSessionObservationContent(title, text, input.context ?? null),
+      cwd: normalizedCwd,
+      vector: await embedText(summary, signal),
       turnRefs: [...new Set(input.references.map((reference) => reference.trim()).filter(Boolean))],
-      observationPaths: [],
-      observedRootAnchors: [],
+      globalObservationPaths: [],
       createdAt: now,
       updatedAt: now,
     });
   }
   if (rows.length > 0) {
-    await client.extractionTable.upsert({ rows });
+    await client.sessionObservationTable.upsert({ rows });
   }
   return rows;
 }
 
-function buildMockExtraction(turns: Turn[]): ExtractionExtractionResult {
-  const extractions: ExtractionInput[] = [];
+function renderSessionObservationContent(title: string, summary: string, content: string | null): string {
+  return [
+    '## Title',
+    '',
+    title,
+    '',
+    '## Summary',
+    '',
+    normalizeText(summary),
+    '',
+    '## Content',
+    '',
+    content?.trim() ?? '',
+  ].join('\n');
+}
+
+function normalizeText(value: string): string {
+  return value.split(/\s+/).join(' ').trim();
+}
+
+function buildMockSessionObservation(turns: Turn[]): SessionObservationSessionObservationResult {
+  const extractions: SessionObservationInput[] = [];
   for (const turn of turns) {
     const text = [turn.prompt, turn.response, turn.summary]
       .map((value) => value?.trim())
@@ -94,21 +109,20 @@ function buildMockExtraction(turns: Turn[]): ExtractionExtractionResult {
     if (text) {
       extractions.push({
         text,
-        category: 'Fact',
         references: [turn.turnId],
       });
     }
   }
-  return validateExtraction({
+  return validateSessionObservation({
     extractions,
   });
 }
 
-function renderExtractionPrompt(input: {
+function renderSessionObservationPrompt(input: {
   inputJson: string;
   domainPrompt?: string;
 }): { system: string; prompt: string } {
-  const template = loadPromptTemplate('extraction_extraction');
+  const template = loadPromptTemplate('extraction_session_observation');
   return {
     system: renderPromptTemplate(template.system, {
       domain_prompt: input.domainPrompt?.trim() || 'No additional domain guidance.',
@@ -117,25 +131,22 @@ function renderExtractionPrompt(input: {
   };
 }
 
-function validateExtraction(result: ExtractionExtractionResult): ExtractionExtractionResult {
+function validateSessionObservation(result: SessionObservationSessionObservationResult): SessionObservationSessionObservationResult {
   if (!result || typeof result !== 'object' || !Array.isArray(result.extractions)) {
     throw new Error('extraction extraction must include extractions');
   }
   return {
-    extractions: result.extractions.map(validateExtractionInput),
+    extractions: result.extractions.map(validateSessionObservationInput),
   };
 }
 
-function validateExtractionInput(input: ExtractionInput): ExtractionInput {
+function validateSessionObservationInput(input: SessionObservationInput): SessionObservationInput {
   if (!input || typeof input !== 'object') {
     throw new Error('extraction must be an object');
   }
   const text = typeof input.text === 'string' ? input.text.trim() : '';
   if (!text) {
     throw new Error('extraction.text must be a non-empty string');
-  }
-  if (!CATEGORIES.has(input.category)) {
-    throw new Error(`invalid extraction category: ${String(input.category)}`);
   }
   if (!Array.isArray(input.references)) {
     throw new Error('extraction.references must be an array');
@@ -148,17 +159,18 @@ function validateExtractionInput(input: ExtractionInput): ExtractionInput {
   }
   return {
     text,
-    category: input.category,
+    title: typeof input.title === 'string' ? input.title.trim() || null : null,
+    context: typeof input.context === 'string' ? input.context.trim() || null : null,
     references,
   };
 }
 
-function toExtractionTurn(turn: Turn): Record<string, unknown> {
+function toSessionObservationTurn(turn: Turn): Record<string, unknown> {
   return {
     turnId: turn.turnId,
     ...(turn.createdAt ? { createdAt: turn.createdAt } : {}),
     ...(turn.recentContext && turn.recentContext.length > 0
-      ? { recentContext: turn.recentContext.map(toExtractionContextTurn) }
+      ? { recentContext: turn.recentContext.map(toSessionObservationContextTurn) }
       : {}),
     ...(turn.prompt ? { prompt: turn.prompt } : {}),
     ...(turn.response ? { response: turn.response } : {}),
@@ -166,31 +178,13 @@ function toExtractionTurn(turn: Turn): Record<string, unknown> {
   };
 }
 
-function toExtractionContextTurn(turn: NonNullable<Turn['recentContext']>[number]): Record<string, unknown> {
+function toSessionObservationContextTurn(turn: NonNullable<Turn['recentContext']>[number]): Record<string, unknown> {
   return {
     turnId: turn.turnId,
     ...(turn.updatedAt ? { updatedAt: turn.updatedAt } : {}),
     ...(turn.prompt ? { prompt: turn.prompt } : {}),
     ...(turn.response ? { response: turn.response } : {}),
   };
-}
-
-function extractionCategory(category: ExtractionCategory): string {
-  switch (category) {
-    case 'Preference':
-      return 'preference';
-    case 'Fact':
-      return 'fact';
-    case 'Decision':
-      return 'decision';
-    case 'Entity':
-      return 'entity';
-    case 'Concept':
-    case 'Other':
-      return 'other';
-    default:
-      return 'other';
-  }
 }
 
 function parseJson<T>(raw: string): T {
@@ -220,7 +214,7 @@ function throwIfAborted(signal?: AbortSignal): void {
 }
 
 export const __testing = {
-  renderExtractionPrompt,
-  toExtractionTurn,
-  validateExtraction,
+  renderSessionObservationPrompt,
+  toSessionObservationTurn,
+  validateSessionObservation,
 };

@@ -6,6 +6,7 @@ use futures_util::TryStreamExt;
 use lance::{Error, Result};
 use object_store::path::Path;
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 
 use super::access::{
     LanceDataset, TableAccess, TableDescription, TableOptions, TableStats, delete_by_row_ids,
@@ -119,12 +120,16 @@ pub struct Turn {
     pub updated_at: DateTime<Utc>,
     #[serde(rename = "session_id")]
     pub session_id: Option<String>,
+    pub project: String,
+    pub cwd: String,
     pub agent: String,
     pub observer: String,
     pub title: Option<String>,
     pub summary: Option<String>,
     pub events: Vec<TurnEvent>,
     pub artifacts: Option<Vec<Artifact>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<Map<String, Value>>,
     pub prompt: Option<String>,
     pub response: Option<String>,
     pub observing_epoch: Option<u64>,

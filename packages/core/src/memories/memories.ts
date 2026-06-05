@@ -1,11 +1,11 @@
 import type { NativeTables } from '../native.js';
 import type { ListModeInput, SessionSnapshot, RecallHit, RenderedMemory, Turn } from '../client.js';
 import { getSessionSnapshot, listSessionSnapshots, timelineSessionSnapshots } from './sessions.js';
-import { getExtraction } from './extractions.js';
-import { getObservation } from './observations.js';
+import { getSessionObservation } from './session-observations.js';
+import { getGlobalObservation } from './global-observations.js';
 import { recallMemories } from './recall.js';
 import type { RecallMode } from './recall.js';
-import { renderExtraction, renderObservation, renderSessionSnapshot, renderTurn } from './rendered.js';
+import { renderSessionObservation, renderGlobalObservation, renderSessionSnapshot, renderTurn } from './rendered.js';
 import { getTurn, listTurns, timelineTurns } from './turns.js';
 
 export class Memories {
@@ -35,17 +35,17 @@ export class Memories {
   }
 
   async get(memoryId: string): Promise<RenderedMemory | null> {
-    if (memoryId.startsWith('extraction:')) {
-      const extraction = await getExtraction(this.client, memoryId);
-      return extraction ? renderExtraction(extraction) : null;
+    if (memoryId.startsWith('session_observation:')) {
+      const observation = await getSessionObservation(this.client, memoryId);
+      return observation ? renderSessionObservation(observation) : null;
     }
-    if (memoryId.startsWith('observation:')) {
-      const observation = await getObservation(this.client, memoryId);
-      return observation ? renderObservation(observation) : null;
+    if (memoryId.startsWith('global_observation:')) {
+      const observation = await getGlobalObservation(this.client, memoryId);
+      return observation ? renderGlobalObservation(observation) : null;
     }
     if (memoryId.startsWith('session:')) {
-      const observing = await getSessionSnapshot(this.client, memoryId);
-      return observing ? renderSessionSnapshot(observing) : null;
+      const snapshot = await getSessionSnapshot(this.client, memoryId);
+      return snapshot ? renderSessionSnapshot(snapshot) : null;
     }
     const session = await getTurn(this.client, memoryId);
     return session ? renderTurn(session) : null;

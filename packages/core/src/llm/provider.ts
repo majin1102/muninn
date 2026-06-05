@@ -136,17 +136,17 @@ function generateMockText(request: LlmTextRequest): string {
     || request.system.includes('observer that rewrites a subtree of a cross-session observation document')
     || request.system.includes('observer that maintains parts of a cross-session observation tree')
   ) {
-    const ref = request.prompt.match(/^\s*-\s+([A-Za-z0-9:_-]+)/m)?.[1] ?? 'mock-extraction';
-    const entity = extractLabeledValue(request.prompt, 'Entity anchor:') || 'Mock entity';
+    const ref = request.prompt.match(/^\s*-\s+([A-Za-z0-9:_-]+)/m)?.[1] ?? 'mock-session-observation';
+    const scope = request.prompt.match(/^\s*#\s+(.+)$/m)?.[1]?.trim() || 'Mock cwd scope';
     return [
-      `# ${entity}`,
+      `# ${scope}`,
       '',
-      `## What is remembered about ${entity}?`,
+      `## What is remembered in this scope?`,
       '',
-      `${entity} has curated memory from the provided extraction.`,
+      `This cwd scope has curated memory from the provided session observation.`,
       '',
-      `### What evidence supports ${entity}?`,
-      `${entity} has curated memory from the provided extraction.`,
+      `### What evidence supports this scope?`,
+      `This cwd scope has curated memory from the provided session observation.`,
       '',
       'Source extractions:',
       `- [${ref}]`,
@@ -162,8 +162,11 @@ function generateMockText(request: LlmTextRequest): string {
       '',
       '## Extractions',
       `<!-- refs: [${ref}] -->`,
-      '[Entity] Mock entity',
-      `[Extraction] ${excerpt(seed)}`,
+      '### Title',
+      'Mock memory unit',
+      '',
+      '### Summary',
+      `${excerpt(seed)}`,
     ].join('\n');
   }
   if (request.system.includes('"memory_delta"')) {

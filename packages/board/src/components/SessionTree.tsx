@@ -3,17 +3,23 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { RefObject } from 'react';
 import { logoForAgent, type AgentLogo } from '../lib/agent_logo.js';
 import type { ProjectNode, ProjectSegmentNode, ProjectSessionNode, ProjectTurnNode } from '../lib/api.js';
-import { formatRelativeTime, formatTimelineTime, formatTimestamp } from '../lib/utils.js';
+import { toggleSessionTreeLayoutMode, type SessionContentMode } from '../lib/session_content_state.js';
+import { formatRelativeTime, formatTimestamp } from '../lib/utils.js';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from './ui/collapsible.js';
 import { Button } from './ui/button.js';
 
 type SessionTreeProps = {
   projects: ProjectNode[];
+  selectedSessionId: string | null;
   activeMemoryId: string | null;
+  canExpandSessions: boolean;
+  contentMode: SessionContentMode;
   loading: boolean;
   error: string | null;
+  onContentModeChange: (mode: SessionContentMode) => void;
   onOpenSession: (session: ProjectSessionNode) => void;
-  onOpenTurn: (memoryId: string) => void;
+  onLoadSession: (session: ProjectSessionNode) => void;
+  onOpenTurn: (memoryId: string, session: ProjectSessionNode) => void;
   onLoadMore: (session: ProjectSessionNode) => void;
 };
 
@@ -30,15 +36,20 @@ type SessionToolbarState = {
   customToTime: string;
 };
 
-const SESSION_TOOLBAR_STORAGE_KEY = 'muninn:board:session-toolbar-filter:v1';
+const SESSION_TOOLBAR_STORAGE_KEY = 'muninn:board:session-toolbar-filter:v2';
 const TURN_LIST_PAGE_SIZE = 20;
 
 export function SessionTree({
   projects,
+  selectedSessionId,
   activeMemoryId,
+  canExpandSessions,
+  contentMode,
   loading,
   error,
+  onContentModeChange,
   onOpenSession,
+  onLoadSession,
   onOpenTurn,
   onLoadMore,
 }: SessionTreeProps) {
@@ -64,6 +75,8 @@ export function SessionTree({
   const [expandedTurnLists, setExpandedTurnLists] = useState<Record<string, number>>({});
   const activeRef = useRef<HTMLButtonElement>(null);
   const toolbarRef = useRef<HTMLDivElement>(null);
+  const treeScrollRef = useRef<HTMLDivElement>(null);
+  const [treeScrollThumb, setTreeScrollThumb] = useState({ height: 0, top: 0, visible: false });
 
   const agents = useMemo(() => uniqueAgents(projects), [projects]);
   const timeRange = useMemo(() => resolveTimeRange(timePreset, customFromDate, customFromTime, customToDate, customToTime), [
@@ -80,7 +93,6 @@ export function SessionTree({
     timeRange,
   }), [projects, query, selectedAgents, sortDirection, timeRange]);
   const activePath = useMemo(() => findActivePath(filteredProjects, activeMemoryId), [activeMemoryId, filteredProjects]);
-  const canLocateActive = activePath !== null;
 
   useEffect(() => {
     setOpenProjects((current) => {
@@ -111,19 +123,23 @@ export function SessionTree({
       return;
     }
     setOpenProjects((current) => openVisibleProjects(current, filteredProjects));
-    setOpenSessions((current) => openVisibleSessions(current, filteredProjects));
-  }, [filteredProjects, query]);
+    if (canExpandSessions) {
+      setOpenSessions((current) => openVisibleSessions(current, filteredProjects));
+    }
+  }, [canExpandSessions, filteredProjects, query]);
 
   useEffect(() => {
     if (!activePath) {
       return;
     }
     setOpenProjects((current) => ({ ...current, [activePath.projectKey]: true }));
-    setOpenSessions((current) => ({ ...current, [activePath.sessionKey]: true }));
+    if (canExpandSessions) {
+      setOpenSessions((current) => ({ ...current, [activePath.sessionKey]: true }));
+    }
     window.requestAnimationFrame(() => {
       activeRef.current?.scrollIntoView({ block: 'center', behavior: 'smooth' });
     });
-  }, [activePath]);
+  }, [activePath, canExpandSessions]);
 
   useEffect(() => {
     if (!agentFilterOpen && !timeFilterOpen) {
@@ -141,6 +157,49 @@ export function SessionTree({
     document.addEventListener('pointerdown', closeOnOutsidePointer);
     return () => document.removeEventListener('pointerdown', closeOnOutsidePointer);
   }, [agentFilterOpen, timeFilterOpen]);
+
+  useEffect(() => {
+    const scrollElement = treeScrollRef.current;
+    if (!scrollElement) {
+      return;
+    }
+
+    let frame = 0;
+    const updateThumb = () => {
+      window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(() => {
+        const maxScroll = scrollElement.scrollHeight - scrollElement.clientHeight;
+        if (maxScroll <= 1) {
+          setTreeScrollThumb((current) => (current.visible ? { height: 0, top: 0, visible: false } : current));
+          return;
+        }
+
+        const trackHeight = scrollElement.clientHeight;
+        const height = Math.max(24, Math.round((trackHeight / scrollElement.scrollHeight) * trackHeight));
+        const top = Math.round((scrollElement.scrollTop / maxScroll) * (trackHeight - height));
+        setTreeScrollThumb((current) => {
+          if (current.visible && current.height === height && current.top === top) {
+            return current;
+          }
+          return { height, top, visible: true };
+        });
+      });
+    };
+
+    updateThumb();
+    scrollElement.addEventListener('scroll', updateThumb, { passive: true });
+    const observer = new ResizeObserver(updateThumb);
+    observer.observe(scrollElement);
+    if (scrollElement.firstElementChild) {
+      observer.observe(scrollElement.firstElementChild);
+    }
+
+    return () => {
+      window.cancelAnimationFrame(frame);
+      scrollElement.removeEventListener('scroll', updateThumb);
+      observer.disconnect();
+    };
+  }, [canExpandSessions, expandedTurnLists, filteredProjects, openProjects, openSessions]);
 
   useEffect(() => {
     saveSessionToolbarState({
@@ -163,7 +222,13 @@ export function SessionTree({
   }
 
   if (projects.length === 0) {
-    return <div className="sidebar-empty">No sessions yet.</div>;
+    return (
+      <div className="session-import-empty">
+        <button type="button" disabled>
+          Import sessions
+        </button>
+      </div>
+    );
   }
 
   function toggleAgent(agent: string) {
@@ -179,15 +244,14 @@ export function SessionTree({
     setOpenSessions({});
   }
 
-  function locateActive() {
-    if (!activePath) {
+  function setSessionOpen(session: ProjectSessionNode, open: boolean) {
+    if (!canExpandSessions) {
       return;
     }
-    setOpenProjects((current) => ({ ...current, [activePath.projectKey]: true }));
-    setOpenSessions((current) => ({ ...current, [activePath.sessionKey]: true }));
-    window.requestAnimationFrame(() => {
-      activeRef.current?.scrollIntoView({ block: 'center', behavior: 'smooth' });
-    });
+    setOpenSessions((current) => ({ ...current, [sessionKey(session)]: open }));
+    if (open && !session.loaded && !session.loading) {
+      onLoadSession(session);
+    }
   }
 
   function syncDraftTimeFilter() {
@@ -249,13 +313,13 @@ export function SessionTree({
           ) : <span />}
         </label>
         <button
-          className="tree-action-button tree-locate-button"
+          className="tree-action-button tree-layout-button"
           type="button"
-          title={canLocateActive ? 'Locate selected' : 'No selected turn'}
-          disabled={!canLocateActive}
-          onClick={locateActive}
+          title={contentMode === 'conversation' ? 'Show observations' : 'Show conversation only'}
+          aria-label={contentMode === 'conversation' ? 'Show observations' : 'Show conversation only'}
+          onClick={() => onContentModeChange(toggleSessionTreeLayoutMode(contentMode))}
         >
-          <LocateIcon />
+          <SessionTreeLayoutIcon mode={contentMode} />
         </button>
         <div className="session-toolbar-row">
           <div className="toolbar-popover agent-filter-popover">
@@ -387,7 +451,8 @@ export function SessionTree({
         </button>
       </div>
 
-      <div className="session-tree">
+      <div className="session-tree-scroll-shell">
+        <div ref={treeScrollRef} className="session-tree">
       {filteredProjects.length === 0 ? (
         <div className="sidebar-empty">No matching sessions.</div>
       ) : filteredProjects.map((project) => (
@@ -409,52 +474,83 @@ export function SessionTree({
             </span>
           </CollapsibleTrigger>
           <CollapsibleContent className="tree-children">
-            {project.sessions.map((session) => (
+            {project.sessions.map((session) => {
+              const key = sessionKey(session);
+              const sessionActive = selectedSessionId === key;
+              const sessionOpen = canExpandSessions && (openSessions[key] ?? session.loaded);
+              return (
               <Collapsible
                 key={`${session.agent}:${session.sessionKey}`}
-                open={openSessions[sessionKey(session)] ?? session.loaded}
-                onOpenChange={(open) => setOpenSessions((current) => ({ ...current, [sessionKey(session)]: open }))}
+                open={sessionOpen}
+                onOpenChange={(open) => setSessionOpen(session, open)}
                 className="tree-group"
               >
-                <CollapsibleTrigger
-                  className="tree-trigger tree-trigger-session"
-                  onClick={() => {
-                    if (!session.loaded && !session.loading) {
-                      onOpenSession(session);
-                    }
-                  }}
+                <div
+                  className={[
+                    'tree-trigger tree-trigger-session',
+                    !canExpandSessions ? 'tree-trigger-session-flat' : '',
+                    sessionActive ? 'tree-trigger-session-active' : '',
+                  ].filter(Boolean).join(' ')}
                 >
-                  <span className="tree-trigger-main">
-                    <ChevronRight className="tree-chevron" />
-                    <AgentLogoIcon logo={logoForAgent(session.agent)} />
-                    <span>{session.displaySessionId}</span>
-                  </span>
-                  <span className="tree-meta tree-time" title={formatTimestamp(session.latestUpdatedAt)}>
-                    {formatRelativeTime(session.latestUpdatedAt)}
-                  </span>
-                </CollapsibleTrigger>
-                <CollapsibleContent className="turn-list">
-                  {session.loading && session.turns.length === 0 ? (
-                    <div className="turn-empty">Loading turns...</div>
+                  {canExpandSessions ? (
+                    <CollapsibleTrigger
+                      className="tree-session-toggle"
+                      aria-label={`${sessionOpen ? 'Collapse' : 'Expand'} ${session.displaySessionId}`}
+                    >
+                      <ChevronRight className="tree-chevron" />
+                    </CollapsibleTrigger>
                   ) : null}
-                  <SessionTurnList
-                    session={session}
-                    activeMemoryId={activeMemoryId}
-                    activeRef={activeRef}
-                    visibleCount={expandedTurnLists[sessionKey(session)] ?? TURN_LIST_PAGE_SIZE}
-                    onVisibleCountChange={(visibleCount) => setExpandedTurnLists((current) => ({
-                      ...current,
-                      [sessionKey(session)]: visibleCount,
-                    }))}
-                    onOpenTurn={onOpenTurn}
-                    onLoadMore={onLoadMore}
-                  />
-                </CollapsibleContent>
+                  <button
+                    className="tree-session-open"
+                    type="button"
+                    onClick={() => onOpenSession(session)}
+                  >
+                    <span className="tree-trigger-main">
+                      <AgentLogoIcon logo={logoForAgent(session.agent)} />
+                      <span>{session.displaySessionId}</span>
+                    </span>
+                    <span className="tree-meta tree-time" title={formatTimestamp(session.latestUpdatedAt)}>
+                      {formatRelativeTime(session.latestUpdatedAt)}
+                    </span>
+                  </button>
+                </div>
+                {canExpandSessions ? (
+                  <CollapsibleContent className="turn-list">
+                    {session.loading && session.turns.length === 0 ? (
+                      <div className="turn-empty">Loading turns...</div>
+                    ) : null}
+                    <SessionTurnList
+                      session={session}
+                      activeMemoryId={activeMemoryId}
+                      activeRef={activeRef}
+                      visibleCount={expandedTurnLists[key] ?? TURN_LIST_PAGE_SIZE}
+                      onVisibleCountChange={(visibleCount) => setExpandedTurnLists((current) => ({
+                        ...current,
+                        [key]: visibleCount,
+                      }))}
+                      onOpenTurn={onOpenTurn}
+                      onLoadMore={onLoadMore}
+                    />
+                  </CollapsibleContent>
+                ) : null}
               </Collapsible>
-            ))}
+            );
+            })}
           </CollapsibleContent>
         </Collapsible>
       ))}
+        </div>
+        {treeScrollThumb.visible ? (
+          <div className="session-tree-scrollbar-overlay" aria-hidden="true">
+            <div
+              className="session-tree-scrollbar-thumb"
+              style={{
+                height: `${treeScrollThumb.height}px`,
+                transform: `translateY(${treeScrollThumb.top}px)`,
+              }}
+            />
+          </div>
+        ) : null}
       </div>
     </div>
   );
@@ -474,7 +570,7 @@ function SessionTurnList({
   activeRef: RefObject<HTMLButtonElement | null>;
   visibleCount: number;
   onVisibleCountChange: (visibleCount: number) => void;
-  onOpenTurn: (memoryId: string) => void;
+  onOpenTurn: (memoryId: string, session: ProjectSessionNode) => void;
   onLoadMore: (session: ProjectSessionNode) => void;
 }) {
   const items = session.segments.length > 0 ? session.segments : session.turns;
@@ -498,11 +594,10 @@ function SessionTurnList({
           data-memory-id={turn.memoryId}
           className={activeMemoryId === turn.memoryId ? 'turn-item turn-item-active' : 'turn-item'}
           type="button"
-          onClick={() => onOpenTurn(turn.memoryId)}
+          onClick={() => onOpenTurn(turn.memoryId, session)}
         >
           <MessageSquare className="turn-icon" />
           <TurnSummary text={segmentTitle(turn)} />
-          <span className="turn-time" title={formatTimestamp(turn.createdAt)}>{formatTimelineTime(turn.createdAt)}</span>
         </button>
       ))}
       {hasMore ? (
@@ -627,7 +722,7 @@ function uniqueAgents(projects: ProjectNode[]): string[] {
 }
 
 function sessionKey(session: ProjectSessionNode): string {
-  return `${session.agent}:${session.sessionKey}`;
+  return `${session.agent}:${session.projectKey}:${session.sessionKey}`;
 }
 
 function shouldAutoExpandSession(session: ProjectSessionNode): boolean {
@@ -732,7 +827,7 @@ function defaultSessionToolbarState(): SessionToolbarState {
   return {
     selectedAgents: [],
     timePreset: 'last_7d',
-    sortDirection: 'desc',
+    sortDirection: 'asc',
     customFromDate: dateInputValue(daysAgo(7)),
     customFromTime: '00:00',
     customToDate: dateInputValue(new Date()),
@@ -838,7 +933,7 @@ function saveSessionToolbarStateToUrl(state: SessionToolbarState) {
   }
 
   setSearchParam(url, 'time', state.timePreset === 'last_7d' ? null : state.timePreset);
-  setSearchParam(url, 'sort', state.sortDirection === 'desc' ? null : state.sortDirection);
+  setSearchParam(url, 'sort', state.sortDirection === 'asc' ? null : state.sortDirection);
   if (state.timePreset === 'custom') {
     setSearchParam(url, 'from', `${state.customFromDate}T${state.customFromTime}`);
     setSearchParam(url, 'to', `${state.customToDate}T${state.customToTime}`);
@@ -937,14 +1032,12 @@ function CollapseIcon() {
   );
 }
 
-function LocateIcon() {
+function SessionTreeLayoutIcon({ mode }: { mode: SessionContentMode }) {
+  const split = mode !== 'conversation';
   return (
-    <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M12 3v3" />
-      <path d="M12 18v3" />
-      <path d="M3 12h3" />
-      <path d="M18 12h3" />
-      <circle cx="12" cy="12" r="5" />
+    <svg viewBox="0 0 18 18" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.65" strokeLinecap="round">
+      <path d="M6.5 4.25v9.5" />
+      {split ? <path d="M11.5 4.25v9.5" /> : null}
     </svg>
   );
 }

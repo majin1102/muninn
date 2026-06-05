@@ -16,22 +16,22 @@ import {
 } from './provider.js';
 import { loadPromptTemplate, renderPromptTemplate } from './prompt-loader.js';
 
-export type ObserverExtractionInput = {
+export type ObserverSessionObservationInput = {
   id: string;
   status?: 'new' | 'changed';
   text: string;
   context?: string | null;
-  anchors?: string[];
+  cwd?: string;
   turnRefs?: string[];
 };
 
-export type ObserveAnchorInput = {
-  entityAnchor: string;
+export type ObserveCwdScopeInput = {
+  cwdScope: string;
   outline: string;
   observedDocument: string;
-  extractions: ObserverExtractionInput[];
+  extractions: ObserverSessionObservationInput[];
   validRefs?: string[];
-  getObservation?: (paths: string[]) => Promise<string> | string;
+  getGlobalObservation?: (paths: string[]) => Promise<string> | string;
   maxAttempts?: number;
   database?: string;
   signal?: AbortSignal;
@@ -43,16 +43,15 @@ type ToolModel = (
   request: LlmToolRequest,
 ) => Promise<LlmToolResult | null>;
 
-export async function observeAnchor(input: ObserveAnchorInput): Promise<ParsedObserverDocument> {
+export async function observeCwdScope(input: ObserveCwdScopeInput): Promise<ParsedObserverDocument> {
   const template = loadPromptTemplate('thread_observing');
   const database = resolveDatabaseName(input.database);
   const contentBudgetChars = getObserverRuntimeConfig().contentBudgetChars;
   const observedDocument = trimContent(input.observedDocument, contentBudgetChars);
   const prompt = renderPromptTemplate(template.userTemplate, {
-    entity_anchor: input.entityAnchor,
     outline: input.outline.trim() || '(none)',
     observed_document: observedDocument.trim() || '(none)',
-    extractions: renderExtractions(input.extractions),
+    extractions: renderSessionObservations(input.extractions),
   });
   const validRefs = new Set([
     ...(input.validRefs ?? []),
@@ -62,7 +61,7 @@ export async function observeAnchor(input: ObserveAnchorInput): Promise<ParsedOb
   const attempts = input.maxAttempts ?? 2;
   const trace = {
     input: {
-      entityAnchor: input.entityAnchor,
+      cwdScope: input.cwdScope,
       outline: input.outline,
       observedDocument,
       extractions: input.extractions,
@@ -88,9 +87,9 @@ export async function observeAnchor(input: ObserveAnchorInput): Promise<ParsedOb
       system: template.system,
       prompt: attempt === 1 ? prompt : `${prompt}\n\nPrevious output was invalid: ${String(lastError)}\nReturn Markdown only.`,
       signal: input.signal,
-      entityAnchor: input.entityAnchor,
+      cwdScope: input.cwdScope,
       extractionCount: input.extractions.length,
-      getObservation: input.getObservation,
+      getGlobalObservation: input.getGlobalObservation,
       model: input.model,
       onToolResults: (event) => {
         for (const result of event.toolResults) {
@@ -105,7 +104,7 @@ export async function observeAnchor(input: ObserveAnchorInput): Promise<ParsedOb
       throw new Error('observer llm is unavailable');
     }
     try {
-      const document = parseObserverSubtree(raw, validRefs, input.entityAnchor);
+      const document = parseObserverSubtree(raw, validRefs, input.cwdScope);
       await writeObserverTrace({
         ...trace,
         database,
@@ -137,9 +136,9 @@ async function generateObserverText(params: {
   system: string;
   prompt: string;
   signal?: AbortSignal;
-  entityAnchor: string;
+  cwdScope: string;
   extractionCount: number;
-  getObservation?: (paths: string[]) => Promise<string> | string;
+  getGlobalObservation?: (paths: string[]) => Promise<string> | string;
   model?: ToolModel;
   onToolResults?: (event: {
     toolCalls: LlmToolCall[];
@@ -152,26 +151,26 @@ async function generateObserverText(params: {
   }) => Promise<void> | void;
 }): Promise<string | null> {
   try {
-    if (!params.getObservation) {
+    if (!params.getGlobalObservation) {
       return await generateText('observer', {
         system: params.system,
         prompt: params.prompt,
         signal: params.signal,
       });
     }
-    let getObservationCalls = 0;
-    const maxGetObservationCalls = 3;
+    let getGlobalObservationCalls = 0;
+    const maxGetGlobalObservationCalls = 3;
     return await runToolLoop({
       messages: [
         { role: 'system', content: params.system },
         { role: 'user', content: params.prompt },
       ],
-      tools: [getObservationSpec()],
+      tools: [getGlobalObservationSpec()],
       toolHandlers: {
-        get_observation: async (args) => {
-          getObservationCalls += 1;
-          if (getObservationCalls > maxGetObservationCalls) {
-            const error = new Error(`get_observation exceeded max calls=${maxGetObservationCalls}`);
+        get_global_observation: async (args) => {
+          getGlobalObservationCalls += 1;
+          if (getGlobalObservationCalls > maxGetGlobalObservationCalls) {
+            const error = new Error(`get_observation exceeded max calls=${maxGetGlobalObservationCalls}`);
             (error as Error & { fatalToolError?: boolean }).fatalToolError = true;
             throw error;
           }
@@ -181,7 +180,7 @@ async function generateObserverText(params: {
           if (paths.length === 0) {
             throw new Error('get_observation requires paths');
           }
-          return { paths, content: await params.getObservation!(paths) };
+          return { paths, content: await params.getGlobalObservation!(paths) };
         },
       },
       model: params.model ?? generateWithTools,
@@ -191,20 +190,20 @@ async function generateObserverText(params: {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const wrapped = new Error(
-      `observer llm request failed for anchor=${JSON.stringify(params.entityAnchor)} extractionCount=${params.extractionCount}: ${message}`,
+      `observer llm request failed for cwd=${JSON.stringify(params.cwdScope)} extractionCount=${params.extractionCount}: ${message}`,
     );
     (wrapped as Error & { cause?: unknown }).cause = error;
     throw wrapped;
   }
 }
 
-function renderExtractions(extractions: ObserverExtractionInput[]): string {
+function renderSessionObservations(extractions: ObserverSessionObservationInput[]): string {
   return extractions.map((extraction) => [
     `- ${extraction.id}`,
     extraction.status ? `  Status: ${extraction.status}` : '',
-    extraction.anchors && extraction.anchors.length > 0 ? `  Anchors: ${extraction.anchors.join('; ')}` : '',
+    extraction.cwd ? `  CWD: ${extraction.cwd}` : '',
     extraction.context?.trim() ? `  Context: ${extraction.context.trim()}` : '',
-    `  Extraction: ${extraction.text.trim()}`,
+    `  SessionObservation: ${extraction.text.trim()}`,
     extraction.turnRefs && extraction.turnRefs.length > 0 ? `  Source refs: ${extraction.turnRefs.join(', ')}` : '',
   ].filter(Boolean).join('\n')).join('\n\n');
 }
@@ -283,7 +282,7 @@ async function runToolLoop(params: {
   throw new Error(`tool loop exceeded maxSteps=${maxSteps}`);
 }
 
-function getObservationSpec(): LlmTool {
+function getGlobalObservationSpec(): LlmTool {
   return {
     name: 'get_observation',
     description: 'Get root-to-node paths and complete subtrees for observation paths visible in the outline.',
@@ -294,7 +293,7 @@ function getObservationSpec(): LlmTool {
         paths: {
           type: 'array',
           items: { type: 'string' },
-          description: 'Observation paths visible in the observation outline.',
+          description: 'GlobalObservation paths visible in the observation outline.',
         },
       },
       required: ['paths'],
@@ -359,7 +358,7 @@ async function writeObserverTrace(event: {
 }
 
 export const __testing = {
-  renderExtractions,
+  renderSessionObservations,
   trimContent,
-  getObservationSpec,
+  getGlobalObservationSpec,
 };

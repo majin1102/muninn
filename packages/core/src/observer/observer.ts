@@ -5,7 +5,7 @@ import { writeMuninnLog } from '../logging.js';
 import type { NativeTables } from '../native.js';
 import { runObserver } from './runner.js';
 import { ackBucket, enqueueChanges, queueStats, readyBucket, type ObserveQueue } from './queue.js';
-import type { QueuedExtractionChange } from '../checkpoint.js';
+import type { QueuedSessionObservationChange } from '../checkpoint.js';
 
 const BASE_RETRY_DELAY_MS = 500;
 const MAX_RETRY_DELAY_MS = 5_000;
@@ -18,8 +18,8 @@ const noopCheckpointLock: CheckpointLock = {
 
 export class Observer {
   readonly name: string;
-  private readonly anchorThreshold: number;
-  private readonly anchorBatchSize: number;
+  private readonly cwdThreshold: number;
+  private readonly cwdBatchSize: number;
   private readonly shutdownController = new AbortController();
   private readonly changeWaiters = new Set<() => void>();
   private loopPromise: Promise<void> | null = null;
@@ -43,13 +43,13 @@ export class Observer {
     }
     this.name = config.name;
     const runtime = getObserverRuntimeConfig();
-    this.anchorThreshold = runtime.anchorThreshold;
-    this.anchorBatchSize = runtime.anchorBatchSize;
+    this.cwdThreshold = runtime.cwdThreshold;
+    this.cwdBatchSize = runtime.cwdBatchSize;
     this.baseline = checkpoint?.baseline ?? {
-      observationContext: 0,
-      observation: 0,
+      globalObservationContext: 0,
+      global_observation: 0,
     };
-    this.observeQueue = checkpoint?.observeQueue ?? { anchors: [] };
+    this.observeQueue = checkpoint?.observeQueue ?? { cwdBuckets: [] };
   }
 
   private readonly database: string;
@@ -64,27 +64,27 @@ export class Observer {
     this.wake();
   }
 
-  enqueue(changes: QueuedExtractionChange[]): void {
+  enqueue(changes: QueuedSessionObservationChange[]): void {
     this.observeQueue = enqueueChanges(this.observeQueue, changes);
     this.lastError = null;
     this.wake();
   }
 
   async watermark(): Promise<MemoryWatermark> {
-    const pendingExtractionIds = pendingQueueExtractionIds(this.observeQueue);
+    const pendingSessionObservationIds = pendingQueueSessionObservationIds(this.observeQueue);
     const phase = this.lastError
       ? 'error'
       : this.drainRequested
         ? 'draining'
         : this.running
           ? 'running'
-          : pendingExtractionIds.length > 0
+          : pendingSessionObservationIds.length > 0
             ? 'pending'
             : 'idle';
     return {
       pending: {
         turns: [],
-        extractions: pendingExtractionIds,
+        extractions: pendingSessionObservationIds,
       },
       phases: {
         extractor: 'idle',
@@ -127,8 +127,8 @@ export class Observer {
     while (!this.shuttingDown) {
       try {
         const batch = readyBucket(this.observeQueue, {
-          threshold: this.anchorThreshold,
-          batchSize: this.anchorBatchSize,
+          threshold: this.cwdThreshold,
+          batchSize: this.cwdBatchSize,
           finalize: this.drainRequested,
         });
         if (!batch) {
@@ -158,8 +158,8 @@ export class Observer {
 
   private async runOnce(finalize: boolean): Promise<void> {
     const batch = readyBucket(this.observeQueue, {
-      threshold: this.anchorThreshold,
-      batchSize: this.anchorBatchSize,
+      threshold: this.cwdThreshold,
+      batchSize: this.cwdBatchSize,
       finalize,
     });
     if (!batch) {
@@ -171,8 +171,8 @@ export class Observer {
         await runObserver({
           client: this.client,
           observerName: this.name,
-          anchor: batch.anchor,
-          extractionChanges: batch.extractionChanges,
+          cwd: batch.cwd,
+          sessionObservationChanges: batch.sessionObservationChanges,
           signal: this.shutdownController.signal,
           database: this.database,
         });
@@ -181,9 +181,9 @@ export class Observer {
       this.observeQueue = ackBucket(
         this.observeQueue,
         batch.key,
-        batch.extractionChanges.map((change) => change.extraction.id),
+        batch.sessionObservationChanges.map((change) => change.sessionObservation.id),
       );
-      if (finalize && pendingQueueExtractionIds(this.observeQueue).length === 0) {
+      if (finalize && pendingQueueSessionObservationIds(this.observeQueue).length === 0) {
         this.drainRequested = false;
       }
     } finally {
@@ -220,16 +220,16 @@ export class Observer {
 
 }
 
-function pendingQueueExtractionIds(queue: ObserveQueue): string[] {
+function pendingQueueSessionObservationIds(queue: ObserveQueue): string[] {
   const seen = new Set<string>();
   const ids: string[] = [];
-  for (const bucket of queue.anchors) {
-    for (const change of bucket.extractionChanges) {
-      if (seen.has(change.extraction.id)) {
+  for (const bucket of queue.cwdBuckets) {
+    for (const change of bucket.sessionObservationChanges) {
+      if (seen.has(change.sessionObservation.id)) {
         continue;
       }
-      seen.add(change.extraction.id);
-      ids.push(change.extraction.id);
+      seen.add(change.sessionObservation.id);
+      ids.push(change.sessionObservation.id);
     }
   }
   return ids;

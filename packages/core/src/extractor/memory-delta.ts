@@ -1,139 +1,124 @@
 import { createHash } from 'node:crypto';
 
-import { getEmbeddingConfig } from '../config.js';
 import { embedText } from '../llm/embedding-provider.js';
-import type { NativeTables, Extraction as StoredExtraction } from '../native.js';
-import type { QueuedExtractionChange } from '../checkpoint.js';
+import type { NativeTables, SessionObservation as StoredSessionObservation } from '../native.js';
+import type { QueuedSessionObservationChange } from '../checkpoint.js';
 import type {
-  Extraction,
-  ExtractionCategory,
-  ExtractionChange,
+  SessionObservation,
+  SessionObservationChange,
   ExtractSessionMemoryResult,
   SnapshotContent,
 } from './types.js';
 
-export function applyExtractionChanges(
-  currentExtractions: Extraction[],
+export function applySessionObservationChanges(
+  currentSessionObservations: SessionObservation[],
   result: ExtractSessionMemoryResult,
 ): {
-  extractionChanges: ExtractionChange[];
-  extractions: Extraction[];
+  extractionChanges: SessionObservationChange[];
+  extractions: SessionObservation[];
 } {
-  const currentById = new Map<string, Extraction>();
-  const currentByUnitKey = new Map<string, Extraction>();
-  for (const extraction of currentExtractions) {
-    const normalized = cloneExtraction(extraction, { requireReferences: false });
+  const currentById = new Map<string, SessionObservation>();
+  const currentByUnitKey = new Map<string, SessionObservation>();
+  for (const row of currentSessionObservations) {
+    const normalized = cloneSessionObservation(row, { requireReferences: false });
     if (!normalized.id) {
       continue;
     }
     currentById.set(normalized.id, normalized);
-    const key = extractionUnitKey(normalized);
-    if (key) {
-      currentByUnitKey.set(key, normalized);
-    }
+    currentByUnitKey.set(sessionObservationUnitKey(normalized), normalized);
   }
 
-  const nextExtractions: Extraction[] = [];
-  const changes: ExtractionChange[] = [];
+  const nextSessionObservations: SessionObservation[] = [];
+  const changes: SessionObservationChange[] = [];
   const seenIds = new Set<string>();
 
-  for (const rawExtraction of result.extractions) {
-    const normalized = cloneExtraction(rawExtraction, { requireReferences: true });
-    const generatedId = addedExtractionId({
+  for (const raw of result.extractions) {
+    const normalized = cloneSessionObservation(raw, { requireReferences: true });
+    const generatedId = addedSessionObservationId({
       type: 'add',
       text: normalized.text,
-      category: normalized.category,
+      context: normalized.context ?? null,
       references: normalized.references,
-      reason: 'state rewrite added extraction',
+      reason: 'state rewrite added session observation',
     });
     const matched = normalized.id
       ? currentById.get(normalized.id)
-      : currentById.get(generatedId) ?? currentByUnitKey.get(extractionUnitKey(normalized));
+      : currentById.get(generatedId) ?? currentByUnitKey.get(sessionObservationUnitKey(normalized));
     const id = normalized.id || matched?.id || generatedId;
     if (seenIds.has(id)) {
-      throw new Error(`duplicate extraction id in state rewrite: ${id}`);
+      throw new Error(`duplicate session observation id in state rewrite: ${id}`);
     }
 
     const existing = currentById.get(id);
     if (normalized.id && !existing) {
-      throw new Error(`unknown extraction id in state rewrite: ${normalized.id}`);
+      throw new Error(`unknown session observation id in state rewrite: ${normalized.id}`);
     }
 
     seenIds.add(id);
-    const nextExtraction = {
+    const next = {
       ...normalized,
       id,
       updatedMemory: existing?.updatedMemory ?? normalized.updatedMemory ?? null,
     };
-    nextExtractions.push(nextExtraction);
+    nextSessionObservations.push(next);
 
     if (!existing) {
       changes.push({
         type: 'add',
-        text: nextExtraction.text,
-        context: nextExtraction.context ?? null,
-        anchors: nextExtraction.anchors ?? [],
-        category: nextExtraction.category,
-        references: nextExtraction.references,
-        reason: 'state rewrite added extraction',
+        text: next.text,
+        context: next.context ?? null,
+        references: next.references,
+        reason: 'state rewrite added session observation',
       });
       continue;
     }
 
     if (
-      existing.text !== nextExtraction.text
-      || (existing.context ?? null) !== (nextExtraction.context ?? null)
-      || !sameStringSet(existing.anchors ?? [], nextExtraction.anchors ?? [])
-      || existing.category !== nextExtraction.category
-      || !sameStringSet(existing.references, nextExtraction.references)
+      existing.text !== next.text
+      || (existing.context ?? null) !== (next.context ?? null)
+      || !sameStringSet(existing.references, next.references)
     ) {
       changes.push({
         type: 'update',
         extractionId: id,
-        text: nextExtraction.text,
-        category: nextExtraction.category,
-        references: nextExtraction.references,
-        context: nextExtraction.context ?? null,
-        anchors: nextExtraction.anchors ?? [],
-        reason: 'state rewrite updated extraction',
+        text: next.text,
+        references: next.references,
+        context: next.context ?? null,
+        reason: 'state rewrite updated session observation',
       });
     }
   }
 
-  for (const extractionId of currentById.keys()) {
-    if (!seenIds.has(extractionId)) {
+  for (const id of currentById.keys()) {
+    if (!seenIds.has(id)) {
       changes.push({
         type: 'delete',
-        extractionId,
-        reason: 'state rewrite omitted extraction',
+        extractionId: id,
+        reason: 'state rewrite omitted session observation',
       });
     }
   }
 
   return {
     extractionChanges: changes,
-    extractions: nextExtractions,
+    extractions: nextSessionObservations,
   };
 }
 
-function extractionUnitKey(extraction: Extraction): string {
-  return [
-    extraction.category,
-    [...(extraction.anchors ?? [])].sort().join('\u0001'),
-    [...(extraction.references ?? [])].sort().join('\u0001'),
-  ].join('\u0002');
-}
-
-export async function applyExtractionTableChanges(
+export async function applySessionObservationTableChanges(
   client: NativeTables,
   snapshot: SnapshotContent,
-  _memoryId: string,
+  _snapshotId: string,
   signal?: AbortSignal,
-): Promise<QueuedExtractionChange[]> {
+): Promise<QueuedSessionObservationChange[]> {
   throwIfAborted(signal);
   const changes = snapshot.extractionChanges ?? [];
   if (changes.length === 0) {
     return [];
+  }
+  const cwd = snapshot.cwd?.trim();
+  if (!cwd) {
+    throw new Error('snapshot cwd is required to write session observations');
   }
 
   const sourceIds = new Set<string>();
@@ -141,7 +126,7 @@ export async function applyExtractionTableChanges(
   const upsertIds = new Set<string>();
   for (const change of changes) {
     if (change.type === 'add') {
-      upsertIds.add(addedExtractionId(change));
+      upsertIds.add(addedSessionObservationId(change));
       continue;
     }
     if (change.type === 'merge') {
@@ -149,7 +134,7 @@ export async function applyExtractionTableChanges(
         sourceIds.add(extractionId);
         deletedIds.add(extractionId);
       }
-      upsertIds.add(mergedExtractionId(change));
+      upsertIds.add(mergedSessionObservationId(change));
       continue;
     }
     if (change.type === 'update') {
@@ -162,17 +147,17 @@ export async function applyExtractionTableChanges(
   }
 
   const existingRows = sourceIds.size > 0
-    ? await client.extractionTable.get({ ids: [...sourceIds] })
+    ? await client.sessionObservationTable.get({ ids: [...sourceIds] })
     : [];
   const existingById = new Map(existingRows.map((row) => [row.id, row]));
-  const queued: QueuedExtractionChange[] = [];
+  const queued: QueuedSessionObservationChange[] = [];
 
   if (deletedIds.size > 0) {
-    await client.extractionTable.delete({ ids: [...deletedIds] });
+    await client.sessionObservationTable.delete({ ids: [...deletedIds] });
     for (const id of deletedIds) {
       const existing = existingById.get(id);
       if (existing) {
-        queued.push({ type: 'delete', extraction: existing });
+        queued.push({ type: 'delete', sessionObservation: existing });
       }
     }
   }
@@ -181,160 +166,63 @@ export async function applyExtractionTableChanges(
     return queued;
   }
 
-  const storedUpserts = await client.extractionTable.get({ ids: [...upsertIds] });
+  const storedUpserts = await client.sessionObservationTable.get({ ids: [...upsertIds] });
   const storedById = new Map(storedUpserts.map((row) => [row.id, row]));
-  const extractionsById = new Map(
+  const observationsById = new Map(
     snapshot.extractions
-      .filter((extraction): extraction is Extraction & { id: string } => Boolean(extraction.id))
-      .map((extraction) => [extraction.id, extraction]),
+      .filter((row): row is SessionObservation & { id: string } => Boolean(row.id))
+      .map((row) => [row.id, row]),
   );
-  const embeddingConfig = getEmbeddingConfig();
-  const rows: StoredExtraction[] = [];
+  const rows: StoredSessionObservation[] = [];
 
   for (const change of changes) {
+    if (change.type === 'delete') {
+      continue;
+    }
     const id = change.type === 'add'
-      ? addedExtractionId(change)
+      ? addedSessionObservationId(change)
       : change.type === 'merge'
-        ? mergedExtractionId(change)
+        ? mergedSessionObservationId(change)
         : change.type === 'update'
           ? change.extractionId
           : null;
     if (!id || !upsertIds.has(id)) {
       continue;
     }
-    const extraction = extractionsById.get(id);
-    const text = extraction?.text.trim() ?? '';
-    if (!extraction || !text) {
+    const observation = observationsById.get(id);
+    const text = observation?.text.trim() ?? '';
+    if (!observation || !text) {
       continue;
     }
     const existing = storedById.get(id) ?? (change.type === 'update' ? existingById.get(id) : undefined);
-    const references = change.type === 'delete' ? [] : referencesForChange(change, existingById);
+    const references = referencesForChange(change, existingById);
     const now = new Date().toISOString();
+    const title = sessionObservationTitle(observation);
+    const summary = sessionObservationSummary(title, observation);
     rows.push({
       id,
-      text,
-      context: extraction.context ?? null,
-      anchors: extraction.anchors ?? [],
-      vector: await embedText(embeddingText(extraction), signal),
-      importance: existing?.importance ?? embeddingConfig.defaultImportance,
-      category: semanticCategory(extraction.category),
+      title,
+      summary,
+      content: sessionObservationContent(title, observation),
+      cwd,
+      vector: await embedText(summary, signal),
       turnRefs: references,
-      observationPaths: existing?.observationPaths ?? [],
-      observedRootAnchors: existing?.observedRootAnchors ?? [],
+      globalObservationPaths: existing?.globalObservationPaths ?? [],
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
     });
   }
 
   if (rows.length > 0) {
-    await client.extractionTable.upsert({ rows });
-    queued.push(...rows.map((row) => ({ type: 'upsert' as const, extraction: row })));
+    await client.sessionObservationTable.upsert({ rows });
+    queued.push(...rows.map((row) => ({ type: 'upsert' as const, sessionObservation: row })));
   }
   return queued;
 }
 
-function normalizeChanges(
-  changes: ExtractionChange[],
-  extractions: Map<string, Extraction>,
-): ExtractionChange[] {
-  if (!Array.isArray(changes)) {
-    throw new Error('extractionChanges must be an array');
-  }
-  const modifiedIds = new Set<string>();
-  return changes.map((change) => {
-    const reason = normalizeText(change.reason);
-    if (!reason) {
-      throw new Error('extraction change missing reason');
-    }
-    if (change.type === 'add') {
-      const text = normalizeText(change.text);
-      if (!text) {
-        throw new Error('add change missing text');
-      }
-      const references = normalizeIds(change.references);
-      if (references.length === 0) {
-        throw new Error('add change must include references');
-      }
-      return {
-        type: 'add',
-        text,
-        ...(change.context ? { context: normalizeText(change.context) } : {}),
-        category: normalizeCategory(change.category),
-        references,
-        reason,
-      };
-    }
-    if (change.type === 'merge') {
-      const extractionIds = normalizeIds(change.extractionIds);
-      if (extractionIds.length < 2) {
-        throw new Error('merge change must include at least two extractionIds');
-      }
-      for (const extractionId of extractionIds) {
-        claimExtractionId(extractionId, extractions, modifiedIds);
-      }
-      const text = normalizeText(change.text);
-      if (!text) {
-        throw new Error('merge change missing text');
-      }
-      return {
-        type: 'merge',
-        extractionIds,
-        text,
-        ...(change.context ? { context: normalizeText(change.context) } : {}),
-        category: normalizeCategory(change.category),
-        reason,
-      };
-    }
-    if (change.type === 'update') {
-      const extractionId = change.extractionId?.trim();
-      claimExtractionId(extractionId, extractions, modifiedIds);
-      const text = normalizeText(change.text);
-      if (!text) {
-        throw new Error('update change missing text');
-      }
-      return {
-        type: 'update',
-        extractionId,
-        text,
-        ...(change.context ? { context: normalizeText(change.context) } : {}),
-        ...(change.category ? { category: normalizeCategory(change.category) } : {}),
-        ...(Array.isArray(change.references) ? { references: normalizeIds(change.references) } : {}),
-        reason,
-      };
-    }
-    if (change.type === 'delete') {
-      const extractionId = change.extractionId?.trim();
-      claimExtractionId(extractionId, extractions, modifiedIds);
-      return {
-        type: 'delete',
-        extractionId,
-        reason,
-      };
-    }
-    throw new Error('unknown extraction change type');
-  });
-}
-
-function claimExtractionId(
-  extractionId: string | undefined,
-  extractions: Map<string, Extraction>,
-  modifiedIds: Set<string>,
-): asserts extractionId is string {
-  if (!extractionId || !extractions.has(extractionId)) {
-    throw new Error(`extraction change referenced unknown extractionId: ${extractionId ?? ''}`);
-  }
-  if (extractionId.startsWith('session:')) {
-    throw new Error(`extraction change cannot modify source turn id: ${extractionId}`);
-  }
-  if (modifiedIds.has(extractionId)) {
-    throw new Error(`extraction change modified extractionId more than once: ${extractionId}`);
-  }
-  modifiedIds.add(extractionId);
-}
-
 function referencesForChange(
-  change: Extract<ExtractionChange, { type: 'add' | 'merge' | 'update' }>,
-  existingById: Map<string, StoredExtraction>,
+  change: Extract<SessionObservationChange, { type: 'add' | 'merge' | 'update' }>,
+  existingById: Map<string, StoredSessionObservation>,
 ): string[] {
   if (change.type === 'add') {
     return change.references;
@@ -349,52 +237,50 @@ function referencesForChange(
   return [...new Set(references)];
 }
 
-function addedExtractionId(change: Extract<ExtractionChange, { type: 'add' }>): string {
-  return stableExtractionId({
+function addedSessionObservationId(change: Extract<SessionObservationChange, { type: 'add' }>): string {
+  return stableSessionObservationId({
     type: change.type,
     text: change.text,
-    category: change.category,
+    context: change.context ?? null,
     references: [...change.references].sort(),
   });
 }
 
-function mergedExtractionId(change: Extract<ExtractionChange, { type: 'merge' }>): string {
-  return stableExtractionId({
+function mergedSessionObservationId(change: Extract<SessionObservationChange, { type: 'merge' }>): string {
+  return stableSessionObservationId({
     type: change.type,
     extractionIds: [...change.extractionIds].sort(),
     text: change.text,
-    category: change.category,
+    context: change.context ?? null,
   });
 }
 
-function stableExtractionId(value: unknown): string {
+function stableSessionObservationId(value: unknown): string {
   return createHash('sha256')
     .update(JSON.stringify(value))
     .digest('hex')
     .slice(0, 24);
 }
 
-function cloneExtraction(
-  extraction: Extraction,
+function cloneSessionObservation(
+  row: SessionObservation,
   options: { requireReferences: boolean } = { requireReferences: true },
-): Extraction {
-  const text = normalizeText(extraction.text);
+): SessionObservation {
+  const text = normalizeText(row.text);
   if (!text) {
-    throw new Error('extraction text is required');
+    throw new Error('session observation text is required');
   }
-  const references = normalizeIds(extraction.references);
+  const references = normalizeIds(row.references);
   if (options.requireReferences && references.length === 0) {
-    throw new Error('extraction references must include at least one reference');
+    throw new Error('session observation references must include at least one reference');
   }
   return {
-    id: extraction.id?.trim() || null,
-    title: normalizeText(extraction.title ?? '') || null,
+    id: row.id?.trim() || null,
+    title: normalizeText(row.title ?? '') || null,
     text,
-    context: normalizeText(extraction.context ?? '') || null,
-    anchors: normalizeAnchors(extraction.anchors ?? []),
-    category: normalizeCategory(extraction.category),
+    context: normalizeContext(row.context ?? null),
     references,
-    updatedMemory: extraction.updatedMemory?.trim() || null,
+    updatedMemory: row.updatedMemory?.trim() || null,
   };
 }
 
@@ -410,54 +296,48 @@ function normalizeIds(ids: string[]): string[] {
   return [...new Set((ids ?? []).map((id) => id.trim()).filter(Boolean))];
 }
 
-function normalizeAnchors(anchors: string[]): string[] {
-  return [...new Set((anchors ?? []).map((anchor) => normalizeText(anchor)).filter(Boolean))];
-}
-
-function normalizeCategory(category: ExtractionCategory): ExtractionCategory {
-  if ([
-    'Preference',
-    'Fact',
-    'Decision',
-    'Entity',
-    'Concept',
-    'Other',
-  ].includes(category)) {
-    return category;
-  }
-  throw new Error(`invalid extraction category: ${category}`);
-}
-
-function semanticCategory(category: Extraction['category']): string {
-  switch (category) {
-    case 'Preference':
-      return 'preference';
-    case 'Fact':
-      return 'fact';
-    case 'Decision':
-      return 'decision';
-    case 'Entity':
-      return 'entity';
-    case 'Concept':
-    case 'Other':
-      return 'other';
-    default:
-      return 'other';
-  }
-}
-
 function normalizeText(value: string): string {
   return value.split(/\s+/).join(' ').trim();
 }
 
-function embeddingText(extraction: Extraction): string {
-  const anchors = normalizeAnchors(extraction.anchors ?? []);
-  const context = normalizeText(extraction.context ?? '');
+function normalizeContext(value: string | null): string | null {
+  const trimmed = (value ?? '').trim();
+  return trimmed || null;
+}
+
+function sessionObservationUnitKey(row: SessionObservation): string {
   return [
-    anchors.length > 0 ? `Anchors: ${anchors.join('; ')}` : '',
-    context,
-    extraction.text,
-  ].filter(Boolean).join('\n');
+    normalizeText(row.title ?? ''),
+    normalizeText(row.text),
+    [...(row.references ?? [])].sort().join('\u0001'),
+  ].join('\u0002');
+}
+
+function sessionObservationTitle(row: SessionObservation): string {
+  return normalizeText(row.title ?? '') || normalizeText(row.text).slice(0, 80);
+}
+
+function sessionObservationSummary(title: string, row: SessionObservation): string {
+  return [
+    title,
+    row.text,
+  ].filter(Boolean).join('\n\n');
+}
+
+function sessionObservationContent(title: string, row: SessionObservation): string {
+  return [
+    '## Title',
+    '',
+    title,
+    '',
+    '## Summary',
+    '',
+    normalizeText(row.text),
+    '',
+    '## Content',
+    '',
+    row.context?.trim() ?? '',
+  ].join('\n');
 }
 
 function throwIfAborted(signal?: AbortSignal): void {

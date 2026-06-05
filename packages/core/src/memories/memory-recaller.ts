@@ -5,7 +5,6 @@ export type MemoryRecallCandidate = {
   memoryId: string;
   content: string;
   context?: string | null;
-  anchors?: string[];
   refs: string[];
 };
 
@@ -89,7 +88,6 @@ function stripJsonFence(raw: string): string {
 function renderCandidates(candidates: MemoryRecallCandidate[]): string {
   return candidates.map((candidate, index) => [
     `[${index + 1}] ${candidate.memoryId}`,
-    candidate.anchors && candidate.anchors.length > 0 ? `Anchors: ${candidate.anchors.join('; ')}` : '',
     `Content: ${candidate.content}`,
     candidate.context?.trim() ? `Context: ${candidate.context.trim()}` : '',
     `Refs: ${candidate.refs.join(', ')}`,

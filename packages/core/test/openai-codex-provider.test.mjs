@@ -160,7 +160,7 @@ test('generateWithTools sends openai-codex Responses tools and parses calls', as
         type: 'function_call',
         call_id: 'call-1',
         name: 'memory-get',
-        arguments: '{"memoryIds":["extraction:1"]}',
+        arguments: '{"memoryIds":["session_observation:1"]}',
         }],
       },
     }));
@@ -215,7 +215,7 @@ test('generateWithTools sends openai-codex Responses tools and parses calls', as
     toolCalls: [{
       id: 'call-1',
       name: 'memory-get',
-      arguments: { memoryIds: ['extraction:1'] },
+      arguments: { memoryIds: ['session_observation:1'] },
     }],
   });
 });

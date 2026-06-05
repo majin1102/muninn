@@ -25,10 +25,13 @@ pub struct SessionSnapshot {
     )]
     pub snapshot_id: MemoryId,
     pub session_id: String,
+    pub project: String,
+    pub cwd: String,
+    pub agent: String,
     pub snapshot_sequence: i64,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
-    pub observer: String,
+    pub extractor: String,
     pub title: String,
     pub summary: String,
     pub content: String,
@@ -121,10 +124,10 @@ impl SessionTable {
         Ok(Some(describe_dataset(&dataset)))
     }
 
-    pub async fn list(&self, observer: Option<&str>) -> Result<Vec<SessionSnapshot>> {
+    pub async fn list(&self, extractor: Option<&str>) -> Result<Vec<SessionSnapshot>> {
         let mut snapshots = self.load_all().await?;
-        if let Some(observer) = observer {
-            snapshots.retain(|snapshot| snapshot.observer == observer);
+        if let Some(extractor) = extractor {
+            snapshots.retain(|snapshot| snapshot.extractor == extractor);
         }
         Ok(snapshots)
     }
@@ -220,7 +223,7 @@ impl SessionTable {
 
     pub async fn delta(
         &self,
-        observer: &str,
+        extractor: &str,
         baseline_version: u64,
     ) -> Result<Vec<SessionSnapshot>> {
         let Some(dataset) = self.access.try_open().await? else {
@@ -243,7 +246,7 @@ impl SessionTable {
             rows.extend(
                 record_batch_to_session_snapshots(&batch)?
                     .into_iter()
-                    .filter(|row| row.observer == observer),
+                    .filter(|row| row.extractor == extractor),
             );
         }
         rows.sort_by(|left, right| {
@@ -333,10 +336,13 @@ mod tests {
         let snapshot = SessionSnapshot {
             snapshot_id: MemoryId::new(MemoryLayer::Session, 42),
             session_id: "OBS-LINE".to_string(),
+            project: "muninn".to_string(),
+            cwd: "/repo/muninn".to_string(),
+            agent: "codex".to_string(),
             snapshot_sequence: 1,
             created_at: Utc::now(),
             updated_at: Utc::now(),
-            observer: "observer-a".to_string(),
+            extractor: "observer-a".to_string(),
             title: "Session Title".to_string(),
             summary: "Session summary".to_string(),
             content: "{\"memories\":[]}".to_string(),
@@ -353,10 +359,13 @@ mod tests {
         let mut pending = vec![SessionSnapshot {
             snapshot_id: MemoryId::new(MemoryLayer::Session, u64::MAX),
             session_id: "OBS-LINE".to_string(),
+            project: "muninn".to_string(),
+            cwd: "/repo/muninn".to_string(),
+            agent: "codex".to_string(),
             snapshot_sequence: 0,
             created_at: Utc::now(),
             updated_at: Utc::now(),
-            observer: "observer-a".to_string(),
+            extractor: "observer-a".to_string(),
             title: "Session Title".to_string(),
             summary: "Session summary".to_string(),
             content: "{\"memories\":[]}".to_string(),
@@ -370,10 +379,13 @@ mod tests {
             .update(&[SessionSnapshot {
                 snapshot_id: MemoryId::new(MemoryLayer::Session, u64::MAX),
                 session_id: "OBS-LINE".to_string(),
+                project: "muninn".to_string(),
+                cwd: "/repo/muninn".to_string(),
+                agent: "codex".to_string(),
                 snapshot_sequence: 1,
                 created_at: Utc::now(),
                 updated_at: Utc::now(),
-                observer: "observer-a".to_string(),
+                extractor: "observer-a".to_string(),
                 title: "Session Title".to_string(),
                 summary: "Session summary".to_string(),
                 content: "{\"memories\":[]}".to_string(),

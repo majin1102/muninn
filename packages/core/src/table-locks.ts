@@ -3,9 +3,9 @@ import type { NativeTables } from './native.js';
 export type TableName =
   | 'turn'
   | 'session'
-  | 'extraction'
-  | 'observationContext'
-  | 'observation';
+  | 'sessionObservation'
+  | 'globalObservationContext'
+  | 'globalObservation';
 
 export class TableMutationLocks {
   private readonly queues = new Map<TableName, Promise<void>>();
@@ -46,30 +46,30 @@ export function lockNativeTables<T extends NativeTables>(tables: T, locks: Table
       compact: () => locks.with('session', () => tables.sessionTable.compact()),
       cleanup: (params) => locks.with('session', () => tables.sessionTable.cleanup(params)),
     },
-    extractionTable: tables.extractionTable && {
-      ...tables.extractionTable,
-      upsert: (params) => locks.with('extraction', () => tables.extractionTable.upsert(params)),
-      delete: (params) => locks.with('extraction', () => tables.extractionTable.delete(params)),
-      ensureVectorIndex: (params) => locks.with('extraction', () => tables.extractionTable.ensureVectorIndex(params)),
-      compact: () => locks.with('extraction', () => tables.extractionTable.compact()),
-      cleanup: (params) => locks.with('extraction', () => tables.extractionTable.cleanup(params)),
-      optimize: (params) => locks.with('extraction', () => tables.extractionTable.optimize(params)),
+    sessionObservationTable: tables.sessionObservationTable && {
+      ...tables.sessionObservationTable,
+      upsert: (params) => locks.with('sessionObservation', () => tables.sessionObservationTable.upsert(params)),
+      delete: (params) => locks.with('sessionObservation', () => tables.sessionObservationTable.delete(params)),
+      ensureVectorIndex: (params) => locks.with('sessionObservation', () => tables.sessionObservationTable.ensureVectorIndex(params)),
+      compact: () => locks.with('sessionObservation', () => tables.sessionObservationTable.compact()),
+      cleanup: (params) => locks.with('sessionObservation', () => tables.sessionObservationTable.cleanup(params)),
+      optimize: (params) => locks.with('sessionObservation', () => tables.sessionObservationTable.optimize(params)),
     },
-    observationContextTable: tables.observationContextTable && {
-      ...tables.observationContextTable,
-      upsert: (params) => locks.with('observationContext', () => tables.observationContextTable.upsert(params)),
-      delete: (params) => locks.with('observationContext', () => tables.observationContextTable.delete(params)),
-      ensureIdIndex: () => locks.with('observationContext', () => tables.observationContextTable.ensureIdIndex()),
-      optimize: (params) => locks.with('observationContext', () => tables.observationContextTable.optimize(params)),
+    globalObservationContextTable: tables.globalObservationContextTable && {
+      ...tables.globalObservationContextTable,
+      upsert: (params) => locks.with('globalObservationContext', () => tables.globalObservationContextTable.upsert(params)),
+      delete: (params) => locks.with('globalObservationContext', () => tables.globalObservationContextTable.delete(params)),
+      ensureIdIndex: () => locks.with('globalObservationContext', () => tables.globalObservationContextTable.ensureIdIndex()),
+      optimize: (params) => locks.with('globalObservationContext', () => tables.globalObservationContextTable.optimize(params)),
     },
-    observationTable: tables.observationTable && {
-      ...tables.observationTable,
-      upsert: (params) => locks.with('observation', () => tables.observationTable.upsert(params)),
-      delete: (params) => locks.with('observation', () => tables.observationTable.delete(params)),
-      ensureVectorIndex: (params) => locks.with('observation', () => tables.observationTable.ensureVectorIndex(params)),
-      compact: () => locks.with('observation', () => tables.observationTable.compact()),
-      cleanup: (params) => locks.with('observation', () => tables.observationTable.cleanup(params)),
-      optimize: (params) => locks.with('observation', () => tables.observationTable.optimize(params)),
+    globalObservationTable: tables.globalObservationTable && {
+      ...tables.globalObservationTable,
+      upsert: (params) => locks.with('globalObservation', () => tables.globalObservationTable.upsert(params)),
+      delete: (params) => locks.with('globalObservation', () => tables.globalObservationTable.delete(params)),
+      ensureVectorIndex: (params) => locks.with('globalObservation', () => tables.globalObservationTable.ensureVectorIndex(params)),
+      compact: () => locks.with('globalObservation', () => tables.globalObservationTable.compact()),
+      cleanup: (params) => locks.with('globalObservation', () => tables.globalObservationTable.cleanup(params)),
+      optimize: (params) => locks.with('globalObservation', () => tables.globalObservationTable.optimize(params)),
     },
   };
 }

@@ -9,9 +9,7 @@ use serde::Deserialize;
 
 pub(crate) const CONFIG_FILE_NAME: &str = "muninn.json";
 
-const DEFAULT_EXTRACTION_DIMENSIONS: usize = 8;
-#[cfg(test)]
-const DEFAULT_EXTRACTION_IMPORTANCE: f32 = 0.7;
+const DEFAULT_SESSION_OBSERVATION_DIMENSIONS: usize = 8;
 #[cfg(test)]
 #[allow(dead_code)]
 const DEFAULT_OBSERVER_NAME: &str = "default-observer";
@@ -28,8 +26,6 @@ pub struct EmbeddingConfig {
     #[cfg(test)]
     pub base_url: Option<String>,
     pub dimensions: usize,
-    #[cfg(test)]
-    pub default_importance: f32,
 }
 
 #[derive(Debug, Clone)]
@@ -110,7 +106,7 @@ pub fn current_storage_config() -> Result<Option<StorageConfig>> {
     }))
 }
 
-pub fn extraction_config() -> Result<EmbeddingConfig> {
+pub fn session_observation_config() -> Result<EmbeddingConfig> {
     let parsed = load_muninn_config()?;
     let embedding = resolve_embedding_provider(parsed.as_ref())?;
     Ok(EmbeddingConfig {
@@ -128,14 +124,12 @@ pub fn extraction_config() -> Result<EmbeddingConfig> {
         dimensions: embedding
             .as_ref()
             .and_then(|config| config.dimensions)
-            .unwrap_or(DEFAULT_EXTRACTION_DIMENSIONS),
-        #[cfg(test)]
-        default_importance: DEFAULT_EXTRACTION_IMPORTANCE,
+            .unwrap_or(DEFAULT_SESSION_OBSERVATION_DIMENSIONS),
     })
 }
 
 #[cfg(test)]
-pub fn extraction_config_from_raw(raw: &str) -> Result<EmbeddingConfig> {
+pub fn session_observation_config_from_raw(raw: &str) -> Result<EmbeddingConfig> {
     let parsed = parse_muninn_config(raw, "provided Muninn config")?;
     let embedding = resolve_embedding_provider(Some(&parsed))?;
     Ok(EmbeddingConfig {
@@ -153,9 +147,7 @@ pub fn extraction_config_from_raw(raw: &str) -> Result<EmbeddingConfig> {
         dimensions: embedding
             .as_ref()
             .and_then(|config| config.dimensions)
-            .unwrap_or(DEFAULT_EXTRACTION_DIMENSIONS),
-        #[cfg(test)]
-        default_importance: DEFAULT_EXTRACTION_IMPORTANCE,
+            .unwrap_or(DEFAULT_SESSION_OBSERVATION_DIMENSIONS),
     })
 }
 
@@ -208,7 +200,7 @@ fn parse_muninn_config(raw: &str, source: &str) -> Result<MuninnConfig> {
         .is_some()
     {
         return Err(Error::invalid_input(
-            "extractor.defaultImportance is not supported; Muninn uses an internal default importance.",
+            "extractor.defaultImportance is not supported; extraction importance has been removed.",
         ));
     }
     Ok(parsed)
@@ -322,19 +314,18 @@ pub(crate) fn write_test_muninn_config(
 
 #[cfg(test)]
 mod tests {
-    use super::{DEFAULT_EXTRACTION_DIMENSIONS, extraction_config_from_raw};
+    use super::{DEFAULT_SESSION_OBSERVATION_DIMENSIONS, session_observation_config_from_raw};
 
     #[test]
-    fn extraction_config_uses_defaults_when_section_is_missing() {
-        let config = extraction_config_from_raw("{}").unwrap();
+    fn session_observation_config_uses_defaults_when_section_is_missing() {
+        let config = session_observation_config_from_raw("{}").unwrap();
         assert_eq!(config.provider, "mock");
-        assert_eq!(config.dimensions, DEFAULT_EXTRACTION_DIMENSIONS);
-        assert_eq!(config.default_importance, 0.7);
+        assert_eq!(config.dimensions, DEFAULT_SESSION_OBSERVATION_DIMENSIONS);
     }
 
     #[test]
-    fn extraction_config_rejects_semantic_index() {
-        let error = extraction_config_from_raw(
+    fn session_observation_config_rejects_semantic_index() {
+        let error = session_observation_config_from_raw(
             r#"{
   "semanticIndex": {
     "embedding": {
@@ -348,8 +339,8 @@ mod tests {
     }
 
     #[test]
-    fn extraction_config_resolves_extractor_embedding_provider() {
-        let config = extraction_config_from_raw(
+    fn session_observation_config_resolves_extractor_embedding_provider() {
+        let config = session_observation_config_from_raw(
             r#"{
   "extractor": {
     "embeddingProvider": "large"
@@ -367,12 +358,11 @@ mod tests {
         .unwrap();
         assert_eq!(config.provider, "mock");
         assert_eq!(config.dimensions, 16);
-        assert_eq!(config.default_importance, 0.7);
     }
 
     #[test]
-    fn extraction_config_rejects_top_level_extraction() {
-        let error = extraction_config_from_raw(
+    fn session_observation_config_rejects_top_level_extraction() {
+        let error = session_observation_config_from_raw(
             r#"{
   "extraction": {
     "embeddingProvider": "default"
@@ -384,8 +374,8 @@ mod tests {
     }
 
     #[test]
-    fn extraction_config_rejects_extractor_default_importance() {
-        let error = extraction_config_from_raw(
+    fn session_observation_config_rejects_extractor_default_importance() {
+        let error = session_observation_config_from_raw(
             r#"{
   "extractor": {
     "embeddingProvider": "default",

@@ -24,7 +24,7 @@ user_template: |
 
   Each reviewed extraction id must appear exactly once.
   `extractionIds` and `unthreadedExtractionIds` must use only `reviewedExtractions[].id`.
-  Do not put candidate memory ids, active thread memory ids, or `extraction:<id>` memory ids in `extractionIds`.
+  Do not put candidate memory ids, active thread memory ids, or `session_observation:<id>` memory ids in `extractionIds`.
   Candidate memories and active threads are context only; route only the current reviewed extractions.
   Each work item must have either targetThreadId or newThreadTitle, not both.
   Any work item with newThreadTitle must contain at least two extractionIds.

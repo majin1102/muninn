@@ -1,22 +1,22 @@
 import { getExtractorLlmConfig } from '../config.js';
 import { generateText } from '../llm/provider.js';
 import { loadPromptTemplate, renderPromptTemplate } from '../llm/prompt-loader.js';
-import type { Extraction } from '../native.js';
+import type { SessionObservation } from '../native.js';
 
-export type ExtractionReviewInput = {
-  newExtractions: Extraction[];
-  candidateExtractions: Extraction[];
+export type SessionObservationReviewInput = {
+  newSessionObservations: SessionObservation[];
+  candidateSessionObservations: SessionObservation[];
 };
 
-export type ExtractionReviewResult = {
-  removeExtractionIds: string[];
-  reviewedExtractionIds: string[];
+export type SessionObservationReviewResult = {
+  removeSessionObservationIds: string[];
+  reviewedSessionObservationIds: string[];
 };
 
-export async function reviewExtractions(
-  input: ExtractionReviewInput,
+export async function reviewSessionObservations(
+  input: SessionObservationReviewInput,
   signal?: AbortSignal,
-): Promise<ExtractionReviewResult> {
+): Promise<SessionObservationReviewResult> {
   throwIfAborted(signal);
   const config = getExtractorLlmConfig();
   if (!config) {
@@ -24,8 +24,8 @@ export async function reviewExtractions(
   }
   if (config.provider === 'mock') {
     return {
-      removeExtractionIds: [],
-      reviewedExtractionIds: input.newExtractions.map((extraction) => extraction.id),
+      removeSessionObservationIds: [],
+      reviewedSessionObservationIds: input.newSessionObservations.map((extraction) => extraction.id),
     };
   }
 
@@ -39,30 +39,30 @@ export async function reviewExtractions(
   if (!raw) {
     throw new Error('observer is not configured');
   }
-  return validateReview(input, parseJson<ExtractionReviewResult>(raw));
+  return validateReview(input, parseJson<SessionObservationReviewResult>(raw));
 }
 
 function validateReview(
-  input: ExtractionReviewInput,
-  result: ExtractionReviewResult,
-): ExtractionReviewResult {
+  input: SessionObservationReviewInput,
+  result: SessionObservationReviewResult,
+): SessionObservationReviewResult {
   if (!result || typeof result !== 'object') {
     throw new Error('extraction review must return an object');
   }
-  const removeExtractionIds = normalizeIdList(result.removeExtractionIds, 'removeExtractionIds');
-  const reviewedExtractionIds = normalizeIdList(result.reviewedExtractionIds, 'reviewedExtractionIds');
-  const candidateIds = new Set(input.candidateExtractions.map((extraction) => extraction.id));
-  const newIds = new Set(input.newExtractions.map((extraction) => extraction.id));
-  const coveredNewIds = new Set([...removeExtractionIds, ...reviewedExtractionIds]);
+  const removeSessionObservationIds = normalizeIdList(result.removeSessionObservationIds, 'removeSessionObservationIds');
+  const reviewedSessionObservationIds = normalizeIdList(result.reviewedSessionObservationIds, 'reviewedSessionObservationIds');
+  const candidateIds = new Set(input.candidateSessionObservations.map((extraction) => extraction.id));
+  const newIds = new Set(input.newSessionObservations.map((extraction) => extraction.id));
+  const coveredNewIds = new Set([...removeSessionObservationIds, ...reviewedSessionObservationIds]);
 
-  for (const id of removeExtractionIds) {
+  for (const id of removeSessionObservationIds) {
     if (!candidateIds.has(id) && !newIds.has(id)) {
-      throw new Error(`removeExtractionIds includes unknown extraction id: ${id}`);
+      throw new Error(`removeSessionObservationIds includes unknown extraction id: ${id}`);
     }
   }
-  for (const id of reviewedExtractionIds) {
+  for (const id of reviewedSessionObservationIds) {
     if (!newIds.has(id)) {
-      throw new Error(`reviewedExtractionIds includes non-new extraction id: ${id}`);
+      throw new Error(`reviewedSessionObservationIds includes non-new extraction id: ${id}`);
     }
   }
   for (const id of newIds) {
@@ -71,8 +71,8 @@ function validateReview(
     }
   }
   return {
-    removeExtractionIds,
-    reviewedExtractionIds,
+    removeSessionObservationIds,
+    reviewedSessionObservationIds,
   };
 }
 

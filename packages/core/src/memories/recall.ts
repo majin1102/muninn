@@ -46,40 +46,40 @@ export async function recallMemories(
   const vector = mode === 'fts'
     ? []
     : await (options.embed ?? embedText)(trimmed);
-  const leafObservationIds = await loadLeafObservationIds(client);
-  const observationLimit = leafObservationIds ? queryLimit * 4 : queryLimit;
+  const leafGlobalObservationIds = await loadLeafGlobalObservationIds(client);
+  const observationLimit = leafGlobalObservationIds ? queryLimit * 4 : queryLimit;
   const [observationRows, extractionRows] = await Promise.all([
-    client.observationTable.search({
+    client.globalObservationTable.search({
       query: trimmed,
       vector,
       limit: observationLimit,
       mode,
     }),
-    client.extractionTable.search({
+    client.sessionObservationTable.search({
       query: trimmed,
       vector,
       limit: queryLimit,
       mode,
     }),
   ]);
-  const filteredObservationRows = leafObservationIds
-    ? observationRows.filter((row) => leafObservationIds.has(row.id))
+  const filteredGlobalObservationRows = leafGlobalObservationIds
+    ? observationRows.filter((row) => leafGlobalObservationIds.has(row.id))
     : observationRows;
-  const observationRefs = await loadObservationContextRefs(client, filteredObservationRows.map((row) => row.id));
-  const extractionDetails = await loadExtractionDetails(
+  const observationRefs = await loadGlobalObservationContextRefs(client, filteredGlobalObservationRows.map((row) => row.id));
+  const extractionDetails = await loadSessionObservationDetails(
     client,
-    filteredObservationRows.flatMap((row) => row.extractionRefs),
+    filteredGlobalObservationRows.flatMap((row) => row.sessionObservationRefs),
   );
-  const curatedHits: RouteHit[] = filteredObservationRows.map((row) => ({
+  const curatedHits: RouteHit[] = filteredGlobalObservationRows.map((row) => ({
     route: 'curated',
-    memoryId: `observation:${row.id}`,
-    text: renderObservationHit(row.text, row.extractionRefs, extractionDetails),
-    references: observationRefs.get(row.id) ?? row.extractionRefs,
+    memoryId: `global_observation:${row.id}`,
+    text: renderGlobalObservationHit(row.text, row.sessionObservationRefs, extractionDetails),
+    references: observationRefs.get(row.id) ?? row.sessionObservationRefs,
   }));
   const rawHits: RouteHit[] = extractionRows.map((row) => ({
     route: 'raw',
-    memoryId: `extraction:${row.id}`,
-    text: row.text,
+    memoryId: `session_observation:${row.id}`,
+    text: row.content,
     references: row.turnRefs,
   }));
   const merged = mergeRoutes(curatedHits, rawHits, budget > 0 ? queryLimit : limit);
@@ -87,8 +87,8 @@ export async function recallMemories(
     if (merged.length === 0) {
       return [];
     }
-    const extractionById = new Map(extractionRows.map((row) => [`extraction:${row.id}`, row]));
-    const observationById = new Map(observationRows.map((row) => [`observation:${row.id}`, row]));
+    const extractionById = new Map(extractionRows.map((row) => [`session_observation:${row.id}`, row]));
+    const observationById = new Map(observationRows.map((row) => [`global_observation:${row.id}`, row]));
     const curatedTextById = new Map(curatedHits.map((hit) => [hit.memoryId, hit.text]));
     const candidates = merged.map((hit) => {
       if (hit.route === 'curated') {
@@ -108,9 +108,7 @@ export async function recallMemories(
       }
       return {
         memoryId: hit.memoryId,
-        content: row.text,
-        context: row.context,
-        anchors: row.anchors,
+        content: row.content,
         refs: row.turnRefs,
       };
     });
@@ -134,44 +132,44 @@ export async function recallMemories(
 
 export type { RecallMode };
 
-type ExtractionDetail = {
+type SessionObservationDetail = {
   id: string;
-  text: string;
-  context?: string | null;
-  anchors?: string[];
+  title: string;
+  summary: string;
+  content: string;
 };
 
-async function loadExtractionDetails(
+async function loadSessionObservationDetails(
   client: NativeTables,
   refs: string[],
-): Promise<Map<string, ExtractionDetail>> {
+): Promise<Map<string, SessionObservationDetail>> {
   const ids = uniqueRefs(refs.map((ref) => extractionRowId(ref)).filter((id): id is string => Boolean(id)));
-  if (ids.length === 0 || typeof client.extractionTable.get !== 'function') {
+  if (ids.length === 0 || typeof client.sessionObservationTable.get !== 'function') {
     return new Map();
   }
-  const rows = await client.extractionTable.get({ ids });
+  const rows = await client.sessionObservationTable.get({ ids });
   return new Map(rows.map((row) => [row.id, row]));
 }
 
-async function loadObservationContextRefs(
+async function loadGlobalObservationContextRefs(
   client: NativeTables,
   ids: string[],
 ): Promise<Map<string, string[]>> {
   const uniqueIds = uniqueRefs(ids);
-  if (uniqueIds.length === 0 || typeof client.observationContextTable?.get !== 'function') {
+  if (uniqueIds.length === 0 || typeof client.globalObservationContextTable?.get !== 'function') {
     return new Map();
   }
-  const rows = await client.observationContextTable.get({ ids: uniqueIds });
+  const rows = await client.globalObservationContextTable.get({ ids: uniqueIds });
   return new Map(rows.map((row) => [
     row.id,
     uniqueRefs(row.sourceRefs ?? []),
   ]));
 }
 
-function renderObservationHit(
+function renderGlobalObservationHit(
   text: string,
   refs: string[],
-  details: Map<string, ExtractionDetail>,
+  details: Map<string, SessionObservationDetail>,
 ): string {
   const replaced = replaceSourcePlaceholders(text, details);
   const lines = [`OBSERVATION: ${replaced.text}`];
@@ -184,18 +182,14 @@ function renderObservationHit(
     if (!detail) {
       continue;
     }
-    const sourceContext = detail.context?.trim();
-    if (sourceContext) {
-      lines.push(`CONTEXT: ${sourceContext}`);
-    }
-    lines.push(`EXTRACTION: ${detail.text}`);
+    lines.push(`EXTRACTION: ${detail.content}`);
   }
   return lines.join('\n');
 }
 
 function replaceSourcePlaceholders(
   text: string,
-  details: Map<string, ExtractionDetail>,
+  details: Map<string, SessionObservationDetail>,
 ): { text: string; embeddedRefs: Set<string> } {
   const lines = text.split('\n');
   const sourceIndex = lines.findIndex((line) => /^Source extractions:\s*$/i.test(line.trim()));
@@ -211,7 +205,7 @@ function replaceSourcePlaceholders(
 
 function replaceSourceLine(
   line: string,
-  details: Map<string, ExtractionDetail>,
+  details: Map<string, SessionObservationDetail>,
   embeddedRefs: Set<string>,
 ): string {
   return line.replace(
@@ -230,12 +224,8 @@ function replaceSourceLine(
         return original;
       }
       embeddedRefs.add(id);
-      const sourceContext = detail.context?.trim();
       const continuationPrefix = prefix.replace(/-\s*$/, '  ');
-      if (sourceContext) {
-        return `${prefix}context: ${formatInlineBlock(sourceContext, continuationPrefix)}\n${continuationPrefix}extraction: ${formatInlineBlock(detail.text, continuationPrefix)}`;
-      }
-      return `${prefix}extraction: ${formatInlineBlock(detail.text, continuationPrefix)}`;
+      return `${prefix}session_observation: ${formatInlineBlock(detail.content, continuationPrefix)}`;
     },
   );
 }
@@ -246,9 +236,9 @@ function formatInlineBlock(text: string, prefix: string): string {
   )).join('\n');
 }
 
-async function loadLeafObservationIds(client: NativeTables): Promise<Set<string> | null> {
+async function loadLeafGlobalObservationIds(client: NativeTables): Promise<Set<string> | null> {
   try {
-    const contexts = await client.observationContextTable.list({});
+    const contexts = await client.globalObservationContextTable.list({});
     if (contexts.length === 0) {
       return null;
     }
@@ -267,7 +257,7 @@ function curatedQuota(limit: number): number {
   return Math.ceil(limit * 0.7);
 }
 
-function sourceExtractionIds(hits: RouteHit[]): Set<string> {
+function sourceSessionObservationIds(hits: RouteHit[]): Set<string> {
   const sources = new Set<string>();
   for (const hit of hits) {
     if (hit.route !== 'curated') {
@@ -288,12 +278,12 @@ function extractionRowId(ref: string): string | null {
   if (!trimmed) {
     return null;
   }
-  return trimmed.startsWith('extraction:') ? trimmed.slice('extraction:'.length).trim() || null : trimmed;
+  return trimmed.startsWith('session_observation:') ? trimmed.slice('session_observation:'.length).trim() || null : trimmed;
 }
 
 function extractionMemoryId(ref: string): string | null {
   const id = extractionRowId(ref);
-  return id ? `extraction:${id}` : null;
+  return id ? `session_observation:${id}` : null;
 }
 
 function mergeRoutes(curated: RouteHit[], raw: RouteHit[], limit: number): RouteHit[] {
@@ -301,7 +291,7 @@ function mergeRoutes(curated: RouteHit[], raw: RouteHit[], limit: number): Route
     return [];
   }
   const firstCurated = curated.slice(0, curatedQuota(limit));
-  const sourceIds = sourceExtractionIds(firstCurated);
+  const sourceIds = sourceSessionObservationIds(firstCurated);
   const rawFallback = raw.filter((hit) => !sourceIds.has(hit.memoryId));
   const rawQuota = limit - firstCurated.length;
   const selected = firstCurated.concat(rawFallback.slice(0, rawQuota));

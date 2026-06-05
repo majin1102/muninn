@@ -106,11 +106,11 @@ function parseSections(
     }
     const hint = parseHint(match[3] ?? '', validRefs);
     const parent = stack.at(-1);
-    const observingPath = `${parent?.observingPath ?? title} / ${heading}`;
+    const globalPath = `${parent?.globalPath ?? title} / ${heading}`;
     const section: DraftSection = {
       level,
       heading,
-      observingPath,
+      globalPath,
       sourceRefs: hint.sourceRefs,
       expandRefs: hint.expandRefs,
       body: '',
@@ -128,7 +128,7 @@ function parseSections(
   }
 
   trimBodies(roots);
-  parseSourceExtractionSections(roots, validRefs);
+  parseSourceSessionObservationSections(roots, validRefs);
   markRewritten(roots);
   return roots;
 }
@@ -178,7 +178,7 @@ function resolveRef(ref: string, validRefs: Set<string>): string {
   if (matches.length > 1) {
     throw new Error(`observer referenced ambiguous extraction id prefix: ${ref}`);
   }
-  const nearMatches = nearExtractionRefMatches(ref, validRefs);
+  const nearMatches = nearSessionObservationRefMatches(ref, validRefs);
   if (nearMatches.length === 1) {
     return nearMatches[0]!;
   }
@@ -188,7 +188,7 @@ function resolveRef(ref: string, validRefs: Set<string>): string {
   throw new Error(`observer referenced unknown extraction id: ${ref}`);
 }
 
-function nearExtractionRefMatches(ref: string, validRefs: Set<string>): string[] {
+function nearSessionObservationRefMatches(ref: string, validRefs: Set<string>): string[] {
   if (!/^[0-9a-f]{12,}$/i.test(ref)) {
     return [];
   }
@@ -243,10 +243,10 @@ function editDistanceAtMost(left: string, right: string, limit: number): boolean
 function validateTree(sections: DraftSection[], validRefs: Set<string>): void {
   const paths = new Set<string>();
   for (const section of walk(sections)) {
-    if (paths.has(section.observingPath)) {
-      throw new Error(`duplicate observer section path: ${section.observingPath}`);
+    if (paths.has(section.globalPath)) {
+      throw new Error(`duplicate observer section path: ${section.globalPath}`);
     }
-    paths.add(section.observingPath);
+    paths.add(section.globalPath);
     const sectionRefs = refsForSection(section);
     if (section.children.length > 0 && sectionRefs.length > 0) {
       throw new Error(`non-leaf observer section cannot declare refs: ${section.heading}`);
@@ -285,7 +285,7 @@ function trimBodies(sections: DraftSection[]): void {
   }
 }
 
-function parseSourceExtractionSections(sections: DraftSection[], validRefs: Set<string>): void {
+function parseSourceSessionObservationSections(sections: DraftSection[], validRefs: Set<string>): void {
   for (const section of walk(sections)) {
     if (!clean(section.body)) {
       continue;
@@ -348,7 +348,7 @@ function stripParent(section: DraftSection): ParsedObserverSection {
   return {
     level: section.level,
     heading: section.heading,
-    observingPath: section.observingPath,
+    globalPath: section.globalPath,
     sourceRefs: section.sourceRefs,
     expandRefs: section.expandRefs,
     body: section.body,

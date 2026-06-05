@@ -9,6 +9,7 @@ import type {
   SessionAgentsResponse,
   SessionGroupsResponse,
   SessionNode,
+  SessionObservationPreview,
   SessionSegmentPreview,
   SessionTurnsResponse,
   SettingsConfigResponse,
@@ -37,10 +38,18 @@ export type ProjectSegmentNode = SessionSegmentPreview & {
   sessionLabel: string;
 };
 
+export type ProjectObservationNode = SessionObservationPreview & {
+  agent: string;
+  sessionKey: string;
+  sessionLabel: string;
+};
+
 export type ProjectSessionNode = SessionNode & {
   agent: string;
   turns: ProjectTurnNode[];
   segments: ProjectSegmentNode[];
+  observations: ProjectObservationNode[];
+  sessionSummary?: string;
   nextOffset: number | null;
   loading: boolean;
   loaded: boolean;
@@ -61,6 +70,8 @@ export type BoardClient = {
   loadSessionTurns(session: ProjectSessionNode, offset?: number): Promise<{
     turns: ProjectTurnNode[];
     segments: ProjectSegmentNode[];
+    observations: ProjectObservationNode[];
+    sessionSummary?: string;
     nextOffset: number | null;
   }>;
   getDocument(memoryId: string): Promise<MemoryDocument>;
@@ -156,6 +167,13 @@ export function createBoardClient(apiBase: string, usesDemoData: boolean): Board
               sessionKey: session.sessionKey,
               sessionLabel: session.displaySessionId,
             })),
+            observations: (response.observations ?? []).map((observation) => ({
+              ...observation,
+              agent: session.agent,
+              sessionKey: session.sessionKey,
+              sessionLabel: session.displaySessionId,
+            })),
+            sessionSummary: response.sessionSummary,
             nextOffset: response.nextOffset,
             loaded: true,
           };
@@ -166,7 +184,7 @@ export function createBoardClient(apiBase: string, usesDemoData: boolean): Board
       const response = usesDemoData
         ? await getDemoSessionTurns(session.agent, session.sessionKey, offset, 100)
         : await fetchJson<SessionTurnsResponse>(
-          `/api/v1/ui/session/agents/${encodeURIComponent(session.agent)}/sessions/${encodeURIComponent(session.sessionKey)}/turns?offset=${offset}&limit=100`,
+          `/api/v1/ui/session/agents/${encodeURIComponent(session.agent)}/sessions/${encodeURIComponent(session.sessionKey)}/turns?project=${encodeURIComponent(session.projectKey)}&offset=${offset}&limit=100`,
         );
       return {
         turns: response.turns.map((turn) => ({
@@ -181,6 +199,13 @@ export function createBoardClient(apiBase: string, usesDemoData: boolean): Board
           sessionKey: session.sessionKey,
           sessionLabel: session.displaySessionId,
         })),
+        observations: (response.observations ?? []).map((observation) => ({
+          ...observation,
+          agent: session.agent,
+          sessionKey: session.sessionKey,
+          sessionLabel: session.displaySessionId,
+        })),
+        sessionSummary: response.sessionSummary,
         nextOffset: response.nextOffset,
       };
     },
@@ -250,6 +275,7 @@ async function projectTreeFromAgents(
         agent: agent.agent,
         turns: [],
         segments: [],
+        observations: [],
         nextOffset: null,
         loading: false,
         loaded: false,
@@ -267,12 +293,7 @@ async function projectTreeFromAgents(
 }
 
 function projectKeyFromSession(session: SessionNode): string {
-  if (session.projectKey) {
-    return session.projectKey;
-  }
-  const label = session.displaySessionId || session.sessionKey;
-  const [first] = label.split(/[/:#]/).filter(Boolean);
-  return first || 'Default Project';
+  return session.projectKey;
 }
 
 async function safeJson<T>(response: Response): Promise<T | null> {

@@ -1,11 +1,11 @@
-import type { Extraction } from './types.js';
+import type { SessionObservation } from './types.js';
 
 export type ParsedSnapshotContent = {
   title: string;
   summary: string;
   snapshotContent: string;
   extractionMarkdown: string;
-  extractions: Extraction[];
+  extractions: SessionObservation[];
 };
 
 export type ParsedSnapshotPatch = {
@@ -110,7 +110,7 @@ export function parseSnapshotPatch(
 export function parseSnapshotContentUnits(
   snapshotContent: string,
   validReferences: Set<string>,
-): Extraction[] {
+): SessionObservation[] {
   if (!snapshotContent.trim()) {
     return [];
   }
@@ -127,14 +127,12 @@ export function parseSnapshotContentUnits(
       title: body.title,
       text: normalizeText(body.summary),
       context: normalizeContext(body.content ?? ''),
-      anchors: [],
-      category: 'Other',
       references: metadata.references,
     };
   });
 }
 
-export function renderSnapshotContent(title: string, summary: string, extractions: Extraction[]): string {
+export function renderSnapshotContent(title: string, summary: string, extractions: SessionObservation[]): string {
   return [
     `# ${normalizeTitle(title)}`,
     '',
@@ -142,27 +140,27 @@ export function renderSnapshotContent(title: string, summary: string, extraction
     summary.trim(),
     '',
     '## Extractions',
-    extractions.map((extraction) => renderExtractionBlock(extraction)).join('\n\n----\n\n'),
+    extractions.map((extraction) => renderSessionObservationBlock(extraction)).join('\n\n----\n\n'),
   ].join('\n').trimEnd();
 }
 
-export function renderExtractionBlock(
-  extraction: Extraction,
+export function renderSessionObservationBlock(
+  sessionObservation: SessionObservation,
   options: { sequence?: number; includeRefs?: boolean } = {},
 ): string {
   const metadata = renderMetadata({
     sequence: options.sequence,
-    references: options.includeRefs === false ? [] : extraction.references,
+    references: options.includeRefs === false ? [] : sessionObservation.references,
   });
   return [
     metadata,
     '### Title',
-    normalizeTitle(extraction.title ?? extraction.text),
+    normalizeTitle(sessionObservation.title ?? sessionObservation.text),
     '',
     '### Summary',
-    extraction.text.trim(),
-    ...(normalizeContext(extraction.context ?? '')
-      ? ['', '### Content', extraction.context!.trim()]
+    sessionObservation.text.trim(),
+    ...(normalizeContext(sessionObservation.context ?? '')
+      ? ['', '### Content', sessionObservation.context!.trim()]
       : []),
   ].join('\n');
 }
@@ -279,10 +277,42 @@ function renderMetadata(value: UnitMetadata): string {
 }
 
 function splitUnits(value: string): string[] {
-  return value
-    .split(/^\s*----\s*$/m)
-    .map((unit) => unit.trim())
-    .filter(Boolean);
+  const units: string[] = [];
+  let current: string[] = [];
+
+  for (const line of value.split(/\r?\n/)) {
+    if (/^\s*----\s*$/.test(line)) {
+      pushCurrentUnit(units, current);
+      current = [];
+      continue;
+    }
+
+    if (current.length > 0 && isUnitMetadataLine(line)) {
+      pushCurrentUnit(units, current);
+      current = [line];
+      continue;
+    }
+
+    current.push(line);
+  }
+
+  pushCurrentUnit(units, current);
+  return units;
+}
+
+function pushCurrentUnit(units: string[], lines: string[]): void {
+  const unit = lines.join('\n').trim();
+  if (unit) {
+    units.push(unit);
+  }
+}
+
+function isUnitMetadataLine(line: string): boolean {
+  try {
+    return parseSnapshotContentMetadata(line) !== null;
+  } catch {
+    return false;
+  }
 }
 
 function parseSnapshotContentRefs(value: string): string[] {

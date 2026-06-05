@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  buildSessionObservationsForTests,
   buildSessionSegmentsForTests,
   buildSessionTurnPageForTests,
   resolveSessionTreeNextOffsetForTests,
@@ -77,6 +78,50 @@ test('uses extraction title heading for segment titles', () => {
   ]);
 });
 
+test('builds snapshot observations with markdown and refs', () => {
+  const snapshot = [
+    '# Session title',
+    '',
+    '## Summary',
+    'Session summary text',
+    '',
+    '## Extractions',
+    '<!-- sequence: 1; refs: [turn:1, turn:2] -->',
+    '### Title',
+    'Prompt budget rules',
+    '',
+    '### Summary',
+    'Summary content.',
+    '',
+    '### Content',
+    '- Keep Markdown bullets.',
+    '----',
+    '<!-- refs: [turn:2] -->',
+    '### Title',
+    'Title language',
+    '',
+    '### Summary',
+    'Write in the session language.',
+  ].join('\n');
+
+  assert.deepEqual(buildSessionObservationsForTests(snapshot, turns), [
+    {
+      memoryId: 'turn:1',
+      title: 'Prompt budget rules',
+      createdAt: '2026-06-02T10:00:00.000Z',
+      markdown: ['### Summary', 'Summary content.', '', '### Content', '- Keep Markdown bullets.'].join('\n'),
+      refs: ['turn:1', 'turn:2'],
+    },
+    {
+      memoryId: 'turn:2',
+      title: 'Title language',
+      createdAt: '2026-06-02T10:10:00.000Z',
+      markdown: ['### Summary', 'Write in the session language.'].join('\n'),
+      refs: ['turn:2'],
+    },
+  ]);
+});
+
 test('falls back to user prompt list when snapshot has no usable extraction refs', () => {
   assert.deepEqual(buildSessionSegmentsForTests('## Extractions\n没有 refs', turns), [
     {
@@ -122,6 +167,10 @@ test('session turn page segments use snapshot content when available', async () 
       createdAt: '2026-06-02T10:10:00.000Z',
     },
   ]);
+  assert.deepEqual(page.observations.map((observation) => observation.title), [
+    'snapshot segment a',
+    'snapshot segment b',
+  ]);
   assert.equal(page.turns.length, 1);
   assert.equal(page.nextOffset, null);
 });
@@ -143,30 +192,36 @@ test('session tree pagination ignores turn nextOffset when snapshot segments exi
 
 test('session node display title prefers sessionIndex title', () => {
   assert.deepEqual(resolveSessionNodeFromIndexForTests({
-    sessionId: 'muninn/internal-id',
+    sessionId: 'raw-session-id',
     agent: 'codex',
+    project: 'muninn',
+    cwd: '/Users/Nathan/workspace/muninn',
     latestUpdatedAt: '2026-06-02T12:00:00.000Z',
     snapshotId: 'session:1',
     title: 'Snapshot title',
   }), {
-    sessionKey: 'muninn/internal-id',
+    sessionKey: 'raw-session-id',
     displaySessionId: 'Snapshot title',
     projectKey: 'muninn',
+    cwd: '/Users/Nathan/workspace/muninn',
     latestUpdatedAt: '2026-06-02T12:00:00.000Z',
   });
 });
 
 test('session node display title ignores generated default snapshot title', () => {
   assert.deepEqual(resolveSessionNodeFromIndexForTests({
-    sessionId: 'lance/https-github-com-lance-format-lance--019e5e34',
+    sessionId: '019e5e34-raw-session',
     agent: 'codex',
+    project: 'lance',
+    cwd: '/Users/Nathan/workspace/lance',
     latestUpdatedAt: '2026-06-02T12:00:00.000Z',
     snapshotId: 'session:1',
-    title: 'Session lance/https-github-com-lance-format-lance--019e5e34',
+    title: 'Session 019e5e34-raw-session',
   }), {
-    sessionKey: 'lance/https-github-com-lance-format-lance--019e5e34',
-    displaySessionId: 'https-github-com-lance-format-lance',
+    sessionKey: '019e5e34-raw-session',
+    displaySessionId: '019e5e34-raw-session',
     projectKey: 'lance',
+    cwd: '/Users/Nathan/workspace/lance',
     latestUpdatedAt: '2026-06-02T12:00:00.000Z',
   });
 });

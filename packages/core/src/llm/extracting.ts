@@ -8,14 +8,14 @@ import type {
   GatewayResult,
   ExtractSessionMemoryRequest,
   ExtractSessionMemoryResult,
-  Extraction,
+  SessionObservation,
   SessionMemoryThreadGatewayInput,
   ContextRef,
 } from '../extractor/types.js';
 import {
   parseSnapshotContent,
   parseSnapshotPatch,
-  renderExtractionBlock,
+  renderSessionObservationBlock,
   renderSnapshotContent,
 } from '../extractor/thread-memory.js';
 import {
@@ -33,7 +33,7 @@ import { loadPromptTemplate, renderPromptTemplate } from './prompt-loader.js';
 
 const MAX_SUMMARY_CHARS = 220;
 const SNAPSHOT_VIEW_TOKEN_CAP = 10_000;
-const MAX_GET_EXTRACTION_CALLS = 3;
+const MAX_GET_EXTRACTION_CALLS = 5;
 
 type ToolModel = (
   task: LlmTask,
@@ -170,13 +170,14 @@ export async function extractSessionMemory(
     renderNewTurns(input.turns),
   ].join('\n').trim();
   const basePrompt = renderPromptTemplate(template.userTemplate, { input_markdown: inputMarkdown });
-  const trace = createExtractionTrace(input);
+  const trace = createSessionObservationTrace(input);
   const database = resolveDatabaseName(deps.database);
 
   let lastError = 'extraction update returned no output';
   for (let attempt = 1; attempt <= config.maxAttempts; attempt += 1) {
     throwIfAborted(signal);
     let getExtractionCallCount = 0;
+    const readExtractionSequences = new Set<number>();
     const startedAt = Date.now();
     const raw = await runToolLoop({
       messages: [
@@ -198,6 +199,11 @@ export async function extractSessionMemory(
           if (getExtractionCallCount > MAX_GET_EXTRACTION_CALLS) {
             throw new Error(`getExtraction exceeded max calls: ${MAX_GET_EXTRACTION_CALLS}`);
           }
+          for (const sequence of normalizeSequences(args.sequences)) {
+            if (snapshotView.visibleSequences.has(sequence)) {
+              readExtractionSequences.add(sequence);
+            }
+          }
           return createGetExtractionTool(input, snapshotView.visibleSequences)(args);
         },
       },
@@ -216,11 +222,8 @@ export async function extractSessionMemory(
     throwIfAborted(signal);
 
     try {
-      if (snapshotView.visibleSequences.size > 0 && getExtractionCallCount === 0) {
-        throw new Error('getExtraction must be called before final patch when current snapshot has extraction summaries');
-      }
-      const result = validateExtractSessionMemoryResult(raw, input);
-      await writeExtractionTrace({
+      const result = validateExtractSessionMemoryResult(raw, input, { readExtractionSequences });
+      await writeSessionObservationTrace({
         ...trace,
         database,
         attempt,
@@ -231,7 +234,7 @@ export async function extractSessionMemory(
       return result;
     } catch (error) {
       lastError = String(error);
-      await writeExtractionTrace({
+      await writeSessionObservationTrace({
         ...trace,
         database,
         attempt,
@@ -275,8 +278,6 @@ function buildMockSnapshotContent(input: ExtractSessionMemoryRequest): string {
       text: joined,
       title: normalizeText(joined, 80) || 'Mock extraction',
       context: null,
-      anchors: [],
-      category: 'Other',
       references,
     });
   }
@@ -285,8 +286,6 @@ function buildMockSnapshotContent(input: ExtractSessionMemoryRequest): string {
       text: input.sessionMemoryContent.title || 'Mock session memory thread',
       title: input.sessionMemoryContent.title || 'Mock session memory thread',
       context: null,
-      anchors: [],
-      category: 'Other',
       references: [references[0] ?? 'session:mock'],
     });
   }
@@ -348,24 +347,29 @@ function validateGatewayResult(
   return { sessionFragments };
 }
 
-function validateExtractSessionMemoryResult(result: string, input?: ExtractSessionMemoryRequest): ExtractSessionMemoryResult {
+function validateExtractSessionMemoryResult(
+  result: string,
+  input?: ExtractSessionMemoryRequest,
+  options: { readExtractionSequences?: ReadonlySet<number> } = {},
+): ExtractSessionMemoryResult {
   const contextRefs = extractionContextRefs(input);
   const validNewReferences = validSessionMemoryReferences(input);
   const current = input?.sessionMemoryContent.extractions ?? [];
   const currentSummary = input?.sessionMemoryContent.summary ?? '';
   const currentTitle = input?.sessionMemoryContent.title ?? '';
   const patch = parseSnapshotPatch(result, validNewReferences);
-  const nextExtractions = mergePatchExtractions(current, patch, validNewReferences);
+  validateUpdatedSequencesWereRead(patch, options.readExtractionSequences);
+  const nextSessionObservations = mergePatchSessionObservations(current, patch, validNewReferences);
   const summary = patch.summary ?? currentSummary;
   const title = patch.title ?? currentTitle;
   const snapshotContent = renderSnapshotContent(
     title || 'Session memory snapshot',
     summary || 'This session has no durable memory summary yet.',
-    nextExtractions,
+    nextSessionObservations,
   );
   const parsed = parseSnapshotContent(
     snapshotContent,
-    new Set(nextExtractions.flatMap((extraction) => extraction.references)),
+    new Set(nextSessionObservations.flatMap((extraction) => extraction.references)),
   );
 
   return {
@@ -377,6 +381,20 @@ function validateExtractSessionMemoryResult(result: string, input?: ExtractSessi
     nextSteps: input?.sessionMemoryContent.nextSteps ?? [],
     contextRefs,
   };
+}
+
+function validateUpdatedSequencesWereRead(
+  patch: ReturnType<typeof parseSnapshotPatch>,
+  readExtractionSequences?: ReadonlySet<number>,
+): void {
+  if (!readExtractionSequences) {
+    return;
+  }
+  for (const update of patch.updates) {
+    if (!readExtractionSequences.has(update.sequence)) {
+      throw new Error(`sequence ${update.sequence} must be read with getExtraction before it can be updated`);
+    }
+  }
 }
 
 function validateMockSessionMemoryResult(result: string, input: ExtractSessionMemoryRequest): ExtractSessionMemoryResult {
@@ -409,15 +427,14 @@ function validSessionMemoryReferences(input: ExtractSessionMemoryRequest | undef
   return new Set(input?.turns.map((turn) => turn.turnId).filter(Boolean) ?? []);
 }
 
-function mergePatchExtractions(
-  current: Extraction[],
+function mergePatchSessionObservations(
+  current: SessionObservation[],
   patch: ReturnType<typeof parseSnapshotPatch>,
   validNewReferences: Set<string>,
-): Extraction[] {
+): SessionObservation[] {
   const next = current.map((extraction) => ({
       ...extraction,
       title: extraction.title ?? extraction.text,
-      anchors: [...(extraction.anchors ?? [])],
       references: [...(extraction.references ?? [])],
   }));
   const seenSequences = new Set<number>();
@@ -436,8 +453,6 @@ function mergePatchExtractions(
       title: update.title,
       text: update.summary,
       context: update.content ?? null,
-      anchors: existing.anchors ?? [],
-      category: existing.category ?? 'Other',
       references: mergeReferences(existing.references ?? [], update.refs),
     };
   }
@@ -450,8 +465,6 @@ function mergePatchExtractions(
       title: addition.title,
       text: addition.summary,
       context: addition.content ?? null,
-      anchors: [],
-      category: 'Other',
       references: addition.refs,
     });
   }
@@ -537,10 +550,12 @@ function buildSnapshotView(content: ExtractSessionMemoryRequest['sessionMemoryCo
   markdown: string;
   visibleSequences: Set<number>;
 } {
-  const title = normalizeText(content.title ?? '');
-  const summary = isDefaultSummary(normalizeText(content.summary ?? ''))
+  const rawTitle = normalizeText(content.title ?? '');
+  const rawSummary = normalizeText(content.summary ?? '');
+  const title = isGeneratedSnapshotTitle(rawTitle, rawSummary) ? '' : rawTitle;
+  const summary = isDefaultSummary(rawSummary)
     ? ''
-    : normalizeText(content.summary ?? '');
+    : rawSummary;
   const extractionEntries = content.extractions.map((extraction, sequence) => ({
     sequence,
     markdown: [
@@ -574,7 +589,7 @@ function renderSnapshotViewMarkdown(
   return [
     '## Current Snapshot',
     '',
-    `# ${title || 'Session memory snapshot'}`,
+    `# ${title || '(empty)'}`,
     '',
     '### Summary',
     summary || '(empty)',
@@ -584,6 +599,20 @@ function renderSnapshotViewMarkdown(
   ].join('\n');
 }
 
+function isGeneratedSnapshotTitle(title: string, summary: string): boolean {
+  if (!title) {
+    return false;
+  }
+  if (
+    title === 'Session memory thread'
+    || title === 'Session memory snapshot'
+    || title === 'Session observing thread'
+  ) {
+    return true;
+  }
+  return /^Session\s+\S+/.test(title) && isDefaultSummary(summary);
+}
+
 function renderNewTurns(turns: ExtractSessionMemoryRequest['turns']): string {
   return [
     '## Current Batch Turns',
@@ -591,8 +620,7 @@ function renderNewTurns(turns: ExtractSessionMemoryRequest['turns']): string {
       `### ${turn.turnId}`,
       labeledText('Prompt', turn.prompt),
       labeledText('Response', turn.response),
-      labeledText('Summary', turn.summary),
-    ].filter(Boolean).join('\n\n')).join('\n\n----\n\n') || '(empty)',
+    ].filter(Boolean).join('\n\n')).join('\n\n') || '(empty)',
   ].join('\n');
 }
 
@@ -635,7 +663,7 @@ function createGetExtractionTool(input: ExtractSessionMemoryRequest, visibleSequ
       }
       results.push({
         sequence,
-        content: renderExtractionBlock(extraction, { sequence, includeRefs: false }),
+        content: renderSessionObservationBlock(extraction, { sequence, includeRefs: false }),
       });
     }
     return { extractions: results };
@@ -652,7 +680,7 @@ function normalizeSequences(value: unknown): number[] {
     .filter((sequence, index, values) => values.indexOf(sequence) === index);
 }
 
-function createExtractionTrace(input: ExtractSessionMemoryRequest) {
+function createSessionObservationTrace(input: ExtractSessionMemoryRequest) {
   return {
     input: {
       sessionMemoryContent: input.sessionMemoryContent,
@@ -672,12 +700,11 @@ function renderSessionTurnText(turn: { prompt?: string | null; response?: string
   const parts = [
     labeledText('Prompt', turn.prompt),
     labeledText('Response', turn.response),
-    labeledText('Summary', turn.summary),
   ].filter(Boolean);
   return parts.join('\n\n');
 }
 
-async function writeExtractionTrace(event: {
+async function writeSessionObservationTrace(event: {
   database?: string;
   input: unknown;
   attempt: number;
@@ -687,7 +714,7 @@ async function writeExtractionTrace(event: {
   finalText?: string;
   rawText?: string;
   validationError?: string;
-  extractions: Extraction[];
+  extractions: SessionObservation[];
 }): Promise<void> {
   const file = process.env.MUNINN_SESSION_MEMORY_TRACE_FILE
     ?? resolveDatabaseLogPath(event.database, 'extractor-trace.jsonl');
@@ -753,6 +780,7 @@ function throwIfAborted(signal?: AbortSignal): void {
 export const __testing = {
   buildGatewaySystemPromptForTests: buildGatewaySystemPrompt,
   gatewayTurnsForTests: toGatewayTurns,
+  renderNewTurnsForTests: renderNewTurns,
   validateGatewayResultForTests: validateGatewayResult,
   validateExtractSessionMemoryResultForTests: validateExtractSessionMemoryResult,
 };

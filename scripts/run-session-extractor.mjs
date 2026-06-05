@@ -11,7 +11,7 @@ import { __testing as updateTesting } from '../packages/core/dist/extractor/upda
 function usage() {
   return [
     'Usage:',
-    '  node scripts/run-session-extractor.mjs --session-id <id> [--database main] [--agent codex]',
+    '  node scripts/run-session-extractor.mjs --session-id <id> [--database main] [--agent codex] [--batch-size 40]',
   ].join('\n');
 }
 
@@ -20,6 +20,7 @@ function parseArgs(argv) {
     database: 'main',
     sessionId: '',
     agent: '',
+    batchSize: 0,
   };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -37,6 +38,13 @@ function parseArgs(argv) {
     }
     if (arg === '--agent') {
       options.agent = readValue(argv, ++index, arg);
+      continue;
+    }
+    if (arg === '--batch-size') {
+      options.batchSize = Number(readValue(argv, ++index, arg));
+      if (!Number.isInteger(options.batchSize) || options.batchSize <= 0) {
+        throw new Error('--batch-size must be a positive integer');
+      }
       continue;
     }
     throw new Error(`unknown option: ${arg}`);
@@ -108,27 +116,39 @@ async function main() {
       return;
     }
 
+    const batchSize = options.batchSize || turns.length;
+    log(`batchSize=${batchSize}`);
     const latestEpoch = Math.max(1, ...turns.map((turn) => turn.observingEpoch ?? 0));
-    const result = await updateTesting.extractEpoch({
-      client: tables,
-      extractorName: extractorConfig.name,
-      activeWindowDays: extractorConfig.activeWindowDays,
-      threads: [],
-      sealedEpoch: {
-        epoch: latestEpoch,
-        turns,
-      },
-      database: databaseName,
-    });
-    log(`touchedThreads=${result.touchedIds.size}`);
+    const threads = [];
+    const touchedIds = new Set();
+    for (let offset = 0, batchIndex = 0; offset < turns.length; offset += batchSize, batchIndex += 1) {
+      const batch = turns.slice(offset, offset + batchSize);
+      log(`batch ${batchIndex + 1}/${Math.ceil(turns.length / batchSize)} turns=${batch.length}`);
+      const result = await updateTesting.extractEpoch({
+        client: tables,
+        extractorName: extractorConfig.name,
+        activeWindowDays: extractorConfig.activeWindowDays,
+        threads,
+        sealedEpoch: {
+          epoch: latestEpoch + batchIndex,
+          turns: batch,
+        },
+        database: databaseName,
+      });
+      threads.splice(0, threads.length, ...result.threads);
+      for (const touchedId of result.touchedIds) {
+        touchedIds.add(touchedId);
+      }
+    }
+    log(`touchedThreads=${touchedIds.size}`);
 
-    const extractionChanges = await updateTesting.buildTouchedIndex(tables, result.threads, result.touchedIds);
-    log(`extractionChanges=${extractionChanges.length}`);
+    const sessionObservationChanges = await updateTesting.buildTouchedIndex(tables, threads, touchedIds);
+    log(`sessionObservationChanges=${sessionObservationChanges.length}`);
 
     const sessionSnapshots = await tables.sessionTable.threadSnapshots(options.sessionId);
-    const extractionRows = await tables.extractionTable.list({ limit: 1_000_000 });
+    const sessionObservationRows = await tables.sessionObservationTable.list({ limit: 1_000_000 });
     log(`sessionSnapshotsForSession=${sessionSnapshots.length}`);
-    log(`totalExtractionRows=${extractionRows.length}`);
+    log(`totalSessionObservationRows=${sessionObservationRows.length}`);
     log('done');
   } finally {
     await tables.close();
