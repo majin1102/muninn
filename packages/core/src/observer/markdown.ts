@@ -273,10 +273,9 @@ function validateTree(sections: DraftSection[], validRefs: Set<string>): void {
   }
 }
 
-function validateTitle(title: string): void {
-  if (title.includes('/')) {
-    throw new Error(`observer document title cannot contain "/": ${title}`);
-  }
+function validateTitle(_title: string): void {
+  // The root title can be a cwd scope such as /Users/Nathan/workspace/muninn.
+  // Section headings still reject "/" so global_path segments stay unambiguous.
 }
 
 function trimBodies(sections: DraftSection[]): void {

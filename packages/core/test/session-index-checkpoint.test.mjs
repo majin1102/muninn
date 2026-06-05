@@ -18,8 +18,8 @@ function checkpoint(overrides = {}) {
       pendingSessionObservationChanges: [],
     },
     observer: {
-      baseline: { observationContext: 4, global_observation: 2 },
-      observeQueue: { anchors: [] },
+      baseline: { globalObservationContext: 4, global_observation: 2 },
+      observeQueue: { cwdBuckets: [] },
       runs: [],
     },
     sessionIndex: {

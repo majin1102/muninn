@@ -54,5 +54,5 @@ user_template: |
   Observed document:
   {{observed_document}}
 
-  Extraction units:
+  SessionObservation units:
   {{extractions}}

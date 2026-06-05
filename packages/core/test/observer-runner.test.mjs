@@ -1,323 +1,146 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
 import { hasPendingObserverWork, __testing } from '../dist/observer/runner.js';
-import { observeAnchor } from '../dist/llm/observing.js';
+import { observeCwdScope } from '../dist/llm/observing.js';
 
 const { getObserverWorkStatus, runObserver } = __testing;
+const CWD = '/Users/Nathan/workspace/muninn';
 
-test('observe queue groups by entity anchor and replaces duplicate extraction rows', async () => {
+test('observe queue groups by cwd and replaces duplicate session observation rows', async () => {
   const { enqueueChanges } = await import('../dist/observer/queue.js');
-  const first = extractionRow('ex-1', ['Entity: Caroline'], 'old text');
-  const latest = extractionRow('ex-1', ['Entity: Caroline'], 'latest text');
-  const queue = enqueueChanges({ anchors: [] }, [{ type: 'upsert', session_observation: first }]);
-  const next = enqueueChanges(queue, [{ type: 'upsert', session_observation: latest }]);
+  const first = sessionObservationRow('so-1', { summary: 'old text' });
+  const latest = sessionObservationRow('so-1', { summary: 'latest text' });
+  const queue = enqueueChanges({ cwdBuckets: [] }, [{ type: 'upsert', sessionObservation: first }]);
+  const next = enqueueChanges(queue, [{ type: 'upsert', sessionObservation: latest }]);
 
-  assert.equal(next.anchors.length, 1);
-  assert.equal(next.anchors[0].key, 'caroline');
-  assert.equal(next.anchors[0].extractionChanges.length, 1);
-  assert.equal(next.anchors[0].extractionChanges[0].extraction.text, 'latest text');
+  assert.equal(next.cwdBuckets.length, 1);
+  assert.equal(next.cwdBuckets[0].key, CWD);
+  assert.equal(next.cwdBuckets[0].sessionObservationChanges.length, 1);
+  assert.equal(next.cwdBuckets[0].sessionObservationChanges[0].sessionObservation.summary, 'latest text');
 });
 
-test('observe queue preserves old bucket when extraction anchor changes', async () => {
+test('observe queue keeps old cwd bucket when a session observation moves cwd', async () => {
   const { enqueueChanges } = await import('../dist/observer/queue.js');
-  const oldRow = extractionRow('ex-1', ['Entity: Caroline'], 'old');
-  const newRow = extractionRow('ex-1', ['Entity: Melanie'], 'new');
-  const queue = enqueueChanges({ anchors: [] }, [{ type: 'upsert', session_observation: oldRow }]);
-  const next = enqueueChanges(queue, [{ type: 'upsert', session_observation: newRow }]);
+  const oldRow = sessionObservationRow('so-1', { cwd: '/repo/old', summary: 'old' });
+  const newRow = sessionObservationRow('so-1', { cwd: '/repo/new', summary: 'new' });
+  const queue = enqueueChanges({ cwdBuckets: [] }, [{ type: 'upsert', sessionObservation: oldRow }]);
+  const next = enqueueChanges(queue, [{ type: 'upsert', sessionObservation: newRow }]);
 
-  assert.deepEqual(next.anchors.map((bucket) => bucket.key), ['caroline', 'melanie']);
-  assert.equal(next.anchors[0].extractionChanges[0].extraction.text, 'new');
-  assert.equal(next.anchors[1].extractionChanges[0].extraction.text, 'new');
+  assert.deepEqual(next.cwdBuckets.map((bucket) => bucket.key), ['/repo/old', '/repo/new']);
+  assert.equal(next.cwdBuckets[0].sessionObservationChanges[0].sessionObservation.summary, 'new');
+  assert.equal(next.cwdBuckets[1].sessionObservationChanges[0].sessionObservation.summary, 'new');
 });
 
-test('observe queue batches and acks one anchor bucket', async () => {
+test('observe queue batches and acks one cwd bucket', async () => {
   const { enqueueChanges, readyBucket, ackBucket } = await import('../dist/observer/queue.js');
-  let queue = { anchors: [] };
+  let queue = { cwdBuckets: [] };
   for (let index = 0; index < 9; index += 1) {
     queue = enqueueChanges(queue, [{
       type: 'upsert',
-      session_observation: extractionRow(`ex-${index}`, ['Entity: Caroline'], `text ${index}`),
+      sessionObservation: sessionObservationRow(`so-${index}`),
     }]);
   }
 
   const bucket = readyBucket(queue, { threshold: 8, batchSize: 4, finalize: false });
-  assert.equal(bucket.anchor, 'Caroline');
-  assert.equal(bucket.extractionChanges.length, 4);
+  assert.equal(bucket.cwd, CWD);
+  assert.equal(bucket.sessionObservationChanges.length, 4);
 
-  const acked = ackBucket(queue, bucket.key, bucket.extractionChanges.map((change) => change.extraction.id));
-  assert.equal(acked.anchors[0].extractionChanges.length, 5);
+  const acked = ackBucket(queue, bucket.key, bucket.sessionObservationChanges.map((change) => change.sessionObservation.id));
+  assert.equal(acked.cwdBuckets[0].sessionObservationChanges.length, 5);
 });
 
-test('hasPendingObserverWork waits for threshold without advancing baseline', async () => {
-  const client = makeClient({
-    extractions: makeSessionObservations(4),
-  });
+test('hasPendingObserverWork waits for cwd threshold without advancing baseline', async () => {
+  const client = makeClient({ sessionObservations: makeSessionObservations(4) });
 
-  assert.equal(await hasPendingObserverWork({ client, baselineVersion: 0, anchorThreshold: 5 }), false);
+  assert.equal(await hasPendingObserverWork({ client, baselineVersion: 0, cwdThreshold: 5 }), false);
   assert.deepEqual(
-    await getObserverWorkStatus({ client, baselineVersion: 0, anchorThreshold: 5 }),
+    await getObserverWorkStatus({ client, baselineVersion: 0, cwdThreshold: 5 }),
     { changed: true, pending: false, groupCount: 1, baselineVersion: 1 },
   );
 });
 
-test('hasPendingObserverWork reports pending when incremental threshold is reached', async () => {
-  const client = makeClient({
-    extractions: makeSessionObservations(5),
-  });
+test('hasPendingObserverWork reports pending when cwd threshold is reached', async () => {
+  const client = makeClient({ sessionObservations: makeSessionObservations(5) });
 
-  assert.equal(await hasPendingObserverWork({ client, baselineVersion: 0, anchorThreshold: 5 }), true);
+  assert.equal(await hasPendingObserverWork({ client, baselineVersion: 0, cwdThreshold: 5 }), true);
 });
 
-test('getObserverWorkStatus advances baseline when delta has no eligible entity anchors', async () => {
+test('getObserverWorkStatus ignores session observations without cwd', async () => {
   const client = makeClient({
-    extractions: makeSessionObservations(2, { anchors: ['Fact: support group'] }),
+    sessionObservations: makeSessionObservations(2).map((row) => ({ ...row, cwd: '' })),
   });
 
   assert.deepEqual(
-    await getObserverWorkStatus({ client, baselineVersion: 0, anchorThreshold: 5 }),
+    await getObserverWorkStatus({ client, baselineVersion: 0, cwdThreshold: 5 }),
     { changed: true, pending: false, groupCount: 0, baselineVersion: 1 },
   );
 });
 
-test('getObserverWorkStatus sees below-threshold work during finalize', async () => {
-  const client = makeClient({
-    extractions: makeSessionObservations(4),
-  });
-
-  assert.deepEqual(
-    await getObserverWorkStatus({ client, baselineVersion: 0, anchorThreshold: 5, finalize: true }),
-    { changed: true, pending: true, groupCount: 1, baselineVersion: 1 },
-  );
-});
-
-test('runObserver skips until anchor threshold is reached', async () => {
-  const client = makeClient({
-    extractions: makeSessionObservations(4),
-  });
+test('runObserver finalizes pending session observations below threshold', async (t) => {
+  await useMockHome(t, 'muninn-observer-runner-finalize-');
+  let observedInput = null;
+  const client = makeClient({ sessionObservations: makeSessionObservations(2) });
 
   const result = await runObserver({
     client,
     observerName: 'test-observer',
     baselineVersion: 0,
-    anchorThreshold: 5,
-    observeAnchorImpl: async () => {
-      throw new Error('observeAnchorImpl should not be called before threshold');
+    cwdThreshold: 5,
+    finalize: true,
+    observeCwdScopeImpl: async (input) => {
+      observedInput = input;
+      return observerResult(input.cwdScope, input.extractions.map((extraction) => extraction.id));
+    },
+  });
+
+  assert.deepEqual(result, { observed: 1, skipped: 0, baselineVersion: 1 });
+  assert.equal(observedInput.cwdScope, CWD);
+  assert.deepEqual(observedInput.extractions.map((extraction) => extraction.id), ['so-1', 'so-2']);
+  assert.equal(client.writes.globalObservationContexts.length, 2);
+  assert.equal(client.writes.globalObservations.length, 1);
+  assert.deepEqual(
+    client.writes.sessionObservations.map((row) => [row.id, row.globalObservationPaths]),
+    [['so-1', [`${CWD} / Work / Decision`]], ['so-2', [`${CWD} / Work / Decision`]]],
+  );
+});
+
+test('runObserver skips until cwd threshold is reached', async () => {
+  const client = makeClient({ sessionObservations: makeSessionObservations(4) });
+
+  const result = await runObserver({
+    client,
+    observerName: 'test-observer',
+    baselineVersion: 0,
+    cwdThreshold: 5,
+    observeCwdScopeImpl: async () => {
+      throw new Error('observeCwdScopeImpl should not be called before threshold');
     },
   });
 
   assert.deepEqual(result, { observed: 0, skipped: 1, baselineVersion: 0 });
 });
 
-test('runObserver finalizes pending extractions below threshold', async () => {
-  let observedInput = null;
-  const client = makeClient({
-    extractions: makeSessionObservations(4),
-  });
-
-  const result = await runObserver({
-    client,
-    observerName: 'test-observer',
-    baselineVersion: 0,
-    anchorThreshold: 5,
-    finalize: true,
-    observeAnchorImpl: async (input) => {
-      observedInput = input;
-      return {
-        title: 'Caroline',
-        sections: [{
-          level: 2,
-          heading: 'Who is Caroline?',
-          observingPath: 'Caroline / Who is Caroline?',
-          sourceRefs: [],
-          expandRefs: [],
-          body: '',
-          children: input.extractions.map((extraction) => ({
-            level: 3,
-            heading: extraction.id,
-            observingPath: `Caroline / Who is Caroline? / ${extraction.id}`,
-            sourceRefs: [extraction.id],
-            expandRefs: [],
-            body: '',
-            children: [],
-          })),
-        }],
-      };
-    },
-  });
-
-  assert.deepEqual(result, { observed: 1, skipped: 0, baselineVersion: 1 });
-  assert.deepEqual(observedInput.extractions.map((extraction) => extraction.id), [
-    'pending-1',
-    'pending-2',
-    'pending-3',
-    'pending-4',
-  ]);
-});
-
-test('runObserver renders existing leaf refs from observation rows', async () => {
-  let observedInput = null;
+test('runObserver preserves unrelated cwd global observation branches', async (t) => {
+  await useMockHome(t, 'muninn-observer-runner-cwd-scope-');
+  const oldPath = `${CWD} / Existing / Leaf`;
+  const otherPath = '/Users/Nathan/workspace/lance / Existing / Leaf';
   const client = makeClient({
     contexts: [
-      {
-        id: 'Caroline / Who is Caroline?',
-        observingPath: 'Caroline / Who is Caroline?',
-        parentId: null,
-        position: 0,
-        content: 'Caroline overview.',
-        observer: 'test-observer',
-        createdAt: '2024-01-01T00:00:00Z',
-        updatedAt: '2024-01-01T00:00:00Z',
-      },
-      {
-        id: 'Caroline / Who is Caroline? / Support group',
-        observingPath: 'Caroline / Who is Caroline? / Support group',
-        parentId: 'Caroline / Who is Caroline?',
-        position: 0,
-        content: 'Caroline attended a support group.',
-        observer: 'test-observer',
-        createdAt: '2024-01-01T00:00:00Z',
-        updatedAt: '2024-01-01T00:00:00Z',
-      },
+      contextRow(`${CWD} / Existing`, null, ''),
+      contextRow(oldPath, `${CWD} / Existing`, 'Old content.', ['so-1']),
+      contextRow('/Users/Nathan/workspace/lance / Existing', null, ''),
+      contextRow(otherPath, '/Users/Nathan/workspace/lance / Existing', 'Other cwd content.', ['other']),
     ],
-    observations: [{
-      id: 'Caroline / Who is Caroline? / Support group',
-      observingPath: 'Caroline / Who is Caroline? / Support group',
-      text: 'Caroline attended a support group.',
-      vector: [],
-      extractionRefs: ['session_observation:old'],
-      createdAt: '2024-01-01T00:00:00Z',
-      updatedAt: '2024-01-01T00:00:00Z',
-    }],
-    extractions: [{ ...makeSessionObservations(1)[0], observationPaths: ['Caroline / Who is Caroline? / Support group'] }],
-  });
-
-  await runObserver({
-    client,
-    observerName: 'test-observer',
-    baselineVersion: 0,
-    anchorThreshold: 5,
-    finalize: true,
-    observeAnchorImpl: async (input) => {
-      observedInput = input;
-      return {
-        title: 'Caroline',
-        sections: [{
-          level: 2,
-          heading: 'Who is Caroline?',
-          observingPath: 'Caroline / Who is Caroline?',
-          sourceRefs: [],
-          expandRefs: [],
-          body: '',
-          children: [{
-            level: 3,
-            heading: 'Support group',
-            observingPath: 'Caroline / Who is Caroline? / Support group',
-            sourceRefs: ['session_observation:old'],
-            expandRefs: [],
-            body: '',
-            children: [],
-          }],
-        }],
-      };
-    },
-  });
-
-  assert.match(observedInput.outline, /leaf: Caroline \/ Who is Caroline\? \/ Support group/);
-  assert.match(observedInput.observedDocument, /### Support group <!-- path: Caroline \/ Who is Caroline\? \/ Support group -->/);
-  assert.match(observedInput.observedDocument, /Source extractions:\n- \[session_observation:old\]/);
-});
-
-test('runObserver removes changed extraction refs from existing leaf hints', async () => {
-  let observedInput = null;
-  const client = makeClient({
-    contexts: [
-      {
-        id: 'Caroline / Who is Caroline?',
-        observingPath: 'Caroline / Who is Caroline?',
-        parentId: null,
-        position: 0,
-        content: 'Caroline overview.',
-        observer: 'test-observer',
-        createdAt: '2024-01-01T00:00:00Z',
-        updatedAt: '2024-01-01T00:00:00Z',
-      },
-      {
-        id: 'Caroline / Who is Caroline? / Support group',
-        observingPath: 'Caroline / Who is Caroline? / Support group',
-        parentId: 'Caroline / Who is Caroline?',
-        position: 0,
-        content: 'Caroline attended a support group.',
-        observer: 'test-observer',
-        createdAt: '2024-01-01T00:00:00Z',
-        updatedAt: '2024-01-01T00:00:00Z',
-      },
+    globalObservations: [
+      globalObservationRow(oldPath, ['so-1']),
+      globalObservationRow(otherPath, ['other']),
     ],
-    observations: [{
-      id: 'Caroline / Who is Caroline? / Support group',
-      observingPath: 'Caroline / Who is Caroline? / Support group',
-      text: 'Caroline attended a support group.',
-      vector: [],
-      extractionRefs: ['session_observation:old', 'pending-1'],
-      createdAt: '2024-01-01T00:00:00Z',
-      updatedAt: '2024-01-01T00:00:00Z',
-    }],
-    extractions: [{ ...makeSessionObservations(1)[0], observationPaths: ['Caroline / Who is Caroline? / Support group'] }],
-  });
-
-  await runObserver({
-    client,
-    observerName: 'test-observer',
-    baselineVersion: 0,
-    anchorThreshold: 5,
-    finalize: true,
-    observeAnchorImpl: async (input) => {
-      observedInput = input;
-      return {
-        title: 'Caroline',
-        sections: [{
-          level: 2,
-          heading: 'Who is Caroline?',
-          observingPath: 'Caroline / Who is Caroline?',
-          sourceRefs: [],
-          expandRefs: [],
-          body: '',
-          children: [{
-            level: 3,
-            heading: 'Support group',
-            observingPath: 'Caroline / Who is Caroline? / Support group',
-            sourceRefs: ['session_observation:old', input.extractions[0].id],
-            expandRefs: [],
-            body: '',
-            children: [],
-          }],
-        }],
-      };
-    },
-  });
-
-  assert.match(observedInput.observedDocument, /Support group <!-- path: Caroline \/ Who is Caroline\? \/ Support group -->/);
-  assert.match(observedInput.observedDocument, /Source extractions:\n- \[session_observation:old\]/);
-  assert.doesNotMatch(observedInput.observedDocument, /- \[session_observation:old, pending-1\]/);
-  assert.deepEqual(observedInput.extractions.map((extraction) => extraction.id), ['pending-1']);
-});
-
-test('runObserver sends full outline but only linked rewrite content', async () => {
-  let observedInput = null;
-  const client = makeClient({
-    contexts: existingCarolineContexts(),
-    observations: [
-      observationRow('Caroline / Support / Support group', 'Caroline / Support / Support group', ['pending-1']),
-      observationRow('Caroline / Art / Painting', 'Caroline / Art / Painting', ['session_observation:painting']),
-    ],
-    extractions: [
-      {
-        ...extractionRow('pending-1', ['Entity: Caroline'], 'Caroline updated support group details.'),
-        observationPaths: ['Caroline / Support / Support group'],
-      },
+    sessionObservations: [
+      sessionObservationRow('so-1', { globalObservationPaths: [oldPath] }),
     ],
   });
 
@@ -325,1215 +148,76 @@ test('runObserver sends full outline but only linked rewrite content', async () 
     client,
     observerName: 'test-observer',
     baselineVersion: 0,
-    anchorThreshold: 5,
+    cwdThreshold: 5,
     finalize: true,
-    observeAnchorImpl: async (input) => {
-      observedInput = input;
-      return {
-        title: 'Caroline',
-        sections: [{
-          level: 2,
-          heading: 'Support',
-          observingPath: 'Caroline / Support',
-          sourceRefs: [],
-          expandRefs: [],
-          body: '',
-          children: [{
-            level: 3,
-            heading: 'Support group',
-            observingPath: 'Caroline / Support / Support group',
-            sourceRefs: ['pending-1'],
-            expandRefs: [],
-            body: '',
-            children: [],
-          }],
-        }],
-      };
-    },
+    observeCwdScopeImpl: async (input) => observerResult(input.cwdScope, [input.extractions[0].id]),
   });
 
-  assert.match(observedInput.outline, /leaf: Caroline \/ Support \/ Support group/);
-  assert.match(observedInput.outline, /leaf: Caroline \/ Art \/ Painting/);
-  assert.match(observedInput.observedDocument, /Support group/);
-  assert.match(observedInput.observedDocument, /Painting <!-- path: Caroline \/ Art \/ Painting -->/);
-  assert.doesNotMatch(observedInput.observedDocument, /Caroline painted a landscape/);
-  assert.deepEqual(observedInput.extractions.map((extraction) => extraction.status), ['changed']);
+  assert.equal(client.writes.deletedGlobalObservationIds.includes(otherPath), false);
+  assert.equal(client.writes.deletedContextIds.includes(otherPath), false);
 });
 
-test('runObserver preserves sibling branches outside returned subtree', async () => {
-  const client = makeClient({
-    contexts: existingCarolineContexts(),
-    observations: [
-      observationRow('support-leaf', 'Caroline / Support / Support group', ['pending-1']),
-      observationRow('painting-leaf', 'Caroline / Art / Painting', ['session_observation:painting']),
-    ],
-    extractions: [
-      {
-        ...extractionRow('pending-1', ['Entity: Caroline'], 'Caroline updated support group details.'),
-        observationPaths: ['Caroline / Support / Support group'],
-      },
-    ],
-  });
+test('observeCwdScope accepts slash-containing cwd as root title', async (t) => {
+  await useMockHome(t, 'muninn-observer-cwd-title-');
 
-  await runObserver({
-    client,
-    observerName: 'test-observer',
-    baselineVersion: 0,
-    anchorThreshold: 5,
-    finalize: true,
-    observeAnchorImpl: async () => ({
-      title: 'Caroline',
-      sections: [{
-        level: 2,
-        heading: 'Support',
-        observingPath: 'Caroline / Support',
-        sourceRefs: [],
-        expandRefs: [],
-        body: '',
-        rewritten: true,
-        children: [{
-          level: 3,
-          heading: 'Support group',
-          observingPath: 'Caroline / Support / Support group',
-          sourceRefs: ['pending-1'],
-          expandRefs: [],
-          body: '',
-          children: [],
-        }],
-      }],
-    }),
-  });
-
-  assert.equal(client.writes.deletedGlobalObservationIds.includes('Caroline / Art / Painting'), false);
-  assert.equal(client.writes.observationContexts.some((row) => row.id === 'Caroline / Art / Painting'), false);
-});
-
-test('runObserver deletes omitted descendants inside a returned subtree scope', async () => {
-  const siblingPath = 'Caroline / Support / Family';
-  const client = makeClient({
-    contexts: [
-      ...existingCarolineContexts(),
-      {
-        id: siblingPath,
-        observingPath: siblingPath,
-        parentId: 'Caroline / Support',
-        position: 1,
-        content: 'Caroline has family support.',
-        observer: 'test-observer',
-        createdAt: '2024-01-01T00:00:00Z',
-        updatedAt: '2024-01-01T00:00:00Z',
-      },
-    ],
-    observations: [
-      observationRow('Caroline / Support / Support group', 'Caroline / Support / Support group', ['pending-1']),
-      observationRow(siblingPath, siblingPath, ['session_observation:family']),
-    ],
-    extractions: [
-      {
-        ...extractionRow('pending-1', ['Entity: Caroline'], 'Caroline updated support group details.'),
-        observationPaths: ['Caroline / Support / Support group'],
-      },
-    ],
-  });
-
-  await runObserver({
-    client,
-    observerName: 'test-observer',
-    baselineVersion: 0,
-    anchorThreshold: 5,
-    finalize: true,
-    observeAnchorImpl: async () => ({
-      title: 'Caroline',
-      sections: [{
-        level: 2,
-        heading: 'Support',
-        observingPath: 'Caroline / Support',
-        sourceRefs: [],
-        expandRefs: [],
-        body: '',
-        rewritten: true,
-        children: [{
-          level: 3,
-          heading: 'Support group',
-          observingPath: 'Caroline / Support / Support group',
-          sourceRefs: ['pending-1'],
-          expandRefs: [],
-          body: '',
-          children: [],
-        }],
-      }],
-    }),
-  });
-
-  assert.equal(client.writes.deletedContextIds.includes(siblingPath), true);
-  assert.equal(client.writes.deletedGlobalObservationIds.includes(siblingPath), true);
-});
-
-test('runObserver keeps heading-only existing descendants under a rewritten parent', async () => {
-  const siblingPath = 'Caroline / Support / Family';
-  const client = makeClient({
-    contexts: [
-      ...existingCarolineContexts(),
-      {
-        id: siblingPath,
-        observingPath: siblingPath,
-        parentId: 'Caroline / Support',
-        position: 1,
-        content: 'Caroline has family support.',
-        observer: 'test-observer',
-        createdAt: '2024-01-01T00:00:00Z',
-        updatedAt: '2024-01-01T00:00:00Z',
-      },
-    ],
-    observations: [
-      observationRow('Caroline / Support / Support group', 'Caroline / Support / Support group', ['pending-1']),
-      observationRow(siblingPath, siblingPath, ['session_observation:family']),
-    ],
-    extractions: [
-      {
-        ...extractionRow('pending-1', ['Entity: Caroline'], 'Caroline updated support group details.'),
-        observationPaths: ['Caroline / Support / Support group'],
-      },
-    ],
-  });
-
-  await runObserver({
-    client,
-    observerName: 'test-observer',
-    baselineVersion: 0,
-    anchorThreshold: 5,
-    finalize: true,
-    observeAnchorImpl: async () => ({
-      title: 'Caroline',
-      sections: [{
-        level: 2,
-        heading: 'Support',
-        observingPath: 'Caroline / Support',
-        sourceRefs: [],
-        expandRefs: [],
-        body: '',
-        rewritten: true,
-        children: [{
-          level: 3,
-          heading: 'Support group',
-          observingPath: 'Caroline / Support / Support group',
-          sourceRefs: ['pending-1'],
-          expandRefs: [],
-          body: '',
-          rewritten: true,
-          children: [],
-        }, {
-          level: 3,
-          heading: 'Family',
-          observingPath: siblingPath,
-          sourceRefs: [],
-          expandRefs: [],
-          body: '',
-          rewritten: false,
-          children: [],
-        }],
-      }],
-    }),
-  });
-
-  assert.equal(client.writes.deletedContextIds.includes(siblingPath), false);
-  assert.equal(client.writes.deletedGlobalObservationIds.includes(siblingPath), false);
-  assert.equal(client.writes.observationContexts.some((row) => row.id === siblingPath), false);
-});
-
-test('runObserver clears stale leaf content when a heading-only leaf is promoted to parent', async () => {
-  const familyPath = 'Caroline / Support / Family';
-  const parentsPath = 'Caroline / Support / Family / Parents';
-  const client = makeClient({
-    contexts: [
-      ...existingCarolineContexts(),
-      {
-        id: familyPath,
-        observingPath: familyPath,
-        parentId: 'Caroline / Support',
-        position: 1,
-        content: 'Caroline has family support.',
-        sourceRefs: ['session_observation:family-old'],
-        expandRefs: [],
-        observer: 'test-observer',
-        createdAt: '2024-01-01T00:00:00Z',
-        updatedAt: '2024-01-01T00:00:00Z',
-      },
-    ],
-    observations: [
-      observationRow(familyPath, familyPath, ['session_observation:family-old']),
-    ],
-    extractions: [
-      {
-        ...extractionRow('pending-1', ['Entity: Caroline'], 'Caroline said her parents support her.'),
-        observationPaths: [familyPath],
-      },
-    ],
-  });
-
-  await runObserver({
-    client,
-    observerName: 'test-observer',
-    baselineVersion: 0,
-    anchorThreshold: 5,
-    finalize: true,
-    observeAnchorImpl: async () => ({
-      title: 'Caroline',
-      sections: [{
-        level: 2,
-        heading: 'Support',
-        observingPath: 'Caroline / Support',
-        sourceRefs: [],
-        expandRefs: [],
-        body: '',
-        rewritten: true,
-        children: [{
-          level: 3,
-          heading: 'Family',
-          observingPath: familyPath,
-          sourceRefs: [],
-          expandRefs: [],
-          body: '',
-          rewritten: false,
-          children: [{
-            level: 4,
-            heading: 'Parents',
-            observingPath: parentsPath,
-            sourceRefs: ['pending-1'],
-            expandRefs: [],
-            body: '',
-            rewritten: true,
-            children: [],
-          }],
-        }],
-      }],
-    }),
-  });
-
-  const promoted = client.writes.observationContexts.find((row) => row.id === familyPath);
-  assert.equal(promoted?.content, '');
-  assert.deepEqual(promoted?.sourceRefs, []);
-  assert.deepEqual(promoted?.expandRefs, []);
-  assert.equal(client.writes.deletedGlobalObservationIds.includes(familyPath), true);
-  assert.equal(client.writes.deletedContextIds.includes(familyPath), false);
-});
-
-test('runObserver rejects heading-only new leaves', async () => {
-  const client = makeClient({
-    contexts: existingCarolineContexts(),
-    observations: [
-      observationRow('Caroline / Support / Support group', 'Caroline / Support / Support group', ['pending-1']),
-    ],
-    extractions: [
-      {
-        ...extractionRow('pending-1', ['Entity: Caroline'], 'Caroline updated support group details.'),
-        observationPaths: ['Caroline / Support / Support group'],
-      },
-    ],
-  });
-
-  await assert.rejects(() => runObserver({
-    client,
-    observerName: 'test-observer',
-    baselineVersion: 0,
-    anchorThreshold: 5,
-    finalize: true,
-    observeAnchorImpl: async () => ({
-      title: 'Caroline',
-      sections: [{
-        level: 2,
-        heading: 'Support',
-        observingPath: 'Caroline / Support',
-        sourceRefs: [],
-        expandRefs: [],
-        body: 'Updated support overview.',
-        rewritten: true,
-        children: [{
-          level: 3,
-          heading: 'New empty leaf',
-          observingPath: 'Caroline / Support / New empty leaf',
-          sourceRefs: [],
-          expandRefs: [],
-          body: '',
-          rewritten: false,
-          children: [],
-        }],
-      }],
-    }),
-  }), /heading-only observer section does not exist/i);
-});
-
-test('runObserver deletes a linked leaf omitted from the returned rewrite scope', async () => {
-  const client = makeClient({
-    contexts: existingCarolineContexts(),
-    observations: [
-      observationRow('Caroline / Support / Support group', 'Caroline / Support / Support group', ['pending-1']),
-    ],
-    extractions: [
-      {
-        ...extractionRow('pending-1', ['Entity: Caroline'], 'Caroline updated support group details.'),
-        observationPaths: ['Caroline / Support / Support group'],
-      },
-    ],
-  });
-
-  await runObserver({
-    client,
-    observerName: 'test-observer',
-    baselineVersion: 0,
-    anchorThreshold: 5,
-    finalize: true,
-    observeAnchorImpl: async () => ({
-      title: 'Caroline',
-      sections: [{
-        level: 2,
-        heading: 'Support',
-        observingPath: 'Caroline / Support',
-        sourceRefs: [],
-        expandRefs: [],
-        body: '',
-        rewritten: true,
-        children: [],
-      }],
-    }),
-  });
-
-  assert.equal(client.writes.deletedContextIds.includes('Caroline / Support / Support group'), true);
-  assert.equal(client.writes.deletedGlobalObservationIds.includes('Caroline / Support / Support group'), true);
-});
-
-test('runObserver does not upsert deleted extraction changes when updating links', async (t) => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), 'muninn-observer-runner-'));
-  const homeDir = path.join(dir, 'muninn');
-  await mkdir(homeDir, { recursive: true });
-  await writeFile(path.join(homeDir, 'muninn.json'), JSON.stringify(mockConfig(), null, 2));
-  const previousHome = process.env.MUNINN_HOME;
-  process.env.MUNINN_HOME = homeDir;
-  t.after(async () => {
-    if (previousHome === undefined) {
-      delete process.env.MUNINN_HOME;
-    } else {
-      process.env.MUNINN_HOME = previousHome;
-    }
-    await rm(dir, { recursive: true, force: true });
-  });
-
-  const deletedSessionObservation = {
-    ...extractionRow('pending-1', ['Entity: Caroline'], 'Caroline removed old support group details.'),
-    observationPaths: ['Caroline / Support / Support group'],
-  };
-  const client = makeClient({
-    contexts: existingCarolineContexts(),
-    observations: [
-      observationRow('Caroline / Support / Support group', 'Caroline / Support / Support group', ['pending-1']),
-    ],
-    extractions: [],
-  });
-
-  await runObserver({
-    client,
-    observerName: 'test-observer',
-    anchor: 'Caroline',
-    extractionChanges: [{ type: 'delete', session_observation: deletedSessionObservation }],
-    observeAnchorImpl: async () => ({
-      title: 'Caroline',
-      sections: [{
-        level: 2,
-        heading: 'Support',
-        observingPath: 'Caroline / Support',
-        sourceRefs: [],
-        expandRefs: [],
-        body: '',
-        rewritten: true,
-        children: [],
-      }],
-    }),
-  });
-
-  assert.equal(client.writes.deletedContextIds.includes('Caroline / Support / Support group'), true);
-  assert.equal(client.writes.deletedGlobalObservationIds.includes('Caroline / Support / Support group'), true);
-  assert.deepEqual(client.writes.extractions, []);
-});
-
-test('runObserver get_observation returns selected subtree without siblings', async () => {
-  let toolContent = '';
-  const client = makeClient({
-    contexts: existingCarolineContexts(),
-    observations: [
-      observationRow('Caroline / Support / Support group', 'Caroline / Support / Support group', ['session_observation:support']),
-      observationRow('Caroline / Art / Painting', 'Caroline / Art / Painting', ['session_observation:painting']),
-    ],
-    extractions: makeSessionObservations(1),
-  });
-
-  await runObserver({
-    client,
-    observerName: 'test-observer',
-    baselineVersion: 0,
-    anchorThreshold: 5,
-    finalize: true,
-    observeAnchorImpl: async (input) => {
-      toolContent = await input.getGlobalObservation(['Caroline / Art / Painting']);
-      return {
-        title: 'Caroline',
-        sections: [{
-          level: 2,
-          heading: 'Art',
-          observingPath: 'Caroline / Art',
-          sourceRefs: [],
-          expandRefs: [],
-          body: '',
-          children: [{
-            level: 3,
-            heading: 'Painting',
-            observingPath: 'Caroline / Art / Painting',
-            sourceRefs: ['session_observation:painting', input.extractions[0].id],
-            expandRefs: [],
-            body: '',
-            children: [],
-          }],
-        }],
-      };
-    },
-  });
-
-  assert.match(toolContent, /# Caroline/);
-  assert.match(toolContent, /## Art/);
-  assert.match(toolContent, /### Painting <!-- path: Caroline \/ Art \/ Painting -->/);
-  assert.match(toolContent, /Source extractions:\n- \[session_observation:painting\]/);
-  assert.doesNotMatch(toolContent, /Support group/);
-});
-
-test('runObserver get_observation returns non-leaf subtree without sibling branches', async () => {
-  let toolContent = '';
-  const client = makeClient({
-    contexts: [
-      ...existingCarolineContexts(),
-      {
-        id: 'Caroline / Art / Music',
-        observingPath: 'Caroline / Art / Music',
-        parentId: 'Caroline / Art',
-        position: 1,
-        content: 'Caroline plays piano.',
-        observer: 'test-observer',
-        createdAt: '2024-01-01T00:00:00Z',
-        updatedAt: '2024-01-01T00:00:00Z',
-      },
-    ],
-    observations: [
-      observationRow('Caroline / Support / Support group', 'Caroline / Support / Support group', ['session_observation:support']),
-      observationRow('Caroline / Art / Painting', 'Caroline / Art / Painting', ['session_observation:painting']),
-      observationRow('Caroline / Art / Music', 'Caroline / Art / Music', ['session_observation:music']),
-    ],
-    extractions: makeSessionObservations(1),
-  });
-
-  await runObserver({
-    client,
-    observerName: 'test-observer',
-    baselineVersion: 0,
-    anchorThreshold: 5,
-    finalize: true,
-    observeAnchorImpl: async (input) => {
-      toolContent = await input.getGlobalObservation(['Caroline / Art']);
-      return {
-        title: 'Caroline',
-        sections: [{
-          level: 2,
-          heading: 'Art',
-          observingPath: 'Caroline / Art',
-          sourceRefs: [],
-          expandRefs: [],
-          body: 'Art overview.',
-          children: [{
-            level: 3,
-            heading: 'Painting',
-            observingPath: 'Caroline / Art / Painting',
-            sourceRefs: ['session_observation:painting'],
-            expandRefs: [],
-            body: '',
-            children: [],
-          }, {
-            level: 3,
-            heading: 'Music',
-            observingPath: 'Caroline / Art / Music',
-            sourceRefs: ['session_observation:music'],
-            expandRefs: [],
-            body: '',
-            children: [],
-          }],
-        }],
-      };
-    },
-  });
-
-  assert.match(toolContent, /# Caroline/);
-  assert.match(toolContent, /## Art/);
-  assert.match(toolContent, /### Painting <!-- path: Caroline \/ Art \/ Painting -->/);
-  assert.match(toolContent, /Source extractions:\n- \[session_observation:painting\]/);
-  assert.match(toolContent, /### Music <!-- path: Caroline \/ Art \/ Music -->/);
-  assert.match(toolContent, /Source extractions:\n- \[session_observation:music\]/);
-  assert.doesNotMatch(toolContent, /Support group/);
-});
-
-test('runObserver applies a rootless leaf rewrite to its existing parent', async () => {
-  const client = makeClient({
-    contexts: existingCarolineContexts(),
-    observations: [
-      observationRow('support-leaf', 'Caroline / Support / Support group', ['pending-1']),
-    ],
-    extractions: [
-      {
-        ...extractionRow('pending-1', ['Entity: Caroline'], 'Caroline updated support group details.'),
-        observationPaths: ['Caroline / Support / Support group'],
-      },
-    ],
-  });
-
-  await runObserver({
-    client,
-    observerName: 'test-observer',
-    baselineVersion: 0,
-    anchorThreshold: 5,
-    finalize: true,
-    observeAnchorImpl: async () => ({
-      title: 'Caroline',
-      sections: [{
-        level: 2,
-        heading: 'Support',
-        observingPath: 'Caroline / Support',
-        sourceRefs: [],
-        expandRefs: [],
-        body: '',
-        children: [{
-          level: 3,
-          heading: 'Support group',
-          observingPath: 'Caroline / Support / Support group',
-          sourceRefs: ['pending-1'],
-          expandRefs: [],
-          body: '',
-          children: [],
-        }],
-      }],
-    }),
-  });
-
-  const leaf = client.writes.observationContexts.find((row) => row.observingPath === 'Caroline / Support / Support group');
-  assert.equal(leaf?.parentId, 'Caroline / Support');
-  assert.equal(leaf?.observingPath, 'Caroline / Support / Support group');
-});
-
-test('observeAnchor accepts path-based subtree markdown', async (t) => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), 'muninn-observer-rootless-'));
-  t.after(async () => rm(dir, { recursive: true, force: true }));
-
-  const homeDir = path.join(dir, 'home');
-  await writeFile(path.join(dir, 'muninn.json'), JSON.stringify(mockConfig(), null, 2));
-  await mkdir(homeDir, { recursive: true });
-  await copyFile(path.join(dir, 'muninn.json'), path.join(homeDir, 'muninn.json'));
-
-  const previousHome = process.env.MUNINN_HOME;
-  process.env.MUNINN_HOME = homeDir;
-  t.after(() => {
-    if (previousHome === undefined) {
-      delete process.env.MUNINN_HOME;
-    } else {
-      process.env.MUNINN_HOME = previousHome;
-    }
-  });
-
-  const result = await observeAnchor({
-    entityAnchor: 'Caroline',
-    outline: '# Caroline',
+  const result = await observeCwdScope({
+    cwdScope: CWD,
+    outline: `# ${CWD}\n\n(empty)`,
     observedDocument: '',
     extractions: [{
-      id: 'ext-a',
-      status: 'changed',
-      text: 'Caroline updated support details.',
+      id: 'so-1',
+      status: 'new',
+      text: 'The project should use cwd-scoped observer grouping.',
       context: null,
-      anchors: ['Entity: Caroline'],
+      cwd: CWD,
       turnRefs: ['turn:1'],
     }],
-    getGlobalObservation: () => '# Caroline',
+    getGlobalObservation: () => `# ${CWD}`,
     maxAttempts: 1,
     model: async () => ({
       type: 'final',
-      text: `## Support
+      text: `## Work
 
-### Support group
-Caroline updated support details.
+### Decision
+The observer groups session observations by cwd.
 
 Source extractions:
-- [ext-a]`,
+- [so-1]`,
     }),
   });
 
-  assert.equal(result.title, 'Caroline');
-  assert.equal(result.sections[0].level, 2);
-  assert.equal(result.sections[0].observingPath, 'Caroline / Support');
-  assert.equal(result.sections[0].children[0].observingPath, 'Caroline / Support / Support group');
+  assert.equal(result.title, CWD);
+  assert.equal(result.sections[0].globalPath, `${CWD} / Work`);
+  assert.equal(result.sections[0].children[0].globalPath, `${CWD} / Work / Decision`);
 });
 
-test('runObserver upserts each observation id once', async (t) => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), 'muninn-observer-dedupe-'));
-  t.after(async () => rm(dir, { recursive: true, force: true }));
-
-  const homeDir = path.join(dir, 'home');
-  await writeFile(path.join(dir, 'muninn.json'), JSON.stringify(mockConfig(), null, 2));
-  await mkdir(homeDir, { recursive: true });
-  await copyFile(path.join(dir, 'muninn.json'), path.join(homeDir, 'muninn.json'));
-
-  const previousHome = process.env.MUNINN_HOME;
-  process.env.MUNINN_HOME = homeDir;
-  t.after(() => {
-    if (previousHome === undefined) {
-      delete process.env.MUNINN_HOME;
-    } else {
-      process.env.MUNINN_HOME = previousHome;
-    }
-  });
-
-  const client = makeClient({
-    extractions: makeSessionObservations(1),
-  });
-
-  await runObserver({
-    client,
-    observerName: 'test-observer',
-    baselineVersion: 0,
-    anchorThreshold: 5,
-    finalize: true,
-    observeAnchorImpl: async (input) => ({
-      title: 'Caroline',
-      sections: [{
-        level: 2,
-        heading: 'Who is Caroline?',
-        observingPath: 'Caroline / Who is Caroline?',
-        sourceRefs: [],
-        expandRefs: [],
-        body: 'Caroline overview.',
-        children: [{
-          level: 3,
-          heading: 'Support group',
-          observingPath: 'Caroline / Who is Caroline? / Support group',
-          sourceRefs: [input.extractions[0].id],
-          expandRefs: [],
-          body: 'Caroline attended a support group.',
-          children: [],
-        }],
-      }],
-    }),
-  });
-
-  const ids = client.writes.observations.map((row) => row.id);
-  assert.equal(ids.length, new Set(ids).size);
-});
-
-test('runObserver indexes only expandable refs while linking all source refs', async (t) => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), 'muninn-observer-source-refs-'));
-  t.after(async () => rm(dir, { recursive: true, force: true }));
-
-  const homeDir = path.join(dir, 'home');
-  await writeFile(path.join(dir, 'muninn.json'), JSON.stringify(mockConfig(), null, 2));
-  await mkdir(homeDir, { recursive: true });
-  await copyFile(path.join(dir, 'muninn.json'), path.join(homeDir, 'muninn.json'));
-
-  const previousHome = process.env.MUNINN_HOME;
-  process.env.MUNINN_HOME = homeDir;
-  t.after(() => {
-    if (previousHome === undefined) {
-      delete process.env.MUNINN_HOME;
-    } else {
-      process.env.MUNINN_HOME = previousHome;
-    }
-  });
-
-  const client = makeClient({
-    extractions: makeSessionObservations(2),
-  });
-
-  await runObserver({
-    client,
-    observerName: 'test-observer',
-    baselineVersion: 0,
-    anchorThreshold: 5,
-    finalize: true,
-    observeAnchorImpl: async (input) => ({
-      title: 'Caroline',
-      sections: [{
-        level: 2,
-        heading: 'Who is Caroline?',
-        observingPath: 'Caroline / Who is Caroline?',
-        sourceRefs: [],
-        expandRefs: [],
-        body: 'Caroline overview.',
-        children: [{
-          level: 3,
-          heading: 'Support group',
-          observingPath: 'Caroline / Who is Caroline? / Support group',
-          sourceRefs: [input.extractions[0].id, input.extractions[1].id],
-          expandRefs: [input.extractions[1].id],
-          body: 'Caroline attended a support group.',
-          children: [],
-        }],
-      }],
-    }),
-  });
-
-  assert.equal(client.writes.observations.length, 1);
-  assert.deepEqual(client.writes.observations[0].extractionRefs, ['pending-2']);
-  const leafId = client.writes.observations[0].id;
-  assert.deepEqual(
-    client.writes.extractions.map((row) => [row.id, row.observationPaths]),
-    [['pending-1', [leafId]], ['pending-2', [leafId]]],
-  );
-});
-
-test('runObserver skips extraction path upsert when observation paths are unchanged', async (t) => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), 'muninn-observer-path-noop-'));
-  t.after(async () => rm(dir, { recursive: true, force: true }));
-
-  const homeDir = path.join(dir, 'home');
-  await writeFile(path.join(dir, 'muninn.json'), JSON.stringify(mockConfig(), null, 2));
-  await mkdir(homeDir, { recursive: true });
-  await copyFile(path.join(dir, 'muninn.json'), path.join(homeDir, 'muninn.json'));
-
-  const previousHome = process.env.MUNINN_HOME;
-  process.env.MUNINN_HOME = homeDir;
-  t.after(() => {
-    if (previousHome === undefined) {
-      delete process.env.MUNINN_HOME;
-    } else {
-      process.env.MUNINN_HOME = previousHome;
-    }
-  });
-
-  const pathId = 'Caroline / Who is Caroline? / Support group';
-  const client = makeClient({
-    contexts: [{
-      id: pathId,
-      observingPath: pathId,
-      parentId: 'Caroline / Who is Caroline?',
-      position: 0,
-      content: 'Caroline attended a support group.',
-      sourceRefs: ['pending-1'],
-      expandRefs: [],
-      observer: 'test-observer',
-      createdAt: '2024-01-01T00:00:00Z',
-      updatedAt: '2024-01-01T00:00:00Z',
-    }],
-    extractions: [{
-      ...makeSessionObservations(1)[0],
-      observationPaths: [pathId],
-    }],
-  });
-
-  await runObserver({
-    client,
-    observerName: 'test-observer',
-    baselineVersion: 0,
-    anchorThreshold: 5,
-    finalize: true,
-    observeAnchorImpl: async (input) => ({
-      title: 'Caroline',
-      sections: [{
-        level: 2,
-        heading: 'Who is Caroline?',
-        observingPath: 'Caroline / Who is Caroline?',
-        sourceRefs: [],
-        expandRefs: [],
-        body: '',
-        children: [{
-          level: 3,
-          heading: 'Support group',
-          observingPath: pathId,
-          sourceRefs: [input.extractions[0].id],
-          expandRefs: [],
-          body: 'Caroline attended a support group.',
-          children: [],
-        }],
-      }],
-    }),
-  });
-
-  assert.deepEqual(client.writes.extractions, []);
-});
-
-test('runObserver updates stored extraction links when old refs move to a new leaf', async (t) => {
-  await useMockHome(t, 'muninn-observer-link-move-');
-  const oldPath = 'Caroline / Support / Support group';
-  const newPath = 'Caroline / Support / Community support';
-  const oldSessionObservation = {
-    ...extractionRow('session_observation:old', ['Entity: Caroline'], 'Caroline previously attended a support group.'),
-    observationPaths: [oldPath],
-  };
-  const pendingSessionObservation = {
-    ...extractionRow('pending-1', ['Entity: Caroline'], 'Caroline joined a broader community support circle.'),
-    observationPaths: [oldPath],
-  };
-  const client = makeClient({
-    contexts: [{
-      id: 'Caroline / Support',
-      observingPath: 'Caroline / Support',
-      parentId: null,
-      position: 0,
-      content: '',
-      observer: 'test-observer',
-      createdAt: '2024-01-01T00:00:00Z',
-      updatedAt: '2024-01-01T00:00:00Z',
-    }, {
-      id: oldPath,
-      observingPath: oldPath,
-      parentId: 'Caroline / Support',
-      position: 0,
-      content: 'Caroline previously attended a support group.',
-      sourceRefs: ['session_observation:old'],
-      expandRefs: [],
-      observer: 'test-observer',
-      createdAt: '2024-01-01T00:00:00Z',
-      updatedAt: '2024-01-01T00:00:00Z',
-    }],
-    extractions: [oldSessionObservation, pendingSessionObservation],
-  });
-
-  await runObserver({
-    client,
-    observerName: 'test-observer',
-    anchor: 'Caroline',
-    extractionChanges: [{ type: 'upsert', session_observation: pendingSessionObservation }],
-    observeAnchorImpl: async () => ({
-      title: 'Caroline',
-      sections: [{
-        level: 2,
-        heading: 'Support',
-        observingPath: 'Caroline / Support',
-        sourceRefs: [],
-        expandRefs: [],
-        body: 'Caroline has community support.',
-        rewritten: true,
-        children: [{
-          level: 3,
-          heading: 'Community support',
-          observingPath: newPath,
-          sourceRefs: ['session_observation:old', 'pending-1'],
-          expandRefs: [],
-          body: 'Caroline moved from a prior support group into broader community support.',
-          rewritten: true,
-          children: [],
-        }],
-      }],
-    }),
-  });
-
-  assert.equal(client.writes.deletedContextIds.includes(oldPath), true);
-  assert.deepEqual(
-    client.writes.extractions.map((row) => [row.id, row.observationPaths]).sort(),
-    [['session_observation:old', [newPath]], ['pending-1', [newPath]]],
-  );
-});
-
-test('runObserver clears stored extraction links when old refs are removed from rewritten scope', async (t) => {
-  await useMockHome(t, 'muninn-observer-link-remove-');
-  const oldPath = 'Caroline / Support / Support group';
-  const oldSessionObservation = {
-    ...extractionRow('session_observation:old', ['Entity: Caroline'], 'Caroline previously attended a support group.'),
-    observationPaths: [oldPath],
-  };
-  const pendingSessionObservation = {
-    ...extractionRow('pending-1', ['Entity: Caroline'], 'Caroline removed outdated support details.'),
-    observationPaths: [oldPath],
-  };
-  const client = makeClient({
-    contexts: [{
-      id: 'Caroline / Support',
-      observingPath: 'Caroline / Support',
-      parentId: null,
-      position: 0,
-      content: '',
-      observer: 'test-observer',
-      createdAt: '2024-01-01T00:00:00Z',
-      updatedAt: '2024-01-01T00:00:00Z',
-    }, {
-      id: oldPath,
-      observingPath: oldPath,
-      parentId: 'Caroline / Support',
-      position: 0,
-      content: 'Caroline previously attended a support group.',
-      sourceRefs: ['session_observation:old'],
-      expandRefs: [],
-      observer: 'test-observer',
-      createdAt: '2024-01-01T00:00:00Z',
-      updatedAt: '2024-01-01T00:00:00Z',
-    }],
-    extractions: [oldSessionObservation, pendingSessionObservation],
-  });
-
-  await runObserver({
-    client,
-    observerName: 'test-observer',
-    anchor: 'Caroline',
-    extractionChanges: [{ type: 'upsert', session_observation: pendingSessionObservation }],
-    observeAnchorImpl: async () => ({
-      title: 'Caroline',
-      sections: [{
-        level: 2,
-        heading: 'Support',
-        observingPath: 'Caroline / Support',
-        sourceRefs: [],
-        expandRefs: [],
-        body: 'Caroline support details were updated.',
-        rewritten: true,
-        children: [],
-      }],
-    }),
-  });
-
-  assert.equal(client.writes.deletedContextIds.includes(oldPath), true);
-  assert.deepEqual(
-    client.writes.extractions.map((row) => [row.id, row.observationPaths]).sort(),
-    [['session_observation:old', []], ['pending-1', []]],
-  );
-});
-
-test('runObserver stores only current section content in observation text', async (t) => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), 'muninn-observer-text-'));
-  t.after(async () => rm(dir, { recursive: true, force: true }));
-
-  const homeDir = path.join(dir, 'home');
-  await writeFile(path.join(dir, 'muninn.json'), JSON.stringify(mockConfig(), null, 2));
-  await mkdir(homeDir, { recursive: true });
-  await copyFile(path.join(dir, 'muninn.json'), path.join(homeDir, 'muninn.json'));
-
-  const previousHome = process.env.MUNINN_HOME;
-  process.env.MUNINN_HOME = homeDir;
-  t.after(() => {
-    if (previousHome === undefined) {
-      delete process.env.MUNINN_HOME;
-    } else {
-      process.env.MUNINN_HOME = previousHome;
-    }
-  });
-
-  const client = makeClient({
-    extractions: makeSessionObservations(1),
-  });
-
-  await runObserver({
-    client,
-    observerName: 'test-observer',
-    baselineVersion: 0,
-    anchorThreshold: 5,
-    finalize: true,
-    observeAnchorImpl: async (input) => ({
-      title: 'Caroline',
-      sections: [{
-        level: 2,
-        heading: 'Who is Caroline?',
-        observingPath: 'Caroline / Who is Caroline?',
-        sourceRefs: [],
-        expandRefs: [],
-        body: 'Parent overview should not enter leaf observation text.',
-        children: [{
-          level: 3,
-          heading: 'Support group',
-          observingPath: 'Caroline / Who is Caroline? / Support group',
-          sourceRefs: [input.extractions[0].id],
-          expandRefs: [],
-          body: 'Caroline attended a support group.',
-          children: [],
-        }],
-      }],
-    }),
-  });
-
-  assert.equal(client.writes.observations.length, 1);
-  const leaf = client.writes.observations.find((row) => row.observingPath.endsWith('Support group'));
-  assert.equal(leaf?.text, 'Caroline / Who is Caroline? / Support group\n\nCaroline attended a support group.');
-  assert.doesNotMatch(leaf?.text ?? '', /Parent overview/);
-});
-
-test('runObserver deletes stale non-leaf observation rows', async (t) => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), 'muninn-observer-parent-delete-'));
-  t.after(async () => rm(dir, { recursive: true, force: true }));
-
-  const homeDir = path.join(dir, 'home');
-  await writeFile(path.join(dir, 'muninn.json'), JSON.stringify(mockConfig(), null, 2));
-  await mkdir(homeDir, { recursive: true });
-  await copyFile(path.join(dir, 'muninn.json'), path.join(homeDir, 'muninn.json'));
-
-  const previousHome = process.env.MUNINN_HOME;
-  process.env.MUNINN_HOME = homeDir;
-  t.after(() => {
-    if (previousHome === undefined) {
-      delete process.env.MUNINN_HOME;
-    } else {
-      process.env.MUNINN_HOME = previousHome;
-    }
-  });
-
-  const client = makeClient({
-    contexts: [{
-      id: 'Caroline / Who is Caroline?',
-      observingPath: 'Caroline / Who is Caroline?',
-      parentId: null,
-      position: 0,
-      content: 'Parent overview.',
-      observer: 'test-observer',
-      createdAt: '2024-01-01T00:00:00Z',
-      updatedAt: '2024-01-01T00:00:00Z',
-    }],
-    observations: [{
-      id: 'Caroline / Who is Caroline?',
-      observingPath: 'Caroline / Who is Caroline?',
-      text: 'Who is Caroline?\n\nParent overview.',
-      vector: [],
-      extractionRefs: ['pending-1'],
-      createdAt: '2024-01-01T00:00:00Z',
-      updatedAt: '2024-01-01T00:00:00Z',
-    }],
-    extractions: makeSessionObservations(1),
-  });
-
-  await runObserver({
-    client,
-    observerName: 'test-observer',
-    baselineVersion: 0,
-    anchorThreshold: 5,
-    finalize: true,
-    observeAnchorImpl: async (input) => ({
-      title: 'Caroline',
-      sections: [{
-        level: 2,
-        heading: 'Who is Caroline?',
-        observingPath: 'Caroline / Who is Caroline?',
-        sourceRefs: [],
-        expandRefs: [],
-        body: 'Parent overview.',
-        children: [{
-          level: 3,
-          heading: 'Support group',
-          observingPath: 'Caroline / Who is Caroline? / Support group',
-          sourceRefs: [input.extractions[0].id],
-          expandRefs: [],
-          body: 'Caroline attended a support group.',
-          children: [],
-        }],
-      }],
-    }),
-  });
-
-  assert.deepEqual(client.writes.deletedGlobalObservationIds, ['Caroline / Who is Caroline?']);
-});
-
-test('getObserverWorkStatus reports no work when extraction baseline is current', async () => {
-  const client = makeClient({
-    extractions: makeSessionObservations(5),
-    extractionVersion: 7,
-  });
-
-  assert.deepEqual(
-    await getObserverWorkStatus({ client, baselineVersion: 7, anchorThreshold: 5 }),
-    { changed: false, pending: false, groupCount: 0, baselineVersion: 7 },
-  );
-});
-
-test('observeAnchor writes observer trace with input, prompt, and parsed document', async (t) => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), 'muninn-observer-trace-'));
-  t.after(async () => rm(dir, { recursive: true, force: true }));
-
-  const homeDir = path.join(dir, 'home');
-  await writeFile(path.join(dir, 'muninn.json'), JSON.stringify(mockConfig(), null, 2));
-  await mkdir(homeDir, { recursive: true });
-  await copyFile(path.join(dir, 'muninn.json'), path.join(homeDir, 'muninn.json'));
-
-  const previousHome = process.env.MUNINN_HOME;
-  const previousTrace = process.env.MUNINN_OBSERVER_TRACE_FILE;
-  const tracePath = path.join(dir, 'observer-trace.jsonl');
-  process.env.MUNINN_HOME = homeDir;
-  process.env.MUNINN_OBSERVER_TRACE_FILE = tracePath;
-  t.after(() => {
-    if (previousHome === undefined) {
-      delete process.env.MUNINN_HOME;
-    } else {
-      process.env.MUNINN_HOME = previousHome;
-    }
-    if (previousTrace === undefined) {
-      delete process.env.MUNINN_OBSERVER_TRACE_FILE;
-    } else {
-      process.env.MUNINN_OBSERVER_TRACE_FILE = previousTrace;
-    }
-  });
-
-  const result = await observeAnchor({
-    entityAnchor: 'Caroline',
-    outline: '# Caroline\n\n(empty)',
-    observedDocument: '',
-    extractions: [{
-      id: 'ext-a',
-      status: 'new',
-      text: 'Caroline attended an LGBTQ support group.',
-      context: 'Caroline discussed support.',
-      anchors: ['Entity: Caroline'],
-      turnRefs: ['turn:1'],
-    }],
-    maxAttempts: 1,
-  });
-
-  assert.equal(result.title, 'Mock entity');
-  const trace = JSON.parse(await readFile(tracePath, 'utf8'));
-  assert.equal(trace.input.entityAnchor, 'Caroline');
-  assert.match(trace.prompt.system, /observer that maintains parts of a cross-session observation tree/);
-  assert.match(trace.prompt.system, /get_observation\(paths\)/);
-  assert.match(trace.prompt.user, /Observed document:/);
-  assert.match(trace.prompt.user, /SessionObservation units:/);
-  assert.match(trace.finalText, /# Mock entity/);
-  assert.equal(trace.document.title, 'Mock entity');
-  assert.equal(trace.document.sections[0].children[0].sourceRefs[0], 'ext-a');
-});
-
-test('observeAnchor exposes get_observation tool without memory-get', async (t) => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), 'muninn-observer-tool-'));
-  t.after(async () => rm(dir, { recursive: true, force: true }));
-
-  const homeDir = path.join(dir, 'home');
-  await writeFile(path.join(dir, 'muninn.json'), JSON.stringify(mockConfig(), null, 2));
-  await mkdir(homeDir, { recursive: true });
-  await copyFile(path.join(dir, 'muninn.json'), path.join(homeDir, 'muninn.json'));
-
-  const previousHome = process.env.MUNINN_HOME;
-  process.env.MUNINN_HOME = homeDir;
-  t.after(() => {
-    if (previousHome === undefined) {
-      delete process.env.MUNINN_HOME;
-    } else {
-      process.env.MUNINN_HOME = previousHome;
-    }
-  });
+test('observeCwdScope exposes get_observation tool without memory-get', async (t) => {
+  await useMockHome(t, 'muninn-observer-tool-');
 
   const toolNames = [];
   let calls = 0;
-  const result = await observeAnchor({
-    entityAnchor: 'Caroline',
-    outline: '# Caroline\n- leaf: Caroline / Support / Support group',
+  const result = await observeCwdScope({
+    cwdScope: CWD,
+    outline: `# ${CWD}\n- leaf: ${CWD} / Work / Decision`,
     observedDocument: '',
     extractions: [{
-      id: 'ext-a',
-      status: 'new',
-      text: 'Caroline attended an LGBTQ support group.',
+      id: 'so-1',
+      status: 'changed',
+      text: 'Decision was updated.',
       context: null,
-      anchors: ['Entity: Caroline'],
+      cwd: CWD,
       turnRefs: ['turn:1'],
     }],
-    getGlobalObservation: (paths) => `# Caroline
+    getGlobalObservation: () => `# ${CWD}
 
-## Support
+## Work
 
-### Support group
-Caroline previously attended a support group.
+### Decision
+Previous decision content.
 
 Source extractions:
-- [ext-old]`,
-    validRefs: ['ext-old'],
+- [so-old]`,
+    validRefs: ['so-old'],
     maxAttempts: 1,
     model: async (_task, request) => {
       calls += 1;
@@ -1544,72 +228,46 @@ Source extractions:
           toolCalls: [{
             id: 'call-1',
             name: 'get_observation',
-            arguments: { paths: ['Caroline / Support / Support group'] },
+            arguments: { paths: [`${CWD} / Work / Decision`] },
           }],
         };
       }
       return {
         type: 'final',
-        text: `# Caroline
+        text: `## Work
 
-## Support
-
-### Support group
-Caroline attended an LGBTQ support group.
+### Decision
+Updated decision content.
 
 Source extractions:
-- [ext-old]
-- [ext-a]`,
+- [so-old]
+- [so-1]`,
       };
     },
   });
 
   assert.deepEqual([...new Set(toolNames)], ['get_observation']);
-  assert.equal(result.sections[0].children[0].sourceRefs.includes('ext-a'), true);
+  assert.equal(result.sections[0].children[0].sourceRefs.includes('so-1'), true);
 });
 
-test('observeAnchor rejects more than two get_observation calls', async (t) => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), 'muninn-observer-tool-steps-'));
-  t.after(async () => rm(dir, { recursive: true, force: true }));
-
-  const homeDir = path.join(dir, 'home');
-  await writeFile(path.join(dir, 'muninn.json'), JSON.stringify(mockConfig(), null, 2));
-  await mkdir(homeDir, { recursive: true });
-  await copyFile(path.join(dir, 'muninn.json'), path.join(homeDir, 'muninn.json'));
-
-  const previousHome = process.env.MUNINN_HOME;
-  process.env.MUNINN_HOME = homeDir;
-  t.after(() => {
-    if (previousHome === undefined) {
-      delete process.env.MUNINN_HOME;
-    } else {
-      process.env.MUNINN_HOME = previousHome;
-    }
-  });
+test('observeCwdScope rejects more than three get_observation calls', async (t) => {
+  await useMockHome(t, 'muninn-observer-tool-steps-');
 
   let calls = 0;
-  await assert.rejects(() => observeAnchor({
-    entityAnchor: 'Caroline',
-    outline: '# Caroline\n- leaf: Caroline / Support / Support group',
+  await assert.rejects(() => observeCwdScope({
+    cwdScope: CWD,
+    outline: `# ${CWD}\n- leaf: ${CWD} / Work / Decision`,
     observedDocument: '',
     extractions: [{
-      id: 'ext-a',
-      status: 'new',
-      text: 'Caroline attended an LGBTQ support group.',
+      id: 'so-1',
+      status: 'changed',
+      text: 'Decision was updated.',
       context: null,
-      anchors: ['Entity: Caroline'],
+      cwd: CWD,
       turnRefs: ['turn:1'],
     }],
-    getGlobalObservation: () => `# Caroline
-
-## Support
-
-### Support group
-Caroline previously attended a support group.
-
-Source extractions:
-- [ext-old]`,
-    validRefs: ['ext-old'],
+    getGlobalObservation: () => `# ${CWD}`,
+    validRefs: ['so-old'],
     maxAttempts: 1,
     model: async () => {
       calls += 1;
@@ -1619,22 +277,19 @@ Source extractions:
           toolCalls: [{
             id: `call-${calls}`,
             name: 'get_observation',
-            arguments: { paths: ['Caroline / Support / Support group'] },
+            arguments: { paths: [`${CWD} / Work / Decision`] },
           }],
         };
       }
       return {
         type: 'final',
-        text: `# Caroline
+        text: `## Work
 
-## Support
-
-### Support group
-Caroline attended an LGBTQ support group.
+### Decision
+Updated decision content.
 
 Source extractions:
-- [ext-old]
-- [ext-a]`,
+- [so-1]`,
       };
     },
   }), /get_observation exceeded max calls=3/);
@@ -1642,103 +297,61 @@ Source extractions:
   assert.equal(calls, 4);
 });
 
-test('observeAnchor recovers when get_observation is called with an unavailable id', async (t) => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), 'muninn-observer-tool-error-'));
-  t.after(async () => rm(dir, { recursive: true, force: true }));
+test('observeCwdScope writes observer trace with cwd input', async (t) => {
+  const { tracePath } = await useMockHome(t, 'muninn-observer-trace-', true);
 
-  const homeDir = path.join(dir, 'home');
-  await writeFile(path.join(dir, 'muninn.json'), JSON.stringify(mockConfig(), null, 2));
-  await mkdir(homeDir, { recursive: true });
-  await copyFile(path.join(dir, 'muninn.json'), path.join(homeDir, 'muninn.json'));
-
-  const previousHome = process.env.MUNINN_HOME;
-  process.env.MUNINN_HOME = homeDir;
-  t.after(() => {
-    if (previousHome === undefined) {
-      delete process.env.MUNINN_HOME;
-    } else {
-      process.env.MUNINN_HOME = previousHome;
-    }
-  });
-
-  let calls = 0;
-  let sawToolError = false;
-  const result = await observeAnchor({
-    entityAnchor: 'Caroline',
-    outline: '# Caroline\n- leaf: Caroline / Support / Support group',
+  const result = await observeCwdScope({
+    cwdScope: CWD,
+    outline: `# ${CWD}\n\n(empty)`,
     observedDocument: '',
     extractions: [{
-      id: 'ext-a',
+      id: 'so-1',
       status: 'new',
-      text: 'Caroline attended an LGBTQ support group.',
+      text: 'Trace should include cwd scoped observer input.',
       context: null,
-      anchors: ['Entity: Caroline'],
+      cwd: CWD,
       turnRefs: ['turn:1'],
     }],
-    getGlobalObservation: (paths) => {
-      if (paths[0] !== 'Caroline / Support / Support group') {
-        throw new Error(`get_observation path is not visible in the outline: ${paths[0]}`);
-      }
-      return `# Caroline
-
-## Support
-
-### Support group
-Caroline previously attended a support group.
-
-Source extractions:
-- [ext-old]`;
-    },
-    validRefs: ['ext-old'],
+    getGlobalObservation: () => `# ${CWD}`,
     maxAttempts: 1,
-    model: async (_purpose, input) => {
-      calls += 1;
-      if (calls === 1) {
-        return {
-          type: 'tool_calls',
-          toolCalls: [{
-            id: 'call-invalid',
-            name: 'get_observation',
-            arguments: { paths: ['not-visible'] },
-          }],
-        };
-      }
-      sawToolError = input.messages.some((message) =>
-        message.role === 'tool' && String(message.content).includes('not visible in the outline'));
-      return {
-        type: 'final',
-        text: `# Caroline
+    model: async () => ({
+      type: 'final',
+      text: `## Work
 
-## Support
-
-### Support group
-Caroline attended an LGBTQ support group.
+### Trace
+Trace includes cwd scope.
 
 Source extractions:
-- [ext-old]
-- [ext-a]`,
-      };
-    },
+- [so-1]`,
+    }),
   });
 
-  assert.equal(calls, 2);
-  assert.equal(sawToolError, true);
-  assert.equal(result.sections[0].children[0].sourceRefs.includes('ext-a'), true);
+  assert.equal(result.title, CWD);
+  const trace = JSON.parse(await readFile(tracePath, 'utf8'));
+  assert.equal(trace.input.cwdScope, CWD);
+  assert.match(trace.prompt.system, /observer that maintains parts of a cross-session observation tree/);
+  assert.match(trace.prompt.user, /SessionObservation units:/);
+  assert.equal(trace.document.title, CWD);
 });
 
-function makeClient({ extractions, contexts = [], observations = [], extractionVersion = 1 }) {
+function makeClient({
+  sessionObservations,
+  contexts = [],
+  globalObservations = [],
+  version = 1,
+}) {
   const normalizedContexts = contexts.map((context) => {
-    const observation = observations.find((row) => row.id === context.id);
+    const observation = globalObservations.find((row) => row.id === context.id);
     return {
-      sourceRefs: observation?.extractionRefs ?? [],
-      expandRefs: [],
+      sourceRefs: observation?.sessionObservationRefs ?? [],
+      expandRefs: observation?.sessionObservationRefs ?? [],
       ...context,
     };
   });
   const writes = {
-    observationContexts: [],
-    observations: [],
-    extractions: [],
+    globalObservationContexts: [],
+    globalObservations: [],
+    sessionObservations: [],
     deletedContextIds: [],
     deletedGlobalObservationIds: [],
   };
@@ -1746,23 +359,23 @@ function makeClient({ extractions, contexts = [], observations = [], extractionV
     writes,
     sessionObservationTable: {
       stats: async () => ({
-        version: extractionVersion,
+        version,
         fragmentCount: 1,
-        rowCount: extractions.length,
+        rowCount: sessionObservations.length,
       }),
-      get: async ({ ids }) => extractions.filter((row) => ids.includes(row.id)),
+      get: async ({ ids }) => sessionObservations.filter((row) => ids.includes(row.id)),
       delta: async ({ baselineVersion }) => (
-        baselineVersion < extractionVersion ? extractions : []
+        baselineVersion < version ? sessionObservations : []
       ),
       upsert: async ({ rows }) => {
-        writes.extractions.push(...rows);
+        writes.sessionObservations.push(...rows);
       },
     },
     globalObservationContextTable: {
       list: async () => normalizedContexts,
       get: async ({ ids }) => normalizedContexts.filter((row) => ids.includes(row.id)),
       upsert: async ({ rows }) => {
-        writes.observationContexts.push(...rows);
+        writes.globalObservationContexts.push(...rows);
       },
       delete: async ({ ids }) => {
         writes.deletedContextIds.push(...ids);
@@ -1770,9 +383,9 @@ function makeClient({ extractions, contexts = [], observations = [], extractionV
       },
     },
     globalObservationTable: {
-      get: async ({ ids }) => observations.filter((row) => ids.includes(row.id)),
+      get: async ({ ids }) => globalObservations.filter((row) => ids.includes(row.id)),
       upsert: async ({ rows }) => {
-        writes.observations.push(...rows);
+        writes.globalObservations.push(...rows);
       },
       delete: async ({ ids }) => {
         writes.deletedGlobalObservationIds.push(...ids);
@@ -1782,134 +395,152 @@ function makeClient({ extractions, contexts = [], observations = [], extractionV
   };
 }
 
-async function useMockHome(t, prefix) {
-  const dir = await mkdtemp(path.join(os.tmpdir(), prefix));
-  t.after(async () => rm(dir, { recursive: true, force: true }));
-
-  const homeDir = path.join(dir, 'home');
-  await writeFile(path.join(dir, 'muninn.json'), JSON.stringify(mockConfig(), null, 2));
-  await mkdir(homeDir, { recursive: true });
-  await copyFile(path.join(dir, 'muninn.json'), path.join(homeDir, 'muninn.json'));
-
-  const previousHome = process.env.MUNINN_HOME;
-  process.env.MUNINN_HOME = homeDir;
-  t.after(() => {
-    if (previousHome === undefined) {
-      delete process.env.MUNINN_HOME;
-    } else {
-      process.env.MUNINN_HOME = previousHome;
-    }
-  });
-}
-
-function extractionRow(id, anchors, text) {
+function observerResult(cwdScope, refs) {
   return {
-    id,
-    text,
-    context: null,
-    anchors,
-    vector: [0.1, 0.2],
-    category: 'Fact',
-    turnRefs: ['turn:1'],
-    observationPaths: [],
-    observedRootAnchors: [],
-    createdAt: '2026-05-17T00:00:00.000Z',
-    updatedAt: '2026-05-17T00:00:00.000Z',
+    title: cwdScope,
+    sections: [{
+      level: 2,
+      heading: 'Work',
+      globalPath: `${cwdScope} / Work`,
+      sourceRefs: [],
+      expandRefs: [],
+      body: '',
+      children: [{
+        level: 3,
+        heading: 'Decision',
+        globalPath: `${cwdScope} / Work / Decision`,
+        sourceRefs: refs,
+        expandRefs: refs,
+        body: 'The cwd scoped observer groups related session observations.',
+        children: [],
+      }],
+    }],
   };
 }
 
 function makeSessionObservations(count, options = {}) {
   const offset = options.offset ?? 0;
-  const anchors = options.anchors ?? ['Entity: Caroline'];
-  return Array.from({ length: count }, (_, index) => ({
-    id: `pending-${offset + index + 1}`,
-    text: `Caroline memory ${offset + index + 1}`,
-    context: null,
-    anchors,
-    turnRefs: [`turn:${offset + index + 1}`],
-    observationPaths: [],
-    observedRootAnchors: options.observed ? ['Caroline'] : [],
-  }));
+  return Array.from({ length: count }, (_, index) =>
+    sessionObservationRow(`so-${offset + index + 1}`, {
+      turnRefs: [`turn:${offset + index + 1}`],
+      ...options,
+    }));
 }
 
-function existingCarolineContexts() {
-  return [
-    {
-      id: 'Caroline / Support',
-      observingPath: 'Caroline / Support',
-      parentId: null,
-      position: 0,
-      content: 'Support overview.',
-      observer: 'test-observer',
-      createdAt: '2024-01-01T00:00:00Z',
-      updatedAt: '2024-01-01T00:00:00Z',
-    },
-    {
-      id: 'Caroline / Support / Support group',
-      observingPath: 'Caroline / Support / Support group',
-      parentId: 'Caroline / Support',
-      position: 0,
-      content: 'Caroline attended a support group.',
-      observer: 'test-observer',
-      createdAt: '2024-01-01T00:00:00Z',
-      updatedAt: '2024-01-01T00:00:00Z',
-    },
-    {
-      id: 'Caroline / Art',
-      observingPath: 'Caroline / Art',
-      parentId: null,
-      position: 1,
-      content: 'Art overview.',
-      observer: 'test-observer',
-      createdAt: '2024-01-01T00:00:00Z',
-      updatedAt: '2024-01-01T00:00:00Z',
-    },
-    {
-      id: 'Caroline / Art / Painting',
-      observingPath: 'Caroline / Art / Painting',
-      parentId: 'Caroline / Art',
-      position: 0,
-      content: 'Caroline painted a landscape.',
-      observer: 'test-observer',
-      createdAt: '2024-01-01T00:00:00Z',
-      updatedAt: '2024-01-01T00:00:00Z',
-    },
-  ];
-}
-
-function observationRow(id, observingPath, extractionRefs) {
+function sessionObservationRow(id, overrides = {}) {
+  const title = overrides.title ?? `Session observation ${id}`;
+  const summary = overrides.summary ?? `${title}: compact summary.`;
   return {
     id,
-    observingPath,
-    text: `${observingPath.split('/').at(-1)?.trim() ?? id}\n\nGlobalObservation text.`,
-    vector: [],
-    extractionRefs,
+    title,
+    summary,
+    content: overrides.content ?? [
+      '## Title',
+      '',
+      title,
+      '',
+      '## Summary',
+      '',
+      summary,
+      '',
+      '## Content',
+      '',
+      '- Detailed content.',
+    ].join('\n'),
+    cwd: overrides.cwd ?? CWD,
+    vector: overrides.vector ?? [0.1, 0.2],
+    turnRefs: overrides.turnRefs ?? ['turn:1'],
+    globalObservationPaths: overrides.globalObservationPaths ?? [],
+    createdAt: overrides.createdAt ?? '2026-05-17T00:00:00.000Z',
+    updatedAt: overrides.updatedAt ?? '2026-05-17T00:00:00.000Z',
+  };
+}
+
+function contextRow(globalPath, parentId, content, refs = []) {
+  return {
+    id: globalPath,
+    globalPath,
+    parentId,
+    position: 0,
+    content,
+    sourceRefs: refs,
+    expandRefs: refs,
+    observer: 'test-observer',
     createdAt: '2024-01-01T00:00:00Z',
     updatedAt: '2024-01-01T00:00:00Z',
   };
 }
 
+function globalObservationRow(globalPath, refs) {
+  return {
+    id: globalPath,
+    globalPath,
+    text: `${globalPath}\n\nGlobal observation text.`,
+    vector: [0.3, 0.4],
+    sessionObservationRefs: refs,
+    createdAt: '2024-01-01T00:00:00Z',
+    updatedAt: '2024-01-01T00:00:00Z',
+  };
+}
+
+async function useMockHome(t, prefix, trace = false) {
+  const dir = await mkdtemp(path.join(os.tmpdir(), prefix));
+  const homeDir = path.join(dir, 'home');
+  const tracePath = path.join(dir, 'observer-trace.jsonl');
+  await mkdir(homeDir, { recursive: true });
+  await writeFile(path.join(homeDir, 'muninn.json'), JSON.stringify(mockConfig(), null, 2));
+
+  const previousHome = process.env.MUNINN_HOME;
+  const previousTrace = process.env.MUNINN_OBSERVER_TRACE_FILE;
+  process.env.MUNINN_HOME = homeDir;
+  if (trace) {
+    process.env.MUNINN_OBSERVER_TRACE_FILE = tracePath;
+  }
+  t.after(async () => {
+    if (previousHome === undefined) {
+      delete process.env.MUNINN_HOME;
+    } else {
+      process.env.MUNINN_HOME = previousHome;
+    }
+    if (previousTrace === undefined) {
+      delete process.env.MUNINN_OBSERVER_TRACE_FILE;
+    } else {
+      process.env.MUNINN_OBSERVER_TRACE_FILE = previousTrace;
+    }
+    await rm(dir, { recursive: true, force: true });
+  });
+  return { homeDir, tracePath };
+}
+
 function mockConfig() {
   return {
+    version: 1,
+    storage: { type: 'lance', uri: 'memory' },
+    defaults: {
+      agent: 'test-agent',
+      observer: 'test-observer',
+      sessionId: 'test-session',
+    },
     extractor: {
       name: 'test-extractor',
-      llmProvider: 'default',
+      llmProvider: 'extractor_llm',
       embeddingProvider: 'default',
     },
     observer: {
+      enabled: true,
       name: 'test-observer',
-      llmProvider: 'default',
+      llmProvider: 'observer_llm',
+      cwdThreshold: 5,
     },
     providers: {
       llm: {
-        default: {
-          type: 'mock',
-        },
+        extractor_llm: { type: 'mock' },
+        observer_llm: { type: 'mock' },
       },
       embedding: {
         default: {
           type: 'mock',
-          dimensions: 8,
+          dimensions: 4,
         },
       },
     },

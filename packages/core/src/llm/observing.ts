@@ -167,7 +167,7 @@ async function generateObserverText(params: {
       ],
       tools: [getGlobalObservationSpec()],
       toolHandlers: {
-        get_global_observation: async (args) => {
+        get_observation: async (args) => {
           getGlobalObservationCalls += 1;
           if (getGlobalObservationCalls > maxGetGlobalObservationCalls) {
             const error = new Error(`get_observation exceeded max calls=${maxGetGlobalObservationCalls}`);
