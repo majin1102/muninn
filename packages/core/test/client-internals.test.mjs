@@ -267,6 +267,7 @@ test('checkpoint preserves observer runs', () => {
       runs: [{
         runId: 'run-1',
         observeId: 'entity:caroline',
+        cwd: '/workspace/project-a',
         anchor: 'Caroline',
         stage: 'generatingGlobalObservation',
         pendingExtractionIds: ['abc'],
@@ -277,6 +278,7 @@ test('checkpoint preserves observer runs', () => {
     sessionIndex: { baseline: { turn: 0, session: 0 }, entries: [] },
   }));
   assert.equal(checkpoint.observer.runs[0].observeId, 'entity:caroline');
+  assert.equal(checkpoint.observer.runs[0].cwd, '/workspace/project-a');
 });
 
 test('native bindings expose observation context and observation tables', async () => {
@@ -461,8 +463,8 @@ test('memories.get accepts observation paths containing colons', async () => {
 test('observation memory id parser rejects empty and wrong prefixes', async () => {
   const { parseGlobalObservationMemoryId } = await import('../dist/memories/global-observations.js');
 
-  assert.throws(() => parseGlobalObservationMemoryId('global_observation:'), /invalid observation memory id/);
-  assert.throws(() => parseGlobalObservationMemoryId('extraction:Caroline / Work: schedule'), /invalid observation memory id/);
+  assert.throws(() => parseGlobalObservationMemoryId('global_observation:'), /invalid global observation memory id/);
+  assert.throws(() => parseGlobalObservationMemoryId('extraction:Caroline / Work: schedule'), /invalid global observation memory id/);
 });
 
 test('observer markdown parser derives parent and child observations', async () => {
@@ -621,6 +623,8 @@ function makeObservableTurn(turnId, extractionEpoch, text) {
     createdAt: '2024-01-01T00:00:00Z',
     updatedAt: '2024-01-01T00:00:00Z',
     sessionId: 'group-a',
+    project: 'project-a',
+    cwd: '/workspace/project-a',
     agent: 'agent-a',
     observer: 'default-observer',
     summary: `${text} summary`,
@@ -1075,12 +1079,12 @@ test('watchdog creates and optimizes observation index only once for an unchange
   assert.equal(optimizeCalls, 1);
   const records = await readWatchdogLog(homeDir);
   assert.ok(records.some((record) => (
-    record.dataset === 'observation'
+    record.dataset === 'global_observation'
     && record.event === 'index_created'
     && record.version === 17
   )));
   assert.ok(records.some((record) => (
-    record.dataset === 'observation'
+    record.dataset === 'global_observation'
     && record.event === 'optimized'
     && record.details?.indexCreated === true
   )));
@@ -1829,10 +1833,13 @@ test('loadThreads filters snapshots by the configured active window', () => {
     {
       snapshotId: 'fresh-snapshot',
       sessionId: 'fresh-thread',
+      project: 'project-a',
+      cwd: '/workspace/project-a',
+      agent: 'agent-a',
       snapshotSequence: 0,
       createdAt: freshUpdatedAt,
       updatedAt: freshUpdatedAt,
-      observer: 'default-observer',
+      extractor: 'default-observer',
       title: 'Fresh thread',
       summary: 'Fresh summary',
       content: snapshotContentFixture('', { title: 'Fresh thread', summary: 'Fresh summary' }),
@@ -1841,10 +1848,13 @@ test('loadThreads filters snapshots by the configured active window', () => {
     {
       snapshotId: 'stale-snapshot',
       sessionId: 'stale-thread',
+      project: 'project-a',
+      cwd: '/workspace/project-a',
+      agent: 'agent-a',
       snapshotSequence: 0,
       createdAt: staleUpdatedAt,
       updatedAt: staleUpdatedAt,
-      observer: 'default-observer',
+      extractor: 'default-observer',
       title: 'Stale thread',
       summary: 'Stale summary',
       content: snapshotContentFixture('', { title: 'Stale thread', summary: 'Stale summary' }),
@@ -1865,10 +1875,13 @@ test('loadThreads keeps full history for active threads', () => {
     {
       snapshotId: 'snapshot-0',
       sessionId: 'mixed-thread',
+      project: 'project-a',
+      cwd: '/workspace/project-a',
+      agent: 'agent-a',
       snapshotSequence: 0,
       createdAt: staleUpdatedAt,
       updatedAt: staleUpdatedAt,
-      observer: 'default-observer',
+      extractor: 'default-observer',
       title: 'Thread',
       summary: 'Summary',
       content: snapshotContentFixture('', { title: 'Thread', summary: 'Summary' }),
@@ -1877,10 +1890,13 @@ test('loadThreads keeps full history for active threads', () => {
     {
       snapshotId: 'snapshot-1',
       sessionId: 'mixed-thread',
+      project: 'project-a',
+      cwd: '/workspace/project-a',
+      agent: 'agent-a',
       snapshotSequence: 1,
       createdAt: freshUpdatedAt,
       updatedAt: freshUpdatedAt,
-      observer: 'default-observer',
+      extractor: 'default-observer',
       title: 'Thread',
       summary: 'Summary',
       content: snapshotContentFixture('', { title: 'Thread', summary: 'Summary' }),
@@ -3911,6 +3927,10 @@ test('snapshot extraction state rewrite updates and deletes extraction rows', as
     contextRefs: [],
   });
   await applyExtractionTableChanges(client, {
+    project: 'project-a',
+    cwd: '/workspace/project-a',
+    agent: 'agent-a',
+    snapshotContent: 'S',
     extractions: state.extractions,
     contextRefs: [],
     extractionChanges: state.extractionChanges,
@@ -4203,6 +4223,9 @@ test('buildExtraction surfaces extraction write failures and leaves work pending
   const threads = [
     {
       sessionId: 'session-a',
+      project: 'alpha',
+      cwd: '/workspace/alpha',
+      agent: 'codex',
       snapshotId: 'snapshot-1',
       snapshotIds: ['snapshot-0', 'snapshot-1'],
       extractionEpoch: 7,
@@ -4210,6 +4233,10 @@ test('buildExtraction surfaces extraction write failures and leaves work pending
       summary: 'Summary',
       snapshots: [
         {
+          project: 'alpha',
+          cwd: '/workspace/alpha',
+          agent: 'codex',
+          snapshotContent: '',
           extractions: [],
           contextRefs: [],
           openQuestions: [],
@@ -4217,17 +4244,20 @@ test('buildExtraction surfaces extraction write failures and leaves work pending
           extractionChanges: [],
         },
         {
+          project: 'alpha',
+          cwd: '/workspace/alpha',
+          agent: 'codex',
+          snapshotContent: '',
           extractions: [{ id: 'memory-1', text: 'remember this', category: 'Fact', references: ['session:existing'], updatedMemory: null }],
           contextRefs: [],
           openQuestions: [],
           nextSteps: [],
           extractionChanges: [{
-              type: 'update',
-              extractionId: 'memory-1',
-              text: 'remember this',
-              category: 'Fact',
-              reason: 'refreshes the existing extraction wording',
-            }],
+            type: 'update',
+            extractionId: 'memory-1',
+            text: 'remember this',
+            reason: 'refreshes the existing extraction wording',
+          }],
         },
       ],
       references: [],
@@ -4426,15 +4456,11 @@ test('observer validation derives extractions from titled snapshot content', () 
     title: 'Lake sunrise painting',
     text: 'Melanie painted a lake sunrise in 2022.',
     context: 'Caroline asked whether Melanie painted the lake sunrise herself.',
-    anchors: [],
-    category: 'Other',
     references: ['turn:13'],
   }, {
     title: 'Special lake painting',
     text: 'The lake sunrise painting is special to Melanie.',
     context: null,
-    anchors: [],
-    category: 'Other',
     references: ['turn:13'],
   }]);
 });
@@ -4834,7 +4860,7 @@ test('thread session get_extraction expands visible extraction sequences only', 
   assert.equal(result.extractions[0].title, 'LGBTQ support group');
   assert.equal(result.extractions[0].text, 'Caroline attended an LGBTQ support group on 7 May 2023.');
   assert.equal(result.extractions[0].context, '- Caroline said she went to the support group yesterday relative to 8 May 2023.');
-  assert.equal(result.extractions[0].category, 'Other');
+  assert.equal(result.extractions[0].category, undefined);
   assert.deepEqual(result.extractions[0].references, ['turn:0', 'turn:1']);
   const trace = JSON.parse(await readFile(tracePath, 'utf8'));
   assert.equal(trace.toolCalls[0].name, 'get_extraction');
@@ -5398,7 +5424,17 @@ test('session snapshot persists markdown content with parsed title and summary',
 
 test('extractSessionThread passes raw turns to observer', async () => {
   const now = '2026-01-01T00:00:00.000Z';
-  const thread = createSessionMemoryThread('default-observer', 'Session locomo', 'Default session thread for session locomo.', [], 1, now, 'session', 'locomo');
+  const thread = createSessionMemoryThread(
+    'default-observer',
+    'Session locomo',
+    'Default session thread for session locomo.',
+    [],
+    1,
+    now,
+    'session',
+    'locomo',
+    { agent: 'Melanie', project: 'locomo', cwd: '/workspace/locomo' },
+  );
   const observedInputs = [];
   const extractSessionMemoryImpl = async (input) => {
     observedInputs.push(input);
@@ -5436,6 +5472,8 @@ test('extractSessionThread passes raw turns to observer', async () => {
       createdAt: now,
       updatedAt: now,
       sessionId: 'locomo',
+      project: 'locomo',
+      cwd: '/workspace/locomo',
       agent: 'Melanie',
       observer: 'default-observer',
       title: null,
@@ -5470,6 +5508,10 @@ test('gateway input includes thread kind and prompt plus response turn text', ()
     '2026-01-01T00:00:00.000Z',
   );
   thread.snapshots.push({
+    project: 'locomo',
+    cwd: '/workspace/locomo',
+    agent: 'Melanie',
+    snapshotContent: '',
     extractions: [],
     contextRefs: [
       { turnId: 'turn:10', summary: 'Caroline attended a LGBTQ support group.' },
@@ -5478,7 +5520,7 @@ test('gateway input includes thread kind and prompt plus response turn text', ()
     ],
     openQuestions: [],
     nextSteps: [],
-    extractionDelta: { before: [], after: [] },
+    extractionChanges: [],
   });
 
   const turns = observingGatewayTesting.gatewayTurnsForTests([{
@@ -5519,7 +5561,17 @@ test('gateway input includes thread kind and prompt plus response turn text', ()
 
 test('observed turns without observer context refs are not persisted as references', async () => {
   const now = '2026-01-01T00:00:00.000Z';
-  const thread = createSessionMemoryThread('default-observer', 'Session locomo', 'Default session thread for session locomo.', [], 1, now, 'session', 'locomo');
+  const thread = createSessionMemoryThread(
+    'default-observer',
+    'Session locomo',
+    'Default session thread for session locomo.',
+    [],
+    1,
+    now,
+    'session',
+    'locomo',
+    { agent: 'Melanie', project: 'locomo', cwd: '/workspace/locomo' },
+  );
   const extractSessionMemoryImpl = async () => ({
     title: 'Career',
     snapshotContent: '',
@@ -5537,6 +5589,8 @@ test('observed turns without observer context refs are not persisted as referenc
       createdAt: now,
       updatedAt: now,
       sessionId: 'locomo',
+      project: 'locomo',
+      cwd: '/workspace/locomo',
       agent: 'Melanie',
       observer: 'default-observer',
       title: null,
@@ -5564,6 +5618,7 @@ test('raw-turn session only updates the session thread', async () => {
     now,
     'session',
     'locomo',
+    { agent: 'Melanie', project: 'locomo', cwd: '/workspace/locomo' },
   );
   const threads = [thread];
   const observedInputs = [];
@@ -5603,6 +5658,8 @@ test('raw-turn session only updates the session thread', async () => {
       createdAt: now,
       updatedAt: now,
       sessionId: 'locomo',
+      project: 'locomo',
+      cwd: '/workspace/locomo',
       agent: 'Melanie',
       observer: 'default-observer',
       title: null,
@@ -5850,22 +5907,26 @@ test('observer.retryExtraction refreshes the committed checkpoint snapshot after
   observer.openEpoch = new OpenEpoch(2);
   observer.threads = [{
     sessionId: 'session-a',
+    project: 'alpha',
+    cwd: '/workspace/alpha',
+    agent: 'codex',
     snapshotId: 'snapshot-1',
     snapshotIds: ['snapshot-0', 'snapshot-1'],
     extractionEpoch: 1,
     title: 'Existing title',
     summary: 'Existing summary',
     snapshots: [
-      { extractions: [], contextRefs: [], openQuestions: [], nextSteps: [], extractionDelta: { before: [], after: [] } },
+      { project: 'alpha', cwd: '/workspace/alpha', agent: 'codex', snapshotContent: '', extractions: [], contextRefs: [], openQuestions: [], nextSteps: [], extractionChanges: [] },
       {
+        project: 'alpha',
+        cwd: '/workspace/alpha',
+        agent: 'codex',
+        snapshotContent: '',
         extractions: [],
         contextRefs: [],
         openQuestions: [],
         nextSteps: [],
-        extractionDelta: {
-          before: [],
-          after: [{ id: 'memory-1', text: 'remember this', category: 'Fact', references: ['session:existing'], updatedMemory: null }],
-        },
+        extractionChanges: [{ type: 'add', text: 'remember this', references: ['session:existing'], reason: 'adds memory' }],
       },
     ],
     references: ['session:existing'],
@@ -5984,6 +6045,9 @@ test('observer.run retries pending extraction index before queued epochs when du
   observer.threads = [
     {
       sessionId: 'session-a',
+      project: 'alpha',
+      cwd: '/workspace/alpha',
+      agent: 'codex',
       snapshotId: 'snapshot-1',
       snapshotIds: ['snapshot-0', 'snapshot-1'],
       extractionEpoch: 7,
@@ -5991,21 +6055,26 @@ test('observer.run retries pending extraction index before queued epochs when du
       summary: 'Summary',
       snapshots: [
         {
+          project: 'alpha',
+          cwd: '/workspace/alpha',
+          agent: 'codex',
+          snapshotContent: '',
           extractions: [],
           contextRefs: [],
           openQuestions: [],
           nextSteps: [],
-          extractionDelta: { before: [], after: [] },
+          extractionChanges: [],
         },
         {
+          project: 'alpha',
+          cwd: '/workspace/alpha',
+          agent: 'codex',
+          snapshotContent: '',
           extractions: [],
           contextRefs: [],
           openQuestions: [],
           nextSteps: [],
-          extractionDelta: {
-            before: [],
-            after: [{ id: 'memory-1', text: 'remember this', category: 'Fact', references: ['session:existing'], updatedMemory: null }],
-          },
+          extractionChanges: [{ type: 'add', text: 'remember this', references: ['session:existing'], reason: 'adds memory' }],
         },
       ],
       references: [],

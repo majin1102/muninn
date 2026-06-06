@@ -154,10 +154,20 @@ function defaultStorageTarget(homeDir) {
 }
 
 function firstExtractionRef(hits) {
-  return hits
-    .flatMap((hit) => [hit.memoryId, ...(hit.references ?? [])])
-    .map((ref) => ref.startsWith('extraction:') ? ref.slice('extraction:'.length) : ref)
-    .find((ref) => ref && !ref.startsWith('turn:') && !ref.startsWith('session:'));
+  for (const ref of hits.flatMap((hit) => [hit.memoryId, ...(hit.references ?? [])])) {
+    if (ref.startsWith('extraction:')) {
+      return ref.slice('extraction:'.length);
+    }
+    if (
+      ref
+      && !ref.startsWith('turn:')
+      && !ref.startsWith('session:')
+      && !ref.startsWith('global_observation:')
+    ) {
+      return ref;
+    }
+  }
+  return undefined;
 }
 
 async function writeMuninnConfig(configPath, {
@@ -1143,12 +1153,10 @@ test('validateSettings rejects extraction dimension changes when the table exist
       title: 'extraction text',
       summary: 'extraction text',
       content: '## Title\n\nextraction text\n\n## Summary\n\nextraction text\n\n## Content\n\n',
-      anchors: [],
+      cwd: '/workspace/project-a',
       turnRefs: ['turn:1'],
-      observationPaths: [],
-      observedRootAnchors: [],
+      globalObservationPaths: [],
       vector: [0.1, 0.2, 0.3, 0.4],
-      category: 'fact',
       createdAt: '2024-01-01T00:00:00Z',
       updatedAt: '2024-01-01T00:00:00Z',
     }],
@@ -1400,12 +1408,10 @@ test('recall returns extraction memory ids and detail renders references', async
       title: 'Caroline support group',
       summary: 'Caroline joined an LGBTQ support group in May 2023.',
       content: '## Title\n\nCaroline support group\n\n## Summary\n\nCaroline joined an LGBTQ support group in May 2023.\n\n## Content\n\n',
-      anchors: [],
+      cwd: '/workspace/project-a',
       turnRefs: ['turn:1'],
-      observationPaths: [],
-      observedRootAnchors: [],
+      globalObservationPaths: [],
       vector: [1, 0, 0, 0],
-      category: 'fact',
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     }],
