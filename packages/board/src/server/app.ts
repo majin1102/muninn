@@ -862,7 +862,7 @@ boardApp.get('/api/v1/ui/search', async (c) => {
     return c.json(errorResponse('invalidRequest', `topN ${topN}`), 400);
   }
 
-  const results = await searchBoardMemory({
+  const search = await searchBoardMemory({
     query,
     projectKeys,
     sessionKeys,
@@ -874,7 +874,8 @@ boardApp.get('/api/v1/ui/search', async (c) => {
   });
 
   const response: SearchResponse = {
-    results,
+    answer: search.answer,
+    results: search.results,
     requestId: generateRequestId(),
   };
   return c.json(response);

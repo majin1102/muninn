@@ -19,6 +19,7 @@ import type {
 import {
   getDemoDocument,
   getDemoPipelineTasks,
+  getDemoSearchAnswer,
   getDemoSearchResults,
   getDemoSessionAgents,
   getDemoSessionGroups,
@@ -247,8 +248,10 @@ export function createBoardClient(apiBase: string, usesDemoData: boolean): Board
         searchParams.append('sessionKey', sessionKey);
       }
       if (usesDemoData) {
+        const results = await getDemoSearchResults(params);
         return {
-          results: await getDemoSearchResults(params),
+          answer: getDemoSearchAnswer(params.query, results),
+          results,
           requestId: 'demo-search',
         };
       }

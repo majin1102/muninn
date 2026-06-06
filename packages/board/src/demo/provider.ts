@@ -14,7 +14,7 @@ import {
   type DemoSessionTimelineItem,
 } from './data.js';
 import { shiftPipelineTaskTimes, summarizePipelineTasks } from '../lib/pipeline_model.js';
-import type { SearchSessionResult } from '@muninn/types';
+import type { SearchAnswer, SearchSessionResult } from '@muninn/types';
 
 export async function getDemoSessionAgents(): Promise<DemoSessionAgentItem[]> {
   return demoAgents;
@@ -163,4 +163,37 @@ export async function getDemoSearchResults(params: {
     }))
     .filter((result) => result.items.length > 0)
     .slice(0, params.topN);
+}
+
+export function getDemoSearchAnswer(query: string, results: SearchSessionResult[]): SearchAnswer {
+  const hits = results.flatMap((result) => result.items.map((item) => ({ result, item })));
+  if (hits.length === 0) {
+    return {
+      text: `I could not find enough context for "${query}" in the demo memory.`,
+      citations: [],
+    };
+  }
+  const topHits = hits.slice(0, 4);
+  return {
+    text: [
+      `Based on the context I found for "${query}":`,
+      '',
+      ...topHits.slice(0, 3).map(({ item }) => `- ${previewSentence(item.content)}`),
+      '',
+      `The right side keeps the source sessions and matched context so you can inspect the evidence directly.`,
+    ].join('\n'),
+    citations: topHits.map(({ result, item }) => ({
+      id: item.id,
+      label: item.title || result.sessionLabel,
+      source: item.source,
+      sessionKey: result.sessionKey,
+      memoryId: item.memoryId,
+    })),
+  };
+}
+
+function previewSentence(content: string): string {
+  const normalized = content.replace(/\s+/g, ' ').trim();
+  const sentence = normalized.match(/^[^.!?。！？]+[.!?。！？]?/)?.[0]?.trim() ?? normalized;
+  return sentence.length > 180 ? `${sentence.slice(0, 177).trim()}...` : sentence;
 }

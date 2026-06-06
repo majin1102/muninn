@@ -45,6 +45,30 @@ test('conversationCandidates respects query, project, and session scope', async 
   assert.equal(candidates[0].source, 'conversation');
 });
 
+test('buildAnswer summarizes top search evidence with citations', async () => {
+  const { __testing } = await loadSearchServer();
+  const answer = __testing.buildAnswer('board search', [{
+    sessionKey: 'muninn/search-a',
+    sessionLabel: 'Search A',
+    projectKey: 'muninn',
+    latestUpdatedAt: '2026-06-04T00:00:00.000Z',
+    items: [{
+      id: 'conversation:1',
+      source: 'conversation',
+      title: 'Board search decision',
+      content: 'Board search should answer questions and keep evidence visible on the right.',
+      createdAt: '2026-06-04T00:00:00.000Z',
+      memoryId: 'turn:1',
+      links: [],
+    }],
+  }]);
+
+  assert.match(answer.text, /Based on the context/);
+  assert.match(answer.text, /keep evidence visible/);
+  assert.equal(answer.citations.length, 1);
+  assert.equal(answer.citations[0].sessionKey, 'muninn/search-a');
+});
+
 function candidate(overrides) {
   return {
     sessionKey: overrides.sessionKey,

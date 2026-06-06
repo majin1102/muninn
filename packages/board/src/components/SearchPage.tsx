@@ -1,4 +1,4 @@
-import type { SearchSessionResult } from '@muninn/types';
+import type { SearchAnswer, SearchSessionResult } from '@muninn/types';
 import {
   ArrowUp,
   Bot,
@@ -74,6 +74,7 @@ export function SearchPage({
   const [submitted, setSubmitted] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [answer, setAnswer] = useState<SearchAnswer | null>(null);
   const [results, setResults] = useState<SearchSessionResult[]>([]);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [provider, setProvider] = useState(PROVIDER_OPTIONS[0]?.value ?? 'default');
@@ -158,6 +159,7 @@ export function SearchPage({
     setSubmitted(true);
     setLoading(true);
     setError(null);
+    setAnswer(null);
     setExpanded({});
     try {
       const response = await client.search({
@@ -167,8 +169,10 @@ export function SearchPage({
         sessionTopN: controls.sessionTopN,
         topN: controls.topN,
       });
+      setAnswer(response.answer);
       setResults(response.results);
     } catch (nextError) {
+      setAnswer(null);
       setResults([]);
       setError(asErrorMessage(nextError));
     } finally {
@@ -293,17 +297,93 @@ export function SearchPage({
           </div>
         </div>
       </form>
-      {submitted ? <SearchSourceTabs value={sourceTab} onChange={setSourceTab} /> : null}
       {projectError ? <div className="search-error">{projectError}</div> : null}
       {submitted ? (
-        <SearchResults
-          loading={loading}
-          error={error}
-          results={results}
-          expanded={expanded}
-          onToggle={(id) => setExpanded((current) => ({ ...current, [id]: !current[id] }))}
-        />
+        <div className="search-qa-layout">
+          <section className="search-answer-pane" aria-label="Agent answer">
+            <SearchAnswerView loading={loading} error={error} answer={answer} />
+          </section>
+          <div className="search-qa-divider" aria-hidden="true" />
+          <section className="search-evidence-pane" aria-label="Search evidence">
+            <SearchSourceTabs value={sourceTab} onChange={setSourceTab} />
+            <SearchResults
+              loading={loading}
+              error={error}
+              results={results}
+              expanded={expanded}
+              onToggle={(id) => setExpanded((current) => ({ ...current, [id]: !current[id] }))}
+            />
+          </section>
+        </div>
       ) : null}
+    </div>
+  );
+}
+
+function SearchAnswerView({
+  loading,
+  error,
+  answer,
+}: {
+  loading: boolean;
+  error: string | null;
+  answer: SearchAnswer | null;
+}) {
+  if (loading) {
+    return (
+      <div className="search-answer">
+        <div className="search-answer-avatar">
+          <BotMessageSquare />
+        </div>
+        <div className="search-answer-body">
+          <div className="search-answer-label">Muninn</div>
+          <p>Thinking across your agents' context...</p>
+        </div>
+      </div>
+    );
+  }
+  if (error) {
+    return (
+      <div className="search-answer">
+        <div className="search-answer-avatar search-answer-avatar-error">
+          <BotMessageSquare />
+        </div>
+        <div className="search-answer-body">
+          <div className="search-answer-label">Muninn</div>
+          <p>I could not complete this question.</p>
+        </div>
+      </div>
+    );
+  }
+  if (!answer) {
+    return null;
+  }
+  return (
+    <div className="search-answer">
+      <div className="search-answer-avatar">
+        <BotMessageSquare />
+      </div>
+      <div className="search-answer-body">
+        <div className="search-answer-label">Muninn</div>
+        <div className="search-answer-text">
+          {answer.text.split('\n').map((line, index) => (
+            line.trim().startsWith('- ') ? (
+              <p key={`${index}:${line}`} className="search-answer-bullet">{line.trim().slice(2)}</p>
+            ) : line.trim() ? (
+              <p key={`${index}:${line}`}>{line}</p>
+            ) : null
+          ))}
+        </div>
+        {answer.citations.length > 0 ? (
+          <div className="search-answer-citations" aria-label="Answer sources">
+            {answer.citations.map((citation, index) => (
+              <span key={`${citation.id}:${index}`} className="search-answer-citation">
+                {index + 1}. {citation.label}
+              </span>
+            ))}
+          </div>
+        ) : null}
+      </div>
     </div>
   );
 }

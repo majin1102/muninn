@@ -942,6 +942,9 @@ test('board search groups conversation results by session and validates scope', 
   const response = await app.request('/api/v1/ui/search?query=board%20search&projectKey=muninn&sessionTopN=1&topN=10');
   assert.equal(response.status, 200);
   const body = await json(response);
+  assert.match(body.answer.text, /Based on the context/);
+  assert.equal(body.answer.citations.length, 1);
+  assert.equal(body.answer.citations[0].sessionKey, 'muninn/search-alpha');
   assert.equal(body.results.length, 1);
   assert.equal(body.results[0].projectKey, 'muninn');
   assert.equal(body.results[0].sessionKey, 'muninn/search-alpha');

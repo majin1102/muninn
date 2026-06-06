@@ -3,6 +3,7 @@ import type {
   Turn,
 } from '@muninn/core';
 import type {
+  SearchAnswer,
   SearchResultItem,
   SearchResultLink,
   SearchSessionResult,
@@ -32,15 +33,23 @@ export type SearchCandidate = {
   links: SearchResultLink[];
 };
 
+export type BoardSearchResult = {
+  answer: SearchAnswer;
+  results: SearchSessionResult[];
+};
+
 type SearchDeps = {
   listTurns: (params: { mode: { type: 'recency'; limit: number } }) => Promise<Turn[]>;
   recall: (query: string, limit?: number, options?: { mode?: 'vector' | 'fts' | 'hybrid'; budget?: number; queryLimit?: number }) => Promise<RecallHit[]>;
 };
 
-export async function searchBoardMemory(params: BoardSearchParams, deps: SearchDeps): Promise<SearchSessionResult[]> {
+export async function searchBoardMemory(params: BoardSearchParams, deps: SearchDeps): Promise<BoardSearchResult> {
   const query = params.query.trim();
   if (!query) {
-    return [];
+    return {
+      answer: emptyAnswer(),
+      results: [],
+    };
   }
 
   const allTurns = await deps.listTurns({
@@ -61,10 +70,57 @@ export async function searchBoardMemory(params: BoardSearchParams, deps: SearchD
     sessionKeys: params.sessionKeys,
   });
 
-  return groupCandidates([...conversations, ...extractions], {
+  const results = groupCandidates([...conversations, ...extractions], {
     sessionTopN: params.sessionTopN,
     topN: params.topN,
   });
+  return {
+    answer: buildAnswer(query, results),
+    results,
+  };
+}
+
+export function buildAnswer(query: string, results: SearchSessionResult[]): SearchAnswer {
+  const hits = results.flatMap((result) => (
+    result.items.map((item) => ({ result, item }))
+  ));
+  if (hits.length === 0) {
+    return {
+      text: `I could not find enough context for "${query}" across the selected agents.`,
+      citations: [],
+    };
+  }
+
+  const topHits = hits.slice(0, 4);
+  const citations = topHits.map(({ result, item }, index) => ({
+    id: item.id,
+    label: item.title || result.sessionLabel || `Source ${index + 1}`,
+    source: item.source,
+    sessionKey: result.sessionKey,
+    memoryId: item.memoryId,
+  }));
+  const bullets = topHits
+    .map(({ item }) => sentencePreview(item.content))
+    .filter((value): value is string => Boolean(value))
+    .slice(0, 3);
+
+  return {
+    text: [
+      `Based on the context I found for "${query}":`,
+      '',
+      ...bullets.map((bullet) => `- ${bullet}`),
+      '',
+      `I found ${hits.length} relevant ${hits.length === 1 ? 'piece' : 'pieces'} of context across ${results.length} ${results.length === 1 ? 'session' : 'sessions'}. The supporting sources are on the right.`,
+    ].filter((line, index, lines) => line !== '' || lines[index - 1] !== '').join('\n'),
+    citations,
+  };
+}
+
+function emptyAnswer(): SearchAnswer {
+  return {
+    text: '',
+    citations: [],
+  };
 }
 
 function conversationCandidates(
@@ -214,6 +270,17 @@ function scoreText(text: string, query: string): number {
   return terms.reduce((score, term) => score + (haystack.includes(term) ? 1 : 0), 0);
 }
 
+function sentencePreview(content: string): string | null {
+  const normalized = content
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!normalized) {
+    return null;
+  }
+  const sentence = normalized.match(/^[^.!?。！？]+[.!?。！？]?/)?.[0]?.trim() ?? normalized;
+  return sentence.length > 180 ? `${sentence.slice(0, 177).trim()}...` : sentence;
+}
+
 function matchesScope(
   projectKey: string,
   sessionKey: string,
@@ -254,6 +321,7 @@ function turnMemoryId(turn: BoardTurn): string {
 }
 
 export const __testing = {
+  buildAnswer,
   conversationCandidates,
   extractionCandidates,
   groupCandidates,

@@ -2795,18 +2795,129 @@ button.search-menu-item:hover,
   height: 14px;
 }
 
-.search-results {
-  width: min(680px, 100%);
-  margin: 8px auto 0;
-}
-
 .search-source-tabs {
   display: inline-flex;
   align-items: center;
   gap: 2px;
-  width: min(680px, 100%);
+  width: 100%;
   min-height: 30px;
-  margin: 8px auto 0;
+  margin: 0;
+}
+
+.search-qa-layout {
+  display: grid;
+  grid-template-columns: minmax(300px, 0.86fr) 1px minmax(520px, 1.14fr);
+  gap: 28px;
+  width: min(1180px, 100%);
+  margin: 18px auto 0;
+  align-items: start;
+}
+
+.search-answer-pane {
+  min-width: 0;
+  padding-top: 5px;
+}
+
+.search-evidence-pane {
+  min-width: 0;
+}
+
+.search-qa-divider {
+  width: 1px;
+  min-height: calc(100vh - 180px);
+  background: #ececef;
+}
+
+.search-answer {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  gap: 11px;
+}
+
+.search-answer-avatar {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid #e2e3e6;
+  border-radius: 999px;
+  color: #555a62;
+}
+
+.search-answer-avatar-error {
+  color: #a72525;
+}
+
+.search-answer-avatar svg {
+  width: 15px;
+  height: 15px;
+  stroke-width: 1.8;
+}
+
+.search-answer-body {
+  min-width: 0;
+  color: #2f3338;
+}
+
+.search-answer-label {
+  margin: 3px 0 9px;
+  color: #5f6368;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+
+.search-answer-text {
+  display: grid;
+  gap: 10px;
+}
+
+.search-answer-text p {
+  margin: 0;
+  color: #30343a;
+  font-size: 14px;
+  line-height: 1.58;
+}
+
+.search-answer-bullet {
+  position: relative;
+  padding-left: 14px;
+}
+
+.search-answer-bullet::before {
+  content: "";
+  position: absolute;
+  top: 0.72em;
+  left: 1px;
+  width: 4px;
+  height: 4px;
+  border-radius: 999px;
+  background: #7a7f87;
+}
+
+.search-answer-citations {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 16px;
+}
+
+.search-answer-citation {
+  max-width: 100%;
+  border: 1px solid #ececef;
+  border-radius: 999px;
+  color: #62666d;
+  font-size: 11px;
+  line-height: 22px;
+  padding: 0 9px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.search-results {
+  width: 100%;
+  margin: 4px 0 0;
 }
 
 .search-source-tab {
@@ -2909,6 +3020,12 @@ button.search-menu-item:hover,
   width: min(680px, 100%);
   margin: 28px auto 0;
   color: var(--muted-foreground);
+}
+
+.search-evidence-pane .search-status,
+.search-evidence-pane .search-error {
+  width: 100%;
+  margin: 18px 0 0;
 }
 
 .search-error {
@@ -4071,6 +4188,19 @@ button.search-menu-item:hover,
   .search-source-tabs {
     gap: 2px;
     overflow-x: auto;
+  }
+
+  .search-qa-layout {
+    grid-template-columns: 1fr;
+    gap: 20px;
+    width: min(680px, 100%);
+    margin-top: 16px;
+  }
+
+  .search-qa-divider {
+    width: 100%;
+    min-height: 1px;
+    height: 1px;
   }
 
   .search-prompt-title {
