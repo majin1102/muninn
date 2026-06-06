@@ -1,4 +1,4 @@
-export type SessionContentMode = 'split' | 'conversation';
+export type SessionContentMode = 'split' | 'conversation' | 'collapsed';
 
 export const OBSERVATION_MIN_WIDTH = 320;
 export const CONVERSATION_MIN_WIDTH = 520;
@@ -40,7 +40,13 @@ export function sessionTreeCanExpand(mode: SessionContentMode): boolean {
 }
 
 export function toggleSessionTreeLayoutMode(mode: SessionContentMode): SessionContentMode {
-  return mode === 'conversation' ? 'split' : 'conversation';
+  if (mode === 'split') {
+    return 'conversation';
+  }
+  if (mode === 'conversation') {
+    return 'collapsed';
+  }
+  return 'split';
 }
 
 export function hasSessionContext(session: unknown, document: unknown): boolean {
@@ -125,8 +131,8 @@ export function locateObservationEnabled(
 
 export function selectedSessionKey(session: {
   agent: string;
-  projectKey: string;
+  cwd?: string;
   sessionKey: string;
 }): string {
-  return `${session.agent}:${session.projectKey}:${session.sessionKey}`;
+  return `${session.agent}:${session.cwd ?? ''}:${session.sessionKey}`;
 }

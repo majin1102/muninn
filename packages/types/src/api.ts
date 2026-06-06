@@ -171,7 +171,7 @@ export interface SessionSegmentPreview {
   createdAt: string;
 }
 
-export interface SessionObservationPreview {
+export interface ExtractionPreview {
   memoryId: string;
   title: string;
   createdAt: string;
@@ -182,7 +182,7 @@ export interface SessionObservationPreview {
 export interface SessionTurnsResponse {
   turns: TurnPreview[];
   segments: SessionSegmentPreview[];
-  observations: SessionObservationPreview[];
+  observations: ExtractionPreview[];
   sessionSummary?: string;
   nextOffset: number | null;
   requestId: string;
@@ -190,7 +190,7 @@ export interface SessionTurnsResponse {
 
 export interface MemoryDocument {
   memoryId: string;
-  kind: 'turn' | 'session' | 'session_observation' | 'global_observation';
+  kind: 'turn' | 'session' | 'extraction' | 'global_observation';
   title: string;
   markdown: string;
   agent?: string;

@@ -15,7 +15,7 @@ const databaseName = resolveDatabaseName(process.env.MUNINN_DATABASE ?? null);
 const databaseHome = resolveDatabaseHome(databaseName);
 const targetDirs = [
   'session_snapshot',
-  'session_observation',
+  'extraction',
   'global_observation',
   'global_observation_context',
   'checkpoints',
@@ -46,8 +46,8 @@ async function main() {
     await countRows('session_snapshot rows (clear)', async () => (
       await tables.sessionTable.listSnapshots({ mode: { type: 'recency', limit: 1_000_000 } })
     ).length);
-    await countRows('session_observation rows (clear)', async () => (
-      await tables.sessionObservationTable.list({ mode: { type: 'recency', limit: 1_000_000 } })
+    await countRows('extraction rows (clear)', async () => (
+      await tables.extractionTable.list({ mode: { type: 'recency', limit: 1_000_000 } })
     ).length);
     await countRows('global_observation rows (clear)', async () => (await tables.globalObservationTable.stats())?.rowCount ?? 0);
     await countRows('global_observation_context rows (clear)', async () => (

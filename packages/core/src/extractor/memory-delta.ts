@@ -1,57 +1,57 @@
 import { createHash } from 'node:crypto';
 
 import { embedText } from '../llm/embedding-provider.js';
-import type { NativeTables, SessionObservation as StoredSessionObservation } from '../native.js';
-import type { QueuedSessionObservationChange } from '../checkpoint.js';
+import type { NativeTables, Extraction as StoredExtraction } from '../native.js';
+import type { QueuedExtractionChange } from '../checkpoint.js';
 import type {
-  SessionObservation,
-  SessionObservationChange,
+  Extraction,
+  ExtractionChange,
   ExtractSessionMemoryResult,
   SnapshotContent,
 } from './types.js';
 
-export function applySessionObservationChanges(
-  currentSessionObservations: SessionObservation[],
+export function applyExtractionChanges(
+  currentExtractions: Extraction[],
   result: ExtractSessionMemoryResult,
 ): {
-  extractionChanges: SessionObservationChange[];
-  extractions: SessionObservation[];
+  extractionChanges: ExtractionChange[];
+  extractions: Extraction[];
 } {
-  const currentById = new Map<string, SessionObservation>();
-  const currentByUnitKey = new Map<string, SessionObservation>();
-  for (const row of currentSessionObservations) {
-    const normalized = cloneSessionObservation(row, { requireReferences: false });
+  const currentById = new Map<string, Extraction>();
+  const currentByUnitKey = new Map<string, Extraction>();
+  for (const row of currentExtractions) {
+    const normalized = cloneExtraction(row, { requireReferences: false });
     if (!normalized.id) {
       continue;
     }
     currentById.set(normalized.id, normalized);
-    currentByUnitKey.set(sessionObservationUnitKey(normalized), normalized);
+    currentByUnitKey.set(extractionUnitKey(normalized), normalized);
   }
 
-  const nextSessionObservations: SessionObservation[] = [];
-  const changes: SessionObservationChange[] = [];
+  const nextExtractions: Extraction[] = [];
+  const changes: ExtractionChange[] = [];
   const seenIds = new Set<string>();
 
   for (const raw of result.extractions) {
-    const normalized = cloneSessionObservation(raw, { requireReferences: true });
-    const generatedId = addedSessionObservationId({
+    const normalized = cloneExtraction(raw, { requireReferences: true });
+    const generatedId = addedExtractionId({
       type: 'add',
       text: normalized.text,
       context: normalized.context ?? null,
       references: normalized.references,
-      reason: 'state rewrite added session observation',
+      reason: 'state rewrite added extraction',
     });
     const matched = normalized.id
       ? currentById.get(normalized.id)
-      : currentById.get(generatedId) ?? currentByUnitKey.get(sessionObservationUnitKey(normalized));
+      : currentById.get(generatedId) ?? currentByUnitKey.get(extractionUnitKey(normalized));
     const id = normalized.id || matched?.id || generatedId;
     if (seenIds.has(id)) {
-      throw new Error(`duplicate session observation id in state rewrite: ${id}`);
+      throw new Error(`duplicate extraction id in state rewrite: ${id}`);
     }
 
     const existing = currentById.get(id);
     if (normalized.id && !existing) {
-      throw new Error(`unknown session observation id in state rewrite: ${normalized.id}`);
+      throw new Error(`unknown extraction id in state rewrite: ${normalized.id}`);
     }
 
     seenIds.add(id);
@@ -60,7 +60,7 @@ export function applySessionObservationChanges(
       id,
       updatedMemory: existing?.updatedMemory ?? normalized.updatedMemory ?? null,
     };
-    nextSessionObservations.push(next);
+    nextExtractions.push(next);
 
     if (!existing) {
       changes.push({
@@ -68,7 +68,7 @@ export function applySessionObservationChanges(
         text: next.text,
         context: next.context ?? null,
         references: next.references,
-        reason: 'state rewrite added session observation',
+        reason: 'state rewrite added extraction',
       });
       continue;
     }
@@ -84,7 +84,7 @@ export function applySessionObservationChanges(
         text: next.text,
         references: next.references,
         context: next.context ?? null,
-        reason: 'state rewrite updated session observation',
+        reason: 'state rewrite updated extraction',
       });
     }
   }
@@ -94,23 +94,23 @@ export function applySessionObservationChanges(
       changes.push({
         type: 'delete',
         extractionId: id,
-        reason: 'state rewrite omitted session observation',
+        reason: 'state rewrite omitted extraction',
       });
     }
   }
 
   return {
     extractionChanges: changes,
-    extractions: nextSessionObservations,
+    extractions: nextExtractions,
   };
 }
 
-export async function applySessionObservationTableChanges(
+export async function applyExtractionTableChanges(
   client: NativeTables,
   snapshot: SnapshotContent,
   _snapshotId: string,
   signal?: AbortSignal,
-): Promise<QueuedSessionObservationChange[]> {
+): Promise<QueuedExtractionChange[]> {
   throwIfAborted(signal);
   const changes = snapshot.extractionChanges ?? [];
   if (changes.length === 0) {
@@ -118,7 +118,7 @@ export async function applySessionObservationTableChanges(
   }
   const cwd = snapshot.cwd?.trim();
   if (!cwd) {
-    throw new Error('snapshot cwd is required to write session observations');
+    throw new Error('snapshot cwd is required to write extractions');
   }
 
   const sourceIds = new Set<string>();
@@ -126,7 +126,7 @@ export async function applySessionObservationTableChanges(
   const upsertIds = new Set<string>();
   for (const change of changes) {
     if (change.type === 'add') {
-      upsertIds.add(addedSessionObservationId(change));
+      upsertIds.add(addedExtractionId(change));
       continue;
     }
     if (change.type === 'merge') {
@@ -134,7 +134,7 @@ export async function applySessionObservationTableChanges(
         sourceIds.add(extractionId);
         deletedIds.add(extractionId);
       }
-      upsertIds.add(mergedSessionObservationId(change));
+      upsertIds.add(mergedExtractionId(change));
       continue;
     }
     if (change.type === 'update') {
@@ -147,17 +147,17 @@ export async function applySessionObservationTableChanges(
   }
 
   const existingRows = sourceIds.size > 0
-    ? await client.sessionObservationTable.get({ ids: [...sourceIds] })
+    ? await client.extractionTable.get({ ids: [...sourceIds] })
     : [];
   const existingById = new Map(existingRows.map((row) => [row.id, row]));
-  const queued: QueuedSessionObservationChange[] = [];
+  const queued: QueuedExtractionChange[] = [];
 
   if (deletedIds.size > 0) {
-    await client.sessionObservationTable.delete({ ids: [...deletedIds] });
+    await client.extractionTable.delete({ ids: [...deletedIds] });
     for (const id of deletedIds) {
       const existing = existingById.get(id);
       if (existing) {
-        queued.push({ type: 'delete', sessionObservation: existing });
+        queued.push({ type: 'delete', extraction: existing });
       }
     }
   }
@@ -166,23 +166,23 @@ export async function applySessionObservationTableChanges(
     return queued;
   }
 
-  const storedUpserts = await client.sessionObservationTable.get({ ids: [...upsertIds] });
+  const storedUpserts = await client.extractionTable.get({ ids: [...upsertIds] });
   const storedById = new Map(storedUpserts.map((row) => [row.id, row]));
   const observationsById = new Map(
     snapshot.extractions
-      .filter((row): row is SessionObservation & { id: string } => Boolean(row.id))
+      .filter((row): row is Extraction & { id: string } => Boolean(row.id))
       .map((row) => [row.id, row]),
   );
-  const rows: StoredSessionObservation[] = [];
+  const rows: StoredExtraction[] = [];
 
   for (const change of changes) {
     if (change.type === 'delete') {
       continue;
     }
     const id = change.type === 'add'
-      ? addedSessionObservationId(change)
+      ? addedExtractionId(change)
       : change.type === 'merge'
-        ? mergedSessionObservationId(change)
+        ? mergedExtractionId(change)
         : change.type === 'update'
           ? change.extractionId
           : null;
@@ -197,13 +197,13 @@ export async function applySessionObservationTableChanges(
     const existing = storedById.get(id) ?? (change.type === 'update' ? existingById.get(id) : undefined);
     const references = referencesForChange(change, existingById);
     const now = new Date().toISOString();
-    const title = sessionObservationTitle(observation);
-    const summary = sessionObservationSummary(title, observation);
+    const title = extractionTitle(observation);
+    const summary = extractionSummary(title, observation);
     rows.push({
       id,
       title,
       summary,
-      content: sessionObservationContent(title, observation),
+      content: extractionContent(title, observation),
       cwd,
       vector: await embedText(summary, signal),
       turnRefs: references,
@@ -214,15 +214,15 @@ export async function applySessionObservationTableChanges(
   }
 
   if (rows.length > 0) {
-    await client.sessionObservationTable.upsert({ rows });
-    queued.push(...rows.map((row) => ({ type: 'upsert' as const, sessionObservation: row })));
+    await client.extractionTable.upsert({ rows });
+    queued.push(...rows.map((row) => ({ type: 'upsert' as const, extraction: row })));
   }
   return queued;
 }
 
 function referencesForChange(
-  change: Extract<SessionObservationChange, { type: 'add' | 'merge' | 'update' }>,
-  existingById: Map<string, StoredSessionObservation>,
+  change: Extract<ExtractionChange, { type: 'add' | 'merge' | 'update' }>,
+  existingById: Map<string, StoredExtraction>,
 ): string[] {
   if (change.type === 'add') {
     return change.references;
@@ -237,8 +237,8 @@ function referencesForChange(
   return [...new Set(references)];
 }
 
-function addedSessionObservationId(change: Extract<SessionObservationChange, { type: 'add' }>): string {
-  return stableSessionObservationId({
+function addedExtractionId(change: Extract<ExtractionChange, { type: 'add' }>): string {
+  return stableExtractionId({
     type: change.type,
     text: change.text,
     context: change.context ?? null,
@@ -246,8 +246,8 @@ function addedSessionObservationId(change: Extract<SessionObservationChange, { t
   });
 }
 
-function mergedSessionObservationId(change: Extract<SessionObservationChange, { type: 'merge' }>): string {
-  return stableSessionObservationId({
+function mergedExtractionId(change: Extract<ExtractionChange, { type: 'merge' }>): string {
+  return stableExtractionId({
     type: change.type,
     extractionIds: [...change.extractionIds].sort(),
     text: change.text,
@@ -255,24 +255,24 @@ function mergedSessionObservationId(change: Extract<SessionObservationChange, { 
   });
 }
 
-function stableSessionObservationId(value: unknown): string {
+function stableExtractionId(value: unknown): string {
   return createHash('sha256')
     .update(JSON.stringify(value))
     .digest('hex')
     .slice(0, 24);
 }
 
-function cloneSessionObservation(
-  row: SessionObservation,
+function cloneExtraction(
+  row: Extraction,
   options: { requireReferences: boolean } = { requireReferences: true },
-): SessionObservation {
+): Extraction {
   const text = normalizeText(row.text);
   if (!text) {
-    throw new Error('session observation text is required');
+    throw new Error('extraction text is required');
   }
   const references = normalizeIds(row.references);
   if (options.requireReferences && references.length === 0) {
-    throw new Error('session observation references must include at least one reference');
+    throw new Error('extraction references must include at least one reference');
   }
   return {
     id: row.id?.trim() || null,
@@ -305,7 +305,7 @@ function normalizeContext(value: string | null): string | null {
   return trimmed || null;
 }
 
-function sessionObservationUnitKey(row: SessionObservation): string {
+function extractionUnitKey(row: Extraction): string {
   return [
     normalizeText(row.title ?? ''),
     normalizeText(row.text),
@@ -313,18 +313,18 @@ function sessionObservationUnitKey(row: SessionObservation): string {
   ].join('\u0002');
 }
 
-function sessionObservationTitle(row: SessionObservation): string {
+function extractionTitle(row: Extraction): string {
   return normalizeText(row.title ?? '') || normalizeText(row.text).slice(0, 80);
 }
 
-function sessionObservationSummary(title: string, row: SessionObservation): string {
+function extractionSummary(title: string, row: Extraction): string {
   return [
     title,
     row.text,
   ].filter(Boolean).join('\n\n');
 }
 
-function sessionObservationContent(title: string, row: SessionObservation): string {
+function extractionContent(title: string, row: Extraction): string {
   return [
     '## Title',
     '',

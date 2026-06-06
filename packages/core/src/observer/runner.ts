@@ -1,8 +1,8 @@
 import { getObserverRuntimeConfig } from '../config.js';
 import { embedText } from '../llm/embedding-provider.js';
-import { observeCwdScope, type ObserverSessionObservationInput } from '../llm/observing.js';
-import type { SessionObservation, NativeTables, GlobalObservation, GlobalObservationContext } from '../native.js';
-import type { QueuedSessionObservationChange } from '../checkpoint.js';
+import { observeCwdScope, type ObserverExtractionInput } from '../llm/observing.js';
+import type { Extraction, NativeTables, GlobalObservation, GlobalObservationContext } from '../native.js';
+import type { QueuedExtractionChange } from '../checkpoint.js';
 import type { ParsedObserverDocument, ParsedObserverSection } from './types.js';
 
 type ObserveCwdScopeImpl = typeof observeCwdScope;
@@ -49,7 +49,7 @@ export async function runObserver(params: {
   client: NativeTables;
   observerName: string;
   cwd?: string;
-  sessionObservationChanges?: QueuedSessionObservationChange[];
+  extractionChanges?: QueuedExtractionChange[];
   baselineVersion?: number;
   cwdThreshold?: number;
   finalize?: boolean;
@@ -59,19 +59,19 @@ export async function runObserver(params: {
 }): Promise<ObserverRunResult> {
   throwIfAborted(params.signal);
   const cwdThreshold = params.cwdThreshold ?? getObserverRuntimeConfig().cwdThreshold;
-  if (params.cwd && params.sessionObservationChanges) {
+  if (params.cwd && params.extractionChanges) {
     return runQueuedObserver({
       client: params.client,
       observerName: params.observerName,
       cwd: params.cwd,
-      sessionObservationChanges: params.sessionObservationChanges,
+      extractionChanges: params.extractionChanges,
       signal: params.signal,
       database: params.database,
       observeCwdScopeImpl: params.observeCwdScopeImpl,
     });
   }
   const baselineInput = params.baselineVersion ?? 0;
-  const { extractions, baselineVersion } = await loadChangedSessionObservations(params.client, baselineInput);
+  const { extractions, baselineVersion } = await loadChangedExtractions(params.client, baselineInput);
   const allContexts = await params.client.globalObservationContextTable.list({ observer: params.observerName });
   const groups = groupByCwd(extractions);
   let observed = 0;
@@ -98,9 +98,9 @@ export async function runObserver(params: {
   for (const group of groups) {
     throwIfAborted(params.signal);
     const tree = contextsForCwd(allContexts, group.cwd);
-    const currentGlobalObservationRefs = stripChangedSessionObservationRefs(refHintsById(tree.rows), group.extractions);
+    const currentGlobalObservationRefs = stripChangedExtractionRefs(refHintsById(tree.rows), group.extractions);
     const rewriteScope = buildRewriteScope(tree, group.extractions);
-    const extractions = group.extractions.map(toObserverSessionObservationInput);
+    const extractions = group.extractions.map(toObserverExtractionInput);
     const result = await (params.observeCwdScopeImpl ?? observeCwdScope)({
       cwdScope: group.cwd,
       outline: renderOutline(group.cwd, tree.rootRows),
@@ -117,7 +117,7 @@ export async function runObserver(params: {
       cwd: group.cwd,
       tree,
       result,
-      linkSessionObservations: group.extractions,
+      linkExtractions: group.extractions,
       signal: params.signal,
     });
     observed += 1;
@@ -130,24 +130,24 @@ async function runQueuedObserver(params: {
   client: NativeTables;
   observerName: string;
   cwd: string;
-  sessionObservationChanges: QueuedSessionObservationChange[];
+  extractionChanges: QueuedExtractionChange[];
   signal?: AbortSignal;
   database?: string;
   observeCwdScopeImpl?: ObserveCwdScopeImpl;
 }): Promise<ObserverRunResult> {
-  const changedSessionObservations = params.sessionObservationChanges.map((change) => change.sessionObservation);
-  const upsertSessionObservations = params.sessionObservationChanges
+  const changedExtractions = params.extractionChanges.map((change) => change.extraction);
+  const upsertExtractions = params.extractionChanges
     .filter((change) => change.type === 'upsert')
-    .map((change) => change.sessionObservation);
+    .map((change) => change.extraction);
   const allContexts = await params.client.globalObservationContextTable.list({ observer: params.observerName });
   const tree = contextsForCwd(allContexts, params.cwd);
-  const currentGlobalObservationRefs = stripChangedSessionObservationRefs(refHintsById(tree.rows), changedSessionObservations);
-  const rewriteScope = buildRewriteScope(tree, changedSessionObservations);
+  const currentGlobalObservationRefs = stripChangedExtractionRefs(refHintsById(tree.rows), changedExtractions);
+  const rewriteScope = buildRewriteScope(tree, changedExtractions);
   const result = await (params.observeCwdScopeImpl ?? observeCwdScope)({
     cwdScope: params.cwd,
     outline: renderOutline(params.cwd, tree.rootRows),
     observedDocument: renderObservedDocument(params.cwd, tree.rows, rewriteScope.paths, currentGlobalObservationRefs),
-    extractions: upsertSessionObservations.map(toObserverSessionObservationInput),
+    extractions: upsertExtractions.map(toObserverExtractionInput),
     validRefs: [...currentGlobalObservationRefs.values()].flatMap(allRefs),
     getGlobalObservation: createGetGlobalObservationTool(params.cwd, tree, currentGlobalObservationRefs),
     signal: params.signal,
@@ -159,7 +159,7 @@ async function runQueuedObserver(params: {
     cwd: params.cwd,
     tree,
     result,
-    linkSessionObservations: upsertSessionObservations,
+    linkExtractions: upsertExtractions,
     signal: params.signal,
   });
   return { observed: 1, skipped: 0, baselineVersion: 0 };
@@ -184,7 +184,7 @@ export async function getObserverWorkStatus(params: {
 }): Promise<ObserverWorkStatus> {
   throwIfAborted(params.signal);
   const cwdThreshold = params.cwdThreshold ?? getObserverRuntimeConfig().cwdThreshold;
-  const { extractions, baselineVersion } = await loadChangedSessionObservations(params.client, params.baselineVersion);
+  const { extractions, baselineVersion } = await loadChangedExtractions(params.client, params.baselineVersion);
   const groups = groupByCwd(extractions);
   const pending = params.finalize
     ? groups.length > 0
@@ -197,11 +197,11 @@ export async function getObserverWorkStatus(params: {
   };
 }
 
-async function loadChangedSessionObservations(
+async function loadChangedExtractions(
   client: NativeTables,
   baselineVersion: number,
-): Promise<{ extractions: SessionObservation[]; baselineVersion: number }> {
-  const stats = await client.sessionObservationTable.stats();
+): Promise<{ extractions: Extraction[]; baselineVersion: number }> {
+  const stats = await client.extractionTable.stats();
   const nextBaselineVersion = stats?.version ?? baselineVersion;
   if (nextBaselineVersion <= baselineVersion) {
     return {
@@ -209,15 +209,15 @@ async function loadChangedSessionObservations(
       baselineVersion,
     };
   }
-  const extractions = await client.sessionObservationTable.delta({ baselineVersion });
+  const extractions = await client.extractionTable.delta({ baselineVersion });
   return {
     extractions,
     baselineVersion: nextBaselineVersion,
   };
 }
 
-function groupByCwd(extractions: SessionObservation[]): Array<{ cwd: string; extractions: SessionObservation[] }> {
-  const groups = new Map<string, { cwd: string; extractions: SessionObservation[] }>();
+function groupByCwd(extractions: Extraction[]): Array<{ cwd: string; extractions: Extraction[] }> {
+  const groups = new Map<string, { cwd: string; extractions: Extraction[] }>();
   const order: string[] = [];
   for (const extraction of extractions) {
     const cwd = normalizeCwd(extraction.cwd);
@@ -239,14 +239,14 @@ function normalizeCwd(cwd: string): string {
   return cwd.trim().replace(/\/+$/, '') || cwd.trim();
 }
 
-function toObserverSessionObservationInput(sessionObservation: SessionObservation): ObserverSessionObservationInput {
+function toObserverExtractionInput(extraction: Extraction): ObserverExtractionInput {
   return {
-    id: sessionObservation.id,
-    status: sessionObservation.globalObservationPaths.length > 0 ? 'changed' : 'new',
-    text: sessionObservation.summary,
-    context: sessionObservation.content,
-    cwd: sessionObservation.cwd,
-    turnRefs: sessionObservation.turnRefs,
+    id: extraction.id,
+    status: extraction.globalObservationPaths.length > 0 ? 'changed' : 'new',
+    text: extraction.summary,
+    context: extraction.content,
+    cwd: extraction.cwd,
+    turnRefs: extraction.turnRefs,
   };
 }
 
@@ -269,7 +269,7 @@ async function applyDocument(params: {
   cwd: string;
   tree: ExistingTree;
   result: ParsedObserverDocument;
-  linkSessionObservations: SessionObservation[];
+  linkExtractions: Extraction[];
   signal?: AbortSignal;
 }): Promise<void> {
   const now = new Date().toISOString();
@@ -319,8 +319,8 @@ async function applyDocument(params: {
   if (observationRows.length > 0) {
     await params.client.globalObservationTable.upsert({ rows: observationRows });
   }
-  await updateSessionObservationLinks(params.client, {
-    extractions: params.linkSessionObservations,
+  await updateExtractionLinks(params.client, {
+    extractions: params.linkExtractions,
     existingRows: params.tree.rows,
     writablePaths,
     nodes: next,
@@ -471,7 +471,7 @@ async function buildGlobalObservationRows(
       globalPath: node.globalPath,
       text,
       vector: await embedText(text, signal),
-      sessionObservationRefs: expandRefs,
+      extractionRefs: expandRefs,
       createdAt: existing.get(node.id)?.createdAt ?? now,
       updatedAt: now,
     });
@@ -483,10 +483,10 @@ function leafGlobalObservationText(node: NextNode): string {
   return `${node.globalPath}\n\n${node.content.trim()}`.trim();
 }
 
-async function updateSessionObservationLinks(
+async function updateExtractionLinks(
   client: NativeTables,
   params: {
-    extractions: SessionObservation[];
+    extractions: Extraction[];
     existingRows: GlobalObservationContext[];
     writablePaths: Set<string>;
     nodes: NextNode[];
@@ -513,7 +513,7 @@ async function updateSessionObservationLinks(
     ...leafByRef.keys(),
   ]);
   const storedRows = affectedIds.length > 0
-    ? await client.sessionObservationTable.get({ ids: affectedIds.filter((id) => !inputById.has(id)) })
+    ? await client.extractionTable.get({ ids: affectedIds.filter((id) => !inputById.has(id)) })
     : [];
   const extractionById = new Map([
     ...storedRows.map((extraction) => [extraction.id, extraction] as const),
@@ -521,7 +521,7 @@ async function updateSessionObservationLinks(
   ]);
   const rows = affectedIds
     .map((id) => extractionById.get(id))
-    .filter((extraction): extraction is SessionObservation => Boolean(extraction))
+    .filter((extraction): extraction is Extraction => Boolean(extraction))
     .filter((extraction) => leafByRef.has(extraction.id) || extraction.globalObservationPaths.some((path) => params.writablePaths.has(path)))
     .map((extraction) => {
       const globalObservationPaths = unique([
@@ -537,9 +537,9 @@ async function updateSessionObservationLinks(
         updatedAt: params.now,
       };
     })
-    .filter((row): row is SessionObservation => Boolean(row));
+    .filter((row): row is Extraction => Boolean(row));
   if (rows.length > 0) {
-    await client.sessionObservationTable.upsert({ rows });
+    await client.extractionTable.upsert({ rows });
   }
 }
 
@@ -550,9 +550,9 @@ function refHintsById(contexts: GlobalObservationContext[]): Map<string, RefHint
   }]));
 }
 
-function stripChangedSessionObservationRefs(
+function stripChangedExtractionRefs(
   refsById: Map<string, RefHints>,
-  extractions: SessionObservation[],
+  extractions: Extraction[],
 ): Map<string, RefHints> {
   const changedRefs = new Set(extractions.flatMap(extractionRefVariants));
   return new Map([...refsById].map(([id, refs]) => [id, {
@@ -561,10 +561,10 @@ function stripChangedSessionObservationRefs(
   }]));
 }
 
-function extractionRefVariants(sessionObservation: SessionObservation): string[] {
-  return sessionObservation.id.startsWith('session_observation:')
-    ? [sessionObservation.id, sessionObservation.id.slice('session_observation:'.length)]
-    : [sessionObservation.id, `session_observation:${sessionObservation.id}`];
+function extractionRefVariants(extraction: Extraction): string[] {
+  return extraction.id.startsWith('extraction:')
+    ? [extraction.id, extraction.id.slice('extraction:'.length)]
+    : [extraction.id, `extraction:${extraction.id}`];
 }
 
 function renderTree(
@@ -620,7 +620,7 @@ function renderOutlineRows(
   });
 }
 
-function buildRewriteScope(tree: ExistingTree, extractions: SessionObservation[]): { rows: GlobalObservationContext[]; paths: Set<string> } {
+function buildRewriteScope(tree: ExistingTree, extractions: Extraction[]): { rows: GlobalObservationContext[]; paths: Set<string> } {
   const paths = new Set<string>();
   for (const extraction of extractions) {
     for (const path of extraction.globalObservationPaths) {
@@ -736,7 +736,7 @@ function renderContextRow(
     lines.push('', row.content.trim());
   }
   if (selected && !hasChildren) {
-    lines.push(...renderSourceSessionObservationLines(refs, row.content));
+    lines.push(...renderSourceExtractionLines(refs, row.content));
   }
   return lines.join('\n').trim();
 }
@@ -774,7 +774,7 @@ function renderRefsHint(_refs: RefHints): string {
   return '';
 }
 
-function renderSourceSessionObservationLines(refs: RefHints, content: string): string[] {
+function renderSourceExtractionLines(refs: RefHints, content: string): string[] {
   if (/^Source extractions:\s*$/im.test(content)) {
     return [];
   }

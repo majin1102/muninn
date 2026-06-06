@@ -7,7 +7,7 @@ import type {
   SessionSnapshot,
   SessionFragment,
 } from './extractor/types.js';
-import type { SessionObservation } from './native.js';
+import type { Extraction } from './native.js';
 
 export type RecentTurn = {
   turnId: string;
@@ -36,7 +36,7 @@ export type ExtractorCheckpoint = {
   baseline: {
     turn: number;
     session: number;
-    session_observation: number;
+    extraction: number;
     global_observation: number;
   };
   committedEpoch?: number;
@@ -44,7 +44,7 @@ export type ExtractorCheckpoint = {
   recentSessions: RecentSessionCheckpoint[];
   threads: ThreadRef[];
   runs: ExtractorRun[];
-  pendingSessionObservationChanges: QueuedSessionObservationChange[];
+  pendingExtractionChanges: QueuedExtractionChange[];
 };
 
 export type SessionIndexEntry = {
@@ -65,9 +65,9 @@ export type SessionIndexCheckpoint = {
   entries: SessionIndexEntry[];
 };
 
-export type QueuedSessionObservationChange =
-  | { type: 'upsert'; sessionObservation: SessionObservation }
-  | { type: 'delete'; sessionObservation: SessionObservation };
+export type QueuedExtractionChange =
+  | { type: 'upsert'; extraction: Extraction }
+  | { type: 'delete'; extraction: Extraction };
 
 export type CheckpointContent = {
   schemaVersion: 7;
@@ -85,7 +85,7 @@ export type ExtractorRunStatus = 'running' | 'completed' | 'failed';
 
 export type ExtractorRunStage =
   | 'fittingThreads'
-  | 'committingSessionObservations'
+  | 'committingExtractions'
   | 'extractingSessionMemory'
   | 'committingSnapshots'
   | 'indexingSnapshots'
@@ -116,7 +116,7 @@ export type ExtractorRun = {
 };
 
 export type ObserverRunStage =
-  | 'selectingSessionObservations'
+  | 'selectingExtractions'
   | 'generatingGlobalObservation'
   | 'committingSnapshot'
   | 'committingGlobalObservations'
@@ -128,7 +128,7 @@ export type ObserverRun = {
   observeId: string;
   cwd: string;
   stage: ObserverRunStage;
-  pendingSessionObservationIds: string[];
+  pendingExtractionIds: string[];
   generatedContent?: string;
   parsedGlobalObservationDrafts?: Array<{
     id: string;
@@ -152,7 +152,7 @@ export type ObserverCheckpoint = {
     cwdBuckets: Array<{
       key: string;
       cwd: string;
-      sessionObservationChanges: QueuedSessionObservationChange[];
+      extractionChanges: QueuedExtractionChange[];
     }>;
   };
   runs: ObserverRun[];
@@ -216,8 +216,8 @@ function parseExtractorSection(value: unknown): ExtractorCheckpoint | null {
   const recentSessions = parseRecentSessions(value.recentSessions);
   const threads = parseThreads(value.threads);
   const runs = parseExtractorRuns(value.runs ?? []);
-  const pendingSessionObservationChanges = parseQueuedSessionObservationChanges(value.pendingSessionObservationChanges);
-  if (!baseline || typeof nextEpoch !== 'number' || !recentSessions || !threads || !runs || !pendingSessionObservationChanges) {
+  const pendingExtractionChanges = parseQueuedExtractionChanges(value.pendingExtractionChanges);
+  if (!baseline || typeof nextEpoch !== 'number' || !recentSessions || !threads || !runs || !pendingExtractionChanges) {
     return null;
   }
   const committedEpoch = value.committedEpoch;
@@ -231,7 +231,7 @@ function parseExtractorSection(value: unknown): ExtractorCheckpoint | null {
     recentSessions,
     threads,
     runs,
-    pendingSessionObservationChanges,
+    pendingExtractionChanges,
   };
 }
 
@@ -242,7 +242,7 @@ function parseExtractorBaseline(value: unknown): ExtractorCheckpoint['baseline']
   if (
     typeof value.turn !== 'number'
     || typeof value.session !== 'number'
-    || typeof value.session_observation !== 'number'
+    || typeof value.extraction !== 'number'
     || typeof value.global_observation !== 'number'
   ) {
     return null;
@@ -250,7 +250,7 @@ function parseExtractorBaseline(value: unknown): ExtractorCheckpoint['baseline']
   return {
     turn: value.turn,
     session: value.session,
-    session_observation: value.session_observation,
+    extraction: value.extraction,
     global_observation: value.global_observation,
   };
 }
@@ -342,38 +342,38 @@ function parseObserveQueue(value: unknown): ObserverCheckpoint['observeQueue'] |
     ) {
       return null;
     }
-    const sessionObservationChanges = parseQueuedSessionObservationChanges(bucket.sessionObservationChanges);
-    if (!sessionObservationChanges) {
+    const extractionChanges = parseQueuedExtractionChanges(bucket.extractionChanges);
+    if (!extractionChanges) {
       return null;
     }
     cwdBuckets.push({
       key: bucket.key,
       cwd: bucket.cwd,
-      sessionObservationChanges,
+      extractionChanges,
     });
   }
   return { cwdBuckets };
 }
 
-function parseQueuedSessionObservationChanges(value: unknown): QueuedSessionObservationChange[] | null {
+function parseQueuedExtractionChanges(value: unknown): QueuedExtractionChange[] | null {
   if (!Array.isArray(value)) {
     return null;
   }
-  const changes: QueuedSessionObservationChange[] = [];
+  const changes: QueuedExtractionChange[] = [];
   for (const entry of value) {
     if (!isObjectRecord(entry) || (entry.type !== 'upsert' && entry.type !== 'delete')) {
       return null;
     }
-    const sessionObservation = parseStoredSessionObservation(entry.sessionObservation);
-    if (!sessionObservation) {
+    const extraction = parseStoredExtraction(entry.extraction);
+    if (!extraction) {
       return null;
     }
-    changes.push({ type: entry.type, sessionObservation });
+    changes.push({ type: entry.type, extraction });
   }
   return changes;
 }
 
-function parseStoredSessionObservation(value: unknown): SessionObservation | null {
+function parseStoredExtraction(value: unknown): Extraction | null {
   if (!isObjectRecord(value)) {
     return null;
   }
@@ -637,9 +637,9 @@ function parseObserverRun(value: unknown): ObserverRun | null {
   ) {
     return null;
   }
-  const pendingSessionObservationIds = parseStringArray(value.pendingSessionObservationIds);
+  const pendingExtractionIds = parseStringArray(value.pendingExtractionIds);
   const errors = parseObserverRunErrors(value.errors);
-  if (!pendingSessionObservationIds || !errors) {
+  if (!pendingExtractionIds || !errors) {
     return null;
   }
   const parsedGlobalObservationDrafts = value.parsedGlobalObservationDrafts == null
@@ -665,7 +665,7 @@ function parseObserverRun(value: unknown): ObserverRun | null {
     observeId: value.observeId,
     cwd: value.cwd,
     stage: value.stage,
-    pendingSessionObservationIds,
+    pendingExtractionIds,
     ...(value.generatedContent == null ? {} : { generatedContent: value.generatedContent }),
     ...(parsedGlobalObservationDrafts ? { parsedGlobalObservationDrafts } : {}),
     ...(value.committedSnapshotId == null ? {} : { committedSnapshotId: value.committedSnapshotId }),
@@ -742,7 +742,7 @@ function isRunStatus(value: unknown): value is ExtractorRunStatus {
 
 function isRunStage(value: unknown): value is ExtractorRunStage {
   return value === 'fittingThreads'
-    || value === 'committingSessionObservations'
+    || value === 'committingExtractions'
     || value === 'extractingSessionMemory'
     || value === 'committingSnapshots'
     || value === 'indexingSnapshots'
@@ -750,7 +750,7 @@ function isRunStage(value: unknown): value is ExtractorRunStage {
 }
 
 function isObserverRunStage(value: unknown): value is ObserverRunStage {
-  return value === 'selectingSessionObservations'
+  return value === 'selectingExtractions'
     || value === 'generatingGlobalObservation'
     || value === 'committingSnapshot'
     || value === 'committingGlobalObservations'

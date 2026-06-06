@@ -153,10 +153,10 @@ function defaultStorageTarget(homeDir) {
   return { uri: toFileStoreUri(path.join(homeDir, 'main')) };
 }
 
-function firstSessionObservationRef(hits) {
+function firstExtractionRef(hits) {
   return hits
     .flatMap((hit) => [hit.memoryId, ...(hit.references ?? [])])
-    .map((ref) => ref.startsWith('session_observation:') ? ref.slice('session_observation:'.length) : ref)
+    .map((ref) => ref.startsWith('extraction:') ? ref.slice('extraction:'.length) : ref)
     .find((ref) => ref && !ref.startsWith('turn:') && !ref.startsWith('session:'));
 }
 
@@ -499,7 +499,7 @@ test('pure read APIs work without observer bootstrap config', async (t) => {
   }
 
   const hitsBefore = await memories.recall('bootstrap-free prompt', 1);
-  assert.ok(hitsBefore[0]?.memoryId.startsWith('session_observation:'));
+  assert.ok(hitsBefore[0]?.memoryId.startsWith('extraction:'));
   const extractionId = hitsBefore[0].memoryId;
 
   await shutdownCoreForTests();
@@ -647,7 +647,7 @@ test('cold start does not wait for the first watchdog interval before serving wr
       enabled: true,
       intervalMs: 250,
       compactMinFragments: 1,
-      session_observation: {
+      extraction: {
         targetPartitionSize: 16,
         optimizeMergeCount: 2,
       },
@@ -900,7 +900,7 @@ test('validateSettings rejects legacy provider shape', async (t) => {
           provider: 'mock',
         },
       },
-      session_observation: {
+      extraction: {
         embedding: {
           provider: 'mock',
           dimensions: 8,
@@ -919,7 +919,7 @@ test('validateSettings rejects top-level extraction config', async (t) => {
 
   await assert.rejects(
     () => validateSettings(JSON.stringify(validSettings({
-      session_observation: {
+      extraction: {
         embeddingProvider: 'default',
       },
     }), null, 2)),
@@ -1135,9 +1135,9 @@ test('validateSettings rejects extraction dimension changes when the table exist
   const binding = await getNativeTables(defaultStorageTarget(homeDir));
   assert.ok(typeof binding.turnTable.describe === 'function');
   assert.ok(typeof binding.sessionTable.describe === 'function');
-  assert.ok(typeof binding.sessionObservationTable.describe === 'function');
+  assert.ok(typeof binding.extractionTable.describe === 'function');
 
-  await binding.sessionObservationTable.upsert({
+  await binding.extractionTable.upsert({
     rows: [{
       id: 'mem-1',
       title: 'extraction text',
@@ -1153,9 +1153,9 @@ test('validateSettings rejects extraction dimension changes when the table exist
       updatedAt: '2024-01-01T00:00:00Z',
     }],
   });
-  await binding.sessionObservationTable.delete({ ids: ['mem-1'] });
+  await binding.extractionTable.delete({ ids: ['mem-1'] });
 
-  const description = await binding.sessionObservationTable.describe();
+  const description = await binding.extractionTable.describe();
   assert.ok(description);
   assert.equal(description.dimensions?.vector, 4);
 
@@ -1249,7 +1249,7 @@ test('createNativeTables returns an independent native table binding', async (t)
 
   assert.notStrictEqual(standalone, singleton);
   assert.notStrictEqual(standalone.turnTable, singleton.turnTable);
-  assert.notStrictEqual(standalone.sessionObservationTable, singleton.sessionObservationTable);
+  assert.notStrictEqual(standalone.extractionTable, singleton.extractionTable);
   assert.notStrictEqual(standalone.globalObservationTable, singleton.globalObservationTable);
 });
 
@@ -1344,9 +1344,9 @@ test('observer writes atomic extractions before observing snapshots', async (t) 
   await waitForObserverResolved();
 
   const hits = await memories.recall('counseling programs', 5);
-  const extractionRef = firstSessionObservationRef(hits);
+  const extractionRef = firstExtractionRef(hits);
   assert.ok(extractionRef);
-  const extraction = await memories.get(`session_observation:${extractionRef}`);
+  const extraction = await memories.get(`extraction:${extractionRef}`);
   assert.ok(extraction);
   assert.match(extraction.summary ?? extraction.title ?? '', /counseling/i);
 });
@@ -1378,11 +1378,11 @@ test('rendered memory binding returns unified turn and extraction reads', async 
   assert.match(turnDetail.summary ?? turnDetail.detail ?? '', /rendered prompt|rendered response/);
 
   const recalled = await memories.recall('rendered', 10);
-  const extractionRef = firstSessionObservationRef(recalled);
+  const extractionRef = firstExtractionRef(recalled);
   assert.ok(extractionRef);
-  const extraction = await memories.get(`session_observation:${extractionRef}`);
+  const extraction = await memories.get(`extraction:${extractionRef}`);
   assert.ok(extraction);
-  assert.equal(extraction.memoryId, `session_observation:${extractionRef}`);
+  assert.equal(extraction.memoryId, `extraction:${extractionRef}`);
   assert.match(extraction.summary ?? extraction.title ?? '', /rendered prompt|rendered response/);
 });
 
@@ -1394,7 +1394,7 @@ test('recall returns extraction memory ids and detail renders references', async
   await writeMuninnConfig(configPath, { observerProvider: 'mock' });
 
   const binding = await getNativeTables(defaultStorageTarget(homeDir));
-  await binding.sessionObservationTable.upsert({
+  await binding.extractionTable.upsert({
     rows: [{
       id: 'obs-1',
       title: 'Caroline support group',
@@ -1412,10 +1412,10 @@ test('recall returns extraction memory ids and detail renders references', async
   });
 
   const hits = await memories.recall('support group', 1);
-  assert.equal(hits[0].memoryId, 'session_observation:obs-1');
-  const detail = await memories.get('session_observation:obs-1');
+  assert.equal(hits[0].memoryId, 'extraction:obs-1');
+  const detail = await memories.get('extraction:obs-1');
   assert.ok(detail);
-  assert.equal(detail.memoryId, 'session_observation:obs-1');
+  assert.equal(detail.memoryId, 'extraction:obs-1');
   assert.match(detail.detail ?? '', /turn:1/);
 });
 

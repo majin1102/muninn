@@ -25,6 +25,7 @@ import { SettingsPage } from './SettingsDialog.js';
 type RouteState = {
   view: PrimaryView;
   memoryId: string | null;
+  sessionSelectionId: string | null;
 };
 
 const navItems: Array<{ view: PrimaryView; label: string; icon: ComponentType }> = [
@@ -50,7 +51,7 @@ export function App() {
   const [projects, setProjects] = useState<ProjectNode[]>([]);
   const [projectLoading, setProjectLoading] = useState(false);
   const [projectError, setProjectError] = useState<string | null>(null);
-  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(() => parseRoute(window.location.hash).sessionSelectionId);
   const [activeObservationId, setActiveObservationId] = useState<string | null>(() => parseRoute(window.location.hash).memoryId);
   const [openObservationId, setOpenObservationId] = useState<string | null>(() => parseRoute(window.location.hash).memoryId);
   const [openObservationRequestId, setOpenObservationRequestId] = useState(0);
@@ -156,7 +157,17 @@ export function App() {
       setFocusRequestId((current) => current + 1);
       return;
     }
-  }, [route.memoryId]);
+    if (route.view === 'session' && route.sessionSelectionId) {
+      setSelectedSessionId(route.sessionSelectionId);
+      setActiveObservationId(null);
+      setOpenObservationId(null);
+      setOpenObservationRequestId((current) => current + 1);
+      setFocusMemoryId(null);
+      setFocusRequestId((current) => current + 1);
+      setDocument(null);
+      setDocumentError(null);
+    }
+  }, [route.memoryId, route.sessionSelectionId, route.view]);
 
   useEffect(() => {
     if (!route.memoryId || !activeTurnSession) {
@@ -235,7 +246,8 @@ export function App() {
   }
 
   function selectSession(session: ProjectSessionNode) {
-    setSelectedSessionId(selectedSessionKey(session));
+    const selectionId = selectedSessionKey(session);
+    setSelectedSessionId(selectionId);
     setActiveObservationId(null);
     setOpenObservationId(null);
     setOpenObservationRequestId((current) => current + 1);
@@ -243,9 +255,7 @@ export function App() {
     setFocusRequestId((current) => current + 1);
     setDocument(null);
     setDocumentError(null);
-    if (route.memoryId) {
-      window.location.hash = '#/session';
-    }
+    window.location.hash = `#/session/s/${encodeURIComponent(selectionId)}`;
     if (!session.loaded && !session.loading) {
       void openSession(session);
     }
@@ -255,7 +265,7 @@ export function App() {
     setProjects((current) => current.map((project) => ({
       ...project,
       sessions: project.sessions.map((item) => (
-        item.agent === session.agent && item.projectKey === session.projectKey && item.sessionKey === session.sessionKey
+        sameSession(item, session)
           ? { ...item, ...patch }
           : item
       )),
@@ -385,21 +395,20 @@ export function App() {
       <main className="app-main">
         <div
           ref={contentShellRef}
-          className="content-shell"
+          className={sessionContentMode === 'collapsed' ? 'content-shell content-shell-session-tree-collapsed' : 'content-shell'}
           style={{ '--session-pane-width': `${sessionPaneWidth}px` } as CSSProperties}
         >
           {route.view === 'session' ? (
             <>
-              <aside className="project-pane">
+              {sessionContentMode !== 'collapsed' ? (
+                <aside className="project-pane">
                 <SessionTree
                   projects={projects}
                   selectedSessionId={activeSessionSelectionId}
                   activeMemoryId={activeObservationId}
                   canExpandSessions={sessionTreeCanExpand(sessionContentMode)}
-                  contentMode={sessionContentMode}
                   loading={projectLoading}
                   error={projectError}
-                  onContentModeChange={setSessionContentMode}
                   onOpenSession={selectSession}
                   onLoadSession={(session) => {
                     if (!session.loaded && !session.loading) {
@@ -409,14 +418,15 @@ export function App() {
                   onOpenTurn={openObservationFromTree}
                   onLoadMore={loadMore}
                 />
-                <button
-                  className="session-pane-resizer"
-                  type="button"
-                  aria-label="Resize session pane"
-                  onPointerDown={startSessionPaneResize}
-                  onMouseDown={startSessionPaneMouseResize}
-                />
-              </aside>
+                  <button
+                    className="session-pane-resizer"
+                    type="button"
+                    aria-label="Resize session pane"
+                    onPointerDown={startSessionPaneResize}
+                    onMouseDown={startSessionPaneMouseResize}
+                  />
+                </aside>
+              ) : null}
               <section className="conversation-pane">
                 <SessionContentSplit
                   session={activeSession}
@@ -428,6 +438,7 @@ export function App() {
                   focusRequestId={focusRequestId}
                   sessionTurns={activeSessionTurns}
                   mode={sessionContentMode}
+                  onModeChange={setSessionContentMode}
                   onActiveObservationChange={setActiveObservationId}
                   onOpenObservation={openObservationInPane}
                   onLocateConversationTurn={locateConversationTurn}
@@ -478,7 +489,11 @@ function findSessionForDocument(projects: ProjectNode[], document: MemoryDocumen
 
   for (const project of projects) {
     for (const session of project.sessions) {
-      if (session.sessionKey === document.sessionId && session.agent === document.agent) {
+      if (
+        session.sessionKey === document.sessionId
+        && session.agent === document.agent
+        && (!document.cwd || session.cwd === document.cwd)
+      ) {
         return session;
       }
     }
@@ -506,6 +521,12 @@ function findNextSessionToSearch(projects: ProjectNode[]): ProjectNode['sessions
     }
   }
   return null;
+}
+
+function sameSession(left: ProjectSessionNode, right: ProjectSessionNode): boolean {
+  return left.agent === right.agent
+    && (left.cwd ?? '') === (right.cwd ?? '')
+    && left.sessionKey === right.sessionKey;
 }
 
 function GitHubMark() {
@@ -558,12 +579,21 @@ function parseRoute(hash: string): RouteState {
   const view = parts[0] as PrimaryView | undefined;
 
   if (view === 'search' || view === 'wiki' || view === 'pipelines' || view === 'settings') {
-    return { view, memoryId: null };
+    return { view, memoryId: null, sessionSelectionId: null };
+  }
+
+  if (parts[1] === 's') {
+    return {
+      view: 'session',
+      memoryId: null,
+      sessionSelectionId: parts[2] ? decodeURIComponent(parts.slice(2).join('/')) : null,
+    };
   }
 
   return {
     view: 'session',
     memoryId: parts[1] ? decodeURIComponent(parts.slice(1).join('/')) : null,
+    sessionSelectionId: null,
   };
 }
 

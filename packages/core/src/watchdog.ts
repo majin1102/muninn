@@ -13,7 +13,7 @@ import { writeMuninnLog } from './logging.js';
 import type { CheckpointLock, MuninnBackend } from './backend.js';
 import type { NativeTables, TableStats } from './native.js';
 
-type DatasetName = 'turn' | 'session' | 'session_observation' | 'globalObservationContext' | 'global_observation';
+type DatasetName = 'turn' | 'session' | 'extraction' | 'globalObservationContext' | 'global_observation';
 type WatchdogLevel = 'info' | 'error';
 type WatchdogEvent =
   | 'failed'
@@ -41,7 +41,7 @@ type DatasetState = {
 };
 
 const WATCHDOG_LOG_FILE_NAME = 'watchdog.jsonl';
-const DATASETS: DatasetName[] = ['turn', 'session', 'session_observation', 'globalObservationContext', 'global_observation'];
+const DATASETS: DatasetName[] = ['turn', 'session', 'extraction', 'globalObservationContext', 'global_observation'];
 const noopCheckpointLock: CheckpointLock = {
   shared: async (operation) => operation(),
   exclusive: async (operation) => operation(),
@@ -129,7 +129,7 @@ export class Watchdog {
       await Promise.all([
         this.maintainTurns(),
         this.maintainSessions(),
-        this.maintainSessionObservation(),
+        this.maintainExtraction(),
         this.maintainGlobalObservationContext(),
         this.maintainGlobalObservation(),
       ]);
@@ -264,20 +264,20 @@ export class Watchdog {
     }));
   }
 
-  private async maintainSessionObservation(): Promise<void> {
-    await this.checkpointLock.shared(() => this.runDatasetMaintenance('session_observation', async (setVersion) => {
-      const ensured = await this.binding.sessionObservationTable.ensureVectorIndex({
-        targetPartitionSize: this.config.session_observation.targetPartitionSize,
+  private async maintainExtraction(): Promise<void> {
+    await this.checkpointLock.shared(() => this.runDatasetMaintenance('extraction', async (setVersion) => {
+      const ensured = await this.binding.extractionTable.ensureVectorIndex({
+        targetPartitionSize: this.config.extraction.targetPartitionSize,
       });
-      const stats = await this.binding.sessionObservationTable.stats();
+      const stats = await this.binding.extractionTable.stats();
       if (!stats) {
-        this.resetState('session_observation');
+        this.resetState('extraction');
         return;
       }
 
       setVersion(stats.version);
-      const unchanged = this.versionUnchanged('session_observation', stats);
-      this.updateSeenState('session_observation', stats);
+      const unchanged = this.versionUnchanged('extraction', stats);
+      this.updateSeenState('extraction', stats);
 
       if (!ensured.created && unchanged) {
         return;
@@ -285,31 +285,31 @@ export class Watchdog {
 
       let compactResult: { changed: boolean } | null = null;
       if (stats.fragmentCount >= this.config.compactMinFragments) {
-        compactResult = await this.binding.sessionObservationTable.compact();
+        compactResult = await this.binding.extractionTable.compact();
       }
-      const optimizeResult = await this.binding.sessionObservationTable.optimize({
-        mergeCount: this.config.session_observation.optimizeMergeCount,
+      const optimizeResult = await this.binding.extractionTable.optimize({
+        mergeCount: this.config.extraction.optimizeMergeCount,
       });
-      const finalStats = await this.binding.sessionObservationTable.stats() ?? stats;
-      this.updateMaintainedState('session_observation', finalStats);
+      const finalStats = await this.binding.extractionTable.stats() ?? stats;
+      this.updateMaintainedState('extraction', finalStats);
 
       if (ensured.created) {
-        await this.logInfo('session_observation', 'index_created', finalStats.version, {
-          targetPartitionSize: this.config.session_observation.targetPartitionSize,
+        await this.logInfo('extraction', 'index_created', finalStats.version, {
+          targetPartitionSize: this.config.extraction.targetPartitionSize,
           fragmentCount: finalStats.fragmentCount,
           rowCount: finalStats.rowCount,
         });
       }
       if (compactResult) {
-        await this.logInfo('session_observation', 'compacted', finalStats.version, {
+        await this.logInfo('extraction', 'compacted', finalStats.version, {
           changed: compactResult.changed,
           fragmentCount: finalStats.fragmentCount,
           rowCount: finalStats.rowCount,
         });
       }
-      await this.logInfo('session_observation', 'optimized', finalStats.version, {
+      await this.logInfo('extraction', 'optimized', finalStats.version, {
         changed: optimizeResult.changed,
-        mergeCount: this.config.session_observation.optimizeMergeCount,
+        mergeCount: this.config.extraction.optimizeMergeCount,
         fragmentCount: finalStats.fragmentCount,
         rowCount: finalStats.rowCount,
         indexCreated: ensured.created,
@@ -323,7 +323,7 @@ export class Watchdog {
     }
     await this.checkpointLock.shared(() => this.runDatasetMaintenance('global_observation', async (setVersion) => {
       const ensured = await this.binding.globalObservationTable.ensureVectorIndex({
-        targetPartitionSize: this.config.session_observation.targetPartitionSize,
+        targetPartitionSize: this.config.extraction.targetPartitionSize,
       });
       const stats = await this.binding.globalObservationTable.stats();
       if (!stats) {
@@ -344,14 +344,14 @@ export class Watchdog {
         compactResult = await this.binding.globalObservationTable.compact();
       }
       const optimizeResult = await this.binding.globalObservationTable.optimize({
-        mergeCount: this.config.session_observation.optimizeMergeCount,
+        mergeCount: this.config.extraction.optimizeMergeCount,
       });
       const finalStats = await this.binding.globalObservationTable.stats() ?? stats;
       this.updateMaintainedState('global_observation', finalStats);
 
       if (ensured.created) {
         await this.logInfo('global_observation', 'index_created', finalStats.version, {
-          targetPartitionSize: this.config.session_observation.targetPartitionSize,
+          targetPartitionSize: this.config.extraction.targetPartitionSize,
           fragmentCount: finalStats.fragmentCount,
           rowCount: finalStats.rowCount,
         });
@@ -365,7 +365,7 @@ export class Watchdog {
       }
       await this.logInfo('global_observation', 'optimized', finalStats.version, {
         changed: optimizeResult.changed,
-        mergeCount: this.config.session_observation.optimizeMergeCount,
+        mergeCount: this.config.extraction.optimizeMergeCount,
         fragmentCount: finalStats.fragmentCount,
         rowCount: finalStats.rowCount,
         indexCreated: ensured.created,
@@ -394,7 +394,7 @@ export class Watchdog {
       }
 
       const optimizeResult = await this.binding.globalObservationContextTable.optimize({
-        mergeCount: this.config.session_observation.optimizeMergeCount,
+        mergeCount: this.config.extraction.optimizeMergeCount,
       });
       const finalStats = await this.binding.globalObservationContextTable.stats() ?? stats;
       this.updateMaintainedState('globalObservationContext', finalStats);
@@ -407,7 +407,7 @@ export class Watchdog {
       }
       await this.logInfo('globalObservationContext', 'optimized', finalStats.version, {
         changed: optimizeResult.changed,
-        mergeCount: this.config.session_observation.optimizeMergeCount,
+        mergeCount: this.config.extraction.optimizeMergeCount,
         fragmentCount: finalStats.fragmentCount,
         rowCount: finalStats.rowCount,
         indexCreated: ensured.created,
@@ -547,8 +547,8 @@ export class Watchdog {
         return this.binding.turnTable.cleanup?.({ floorVersion }) ?? Promise.resolve({ changed: false });
       case 'session':
         return this.binding.sessionTable.cleanup?.({ floorVersion }) ?? Promise.resolve({ changed: false });
-      case 'session_observation':
-        return this.binding.sessionObservationTable.cleanup?.({ floorVersion }) ?? Promise.resolve({ changed: false });
+      case 'extraction':
+        return this.binding.extractionTable.cleanup?.({ floorVersion }) ?? Promise.resolve({ changed: false });
       case 'globalObservationContext':
         return Promise.resolve({ changed: false });
       case 'global_observation':
@@ -606,7 +606,7 @@ function checkpointFloors(checkpoint: CheckpointContent | CheckpointFile): Recor
   return {
     turn: checkpoint.extractor.baseline.turn,
     session: checkpoint.extractor.baseline.session,
-    session_observation: checkpoint.extractor.baseline.session_observation,
+    extraction: checkpoint.extractor.baseline.extraction,
     globalObservationContext: checkpoint.observer.baseline.globalObservationContext,
     global_observation: checkpoint.extractor.baseline.global_observation,
   };

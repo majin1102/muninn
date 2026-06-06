@@ -2,7 +2,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { ChevronRight } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
-import type { ProjectObservationNode } from '../lib/api.js';
+import type { ProjectObservationNode, ProjectTurnNode } from '../lib/api.js';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from './ui/collapsible.js';
 import { ScrollArea } from './ui/scroll-area.js';
 
@@ -13,7 +13,9 @@ type ObservationPaneProps = {
   openObservationId: string | null;
   openObservationRequestId: number;
   sessionKey: string | null;
+  sessionTurns: ProjectTurnNode[];
   onActiveObservationChange: (memoryId: string | null) => void;
+  onLocateTurn: (memoryId: string) => void;
 };
 
 export function ObservationPane({
@@ -23,13 +25,16 @@ export function ObservationPane({
   openObservationId,
   openObservationRequestId,
   sessionKey,
+  sessionTurns,
   onActiveObservationChange,
+  onLocateTurn,
 }: ObservationPaneProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [openItem, setOpenItem] = useState<string | null>(null);
   const [summaryOpen, setSummaryOpen] = useState(false);
   const [scrollThumb, setScrollThumb] = useState({ height: 0, top: 0, visible: false });
   const restoreObservationId = openObservationId ?? activeObservationId;
+  const turnIndexById = new Map(sessionTurns.map((turn, index) => [turn.memoryId, index + 1]));
 
   useEffect(() => {
     setSummaryOpen(false);
@@ -145,7 +150,33 @@ export function ObservationPane({
                       </CollapsibleTrigger>
                       <CollapsibleContent>
                         <div className="observation-markdown">
-                          <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                          <ReactMarkdown
+                            remarkPlugins={[remarkGfm]}
+                            components={{
+                              a: ({ href, children }) => {
+                                const turnId = href?.startsWith(TURN_CITATION_HREF_PREFIX)
+                                  ? decodeURIComponent(href.slice(TURN_CITATION_HREF_PREFIX.length))
+                                  : null;
+                                if (!turnId) {
+                                  return <a href={href}>{children}</a>;
+                                }
+                                const turnNumber = turnIndexById.get(turnId);
+                                const label = turnNumber
+                                  ? `detail: turn ${turnNumber}`
+                                  : `detail: ${turnId.replace(/^turn:/, 'turn ')}`;
+                                return (
+                                  <button
+                                    className="observation-inline-citation"
+                                    type="button"
+                                    title={turnNumber ? `Go to turn #${turnNumber}` : 'Go to referenced turn'}
+                                    onClick={() => onLocateTurn(turnId)}
+                                  >
+                                    [{label}]
+                                  </button>
+                                );
+                              },
+                            }}
+                          >
                             {displayObservationMarkdown(observation.markdown)}
                           </ReactMarkdown>
                         </div>
@@ -173,11 +204,17 @@ export function ObservationPane({
   );
 }
 
+const TURN_CITATION_HREF_PREFIX = '#muninn-turn=';
+
 function displayObservationMarkdown(markdown: string): string {
   return markdown
     .split('\n')
     .filter((line) => !/^###\s+(Summary|Content)\s*$/i.test(line.trim()))
     .join('\n')
+    .replace(/@\[turn:([^\]]+)\]/g, (_, turnId: string) => {
+      const normalizedTurnId = `turn:${turnId.trim().replace(/^turn:/, '')}`;
+      return `[detail: ${normalizedTurnId.replace(':', ' ')}](${TURN_CITATION_HREF_PREFIX}${encodeURIComponent(normalizedTurnId)})`;
+    })
     .replace(/^\s+/, '')
     .trimEnd();
 }

@@ -131,22 +131,22 @@ function generateMockText(request: LlmTextRequest): string {
   if (
     request.system.includes('observer that rewrites an observing document')
     || request.system.includes('observer that rewrites a cross-session curated observation document')
-    || request.system.includes('observer that rewrites part of a cross-session observation document')
-    || request.system.includes('observer that maintains parts of a cross-session observation document')
-    || request.system.includes('observer that rewrites a subtree of a cross-session observation document')
-    || request.system.includes('observer that maintains parts of a cross-session observation tree')
+    || request.system.includes('observer that rewrites part of a cross-extraction document')
+    || request.system.includes('observer that maintains parts of a cross-extraction document')
+    || request.system.includes('observer that rewrites a subtree of a cross-extraction document')
+    || request.system.includes('observer that maintains parts of a cross-extraction tree')
   ) {
-    const ref = request.prompt.match(/^\s*-\s+([A-Za-z0-9:_-]+)/m)?.[1] ?? 'mock-session-observation';
+    const ref = request.prompt.match(/^\s*-\s+([A-Za-z0-9:_-]+)/m)?.[1] ?? 'mock-extraction';
     const scope = request.prompt.match(/^\s*#\s+(.+)$/m)?.[1]?.trim() || 'Mock cwd scope';
     return [
       `# ${scope}`,
       '',
       `## What is remembered in this scope?`,
       '',
-      `This cwd scope has curated memory from the provided session observation.`,
+      `This cwd scope has curated memory from the provided extraction.`,
       '',
       `### What evidence supports this scope?`,
-      `This cwd scope has curated memory from the provided session observation.`,
+      `This cwd scope has curated memory from the provided extraction.`,
       '',
       'Source extractions:',
       `- [${ref}]`,

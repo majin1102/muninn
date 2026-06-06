@@ -12,10 +12,10 @@ use lance::{Error, Result};
 use serde_json::{Map, Value};
 
 use super::schema::{
-    session_observation_schema, global_observation_context_schema, global_observation_schema, session_schema, turn_schema,
+    extraction_schema, global_observation_context_schema, global_observation_schema, session_schema, turn_schema,
 };
-use crate::config::session_observation_config;
-use crate::session_observation::SessionObservation;
+use crate::config::extraction_config;
+use crate::extraction::Extraction;
 use crate::memory_id::{MemoryId, MemoryLayer};
 use crate::global_observation_context::GlobalObservationContext;
 use crate::global_observation::GlobalObservation;
@@ -634,8 +634,8 @@ pub(crate) fn batch_row_ids(batch: &RecordBatch) -> Result<Vec<u64>> {
         .collect())
 }
 
-pub(crate) fn session_observations_to_record_batch(rows: &[SessionObservation]) -> Result<RecordBatch> {
-    let dimensions = session_observation_dimensions()?;
+pub(crate) fn extractions_to_record_batch(rows: &[Extraction]) -> Result<RecordBatch> {
+    let dimensions = extraction_dimensions()?;
     let ids = StringArray::from_iter_values(rows.iter().map(|row| row.id.as_str()));
     let title = StringArray::from_iter_values(rows.iter().map(|row| row.title.as_str()));
     let summary = StringArray::from_iter_values(rows.iter().map(|row| row.summary.as_str()));
@@ -645,7 +645,7 @@ pub(crate) fn session_observations_to_record_batch(rows: &[SessionObservation]) 
         rows.iter().map(|row| row.vector.as_slice()),
         dimensions,
     )
-    .map_err(|error| Error::invalid_input(format!("invalid session observation vector: {error}")))?;
+    .map_err(|error| Error::invalid_input(format!("invalid extraction vector: {error}")))?;
     let turn_refs = build_string_list_array(rows.iter().map(|row| Some(&row.turn_refs)));
     let global_observation_paths = build_string_list_array(rows.iter().map(|row| Some(&row.global_observation_paths)));
     let created_at = TimestampMicrosecondArray::from_iter_values(
@@ -658,7 +658,7 @@ pub(crate) fn session_observations_to_record_batch(rows: &[SessionObservation]) 
     .with_timezone("UTC");
 
     RecordBatch::try_new(
-        Arc::new(session_observation_schema(dimensions)),
+        Arc::new(extraction_schema(dimensions)),
         vec![
             Arc::new(ids),
             Arc::new(title),
@@ -672,23 +672,23 @@ pub(crate) fn session_observations_to_record_batch(rows: &[SessionObservation]) 
             Arc::new(updated_at),
         ],
     )
-    .map_err(|error| Error::invalid_input(format!("build session observation batch: {error}")))
+    .map_err(|error| Error::invalid_input(format!("build extraction batch: {error}")))
 }
 
-pub(crate) fn session_observations_to_reader(
-    rows: Vec<SessionObservation>,
+pub(crate) fn extractions_to_reader(
+    rows: Vec<Extraction>,
 ) -> Result<RecordBatchIterator<impl Iterator<Item = std::result::Result<RecordBatch, ArrowError>>>>
 {
-    let dimensions = session_observation_dimensions()?;
-    let schema = Arc::new(session_observation_schema(dimensions));
-    let batch = session_observations_to_record_batch(&rows).map_err(arrow_error_from_lance)?;
+    let dimensions = extraction_dimensions()?;
+    let schema = Arc::new(extraction_schema(dimensions));
+    let batch = extractions_to_record_batch(&rows).map_err(arrow_error_from_lance)?;
     Ok(RecordBatchIterator::new(
         vec![Ok(batch)].into_iter(),
         schema,
     ))
 }
 
-pub(crate) fn record_batch_to_session_observations(batch: &RecordBatch) -> Result<Vec<SessionObservation>> {
+pub(crate) fn record_batch_to_extractions(batch: &RecordBatch) -> Result<Vec<Extraction>> {
     let ids = batch
         .column(0)
         .as_any()
@@ -743,12 +743,12 @@ pub(crate) fn record_batch_to_session_observations(batch: &RecordBatch) -> Resul
                 optional_float32_fixed_size_list(vector, index).unwrap_or_default()
             } else {
                 return Err(Error::invalid_input(format!(
-                    "session_observation.vector must be FixedSizeList<Float32, N>, got {:?}",
+                    "extraction.vector must be FixedSizeList<Float32, N>, got {:?}",
                     vector.data_type()
                 )));
             };
 
-            Ok(SessionObservation {
+            Ok(Extraction {
                 id: ids.value(index).to_string(),
                 title: title.value(index).to_string(),
                 summary: summary.value(index).to_string(),
@@ -771,7 +771,7 @@ pub(crate) fn record_batch_to_session_observations(batch: &RecordBatch) -> Resul
 }
 
 pub(crate) fn global_observations_to_record_batch(rows: &[GlobalObservation]) -> Result<RecordBatch> {
-    let dimensions = session_observation_dimensions()?;
+    let dimensions = extraction_dimensions()?;
     let ids = StringArray::from_iter_values(rows.iter().map(|row| row.id.as_str()));
     let global_path = StringArray::from_iter_values(rows.iter().map(|row| row.global_path.as_str()));
     let text = StringArray::from_iter_values(rows.iter().map(|row| row.text.as_str()));
@@ -780,7 +780,7 @@ pub(crate) fn global_observations_to_record_batch(rows: &[GlobalObservation]) ->
         dimensions,
     )
     .map_err(|error| Error::invalid_input(format!("invalid global observation vector: {error}")))?;
-    let session_observation_refs = build_string_list_array(rows.iter().map(|row| Some(&row.session_observation_refs)));
+    let extraction_refs = build_string_list_array(rows.iter().map(|row| Some(&row.extraction_refs)));
     let created_at = TimestampMicrosecondArray::from_iter_values(
         rows.iter().map(|row| row.created_at.timestamp_micros()),
     )
@@ -797,7 +797,7 @@ pub(crate) fn global_observations_to_record_batch(rows: &[GlobalObservation]) ->
             Arc::new(global_path),
             Arc::new(text),
             Arc::new(vector),
-            Arc::new(session_observation_refs),
+            Arc::new(extraction_refs),
             Arc::new(created_at),
             Arc::new(updated_at),
         ],
@@ -809,7 +809,7 @@ pub(crate) fn global_observations_to_reader(
     rows: Vec<GlobalObservation>,
 ) -> Result<RecordBatchIterator<impl Iterator<Item = std::result::Result<RecordBatch, ArrowError>>>>
 {
-    let dimensions = session_observation_dimensions()?;
+    let dimensions = extraction_dimensions()?;
     let schema = Arc::new(global_observation_schema(dimensions));
     let batch = global_observations_to_record_batch(&rows).map_err(arrow_error_from_lance)?;
     Ok(RecordBatchIterator::new(
@@ -835,7 +835,7 @@ pub(crate) fn record_batch_to_global_observations(batch: &RecordBatch) -> Result
         .downcast_ref::<StringArray>()
         .unwrap();
     let vector = batch.column(3);
-    let session_observation_refs = batch
+    let extraction_refs = batch
         .column(4)
         .as_any()
         .downcast_ref::<ListArray>()
@@ -868,7 +868,7 @@ pub(crate) fn record_batch_to_global_observations(batch: &RecordBatch) -> Result
                 global_path: global_path.value(index).to_string(),
                 text: text.value(index).to_string(),
                 vector,
-                session_observation_refs: optional_string_list(session_observation_refs, index).unwrap_or_default(),
+                extraction_refs: optional_string_list(extraction_refs, index).unwrap_or_default(),
                 created_at: Utc
                     .timestamp_micros(created_at.value(index))
                     .single()
@@ -924,8 +924,8 @@ pub(crate) fn optional_float32_fixed_size_list(
     Some((0..values.len()).map(|idx| values.value(idx)).collect())
 }
 
-pub(crate) fn session_observation_dimensions() -> Result<usize> {
-    Ok(session_observation_config()?.dimensions)
+pub(crate) fn extraction_dimensions() -> Result<usize> {
+    Ok(extraction_config()?.dimensions)
 }
 
 pub(crate) fn arrow_error_from_lance(error: Error) -> ArrowError {
@@ -963,8 +963,8 @@ mod tests {
         }
     }
 
-    fn sample_extraction() -> SessionObservation {
-        SessionObservation {
+    fn sample_extraction() -> Extraction {
+        Extraction {
             id: "extraction-1".to_string(),
             title: "Report defaults".to_string(),
             summary: "Report defaults require CSV export names.".to_string(),
@@ -1039,7 +1039,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         write_test_config(&dir);
 
-        let batch = session_observations_to_record_batch(&[sample_extraction()]).unwrap();
+        let batch = extractions_to_record_batch(&[sample_extraction()]).unwrap();
         assert!(batch.schema().field_with_name("title").is_ok());
         assert!(batch.schema().field_with_name("summary").is_ok());
         assert!(batch.schema().field_with_name("content").is_ok());
@@ -1047,7 +1047,7 @@ mod tests {
         assert!(batch.schema().field_with_name("context").is_err());
         assert!(batch.schema().field_with_name("search_text").is_err());
 
-        let rows = record_batch_to_session_observations(&batch).unwrap();
+        let rows = record_batch_to_extractions(&batch).unwrap();
 
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].title, "Report defaults");

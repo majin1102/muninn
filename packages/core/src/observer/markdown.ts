@@ -128,7 +128,7 @@ function parseSections(
   }
 
   trimBodies(roots);
-  parseSourceSessionObservationSections(roots, validRefs);
+  parseSourceExtractionSections(roots, validRefs);
   markRewritten(roots);
   return roots;
 }
@@ -178,7 +178,7 @@ function resolveRef(ref: string, validRefs: Set<string>): string {
   if (matches.length > 1) {
     throw new Error(`observer referenced ambiguous extraction id prefix: ${ref}`);
   }
-  const nearMatches = nearSessionObservationRefMatches(ref, validRefs);
+  const nearMatches = nearExtractionRefMatches(ref, validRefs);
   if (nearMatches.length === 1) {
     return nearMatches[0]!;
   }
@@ -188,7 +188,7 @@ function resolveRef(ref: string, validRefs: Set<string>): string {
   throw new Error(`observer referenced unknown extraction id: ${ref}`);
 }
 
-function nearSessionObservationRefMatches(ref: string, validRefs: Set<string>): string[] {
+function nearExtractionRefMatches(ref: string, validRefs: Set<string>): string[] {
   if (!/^[0-9a-f]{12,}$/i.test(ref)) {
     return [];
   }
@@ -284,7 +284,7 @@ function trimBodies(sections: DraftSection[]): void {
   }
 }
 
-function parseSourceSessionObservationSections(sections: DraftSection[], validRefs: Set<string>): void {
+function parseSourceExtractionSections(sections: DraftSection[], validRefs: Set<string>): void {
   for (const section of walk(sections)) {
     if (!clean(section.body)) {
       continue;

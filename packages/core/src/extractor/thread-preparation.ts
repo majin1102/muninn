@@ -14,7 +14,7 @@ import {
 } from '../llm/provider.js';
 import type { Memories } from '../memories/memories.js';
 import { renderRenderedMemoryMarkdown } from '../memories/rendered.js';
-import type { SessionObservation } from '../native.js';
+import type { Extraction } from '../native.js';
 import type {
   ThreadCandidateMemory,
   ThreadPreparationResult,
@@ -23,7 +23,7 @@ import type {
 } from './types.js';
 
 export type ThreadPreparationInput = {
-  reviewedSessionObservations: SessionObservation[];
+  reviewedExtractions: Extraction[];
   activeThreads: ThreadPreparationThread[];
   candidateMemories?: ThreadCandidateMemory[];
 };
@@ -51,7 +51,7 @@ export async function prepareThreads(
   if (config.provider === 'mock') {
     return validateThreadPreparation(input, {
       workItems: [],
-      unthreadedSessionObservationIds: input.reviewedSessionObservations.map((extraction) => extraction.id),
+      unthreadedExtractionIds: input.reviewedExtractions.map((extraction) => extraction.id),
     });
   }
 
@@ -91,7 +91,7 @@ function validateOrFallback(input: ThreadPreparationInput, raw: string): ThreadP
   } catch {
     return {
       workItems: [],
-      unthreadedSessionObservationIds: input.reviewedSessionObservations.map((extraction) => extraction.id),
+      unthreadedExtractionIds: input.reviewedExtractions.map((extraction) => extraction.id),
     };
   }
 }
@@ -164,15 +164,15 @@ async function runNativeToolLoop(params: {
 type ToolHandler = (args: Record<string, unknown>, call: LlmToolCall) => Promise<unknown> | unknown;
 
 export async function collectCandidateMemories(params: {
-  reviewedSessionObservations: SessionObservation[];
+  reviewedExtractions: Extraction[];
   memories: Pick<Memories, 'recall'>;
-  limitPerSessionObservation?: number;
+  limitPerExtraction?: number;
 }): Promise<ThreadCandidateMemory[]> {
-  const limit = params.limitPerSessionObservation ?? 5;
-  const reviewedMemoryIds = new Set(params.reviewedSessionObservations.map((extraction) => `session_observation:${extraction.id}`));
+  const limit = params.limitPerExtraction ?? 5;
+  const reviewedMemoryIds = new Set(params.reviewedExtractions.map((extraction) => `extraction:${extraction.id}`));
   const seen = new Set<string>();
   const candidates: ThreadCandidateMemory[] = [];
-  for (const extraction of params.reviewedSessionObservations) {
+  for (const extraction of params.reviewedExtractions) {
     const hits = await params.memories.recall(extraction.summary, limit).catch(() => []);
     for (const hit of hits) {
       if (reviewedMemoryIds.has(hit.memoryId) || seen.has(hit.memoryId)) {
@@ -238,7 +238,7 @@ function memoryGetSpec(): LlmTool {
         memoryIds: {
           type: 'array',
           items: { type: 'string' },
-          description: 'Allowlisted memory ids from reviewedSessionObservations, activeThreads, or candidateMemories.',
+          description: 'Allowlisted memory ids from reviewedExtractions, activeThreads, or candidateMemories.',
         },
       },
       required: ['memoryIds'],
@@ -248,7 +248,7 @@ function memoryGetSpec(): LlmTool {
 
 function createThreadPreparationTrace(input: ThreadPreparationInput) {
   return {
-    reviewedSessionObservations: toPromptInput(input).reviewedSessionObservations,
+    reviewedExtractions: toPromptInput(input).reviewedExtractions,
     activeThreads: input.activeThreads,
     candidateMemories: input.candidateMemories ?? [],
     toolCalls: [] as LlmToolCall[],
@@ -262,7 +262,7 @@ function createThreadPreparationTrace(input: ThreadPreparationInput) {
 }
 
 async function writeThreadPreparationTrace(event: {
-  reviewedSessionObservations: unknown;
+  reviewedExtractions: unknown;
   activeThreads: ThreadPreparationThread[];
   candidateMemories: ThreadCandidateMemory[];
   toolCalls: LlmToolCall[];
@@ -279,7 +279,7 @@ async function writeThreadPreparationTrace(event: {
 
 function buildMemoryGetAllowlist(input: ThreadPreparationInput): Set<string> {
   return new Set([
-    ...input.reviewedSessionObservations.map((extraction) => `session_observation:${extraction.id}`),
+    ...input.reviewedExtractions.map((extraction) => `extraction:${extraction.id}`),
     ...input.activeThreads
       .map((thread) => thread.memoryId)
       .filter((memoryId): memoryId is string => Boolean(memoryId?.trim())),
@@ -308,16 +308,16 @@ function validateThreadPreparation(
     throw new Error('thread preparation workItems must be an array');
   }
 
-  const reviewedIds = new Set(input.reviewedSessionObservations.map((extraction) => extraction.id));
+  const reviewedIds = new Set(input.reviewedExtractions.map((extraction) => extraction.id));
   const activeThreadIds = new Set(input.activeThreads.map((thread) => thread.threadId));
   const seen = new Set<string>();
   const workItems = result.workItems.map((item) => (
     validateWorkItem(item, reviewedIds, activeThreadIds, seen)
   ));
-  const unthreadedSessionObservationIds = normalizeIdList(result.unthreadedSessionObservationIds, 'unthreadedSessionObservationIds');
-  for (const id of unthreadedSessionObservationIds) {
+  const unthreadedExtractionIds = normalizeIdList(result.unthreadedExtractionIds, 'unthreadedExtractionIds');
+  for (const id of unthreadedExtractionIds) {
     if (!reviewedIds.has(id)) {
-      throw new Error(`unthreadedSessionObservationIds includes unknown extraction id: ${id}`);
+      throw new Error(`unthreadedExtractionIds includes unknown extraction id: ${id}`);
     }
     if (seen.has(id)) {
       throw new Error(`reviewed extraction id must appear exactly once: ${id}`);
@@ -333,7 +333,7 @@ function validateThreadPreparation(
 
   return {
     workItems,
-    unthreadedSessionObservationIds,
+    unthreadedExtractionIds,
   };
 }
 
@@ -402,9 +402,9 @@ function normalizeOptionalString(value: unknown): string | null {
 
 function toPromptInput(input: ThreadPreparationInput): Record<string, unknown> {
   return {
-    reviewedSessionObservations: input.reviewedSessionObservations.map((extraction) => ({
+    reviewedExtractions: input.reviewedExtractions.map((extraction) => ({
       id: extraction.id,
-      memoryId: `session_observation:${extraction.id}`,
+      memoryId: `extraction:${extraction.id}`,
       text: extraction.content,
       references: extraction.turnRefs,
     })),

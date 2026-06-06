@@ -55,7 +55,7 @@ export async function recallMemories(
       limit: observationLimit,
       mode,
     }),
-    client.sessionObservationTable.search({
+    client.extractionTable.search({
       query: trimmed,
       vector,
       limit: queryLimit,
@@ -66,19 +66,19 @@ export async function recallMemories(
     ? observationRows.filter((row) => leafGlobalObservationIds.has(row.id))
     : observationRows;
   const observationRefs = await loadGlobalObservationContextRefs(client, filteredGlobalObservationRows.map((row) => row.id));
-  const extractionDetails = await loadSessionObservationDetails(
+  const extractionDetails = await loadExtractionDetails(
     client,
-    filteredGlobalObservationRows.flatMap((row) => row.sessionObservationRefs),
+    filteredGlobalObservationRows.flatMap((row) => row.extractionRefs),
   );
   const curatedHits: RouteHit[] = filteredGlobalObservationRows.map((row) => ({
     route: 'curated',
     memoryId: `global_observation:${row.id}`,
-    text: renderGlobalObservationHit(row.text, row.sessionObservationRefs, extractionDetails),
-    references: observationRefs.get(row.id) ?? row.sessionObservationRefs,
+    text: renderGlobalObservationHit(row.text, row.extractionRefs, extractionDetails),
+    references: observationRefs.get(row.id) ?? row.extractionRefs,
   }));
   const rawHits: RouteHit[] = extractionRows.map((row) => ({
     route: 'raw',
-    memoryId: `session_observation:${row.id}`,
+    memoryId: `extraction:${row.id}`,
     text: row.content,
     references: row.turnRefs,
   }));
@@ -87,7 +87,7 @@ export async function recallMemories(
     if (merged.length === 0) {
       return [];
     }
-    const extractionById = new Map(extractionRows.map((row) => [`session_observation:${row.id}`, row]));
+    const extractionById = new Map(extractionRows.map((row) => [`extraction:${row.id}`, row]));
     const observationById = new Map(observationRows.map((row) => [`global_observation:${row.id}`, row]));
     const curatedTextById = new Map(curatedHits.map((hit) => [hit.memoryId, hit.text]));
     const candidates = merged.map((hit) => {
@@ -132,22 +132,22 @@ export async function recallMemories(
 
 export type { RecallMode };
 
-type SessionObservationDetail = {
+type ExtractionDetail = {
   id: string;
   title: string;
   summary: string;
   content: string;
 };
 
-async function loadSessionObservationDetails(
+async function loadExtractionDetails(
   client: NativeTables,
   refs: string[],
-): Promise<Map<string, SessionObservationDetail>> {
+): Promise<Map<string, ExtractionDetail>> {
   const ids = uniqueRefs(refs.map((ref) => extractionRowId(ref)).filter((id): id is string => Boolean(id)));
-  if (ids.length === 0 || typeof client.sessionObservationTable.get !== 'function') {
+  if (ids.length === 0 || typeof client.extractionTable.get !== 'function') {
     return new Map();
   }
-  const rows = await client.sessionObservationTable.get({ ids });
+  const rows = await client.extractionTable.get({ ids });
   return new Map(rows.map((row) => [row.id, row]));
 }
 
@@ -169,7 +169,7 @@ async function loadGlobalObservationContextRefs(
 function renderGlobalObservationHit(
   text: string,
   refs: string[],
-  details: Map<string, SessionObservationDetail>,
+  details: Map<string, ExtractionDetail>,
 ): string {
   const replaced = replaceSourcePlaceholders(text, details);
   const lines = [`OBSERVATION: ${replaced.text}`];
@@ -189,7 +189,7 @@ function renderGlobalObservationHit(
 
 function replaceSourcePlaceholders(
   text: string,
-  details: Map<string, SessionObservationDetail>,
+  details: Map<string, ExtractionDetail>,
 ): { text: string; embeddedRefs: Set<string> } {
   const lines = text.split('\n');
   const sourceIndex = lines.findIndex((line) => /^Source extractions:\s*$/i.test(line.trim()));
@@ -205,7 +205,7 @@ function replaceSourcePlaceholders(
 
 function replaceSourceLine(
   line: string,
-  details: Map<string, SessionObservationDetail>,
+  details: Map<string, ExtractionDetail>,
   embeddedRefs: Set<string>,
 ): string {
   return line.replace(
@@ -225,7 +225,7 @@ function replaceSourceLine(
       }
       embeddedRefs.add(id);
       const continuationPrefix = prefix.replace(/-\s*$/, '  ');
-      return `${prefix}session_observation: ${formatInlineBlock(detail.content, continuationPrefix)}`;
+      return `${prefix}extraction: ${formatInlineBlock(detail.content, continuationPrefix)}`;
     },
   );
 }
@@ -257,7 +257,7 @@ function curatedQuota(limit: number): number {
   return Math.ceil(limit * 0.7);
 }
 
-function sourceSessionObservationIds(hits: RouteHit[]): Set<string> {
+function sourceExtractionIds(hits: RouteHit[]): Set<string> {
   const sources = new Set<string>();
   for (const hit of hits) {
     if (hit.route !== 'curated') {
@@ -278,12 +278,12 @@ function extractionRowId(ref: string): string | null {
   if (!trimmed) {
     return null;
   }
-  return trimmed.startsWith('session_observation:') ? trimmed.slice('session_observation:'.length).trim() || null : trimmed;
+  return trimmed.startsWith('extraction:') ? trimmed.slice('extraction:'.length).trim() || null : trimmed;
 }
 
 function extractionMemoryId(ref: string): string | null {
   const id = extractionRowId(ref);
-  return id ? `session_observation:${id}` : null;
+  return id ? `extraction:${id}` : null;
 }
 
 function mergeRoutes(curated: RouteHit[], raw: RouteHit[], limit: number): RouteHit[] {
@@ -291,7 +291,7 @@ function mergeRoutes(curated: RouteHit[], raw: RouteHit[], limit: number): Route
     return [];
   }
   const firstCurated = curated.slice(0, curatedQuota(limit));
-  const sourceIds = sourceSessionObservationIds(firstCurated);
+  const sourceIds = sourceExtractionIds(firstCurated);
   const rawFallback = raw.filter((hit) => !sourceIds.has(hit.memoryId));
   const rawQuota = limit - firstCurated.length;
   const selected = firstCurated.concat(rawFallback.slice(0, rawQuota));

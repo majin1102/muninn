@@ -3,7 +3,7 @@ import type { NativeTables } from './native.js';
 export type TableName =
   | 'turn'
   | 'session'
-  | 'sessionObservation'
+  | 'extraction'
   | 'globalObservationContext'
   | 'globalObservation';
 
@@ -46,14 +46,14 @@ export function lockNativeTables<T extends NativeTables>(tables: T, locks: Table
       compact: () => locks.with('session', () => tables.sessionTable.compact()),
       cleanup: (params) => locks.with('session', () => tables.sessionTable.cleanup(params)),
     },
-    sessionObservationTable: tables.sessionObservationTable && {
-      ...tables.sessionObservationTable,
-      upsert: (params) => locks.with('sessionObservation', () => tables.sessionObservationTable.upsert(params)),
-      delete: (params) => locks.with('sessionObservation', () => tables.sessionObservationTable.delete(params)),
-      ensureVectorIndex: (params) => locks.with('sessionObservation', () => tables.sessionObservationTable.ensureVectorIndex(params)),
-      compact: () => locks.with('sessionObservation', () => tables.sessionObservationTable.compact()),
-      cleanup: (params) => locks.with('sessionObservation', () => tables.sessionObservationTable.cleanup(params)),
-      optimize: (params) => locks.with('sessionObservation', () => tables.sessionObservationTable.optimize(params)),
+    extractionTable: tables.extractionTable && {
+      ...tables.extractionTable,
+      upsert: (params) => locks.with('extraction', () => tables.extractionTable.upsert(params)),
+      delete: (params) => locks.with('extraction', () => tables.extractionTable.delete(params)),
+      ensureVectorIndex: (params) => locks.with('extraction', () => tables.extractionTable.ensureVectorIndex(params)),
+      compact: () => locks.with('extraction', () => tables.extractionTable.compact()),
+      cleanup: (params) => locks.with('extraction', () => tables.extractionTable.cleanup(params)),
+      optimize: (params) => locks.with('extraction', () => tables.extractionTable.optimize(params)),
     },
     globalObservationContextTable: tables.globalObservationContextTable && {
       ...tables.globalObservationContextTable,

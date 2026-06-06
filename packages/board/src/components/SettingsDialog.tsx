@@ -265,8 +265,8 @@ function VisualSettings({ draft, pathLabel }: { draft: MuninnSettingsDraft; path
         <EffectiveSettingsRow draft={draft} label="Watchdog" path={['watchdog', 'enabled']} defaultValue={DEFAULT_WATCHDOG_CONFIG.enabled} />
         <EffectiveSettingsRow draft={draft} label="Interval" path={['watchdog', 'intervalMs']} defaultValue={DEFAULT_WATCHDOG_CONFIG.intervalMs} />
         <EffectiveSettingsRow draft={draft} label="Compact fragments" path={['watchdog', 'compactMinFragments']} defaultValue={DEFAULT_WATCHDOG_CONFIG.compactMinFragments} />
-        <EffectiveSettingsRow draft={draft} label="Index partitions" path={['watchdog', 'session_observation', 'targetPartitionSize']} defaultValue={DEFAULT_WATCHDOG_CONFIG.targetPartitionSize} />
-        <EffectiveSettingsRow draft={draft} label="Optimize merge count" path={['watchdog', 'session_observation', 'optimizeMergeCount']} defaultValue={DEFAULT_WATCHDOG_CONFIG.optimizeMergeCount} />
+        <EffectiveSettingsRow draft={draft} label="Index partitions" path={['watchdog', 'extraction', 'targetPartitionSize']} defaultValue={DEFAULT_WATCHDOG_CONFIG.targetPartitionSize} />
+        <EffectiveSettingsRow draft={draft} label="Optimize merge count" path={['watchdog', 'extraction', 'optimizeMergeCount']} defaultValue={DEFAULT_WATCHDOG_CONFIG.optimizeMergeCount} />
       </SettingsSection>
     </div>
   );

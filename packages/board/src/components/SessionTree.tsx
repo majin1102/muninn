@@ -3,7 +3,6 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { RefObject } from 'react';
 import { logoForAgent, type AgentLogo } from '../lib/agent_logo.js';
 import type { ProjectNode, ProjectSegmentNode, ProjectSessionNode, ProjectTurnNode } from '../lib/api.js';
-import { toggleSessionTreeLayoutMode, type SessionContentMode } from '../lib/session_content_state.js';
 import { formatRelativeTime, formatTimestamp } from '../lib/utils.js';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from './ui/collapsible.js';
 import { Button } from './ui/button.js';
@@ -13,10 +12,8 @@ type SessionTreeProps = {
   selectedSessionId: string | null;
   activeMemoryId: string | null;
   canExpandSessions: boolean;
-  contentMode: SessionContentMode;
   loading: boolean;
   error: string | null;
-  onContentModeChange: (mode: SessionContentMode) => void;
   onOpenSession: (session: ProjectSessionNode) => void;
   onLoadSession: (session: ProjectSessionNode) => void;
   onOpenTurn: (memoryId: string, session: ProjectSessionNode) => void;
@@ -24,12 +21,10 @@ type SessionTreeProps = {
 };
 
 type TimePreset = 'all' | 'last_6h' | 'last_24h' | 'last_7d' | 'last_30d' | 'custom';
-type SortDirection = 'asc' | 'desc';
 
 type SessionToolbarState = {
   selectedAgents: string[];
   timePreset: TimePreset;
-  sortDirection: SortDirection;
   customFromDate: string;
   customFromTime: string;
   customToDate: string;
@@ -44,10 +39,8 @@ export function SessionTree({
   selectedSessionId,
   activeMemoryId,
   canExpandSessions,
-  contentMode,
   loading,
   error,
-  onContentModeChange,
   onOpenSession,
   onLoadSession,
   onOpenTurn,
@@ -59,13 +52,11 @@ export function SessionTree({
   const [agentFilterOpen, setAgentFilterOpen] = useState(false);
   const [timeFilterOpen, setTimeFilterOpen] = useState(false);
   const [timePreset, setTimePreset] = useState<TimePreset>(() => initialToolbarState.current.timePreset);
-  const [sortDirection, setSortDirection] = useState<SortDirection>(() => initialToolbarState.current.sortDirection);
   const [customFromDate, setCustomFromDate] = useState(() => initialToolbarState.current.customFromDate);
   const [customFromTime, setCustomFromTime] = useState(() => initialToolbarState.current.customFromTime);
   const [customToDate, setCustomToDate] = useState(() => initialToolbarState.current.customToDate);
   const [customToTime, setCustomToTime] = useState(() => initialToolbarState.current.customToTime);
   const [draftTimePreset, setDraftTimePreset] = useState<TimePreset>(() => initialToolbarState.current.timePreset);
-  const [draftSortDirection, setDraftSortDirection] = useState<SortDirection>(() => initialToolbarState.current.sortDirection);
   const [draftCustomFromDate, setDraftCustomFromDate] = useState(() => initialToolbarState.current.customFromDate);
   const [draftCustomFromTime, setDraftCustomFromTime] = useState(() => initialToolbarState.current.customFromTime);
   const [draftCustomToDate, setDraftCustomToDate] = useState(() => initialToolbarState.current.customToDate);
@@ -89,9 +80,8 @@ export function SessionTree({
   const filteredProjects = useMemo(() => filterProjects(projects, {
     query,
     selectedAgents,
-    sortDirection,
     timeRange,
-  }), [projects, query, selectedAgents, sortDirection, timeRange]);
+  }), [projects, query, selectedAgents, timeRange]);
   const activePath = useMemo(() => findActivePath(filteredProjects, activeMemoryId), [activeMemoryId, filteredProjects]);
 
   useEffect(() => {
@@ -205,13 +195,12 @@ export function SessionTree({
     saveSessionToolbarState({
       selectedAgents,
       timePreset,
-      sortDirection,
       customFromDate,
       customFromTime,
       customToDate,
       customToTime,
     });
-  }, [customFromDate, customFromTime, customToDate, customToTime, selectedAgents, sortDirection, timePreset]);
+  }, [customFromDate, customFromTime, customToDate, customToTime, selectedAgents, timePreset]);
 
   if (loading && projects.length === 0) {
     return <div className="sidebar-empty">Loading projects...</div>;
@@ -256,7 +245,6 @@ export function SessionTree({
 
   function syncDraftTimeFilter() {
     setDraftTimePreset(timePreset);
-    setDraftSortDirection(sortDirection);
     if (timePreset === 'custom') {
       setDraftCustomFromDate(customFromDate);
       setDraftCustomFromTime(customFromTime);
@@ -287,7 +275,6 @@ export function SessionTree({
 
   function applyDraftTimeFilter() {
     setTimePreset(draftTimePreset);
-    setSortDirection(draftSortDirection);
     setCustomFromDate(draftCustomFromDate);
     setCustomFromTime(draftCustomFromTime);
     setCustomToDate(draftCustomToDate);
@@ -312,14 +299,8 @@ export function SessionTree({
             </button>
           ) : <span />}
         </label>
-        <button
-          className="tree-action-button tree-layout-button"
-          type="button"
-          title={contentMode === 'conversation' ? 'Show observations' : 'Show conversation only'}
-          aria-label={contentMode === 'conversation' ? 'Show observations' : 'Show conversation only'}
-          onClick={() => onContentModeChange(toggleSessionTreeLayoutMode(contentMode))}
-        >
-          <SessionTreeLayoutIcon mode={contentMode} />
+        <button className="tree-action-button tree-collapse-button" type="button" title="Collapse all" onClick={collapseAll}>
+          <CollapseIcon />
         </button>
         <div className="session-toolbar-row">
           <div className="toolbar-popover agent-filter-popover">
@@ -381,7 +362,7 @@ export function SessionTree({
                 setAgentFilterOpen(false);
               }}
             >
-              <span>{timeTriggerLabel(timePreset, timeRange, sortDirection)}</span>
+              <span>{timeTriggerLabel(timePreset, timeRange)}</span>
               <ChevronDown />
             </button>
             {timeFilterOpen ? (
@@ -421,23 +402,6 @@ export function SessionTree({
                       <input disabled={draftTimePreset !== 'custom'} type="time" value={draftCustomToTime} onChange={(event) => setDraftCustomToTime(event.target.value)} />
                     </label>
                   </div>
-                  <div className="session-order-section">
-                    <button
-                      className="time-order-toggle"
-                      type="button"
-                      role="switch"
-                      aria-checked={draftSortDirection === 'asc'}
-                      onClick={() => setDraftSortDirection(draftSortDirection === 'asc' ? 'desc' : 'asc')}
-                    >
-                      <span className="time-order-copy">
-                        <span>Ascending order</span>
-                        <span>Oldest session first</span>
-                      </span>
-                      <span className={draftSortDirection === 'asc' ? 'pill-switch pill-switch-on' : 'pill-switch'} aria-hidden="true">
-                        <span />
-                      </span>
-                    </button>
-                  </div>
                 </div>
                 <div className="custom-time-actions">
                   <button type="button" className="time-action-button time-action-button-primary" onClick={applyDraftTimeFilter}>Apply</button>
@@ -446,9 +410,6 @@ export function SessionTree({
             ) : null}
           </div>
         </div>
-        <button className="tree-action-button tree-collapse-button" type="button" title="Collapse all" onClick={collapseAll}>
-          <CollapseIcon />
-        </button>
       </div>
 
       <div className="session-tree-scroll-shell">
@@ -477,10 +438,11 @@ export function SessionTree({
             {project.sessions.map((session) => {
               const key = sessionKey(session);
               const sessionActive = selectedSessionId === key;
+              const sessionHasActiveChild = hasActiveSessionChild(session, activeMemoryId);
               const sessionOpen = canExpandSessions && (openSessions[key] ?? session.loaded);
               return (
               <Collapsible
-                key={`${session.agent}:${session.sessionKey}`}
+                key={key}
                 open={sessionOpen}
                 onOpenChange={(open) => setSessionOpen(session, open)}
                 className="tree-group"
@@ -489,7 +451,7 @@ export function SessionTree({
                   className={[
                     'tree-trigger tree-trigger-session',
                     !canExpandSessions ? 'tree-trigger-session-flat' : '',
-                    sessionActive ? 'tree-trigger-session-active' : '',
+                    sessionActive && !sessionHasActiveChild ? 'tree-trigger-session-active' : '',
                   ].filter(Boolean).join(' ')}
                 >
                   {canExpandSessions ? (
@@ -637,16 +599,13 @@ const TIME_PRESETS: Array<{ value: TimePreset; label: string }> = [
 type ProjectFilter = {
   query: string;
   selectedAgents: string[];
-  sortDirection: SortDirection;
   timeRange: TimeRange;
 };
 
 function filterProjects(projects: ProjectNode[], filter: ProjectFilter): ProjectNode[] {
   const normalizedQuery = filter.query.trim().toLowerCase();
   const selectedAgents = new Set(filter.selectedAgents);
-  const compare = filter.sortDirection === 'desc'
-    ? (left: string, right: string) => right.localeCompare(left)
-    : (left: string, right: string) => left.localeCompare(right);
+  const compare = (left: string, right: string) => left.localeCompare(right);
 
   return projects.flatMap((project) => {
     const projectMatches = matchesQuery(project.label, normalizedQuery);
@@ -722,7 +681,15 @@ function uniqueAgents(projects: ProjectNode[]): string[] {
 }
 
 function sessionKey(session: ProjectSessionNode): string {
-  return `${session.agent}:${session.projectKey}:${session.sessionKey}`;
+  return `${session.agent}:${session.cwd ?? ''}:${session.sessionKey}`;
+}
+
+function hasActiveSessionChild(session: ProjectSessionNode, activeMemoryId: string | null): boolean {
+  if (!activeMemoryId) {
+    return false;
+  }
+  return session.turns.some((turn) => turn.memoryId === activeMemoryId)
+    || session.segments.some((segment) => segment.memoryId === activeMemoryId);
 }
 
 function shouldAutoExpandSession(session: ProjectSessionNode): boolean {
@@ -827,7 +794,6 @@ function defaultSessionToolbarState(): SessionToolbarState {
   return {
     selectedAgents: [],
     timePreset: 'last_7d',
-    sortDirection: 'asc',
     customFromDate: dateInputValue(daysAgo(7)),
     customFromTime: '00:00',
     customToDate: dateInputValue(new Date()),
@@ -858,7 +824,6 @@ function loadSessionToolbarState(): SessionToolbarState {
         ? parsed.selectedAgents.filter((agent): agent is string => typeof agent === 'string' && agent.length > 0)
         : defaults.selectedAgents,
       timePreset: isTimePreset(parsed.timePreset) ? parsed.timePreset : defaults.timePreset,
-      sortDirection: isSortDirection(parsed.sortDirection) ? parsed.sortDirection : defaults.sortDirection,
       customFromDate: isDateInput(parsed.customFromDate) ? parsed.customFromDate : defaults.customFromDate,
       customFromTime: isTimeInput(parsed.customFromTime) ? parsed.customFromTime : defaults.customFromTime,
       customToDate: isDateInput(parsed.customToDate) ? parsed.customToDate : defaults.customToDate,
@@ -887,7 +852,6 @@ function loadSessionToolbarStateFromUrl(defaults: SessionToolbarState): SessionT
   const params = new URL(window.location.href).searchParams;
   const hasToolbarParams = params.has('agent')
     || params.has('time')
-    || params.has('sort')
     || params.has('from')
     || params.has('to');
   if (!hasToolbarParams) {
@@ -903,11 +867,6 @@ function loadSessionToolbarStateFromUrl(defaults: SessionToolbarState): SessionT
   const timePreset = params.get('time');
   if (isTimePreset(timePreset)) {
     next.timePreset = timePreset;
-  }
-
-  const sortDirection = params.get('sort');
-  if (isSortDirection(sortDirection)) {
-    next.sortDirection = sortDirection;
   }
 
   const from = parseUrlDateTime(params.get('from'));
@@ -933,7 +892,7 @@ function saveSessionToolbarStateToUrl(state: SessionToolbarState) {
   }
 
   setSearchParam(url, 'time', state.timePreset === 'last_7d' ? null : state.timePreset);
-  setSearchParam(url, 'sort', state.sortDirection === 'asc' ? null : state.sortDirection);
+  url.searchParams.delete('sort');
   if (state.timePreset === 'custom') {
     setSearchParam(url, 'from', `${state.customFromDate}T${state.customFromTime}`);
     setSearchParam(url, 'to', `${state.customToDate}T${state.customToTime}`);
@@ -977,10 +936,6 @@ function isTimePreset(value: unknown): value is TimePreset {
     || value === 'custom';
 }
 
-function isSortDirection(value: unknown): value is SortDirection {
-  return value === 'asc' || value === 'desc';
-}
-
 function isDateInput(value: unknown): value is string {
   return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value);
 }
@@ -1002,12 +957,11 @@ function timeFilterLabel(preset: TimePreset, range: TimeRange): string {
   return `${formatRangePart(range.from)} - ${formatRangePart(range.to)}`;
 }
 
-function timeTriggerLabel(preset: TimePreset, range: TimeRange, sortDirection: SortDirection): string {
-  const suffix = sortDirection === 'desc' ? '↓' : '↑';
+function timeTriggerLabel(preset: TimePreset, range: TimeRange): string {
   if (preset === 'all') {
-    return `Time: All ${suffix}`;
+    return 'Time: All';
   }
-  return `${timeFilterLabel(preset, range)} ${suffix}`;
+  return timeFilterLabel(preset, range);
 }
 
 function formatRangePart(date: Date): string {
@@ -1032,15 +986,6 @@ function CollapseIcon() {
   );
 }
 
-function SessionTreeLayoutIcon({ mode }: { mode: SessionContentMode }) {
-  const split = mode !== 'conversation';
-  return (
-    <svg viewBox="0 0 18 18" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.65" strokeLinecap="round">
-      <path d="M6.5 4.25v9.5" />
-      {split ? <path d="M11.5 4.25v9.5" /> : null}
-    </svg>
-  );
-}
 
 function TurnSummary({ text }: { text: string }) {
   const ref = useRef<HTMLSpanElement>(null);

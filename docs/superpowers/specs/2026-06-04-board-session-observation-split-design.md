@@ -1,4 +1,4 @@
-# Board Session Observation Split Design
+# Board Extraction Split Design
 
 ## Scope
 
@@ -12,7 +12,7 @@ The Session page currently has three relevant layers:
 - Segment nodes are currently derived from the latest session snapshot extraction blocks when available, with turn prompt fallback.
 - The content area currently focuses on Conversation rendering through `ChatView`.
 
-The new page should reuse session snapshot extraction blocks as the Observation source because those blocks already align with the third-level Session tree segments. `session_observation` table rows should remain a future alignment target, not the data source for this UI iteration.
+The new page should reuse session snapshot extraction blocks as the Observation source because those blocks already align with the third-level Session tree segments. `extraction` table rows should remain a future alignment target, not the data source for this UI iteration.
 
 ## Layout
 

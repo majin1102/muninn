@@ -1,4 +1,4 @@
-# Board Session Observation Split Implementation Plan
+# Board Extraction Split Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -13,7 +13,7 @@
 ## File Structure
 
 - Modify `packages/types/src/api.ts`
-  - Add `SessionObservationPreview`.
+  - Add `ExtractionPreview`.
   - Add `observations` to `SessionTurnsResponse`.
 - Modify `packages/board/src/server/app.ts`
   - Parse snapshot extraction blocks into rich observation previews.
@@ -62,14 +62,14 @@ import type {
   SessionAgentsResponse,
   SessionGroupsResponse,
   SessionNode,
-  SessionObservationPreview,
+  ExtractionPreview,
   SessionSegmentPreview,
   SessionTurnsResponse,
   SettingsConfigResponse,
   TurnPreview,
 } from '@muninn/types';
 
-export type ProjectObservationNode = SessionObservationPreview & {
+export type ProjectObservationNode = ExtractionPreview & {
   agent: string;
   sessionKey: string;
   sessionLabel: string;
@@ -94,14 +94,14 @@ Run:
 source ~/.zprofile && pnpm --filter @muninn/board build
 ```
 
-Expected: `tsc` fails because `SessionObservationPreview` does not exist and project session initialization is missing `observations`.
+Expected: `tsc` fails because `ExtractionPreview` does not exist and project session initialization is missing `observations`.
 
 - [ ] **Step 3: Add API type definitions**
 
 In `packages/types/src/api.ts`, add:
 
 ```ts
-export interface SessionObservationPreview {
+export interface ExtractionPreview {
   memoryId: string;
   title: string;
   createdAt: string;
@@ -116,7 +116,7 @@ Update `SessionTurnsResponse`:
 export interface SessionTurnsResponse {
   turns: TurnPreview[];
   segments: SessionSegmentPreview[];
-  observations: SessionObservationPreview[];
+  observations: ExtractionPreview[];
   nextOffset: number | null;
   requestId: string;
 }
@@ -174,7 +174,7 @@ In `packages/board/test/session-segments.test.mjs`, extend the import:
 
 ```js
 import {
-  buildSessionObservationsForTests,
+  buildExtractionsForTests,
   buildSessionSegmentsForTests,
   buildSessionTurnPageForTests,
   resolveSessionTreeNextOffsetForTests,
@@ -211,7 +211,7 @@ test('builds snapshot observations with markdown and refs', () => {
     'Write in the session language.',
   ].join('\n');
 
-  assert.deepEqual(buildSessionObservationsForTests(snapshot, turns), [
+  assert.deepEqual(buildExtractionsForTests(snapshot, turns), [
     {
       memoryId: 'turn:1',
       title: 'Prompt budget rules',
@@ -261,31 +261,31 @@ Run:
 source ~/.zprofile && pnpm --filter @muninn/board build && node --test packages/board/test/session-segments.test.mjs
 ```
 
-Expected: build or test fails because `buildSessionObservationsForTests` and `observations` are not implemented.
+Expected: build or test fails because `buildExtractionsForTests` and `observations` are not implemented.
 
 - [ ] **Step 3: Implement observation parsing**
 
 In `packages/board/src/server/app.ts`, add an observation builder next to `buildSessionSegments()`:
 
 ```ts
-function buildSessionObservations(
+function buildExtractions(
   snapshotContent: string | null | undefined,
   turnPreviews: TurnPreview[],
-): SessionObservationPreview[] {
+): ExtractionPreview[] {
   if (!snapshotContent) {
     return [];
   }
-  return parseSnapshotSessionObservationBlocks(snapshotContent, turnPreviews);
+  return parseSnapshotExtractionBlocks(snapshotContent, turnPreviews);
 }
 ```
 
 Add block parsing:
 
 ```ts
-function parseSnapshotSessionObservationBlocks(
+function parseSnapshotExtractionBlocks(
   snapshotContent: string,
   turnPreviews: TurnPreview[],
-): SessionObservationPreview[] {
+): ExtractionPreview[] {
   const extractionStart = snapshotContent.search(/^##\s+Extractions\s*$/im);
   if (extractionStart < 0) {
     return [];
@@ -300,13 +300,13 @@ function parseSnapshotSessionObservationBlocks(
   const turnById = new Map(turnPreviews.map((turn, index) => [turn.memoryId, { turn, index }]));
   const refsPattern = /<!--\s*(?:sequence:\s*\d+\s*;\s*)?refs:\s*\[([^\]]*)\]\s*-->/g;
   const matches = [...section.matchAll(refsPattern)];
-  const observations: Array<SessionObservationPreview & { index: number }> = [];
+  const observations: Array<ExtractionPreview & { index: number }> = [];
 
   for (let i = 0; i < matches.length; i += 1) {
     const match = matches[i]!;
     const next = matches[i + 1];
     const block = section.slice(match.index! + match[0].length, next?.index ?? section.length).trim();
-    const refs = parseSessionObservationRefs(match[1]);
+    const refs = parseExtractionRefs(match[1]);
     const firstTurn = refs.map((ref) => turnById.get(ref)).find((entry) => entry !== undefined);
     if (!firstTurn) {
       continue;
@@ -356,7 +356,7 @@ Update return type of `buildSessionTurnPage()` and `loadSessionTurnPreviewsPage(
 Inside `buildSessionTurnPage()`:
 
 ```ts
-const observations = buildSessionObservations(params.snapshotContent, params.turns);
+const observations = buildExtractions(params.snapshotContent, params.turns);
 return {
   turns: pageTurns,
   segments,
@@ -385,11 +385,11 @@ const response: SessionTurnsResponse = {
 Export test helper:
 
 ```ts
-export function buildSessionObservationsForTests(
+export function buildExtractionsForTests(
   snapshotContent: string | null | undefined,
   turnPreviews: TurnPreview[],
-): SessionObservationPreview[] {
-  return buildSessionObservations(snapshotContent, turnPreviews);
+): ExtractionPreview[] {
+  return buildExtractions(snapshotContent, turnPreviews);
 }
 ```
 
@@ -857,7 +857,7 @@ export function SessionContentSplit({
         <ModeButton mode="split" active={mode === 'split'} label="Split view" onClick={() => setMode('split')} />
         <ModeButton mode="conversation" active={mode === 'conversation'} label="Conversation only" onClick={() => setMode('conversation')} />
       </div>
-      <section className="session-observation-pane" aria-label="Session observations">
+      <section className="extraction-pane" aria-label="Session observations">
         <ObservationPane observations={observations} activeMemoryId={activeMemoryId} />
       </section>
       {mode === 'split' ? (
@@ -1030,7 +1030,7 @@ Append to `packages/board/src/styles.css`:
   right: 3px;
 }
 
-.session-observation-pane {
+.extraction-pane {
   min-width: 0;
   min-height: 0;
   opacity: 1;
@@ -1077,7 +1077,7 @@ Append to `packages/board/src/styles.css`:
   grid-template-columns: 0 0 minmax(0, 1fr);
 }
 
-.session-content-mode-conversation .session-observation-pane,
+.session-content-mode-conversation .extraction-pane,
 .session-content-mode-conversation .session-content-divider {
   opacity: 0;
   pointer-events: none;
@@ -1087,7 +1087,7 @@ Append to `packages/board/src/styles.css`:
 @media (prefers-reduced-motion: reduce) {
   .session-content-split,
   .session-mode-button,
-  .session-observation-pane,
+  .extraction-pane,
   .session-conversation-pane,
   .observation-chevron {
     transition: none;
@@ -1204,7 +1204,7 @@ git add packages/types/src/api.ts \
   packages/board/src/styles.css \
   packages/board/test/session-segments.test.mjs \
   packages/board/test/session-content-state.test.mjs
-git commit -m "feat: add session observation split view"
+git commit -m "feat: add extraction split view"
 ```
 
 Expected: commit succeeds and does not include unrelated schema/extractor work.
@@ -1230,7 +1230,7 @@ Placeholder scan:
 
 Type consistency:
 
-- `SessionObservationPreview` is the API type.
+- `ExtractionPreview` is the API type.
 - `ProjectObservationNode` is the client-enriched type.
 - `SessionContentMode` is the UI mode type.
 - `observations` is consistently added to session responses and project session nodes.

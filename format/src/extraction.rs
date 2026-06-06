@@ -15,15 +15,15 @@ use super::TableStats;
 use super::access::{
     LanceDataset, TableAccess, TableDescription, TableOptions, delete_by_ids, describe_dataset,
 };
-use super::codec::{session_observations_to_reader, record_batch_to_session_observations};
+use super::codec::{extractions_to_reader, record_batch_to_extractions};
 use crate::maintenance::{
-    cleanup_dataset, compact_dataset, ensure_session_observation_fts_index, ensure_session_observation_id_index,
-    ensure_semantic_vector_index, optimize_session_observation, SESSION_OBSERVATION_CONTENT_COLUMN,
+    cleanup_dataset, compact_dataset, ensure_extraction_fts_index, ensure_extraction_id_index,
+    ensure_semantic_vector_index, optimize_extraction, EXTRACTION_CONTENT_COLUMN,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
-pub struct SessionObservation {
+pub struct Extraction {
     pub id: String,
     pub title: String,
     pub summary: String,
@@ -44,16 +44,16 @@ pub enum RecallMode {
 }
 
 #[derive(Debug, Clone)]
-pub struct SessionObservationTable {
+pub struct ExtractionTable {
     access: TableAccess,
 }
 
-impl SessionObservationTable {
+impl ExtractionTable {
     pub fn new(options: TableOptions) -> Self {
         Self {
             access: TableAccess::new(
                 options,
-                Path::parse("session_observation").expect("valid session observation table path"),
+                Path::parse("extraction").expect("valid extraction table path"),
             ),
         }
     }
@@ -66,7 +66,7 @@ impl SessionObservationTable {
         if let Some(dataset) = self.access.try_open().await? {
             return Ok(dataset);
         }
-        self.access.write(session_observations_to_reader(Vec::new())?).await
+        self.access.write(extractions_to_reader(Vec::new())?).await
     }
 
     pub async fn validate_dimensions(&self, expected_dimensions: usize) -> Result<()> {
@@ -76,7 +76,7 @@ impl SessionObservationTable {
         let actual_dimensions = extraction_vector_dimensions(&dataset)?;
         if actual_dimensions != expected_dimensions {
             return Err(Error::invalid_input(format!(
-                "session observation dimension mismatch: muninn.json expects {expected_dimensions}, but the existing session_observation table stores {actual_dimensions}; update providers.embedding.<name>.dimensions or rebuild the session_observation table"
+                "extraction dimension mismatch: muninn.json expects {expected_dimensions}, but the existing extraction table stores {actual_dimensions}; update providers.embedding.<name>.dimensions or rebuild the extraction table"
             )));
         }
         Ok(())
@@ -86,7 +86,7 @@ impl SessionObservationTable {
         let Some(dataset) = self.access.try_open().await? else {
             return Ok(None);
         };
-        // describe() reports table facts and the session-observation-specific schema checks
+        // describe() reports table facts and the extraction-specific schema checks
         // that this table already enforces for vector compatibility.
         let actual_dimensions = extraction_vector_dimensions(&dataset)?;
         let mut description = describe_dataset(&dataset);
@@ -103,8 +103,8 @@ impl SessionObservationTable {
             return Ok(false);
         };
         let vector_created = ensure_semantic_vector_index(&mut dataset, target_partition_size).await?;
-        let fts_created = ensure_session_observation_fts_index(&mut dataset).await?;
-        let id_created = ensure_session_observation_id_index(&mut dataset).await?;
+        let fts_created = ensure_extraction_fts_index(&mut dataset).await?;
+        let id_created = ensure_extraction_id_index(&mut dataset).await?;
         Ok(vector_created || fts_created || id_created)
     }
 
@@ -120,10 +120,10 @@ impl SessionObservationTable {
         let Some(mut dataset) = self.access.try_open().await? else {
             return Ok(false);
         };
-        optimize_session_observation(&mut dataset, merge_count).await
+        optimize_extraction(&mut dataset, merge_count).await
     }
 
-    pub async fn list(&self, limit: Option<usize>) -> Result<Vec<SessionObservation>> {
+    pub async fn list(&self, limit: Option<usize>) -> Result<Vec<Extraction>> {
         let Some(dataset) = self.access.try_open().await? else {
             return Ok(Vec::new());
         };
@@ -135,10 +135,10 @@ impl SessionObservationTable {
         if batch.num_rows() == 0 {
             return Ok(Vec::new());
         }
-        record_batch_to_session_observations(&batch)
+        record_batch_to_extractions(&batch)
     }
 
-    pub async fn delta(&self, baseline_version: u64) -> Result<Vec<SessionObservation>> {
+    pub async fn delta(&self, baseline_version: u64) -> Result<Vec<Extraction>> {
         let Some(dataset) = self.access.try_open().await? else {
             return Ok(Vec::new());
         };
@@ -156,16 +156,16 @@ impl SessionObservationTable {
             if batch.num_rows() == 0 {
                 continue;
             }
-            rows.extend(record_batch_to_session_observations(&batch)?);
+            rows.extend(record_batch_to_extractions(&batch)?);
         }
         let mut updated = delta.get_updated_rows().await?;
         while let Some(batch) = updated.try_next().await? {
             if batch.num_rows() == 0 {
                 continue;
             }
-            rows.extend(record_batch_to_session_observations(&batch)?);
+            rows.extend(record_batch_to_extractions(&batch)?);
         }
-        let mut by_id = HashMap::<String, SessionObservation>::new();
+        let mut by_id = HashMap::<String, Extraction>::new();
         for row in rows {
             by_id
                 .entry(row.id.clone())
@@ -186,7 +186,7 @@ impl SessionObservationTable {
         Ok(rows)
     }
 
-    pub async fn get(&self, ids: &[String]) -> Result<Vec<SessionObservation>> {
+    pub async fn get(&self, ids: &[String]) -> Result<Vec<Extraction>> {
         if ids.is_empty() {
             return Ok(Vec::new());
         }
@@ -207,7 +207,7 @@ impl SessionObservationTable {
         if batch.num_rows() == 0 {
             return Ok(Vec::new());
         }
-        let rows = record_batch_to_session_observations(&batch)?;
+        let rows = record_batch_to_extractions(&batch)?;
         let mut by_id = rows
             .into_iter()
             .map(|row| (row.id.clone(), row))
@@ -215,7 +215,7 @@ impl SessionObservationTable {
         Ok(ids.iter().filter_map(|id| by_id.remove(id)).collect())
     }
 
-    pub async fn nearest(&self, query_vector: &[f32], limit: usize) -> Result<Vec<SessionObservation>> {
+    pub async fn nearest(&self, query_vector: &[f32], limit: usize) -> Result<Vec<Extraction>> {
         if limit == 0 || query_vector.is_empty() {
             return Ok(Vec::new());
         }
@@ -230,7 +230,7 @@ impl SessionObservationTable {
                 if batch.num_rows() == 0 {
                     return Ok(Vec::new());
                 }
-                return record_batch_to_session_observations(&batch);
+                return record_batch_to_extractions(&batch);
             }
         }
 
@@ -238,7 +238,7 @@ impl SessionObservationTable {
         if batch.num_rows() == 0 {
             return Ok(Vec::new());
         }
-        let mut rows = record_batch_to_session_observations(&batch)?;
+        let mut rows = record_batch_to_extractions(&batch)?;
         rows.sort_by(|left, right| {
             semantic_vector_score(query_vector.values(), &right.vector)
                 .partial_cmp(&semantic_vector_score(query_vector.values(), &left.vector))
@@ -255,7 +255,7 @@ impl SessionObservationTable {
         query_vector: &[f32],
         limit: usize,
         mode: RecallMode,
-    ) -> Result<Vec<SessionObservation>> {
+    ) -> Result<Vec<Extraction>> {
         match mode {
             RecallMode::Vector => self.nearest(query_vector, limit).await,
             RecallMode::Fts => self.full_text(query, limit).await,
@@ -263,7 +263,7 @@ impl SessionObservationTable {
         }
     }
 
-    async fn full_text(&self, query: &str, limit: usize) -> Result<Vec<SessionObservation>> {
+    async fn full_text(&self, query: &str, limit: usize) -> Result<Vec<Extraction>> {
         if limit == 0 || query.trim().is_empty() {
             return Ok(Vec::new());
         }
@@ -272,14 +272,14 @@ impl SessionObservationTable {
         };
         let normalized_query = query.trim();
         let query = FullTextSearchQuery::new(normalized_query.to_string())
-            .with_column(SESSION_OBSERVATION_CONTENT_COLUMN.to_string())?
+            .with_column(EXTRACTION_CONTENT_COLUMN.to_string())?
             .limit(Some(limit as i64));
         if let Ok(scanner) = dataset.scan().full_text_search(query) {
             if let Ok(batch) = scanner.try_into_batch().await {
                 if batch.num_rows() == 0 {
                     return Ok(Vec::new());
                 }
-                return record_batch_to_session_observations(&batch);
+                return record_batch_to_extractions(&batch);
             }
         }
         fallback_full_text(&dataset, normalized_query, limit).await
@@ -290,7 +290,7 @@ impl SessionObservationTable {
         query: &str,
         query_vector: &[f32],
         limit: usize,
-    ) -> Result<Vec<SessionObservation>> {
+    ) -> Result<Vec<Extraction>> {
         if limit == 0 {
             return Ok(Vec::new());
         }
@@ -301,24 +301,24 @@ impl SessionObservationTable {
     }
 
     #[allow(dead_code)]
-    pub(crate) async fn insert(&self, rows: Vec<SessionObservation>) -> Result<()> {
+    pub(crate) async fn insert(&self, rows: Vec<Extraction>) -> Result<()> {
         if rows.is_empty() {
             return Ok(());
         }
         if let Some(mut dataset) = self.access.try_open().await? {
             dataset
                 .append(
-                    session_observations_to_reader(rows)?,
+                    extractions_to_reader(rows)?,
                     self.access.options().write_params(),
                 )
                 .await?;
         } else {
-            self.access.write(session_observations_to_reader(rows)?).await?;
+            self.access.write(extractions_to_reader(rows)?).await?;
         }
         Ok(())
     }
 
-    pub async fn upsert(&self, rows: Vec<SessionObservation>) -> Result<()> {
+    pub async fn upsert(&self, rows: Vec<Extraction>) -> Result<()> {
         if rows.is_empty() {
             return Ok(());
         }
@@ -330,9 +330,9 @@ impl SessionObservationTable {
                 .when_matched(WhenMatched::UpdateAll)
                 .when_not_matched(WhenNotMatched::InsertAll);
             let job = builder.try_build()?;
-            job.execute_reader(session_observations_to_reader(rows)?).await?;
+            job.execute_reader(extractions_to_reader(rows)?).await?;
         } else {
-            self.access.write(session_observations_to_reader(rows)?).await?;
+            self.access.write(extractions_to_reader(rows)?).await?;
         }
         Ok(())
     }
@@ -343,12 +343,12 @@ impl SessionObservationTable {
 }
 
 fn merge_ranked(
-    vector_rows: Vec<SessionObservation>,
-    fts_rows: Vec<SessionObservation>,
+    vector_rows: Vec<Extraction>,
+    fts_rows: Vec<Extraction>,
     limit: usize,
-) -> Vec<SessionObservation> {
+) -> Vec<Extraction> {
     let mut scores: HashMap<String, f32> = HashMap::new();
-    let mut rows: HashMap<String, SessionObservation> = HashMap::new();
+    let mut rows: HashMap<String, Extraction> = HashMap::new();
 
     for (rank, row) in vector_rows.into_iter().enumerate() {
         add_rank(&mut scores, &mut rows, rank, row);
@@ -372,9 +372,9 @@ fn merge_ranked(
 
 fn add_rank(
     scores: &mut HashMap<String, f32>,
-    rows: &mut HashMap<String, SessionObservation>,
+    rows: &mut HashMap<String, Extraction>,
     rank: usize,
-    row: SessionObservation,
+    row: Extraction,
 ) {
     let score = 1.0_f32 / (60.0 + rank as f32 + 1.0);
     *scores.entry(row.id.clone()).or_default() += score;
@@ -385,7 +385,7 @@ async fn fallback_full_text(
     dataset: &LanceDataset,
     query: &str,
     limit: usize,
-) -> Result<Vec<SessionObservation>> {
+) -> Result<Vec<Extraction>> {
     let tokens = query_tokens(query);
     if tokens.is_empty() {
         return Ok(Vec::new());
@@ -394,7 +394,7 @@ async fn fallback_full_text(
     if batch.num_rows() == 0 {
         return Ok(Vec::new());
     }
-    let mut scored = record_batch_to_session_observations(&batch)?
+    let mut scored = record_batch_to_extractions(&batch)?
         .into_iter()
         .filter_map(|row| {
             let score = lexical_score(&row, &tokens);
@@ -410,7 +410,7 @@ async fn fallback_full_text(
     Ok(scored.into_iter().map(|(_, row)| row).collect())
 }
 
-fn lexical_score(row: &SessionObservation, tokens: &[String]) -> usize {
+fn lexical_score(row: &Extraction, tokens: &[String]) -> usize {
     let haystack = normalize_search_text(&row.content);
     tokens.iter().filter(|token| haystack.contains(token.as_str())).count()
 }
@@ -505,7 +505,7 @@ fn semantic_vector_score(query: &[f32], candidate: &[f32]) -> f32 {
 fn extraction_vector_dimensions(dataset: &LanceDataset) -> Result<usize> {
     let vector = dataset.schema().field("vector").ok_or_else(|| {
         Error::invalid_input(
-            "session_observation table schema is invalid: missing vector column; rebuild the session_observation table",
+            "extraction table schema is invalid: missing vector column; rebuild the extraction table",
         )
     })?;
 
@@ -513,13 +513,13 @@ fn extraction_vector_dimensions(dataset: &LanceDataset) -> Result<usize> {
         DataType::FixedSizeList(item, dimensions) if item.data_type() == &DataType::Float32 => {
             if dimensions <= 0 {
                 return Err(Error::invalid_input(
-                    "session_observation table schema is invalid: vector dimension must be positive; rebuild the session_observation table",
+                    "extraction table schema is invalid: vector dimension must be positive; rebuild the extraction table",
                 ));
             }
             Ok(dimensions as usize)
         }
         actual => Err(Error::invalid_input(format!(
-            "session_observation table schema is incompatible: expected vector column type FixedSizeList<Float32, N>, found {actual:?}; rebuild the session_observation table"
+            "extraction table schema is incompatible: expected vector column type FixedSizeList<Float32, N>, found {actual:?}; rebuild the extraction table"
         ))),
     }
 }
@@ -530,7 +530,7 @@ mod tests {
 
     use serde_json::json;
 
-    use super::{SessionObservation, SessionObservationTable, RecallMode};
+    use super::{Extraction, ExtractionTable, RecallMode};
     use crate::config::{CONFIG_FILE_NAME, llm_test_env_guard};
     use crate::TableOptions;
 
@@ -565,12 +565,12 @@ mod tests {
         }
     }
 
-    fn row(id: &str, text: &str, context: Option<&str>, vector: Vec<f32>) -> SessionObservation {
+    fn row(id: &str, text: &str, context: Option<&str>, vector: Vec<f32>) -> Extraction {
         let content = format!(
             "## Title\n\n{text}\n\n## Summary\n\n{text}\n\n## Content\n\n{}",
             context.unwrap_or("")
         );
-        SessionObservation {
+        Extraction {
             id: id.to_string(),
             title: text.to_string(),
             summary: text.to_string(),
@@ -590,7 +590,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         write_config(&dir);
 
-        let table = SessionObservationTable::new(TableOptions::local(crate::config::data_root().unwrap()).unwrap());
+        let table = ExtractionTable::new(TableOptions::local(crate::config::data_root().unwrap()).unwrap());
         table
             .upsert(vec![
                 row(
@@ -629,7 +629,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         write_config(&dir);
 
-        let table = SessionObservationTable::new(TableOptions::local(crate::config::data_root().unwrap()).unwrap());
+        let table = ExtractionTable::new(TableOptions::local(crate::config::data_root().unwrap()).unwrap());
         table
             .upsert(vec![
                 row("first", "First memory.", None, vec![1.0, 0.0, 0.0, 0.0]),
@@ -655,7 +655,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         write_config(&dir);
 
-        let table = SessionObservationTable::new(TableOptions::local(crate::config::data_root().unwrap()).unwrap());
+        let table = ExtractionTable::new(TableOptions::local(crate::config::data_root().unwrap()).unwrap());
         table
             .upsert(vec![
                 row(
@@ -690,7 +690,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         write_config(&dir);
 
-        let table = SessionObservationTable::new(TableOptions::local(crate::config::data_root().unwrap()).unwrap());
+        let table = ExtractionTable::new(TableOptions::local(crate::config::data_root().unwrap()).unwrap());
         table
             .upsert(vec![
                 row("stable", "Stable memory.", None, vec![1.0, 0.0, 0.0, 0.0]),

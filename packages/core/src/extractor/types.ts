@@ -1,4 +1,4 @@
-export type SessionObservation = {
+export type Extraction = {
   id?: string | null;
   title?: string | null;
   text: string;
@@ -7,7 +7,7 @@ export type SessionObservation = {
   updatedMemory?: string | null;
 };
 
-export type SessionObservationInput = {
+export type ExtractionInput = {
   title?: string | null;
   text: string;
   context?: string | null;
@@ -19,7 +19,7 @@ export type ContextRef = {
   summary: string;
 };
 
-export type SessionObservationChange =
+export type ExtractionChange =
   | {
     type: 'add';
     text: string;
@@ -55,11 +55,11 @@ export type SnapshotContent = {
   cwd?: string;
   agent?: string;
   snapshotContent: string;
-  extractions: SessionObservation[];
+  extractions: Extraction[];
   contextRefs: ContextRef[];
   openQuestions?: string[];
   nextSteps?: string[];
-  extractionChanges: SessionObservationChange[];
+  extractionChanges: ExtractionChange[];
 };
 
 export type SessionMemoryThreadKind = 'session' | 'subject';
@@ -124,7 +124,7 @@ export type SessionMemoryContent = {
   title: string;
   summary: string;
   snapshotContent?: string;
-  extractions: SessionObservation[];
+  extractions: Extraction[];
   openQuestions: string[];
   nextSteps: string[];
 };
@@ -140,7 +140,7 @@ export type ExtractSessionMemoryResult = {
   title: string;
   summary: string;
   snapshotContent: string;
-  extractions: SessionObservation[];
+  extractions: Extraction[];
   openQuestions: string[];
   nextSteps: string[];
   contextRefs: ContextRef[];
@@ -179,5 +179,5 @@ export type ThreadPreparationWorkItem = {
 
 export type ThreadPreparationResult = {
   workItems: ThreadPreparationWorkItem[];
-  unthreadedSessionObservationIds: string[];
+  unthreadedExtractionIds: string[];
 };

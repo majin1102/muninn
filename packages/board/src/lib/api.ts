@@ -9,7 +9,7 @@ import type {
   SessionAgentsResponse,
   SessionGroupsResponse,
   SessionNode,
-  SessionObservationPreview,
+  ExtractionPreview,
   SessionSegmentPreview,
   SessionTurnsResponse,
   SettingsConfigResponse,
@@ -38,7 +38,7 @@ export type ProjectSegmentNode = SessionSegmentPreview & {
   sessionLabel: string;
 };
 
-export type ProjectObservationNode = SessionObservationPreview & {
+export type ProjectObservationNode = ExtractionPreview & {
   agent: string;
   sessionKey: string;
   sessionLabel: string;
@@ -181,10 +181,17 @@ export function createBoardClient(apiBase: string, usesDemoData: boolean): Board
       })));
     },
     async loadSessionTurns(session, offset = 0) {
+      const params = new URLSearchParams({
+        offset: String(offset),
+        limit: '100',
+      });
+      if (session.cwd) {
+        params.set('cwd', session.cwd);
+      }
       const response = usesDemoData
         ? await getDemoSessionTurns(session.agent, session.sessionKey, offset, 100)
         : await fetchJson<SessionTurnsResponse>(
-          `/api/v1/ui/session/agents/${encodeURIComponent(session.agent)}/sessions/${encodeURIComponent(session.sessionKey)}/turns?project=${encodeURIComponent(session.projectKey)}&offset=${offset}&limit=100`,
+          `/api/v1/ui/session/agents/${encodeURIComponent(session.agent)}/sessions/${encodeURIComponent(session.sessionKey)}/turns?${params.toString()}`,
         );
       return {
         turns: response.turns.map((turn) => ({
@@ -287,9 +294,9 @@ async function projectTreeFromAgents(
   return [...projects.values()]
     .map((project) => ({
       ...project,
-      sessions: project.sessions.sort((left, right) => right.latestUpdatedAt.localeCompare(left.latestUpdatedAt)),
+      sessions: project.sessions.sort((left, right) => left.latestUpdatedAt.localeCompare(right.latestUpdatedAt)),
     }))
-    .sort((left, right) => right.latestUpdatedAt.localeCompare(left.latestUpdatedAt));
+    .sort((left, right) => left.latestUpdatedAt.localeCompare(right.latestUpdatedAt));
 }
 
 function projectKeyFromSession(session: SessionNode): string {

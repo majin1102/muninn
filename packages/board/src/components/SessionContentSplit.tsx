@@ -14,6 +14,7 @@ import {
   locateObservationEnabled,
   observationForConversationWindow,
   selectedSessionKey,
+  toggleSessionTreeLayoutMode,
   type SessionContentMode,
 } from '../lib/session_content_state.js';
 import { cn } from '../lib/utils.js';
@@ -39,6 +40,7 @@ type SessionContentSplitProps = {
   onLoadMoreAfter: () => void;
   loading: boolean;
   error: string | null;
+  onModeChange: (mode: SessionContentMode) => void;
 };
 
 export function SessionContentSplit({
@@ -59,6 +61,7 @@ export function SessionContentSplit({
   onLoadMoreAfter,
   loading,
   error,
+  onModeChange,
 }: SessionContentSplitProps) {
   const [contentTab, setContentTab] = useState<'conversation' | 'artifacts'>('conversation');
   const [observationWidth, setObservationWidth] = useState(DEFAULT_OBSERVATION_WIDTH);
@@ -161,6 +164,17 @@ export function SessionContentSplit({
       <LocateIcon />
     </button>
   );
+  const modeButton = (
+    <button
+      className="session-locate-button session-mode-button"
+      type="button"
+      title={modeTitle(mode)}
+      aria-label={modeTitle(mode)}
+      onClick={() => onModeChange(toggleSessionTreeLayoutMode(mode))}
+    >
+      <SessionContentModeIcon mode={mode} />
+    </button>
+  );
   function startResize(event: PointerEvent<HTMLButtonElement>) {
     const root = rootRef.current;
     if (!root || mode !== 'split') {
@@ -193,12 +207,12 @@ export function SessionContentSplit({
       className={cn('session-content-split', `session-content-mode-${mode}`)}
       style={style}
     >
-      <section className="session-observation-pane" aria-label="Session observations">
-        <div className="session-pane-toolbar session-observation-toolbar">
+      <section className="extraction-pane" aria-label="Session observations">
+        <div className="session-pane-toolbar extraction-toolbar">
           <div className="session-pane-title-group">
             <div className="session-pane-title" title={title}>{title}</div>
           </div>
-          <div className="session-observation-toolbar-actions">
+          <div className="extraction-toolbar-actions">
             {locateObservationButton}
           </div>
         </div>
@@ -209,7 +223,9 @@ export function SessionContentSplit({
           openObservationId={openObservationId}
           openObservationRequestId={openObservationRequestId}
           sessionKey={session ? selectedSessionKey(session) : null}
+          sessionTurns={sessionTurns}
           onActiveObservationChange={onActiveObservationChange}
+          onLocateTurn={onLocateConversationTurn}
         />
       </section>
       <button
@@ -221,7 +237,6 @@ export function SessionContentSplit({
       <section className="session-conversation-pane" aria-label="Conversation">
         <div className="session-pane-toolbar session-conversation-toolbar">
           <div className="session-conversation-toolbar-main">
-            {locateConversationButton}
             <div className="session-content-tabs" role="tablist" aria-label="Session content">
               <button
                 type="button"
@@ -241,6 +256,10 @@ export function SessionContentSplit({
               >
                 Artifacts
               </button>
+            </div>
+            <div className="session-conversation-toolbar-actions">
+              {locateConversationButton}
+              {modeButton}
             </div>
           </div>
         </div>
@@ -263,5 +282,39 @@ export function SessionContentSplit({
         )}
       </section>
     </div>
+  );
+}
+
+function modeTitle(mode: SessionContentMode): string {
+  if (mode === 'split') {
+    return 'Session tree, observations, and conversation';
+  }
+  if (mode === 'conversation') {
+    return 'Session tree and conversation';
+  }
+  return 'Observations and conversation';
+}
+
+function SessionContentModeIcon({ mode }: { mode: SessionContentMode }) {
+  return (
+    <svg className="session-mode-icon" viewBox="0 0 18 18" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.55" strokeLinecap="round">
+      {mode === 'split' ? (
+        <>
+          <path d="M4.5 4.25v9.5" />
+          <path d="M9 4.25v9.5" />
+          <path d="M13.5 4.25v9.5" />
+        </>
+      ) : mode === 'conversation' ? (
+        <>
+          <path d="M4.5 4.25v9.5" />
+          <path d="M13.5 4.25v9.5" />
+        </>
+      ) : (
+        <>
+          <path d="M9 4.25v9.5" />
+          <path d="M13.5 4.25v9.5" />
+        </>
+      )}
+    </svg>
   );
 }

@@ -1,11 +1,11 @@
-import type { SessionObservation } from './types.js';
+import type { Extraction } from './types.js';
 
 export type ParsedSnapshotContent = {
   title: string;
   summary: string;
   snapshotContent: string;
   extractionMarkdown: string;
-  extractions: SessionObservation[];
+  extractions: Extraction[];
 };
 
 export type ParsedSnapshotPatch = {
@@ -110,7 +110,7 @@ export function parseSnapshotPatch(
 export function parseSnapshotContentUnits(
   snapshotContent: string,
   validReferences: Set<string>,
-): SessionObservation[] {
+): Extraction[] {
   if (!snapshotContent.trim()) {
     return [];
   }
@@ -132,7 +132,7 @@ export function parseSnapshotContentUnits(
   });
 }
 
-export function renderSnapshotContent(title: string, summary: string, extractions: SessionObservation[]): string {
+export function renderSnapshotContent(title: string, summary: string, extractions: Extraction[]): string {
   return [
     `# ${normalizeTitle(title)}`,
     '',
@@ -140,27 +140,27 @@ export function renderSnapshotContent(title: string, summary: string, extraction
     summary.trim(),
     '',
     '## Extractions',
-    extractions.map((extraction) => renderSessionObservationBlock(extraction)).join('\n\n----\n\n'),
+    extractions.map((extraction) => renderExtractionBlock(extraction)).join('\n\n----\n\n'),
   ].join('\n').trimEnd();
 }
 
-export function renderSessionObservationBlock(
-  sessionObservation: SessionObservation,
+export function renderExtractionBlock(
+  extraction: Extraction,
   options: { sequence?: number; includeRefs?: boolean } = {},
 ): string {
   const metadata = renderMetadata({
     sequence: options.sequence,
-    references: options.includeRefs === false ? [] : sessionObservation.references,
+    references: options.includeRefs === false ? [] : extraction.references,
   });
   return [
     metadata,
     '### Title',
-    normalizeTitle(sessionObservation.title ?? sessionObservation.text),
+    normalizeTitle(extraction.title ?? extraction.text),
     '',
     '### Summary',
-    sessionObservation.text.trim(),
-    ...(normalizeContext(sessionObservation.context ?? '')
-      ? ['', '### Content', sessionObservation.context!.trim()]
+    extraction.text.trim(),
+    ...(normalizeContext(extraction.context ?? '')
+      ? ['', '### Content', extraction.context!.trim()]
       : []),
   ].join('\n');
 }

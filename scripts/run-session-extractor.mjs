@@ -142,13 +142,13 @@ async function main() {
     }
     log(`touchedThreads=${touchedIds.size}`);
 
-    const sessionObservationChanges = await updateTesting.buildTouchedIndex(tables, threads, touchedIds);
-    log(`sessionObservationChanges=${sessionObservationChanges.length}`);
+    const extractionChanges = await updateTesting.buildTouchedIndex(tables, threads, touchedIds);
+    log(`extractionChanges=${extractionChanges.length}`);
 
     const sessionSnapshots = await tables.sessionTable.threadSnapshots(options.sessionId);
-    const sessionObservationRows = await tables.sessionObservationTable.list({ limit: 1_000_000 });
+    const extractionRows = await tables.extractionTable.list({ limit: 1_000_000 });
     log(`sessionSnapshotsForSession=${sessionSnapshots.length}`);
-    log(`totalSessionObservationRows=${sessionObservationRows.length}`);
+    log(`totalExtractionRows=${extractionRows.length}`);
     log('done');
   } finally {
     await tables.close();

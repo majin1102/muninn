@@ -9,13 +9,13 @@ function checkpoint(overrides = {}) {
     writtenAt: '2026-06-02T00:00:00.000Z',
     writerPid: 123,
     extractor: {
-      baseline: { turn: 10, session: 5, session_observation: 3, global_observation: 2 },
+      baseline: { turn: 10, session: 5, extraction: 3, global_observation: 2 },
       committedEpoch: 1,
       nextEpoch: 2,
       recentSessions: [],
       threads: [],
       runs: [],
-      pendingSessionObservationChanges: [],
+      pendingExtractionChanges: [],
     },
     observer: {
       baseline: { globalObservationContext: 4, global_observation: 2 },

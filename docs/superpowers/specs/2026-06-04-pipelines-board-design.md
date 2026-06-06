@@ -110,10 +110,10 @@ Example:
 
 ```text
 green dot  Global observing   Entity: Lance row id                    inspect icon
-running · generating draft from 16 session observations · updated 4s ago
+running · generating draft from 16 extractions · updated 4s ago
 
 Input                                      Output
-16 session observations from 3 turns       Global observation draft in progress
+16 extractions from 3 turns       Global observation draft in progress
 ```
 
 Status text appears inline in the second line. Do not render `running`, `done`, `queued`, or `failed` as bordered pills inside cards. Use plain colored text:
@@ -143,7 +143,7 @@ The inspector shows details for the selected task. It has:
 
 `Input` tab:
 
-- source turns or session observations
+- source turns or extractions
 - extraction or observation ids where available
 - queue or batch metadata
 - thresholds if relevant

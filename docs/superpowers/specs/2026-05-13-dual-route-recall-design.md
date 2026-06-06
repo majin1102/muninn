@@ -4,7 +4,7 @@
 
 Muninn should recall from both curated memory and raw session-level extraction.
 Curated `observation` rows are higher-level memory produced by curation.
-Raw `extraction` rows are lower-level session observations used as fallback and evidence.
+Raw `extraction` rows are lower-level extractions used as fallback and evidence.
 
 The first version is deterministic. It does not introduce an agentic recall loop or new user-facing configuration.
 

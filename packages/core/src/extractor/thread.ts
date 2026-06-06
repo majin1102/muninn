@@ -1,6 +1,6 @@
 import type {
   ExtractSessionMemoryResult,
-  SessionObservation,
+  Extraction,
   SessionMemoryContent,
   SessionSnapshot,
   SessionMemoryThread,
@@ -211,18 +211,18 @@ export function currentSessionMemoryContent(thread: SessionMemoryThread): Sessio
   };
 }
 
-export function applySessionObservationResult(
+export function applyExtractionResult(
   thread: SessionMemoryThread,
   result: ExtractSessionMemoryResult,
   extractionEpoch: number,
-  applySessionObservationChanges: (
-    extractions: SessionObservation[],
+  applyExtractionChanges: (
+    extractions: Extraction[],
     result: ExtractSessionMemoryResult,
-  ) => { extractionChanges: SnapshotContent['extractionChanges']; extractions: SessionObservation[] },
+  ) => { extractionChanges: SnapshotContent['extractionChanges']; extractions: Extraction[] },
   now = new Date().toISOString(),
 ): void {
   const current = latestSnapshot(thread) ?? emptySnapshot();
-  const patched = applySessionObservationChanges(current.extractions, result);
+  const patched = applyExtractionChanges(current.extractions, result);
   thread.title = result.title;
   thread.summary = result.summary ?? thread.summary;
   thread.extractionEpoch = extractionEpoch;
@@ -421,5 +421,5 @@ function trimReferences(references: string[]): void {
 }
 
 export const __testing = {
-  applySessionObservationResultForTests: applySessionObservationResult,
+  applyExtractionResultForTests: applyExtractionResult,
 };

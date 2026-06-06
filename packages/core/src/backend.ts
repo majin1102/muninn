@@ -1,7 +1,7 @@
 import {
   __testing as nativeTesting,
   createNativeTables,
-  describeSessionObservationForStorage,
+  describeExtractionForStorage,
   getNativeTables,
   shutdownNativeTablesForTests,
   type NativeTables,
@@ -381,7 +381,7 @@ export class MuninnBackend {
       const [turnStats, sessionStats, extractionStats, observationContextStats, observationStats] = await Promise.all([
         this.client.turnTable.stats(),
         this.client.sessionTable.stats(),
-        this.client.sessionObservationTable.stats(),
+        this.client.extractionTable.stats(),
         this.client.globalObservationContextTable.stats(),
         this.client.globalObservationTable.stats(),
       ]);
@@ -389,7 +389,7 @@ export class MuninnBackend {
         baseline: {
           turn: turnStats?.version ?? 0,
           session: sessionStats?.version ?? 0,
-          session_observation: extractionStats?.version ?? 0,
+          extraction: extractionStats?.version ?? 0,
           global_observation: observationStats?.version ?? 0,
         },
         committedEpoch: extractorCheckpoint.committedEpoch,
@@ -397,7 +397,7 @@ export class MuninnBackend {
         recentSessions: this.sessionRegistry?.exportRecentSessions() ?? [],
         threads: extractorCheckpoint.threads,
         runs: extractorCheckpoint.runs,
-        pendingSessionObservationChanges: extractorCheckpoint.pendingSessionObservationChanges,
+        pendingExtractionChanges: extractorCheckpoint.pendingExtractionChanges,
       };
       const observerSection: ObserverCheckpoint = observerCheckpoint ? {
         baseline: observerCheckpoint.baseline,
@@ -554,7 +554,7 @@ async function ensureBootstrapped(database?: string | null) {
 async function bootstrap(tables: Awaited<ReturnType<typeof getNativeTables>>): Promise<void> {
   if (loadMuninnConfig()?.extractor) {
     const embedding = getEmbeddingConfig();
-    await tables.sessionObservationTable.validateDimensions({ expected: embedding.dimensions });
+    await tables.extractionTable.validateDimensions({ expected: embedding.dimensions });
   }
 }
 
@@ -594,7 +594,7 @@ export async function addMessage(turnContent: TurnContent, database?: string | n
 export async function validateSettings(content: string): Promise<void> {
   const config = validateMuninnConfigInput(content);
   const storage = resolveStorageTarget(config);
-  const description = await describeSessionObservationForStorage(storage);
+  const description = await describeExtractionForStorage(storage);
   await validateMuninnConfigStorage(config, description);
 }
 

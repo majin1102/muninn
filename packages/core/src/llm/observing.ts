@@ -16,7 +16,7 @@ import {
 } from './provider.js';
 import { loadPromptTemplate, renderPromptTemplate } from './prompt-loader.js';
 
-export type ObserverSessionObservationInput = {
+export type ObserverExtractionInput = {
   id: string;
   status?: 'new' | 'changed';
   text: string;
@@ -29,7 +29,7 @@ export type ObserveCwdScopeInput = {
   cwdScope: string;
   outline: string;
   observedDocument: string;
-  extractions: ObserverSessionObservationInput[];
+  extractions: ObserverExtractionInput[];
   validRefs?: string[];
   getGlobalObservation?: (paths: string[]) => Promise<string> | string;
   maxAttempts?: number;
@@ -51,7 +51,7 @@ export async function observeCwdScope(input: ObserveCwdScopeInput): Promise<Pars
   const prompt = renderPromptTemplate(template.userTemplate, {
     outline: input.outline.trim() || '(none)',
     observed_document: observedDocument.trim() || '(none)',
-    extractions: renderSessionObservations(input.extractions),
+    extractions: renderExtractions(input.extractions),
   });
   const validRefs = new Set([
     ...(input.validRefs ?? []),
@@ -197,13 +197,13 @@ async function generateObserverText(params: {
   }
 }
 
-function renderSessionObservations(extractions: ObserverSessionObservationInput[]): string {
+function renderExtractions(extractions: ObserverExtractionInput[]): string {
   return extractions.map((extraction) => [
     `- ${extraction.id}`,
     extraction.status ? `  Status: ${extraction.status}` : '',
     extraction.cwd ? `  CWD: ${extraction.cwd}` : '',
     extraction.context?.trim() ? `  Context: ${extraction.context.trim()}` : '',
-    `  SessionObservation: ${extraction.text.trim()}`,
+    `  Extraction: ${extraction.text.trim()}`,
     extraction.turnRefs && extraction.turnRefs.length > 0 ? `  Source refs: ${extraction.turnRefs.join(', ')}` : '',
   ].filter(Boolean).join('\n')).join('\n\n');
 }
@@ -358,7 +358,7 @@ async function writeObserverTrace(event: {
 }
 
 export const __testing = {
-  renderSessionObservations,
+  renderExtractions,
   trimContent,
   getGlobalObservationSpec,
 };

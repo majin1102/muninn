@@ -8,14 +8,14 @@ import type {
   GatewayResult,
   ExtractSessionMemoryRequest,
   ExtractSessionMemoryResult,
-  SessionObservation,
+  Extraction,
   SessionMemoryThreadGatewayInput,
   ContextRef,
 } from '../extractor/types.js';
 import {
   parseSnapshotContent,
   parseSnapshotPatch,
-  renderSessionObservationBlock,
+  renderExtractionBlock,
   renderSnapshotContent,
 } from '../extractor/thread-memory.js';
 import {
@@ -170,7 +170,7 @@ export async function extractSessionMemory(
     renderNewTurns(input.turns),
   ].join('\n').trim();
   const basePrompt = renderPromptTemplate(template.userTemplate, { input_markdown: inputMarkdown });
-  const trace = createSessionObservationTrace(input);
+  const trace = createExtractionTrace(input);
   const database = resolveDatabaseName(deps.database);
 
   let lastError = 'extraction update returned no output';
@@ -194,10 +194,10 @@ export async function extractSessionMemory(
       ],
       tools: [getExtractionSpec()],
       toolHandlers: {
-        getExtraction: (args) => {
+        get_extraction: (args) => {
           getExtractionCallCount += 1;
           if (getExtractionCallCount > MAX_GET_EXTRACTION_CALLS) {
-            throw new Error(`getExtraction exceeded max calls: ${MAX_GET_EXTRACTION_CALLS}`);
+            throw new Error(`get_extraction exceeded max calls: ${MAX_GET_EXTRACTION_CALLS}`);
           }
           for (const sequence of normalizeSequences(args.sequences)) {
             if (snapshotView.visibleSequences.has(sequence)) {
@@ -223,7 +223,7 @@ export async function extractSessionMemory(
 
     try {
       const result = validateExtractSessionMemoryResult(raw, input, { readExtractionSequences });
-      await writeSessionObservationTrace({
+      await writeExtractionTrace({
         ...trace,
         database,
         attempt,
@@ -234,7 +234,7 @@ export async function extractSessionMemory(
       return result;
     } catch (error) {
       lastError = String(error);
-      await writeSessionObservationTrace({
+      await writeExtractionTrace({
         ...trace,
         database,
         attempt,
@@ -359,17 +359,17 @@ function validateExtractSessionMemoryResult(
   const currentTitle = input?.sessionMemoryContent.title ?? '';
   const patch = parseSnapshotPatch(result, validNewReferences);
   validateUpdatedSequencesWereRead(patch, options.readExtractionSequences);
-  const nextSessionObservations = mergePatchSessionObservations(current, patch, validNewReferences);
+  const nextExtractions = mergePatchExtractions(current, patch, validNewReferences);
   const summary = patch.summary ?? currentSummary;
   const title = patch.title ?? currentTitle;
   const snapshotContent = renderSnapshotContent(
     title || 'Session memory snapshot',
     summary || 'This session has no durable memory summary yet.',
-    nextSessionObservations,
+    nextExtractions,
   );
   const parsed = parseSnapshotContent(
     snapshotContent,
-    new Set(nextSessionObservations.flatMap((extraction) => extraction.references)),
+    new Set(nextExtractions.flatMap((extraction) => extraction.references)),
   );
 
   return {
@@ -392,7 +392,7 @@ function validateUpdatedSequencesWereRead(
   }
   for (const update of patch.updates) {
     if (!readExtractionSequences.has(update.sequence)) {
-      throw new Error(`sequence ${update.sequence} must be read with getExtraction before it can be updated`);
+      throw new Error(`sequence ${update.sequence} must be read with get_extraction before it can be updated`);
     }
   }
 }
@@ -427,11 +427,11 @@ function validSessionMemoryReferences(input: ExtractSessionMemoryRequest | undef
   return new Set(input?.turns.map((turn) => turn.turnId).filter(Boolean) ?? []);
 }
 
-function mergePatchSessionObservations(
-  current: SessionObservation[],
+function mergePatchExtractions(
+  current: Extraction[],
   patch: ReturnType<typeof parseSnapshotPatch>,
   validNewReferences: Set<string>,
-): SessionObservation[] {
+): Extraction[] {
   const next = current.map((extraction) => ({
       ...extraction,
       title: extraction.title ?? extraction.text,
@@ -630,7 +630,7 @@ function estimateTokens(value: string): number {
 
 function getExtractionSpec(): LlmTool {
   return {
-    name: 'getExtraction',
+    name: 'get_extraction',
     description: 'Get full extraction details by visible sequence when the compressed summary is not enough to safely update a memory unit.',
     parameters: {
       type: 'object',
@@ -663,7 +663,7 @@ function createGetExtractionTool(input: ExtractSessionMemoryRequest, visibleSequ
       }
       results.push({
         sequence,
-        content: renderSessionObservationBlock(extraction, { sequence, includeRefs: false }),
+        content: renderExtractionBlock(extraction, { sequence, includeRefs: false }),
       });
     }
     return { extractions: results };
@@ -680,7 +680,7 @@ function normalizeSequences(value: unknown): number[] {
     .filter((sequence, index, values) => values.indexOf(sequence) === index);
 }
 
-function createSessionObservationTrace(input: ExtractSessionMemoryRequest) {
+function createExtractionTrace(input: ExtractSessionMemoryRequest) {
   return {
     input: {
       sessionMemoryContent: input.sessionMemoryContent,
@@ -704,7 +704,7 @@ function renderSessionTurnText(turn: { prompt?: string | null; response?: string
   return parts.join('\n\n');
 }
 
-async function writeSessionObservationTrace(event: {
+async function writeExtractionTrace(event: {
   database?: string;
   input: unknown;
   attempt: number;
@@ -714,7 +714,7 @@ async function writeSessionObservationTrace(event: {
   finalText?: string;
   rawText?: string;
   validationError?: string;
-  extractions: SessionObservation[];
+  extractions: Extraction[];
 }): Promise<void> {
   const file = process.env.MUNINN_SESSION_MEMORY_TRACE_FILE
     ?? resolveDatabaseLogPath(event.database, 'extractor-trace.jsonl');

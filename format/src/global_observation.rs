@@ -15,7 +15,7 @@ use super::access::{
     describe_dataset, escape_predicate_string,
 };
 use super::codec::{global_observations_to_reader, record_batch_to_global_observations};
-use crate::session_observation::RecallMode;
+use crate::extraction::RecallMode;
 use crate::maintenance::{
     GLOBAL_OBSERVATION_SEARCH_TEXT_COLUMN, cleanup_dataset, compact_dataset, ensure_global_observation_fts_index,
     ensure_global_observation_id_index, ensure_semantic_vector_index, optimize_global_observation,
@@ -28,7 +28,7 @@ pub struct GlobalObservation {
     pub global_path: String,
     pub text: String,
     pub vector: Vec<f32>,
-    pub session_observation_refs: Vec<String>,
+    pub extraction_refs: Vec<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -422,7 +422,7 @@ mod tests {
                 global_path: "Caroline".to_string(),
                 text: "first".to_string(),
                 vector: vec![0.1, 0.2, 0.3, 0.4],
-                session_observation_refs: vec!["session_observation:a".to_string()],
+                extraction_refs: vec!["extraction:a".to_string()],
                 created_at: now,
                 updated_at: now,
             }])
@@ -435,7 +435,7 @@ mod tests {
                 global_path: "Caroline".to_string(),
                 text: "second".to_string(),
                 vector: vec![0.4, 0.3, 0.2, 0.1],
-                session_observation_refs: vec!["session_observation:b".to_string()],
+                extraction_refs: vec!["extraction:b".to_string()],
                 created_at: now,
                 updated_at: now,
             }])
@@ -447,7 +447,7 @@ mod tests {
                 global_path: "Melanie".to_string(),
                 text: "third".to_string(),
                 vector: vec![0.0, 0.0, 0.0, 1.0],
-                session_observation_refs: vec!["session_observation:c".to_string()],
+                extraction_refs: vec!["extraction:c".to_string()],
                 created_at: now,
                 updated_at: now,
             }])
@@ -457,7 +457,7 @@ mod tests {
         let rows = table.get(&["one".to_string()]).await.unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].text, "second");
-        assert_eq!(rows[0].session_observation_refs, vec!["session_observation:b"]);
+        assert_eq!(rows[0].extraction_refs, vec!["extraction:b"]);
 
         let rows = table
             .get(&["two".to_string(), "missing".to_string(), "one".to_string()])

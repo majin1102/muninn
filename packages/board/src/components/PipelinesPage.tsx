@@ -1,5 +1,5 @@
 import type { PipelineTask, PipelineTaskKind, PipelineTaskStatus, PipelineTasksResponse } from '@muninn/types';
-import { ChevronDown, Circle, Eye, X } from 'lucide-react';
+import { ChevronDown, Eye, Search, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { BoardClient } from '../lib/api.js';
 import {
@@ -15,11 +15,13 @@ type PipelinesPageProps = {
   client: BoardClient;
 };
 
+type PipelineFilterMenu = 'type' | 'status' | 'time';
+
 const TASK_FILTERS: Array<{ value: PipelineTaskFilter; label: string }> = [
   { value: 'all', label: 'Type: All' },
-  { value: 'session-observing', label: 'Session observing' },
-  { value: 'global-observing', label: 'Global observing' },
-  { value: 'wiki-compiling', label: 'Wiki compiling' },
+  { value: 'session-observing', label: 'Extraction' },
+  { value: 'global-observing', label: 'Observation' },
+  { value: 'wiki-compiling', label: 'Dreaming' },
 ];
 
 const STATUS_FILTERS: Array<{ value: PipelineStatusFilter; label: string }> = [
@@ -32,9 +34,11 @@ const STATUS_FILTERS: Array<{ value: PipelineStatusFilter; label: string }> = [
 ];
 
 const TIME_FILTERS: Array<{ value: PipelineTimeFilter; label: string }> = [
-  { value: 'last_24h', label: 'Last 24h' },
-  { value: 'last_7d', label: 'Last 7d' },
-  { value: 'all', label: 'All time' },
+  { value: 'all', label: 'All' },
+  { value: 'last_6h', label: 'Last 6 hours' },
+  { value: 'last_24h', label: 'Last 24 hours' },
+  { value: 'last_7d', label: 'Last 7 days' },
+  { value: 'last_30d', label: 'Last 30 days' },
 ];
 const PIPELINE_REFRESH_INTERVAL_MS = 10_000;
 
@@ -45,8 +49,19 @@ export function PipelinesPage({ client }: PipelinesPageProps) {
   const [taskFilter, setTaskFilter] = useState<PipelineTaskFilter>('all');
   const [statusFilter, setStatusFilter] = useState<PipelineStatusFilter>('all');
   const [timeFilter, setTimeFilter] = useState<PipelineTimeFilter>('last_24h');
+  const [customFromDate, setCustomFromDate] = useState(() => dateInputValue(daysAgo(1)));
+  const [customFromTime, setCustomFromTime] = useState('00:00');
+  const [customToDate, setCustomToDate] = useState(() => dateInputValue(new Date()));
+  const [customToTime, setCustomToTime] = useState('23:59');
+  const [draftTimeFilter, setDraftTimeFilter] = useState<PipelineTimeFilter>('last_24h');
+  const [draftCustomFromDate, setDraftCustomFromDate] = useState(() => dateInputValue(daysAgo(1)));
+  const [draftCustomFromTime, setDraftCustomFromTime] = useState('00:00');
+  const [draftCustomToDate, setDraftCustomToDate] = useState(() => dateInputValue(new Date()));
+  const [draftCustomToTime, setDraftCustomToTime] = useState('23:59');
   const [inspectedTaskId, setInspectedTaskId] = useState<string | null>(null);
+  const [openFilter, setOpenFilter] = useState<PipelineFilterMenu | null>(null);
   const requestSeqRef = useRef(0);
+  const toolbarRef = useRef<HTMLDivElement>(null);
 
   const loadPipelineTasks = useCallback(async (options: { silent: boolean }, isCancelled: () => boolean) => {
     const requestSeq = requestSeqRef.current + 1;
@@ -105,49 +120,138 @@ export function PipelinesPage({ client }: PipelinesPageProps) {
     };
   }, [loadPipelineTasks]);
 
+  useEffect(() => {
+    if (openFilter === null) {
+      return;
+    }
+
+    const closeOnOutsidePointer = (event: globalThis.PointerEvent) => {
+      if (event.target instanceof Node && toolbarRef.current?.contains(event.target)) {
+        return;
+      }
+      setOpenFilter(null);
+    };
+
+    document.addEventListener('pointerdown', closeOnOutsidePointer);
+    return () => document.removeEventListener('pointerdown', closeOnOutsidePointer);
+  }, [openFilter]);
+
   const tasks = response?.tasks ?? [];
+  const customTimeRange = useMemo(() => ({
+    from: parseDateTime(customFromDate, customFromTime),
+    to: parseDateTime(customToDate, customToTime),
+  }), [customFromDate, customFromTime, customToDate, customToTime]);
   const visibleTasks = useMemo(
-    () => filterPipelineTasks(tasks, taskFilter, statusFilter, timeFilter),
-    [statusFilter, taskFilter, tasks, timeFilter],
+    () => filterPipelineTasks(tasks, taskFilter, statusFilter, timeFilter, customTimeRange),
+    [customTimeRange, statusFilter, taskFilter, tasks, timeFilter],
   );
   const inspectedTask = tasks.find((task) => task.id === inspectedTaskId) ?? null;
   const fallbackTaskId = useMemo(() => defaultSelectedPipelineTaskId(visibleTasks), [visibleTasks]);
+
+  function syncDraftTimeFilter() {
+    setDraftTimeFilter(timeFilter);
+    if (timeFilter === 'custom') {
+      setDraftCustomFromDate(customFromDate);
+      setDraftCustomFromTime(customFromTime);
+      setDraftCustomToDate(customToDate);
+      setDraftCustomToTime(customToTime);
+      return;
+    }
+    const range = resolvePresetRange(timeFilter);
+    setDraftCustomFromDate(dateInputValue(range.from));
+    setDraftCustomFromTime(timeInputValue(range.from));
+    setDraftCustomToDate(dateInputValue(range.to));
+    setDraftCustomToTime(timeInputValue(range.to));
+  }
+
+  function selectDraftTimeFilter(value: PipelineTimeFilter) {
+    setDraftTimeFilter(value);
+    if (value !== 'custom') {
+      const range = resolvePresetRange(value);
+      setDraftCustomFromDate(dateInputValue(range.from));
+      setDraftCustomFromTime(timeInputValue(range.from));
+      setDraftCustomToDate(dateInputValue(range.to));
+      setDraftCustomToTime(timeInputValue(range.to));
+    }
+  }
+
+  function applyDraftTimeFilter() {
+    setTimeFilter(draftTimeFilter);
+    setCustomFromDate(draftCustomFromDate);
+    setCustomFromTime(draftCustomFromTime);
+    setCustomToDate(draftCustomToDate);
+    setCustomToTime(draftCustomToTime);
+    setOpenFilter(null);
+  }
 
   return (
     <section className={inspectedTask ? 'pipelines-page pipelines-page-inspecting' : 'pipelines-page'}>
       <div className="pipelines-content">
         <header className="pipelines-header">
           <div>
-            <h1>Pipelines</h1>
-            <p>Observing, Dreaming, Wiki compiling..</p>
+            <h1>
+              Pipelines
+            </h1>
+            <div className="pipelines-subtitle-row">
+              <p>Memory pipelines including session extracting, observing and dreaming...</p>
+              <PipelineUpdatedAt updatedAt={response?.summary.updatedAt ?? null} />
+            </div>
           </div>
-          <PipelineSummary summary={response?.summary ?? null} />
         </header>
 
-        <div className="pipelines-toolbar">
+        <div ref={toolbarRef} className="pipelines-toolbar">
           <label className="pipeline-search">
-            <Circle aria-hidden="true" />
-            <input type="search" placeholder="Search memories" readOnly />
+            <Search aria-hidden="true" />
+            <input type="search" placeholder="Search sessions, conversations..." readOnly />
           </label>
-          <PipelineSelect<PipelineTaskFilter>
+          <PipelineFilter<PipelineTaskFilter>
+            id="type"
             label="Type"
             value={taskFilter}
             options={TASK_FILTERS}
-            onChange={setTaskFilter}
+            open={openFilter === 'type'}
+            onToggle={() => setOpenFilter(openFilter === 'type' ? null : 'type')}
+            onChange={(value) => {
+              setTaskFilter(value);
+              setOpenFilter(null);
+            }}
           />
-          <PipelineSelect<PipelineStatusFilter>
+          <PipelineFilter<PipelineStatusFilter>
+            id="status"
             label="Status"
             value={statusFilter}
             options={STATUS_FILTERS}
-            onChange={setStatusFilter}
+            open={openFilter === 'status'}
+            onToggle={() => setOpenFilter(openFilter === 'status' ? null : 'status')}
+            onChange={(value) => {
+              setStatusFilter(value);
+              setOpenFilter(null);
+            }}
           />
-          <PipelineSelect<PipelineTimeFilter>
-            label="Time"
+          <PipelineTimeFilterControl
             value={timeFilter}
-            options={TIME_FILTERS}
-            onChange={setTimeFilter}
+            open={openFilter === 'time'}
+            draftValue={draftTimeFilter}
+            draftFromDate={draftCustomFromDate}
+            draftFromTime={draftCustomFromTime}
+            draftToDate={draftCustomToDate}
+            draftToTime={draftCustomToTime}
+            onToggle={() => {
+              if (openFilter !== 'time') {
+                syncDraftTimeFilter();
+              }
+              setOpenFilter(openFilter === 'time' ? null : 'time');
+            }}
+            onSelectDraft={selectDraftTimeFilter}
+            onFromDateChange={setDraftCustomFromDate}
+            onFromTimeChange={setDraftCustomFromTime}
+            onToDateChange={setDraftCustomToDate}
+            onToTimeChange={setDraftCustomToTime}
+            onApply={applyDraftTimeFilter}
           />
         </div>
+
+        <PipelineSummary tasks={visibleTasks} />
 
         {loading ? <div className="pipeline-empty">Loading pipelines...</div> : null}
         {error ? <div className="pipeline-empty pipeline-empty-error">{error}</div> : null}
@@ -174,13 +278,30 @@ export function PipelinesPage({ client }: PipelinesPageProps) {
   );
 }
 
-function PipelineSummary({ summary }: { summary: PipelineTasksResponse['summary'] | null }) {
+function PipelineUpdatedAt({ updatedAt }: { updatedAt: PipelineTasksResponse['summary']['updatedAt'] }) {
+  return <span className="pipeline-updated-at">updated {relativeTime(updatedAt)}</span>;
+}
+
+function PipelineSummary({ tasks }: { tasks: PipelineTask[] }) {
+  const metrics = useMemo(() => summarizeVisiblePipelineTasks(tasks), [tasks]);
   return (
     <div className="pipeline-summary" aria-label="Pipeline summary">
-      <SummaryItem status="running" label={`${summary?.running ?? 0} running`} />
-      <SummaryItem status="queued" label={`${summary?.queued ?? 0} queued`} />
-      <SummaryItem status="failed" label={`${summary?.failed ?? 0} failed`} />
-      <span>updated {relativeTime(summary?.updatedAt ?? null)}</span>
+      <section className="pipeline-summary-section pipeline-summary-section-state" aria-label="Pipeline state">
+        <h2>State</h2>
+        <div className="pipeline-summary-state-grid">
+          <SummaryItem status="running" label={`Running ${metrics.running}`} />
+          <SummaryItem status="queued" label={`Queued ${metrics.queued}`} />
+          <SummaryItem status="failed" label={`Failed ${metrics.failed}`} />
+          <SummaryItem status="done" label={`Done ${metrics.done}`} />
+        </div>
+      </section>
+      <section className="pipeline-summary-section pipeline-summary-section-usage" aria-label="Pipeline usage">
+        <h2>Usage</h2>
+        <div className="pipeline-summary-usage-grid">
+          <UsageItem label="Input" metric={metrics.input} />
+          <UsageItem label="Output" metric={metrics.output} />
+        </div>
+      </section>
     </div>
   );
 }
@@ -194,22 +315,134 @@ function SummaryItem({ status, label }: { status: PipelineTaskStatus; label: str
   );
 }
 
-function PipelineSelect<T extends string>(props: {
+function UsageItem({ label, metric }: { label: string; metric: PipelineTask['input'] }) {
+  return (
+    <span className="pipeline-summary-usage-item">
+      <strong>{label}</strong>
+      <span>{formatBytes(metric.bytes)}</span>
+      <span>{formatTokens(metric.tokens)}</span>
+    </span>
+  );
+}
+
+function PipelineFilter<T extends string>(props: {
+  id: PipelineFilterMenu;
   label: string;
   value: T;
   options: Array<{ value: T; label: string }>;
+  open: boolean;
+  onToggle(): void;
   onChange(value: T): void;
 }) {
+  const selected = props.options.find((option) => option.value === props.value) ?? props.options[0];
   return (
-    <label className="pipeline-select">
-      <span className="sr-only">{props.label}</span>
-      <select value={props.value} onChange={(event) => props.onChange(event.target.value as T)}>
-        {props.options.map((option) => (
-          <option key={option.value} value={option.value}>{option.label}</option>
-        ))}
-      </select>
-      <ChevronDown aria-hidden="true" />
-    </label>
+    <div className={`toolbar-popover pipeline-filter-popover pipeline-filter-popover-${props.id}`}>
+      <button
+        className="session-filter pipeline-filter-trigger"
+        type="button"
+        aria-haspopup="menu"
+        aria-expanded={props.open}
+        onClick={props.onToggle}
+      >
+        <span>{selected?.label ?? props.label}</span>
+        <ChevronDown aria-hidden="true" />
+      </button>
+      {props.open ? (
+        <div className="session-popover pipeline-filter-menu" role="menu">
+          <div className="session-popover-title">{props.label}</div>
+          <div className="session-popover-section">
+            {props.options.map((option) => (
+              <button
+                key={option.value}
+                className={option.value === props.value ? 'session-menu-item session-menu-item-active' : 'session-menu-item'}
+                type="button"
+                role="menuitemradio"
+                aria-checked={option.value === props.value}
+                onClick={() => props.onChange(option.value)}
+              >
+                <span className={option.value === props.value ? 'menu-radio menu-radio-active' : 'menu-radio'} />
+                <span>{option.label}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function PipelineTimeFilterControl(props: {
+  value: PipelineTimeFilter;
+  open: boolean;
+  draftValue: PipelineTimeFilter;
+  draftFromDate: string;
+  draftFromTime: string;
+  draftToDate: string;
+  draftToTime: string;
+  onToggle(): void;
+  onSelectDraft(value: PipelineTimeFilter): void;
+  onFromDateChange(value: string): void;
+  onFromTimeChange(value: string): void;
+  onToDateChange(value: string): void;
+  onToTimeChange(value: string): void;
+  onApply(): void;
+}) {
+  return (
+    <div className="toolbar-popover pipeline-filter-popover pipeline-filter-popover-time">
+      <button
+        className="session-filter session-time-filter pipeline-filter-trigger"
+        type="button"
+        aria-haspopup="menu"
+        aria-expanded={props.open}
+        onClick={props.onToggle}
+      >
+        <span>{pipelineTimeTriggerLabel(props.value)}</span>
+        <ChevronDown aria-hidden="true" />
+      </button>
+      {props.open ? (
+        <div className="session-popover session-time-popover pipeline-time-popover">
+          <div className="time-filter-heading">Time Range</div>
+          <div className="time-filter-card">
+            <div className="session-popover-section">
+              {TIME_FILTERS.map((preset) => (
+                <button
+                  key={preset.value}
+                  className={props.draftValue === preset.value ? 'session-menu-item session-menu-item-active' : 'session-menu-item'}
+                  type="button"
+                  onClick={() => props.onSelectDraft(preset.value)}
+                >
+                  <span className={props.draftValue === preset.value ? 'menu-radio menu-radio-active' : 'menu-radio'} />
+                  <span>{preset.label}</span>
+                </button>
+              ))}
+              <button
+                className={props.draftValue === 'custom' ? 'session-menu-item session-menu-item-active' : 'session-menu-item'}
+                type="button"
+                onClick={() => props.onSelectDraft('custom')}
+              >
+                <span className={props.draftValue === 'custom' ? 'menu-radio menu-radio-active' : 'menu-radio'} />
+                <span>Custom</span>
+              </button>
+            </div>
+            <div className={props.draftValue === 'custom' ? 'custom-time' : 'custom-time custom-time-disabled'}>
+              <label className="time-input-row">
+                <span>From</span>
+                <input disabled={props.draftValue !== 'custom'} type="date" value={props.draftFromDate} onChange={(event) => props.onFromDateChange(event.target.value)} />
+                <input disabled={props.draftValue !== 'custom'} type="time" value={props.draftFromTime} onChange={(event) => props.onFromTimeChange(event.target.value)} />
+              </label>
+              <label className="time-input-row">
+                <span>To</span>
+                <input disabled={props.draftValue !== 'custom'} type="date" value={props.draftToDate} onChange={(event) => props.onToDateChange(event.target.value)} />
+                <input disabled={props.draftValue !== 'custom'} type="time" value={props.draftToTime} onChange={(event) => props.onToTimeChange(event.target.value)} />
+              </label>
+            </div>
+          </div>
+          <div className="custom-time-actions">
+            <button type="button" className="time-action-button time-action-button-primary" onClick={props.onApply}>Apply</button>
+          </div>
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -219,7 +452,18 @@ function PipelineCard({ task, selected, onInspect }: {
   onInspect(): void;
 }) {
   return (
-    <article className={selected ? `pipeline-card pipeline-card-${task.status} pipeline-card-selected` : `pipeline-card pipeline-card-${task.status}`}>
+    <article
+      className={selected ? `pipeline-card pipeline-card-${task.status} pipeline-card-selected` : `pipeline-card pipeline-card-${task.status}`}
+      role="button"
+      tabIndex={0}
+      onClick={onInspect}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          onInspect();
+        }
+      }}
+    >
       <div className="pipeline-card-top">
         <span className={`pipeline-dot pipeline-dot-${task.status}`} />
         <div className="pipeline-card-title">
@@ -227,7 +471,15 @@ function PipelineCard({ task, selected, onInspect }: {
           <span>{task.target}</span>
         </div>
         <span className={`pipeline-status-text pipeline-status-text-${task.status}`}>{statusLabel(task.status)}</span>
-        <button className="pipeline-inspect-button" type="button" aria-label={`Inspect ${task.title}`} onClick={onInspect}>
+        <button
+          className="pipeline-inspect-button"
+          type="button"
+          aria-label={`Inspect ${task.title}`}
+          onClick={(event) => {
+            event.stopPropagation();
+            onInspect();
+          }}
+        >
           <Eye />
         </button>
       </div>
@@ -367,6 +619,91 @@ function capitalizeSentence(value: string): string {
 
 function toolCallItems(calls: PipelineTask['toolCalls']): string[] {
   return calls.map((call) => `${call.name} x ${call.count}`);
+}
+
+function pipelineTimeTriggerLabel(value: PipelineTimeFilter): string {
+  if (value === 'all') {
+    return 'Time: All';
+  }
+  if (value === 'custom') {
+    return 'Custom';
+  }
+  return TIME_FILTERS.find((item) => item.value === value)?.label ?? 'Time';
+}
+
+function resolvePresetRange(value: PipelineTimeFilter): { from: Date; to: Date } {
+  const to = new Date();
+  if (value === 'all' || value === 'custom') {
+    return {
+      from: daysAgo(1),
+      to,
+    };
+  }
+  const hours = value === 'last_6h'
+    ? 6
+    : value === 'last_24h'
+      ? 24
+      : value === 'last_7d'
+        ? 24 * 7
+        : 24 * 30;
+  return {
+    from: new Date(to.getTime() - hours * 60 * 60 * 1000),
+    to,
+  };
+}
+
+function parseDateTime(date: string, time: string): Date | null {
+  const value = new Date(`${date}T${time || '00:00'}:00`);
+  return Number.isFinite(value.getTime()) ? value : null;
+}
+
+function daysAgo(days: number): Date {
+  const date = new Date();
+  date.setDate(date.getDate() - days);
+  return date;
+}
+
+function dateInputValue(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function timeInputValue(date: Date): string {
+  const hour = String(date.getHours()).padStart(2, '0');
+  const minute = String(date.getMinutes()).padStart(2, '0');
+  return `${hour}:${minute}`;
+}
+
+function summarizeVisiblePipelineTasks(tasks: PipelineTask[]): {
+  running: number;
+  queued: number;
+  failed: number;
+  done: number;
+  input: PipelineTask['input'];
+  output: PipelineTask['input'];
+} {
+  const summary = {
+    running: 0,
+    queued: 0,
+    failed: 0,
+    done: 0,
+    input: { bytes: 0, tokens: 0 },
+    output: { bytes: 0, tokens: 0 },
+  };
+
+  for (const task of tasks) {
+    summary[task.status] += 1;
+    summary.input.bytes += task.input.bytes;
+    summary.input.tokens += task.input.tokens;
+    if (task.output !== undefined) {
+      summary.output.bytes += task.output.bytes;
+      summary.output.tokens += task.output.tokens;
+    }
+  }
+
+  return summary;
 }
 
 function formatBytes(bytes: number): string {

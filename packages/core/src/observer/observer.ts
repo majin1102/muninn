@@ -5,7 +5,7 @@ import { writeMuninnLog } from '../logging.js';
 import type { NativeTables } from '../native.js';
 import { runObserver } from './runner.js';
 import { ackBucket, enqueueChanges, queueStats, readyBucket, type ObserveQueue } from './queue.js';
-import type { QueuedSessionObservationChange } from '../checkpoint.js';
+import type { QueuedExtractionChange } from '../checkpoint.js';
 
 const BASE_RETRY_DELAY_MS = 500;
 const MAX_RETRY_DELAY_MS = 5_000;
@@ -64,27 +64,27 @@ export class Observer {
     this.wake();
   }
 
-  enqueue(changes: QueuedSessionObservationChange[]): void {
+  enqueue(changes: QueuedExtractionChange[]): void {
     this.observeQueue = enqueueChanges(this.observeQueue, changes);
     this.lastError = null;
     this.wake();
   }
 
   async watermark(): Promise<MemoryWatermark> {
-    const pendingSessionObservationIds = pendingQueueSessionObservationIds(this.observeQueue);
+    const pendingExtractionIds = pendingQueueExtractionIds(this.observeQueue);
     const phase = this.lastError
       ? 'error'
       : this.drainRequested
         ? 'draining'
         : this.running
           ? 'running'
-          : pendingSessionObservationIds.length > 0
+          : pendingExtractionIds.length > 0
             ? 'pending'
             : 'idle';
     return {
       pending: {
         turns: [],
-        extractions: pendingSessionObservationIds,
+        extractions: pendingExtractionIds,
       },
       phases: {
         extractor: 'idle',
@@ -172,7 +172,7 @@ export class Observer {
           client: this.client,
           observerName: this.name,
           cwd: batch.cwd,
-          sessionObservationChanges: batch.sessionObservationChanges,
+          extractionChanges: batch.extractionChanges,
           signal: this.shutdownController.signal,
           database: this.database,
         });
@@ -181,9 +181,9 @@ export class Observer {
       this.observeQueue = ackBucket(
         this.observeQueue,
         batch.key,
-        batch.sessionObservationChanges.map((change) => change.sessionObservation.id),
+        batch.extractionChanges.map((change) => change.extraction.id),
       );
-      if (finalize && pendingQueueSessionObservationIds(this.observeQueue).length === 0) {
+      if (finalize && pendingQueueExtractionIds(this.observeQueue).length === 0) {
         this.drainRequested = false;
       }
     } finally {
@@ -220,16 +220,16 @@ export class Observer {
 
 }
 
-function pendingQueueSessionObservationIds(queue: ObserveQueue): string[] {
+function pendingQueueExtractionIds(queue: ObserveQueue): string[] {
   const seen = new Set<string>();
   const ids: string[] = [];
   for (const bucket of queue.cwdBuckets) {
-    for (const change of bucket.sessionObservationChanges) {
-      if (seen.has(change.sessionObservation.id)) {
+    for (const change of bucket.extractionChanges) {
+      if (seen.has(change.extraction.id)) {
         continue;
       }
-      seen.add(change.sessionObservation.id);
-      ids.push(change.sessionObservation.id);
+      seen.add(change.extraction.id);
+      ids.push(change.extraction.id);
     }
   }
   return ids;

@@ -101,7 +101,7 @@ pub fn global_observation_context_schema() -> Schema {
     ])
 }
 
-pub fn session_observation_schema(dimensions: usize) -> Schema {
+pub fn extraction_schema(dimensions: usize) -> Schema {
     let mut id_metadata = HashMap::new();
     id_metadata.insert(
         "lance-schema:unenforced-primary-key".to_string(),
@@ -173,7 +173,7 @@ pub fn global_observation_schema(dimensions: usize) -> Schema {
             false,
         ),
         Field::new(
-            "session_observation_refs",
+            "extraction_refs",
             DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
             false,
         ),
@@ -195,8 +195,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn session_observation_schema_has_refs_and_no_memory_id() {
-        let schema = session_observation_schema(3);
+    fn extraction_schema_has_refs_and_no_memory_id() {
+        let schema = extraction_schema(3);
         assert!(schema.field_with_name("id").is_ok());
         assert!(schema.field_with_name("title").is_ok());
         assert!(schema.field_with_name("summary").is_ok());
@@ -247,8 +247,7 @@ mod tests {
         assert!(schema.field_with_name("text").is_ok());
         assert!(schema.field_with_name("search_text").is_err());
         assert!(schema.field_with_name("vector").is_ok());
-        assert!(schema.field_with_name("session_observation_refs").is_ok());
-        assert!(schema.field_with_name("extraction_refs").is_err());
+        assert!(schema.field_with_name("extraction_refs").is_ok());
         assert!(schema.field_with_name("created_at").is_ok());
         assert!(schema.field_with_name("updated_at").is_ok());
         assert!(schema.field_with_name("anchor").is_err());

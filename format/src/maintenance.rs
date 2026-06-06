@@ -10,8 +10,8 @@ use lance_index::{DatasetIndexExt, IndexType};
 use lance_linalg::distance::MetricType;
 
 pub(crate) const SEMANTIC_VECTOR_INDEX_NAME: &str = "semantic_vector_idx";
-pub(crate) const SESSION_OBSERVATION_FTS_INDEX_NAME: &str = "session_observation_fts_idx";
-pub(crate) const SESSION_OBSERVATION_CONTENT_COLUMN: &str = "content";
+pub(crate) const EXTRACTION_FTS_INDEX_NAME: &str = "extraction_fts_idx";
+pub(crate) const EXTRACTION_CONTENT_COLUMN: &str = "content";
 pub(crate) const GLOBAL_OBSERVATION_FTS_INDEX_NAME: &str = "global_observation_fts_idx";
 pub(crate) const GLOBAL_OBSERVATION_SEARCH_TEXT_COLUMN: &str = "text";
 
@@ -58,8 +58,8 @@ pub(crate) async fn ensure_semantic_vector_index(
     Ok(true)
 }
 
-pub(crate) async fn ensure_session_observation_fts_index(dataset: &mut Dataset) -> Result<bool> {
-    if has_index_named(dataset, SESSION_OBSERVATION_FTS_INDEX_NAME).await? {
+pub(crate) async fn ensure_extraction_fts_index(dataset: &mut Dataset) -> Result<bool> {
+    if has_index_named(dataset, EXTRACTION_FTS_INDEX_NAME).await? {
         return Ok(false);
     }
 
@@ -69,11 +69,11 @@ pub(crate) async fn ensure_session_observation_fts_index(dataset: &mut Dataset) 
     }
     dataset
         .create_index_builder(
-            &[SESSION_OBSERVATION_CONTENT_COLUMN],
+            &[EXTRACTION_CONTENT_COLUMN],
             IndexType::Inverted,
             &InvertedIndexParams::default(),
         )
-        .name(SESSION_OBSERVATION_FTS_INDEX_NAME.to_string())
+        .name(EXTRACTION_FTS_INDEX_NAME.to_string())
         .await?;
     Ok(true)
 }
@@ -98,7 +98,7 @@ pub(crate) async fn ensure_global_observation_fts_index(dataset: &mut Dataset) -
     Ok(true)
 }
 
-pub(crate) async fn ensure_session_observation_id_index(dataset: &mut Dataset) -> Result<bool> {
+pub(crate) async fn ensure_extraction_id_index(dataset: &mut Dataset) -> Result<bool> {
     let _ = dataset;
     Ok(false)
 }
@@ -113,12 +113,12 @@ pub(crate) async fn ensure_global_observation_context_id_index(dataset: &mut Dat
     Ok(false)
 }
 
-pub(crate) async fn optimize_session_observation(
+pub(crate) async fn optimize_extraction(
     dataset: &mut Dataset,
     merge_count: usize,
 ) -> Result<bool> {
     let mut names = Vec::new();
-    for name in [SEMANTIC_VECTOR_INDEX_NAME, SESSION_OBSERVATION_FTS_INDEX_NAME] {
+    for name in [SEMANTIC_VECTOR_INDEX_NAME, EXTRACTION_FTS_INDEX_NAME] {
         if has_index_named(dataset, name).await? {
             names.push(name.to_string());
         }
@@ -176,13 +176,13 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        SEMANTIC_VECTOR_INDEX_NAME, cleanup_dataset, compact_dataset, ensure_session_observation_id_index,
+        SEMANTIC_VECTOR_INDEX_NAME, cleanup_dataset, compact_dataset, ensure_extraction_id_index,
         ensure_global_observation_context_id_index, ensure_global_observation_id_index,
-        ensure_semantic_vector_index, optimize_session_observation,
+        ensure_semantic_vector_index, optimize_extraction,
     };
     use crate::config::{CONFIG_FILE_NAME, llm_test_env_guard};
     use crate::{
-        SessionObservation, SessionObservationTable, MemoryId, MemoryLayer, GlobalObservation, GlobalObservationContext,
+        Extraction, ExtractionTable, MemoryId, MemoryLayer, GlobalObservation, GlobalObservationContext,
         GlobalObservationContextTable, GlobalObservationTable, TableOptions, Turn, TurnTable,
     };
 
@@ -229,9 +229,9 @@ mod tests {
         }
         write_watchdog_config(&dir);
 
-        let table = SessionObservationTable::new(test_table_options());
+        let table = ExtractionTable::new(test_table_options());
         table
-            .upsert(vec![SessionObservation {
+            .upsert(vec![Extraction {
                 id: "row-1".to_string(),
                 title: "alpha".to_string(),
                 summary: "alpha".to_string(),
@@ -270,10 +270,10 @@ mod tests {
         write_watchdog_config(&dir);
         let now = chrono::Utc::now();
 
-        let session_observation_table = SessionObservationTable::new(test_table_options());
-        session_observation_table
-            .upsert(vec![SessionObservation {
-                id: "session-observation-1".to_string(),
+        let extraction_table = ExtractionTable::new(test_table_options());
+        extraction_table
+            .upsert(vec![Extraction {
+                id: "extraction-1".to_string(),
                 title: "alpha".to_string(),
                 summary: "alpha".to_string(),
                 content: "## Title\n\nalpha\n\n## Summary\n\nalpha\n\n## Content\n\n".to_string(),
@@ -286,8 +286,8 @@ mod tests {
             }])
             .await
             .unwrap();
-        let mut session_global_observation_dataset = session_observation_table.try_open_dataset().await.unwrap().unwrap();
-        assert!(!ensure_session_observation_id_index(&mut session_global_observation_dataset).await.unwrap());
+        let mut session_global_observation_dataset = extraction_table.try_open_dataset().await.unwrap().unwrap();
+        assert!(!ensure_extraction_id_index(&mut session_global_observation_dataset).await.unwrap());
 
         let global_observation_table = GlobalObservationTable::new(test_table_options());
         global_observation_table
@@ -296,7 +296,7 @@ mod tests {
                 global_path: "Alice / Plan".to_string(),
                 text: "Alice has a plan.".to_string(),
                 vector: vec![0.1, 0.2, 0.3, 0.4],
-                session_observation_refs: vec!["session-observation-1".to_string()],
+                extraction_refs: vec!["extraction-1".to_string()],
                 created_at: now,
                 updated_at: now,
             }])
@@ -313,7 +313,7 @@ mod tests {
                 parent_id: None,
                 position: 0,
                 content: "Alice planning context.".to_string(),
-                source_refs: vec!["session_observation:1".to_string()],
+                source_refs: vec!["extraction:1".to_string()],
                 expand_refs: vec![],
                 created_at: now,
                 updated_at: now,
@@ -344,7 +344,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn optimize_session_observation_noops_without_index() {
+    async fn optimize_extraction_noops_without_index() {
         let _guard = llm_test_env_guard();
         let dir = tempfile::tempdir().unwrap();
         let home = dir.path().join("muninn");
@@ -360,9 +360,9 @@ mod tests {
             .unwrap();
         assert!(!compacted);
 
-        let table = SessionObservationTable::new(test_table_options());
+        let table = ExtractionTable::new(test_table_options());
         table
-            .upsert(vec![SessionObservation {
+            .upsert(vec![Extraction {
                 id: "row-1".to_string(),
                 title: "alpha".to_string(),
                 summary: "alpha".to_string(),
@@ -377,7 +377,7 @@ mod tests {
             .await
             .unwrap();
         let mut dataset = table.try_open_dataset().await.unwrap().unwrap();
-        let optimized = optimize_session_observation(&mut dataset, 2).await.unwrap();
+        let optimized = optimize_extraction(&mut dataset, 2).await.unwrap();
         assert!(!optimized);
     }
 

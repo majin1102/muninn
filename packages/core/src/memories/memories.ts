@@ -1,11 +1,11 @@
 import type { NativeTables } from '../native.js';
 import type { ListModeInput, SessionSnapshot, RecallHit, RenderedMemory, Turn } from '../client.js';
 import { getSessionSnapshot, listSessionSnapshots, timelineSessionSnapshots } from './sessions.js';
-import { getSessionObservation } from './session-observations.js';
+import { getExtraction } from './extractions.js';
 import { getGlobalObservation } from './global-observations.js';
 import { recallMemories } from './recall.js';
 import type { RecallMode } from './recall.js';
-import { renderSessionObservation, renderGlobalObservation, renderSessionSnapshot, renderTurn } from './rendered.js';
+import { renderExtraction, renderGlobalObservation, renderSessionSnapshot, renderTurn } from './rendered.js';
 import { getTurn, listTurns, timelineTurns } from './turns.js';
 
 export class Memories {
@@ -35,9 +35,9 @@ export class Memories {
   }
 
   async get(memoryId: string): Promise<RenderedMemory | null> {
-    if (memoryId.startsWith('session_observation:')) {
-      const observation = await getSessionObservation(this.client, memoryId);
-      return observation ? renderSessionObservation(observation) : null;
+    if (memoryId.startsWith('extraction:')) {
+      const observation = await getExtraction(this.client, memoryId);
+      return observation ? renderExtraction(observation) : null;
     }
     if (memoryId.startsWith('global_observation:')) {
       const observation = await getGlobalObservation(this.client, memoryId);

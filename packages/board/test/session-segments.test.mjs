@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
-  buildSessionObservationsForTests,
+  buildExtractionsForTests,
   buildSessionSegmentsForTests,
   buildSessionTurnPageForTests,
   resolveSessionTreeNextOffsetForTests,
@@ -104,7 +104,7 @@ test('builds snapshot observations with markdown and refs', () => {
     'Write in the session language.',
   ].join('\n');
 
-  assert.deepEqual(buildSessionObservationsForTests(snapshot, turns), [
+  assert.deepEqual(buildExtractionsForTests(snapshot, turns), [
     {
       memoryId: 'turn:1~observation:0',
       title: 'Prompt budget rules',

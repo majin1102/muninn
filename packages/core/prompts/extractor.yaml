@@ -11,14 +11,14 @@ system: |
   - Current snapshot title, summary, and existing extraction titles/summaries.
   - Existing extractions are marked by `<!-- sequence: N -->`.
   - Current batch turns in the Input Markdown.
-  - The `getExtraction` tool for reading full extraction details by sequence.
+  - The `get_extraction` tool for reading full extraction details by sequence.
 
   Tool use
   - Compare current batch turns with existing extraction titles and summaries before creating new memory units.
-  - If an existing extraction may cover the same topic, call `getExtraction({ sequences })` and update that extraction instead of creating a duplicate.
-  - Do not split related content into a new extraction just to avoid calling `getExtraction`.
+  - If an existing extraction may cover the same topic, call `get_extraction({ sequences })` and update that extraction instead of creating a duplicate.
+  - Do not split related content into a new extraction just to avoid calling `get_extraction`.
   - Split only when the existing unit would exceed budget and the new content can stand as an independent durable topic.
-  - You may call `getExtraction` at most 5 times.
+  - You may call `get_extraction` at most 5 times.
 
   Memory unit rules
   - A memory unit is one stored entry that organizes related session content for future recall.
@@ -57,6 +57,18 @@ system: |
   - Prefer Markdown bullets, short sections, concrete examples, file names, schema fields, constraints, decisions, and open questions.
   - Avoid long narrative paragraphs.
 
+  Inline citations
+  - Use inline turn citations in `### Content` when a detail is better referenced than copied.
+  - Citation syntax: `@[turn:<turnId>]`.
+  - Use citations mainly when:
+    - The turn's original meaning is clear on its own and does not need to be merged with other turns.
+    - Use a citation instead of copying when restating the detail would take more than about 200 tokens.
+  - When a long turn needs context from surrounding turns, first summarize and organize the linked idea in Content, then cite the supporting turn.
+  - Do not add citations to broad summaries or topic labels; citations should support specific details in Content.
+  - Use citations sparingly. Add a citation only when it replaces copied detail or identifies the source of a specific factual claim.
+  - Do not cite the same turn more than 2 times within one extraction.
+  - Prefer one citation at the end of a bullet or paragraph, not after every sentence.
+
   Example input
   ----------------
   ## Current Snapshot
@@ -78,10 +90,10 @@ system: |
   ### turn:102
 
   Prompt:
-  CSV 默认格式保留，不过导出文件名还要加上环境名，比如 staging 或 production。
+  CSV 默认格式保留，不过导出文件名还要加上环境名，比如 staging 或 production。历史导出任务还有一组较长的迁移兼容和审计细节，按前面讨论的约束处理即可。
 
   Response:
-  可以，文件名格式改成 project-env-YYYYMMDD.csv，同时保留 CSV 作为默认导出格式。
+  可以，文件名格式改成 project-env-YYYYMMDD.csv，同时保留 CSV 作为默认导出格式。历史任务兼容和审计细节作为迁移约束保留，不需要全部塞进摘要。
 
   Example output
   -----------------
@@ -106,6 +118,7 @@ system: |
 
   - 文件名格式为 `project-env-YYYYMMDD.csv`。
   - 环境名示例包括 `staging` 和 `production`。
+  - 历史任务兼容和审计细节按原始讨论保留为迁移约束。@[turn:102]
 
   ----
 

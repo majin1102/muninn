@@ -10,29 +10,29 @@ import { observeCwdScope } from '../dist/llm/observing.js';
 const { getObserverWorkStatus, runObserver } = __testing;
 const CWD = '/Users/Nathan/workspace/muninn';
 
-test('observe queue groups by cwd and replaces duplicate session observation rows', async () => {
+test('observe queue groups by cwd and replaces duplicate extraction rows', async () => {
   const { enqueueChanges } = await import('../dist/observer/queue.js');
-  const first = sessionObservationRow('so-1', { summary: 'old text' });
-  const latest = sessionObservationRow('so-1', { summary: 'latest text' });
-  const queue = enqueueChanges({ cwdBuckets: [] }, [{ type: 'upsert', sessionObservation: first }]);
-  const next = enqueueChanges(queue, [{ type: 'upsert', sessionObservation: latest }]);
+  const first = extractionRow('so-1', { summary: 'old text' });
+  const latest = extractionRow('so-1', { summary: 'latest text' });
+  const queue = enqueueChanges({ cwdBuckets: [] }, [{ type: 'upsert', extraction: first }]);
+  const next = enqueueChanges(queue, [{ type: 'upsert', extraction: latest }]);
 
   assert.equal(next.cwdBuckets.length, 1);
   assert.equal(next.cwdBuckets[0].key, CWD);
-  assert.equal(next.cwdBuckets[0].sessionObservationChanges.length, 1);
-  assert.equal(next.cwdBuckets[0].sessionObservationChanges[0].sessionObservation.summary, 'latest text');
+  assert.equal(next.cwdBuckets[0].extractionChanges.length, 1);
+  assert.equal(next.cwdBuckets[0].extractionChanges[0].extraction.summary, 'latest text');
 });
 
-test('observe queue keeps old cwd bucket when a session observation moves cwd', async () => {
+test('observe queue keeps old cwd bucket when a extraction moves cwd', async () => {
   const { enqueueChanges } = await import('../dist/observer/queue.js');
-  const oldRow = sessionObservationRow('so-1', { cwd: '/repo/old', summary: 'old' });
-  const newRow = sessionObservationRow('so-1', { cwd: '/repo/new', summary: 'new' });
-  const queue = enqueueChanges({ cwdBuckets: [] }, [{ type: 'upsert', sessionObservation: oldRow }]);
-  const next = enqueueChanges(queue, [{ type: 'upsert', sessionObservation: newRow }]);
+  const oldRow = extractionRow('so-1', { cwd: '/repo/old', summary: 'old' });
+  const newRow = extractionRow('so-1', { cwd: '/repo/new', summary: 'new' });
+  const queue = enqueueChanges({ cwdBuckets: [] }, [{ type: 'upsert', extraction: oldRow }]);
+  const next = enqueueChanges(queue, [{ type: 'upsert', extraction: newRow }]);
 
   assert.deepEqual(next.cwdBuckets.map((bucket) => bucket.key), ['/repo/old', '/repo/new']);
-  assert.equal(next.cwdBuckets[0].sessionObservationChanges[0].sessionObservation.summary, 'new');
-  assert.equal(next.cwdBuckets[1].sessionObservationChanges[0].sessionObservation.summary, 'new');
+  assert.equal(next.cwdBuckets[0].extractionChanges[0].extraction.summary, 'new');
+  assert.equal(next.cwdBuckets[1].extractionChanges[0].extraction.summary, 'new');
 });
 
 test('observe queue batches and acks one cwd bucket', async () => {
@@ -41,20 +41,20 @@ test('observe queue batches and acks one cwd bucket', async () => {
   for (let index = 0; index < 9; index += 1) {
     queue = enqueueChanges(queue, [{
       type: 'upsert',
-      sessionObservation: sessionObservationRow(`so-${index}`),
+      extraction: extractionRow(`so-${index}`),
     }]);
   }
 
   const bucket = readyBucket(queue, { threshold: 8, batchSize: 4, finalize: false });
   assert.equal(bucket.cwd, CWD);
-  assert.equal(bucket.sessionObservationChanges.length, 4);
+  assert.equal(bucket.extractionChanges.length, 4);
 
-  const acked = ackBucket(queue, bucket.key, bucket.sessionObservationChanges.map((change) => change.sessionObservation.id));
-  assert.equal(acked.cwdBuckets[0].sessionObservationChanges.length, 5);
+  const acked = ackBucket(queue, bucket.key, bucket.extractionChanges.map((change) => change.extraction.id));
+  assert.equal(acked.cwdBuckets[0].extractionChanges.length, 5);
 });
 
 test('hasPendingObserverWork waits for cwd threshold without advancing baseline', async () => {
-  const client = makeClient({ sessionObservations: makeSessionObservations(4) });
+  const client = makeClient({ extractions: makeExtractions(4) });
 
   assert.equal(await hasPendingObserverWork({ client, baselineVersion: 0, cwdThreshold: 5 }), false);
   assert.deepEqual(
@@ -64,14 +64,14 @@ test('hasPendingObserverWork waits for cwd threshold without advancing baseline'
 });
 
 test('hasPendingObserverWork reports pending when cwd threshold is reached', async () => {
-  const client = makeClient({ sessionObservations: makeSessionObservations(5) });
+  const client = makeClient({ extractions: makeExtractions(5) });
 
   assert.equal(await hasPendingObserverWork({ client, baselineVersion: 0, cwdThreshold: 5 }), true);
 });
 
-test('getObserverWorkStatus ignores session observations without cwd', async () => {
+test('getObserverWorkStatus ignores extractions without cwd', async () => {
   const client = makeClient({
-    sessionObservations: makeSessionObservations(2).map((row) => ({ ...row, cwd: '' })),
+    extractions: makeExtractions(2).map((row) => ({ ...row, cwd: '' })),
   });
 
   assert.deepEqual(
@@ -80,10 +80,10 @@ test('getObserverWorkStatus ignores session observations without cwd', async () 
   );
 });
 
-test('runObserver finalizes pending session observations below threshold', async (t) => {
+test('runObserver finalizes pending extractions below threshold', async (t) => {
   await useMockHome(t, 'muninn-observer-runner-finalize-');
   let observedInput = null;
-  const client = makeClient({ sessionObservations: makeSessionObservations(2) });
+  const client = makeClient({ extractions: makeExtractions(2) });
 
   const result = await runObserver({
     client,
@@ -103,13 +103,13 @@ test('runObserver finalizes pending session observations below threshold', async
   assert.equal(client.writes.globalObservationContexts.length, 2);
   assert.equal(client.writes.globalObservations.length, 1);
   assert.deepEqual(
-    client.writes.sessionObservations.map((row) => [row.id, row.globalObservationPaths]),
+    client.writes.extractions.map((row) => [row.id, row.globalObservationPaths]),
     [['so-1', [`${CWD} / Work / Decision`]], ['so-2', [`${CWD} / Work / Decision`]]],
   );
 });
 
 test('runObserver skips until cwd threshold is reached', async () => {
-  const client = makeClient({ sessionObservations: makeSessionObservations(4) });
+  const client = makeClient({ extractions: makeExtractions(4) });
 
   const result = await runObserver({
     client,
@@ -139,8 +139,8 @@ test('runObserver preserves unrelated cwd global observation branches', async (t
       globalObservationRow(oldPath, ['so-1']),
       globalObservationRow(otherPath, ['other']),
     ],
-    sessionObservations: [
-      sessionObservationRow('so-1', { globalObservationPaths: [oldPath] }),
+    extractions: [
+      extractionRow('so-1', { globalObservationPaths: [oldPath] }),
     ],
   });
 
@@ -179,7 +179,7 @@ test('observeCwdScope accepts slash-containing cwd as root title', async (t) => 
       text: `## Work
 
 ### Decision
-The observer groups session observations by cwd.
+The observer groups extractions by cwd.
 
 Source extractions:
 - [so-1]`,
@@ -329,13 +329,13 @@ Source extractions:
   assert.equal(result.title, CWD);
   const trace = JSON.parse(await readFile(tracePath, 'utf8'));
   assert.equal(trace.input.cwdScope, CWD);
-  assert.match(trace.prompt.system, /observer that maintains parts of a cross-session observation tree/);
-  assert.match(trace.prompt.user, /SessionObservation units:/);
+  assert.match(trace.prompt.system, /observer that maintains parts of a cross-extraction tree/);
+  assert.match(trace.prompt.user, /Extraction units:/);
   assert.equal(trace.document.title, CWD);
 });
 
 function makeClient({
-  sessionObservations,
+  extractions,
   contexts = [],
   globalObservations = [],
   version = 1,
@@ -343,32 +343,32 @@ function makeClient({
   const normalizedContexts = contexts.map((context) => {
     const observation = globalObservations.find((row) => row.id === context.id);
     return {
-      sourceRefs: observation?.sessionObservationRefs ?? [],
-      expandRefs: observation?.sessionObservationRefs ?? [],
+      sourceRefs: observation?.extractionRefs ?? [],
+      expandRefs: observation?.extractionRefs ?? [],
       ...context,
     };
   });
   const writes = {
     globalObservationContexts: [],
     globalObservations: [],
-    sessionObservations: [],
+    extractions: [],
     deletedContextIds: [],
     deletedGlobalObservationIds: [],
   };
   return {
     writes,
-    sessionObservationTable: {
+    extractionTable: {
       stats: async () => ({
         version,
         fragmentCount: 1,
-        rowCount: sessionObservations.length,
+        rowCount: extractions.length,
       }),
-      get: async ({ ids }) => sessionObservations.filter((row) => ids.includes(row.id)),
+      get: async ({ ids }) => extractions.filter((row) => ids.includes(row.id)),
       delta: async ({ baselineVersion }) => (
-        baselineVersion < version ? sessionObservations : []
+        baselineVersion < version ? extractions : []
       ),
       upsert: async ({ rows }) => {
-        writes.sessionObservations.push(...rows);
+        writes.extractions.push(...rows);
       },
     },
     globalObservationContextTable: {
@@ -411,23 +411,23 @@ function observerResult(cwdScope, refs) {
         globalPath: `${cwdScope} / Work / Decision`,
         sourceRefs: refs,
         expandRefs: refs,
-        body: 'The cwd scoped observer groups related session observations.',
+        body: 'The cwd scoped observer groups related extractions.',
         children: [],
       }],
     }],
   };
 }
 
-function makeSessionObservations(count, options = {}) {
+function makeExtractions(count, options = {}) {
   const offset = options.offset ?? 0;
   return Array.from({ length: count }, (_, index) =>
-    sessionObservationRow(`so-${offset + index + 1}`, {
+    extractionRow(`so-${offset + index + 1}`, {
       turnRefs: [`turn:${offset + index + 1}`],
       ...options,
     }));
 }
 
-function sessionObservationRow(id, overrides = {}) {
+function extractionRow(id, overrides = {}) {
   const title = overrides.title ?? `Session observation ${id}`;
   const summary = overrides.summary ?? `${title}: compact summary.`;
   return {
@@ -477,7 +477,7 @@ function globalObservationRow(globalPath, refs) {
     globalPath,
     text: `${globalPath}\n\nGlobal observation text.`,
     vector: [0.3, 0.4],
-    sessionObservationRefs: refs,
+    extractionRefs: refs,
     createdAt: '2024-01-01T00:00:00Z',
     updatedAt: '2024-01-01T00:00:00Z',
   };

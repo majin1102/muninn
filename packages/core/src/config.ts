@@ -17,7 +17,7 @@ const DEFAULT_WATCHDOG_INTERVAL_MS = 60_000;
 const DEFAULT_WATCHDOG_COMPACT_MIN_FRAGMENTS = 8;
 const DEFAULT_WATCHDOG_TARGET_PARTITION_SIZE = 1_024;
 const DEFAULT_WATCHDOG_OPTIMIZE_MERGE_COUNT = 4;
-const DEFAULT_SESSION_OBSERVATION_DIMENSIONS = 8;
+const DEFAULT_EXTRACTION_DIMENSIONS = 8;
 const DEFAULT_RECALL_MODE = 'hybrid';
 const DEFAULT_OBSERVER_CWD_THRESHOLD = 8;
 const DEFAULT_OBSERVER_CWD_BATCH_SIZE = 16;
@@ -134,7 +134,7 @@ export type WatchdogConfig = {
   enabled: boolean;
   intervalMs: number;
   compactMinFragments: number;
-  session_observation: {
+  extraction: {
     targetPartitionSize: number;
     optimizeMergeCount: number;
   };
@@ -279,7 +279,7 @@ function getObserverRuntimeConfigFromConfig(config: MuninnConfigRecord | null): 
 
 export function getWatchdogConfig(): WatchdogConfig {
   const watchdog = loadMuninnConfig()?.watchdog as Record<string, unknown> | undefined;
-  const sessionObservation = watchdog?.session_observation as Record<string, unknown> | undefined;
+  const extraction = watchdog?.extraction as Record<string, unknown> | undefined;
   return {
     enabled: typeof watchdog?.enabled === 'boolean' ? watchdog.enabled : true,
     intervalMs: typeof watchdog?.intervalMs === 'number'
@@ -288,12 +288,12 @@ export function getWatchdogConfig(): WatchdogConfig {
     compactMinFragments: typeof watchdog?.compactMinFragments === 'number'
       ? watchdog.compactMinFragments
       : DEFAULT_WATCHDOG_COMPACT_MIN_FRAGMENTS,
-    session_observation: {
-      targetPartitionSize: typeof sessionObservation?.targetPartitionSize === 'number'
-        ? sessionObservation.targetPartitionSize
+    extraction: {
+      targetPartitionSize: typeof extraction?.targetPartitionSize === 'number'
+        ? extraction.targetPartitionSize
         : DEFAULT_WATCHDOG_TARGET_PARTITION_SIZE,
-      optimizeMergeCount: typeof sessionObservation?.optimizeMergeCount === 'number'
-        ? sessionObservation.optimizeMergeCount
+      optimizeMergeCount: typeof extraction?.optimizeMergeCount === 'number'
+        ? extraction.optimizeMergeCount
         : DEFAULT_WATCHDOG_OPTIMIZE_MERGE_COUNT,
     },
   };
@@ -355,7 +355,7 @@ export async function validateMuninnConfigStorage(
   }
   if (actualDimensions !== expectedDimensions) {
     throw new Error(
-      `session observation dimension mismatch: muninn.json expects ${expectedDimensions}, but the existing session_observation table stores ${actualDimensions}; update providers.embedding.${config.extractor?.embeddingProvider}.dimensions or rebuild the session_observation table`,
+      `extraction dimension mismatch: muninn.json expects ${expectedDimensions}, but the existing extraction table stores ${actualDimensions}; update providers.embedding.${config.extractor?.embeddingProvider}.dimensions or rebuild the extraction table`,
     );
   }
 }
@@ -604,7 +604,7 @@ function effectiveEmbeddingDimensions(config: MuninnConfigRecord | null): number
   const embeddingName = config?.extractor?.embeddingProvider;
   const dimensions = embeddingName ? config?.providers?.embedding?.[embeddingName]?.dimensions : undefined;
   if (dimensions === undefined) {
-    return DEFAULT_SESSION_OBSERVATION_DIMENSIONS;
+    return DEFAULT_EXTRACTION_DIMENSIONS;
   }
   return requirePositiveInteger(dimensions, `providers.embedding.${embeddingName}.dimensions`);
 }
@@ -618,17 +618,14 @@ function validateWatchdogConfig(watchdog: unknown): void {
   validateOptionalPositiveInteger(config.intervalMs, 'watchdog.intervalMs');
   validateOptionalPositiveInteger(config.compactMinFragments, 'watchdog.compactMinFragments');
   if (config.extraction !== undefined) {
-    throw new Error('watchdog.extraction is no longer supported; use watchdog.session_observation instead.');
-  }
-  if (config.session_observation !== undefined) {
-    const sessionObservation = expectRecord(config.session_observation, 'watchdog.session_observation');
+    const extraction = expectRecord(config.extraction, 'watchdog.extraction');
     validateOptionalPositiveInteger(
-      sessionObservation.targetPartitionSize,
-      'watchdog.session_observation.targetPartitionSize',
+      extraction.targetPartitionSize,
+      'watchdog.extraction.targetPartitionSize',
     );
     validateOptionalPositiveInteger(
-      sessionObservation.optimizeMergeCount,
-      'watchdog.session_observation.optimizeMergeCount',
+      extraction.optimizeMergeCount,
+      'watchdog.extraction.optimizeMergeCount',
     );
   }
 }

@@ -356,11 +356,11 @@ function toLocomoHit(
 }
 
 function renderBridgeMemoryText(rendered: RenderedMemory, matchedText: string): string {
-  if (rendered.memoryId.startsWith('session_observation:')) {
-    const sessionObservation = matchedText || rendered.summary || rendered.title || '';
+  if (rendered.memoryId.startsWith('extraction:')) {
+    const extraction = matchedText || rendered.summary || rendered.title || '';
     const context = rendered.detail?.match(/(?:^|\n)Context:\n([\s\S]*?)(?:\n\nReferences:|$)/)?.[1]?.trim();
     return [
-      `SESSION_OBSERVATION: ${sessionObservation}`,
+      `EXTRACTION: ${extraction}`,
       context ? `CONTEXT: ${context}` : '',
     ].filter(Boolean).join('\n');
   }
