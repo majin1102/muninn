@@ -53,6 +53,7 @@ export class Extractor {
   private publishingEpochs: OpenEpoch[] = [];
   private threads: SessionMemoryThread[] = [];
   private nextIndexRetryAt?: number;
+  private lastIndexError?: string;
   private pendingExtractionChanges: QueuedExtractionChange[] = [];
   private shuttingDown = false;
   private bootstrapped = false;
@@ -150,12 +151,15 @@ export class Extractor {
     const pendingTurnIds = [...pendingById.values()]
       .sort(compareTurns)
       .map((turn) => turn.turnId);
-    const phase = this.currentEpoch || this.hasPendingExtraction()
-      ? 'running'
+    const hasPendingExtraction = this.hasPendingExtraction();
+    const phase = this.lastIndexError && hasPendingExtraction
+      ? 'error'
+      : this.currentEpoch || hasPendingExtraction
+        ? 'running'
       : pendingTurnIds.length > 0
         ? 'pending'
         : 'idle';
-    return {
+    const watermark: MemoryWatermark = {
       pending: {
         turns: pendingTurnIds,
         extractions: [],
@@ -165,6 +169,13 @@ export class Extractor {
         observer: 'idle',
       },
     };
+    if (this.lastIndexError && hasPendingExtraction) {
+      watermark.error = {
+        phase: 'extractor',
+        message: this.lastIndexError,
+      };
+    }
+    return watermark;
   }
 
   async shutdown(): Promise<void> {
@@ -383,6 +394,7 @@ export class Extractor {
         const extractionChanges = await this.buildCurrentEpochIndex(result.touchedIds);
         this.mergePendingExtractionChanges(extractionChanges);
         this.handoffPendingExtractionChanges();
+        this.lastIndexError = undefined;
         if (!this.hasPendingExtraction()) {
           this.nextIndexRetryAt = undefined;
         }
@@ -391,6 +403,7 @@ export class Extractor {
           throw error;
         }
         const message = String(error);
+        this.lastIndexError = message;
         console.error(`[muninn:extractor] extraction index build failed: ${message}`);
         await writeMuninnLog(this.database, 'error', 'extractor', 'index_build_failed', { message });
         this.nextIndexRetryAt = Date.now() + INDEX_RETRY_DELAY_MS;
@@ -508,6 +521,7 @@ export class Extractor {
         const extractionChanges = await buildExtraction(this.client, this.threads, this.shutdownController.signal);
         this.mergePendingExtractionChanges(extractionChanges);
         this.handoffPendingExtractionChanges();
+        this.lastIndexError = undefined;
         this.refreshCheckpointSnapshot();
         this.nextIndexRetryAt = undefined;
       });
@@ -516,12 +530,14 @@ export class Extractor {
         throw error;
       }
       const message = String(error);
+      this.lastIndexError = message;
       console.error(`[muninn:extractor] extraction index retry failed: ${message}`);
       await writeMuninnLog(this.database, 'error', 'extractor', 'index_retry_failed', { message });
       this.nextIndexRetryAt = Date.now() + INDEX_RETRY_DELAY_MS;
     } finally {
       if (!this.hasPendingExtraction()) {
         this.nextIndexRetryAt = undefined;
+        this.lastIndexError = undefined;
       }
       this.notifyChange();
     }

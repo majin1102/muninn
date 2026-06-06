@@ -5922,11 +5922,16 @@ test('observer.retryExtraction refreshes the committed checkpoint snapshot after
         cwd: '/workspace/alpha',
         agent: 'codex',
         snapshotContent: '',
-        extractions: [],
+        extractions: [{ id: 'memory-1', text: 'remember this', category: 'Fact', references: ['session:existing'], updatedMemory: null }],
         contextRefs: [],
         openQuestions: [],
         nextSteps: [],
-        extractionChanges: [{ type: 'add', text: 'remember this', references: ['session:existing'], reason: 'adds memory' }],
+        extractionChanges: [{
+          type: 'update',
+          extractionId: 'memory-1',
+          text: 'remember this',
+          reason: 'refreshes the existing extraction wording',
+        }],
       },
     ],
     references: ['session:existing'],
@@ -6117,6 +6122,84 @@ test('observer.run retries pending extraction index before queued epochs when du
   await observer.run();
 
   assert.deepEqual(calls, ['index', 'observe']);
+});
+
+test('observer.watermark exposes extraction index retry failures', async (t) => {
+  const { dir, homeDir, configPath } = await makeConfigHome();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+
+  process.env.MUNINN_HOME = homeDir;
+  await writeObserverConfig(configPath);
+
+  const observer = new Observer({
+    sessionTable: {
+      update: async ({ snapshots }) => snapshots,
+    },
+    extractionTable: {
+      delete: async () => ({ deleted: 0 }),
+      get: async () => [],
+      upsert: async () => {
+        throw new Error('extraction write failed');
+      },
+    },
+  });
+
+  observer.bootstrapped = true;
+  observer.openEpoch = new OpenEpoch(9);
+  observer.threads = [{
+    sessionId: 'session-a',
+    project: 'alpha',
+    cwd: '/workspace/alpha',
+    agent: 'codex',
+    snapshotId: 'snapshot-1',
+    snapshotIds: ['snapshot-0', 'snapshot-1'],
+    extractionEpoch: 7,
+    title: 'Title',
+    summary: 'Summary',
+    snapshots: [
+      {
+        project: 'alpha',
+        cwd: '/workspace/alpha',
+        agent: 'codex',
+        snapshotContent: '',
+        extractions: [],
+        contextRefs: [],
+        openQuestions: [],
+        nextSteps: [],
+        extractionChanges: [],
+      },
+      {
+        project: 'alpha',
+        cwd: '/workspace/alpha',
+        agent: 'codex',
+        snapshotContent: '',
+        extractions: [{ id: 'memory-1', text: 'remember this', category: 'Fact', references: ['session:existing'], updatedMemory: null }],
+        contextRefs: [],
+        openQuestions: [],
+        nextSteps: [],
+        extractionChanges: [{
+          type: 'update',
+          extractionId: 'memory-1',
+          text: 'remember this',
+          reason: 'refreshes the existing extraction wording',
+        }],
+      },
+    ],
+    references: [],
+    indexedSnapshotSequence: 0,
+    observer: 'default-observer',
+    createdAt: '2024-01-01T00:00:00Z',
+    updatedAt: '2024-01-01T00:00:00Z',
+  }];
+
+  await observer.retryExtraction();
+
+  const watermark = await observer.watermark();
+  assert.equal(watermark.phases.extractor, 'error');
+  assert.deepEqual(watermark.error, {
+    phase: 'extractor',
+    message: 'Error: extraction write failed',
+  });
 });
 
 test('observer.accept keeps a partial epoch open until epochTurns is reached', async (t) => {

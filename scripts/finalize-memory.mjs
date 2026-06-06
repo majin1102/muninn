@@ -120,16 +120,19 @@ function summarize(result) {
   const extractor = result?.phases?.extractor ?? 'unknown';
   const observer = result?.phases?.observer ?? 'unknown';
   const watermark = result?.watermark ?? result?.baseline ?? result?.nextWatermark;
+  const error = result?.error;
   return {
     pendingTurns,
     pendingExtractions,
     extractor,
     observer,
     watermark,
+    error,
     done: pendingTurns === 0
       && pendingExtractions === 0
       && extractor === 'idle'
-      && observer === 'idle',
+      && observer === 'idle'
+      && !error,
   };
 }
 
@@ -172,9 +175,14 @@ async function main() {
         `pendingExtractions=${summary.pendingExtractions}`,
         `extractor=${summary.extractor}`,
         `observer=${summary.observer}`,
+        summary.error ? `error=${summary.error.phase}:${summary.error.message}` : '',
         formatWatermark(summary.watermark).trim(),
       ].filter(Boolean).join(' '),
     );
+
+    if (summary.error) {
+      throw new Error(`finalize failed: ${summary.error.phase}: ${summary.error.message}`);
+    }
 
     if (summary.done) {
       console.log('');
