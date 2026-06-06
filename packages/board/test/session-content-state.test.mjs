@@ -102,10 +102,10 @@ test('enables observation locate only when the window match is not already activ
   assert.equal(locateObservationEnabled(observation, 'obs:1', ['turn:9'], { memoryId: 'obs:1', refs: ['turn:9'] }), true);
 });
 
-test('resolves selected session identity from agent, project, and session key', () => {
+test('resolves selected session identity from agent, cwd, and session key', () => {
   assert.equal(selectedSessionKey({
     agent: 'codex',
-    projectKey: 'muninn',
+    cwd: '/Users/Nathan/workspace/muninn',
     sessionKey: 'raw-session-id',
-  }), 'codex:muninn:raw-session-id');
+  }), 'codex:/Users/Nathan/workspace/muninn:raw-session-id');
 });

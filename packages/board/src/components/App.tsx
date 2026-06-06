@@ -245,6 +245,51 @@ export function App() {
     }
   }
 
+  async function loadUntilTurn(session: ProjectSessionNode, memoryId: string) {
+    if (hasTurn(session, memoryId) || session.nextOffset === null) {
+      return;
+    }
+
+    let turns = session.turns;
+    let segments = session.segments;
+    let observations = session.observations;
+    let sessionSummary = session.sessionSummary;
+    let nextOffset: number | null = session.nextOffset;
+
+    updateSession(session, { loading: true });
+    try {
+      while (!turns.some((turn) => turn.memoryId === memoryId) && nextOffset !== null) {
+        const response = await client.loadSessionTurns({
+          ...session,
+          turns,
+          segments,
+          observations,
+          sessionSummary,
+          nextOffset,
+          loaded: true,
+          loading: true,
+        }, nextOffset);
+        turns = [...turns, ...response.turns];
+        segments = response.segments.length > 0 ? response.segments : segments;
+        observations = response.observations.length > 0 ? response.observations : observations;
+        sessionSummary = response.sessionSummary ?? sessionSummary;
+        nextOffset = response.nextOffset;
+      }
+      updateSession(session, {
+        turns,
+        segments,
+        observations,
+        sessionSummary,
+        nextOffset,
+        loading: false,
+        loaded: true,
+      });
+    } catch (error) {
+      setProjectError(asErrorMessage(error));
+      updateSession(session, { loading: false });
+    }
+  }
+
   function selectSession(session: ProjectSessionNode) {
     const selectionId = selectedSessionKey(session);
     setSelectedSessionId(selectionId);
@@ -289,8 +334,17 @@ export function App() {
   }
 
   function locateConversationTurn(memoryId: string) {
-    setFocusMemoryId(memoryId);
-    setFocusRequestId((current) => current + 1);
+    const session = activeSession;
+    if (!session || hasTurn(session, memoryId)) {
+      setFocusMemoryId(memoryId);
+      setFocusRequestId((current) => current + 1);
+      return;
+    }
+
+    void loadUntilTurn(session, memoryId).finally(() => {
+      setFocusMemoryId(memoryId);
+      setFocusRequestId((current) => current + 1);
+    });
   }
 
   function openView(view: PrimaryView) {
@@ -527,6 +581,10 @@ function sameSession(left: ProjectSessionNode, right: ProjectSessionNode): boole
   return left.agent === right.agent
     && (left.cwd ?? '') === (right.cwd ?? '')
     && left.sessionKey === right.sessionKey;
+}
+
+function hasTurn(session: ProjectSessionNode, memoryId: string): boolean {
+  return session.turns.some((turn) => turn.memoryId === memoryId);
 }
 
 function GitHubMark() {

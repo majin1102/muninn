@@ -559,8 +559,7 @@ function parseSnapshotSummary(snapshotContent: string | null | undefined): strin
 }
 
 function normalizeObservationMarkdown(raw: string): string {
-  const withoutTitle = raw
-    .replace(/(?:^|\n)###\s+Title\s*\n[\s\S]*?(?=\n###\s+|^\s*----\s*$|\s*$)/im, '\n')
+  const withoutTitle = stripMarkdownHeadingSection(raw, 'Title')
     .replace(/^\s*----\s*$/gm, '')
     .trim();
   if (withoutTitle) {
@@ -571,8 +570,8 @@ function normalizeObservationMarkdown(raw: string): string {
 
 function normalizeSegmentTitle(raw: string): string {
   let title = raw.trim();
-  const explicitTitle = title.match(/(?:^|\n)###\s+Title\s*\n([\s\S]*?)(?=\n###\s+|^\s*----\s*$|\s*$)/im)?.[1]?.trim();
-  const summary = title.match(/(?:^|\n)###\s+Summary\s*\n([\s\S]*?)(?=\n###\s+|^\s*----\s*$|\s*$)/im)?.[1]?.trim();
+  const explicitTitle = extractMarkdownHeadingSection(title, 'Title');
+  const summary = extractMarkdownHeadingSection(title, 'Summary');
   if (explicitTitle) {
     title = explicitTitle;
   } else if (summary) {
@@ -587,6 +586,28 @@ function normalizeSegmentTitle(raw: string): string {
     title = title.slice(0, responseStart).trim();
   }
   return title;
+}
+
+function extractMarkdownHeadingSection(raw: string, heading: string): string | undefined {
+  const escapedHeading = escapeRegex(heading);
+  const match = raw.match(new RegExp(
+    `(?:^|\\n)###\\s+${escapedHeading}\\s*\\n([\\s\\S]*?)(?=\\n###\\s+|\\n\\s*----\\s*(?:\\n|$)|$)`,
+    'i',
+  ));
+  const value = match?.[1]?.trim();
+  return value ? value : undefined;
+}
+
+function stripMarkdownHeadingSection(raw: string, heading: string): string {
+  const escapedHeading = escapeRegex(heading);
+  return raw.replace(new RegExp(
+    `(?:^|\\n)###\\s+${escapedHeading}\\s*\\n[\\s\\S]*?(?=\\n###\\s+|\\n\\s*----\\s*(?:\\n|$)|$)`,
+    'i',
+  ), '\n');
+}
+
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 function parseExtractionRefs(value: string | undefined): string[] {

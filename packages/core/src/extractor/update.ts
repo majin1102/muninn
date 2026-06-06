@@ -113,7 +113,7 @@ function sessionIdForTurns(turns: Turn[]): string {
 }
 
 function turnGroupKey(turn: Turn, sessionId: string): string {
-  return `${turn.agent}\0${turn.project}\0${turn.cwd}\0${sessionId}`;
+  return `${turn.agent}\0${turn.cwd}\0${sessionId}`;
 }
 
 function threadIdentityKey(value: {
@@ -123,7 +123,7 @@ function threadIdentityKey(value: {
   sessionId?: string | null;
   threadId?: string;
 }): string {
-  return `${value.agent}\0${value.project}\0${value.cwd}\0${value.sessionId ?? value.threadId ?? DEFAULT_SESSION_ID}`;
+  return `${value.agent}\0${value.cwd}\0${value.sessionId ?? value.threadId ?? DEFAULT_SESSION_ID}`;
 }
 
 function ownershipForTurns(turns: Turn[]): { agent: string; project: string; cwd: string } {
@@ -132,8 +132,8 @@ function ownershipForTurns(turns: Turn[]): { agent: string; project: string; cwd
     throw new Error('missing turns for session ownership');
   }
   for (const turn of turns) {
-    if (turn.agent !== first.agent || turn.project !== first.project || turn.cwd !== first.cwd) {
-      throw new Error('extractSessionThread requires pendingTurns from a single project/cwd/agent');
+    if (turn.agent !== first.agent || turn.cwd !== first.cwd) {
+      throw new Error('extractSessionThread requires pendingTurns from a single cwd/agent');
     }
   }
   return {
@@ -180,7 +180,6 @@ function ensureSessionThread(
     && thread.kind === 'session'
     && (thread.sessionId ?? null) === sessionId
     && thread.agent === ownership.agent
-    && thread.project === ownership.project
     && thread.cwd === ownership.cwd
   ));
   if (existing) {

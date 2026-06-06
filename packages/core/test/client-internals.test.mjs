@@ -3564,7 +3564,7 @@ test('session registry reuses the same load for trimmed session ids', async () =
   assert.strictEqual(firstSession, secondSession);
 });
 
-test('session registry separates same raw session id across project ownership', async () => {
+test('session registry separates same raw session id across cwd ownership', async () => {
   const registry = new SessionRegistry({
     turnTable: {},
   }, 'default-observer');
@@ -3574,6 +3574,18 @@ test('session registry separates same raw session id across project ownership', 
   const [firstSession, secondSession] = await Promise.all([first, second]);
 
   assert.notStrictEqual(firstSession, secondSession);
+});
+
+test('session registry treats project as display metadata for the same cwd identity', async () => {
+  const registry = new SessionRegistry({
+    turnTable: {},
+  }, 'default-observer');
+
+  const first = registry.load('group-a', 'agent-a', { project: 'project-a', cwd: '/workspace/shared' });
+  const second = registry.load('group-a', 'agent-a', { project: 'project-b', cwd: '/workspace/shared' });
+  const [firstSession, secondSession] = await Promise.all([first, second]);
+
+  assert.strictEqual(firstSession, secondSession);
 });
 
 test('session registry restores live sessions for checkpoint recent turns', async () => {
@@ -5797,7 +5809,7 @@ test('buildTouchedIndex immediately advances extraction index for touched thread
         semanticUpserts += 1;
       },
     },
-  }, threads, new Set(['codex\0alpha\0/workspace/alpha\0session-a']));
+  }, threads, new Set(['codex\0/workspace/alpha\0session-a']));
 
   assert.equal(semanticUpserts, 1);
   assert.equal(threads[0].indexedSnapshotSequence, 1);
@@ -6435,13 +6447,13 @@ test('flushThreads persists session state without inline ref or index builders',
         }));
       },
     },
-  }, threads, new Set(['codex\0alpha\0/workspace/alpha\0session-child']));
+  }, threads, new Set(['codex\0/workspace/alpha\0session-child']));
 
   assert.equal(threads[0].snapshotId, 'snapshot-child');
   assert.equal(threads[0].indexedSnapshotSequence, null);
 });
 
-test('flushThreads keeps same raw session id isolated by project and cwd', async (t) => {
+test('flushThreads keeps same raw session id isolated by cwd', async (t) => {
   const { dir, homeDir, configPath } = await makeConfigHome();
   t.after(async () => rm(dir, { recursive: true, force: true }));
 
@@ -6494,8 +6506,8 @@ test('flushThreads keeps same raw session id isolated by project and cwd', async
       })),
     },
   }, threads, new Set([
-    'codex\0alpha\0/workspace/alpha\0shared-session',
-    'codex\0beta\0/workspace/beta\0shared-session',
+    'codex\0/workspace/alpha\0shared-session',
+    'codex\0/workspace/beta\0shared-session',
   ]));
 
   assert.equal(threads[0].snapshotId, 'snapshot-alpha');

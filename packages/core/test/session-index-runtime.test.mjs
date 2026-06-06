@@ -52,6 +52,8 @@ test('sessionIndex restores checkpoint and applies table deltas without full tur
     entries: [{
       sessionId: 'muninn/session-a',
       agent: 'codex',
+      project: 'muninn',
+      cwd: '/Users/Nathan/workspace/muninn',
       latestUpdatedAt: '2026-06-02T10:00:00.000Z',
     }],
   }, 'default-observer');
@@ -59,6 +61,8 @@ test('sessionIndex restores checkpoint and applies table deltas without full tur
     turnDelta: [{
       sessionId: 'muninn/session-a',
       agent: 'codex',
+      project: 'muninn',
+      cwd: '/Users/Nathan/workspace/muninn',
       observer: 'default-observer',
       summary: 'newer turn',
       updatedAt: '2026-06-02T11:00:00.000Z',
@@ -66,6 +70,9 @@ test('sessionIndex restores checkpoint and applies table deltas without full tur
     sessionDelta: [{
       snapshotId: 'session:9',
       sessionId: 'muninn/session-a',
+      project: 'muninn',
+      cwd: '/Users/Nathan/workspace/muninn',
+      agent: 'codex',
       snapshotSequence: 2,
       createdAt: '2026-06-02T11:00:00.000Z',
       updatedAt: '2026-06-02T11:00:00.000Z',
@@ -82,6 +89,8 @@ test('sessionIndex restores checkpoint and applies table deltas without full tur
   assert.deepEqual(await index.list(fake.tables), [{
     sessionId: 'muninn/session-a',
     agent: 'codex',
+    project: 'muninn',
+    cwd: '/Users/Nathan/workspace/muninn',
     latestUpdatedAt: '2026-06-02T11:00:00.000Z',
     snapshotId: 'session:9',
     title: 'Snapshot title',
@@ -99,6 +108,8 @@ test('sessionIndex rebuilds after dirty mark and drops removed sessions', async 
       {
         sessionId: 'muninn/stale',
         agent: 'codex',
+        project: 'muninn',
+        cwd: '/Users/Nathan/workspace/muninn',
         latestUpdatedAt: '2026-06-02T10:00:00.000Z',
       },
     ],
@@ -108,6 +119,8 @@ test('sessionIndex rebuilds after dirty mark and drops removed sessions', async 
     turns: [{
       session_id: 'muninn/live',
       agent: 'codex',
+      project: 'muninn',
+      cwd: '/Users/Nathan/workspace/muninn',
       observer: 'default-observer',
       summary: 'live turn',
       updatedAt: '2026-06-02T12:00:00.000Z',
@@ -115,6 +128,9 @@ test('sessionIndex rebuilds after dirty mark and drops removed sessions', async 
     snapshots: [{
       snapshotId: 'session:10',
       sessionId: 'muninn/live',
+      project: 'muninn',
+      cwd: '/Users/Nathan/workspace/muninn',
+      agent: 'codex',
       snapshotSequence: 1,
       createdAt: '2026-06-02T12:00:00.000Z',
       updatedAt: '2026-06-02T12:00:00.000Z',
@@ -131,6 +147,8 @@ test('sessionIndex rebuilds after dirty mark and drops removed sessions', async 
   assert.deepEqual(await index.list(fake.tables), [{
     sessionId: 'muninn/live',
     agent: 'codex',
+    project: 'muninn',
+    cwd: '/Users/Nathan/workspace/muninn',
     latestUpdatedAt: '2026-06-02T12:00:00.000Z',
     snapshotId: 'session:10',
     title: 'Live snapshot title',

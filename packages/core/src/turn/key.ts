@@ -8,7 +8,7 @@ export function sessionKey(
   },
 ): string {
   const normalizedSessionId = normalizeSessionId(sessionId);
-  const scope = `project:${ownership.project}|cwd:${ownership.cwd}`;
+  const scope = `cwd:${ownership.cwd}`;
   if (normalizedSessionId) {
     return `${scope}|session:${normalizedSessionId}|agent:${agent}|observer:${observer}`;
   }

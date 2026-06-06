@@ -160,8 +160,7 @@ export class SessionIndex {
 function entryKey(value: {
   sessionId: string;
   agent: string;
-  project: string;
   cwd: string;
 }): string {
-  return `${value.agent}\0${value.project}\0${value.cwd}\0${value.sessionId}`;
+  return `${value.agent}\0${value.cwd}\0${value.sessionId}`;
 }

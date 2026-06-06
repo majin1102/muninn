@@ -78,6 +78,34 @@ test('uses extraction title heading for segment titles', () => {
   ]);
 });
 
+test('parses extraction headings when Markdown leaves blank lines after headings', () => {
+  const snapshot = [
+    '## Extractions',
+    '<!-- refs: [turn:1] -->',
+    '### Title',
+    '',
+    'Markdown heading spacing',
+    '',
+    '### Summary',
+    '',
+    'The parser should read the summary instead of treating the blank line as the end of the section.',
+  ].join('\n');
+
+  assert.deepEqual(buildExtractionsForTests(snapshot, turns), [
+    {
+      memoryId: 'turn:1~observation:0',
+      title: 'Markdown heading spacing',
+      createdAt: '2026-06-02T10:00:00.000Z',
+      markdown: [
+        '### Summary',
+        '',
+        'The parser should read the summary instead of treating the blank line as the end of the section.',
+      ].join('\n'),
+      refs: ['turn:1'],
+    },
+  ]);
+});
+
 test('builds snapshot observations with markdown and refs', () => {
   const snapshot = [
     '# Session title',
