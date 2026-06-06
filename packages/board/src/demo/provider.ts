@@ -2,7 +2,6 @@ import type { PipelineTasksResponse } from '@muninn/types';
 import {
   demoAgents,
   demoDocuments,
-  demoObservings,
   demoPipelineTasks,
   demoSearchResults,
   demoSessionSnapshots,
