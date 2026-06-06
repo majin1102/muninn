@@ -1,5 +1,6 @@
 import type { Turn, TurnContent } from '../client.js';
 import type { SessionRegistry } from '../turn/registry.js';
+import path from 'node:path';
 
 export type SealedEpoch = {
   epoch: number;
@@ -43,7 +44,11 @@ export class OpenEpoch {
     // Writes entering the same open epoch are serialized so seal() can close over a complete epoch.
     const task = this.acceptChain.then(async () => {
       try {
-        const session = await sessionRegistry.load(turnContent.sessionId, turnContent.agent);
+        const session = await sessionRegistry.load(
+          turnContent.sessionId,
+          turnContent.agent,
+          turnOwnership(turnContent),
+        );
         const accepted = await session.accept(turnContent, this.epoch);
         if (accepted.turn && !accepted.deduped && isObservable(accepted.turn)) {
           this.stagedObservableTurns.push(accepted.turn);
@@ -82,6 +87,14 @@ export class OpenEpoch {
       turns: [...this.stagedObservableTurns],
     };
   }
+}
+
+function turnOwnership(turn: TurnContent): { project: string; cwd: string } {
+  const cwd = turn.cwd?.trim() || process.cwd();
+  return {
+    project: turn.project?.trim() || path.basename(cwd) || 'default',
+    cwd,
+  };
 }
 
 export class EpochQueue {

@@ -14,7 +14,10 @@ export const memoryWriter = new Hono();
 
 const TURN_CONTENT_FIELDS = new Set([
   'sessionId',
+  'project',
+  'cwd',
   'agent',
+  'metadata',
   'createdAt',
   'updatedAt',
   'title',
@@ -136,6 +139,22 @@ function validateTurn(turn: TurnContent | undefined): string | null {
 
   if (typeof turn.agent !== 'string' || !hasTextContent(turn.agent)) {
     return 'turn.agent is required';
+  }
+
+  if (turn.project !== undefined && !hasTextContent(turn.project)) {
+    return 'turn.project must be a non-empty string';
+  }
+
+  if (turn.cwd !== undefined && !hasTextContent(turn.cwd)) {
+    return 'turn.cwd must be a non-empty string';
+  }
+
+  if (
+    turn.metadata !== undefined
+    && turn.metadata !== null
+    && (typeof turn.metadata !== 'object' || Array.isArray(turn.metadata))
+  ) {
+    return 'turn.metadata must be an object or null';
   }
 
   if (!hasTextContent(turn.prompt)) {

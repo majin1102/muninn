@@ -16,12 +16,13 @@ import type {
   ErrorResponse,
   MemoryDocumentResponse,
   MemoryReference,
-  ObservingListResponse,
   PipelineTasksResponse,
   SessionAgentsResponse,
   SessionGroupsResponse,
   SessionNode,
+  ExtractionPreview,
   SessionSegmentPreview,
+  SessionSnapshotListResponse,
   SessionTurnsResponse,
   SettingsConfigResponse,
   TurnPreview,
@@ -36,6 +37,7 @@ const SESSION_TREE_PAGE_LIMIT = 1_000_000;
 const packageDir = path.resolve(__dirname, '..');
 
 export const boardApp = new Hono();
+export const SESSION_SNAPSHOTS_ROUTE = '/api/v1/ui/session-snapshots';
 
 let sessionTreeCache: Awaited<ReturnType<typeof turns.list>> | null = null;
 let sessionTreeLoading: Promise<Awaited<ReturnType<typeof turns.list>>> | null = null;
@@ -131,7 +133,7 @@ function defaultConfigContent(): string {
     '    "name": "default-observer",',
     '    "llmProvider": "default",',
     '    "maxAttempts": 3,',
-    '    "anchorThreshold": 8',
+    '    "cwdThreshold": 8',
     '  },',
     '  "providers": {',
     '    "llm": {',
@@ -171,18 +173,20 @@ function normalizeText(value: string | undefined | null): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
-function resolveSessionNode(turn: Pick<BoardSessionTurn, 'sessionId' | 'agent' | 'observer'>): {
+function resolveSessionNode(turn: Pick<BoardSessionTurn, 'sessionId' | 'agent' | 'observer' | 'project' | 'cwd'>): {
   sessionKey: string;
   displaySessionId: string;
-  projectKey?: string;
+  projectKey: string;
+  cwd?: string;
 } {
   const sessionId = normalizeText(turn.sessionId);
   if (sessionId) {
-    const [projectKey] = sessionId.split('/');
+    const projectKey = normalizeText(turn.project) ?? 'default';
     return {
       sessionKey: sessionId,
       displaySessionId: sessionDisplayTitle(sessionId),
-      projectKey: projectKey || undefined,
+      projectKey,
+      cwd: normalizeText(turn.cwd),
     };
   }
 
@@ -191,6 +195,8 @@ function resolveSessionNode(turn: Pick<BoardSessionTurn, 'sessionId' | 'agent' |
     return {
       sessionKey: `${AGENT_DEFAULT_SESSION_PREFIX}${agent}`,
       displaySessionId: 'Default Session',
+      projectKey: normalizeText(turn.project) ?? 'default',
+      cwd: normalizeText(turn.cwd),
     };
   }
 
@@ -198,15 +204,17 @@ function resolveSessionNode(turn: Pick<BoardSessionTurn, 'sessionId' | 'agent' |
   return {
     sessionKey: `${OBSERVER_DEFAULT_SESSION_PREFIX}${observer}`,
     displaySessionId: `Observer Default (${observer})`,
+    projectKey: normalizeText(turn.project) ?? 'default',
+    cwd: normalizeText(turn.cwd),
   };
 }
 
 function resolveSessionNodeFromIndex(entry: BoardSessionIndexEntry): SessionNode {
-  const [projectKey] = entry.sessionId.split('/');
   return {
     sessionKey: entry.sessionId,
     displaySessionId: resolveIndexedSessionTitle(entry),
-    projectKey: projectKey || undefined,
+    projectKey: entry.project,
+    cwd: entry.cwd,
     latestUpdatedAt: entry.latestUpdatedAt,
   };
 }
@@ -360,6 +368,9 @@ async function enrichMemoryDocument(
     agent: turn.agent,
     observer: turn.observer,
     sessionId: turn.sessionId ?? undefined,
+    project: turn.project,
+    cwd: turn.cwd,
+    metadata: turn.metadata ?? undefined,
     prompt: turn.prompt ?? undefined,
     response: turn.response ?? undefined,
     events: events.length > 0 ? events : undefined,
@@ -372,16 +383,24 @@ async function enrichMemoryDocument(
 
 async function loadSessionTurnPreviewsPage(params: {
   agent: string;
+  cwd?: string;
   sessionKey: string;
   offset: number;
   limit: number;
-}): Promise<{ turns: TurnPreview[]; segments: SessionSegmentPreview[]; nextOffset: number | null }> {
+}): Promise<{
+  turns: TurnPreview[];
+  segments: SessionSegmentPreview[];
+  observations: ExtractionPreview[];
+  sessionSummary?: string;
+  nextOffset: number | null;
+}> {
   const allTurns = (await turns.list({
     mode: { type: 'page', offset: 0, limit: SESSION_TREE_PAGE_LIMIT },
     agent: params.agent,
     ...(isDefaultSessionKey(params.sessionKey) ? {} : { sessionId: params.sessionKey }),
   }))
     .filter((turn) => matchesSessionNode(turn, params.sessionKey))
+    .filter((turn) => !params.cwd || turn.cwd === params.cwd)
     .filter(hasSummary)
     .sort((left, right) => (
       left.createdAt.localeCompare(right.createdAt)
@@ -389,7 +408,7 @@ async function loadSessionTurnPreviewsPage(params: {
       || left.turnId.localeCompare(right.turnId)
     ));
   const previews = allTurns.map(toTurnPreview);
-  const snapshotContent = await loadSessionSnapshotContent(params.agent, params.sessionKey);
+  const snapshotContent = await loadSessionSnapshotContent(params.agent, params.sessionKey, params.cwd);
   return buildSessionTurnPage({
     turns: previews,
     snapshotContent,
@@ -398,11 +417,12 @@ async function loadSessionTurnPreviewsPage(params: {
   });
 }
 
-async function loadSessionSnapshotContent(agent: string, sessionKey: string): Promise<string | null> {
+async function loadSessionSnapshotContent(agent: string, sessionKey: string, cwd?: string): Promise<string | null> {
   const sessionIndex = await sessions.index();
   const session = sessionIndex.find((entry) => (
     entry.agent === agent
     && entry.sessionId === sessionKey
+    && (!cwd || entry.cwd === cwd)
   ));
 
   if (!session?.snapshotId) {
@@ -422,31 +442,64 @@ function buildSessionTurnPage(params: {
   snapshotContent?: string | null;
   offset: number;
   limit: number;
-}): { turns: TurnPreview[]; segments: SessionSegmentPreview[]; nextOffset: number | null } {
+}): {
+  turns: TurnPreview[];
+  segments: SessionSegmentPreview[];
+  observations: ExtractionPreview[];
+  sessionSummary?: string;
+  nextOffset: number | null;
+} {
   const pageTurns = params.turns.slice(params.offset, params.offset + params.limit);
+  const observations = buildExtractions(params.snapshotContent, params.turns);
   const segments = buildSessionSegments(params.snapshotContent, params.turns);
-  const hasMore = params.offset + params.limit < params.turns.length;
   return {
     turns: pageTurns,
     segments,
-    nextOffset: hasMore ? params.offset + params.limit : null,
+    observations,
+    sessionSummary: parseSnapshotSummary(params.snapshotContent),
+    nextOffset: resolveSessionTreeNextOffset({
+      offset: params.offset,
+      limit: params.limit,
+      turnCount: params.turns.length,
+    }),
   };
+}
+
+function resolveSessionTreeNextOffset(params: {
+  offset: number;
+  limit: number;
+  turnCount: number;
+}): number | null {
+  return params.offset + params.limit < params.turnCount ? params.offset + params.limit : null;
+}
+
+export function resolveSessionTreeNextOffsetForTests(params: {
+  offset: number;
+  limit: number;
+  turnCount: number;
+}): number | null {
+  return resolveSessionTreeNextOffset(params);
 }
 
 function buildSessionSegments(
   snapshotContent: string | null | undefined,
   turnPreviews: TurnPreview[],
 ): SessionSegmentPreview[] {
-  const fromSnapshot = snapshotContent
-    ? parseSnapshotExtractionSegments(snapshotContent, turnPreviews)
-    : [];
+  const fromSnapshot = buildExtractions(snapshotContent, turnPreviews).map((observation) => ({
+    memoryId: observation.memoryId,
+    title: observation.title,
+    createdAt: observation.createdAt,
+  }));
   return fromSnapshot.length > 0 ? fromSnapshot : fallbackTurnSegments(turnPreviews);
 }
 
-function parseSnapshotExtractionSegments(
-  snapshotContent: string,
+function buildExtractions(
+  snapshotContent: string | null | undefined,
   turnPreviews: TurnPreview[],
-): SessionSegmentPreview[] {
+): ExtractionPreview[] {
+  if (!snapshotContent) {
+    return [];
+  }
   const extractionStart = snapshotContent.search(/^##\s+Extractions\s*$/im);
   if (extractionStart < 0) {
     return [];
@@ -459,48 +512,72 @@ function parseSnapshotExtractionSegments(
   const nextSection = rest.search(/^##\s+/m);
   const section = nextSection >= 0 ? rest.slice(0, nextSection) : rest;
   const turnById = new Map(turnPreviews.map((turn, index) => [turn.memoryId, { turn, index }]));
-  const refsPattern = /<!--\s*refs:\s*\[([^\]]*)\]\s*-->/g;
+  const refsPattern = /<!--\s*(?:sequence:\s*\d+\s*;\s*)?refs:\s*\[([^\]]*)\]\s*-->/g;
   const matches = [...section.matchAll(refsPattern)];
-  const segments: Array<SessionSegmentPreview & { index: number }> = [];
+  const observations: Array<ExtractionPreview & { index: number }> = [];
 
   for (let i = 0; i < matches.length; i += 1) {
     const match = matches[i]!;
     const next = matches[i + 1];
-    const title = normalizeSegmentTitle(section
-      .slice(match.index! + match[0].length, next?.index ?? section.length));
+    const block = section.slice(match.index! + match[0].length, next?.index ?? section.length);
+    const title = normalizeSegmentTitle(block);
     if (!title) {
       continue;
     }
-    const firstTurn = parseExtractionRefs(match[1])
+    const refs = parseExtractionRefs(match[1]);
+    const firstTurn = refs
       .map((ref) => turnById.get(ref))
       .find((entry) => entry !== undefined);
     if (!firstTurn) {
       continue;
     }
-    segments.push({
-      memoryId: firstTurn.turn.memoryId,
+    observations.push({
+      memoryId: `${firstTurn.turn.memoryId}~observation:${i}`,
       title,
       createdAt: firstTurn.turn.createdAt,
+      markdown: normalizeObservationMarkdown(block),
+      refs,
       index: firstTurn.index,
     });
   }
 
-  return segments
+  return observations
     .sort((left, right) => (
       left.createdAt.localeCompare(right.createdAt)
       || left.index - right.index
     ))
-    .map(({ index: _index, ...segment }) => segment);
+    .map(({ index: _index, ...observation }) => observation);
+}
+
+function parseSnapshotSummary(snapshotContent: string | null | undefined): string | undefined {
+  if (!snapshotContent) {
+    return undefined;
+  }
+  const match = snapshotContent.match(/^##\s+Summary\s*\n([\s\S]*?)(?=\n##\s+|$)/im);
+  const summary = match?.[1]?.trim();
+  return summary ? summary : undefined;
+}
+
+function normalizeObservationMarkdown(raw: string): string {
+  const withoutTitle = stripMarkdownHeadingSection(raw, 'Title')
+    .replace(/^\s*----\s*$/gm, '')
+    .trim();
+  if (withoutTitle) {
+    return withoutTitle;
+  }
+  return raw.trim();
 }
 
 function normalizeSegmentTitle(raw: string): string {
   let title = raw.trim();
-  const extraction = title.match(/\[Extraction\]\s*([\s\S]*)/i)?.[1]?.trim();
-  if (extraction) {
-    title = extraction;
+  const explicitTitle = extractMarkdownHeadingSection(title, 'Title');
+  const summary = extractMarkdownHeadingSection(title, 'Summary');
+  if (explicitTitle) {
+    title = explicitTitle;
+  } else if (summary) {
+    title = summary;
   }
   title = title
-    .replace(/\[[^\]]+\]\s*/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
     .replace(/^Prompt:\s*/i, '');
@@ -509,6 +586,28 @@ function normalizeSegmentTitle(raw: string): string {
     title = title.slice(0, responseStart).trim();
   }
   return title;
+}
+
+function extractMarkdownHeadingSection(raw: string, heading: string): string | undefined {
+  const escapedHeading = escapeRegex(heading);
+  const match = raw.match(new RegExp(
+    `(?:^|\\n)###\\s+${escapedHeading}\\s*\\n([\\s\\S]*?)(?=\\n###\\s+|\\n\\s*----\\s*(?:\\n|$)|$)`,
+    'i',
+  ));
+  const value = match?.[1]?.trim();
+  return value ? value : undefined;
+}
+
+function stripMarkdownHeadingSection(raw: string, heading: string): string {
+  const escapedHeading = escapeRegex(heading);
+  return raw.replace(new RegExp(
+    `(?:^|\\n)###\\s+${escapedHeading}\\s*\\n[\\s\\S]*?(?=\\n###\\s+|\\n\\s*----\\s*(?:\\n|$)|$)`,
+    'i',
+  ), '\n');
+}
+
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 function parseExtractionRefs(value: string | undefined): string[] {
@@ -533,16 +632,29 @@ export function buildSessionSegmentsForTests(
   return buildSessionSegments(snapshotContent, turnPreviews);
 }
 
+export function buildExtractionsForTests(
+  snapshotContent: string | null | undefined,
+  turnPreviews: TurnPreview[],
+): ExtractionPreview[] {
+  return buildExtractions(snapshotContent, turnPreviews);
+}
+
 export function buildSessionTurnPageForTests(params: {
   turns: TurnPreview[];
   snapshotContent?: string | null;
   offset: number;
   limit: number;
-}): { turns: TurnPreview[]; segments: SessionSegmentPreview[]; nextOffset: number | null } {
+}): {
+  turns: TurnPreview[];
+  segments: SessionSegmentPreview[];
+  observations: ExtractionPreview[];
+  sessionSummary?: string;
+  nextOffset: number | null;
+} {
   return buildSessionTurnPage(params);
 }
 
-async function loadObservingReferences(references: string[]): Promise<MemoryReference[]> {
+async function loadSnapshotReferences(references: string[]): Promise<MemoryReference[]> {
   const resolved = await Promise.all(
     references.map(async (memoryId) => {
       if (memoryId.startsWith('turn:')) {
@@ -616,7 +728,7 @@ boardApp.get('/board/:asset{.+}', async (c) => {
 boardApp.get('/api/v1/ui/session/agents', async (c) => {
   console.log('[BOARD_UI_SESSION_AGENTS]');
 
-  const entries = (await loadAllSessionTurns()).filter(hasSummary);
+  const entries = await sessions.index();
   const grouped = new Map<string, string>();
 
   for (const entry of entries) {
@@ -625,8 +737,8 @@ boardApp.get('/api/v1/ui/session/agents', async (c) => {
       continue;
     }
     const latest = grouped.get(agent);
-    if (!latest || entry.updatedAt > latest) {
-      grouped.set(agent, entry.updatedAt);
+    if (!latest || entry.latestUpdatedAt > latest) {
+      grouped.set(agent, entry.latestUpdatedAt);
     }
   }
 
@@ -649,22 +761,10 @@ boardApp.get('/api/v1/ui/session/agents/:agent/sessions', async (c) => {
   const agent = c.req.param('agent');
   console.log('[BOARD_UI_SESSION_GROUPS] agent:', agent);
 
-  const grouped = new Map<string, SessionNode>();
-  for (const turn of (await loadAllSessionTurns()).filter(hasSummary)) {
-    if (turn.agent !== agent) {
-      continue;
-    }
-    const node = resolveSessionNode(turn);
-    const current = grouped.get(node.sessionKey);
-    if (!current || turn.updatedAt > current.latestUpdatedAt) {
-      grouped.set(node.sessionKey, {
-        ...node,
-        latestUpdatedAt: turn.updatedAt,
-      });
-    }
-  }
-  const sessionNodes = [...grouped.values()]
-    .sort((left, right) => right.latestUpdatedAt.localeCompare(left.latestUpdatedAt));
+  const sessionNodes = (await sessions.index())
+    .filter((entry) => entry.agent === agent)
+    .map(resolveSessionNodeFromIndex)
+    .sort((left, right) => left.latestUpdatedAt.localeCompare(right.latestUpdatedAt));
 
   const response: SessionGroupsResponse = {
     sessions: sessionNodes,
@@ -677,13 +777,18 @@ boardApp.get('/api/v1/ui/session/agents/:agent/sessions', async (c) => {
 boardApp.get('/api/v1/ui/session/agents/:agent/sessions/:sessionKey/turns', async (c) => {
   const agent = c.req.param('agent');
   const sessionKey = c.req.param('sessionKey');
+  const cwd = normalizeText(c.req.query('cwd'));
   const offsetRaw = c.req.query('offset');
   const limitRaw = c.req.query('limit');
 
   const offset = offsetRaw ? Number(offsetRaw) : 0;
   const limit = limitRaw ? Number(limitRaw) : 10;
 
-  console.log('[BOARD_UI_SESSION_TURNS] agent:', agent, 'sessionKey:', sessionKey, 'offset:', offset, 'limit:', limit);
+  console.log('[BOARD_UI_SESSION_TURNS] agent:', agent, 'cwd:', cwd, 'sessionKey:', sessionKey, 'offset:', offset, 'limit:', limit);
+
+  if (!cwd) {
+    return c.json(errorResponse('invalidRequest', 'cwd is required'), 400);
+  }
 
   if (Number.isNaN(offset) || offset < 0) {
     return c.json(errorResponse('invalidRequest', 'offset must be a non-negative number'), 400);
@@ -695,6 +800,7 @@ boardApp.get('/api/v1/ui/session/agents/:agent/sessions/:sessionKey/turns', asyn
 
   const page = await loadSessionTurnPreviewsPage({
     agent,
+    cwd,
     sessionKey,
     offset,
     limit,
@@ -703,6 +809,8 @@ boardApp.get('/api/v1/ui/session/agents/:agent/sessions/:sessionKey/turns', asyn
   const response: SessionTurnsResponse = {
     turns: page.turns,
     segments: page.segments,
+    observations: page.observations,
+    sessionSummary: page.sessionSummary,
     nextOffset: page.nextOffset,
     requestId: generateRequestId(),
   };
@@ -734,27 +842,27 @@ boardApp.get('/api/v1/ui/memories/:memoryId/document', async (c) => {
   return c.json(response);
 });
 
-boardApp.get('/api/v1/ui/observing', async (c) => {
-  console.log('[BOARD_UI_OBSERVING]');
+boardApp.get(SESSION_SNAPSHOTS_ROUTE, async (c) => {
+  console.log('[BOARD_UI_SESSION_SNAPSHOTS]');
 
   const rows = await sessions.list({
     mode: { type: 'recency', limit: 50 },
   });
-  const extractionCards = await Promise.all(
+  const sessionSnapshotCards = await Promise.all(
     rows
       .slice()
       .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
-      .map(async (observing) => ({
-        memoryId: observing.snapshotId,
-        title: observing.title,
-        summary: observing.summary,
-        updatedAt: observing.updatedAt,
-        references: await loadObservingReferences(observing.references),
+      .map(async (snapshot) => ({
+        memoryId: snapshot.snapshotId,
+        title: snapshot.title,
+        summary: snapshot.summary,
+        updatedAt: snapshot.updatedAt,
+        references: await loadSnapshotReferences(snapshot.references),
       })),
   );
 
-  const response: ObservingListResponse = {
-    extractions: extractionCards,
+  const response: SessionSnapshotListResponse = {
+    sessionSnapshots: sessionSnapshotCards,
     requestId: generateRequestId(),
   };
 

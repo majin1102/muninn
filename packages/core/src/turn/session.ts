@@ -1,6 +1,7 @@
 import type { RecentSessionCheckpoint, RecentTurn } from '../checkpoint.js';
 import type { NativeTables } from '../native.js';
 import type { Turn, TurnContent } from '../client.js';
+import path from 'node:path';
 import { resolveTurnSummary } from '../llm/turn-generator.js';
 import { readTurn, serializeTurn } from './types.js';
 import { hasText, normalizeSessionId } from './key.js';
@@ -24,6 +25,8 @@ export class Session {
       sessionId?: string;
       agent: string;
       observer: string;
+      project: string;
+      cwd: string;
       recentTurns?: RecentTurn[];
     },
   ) {
@@ -36,6 +39,7 @@ export class Session {
       this.touch();
       const sessionId = normalizeSessionId(content.sessionId);
       validateTurnContent(this.config, content, sessionId);
+      const ownership = resolveTurnOwnership(content);
       while (true) {
         const duplicate = this.findRecentDuplicate(content);
         if (!duplicate) {
@@ -57,6 +61,7 @@ export class Session {
         this.config,
         content,
         sessionId,
+        ownership,
         observingEpoch,
       );
       const rows = await this.client.turnTable.insert({
@@ -87,6 +92,8 @@ export class Session {
     return {
       sessionId: this.config.sessionId ?? null,
       agent: this.config.agent,
+      project: this.config.project,
+      cwd: this.config.cwd,
       turns: [...this.recentTurns],
     };
   }
@@ -141,6 +148,7 @@ async function buildTurn(
   config: { sessionId?: string; agent: string; observer: string },
   content: TurnContent,
   sessionId: string | undefined,
+  ownership: { project: string; cwd: string },
   observingEpoch: number,
 ): Promise<Turn> {
   const summary = await resolveTurnSummary({
@@ -157,12 +165,15 @@ async function buildTurn(
     createdAt,
     updatedAt,
     sessionId: sessionId ?? null,
+    project: ownership.project,
+    cwd: ownership.cwd,
     agent: config.agent,
     observer: config.observer,
     title: summary.title ?? null,
     summary: summary.summary ?? null,
     events: content.events.map((event) => ({ ...event })),
     artifacts: content.artifacts?.map((artifact) => ({ ...artifact })) ?? null,
+    metadata: content.metadata ?? null,
     prompt: content.prompt,
     response: content.response,
   };
@@ -173,7 +184,7 @@ async function buildTurn(
 }
 
 function validateTurnContent(
-  config: { sessionId?: string; agent: string; observer: string },
+  config: { sessionId?: string; agent: string; observer: string; project: string; cwd: string },
   content: TurnContent,
   sessionId: string | undefined,
 ): void {
@@ -195,6 +206,15 @@ function validateTurnContent(
   if (content.summary !== undefined && !hasText(content.summary)) {
     throw new Error('turn.summary must be a non-empty string');
   }
+  if (content.project !== undefined && !hasText(content.project)) {
+    throw new Error('turn.project must be a non-empty string');
+  }
+  if (content.cwd !== undefined && !hasText(content.cwd)) {
+    throw new Error('turn.cwd must be a non-empty string');
+  }
+  if (content.metadata !== undefined && !isMetadataObject(content.metadata)) {
+    throw new Error('turn.metadata must be an object or null');
+  }
   if (content.createdAt !== undefined && !isTimestamp(content.createdAt)) {
     throw new Error('turn.createdAt must be an ISO timestamp');
   }
@@ -211,6 +231,22 @@ function validateTurnContent(
   if (sessionId !== config.sessionId) {
     throw new Error('turn session does not match loaded session');
   }
+  const ownership = resolveTurnOwnership(content);
+  if (ownership.project !== config.project || ownership.cwd !== config.cwd) {
+    throw new Error('turn ownership does not match loaded session');
+  }
+}
+
+function resolveTurnOwnership(content: TurnContent): { project: string; cwd: string } {
+  const cwd = hasText(content.cwd) ? content.cwd.trim() : process.cwd();
+  const project = hasText(content.project)
+    ? content.project.trim()
+    : path.basename(cwd) || 'default';
+  return { project, cwd };
+}
+
+function isMetadataObject(value: unknown): value is Record<string, unknown> | null {
+  return value === null || (typeof value === 'object' && !Array.isArray(value));
 }
 
 function isTimestamp(value: unknown): value is string {

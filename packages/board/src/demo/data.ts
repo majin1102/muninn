@@ -8,6 +8,7 @@ export type DemoSessionAgentItem = {
 export type DemoSessionGroupItem = {
   sessionKey: string;
   displaySessionId: string;
+  projectKey: string;
   latestUpdatedAt: string;
 };
 
@@ -22,18 +23,18 @@ export type DemoSessionTimelineItem = {
   toolCalls?: ToolCall[];
 };
 
-export type DemoObservingReferenceItem = {
+export type DemoSessionSnapshotReferenceItem = {
   memoryId: string;
   timestamp: string;
   summary: string;
 };
 
-export type DemoObservingListItem = {
+export type DemoSessionSnapshotListItem = {
   memoryId: string;
   title: string;
   summary: string;
   updatedAt: string;
-  references: DemoObservingReferenceItem[];
+  references: DemoSessionSnapshotReferenceItem[];
 };
 
 export type DemoPipelineTask = PipelineTask;
@@ -62,7 +63,7 @@ export const demoPipelineTasks: DemoPipelineTask[] = [
     title: 'Global observing',
     target: 'Entity: Lance row id',
     status: 'running',
-    statusText: 'generating draft from 16 session observations',
+    statusText: 'generating draft from 16 extractions',
     startedAt: '2026-06-04T08:12:12.000Z',
     updatedAt: '2026-06-04T08:38:12.000Z',
     input: { bytes: 43600, tokens: 18400 },
@@ -94,7 +95,7 @@ export const demoPipelineTasks: DemoPipelineTask[] = [
     title: 'Session observing',
     target: 'codex session import timeline',
     status: 'done',
-    statusText: 'produced 12 session observations and queued global work',
+    statusText: 'produced 12 extractions and queued global work',
     startedAt: '2026-06-04T08:24:12.000Z',
     endedAt: '2026-06-04T08:36:12.000Z',
     updatedAt: '2026-06-04T08:36:12.000Z',
@@ -137,13 +138,13 @@ export const demoPipelineTasks: DemoPipelineTask[] = [
     title: 'Global observing',
     target: 'Entity: Muninn prompt design',
     status: 'queued',
-    statusText: 'waiting for session observations before global rewrite',
+    statusText: 'waiting for extractions before global rewrite',
     updatedAt: '2026-06-04T08:34:12.000Z',
     input: { bytes: 14800, tokens: 6100 },
     toolCalls: [],
     inputDetails: ['5 session-level observations', 'Entity key: Muninn prompt design', 'Below observer threshold'],
     outputDetails: ['Waiting to produce entity observation draft'],
-    trace: ['waiting for more session observations'],
+    trace: ['waiting for more extractions'],
     errors: [],
   },
   {
@@ -152,7 +153,7 @@ export const demoPipelineTasks: DemoPipelineTask[] = [
     title: 'Global observing',
     target: 'Entity: Board settings',
     status: 'failed',
-    statusText: 'parser validation failed after 8 session observations · retry retained',
+    statusText: 'parser validation failed after 8 extractions · retry retained',
     startedAt: '2026-06-04T08:29:12.000Z',
     endedAt: '2026-06-04T08:32:12.000Z',
     updatedAt: '2026-06-04T08:32:12.000Z',
@@ -175,20 +176,20 @@ export const demoPipelineTasks: DemoPipelineTask[] = [
 
 export const demoSessionGroups: Record<string, DemoSessionGroupItem[]> = {
   openclaw: [
-    { sessionKey: 'auth-refactor', displaySessionId: 'auth-refactor', latestUpdatedAt: '2026-06-01T12:01:00.000Z' },
-    { sessionKey: 'board-mvp', displaySessionId: 'board-mvp', latestUpdatedAt: '2026-06-01T07:15:00.000Z' },
+    { sessionKey: 'auth-refactor', displaySessionId: 'auth-refactor', projectKey: 'auth-refactor', latestUpdatedAt: '2026-06-01T12:01:00.000Z' },
+    { sessionKey: 'board-mvp', displaySessionId: 'board-mvp', projectKey: 'board-mvp', latestUpdatedAt: '2026-06-01T07:15:00.000Z' },
   ],
   claude_code: [
-    { sessionKey: 'auth-refactor', displaySessionId: 'auth-refactor', latestUpdatedAt: '2026-05-29T12:00:00.000Z' },
-    { sessionKey: 'release-check', displaySessionId: 'release-check', latestUpdatedAt: '2026-05-26T12:00:00.000Z' },
+    { sessionKey: 'auth-refactor', displaySessionId: 'auth-refactor', projectKey: 'auth-refactor', latestUpdatedAt: '2026-05-29T12:00:00.000Z' },
+    { sessionKey: 'release-check', displaySessionId: 'release-check', projectKey: 'release-check', latestUpdatedAt: '2026-05-26T12:00:00.000Z' },
   ],
   codex_cli: [
-    { sessionKey: 'auth-refactor', displaySessionId: 'auth-refactor', latestUpdatedAt: '2026-05-25T12:00:00.000Z' },
-    { sessionKey: 'sdk-cleanup', displaySessionId: 'sdk-cleanup', latestUpdatedAt: '2026-05-18T12:00:00.000Z' },
+    { sessionKey: 'auth-refactor', displaySessionId: 'auth-refactor', projectKey: 'auth-refactor', latestUpdatedAt: '2026-05-25T12:00:00.000Z' },
+    { sessionKey: 'sdk-cleanup', displaySessionId: 'sdk-cleanup', projectKey: 'sdk-cleanup', latestUpdatedAt: '2026-05-18T12:00:00.000Z' },
   ],
   memory_agent: [
-    { sessionKey: 'memory-inbox/daily-recall', displaySessionId: 'memory-inbox/daily-recall', latestUpdatedAt: '2026-06-01T13:32:00.000Z' },
-    { sessionKey: 'auth-refactor', displaySessionId: 'auth-refactor', latestUpdatedAt: '2026-05-18T12:00:00.000Z' },
+    { sessionKey: 'memory-inbox/daily-recall', displaySessionId: 'memory-inbox/daily-recall', projectKey: 'memory-inbox', latestUpdatedAt: '2026-06-01T13:32:00.000Z' },
+    { sessionKey: 'auth-refactor', displaySessionId: 'auth-refactor', projectKey: 'auth-refactor', latestUpdatedAt: '2026-05-18T12:00:00.000Z' },
   ],
 };
 
@@ -302,7 +303,7 @@ export const demoSessionTurns: Record<string, DemoSessionTimelineItem[]> = {
       memoryId: 'turn:1020',
       createdAt: '2026-03-20T11:32:00.000Z',
       updatedAt: '2026-03-20T11:32:00.000Z',
-      summary: '检查 MCP 命名调整对 demo 文档、说明页和演示入口的影响，确认 turn/capture、UI API 和 observing read model 的表述在对外展示层面保持一致',
+      summary: '检查 MCP 命名调整对 demo 文档、说明页和演示入口的影响，确认 turn/capture、UI API 和 session snapshot read model 的表述在对外展示层面保持一致',
     },
   ],
   'codex_cli::auth-refactor': [
@@ -869,7 +870,7 @@ export function renderTurn(turn: MemoryTurn) {
     updatedAt: '2026-03-20T12:30:00.000Z',
     markdown: `# session:2001
 
-## Observing
+## Session Memory
 
 写接口已经从历史的 message/add 收敛到 turn/capture，接口语义转为“一次提交一条完整 turn”
 
@@ -889,7 +890,7 @@ export function renderTurn(turn: MemoryTurn) {
     updatedAt: '2026-03-20T12:48:00.000Z',
     markdown: `# session:2002
 
-## Observing
+## Session Memory
 
 Muninn Board 更适合作为 memory explorer/workbench，而不是概念展示页
 
@@ -905,11 +906,11 @@ Muninn Board 更适合作为 memory explorer/workbench，而不是概念展示�
   },
 };
 
-export const demoObservings: DemoObservingListItem[] = [
+export const demoSessionSnapshots: DemoSessionSnapshotListItem[] = [
   {
     memoryId: 'session:2002',
     title: 'Muninn Board 应该采用控制台而不是小而美的展示页方向',
-    summary: 'Muninn 作为 memory format 和生态位项目，不适合继续沿用偏卡片、偏展示页的小而美思路。更合理的方向是白灰中性、左右平铺、以 explorer 和文档阅读为核心的控制台式界面，这样可以为后续扩展 observing、editing 和更多 memory layer 预留空间',
+    summary: 'Muninn 作为 memory format 和生态位项目，不适合继续沿用偏卡片、偏展示页的小而美思路。更合理的方向是白灰中性、左右平铺、以 explorer 和文档阅读为核心的控制台式界面，这样可以为后续扩展 session snapshots、editing 和更多 memory layer 预留空间',
     updatedAt: '2026-03-20T12:48:00.000Z',
     references: [
       {
@@ -927,7 +928,7 @@ export const demoObservings: DemoObservingListItem[] = [
   {
     memoryId: 'session:2001',
     title: '写接口命名已经稳定到 turn/capture',
-    summary: 'sidecar 的主写入口已经稳定到 turn/capture，接口语言从“写一个 session memory row”收敛到“一次提交一条完整 turn”。这一点能帮助后续 observing 蒸馏和 OpenClaw 精炼记忆的建模保持清晰',
+    summary: 'sidecar 的主写入口已经稳定到 turn/capture，接口语言从“写一个 session memory row”收敛到“一次提交一条完整 turn”。这一点能帮助后续 session memory extraction和 OpenClaw 精炼记忆的建模保持清晰',
     updatedAt: '2026-03-20T12:30:00.000Z',
     references: [
       {

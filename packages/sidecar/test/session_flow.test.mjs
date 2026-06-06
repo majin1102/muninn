@@ -7,14 +7,13 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import core from '@muninn/core';
 import { getNativeTables } from '../../core/dist/native.js';
 import { serializeTurn } from '../../core/dist/turn/types.js';
-import {
-  getSessionTreeLoadCountForTests,
-  resetSessionTreeCacheForTests,
-} from '@muninn/board/server';
+import { resetSessionTreeCacheForTests } from '@muninn/board/server';
 import { app } from '../dist/app.js';
 import { registerMuninnHooks } from '../../../openclaw/plugin/dist/src/hooks.js';
 
 const { shutdownCoreForTests } = core;
+const TEST_PROJECT = 'project-a';
+const TEST_CWD = '/workspace/project-a';
 
 async function makeDatasetUri() {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'muninn-format-test-'));
@@ -64,6 +63,8 @@ async function waitForWatermarkResolved() {
 function makeTurnContent(overrides = {}) {
   const turn = {
     sessionId: 'group-a',
+    project: TEST_PROJECT,
+    cwd: TEST_CWD,
     agent: 'agent-a',
     prompt: 'alpha prompt',
     response: 'alpha response',
@@ -85,6 +86,15 @@ async function captureTurn(turn) {
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ turn }),
   });
+}
+
+function sessionTurnsPath(agent, sessionKey, { cwd = TEST_CWD, offset = 0, limit = 10 } = {}) {
+  const params = new URLSearchParams({
+    cwd,
+    offset: String(offset),
+    limit: String(limit),
+  });
+  return `/api/v1/ui/session/agents/${encodeURIComponent(agent)}/sessions/${encodeURIComponent(sessionKey)}/turns?${params.toString()}`;
 }
 
 async function captureTurnAndGetTurn(turn) {
@@ -403,7 +413,7 @@ test('turn/capture accepts typed image and file artifacts', async (t) => {
   });
   assert.equal(addResponse.status, 204);
 
-  const listResponse = await app.request(`/api/v1/ui/session/agents/${encodeURIComponent('agent-a')}/sessions/${encodeURIComponent('group-a')}/turns`);
+  const listResponse = await app.request(sessionTurnsPath('agent-a', 'group-a'));
   assert.equal(listResponse.status, 200);
   const list = await json(listResponse);
   assert.equal(list.turns.length, 1);
@@ -646,13 +656,13 @@ test('timeline stays scoped to the full session key when agents share a sessionI
     assert.equal(response.status, 204);
   }
 
-  const agentTurnsResponse = await app.request('/api/v1/ui/session/agents/agent-a/sessions/group-a/turns?offset=0&limit=10');
+  const agentTurnsResponse = await app.request(sessionTurnsPath('agent-a', 'group-a'));
   assert.equal(agentTurnsResponse.status, 200);
   const agentTurns = await json(agentTurnsResponse);
   const firstTurnId = agentTurns.turns[0].memoryId;
   const secondTurnId = agentTurns.turns[1].memoryId;
 
-  const otherTurnsResponse = await app.request('/api/v1/ui/session/agents/agent-b/sessions/group-a/turns?offset=0&limit=10');
+  const otherTurnsResponse = await app.request(sessionTurnsPath('agent-b', 'group-a'));
   assert.equal(otherTurnsResponse.status, 200);
   const otherTurns = await json(otherTurnsResponse);
   const otherAgentTurnId = otherTurns.turns[0].memoryId;
@@ -867,7 +877,7 @@ test('ui session endpoints group by agent/session and return rendered turn docum
   assert.equal(ungroupedBody.sessions.length, 1);
   assert.equal(ungroupedBody.sessions[0].displaySessionId, 'group-b');
 
-  const turnsResponse = await app.request('/api/v1/ui/session/agents/openclaw/sessions/group-a/turns?offset=0&limit=10');
+  const turnsResponse = await app.request(sessionTurnsPath('openclaw', 'group-a'));
   assert.equal(turnsResponse.status, 200);
   const turnsBody = await json(turnsResponse);
   assert.equal(turnsBody.turns.length, 2);
@@ -887,7 +897,7 @@ test('ui session endpoints group by agent/session and return rendered turn docum
   assert.match(documentBody.document.markdown, /## Created At/);
   assert.match(documentBody.document.markdown, /first alpha prompt/);
 
-  const codexTurnsResponse = await app.request('/api/v1/ui/session/agents/codex_cli/sessions/group-b/turns?offset=0&limit=10');
+  const codexTurnsResponse = await app.request(sessionTurnsPath('codex_cli', 'group-b'));
   assert.equal(codexTurnsResponse.status, 200);
   const codexTurnsBody = await json(codexTurnsResponse);
   assert.equal(codexTurnsBody.turns.length, 1);
@@ -904,7 +914,7 @@ test('ui session endpoints group by agent/session and return rendered turn docum
   ]);
 });
 
-test('ui session default session turns include historical null session rows', async (t) => {
+test('ui session endpoints include native rows with indexed ownership fields', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(async () => {
     await shutdownCoreForTests();
@@ -922,7 +932,9 @@ test('ui session default session turns include historical null session rows', as
       turnId: 'turn:18446744073709551615',
       createdAt: '2026-06-03T01:00:00.000Z',
       updatedAt: '2026-06-03T01:01:00.000Z',
-      sessionId: null,
+      sessionId: 'group-native',
+      project: TEST_PROJECT,
+      cwd: TEST_CWD,
       agent: 'agent-a',
       observer: 'default',
       title: 'historical default prompt',
@@ -941,10 +953,12 @@ test('ui session default session turns include historical null session rows', as
   assert.equal(sessionsResponse.status, 200);
   const sessionsBody = await json(sessionsResponse);
   assert.equal(sessionsBody.sessions.length, 1);
-  assert.equal(sessionsBody.sessions[0].sessionKey, '__agent_default__:agent-a');
+  assert.equal(sessionsBody.sessions[0].sessionKey, 'group-native');
+  assert.equal(sessionsBody.sessions[0].projectKey, TEST_PROJECT);
+  assert.equal(sessionsBody.sessions[0].cwd, TEST_CWD);
 
   const turnsResponse = await app.request(
-    `/api/v1/ui/session/agents/agent-a/sessions/${encodeURIComponent('__agent_default__:agent-a')}/turns?offset=0&limit=10`
+    sessionTurnsPath('agent-a', 'group-native')
   );
   assert.equal(turnsResponse.status, 200);
   const turnsBody = await json(turnsResponse);
@@ -952,7 +966,7 @@ test('ui session default session turns include historical null session rows', as
   assert.equal(turnsBody.turns[0].prompt, 'historical default prompt');
 });
 
-test('ui session endpoints reuse the cached session tree until a write invalidates it', async (t) => {
+test('ui session endpoints expose session index writes immediately', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(async () => rm(dir, { recursive: true, force: true }));
 
@@ -962,15 +976,18 @@ test('ui session endpoints reuse the cached session tree until a write invalidat
 
   const first = await app.request('/api/v1/ui/session/agents');
   assert.equal(first.status, 200);
-  assert.equal(getSessionTreeLoadCountForTests(), 1);
+  const firstBody = await json(first);
+  assert.equal(firstBody.agents.length, 0);
 
   const second = await app.request('/api/v1/ui/session/agents');
   assert.equal(second.status, 200);
-  assert.equal(getSessionTreeLoadCountForTests(), 1);
+  const secondBody = await json(second);
+  assert.equal(secondBody.agents.length, 0);
 
   const groups = await app.request('/api/v1/ui/session/agents/openclaw/sessions');
   assert.equal(groups.status, 200);
-  assert.equal(getSessionTreeLoadCountForTests(), 1);
+  const groupsBody = await json(groups);
+  assert.equal(groupsBody.sessions.length, 0);
 
   const addResponse = await captureTurn(makeTurnContent({
     sessionId: 'group-a',
@@ -982,7 +999,15 @@ test('ui session endpoints reuse the cached session tree until a write invalidat
 
   const third = await app.request('/api/v1/ui/session/agents');
   assert.equal(third.status, 200);
-  assert.equal(getSessionTreeLoadCountForTests(), 2);
+  const thirdBody = await json(third);
+  assert.deepEqual(thirdBody.agents.map((agent) => agent.agent), ['openclaw']);
+
+  const updatedGroups = await app.request('/api/v1/ui/session/agents/openclaw/sessions');
+  assert.equal(updatedGroups.status, 200);
+  const updatedGroupsBody = await json(updatedGroups);
+  assert.equal(updatedGroupsBody.sessions.length, 1);
+  assert.equal(updatedGroupsBody.sessions[0].sessionKey, 'group-a');
+  assert.equal(updatedGroupsBody.sessions[0].cwd, TEST_CWD);
 });
 
 test('session snapshots are readable through list/detail/timeline', async (t) => {
@@ -1027,7 +1052,7 @@ test('session snapshots are readable through list/detail/timeline', async (t) =>
 
 });
 
-test('ui observing endpoint returns live session snapshots and documents', async (t) => {
+test('ui session snapshots endpoint returns live session snapshots and documents', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(async () => rm(dir, { recursive: true, force: true }));
 
@@ -1044,14 +1069,14 @@ test('ui observing endpoint returns live session snapshots and documents', async
 
   await new Promise((resolve) => setTimeout(resolve, 50));
 
-  const observingsResponse = await app.request('/api/v1/ui/observing');
-  assert.equal(observingsResponse.status, 200);
-  const observings = await json(observingsResponse);
-  assert.ok(observings.extractions.length >= 1);
-  const snapshot = observings.extractions.find((item) => item.memoryId.startsWith('session:'));
+  const snapshotsResponse = await app.request('/api/v1/ui/session-snapshots');
+  assert.equal(snapshotsResponse.status, 200);
+  const snapshots = await json(snapshotsResponse);
+  assert.ok(snapshots.sessionSnapshots.length >= 1);
+  const snapshot = snapshots.sessionSnapshots.find((item) => item.memoryId.startsWith('session:'));
   assert.ok(snapshot);
   assert.ok(snapshot.references.length >= 1);
-  assert.match(snapshot.summary, /Default observing thread for session group-ui/);
+  assert.match(snapshot.summary, /Default session memory thread for session group-ui/);
 
   const documentResponse = await app.request(
     `/api/v1/ui/memories/${encodeURIComponent(snapshot.memoryId)}/document`

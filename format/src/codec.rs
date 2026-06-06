@@ -9,15 +9,16 @@ use arrow_schema::{ArrowError, DataType, Field};
 use chrono::{TimeZone, Utc};
 use lance::dataset::ROW_ID;
 use lance::{Error, Result};
+use serde_json::{Map, Value};
 
 use super::schema::{
-    extraction_schema, observation_context_schema, observation_schema, session_schema, turn_schema,
+    extraction_schema, global_observation_context_schema, global_observation_schema, session_schema, turn_schema,
 };
 use crate::config::extraction_config;
 use crate::extraction::Extraction;
 use crate::memory_id::{MemoryId, MemoryLayer};
-use crate::observation_context::ObservationContext;
-use crate::observation::Observation;
+use crate::global_observation_context::GlobalObservationContext;
+use crate::global_observation::GlobalObservation;
 use crate::session::SessionSnapshot;
 use crate::turn::{Artifact, Turn, TurnEvent};
 
@@ -39,6 +40,8 @@ pub(crate) fn turns_to_record_batch(
             .collect::<Vec<_>>(),
     );
     let agent = StringArray::from_iter_values(turns.iter().map(|turn| turn.agent.as_str()));
+    let project = StringArray::from_iter_values(turns.iter().map(|turn| turn.project.as_str()));
+    let cwd = StringArray::from_iter_values(turns.iter().map(|turn| turn.cwd.as_str()));
     let observer = StringArray::from_iter_values(turns.iter().map(|turn| turn.observer.as_str()));
     let title = StringArray::from(
         turns
@@ -63,6 +66,12 @@ pub(crate) fn turns_to_record_batch(
                     .as_ref()
                     .map(|artifacts| artifacts_to_json(artifacts))
             })
+            .collect::<Vec<_>>(),
+    );
+    let metadata_json = StringArray::from(
+        turns
+            .iter()
+            .map(|turn| turn.metadata.as_ref().map(metadata_to_json))
             .collect::<Vec<_>>(),
     );
     let prompt = StringArray::from(
@@ -90,12 +99,15 @@ pub(crate) fn turns_to_record_batch(
             Arc::new(created_at),
             Arc::new(updated_at),
             Arc::new(session_ids),
+            Arc::new(project),
+            Arc::new(cwd),
             Arc::new(agent),
             Arc::new(observer),
             Arc::new(title),
             Arc::new(summary),
             Arc::new(events_json),
             Arc::new(artifacts_json),
+            Arc::new(metadata_json),
             Arc::new(prompt),
             Arc::new(response),
             Arc::new(observing_epoch),
@@ -135,48 +147,63 @@ pub(crate) fn record_batch_to_turns_with_row_ids(
         .as_any()
         .downcast_ref::<StringArray>()
         .unwrap();
-    let agent = batch
+    let project = batch
         .column(3)
         .as_any()
         .downcast_ref::<StringArray>()
         .unwrap();
-    let observer = batch
+    let cwd = batch
         .column(4)
         .as_any()
         .downcast_ref::<StringArray>()
         .unwrap();
-    let title = batch
+    let agent = batch
         .column(5)
         .as_any()
         .downcast_ref::<StringArray>()
         .unwrap();
-    let summary = batch
+    let observer = batch
         .column(6)
         .as_any()
         .downcast_ref::<StringArray>()
         .unwrap();
-    let events_json = batch
+    let title = batch
         .column(7)
         .as_any()
         .downcast_ref::<StringArray>()
         .unwrap();
-    let artifacts_json = batch
+    let summary = batch
         .column(8)
         .as_any()
         .downcast_ref::<StringArray>()
         .unwrap();
-    let prompt = batch
+    let events_json = batch
         .column(9)
         .as_any()
         .downcast_ref::<StringArray>()
         .unwrap();
-    let response = batch
+    let artifacts_json = batch
         .column(10)
         .as_any()
         .downcast_ref::<StringArray>()
         .unwrap();
-    let observing_epoch = batch
+    let metadata_json = batch
         .column(11)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap();
+    let prompt = batch
+        .column(12)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap();
+    let response = batch
+        .column(13)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap();
+    let observing_epoch = batch
+        .column(14)
         .as_any()
         .downcast_ref::<UInt64Array>()
         .unwrap();
@@ -194,12 +221,15 @@ pub(crate) fn record_batch_to_turns_with_row_ids(
                 .single()
                 .unwrap(),
             session_id: optional_string(session_ids, index),
+            project: project.value(index).to_string(),
+            cwd: cwd.value(index).to_string(),
             agent: agent.value(index).to_string(),
             observer: observer.value(index).to_string(),
             title: optional_string(title, index),
             summary: optional_string(summary, index),
             events: required_events(events_json, index)?,
             artifacts: optional_artifacts(artifacts_json, index),
+            metadata: optional_json(metadata_json, index),
             prompt: optional_string(prompt, index),
             response: optional_string(response, index),
             observing_epoch: optional_u64(observing_epoch, index),
@@ -254,6 +284,10 @@ pub(crate) fn artifacts_to_json(artifacts: &[Artifact]) -> String {
     serde_json::to_string(artifacts).expect("artifacts should serialize")
 }
 
+pub(crate) fn metadata_to_json(metadata: &Map<String, Value>) -> String {
+    serde_json::to_string(metadata).expect("metadata should serialize")
+}
+
 pub(crate) fn optional_json<T>(array: &StringArray, index: usize) -> Option<T>
 where
     T: serde::de::DeserializeOwned,
@@ -282,6 +316,21 @@ pub(crate) fn session_snapshots_to_record_batch(
             .iter()
             .map(|session_snapshot| session_snapshot.session_id.as_str()),
     );
+    let project = StringArray::from_iter_values(
+        session_snapshots
+            .iter()
+            .map(|session_snapshot| session_snapshot.project.as_str()),
+    );
+    let cwd = StringArray::from_iter_values(
+        session_snapshots
+            .iter()
+            .map(|session_snapshot| session_snapshot.cwd.as_str()),
+    );
+    let agent = StringArray::from_iter_values(
+        session_snapshots
+            .iter()
+            .map(|session_snapshot| session_snapshot.agent.as_str()),
+    );
     let snapshot_sequence = Int64Array::from_iter_values(
         session_snapshots
             .iter()
@@ -299,10 +348,10 @@ pub(crate) fn session_snapshots_to_record_batch(
             .map(|session_snapshot| session_snapshot.updated_at.timestamp_micros()),
     )
     .with_timezone("UTC");
-    let observer = StringArray::from_iter_values(
+    let extractor = StringArray::from_iter_values(
         session_snapshots
             .iter()
-            .map(|session_snapshot| session_snapshot.observer.as_str()),
+            .map(|session_snapshot| session_snapshot.extractor.as_str()),
     );
     let title =
         StringArray::from_iter_values(session_snapshots.iter().map(|session_snapshot| session_snapshot.title.as_str()));
@@ -326,10 +375,13 @@ pub(crate) fn session_snapshots_to_record_batch(
         Arc::new(session_schema()),
         vec![
             Arc::new(session_ids),
+            Arc::new(project),
+            Arc::new(cwd),
+            Arc::new(agent),
             Arc::new(snapshot_sequence),
             Arc::new(created_at),
             Arc::new(updated_at),
-            Arc::new(observer),
+            Arc::new(extractor),
             Arc::new(title),
             Arc::new(summary),
             Arc::new(content),
@@ -360,43 +412,58 @@ pub(crate) fn record_batch_to_session_snapshots_with_row_ids(
         .as_any()
         .downcast_ref::<StringArray>()
         .unwrap();
-    let snapshot_sequence = batch
+    let project = batch
         .column(1)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap();
+    let cwd = batch
+        .column(2)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap();
+    let agent = batch
+        .column(3)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap();
+    let snapshot_sequence = batch
+        .column(4)
         .as_any()
         .downcast_ref::<Int64Array>()
         .unwrap();
     let created_at = batch
-        .column(2)
+        .column(5)
         .as_any()
         .downcast_ref::<TimestampMicrosecondArray>()
         .unwrap();
     let updated_at = batch
-        .column(3)
+        .column(6)
         .as_any()
         .downcast_ref::<TimestampMicrosecondArray>()
         .unwrap();
-    let observer = batch
-        .column(4)
-        .as_any()
-        .downcast_ref::<StringArray>()
-        .unwrap();
-    let title = batch
-        .column(5)
-        .as_any()
-        .downcast_ref::<StringArray>()
-        .unwrap();
-    let summary = batch
-        .column(6)
-        .as_any()
-        .downcast_ref::<StringArray>()
-        .unwrap();
-    let content = batch
+    let extractor = batch
         .column(7)
         .as_any()
         .downcast_ref::<StringArray>()
         .unwrap();
-    let references = batch
+    let title = batch
         .column(8)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap();
+    let summary = batch
+        .column(9)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap();
+    let content = batch
+        .column(10)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap();
+    let references = batch
+        .column(11)
         .as_any()
         .downcast_ref::<ListArray>()
         .unwrap();
@@ -406,6 +473,9 @@ pub(crate) fn record_batch_to_session_snapshots_with_row_ids(
             Ok(SessionSnapshot {
                 snapshot_id: MemoryId::new(MemoryLayer::Session, row_ids[index]),
                 session_id: session_ids.value(index).to_string(),
+                project: project.value(index).to_string(),
+                cwd: cwd.value(index).to_string(),
+                agent: agent.value(index).to_string(),
                 snapshot_sequence: snapshot_sequence.value(index),
                 created_at: Utc
                     .timestamp_micros(created_at.value(index))
@@ -415,7 +485,7 @@ pub(crate) fn record_batch_to_session_snapshots_with_row_ids(
                     .timestamp_micros(updated_at.value(index))
                     .single()
                     .unwrap(),
-                observer: observer.value(index).to_string(),
+                extractor: extractor.value(index).to_string(),
                 title: title.value(index).to_string(),
                 summary: summary.value(index).to_string(),
                 content: content.value(index).to_string(),
@@ -426,11 +496,11 @@ pub(crate) fn record_batch_to_session_snapshots_with_row_ids(
     Ok(session_snapshots)
 }
 
-pub(crate) fn observation_contexts_to_record_batch(
-    rows: &[ObservationContext],
+pub(crate) fn global_observation_contexts_to_record_batch(
+    rows: &[GlobalObservationContext],
 ) -> std::result::Result<RecordBatch, ArrowError> {
     let ids = StringArray::from_iter_values(rows.iter().map(|row| row.id.as_str()));
-    let observing_path = StringArray::from_iter_values(rows.iter().map(|row| row.observing_path.as_str()));
+    let global_path = StringArray::from_iter_values(rows.iter().map(|row| row.global_path.as_str()));
     let parent_id = StringArray::from(rows.iter().map(|row| row.parent_id.as_deref()).collect::<Vec<_>>());
     let position = Int64Array::from_iter_values(rows.iter().map(|row| row.position));
     let content = StringArray::from_iter_values(rows.iter().map(|row| row.content.as_str()));
@@ -447,10 +517,10 @@ pub(crate) fn observation_contexts_to_record_batch(
     let observer = StringArray::from_iter_values(rows.iter().map(|row| row.observer.as_str()));
 
     Ok(RecordBatch::try_new(
-        Arc::new(observation_context_schema()),
+        Arc::new(global_observation_context_schema()),
         vec![
             Arc::new(ids),
-            Arc::new(observing_path),
+            Arc::new(global_path),
             Arc::new(parent_id),
             Arc::new(position),
             Arc::new(content),
@@ -463,12 +533,12 @@ pub(crate) fn observation_contexts_to_record_batch(
     )?)
 }
 
-pub(crate) fn observation_contexts_to_reader(
-    rows: Vec<ObservationContext>,
+pub(crate) fn global_observation_contexts_to_reader(
+    rows: Vec<GlobalObservationContext>,
 ) -> Result<RecordBatchIterator<impl Iterator<Item = std::result::Result<RecordBatch, ArrowError>>>>
 {
-    let schema = Arc::new(observation_context_schema());
-    let batch = observation_contexts_to_record_batch(&rows)
+    let schema = Arc::new(global_observation_context_schema());
+    let batch = global_observation_contexts_to_record_batch(&rows)
         .map_err(|error| Error::invalid_input(format!("build observation context batch: {error}")))?;
     Ok(RecordBatchIterator::new(
         vec![Ok(batch)].into_iter(),
@@ -476,13 +546,13 @@ pub(crate) fn observation_contexts_to_reader(
     ))
 }
 
-pub(crate) fn record_batch_to_observation_contexts(batch: &RecordBatch) -> Result<Vec<ObservationContext>> {
+pub(crate) fn record_batch_to_global_observation_contexts(batch: &RecordBatch) -> Result<Vec<GlobalObservationContext>> {
     let ids = batch
         .column(0)
         .as_any()
         .downcast_ref::<StringArray>()
         .unwrap();
-    let observing_path = batch
+    let global_path = batch
         .column(1)
         .as_any()
         .downcast_ref::<StringArray>()
@@ -530,9 +600,9 @@ pub(crate) fn record_batch_to_observation_contexts(batch: &RecordBatch) -> Resul
 
     (0..batch.num_rows())
         .map(|index| {
-            Ok(ObservationContext {
+            Ok(GlobalObservationContext {
                 id: ids.value(index).to_string(),
-                observing_path: observing_path.value(index).to_string(),
+                global_path: global_path.value(index).to_string(),
                 parent_id: (!parent_id.is_null(index)).then(|| parent_id.value(index).to_string()),
                 position: position.value(index),
                 content: content.value(index).to_string(),
@@ -567,22 +637,17 @@ pub(crate) fn batch_row_ids(batch: &RecordBatch) -> Result<Vec<u64>> {
 pub(crate) fn extractions_to_record_batch(rows: &[Extraction]) -> Result<RecordBatch> {
     let dimensions = extraction_dimensions()?;
     let ids = StringArray::from_iter_values(rows.iter().map(|row| row.id.as_str()));
-    let text = StringArray::from_iter_values(rows.iter().map(|row| row.text.as_str()));
-    let context = StringArray::from_iter(rows.iter().map(|row| row.context.as_deref()));
-    let anchors = build_string_list_array(rows.iter().map(|row| Some(&row.anchors)));
-    let search_text = StringArray::from_iter_values(rows.iter().map(extraction_search_text));
+    let title = StringArray::from_iter_values(rows.iter().map(|row| row.title.as_str()));
+    let summary = StringArray::from_iter_values(rows.iter().map(|row| row.summary.as_str()));
+    let content = StringArray::from_iter_values(rows.iter().map(|row| row.content.as_str()));
+    let cwd = StringArray::from_iter_values(rows.iter().map(|row| row.cwd.as_str()));
     let vector = build_float32_fixed_size_list_array(
         rows.iter().map(|row| row.vector.as_slice()),
         dimensions,
     )
     .map_err(|error| Error::invalid_input(format!("invalid extraction vector: {error}")))?;
-    let importance = Float32Array::from_iter_values(rows.iter().map(|row| row.importance));
-    let category = StringArray::from_iter_values(rows.iter().map(|row| row.category.as_str()));
     let turn_refs = build_string_list_array(rows.iter().map(|row| Some(&row.turn_refs)));
-    let observation_paths = build_string_list_array(rows.iter().map(|row| Some(&row.observation_paths)));
-    let observed_root_anchors = build_string_list_array(
-        rows.iter().map(|row| Some(&row.observed_root_anchors)),
-    );
+    let global_observation_paths = build_string_list_array(rows.iter().map(|row| Some(&row.global_observation_paths)));
     let created_at = TimestampMicrosecondArray::from_iter_values(
         rows.iter().map(|row| row.created_at.timestamp_micros()),
     )
@@ -596,16 +661,13 @@ pub(crate) fn extractions_to_record_batch(rows: &[Extraction]) -> Result<RecordB
         Arc::new(extraction_schema(dimensions)),
         vec![
             Arc::new(ids),
-            Arc::new(text),
-            Arc::new(context),
-            Arc::new(anchors),
-            Arc::new(search_text),
+            Arc::new(title),
+            Arc::new(summary),
+            Arc::new(content),
+            Arc::new(cwd),
             Arc::new(vector),
-            Arc::new(importance),
-            Arc::new(category),
             Arc::new(turn_refs),
-            Arc::new(observation_paths),
-            Arc::new(observed_root_anchors),
+            Arc::new(global_observation_paths),
             Arc::new(created_at),
             Arc::new(updated_at),
         ],
@@ -632,54 +694,44 @@ pub(crate) fn record_batch_to_extractions(batch: &RecordBatch) -> Result<Vec<Ext
         .as_any()
         .downcast_ref::<StringArray>()
         .unwrap();
-    let text = batch
+    let title = batch
         .column(1)
         .as_any()
         .downcast_ref::<StringArray>()
         .unwrap();
-    let context = batch
+    let summary = batch
         .column(2)
         .as_any()
         .downcast_ref::<StringArray>()
         .unwrap();
-    let anchors = batch
+    let content = batch
         .column(3)
-        .as_any()
-        .downcast_ref::<ListArray>()
-        .unwrap();
-    let vector = batch.column(5);
-    let importance = batch
-        .column(6)
-        .as_any()
-        .downcast_ref::<Float32Array>()
-        .unwrap();
-    let category = batch
-        .column(7)
         .as_any()
         .downcast_ref::<StringArray>()
         .unwrap();
+    let cwd = batch
+        .column(4)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap();
+    let vector = batch.column(5);
     let turn_refs = batch
-        .column(8)
+        .column(6)
         .as_any()
         .downcast_ref::<ListArray>()
         .unwrap();
-    let observation_paths = batch
-        .column(9)
-        .as_any()
-        .downcast_ref::<ListArray>()
-        .unwrap();
-    let observed_root_anchors = batch
-        .column(10)
+    let global_observation_paths = batch
+        .column(7)
         .as_any()
         .downcast_ref::<ListArray>()
         .unwrap();
     let created_at = batch
-        .column(11)
+        .column(8)
         .as_any()
         .downcast_ref::<TimestampMicrosecondArray>()
         .unwrap();
     let updated_at = batch
-        .column(12)
+        .column(9)
         .as_any()
         .downcast_ref::<TimestampMicrosecondArray>()
         .unwrap();
@@ -698,15 +750,13 @@ pub(crate) fn record_batch_to_extractions(batch: &RecordBatch) -> Result<Vec<Ext
 
             Ok(Extraction {
                 id: ids.value(index).to_string(),
-                text: text.value(index).to_string(),
-                context: (!context.is_null(index)).then(|| context.value(index).to_string()),
-                anchors: optional_string_list(anchors, index).unwrap_or_default(),
+                title: title.value(index).to_string(),
+                summary: summary.value(index).to_string(),
+                content: content.value(index).to_string(),
+                cwd: cwd.value(index).to_string(),
                 vector,
-                importance: importance.value(index),
-                category: category.value(index).to_string(),
                 turn_refs: optional_string_list(turn_refs, index).unwrap_or_default(),
-                observation_paths: optional_string_list(observation_paths, index).unwrap_or_default(),
-                observed_root_anchors: optional_string_list(observed_root_anchors, index).unwrap_or_default(),
+                global_observation_paths: optional_string_list(global_observation_paths, index).unwrap_or_default(),
                 created_at: Utc
                     .timestamp_micros(created_at.value(index))
                     .single()
@@ -720,16 +770,16 @@ pub(crate) fn record_batch_to_extractions(batch: &RecordBatch) -> Result<Vec<Ext
         .collect()
 }
 
-pub(crate) fn observations_to_record_batch(rows: &[Observation]) -> Result<RecordBatch> {
+pub(crate) fn global_observations_to_record_batch(rows: &[GlobalObservation]) -> Result<RecordBatch> {
     let dimensions = extraction_dimensions()?;
     let ids = StringArray::from_iter_values(rows.iter().map(|row| row.id.as_str()));
-    let observing_path = StringArray::from_iter_values(rows.iter().map(|row| row.observing_path.as_str()));
+    let global_path = StringArray::from_iter_values(rows.iter().map(|row| row.global_path.as_str()));
     let text = StringArray::from_iter_values(rows.iter().map(|row| row.text.as_str()));
     let vector = build_float32_fixed_size_list_array(
         rows.iter().map(|row| row.vector.as_slice()),
         dimensions,
     )
-    .map_err(|error| Error::invalid_input(format!("invalid observation vector: {error}")))?;
+    .map_err(|error| Error::invalid_input(format!("invalid global observation vector: {error}")))?;
     let extraction_refs = build_string_list_array(rows.iter().map(|row| Some(&row.extraction_refs)));
     let created_at = TimestampMicrosecondArray::from_iter_values(
         rows.iter().map(|row| row.created_at.timestamp_micros()),
@@ -741,10 +791,10 @@ pub(crate) fn observations_to_record_batch(rows: &[Observation]) -> Result<Recor
     .with_timezone("UTC");
 
     RecordBatch::try_new(
-        Arc::new(observation_schema(dimensions)),
+        Arc::new(global_observation_schema(dimensions)),
         vec![
             Arc::new(ids),
-            Arc::new(observing_path),
+            Arc::new(global_path),
             Arc::new(text),
             Arc::new(vector),
             Arc::new(extraction_refs),
@@ -752,29 +802,29 @@ pub(crate) fn observations_to_record_batch(rows: &[Observation]) -> Result<Recor
             Arc::new(updated_at),
         ],
     )
-    .map_err(|error| Error::invalid_input(format!("build observation batch: {error}")))
+    .map_err(|error| Error::invalid_input(format!("build global observation batch: {error}")))
 }
 
-pub(crate) fn observations_to_reader(
-    rows: Vec<Observation>,
+pub(crate) fn global_observations_to_reader(
+    rows: Vec<GlobalObservation>,
 ) -> Result<RecordBatchIterator<impl Iterator<Item = std::result::Result<RecordBatch, ArrowError>>>>
 {
     let dimensions = extraction_dimensions()?;
-    let schema = Arc::new(observation_schema(dimensions));
-    let batch = observations_to_record_batch(&rows).map_err(arrow_error_from_lance)?;
+    let schema = Arc::new(global_observation_schema(dimensions));
+    let batch = global_observations_to_record_batch(&rows).map_err(arrow_error_from_lance)?;
     Ok(RecordBatchIterator::new(
         vec![Ok(batch)].into_iter(),
         schema,
     ))
 }
 
-pub(crate) fn record_batch_to_observations(batch: &RecordBatch) -> Result<Vec<Observation>> {
+pub(crate) fn record_batch_to_global_observations(batch: &RecordBatch) -> Result<Vec<GlobalObservation>> {
     let ids = batch
         .column(0)
         .as_any()
         .downcast_ref::<StringArray>()
         .unwrap();
-    let observing_path = batch
+    let global_path = batch
         .column(1)
         .as_any()
         .downcast_ref::<StringArray>()
@@ -808,14 +858,14 @@ pub(crate) fn record_batch_to_observations(batch: &RecordBatch) -> Result<Vec<Ob
                 optional_float32_fixed_size_list(vector, index).unwrap_or_default()
             } else {
                 return Err(Error::invalid_input(format!(
-                    "observation.vector must be FixedSizeList<Float32, N>, got {:?}",
+                    "global_observation.vector must be FixedSizeList<Float32, N>, got {:?}",
                     vector.data_type()
                 )));
             };
 
-            Ok(Observation {
+            Ok(GlobalObservation {
                 id: ids.value(index).to_string(),
-                observing_path: observing_path.value(index).to_string(),
+                global_path: global_path.value(index).to_string(),
                 text: text.value(index).to_string(),
                 vector,
                 extraction_refs: optional_string_list(extraction_refs, index).unwrap_or_default(),
@@ -830,10 +880,6 @@ pub(crate) fn record_batch_to_observations(batch: &RecordBatch) -> Result<Vec<Ob
             })
         })
         .collect()
-}
-
-fn extraction_search_text(row: &Extraction) -> String {
-    row.text.clone()
 }
 
 pub(crate) fn build_float32_fixed_size_list_array<'a>(
@@ -890,6 +936,7 @@ pub(crate) fn arrow_error_from_lance(error: Error) -> ArrowError {
 mod tests {
     use super::*;
     use chrono::TimeZone;
+    use std::fs;
 
     fn sample_turn() -> Turn {
         Turn {
@@ -897,6 +944,8 @@ mod tests {
             created_at: Utc.timestamp_micros(1_000_000).single().unwrap(),
             updated_at: Utc.timestamp_micros(2_000_000).single().unwrap(),
             session_id: Some("session-1".to_string()),
+            project: "muninn".to_string(),
+            cwd: "/repo/muninn".to_string(),
             agent: "agent".to_string(),
             observer: "observer".to_string(),
             title: Some("Title".to_string()),
@@ -907,9 +956,53 @@ mod tests {
                 artifacts: None,
             }],
             artifacts: None,
+            metadata: None,
             prompt: Some("hello".to_string()),
             response: Some("world".to_string()),
             observing_epoch: None,
+        }
+    }
+
+    fn sample_extraction() -> Extraction {
+        Extraction {
+            id: "extraction-1".to_string(),
+            title: "Report defaults".to_string(),
+            summary: "Report defaults require CSV export names.".to_string(),
+            content: "## Title\n\nReport defaults\n\n## Summary\n\nReport defaults require CSV export names.\n\n## Content\n\n- Use `daily-report.csv`.".to_string(),
+            cwd: "/repo/reports".to_string(),
+            vector: vec![0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8],
+            turn_refs: vec!["turn:1".to_string()],
+            global_observation_paths: vec!["reports".to_string()],
+            created_at: Utc.timestamp_micros(3_000_000).single().unwrap(),
+            updated_at: Utc.timestamp_micros(4_000_000).single().unwrap(),
+        }
+    }
+
+    fn write_test_config(dir: &tempfile::TempDir) {
+        let home = dir.path().join("muninn");
+        fs::create_dir_all(&home).unwrap();
+        fs::write(
+            home.join("muninn.json"),
+            serde_json::to_string_pretty(&serde_json::json!({
+                "providers": {
+                    "embedding": {
+                        "default": {
+                            "type": "mock",
+                            "dimensions": 8
+                        }
+                    }
+                },
+                "extractor": {
+                    "name": "default-extractor",
+                    "llmProvider": "default",
+                    "embeddingProvider": "default"
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        unsafe {
+            std::env::set_var("MUNINN_HOME", home);
         }
     }
 
@@ -921,7 +1014,7 @@ mod tests {
             .iter()
             .enumerate()
             .map(|(index, column)| {
-                if index == 7 {
+                if index == 9 {
                     Arc::new(StringArray::from_iter_values(["not json"])) as Arc<dyn Array>
                 } else {
                     Arc::clone(column)
@@ -939,5 +1032,27 @@ mod tests {
                 .contains("invalid events_json for turn row 0"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn extraction_codec_roundtrips_title_summary_content() {
+        let dir = tempfile::tempdir().unwrap();
+        write_test_config(&dir);
+
+        let batch = extractions_to_record_batch(&[sample_extraction()]).unwrap();
+        assert!(batch.schema().field_with_name("title").is_ok());
+        assert!(batch.schema().field_with_name("summary").is_ok());
+        assert!(batch.schema().field_with_name("content").is_ok());
+        assert!(batch.schema().field_with_name("text").is_err());
+        assert!(batch.schema().field_with_name("context").is_err());
+        assert!(batch.schema().field_with_name("search_text").is_err());
+
+        let rows = record_batch_to_extractions(&batch).unwrap();
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].title, "Report defaults");
+        assert_eq!(rows[0].summary, "Report defaults require CSV export names.");
+        assert!(rows[0].content.contains("## Content"));
+        assert_eq!(rows[0].turn_refs, vec!["turn:1"]);
     }
 }

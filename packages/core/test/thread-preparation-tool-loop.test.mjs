@@ -242,12 +242,17 @@ test('thread preparation writes trace with input, tool calls, and final result',
 function storedExtraction(id, text = `${id} text`) {
   return {
     id,
-    text,
+    title: text,
+    summary: text,
+    content: `## Title\n\n${text}\n\n## Summary\n\n${text}\n\n## Content\n\n`,
+    anchors: [],
     vector: [1, 0, 0, 0],
-    importance: 1,
     category: 'Fact',
-    references: ['turn:1'],
+    turnRefs: ['turn:1'],
+    observationPaths: [],
+    observedRootAnchors: [],
     createdAt: '2024-01-01T00:00:00Z',
+    updatedAt: '2024-01-01T00:00:00Z',
   };
 }
 

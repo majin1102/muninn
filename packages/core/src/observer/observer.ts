@@ -18,8 +18,8 @@ const noopCheckpointLock: CheckpointLock = {
 
 export class Observer {
   readonly name: string;
-  private readonly anchorThreshold: number;
-  private readonly anchorBatchSize: number;
+  private readonly cwdThreshold: number;
+  private readonly cwdBatchSize: number;
   private readonly shutdownController = new AbortController();
   private readonly changeWaiters = new Set<() => void>();
   private loopPromise: Promise<void> | null = null;
@@ -43,13 +43,13 @@ export class Observer {
     }
     this.name = config.name;
     const runtime = getObserverRuntimeConfig();
-    this.anchorThreshold = runtime.anchorThreshold;
-    this.anchorBatchSize = runtime.anchorBatchSize;
+    this.cwdThreshold = runtime.cwdThreshold;
+    this.cwdBatchSize = runtime.cwdBatchSize;
     this.baseline = checkpoint?.baseline ?? {
-      observationContext: 0,
-      observation: 0,
+      globalObservationContext: 0,
+      global_observation: 0,
     };
-    this.observeQueue = checkpoint?.observeQueue ?? { anchors: [] };
+    this.observeQueue = checkpoint?.observeQueue ?? { cwdBuckets: [] };
   }
 
   private readonly database: string;
@@ -127,8 +127,8 @@ export class Observer {
     while (!this.shuttingDown) {
       try {
         const batch = readyBucket(this.observeQueue, {
-          threshold: this.anchorThreshold,
-          batchSize: this.anchorBatchSize,
+          threshold: this.cwdThreshold,
+          batchSize: this.cwdBatchSize,
           finalize: this.drainRequested,
         });
         if (!batch) {
@@ -158,8 +158,8 @@ export class Observer {
 
   private async runOnce(finalize: boolean): Promise<void> {
     const batch = readyBucket(this.observeQueue, {
-      threshold: this.anchorThreshold,
-      batchSize: this.anchorBatchSize,
+      threshold: this.cwdThreshold,
+      batchSize: this.cwdBatchSize,
       finalize,
     });
     if (!batch) {
@@ -171,7 +171,7 @@ export class Observer {
         await runObserver({
           client: this.client,
           observerName: this.name,
-          anchor: batch.anchor,
+          cwd: batch.cwd,
           extractionChanges: batch.extractionChanges,
           signal: this.shutdownController.signal,
           database: this.database,
@@ -223,7 +223,7 @@ export class Observer {
 function pendingQueueExtractionIds(queue: ObserveQueue): string[] {
   const seen = new Set<string>();
   const ids: string[] = [];
-  for (const bucket of queue.anchors) {
+  for (const bucket of queue.cwdBuckets) {
     for (const change of bucket.extractionChanges) {
       if (seen.has(change.extraction.id)) {
         continue;

@@ -358,11 +358,9 @@ function toLocomoHit(
 function renderBridgeMemoryText(rendered: RenderedMemory, matchedText: string): string {
   if (rendered.memoryId.startsWith('extraction:')) {
     const extraction = matchedText || rendered.summary || rendered.title || '';
-    const anchors = rendered.detail?.match(/(?:^|\n)Anchors:\n([\s\S]*?)(?:\n\nContext:|\n\nReferences:|$)/)?.[1]?.trim();
     const context = rendered.detail?.match(/(?:^|\n)Context:\n([\s\S]*?)(?:\n\nReferences:|$)/)?.[1]?.trim();
     return [
       `EXTRACTION: ${extraction}`,
-      anchors ? `ANCHORS:\n${anchors}` : '',
       context ? `CONTEXT: ${context}` : '',
     ].filter(Boolean).join('\n');
   }

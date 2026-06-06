@@ -173,7 +173,7 @@ export async function collectCandidateMemories(params: {
   const seen = new Set<string>();
   const candidates: ThreadCandidateMemory[] = [];
   for (const extraction of params.reviewedExtractions) {
-    const hits = await params.memories.recall(extraction.text, limit).catch(() => []);
+    const hits = await params.memories.recall(extraction.summary, limit).catch(() => []);
     for (const hit of hits) {
       if (reviewedMemoryIds.has(hit.memoryId) || seen.has(hit.memoryId)) {
         continue;
@@ -405,8 +405,7 @@ function toPromptInput(input: ThreadPreparationInput): Record<string, unknown> {
     reviewedExtractions: input.reviewedExtractions.map((extraction) => ({
       id: extraction.id,
       memoryId: `extraction:${extraction.id}`,
-      text: extraction.text,
-      category: extraction.category,
+      text: extraction.content,
       references: extraction.turnRefs,
     })),
     activeThreads: input.activeThreads,

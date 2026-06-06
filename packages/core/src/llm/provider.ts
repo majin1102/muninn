@@ -111,7 +111,7 @@ function generateMockText(request: LlmTextRequest): string {
     || extractLabeledValue(request.prompt, 'Final response:')
     || request.prompt.trim();
 
-  if (request.system.includes('routing gateway for an observing memory system')) {
+  if (request.system.includes('routing gateway for a session memory extraction system')) {
     return JSON.stringify({ sessionFragments: [] });
   }
   if (request.system.includes('memory recall agent')) {
@@ -131,28 +131,28 @@ function generateMockText(request: LlmTextRequest): string {
   if (
     request.system.includes('observer that rewrites an observing document')
     || request.system.includes('observer that rewrites a cross-session curated observation document')
-    || request.system.includes('observer that rewrites part of a cross-session observation document')
-    || request.system.includes('observer that maintains parts of a cross-session observation document')
-    || request.system.includes('observer that rewrites a subtree of a cross-session observation document')
-    || request.system.includes('observer that maintains parts of a cross-session observation tree')
+    || request.system.includes('observer that rewrites part of a cross-extraction document')
+    || request.system.includes('observer that maintains parts of a cross-extraction document')
+    || request.system.includes('observer that rewrites a subtree of a cross-extraction document')
+    || request.system.includes('observer that maintains parts of a cross-extraction tree')
   ) {
     const ref = request.prompt.match(/^\s*-\s+([A-Za-z0-9:_-]+)/m)?.[1] ?? 'mock-extraction';
-    const entity = extractLabeledValue(request.prompt, 'Entity anchor:') || 'Mock entity';
+    const scope = request.prompt.match(/^\s*#\s+(.+)$/m)?.[1]?.trim() || 'Mock cwd scope';
     return [
-      `# ${entity}`,
+      `# ${scope}`,
       '',
-      `## What is remembered about ${entity}?`,
+      `## What is remembered in this scope?`,
       '',
-      `${entity} has curated memory from the provided extraction.`,
+      `This cwd scope has curated memory from the provided extraction.`,
       '',
-      `### What evidence supports ${entity}?`,
-      `${entity} has curated memory from the provided extraction.`,
+      `### What evidence supports this scope?`,
+      `This cwd scope has curated memory from the provided extraction.`,
       '',
       'Source extractions:',
       `- [${ref}]`,
     ].join('\n');
   }
-  if (request.system.includes('extractor that rewrites one session extraction document')) {
+  if (request.system.includes('extractor that rewrites one session memory document')) {
     const ref = request.prompt.match(/(?:session|turn):[A-Za-z0-9:_-]+/)?.[0] ?? 'turn:mock';
     return [
       '# Mock Session Memory',
@@ -162,15 +162,18 @@ function generateMockText(request: LlmTextRequest): string {
       '',
       '## Extractions',
       `<!-- refs: [${ref}] -->`,
-      '[Entity] Mock entity',
-      `[Extraction] ${excerpt(seed)}`,
+      '### Title',
+      'Mock memory unit',
+      '',
+      '### Summary',
+      `${excerpt(seed)}`,
     ].join('\n');
   }
   if (request.system.includes('"memory_delta"')) {
     return JSON.stringify({
       observing_content_update: {
-        title: 'Mock observing thread',
-        summary: `Mock observing summary: ${excerpt(seed)}`,
+        title: 'Mock session memory thread',
+        summary: `Mock session memory summary: ${excerpt(seed)}`,
         open_questions: [],
         next_steps: [],
       },

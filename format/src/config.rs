@@ -11,8 +11,6 @@ pub(crate) const CONFIG_FILE_NAME: &str = "muninn.json";
 
 const DEFAULT_EXTRACTION_DIMENSIONS: usize = 8;
 #[cfg(test)]
-const DEFAULT_EXTRACTION_IMPORTANCE: f32 = 0.7;
-#[cfg(test)]
 #[allow(dead_code)]
 const DEFAULT_OBSERVER_NAME: &str = "default-observer";
 
@@ -28,8 +26,6 @@ pub struct EmbeddingConfig {
     #[cfg(test)]
     pub base_url: Option<String>,
     pub dimensions: usize,
-    #[cfg(test)]
-    pub default_importance: f32,
 }
 
 #[derive(Debug, Clone)]
@@ -129,8 +125,6 @@ pub fn extraction_config() -> Result<EmbeddingConfig> {
             .as_ref()
             .and_then(|config| config.dimensions)
             .unwrap_or(DEFAULT_EXTRACTION_DIMENSIONS),
-        #[cfg(test)]
-        default_importance: DEFAULT_EXTRACTION_IMPORTANCE,
     })
 }
 
@@ -154,8 +148,6 @@ pub fn extraction_config_from_raw(raw: &str) -> Result<EmbeddingConfig> {
             .as_ref()
             .and_then(|config| config.dimensions)
             .unwrap_or(DEFAULT_EXTRACTION_DIMENSIONS),
-        #[cfg(test)]
-        default_importance: DEFAULT_EXTRACTION_IMPORTANCE,
     })
 }
 
@@ -208,7 +200,7 @@ fn parse_muninn_config(raw: &str, source: &str) -> Result<MuninnConfig> {
         .is_some()
     {
         return Err(Error::invalid_input(
-            "extractor.defaultImportance is not supported; Muninn uses an internal default importance.",
+            "extractor.defaultImportance is not supported; extraction importance has been removed.",
         ));
     }
     Ok(parsed)
@@ -329,7 +321,6 @@ mod tests {
         let config = extraction_config_from_raw("{}").unwrap();
         assert_eq!(config.provider, "mock");
         assert_eq!(config.dimensions, DEFAULT_EXTRACTION_DIMENSIONS);
-        assert_eq!(config.default_importance, 0.7);
     }
 
     #[test]
@@ -367,7 +358,6 @@ mod tests {
         .unwrap();
         assert_eq!(config.provider, "mock");
         assert_eq!(config.dimensions, 16);
-        assert_eq!(config.default_importance, 0.7);
     }
 
     #[test]

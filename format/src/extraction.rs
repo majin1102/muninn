@@ -18,22 +18,20 @@ use super::access::{
 use super::codec::{extractions_to_reader, record_batch_to_extractions};
 use crate::maintenance::{
     cleanup_dataset, compact_dataset, ensure_extraction_fts_index, ensure_extraction_id_index,
-    ensure_semantic_vector_index, optimize_extraction, EXTRACTION_SEARCH_TEXT_COLUMN,
+    ensure_semantic_vector_index, optimize_extraction, EXTRACTION_CONTENT_COLUMN,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Extraction {
     pub id: String,
-    pub text: String,
-    pub context: Option<String>,
-    pub anchors: Vec<String>,
+    pub title: String,
+    pub summary: String,
+    pub content: String,
+    pub cwd: String,
     pub vector: Vec<f32>,
-    pub importance: f32,
-    pub category: String,
     pub turn_refs: Vec<String>,
-    pub observation_paths: Vec<String>,
-    pub observed_root_anchors: Vec<String>,
+    pub global_observation_paths: Vec<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -245,7 +243,6 @@ impl ExtractionTable {
             semantic_vector_score(query_vector.values(), &right.vector)
                 .partial_cmp(&semantic_vector_score(query_vector.values(), &left.vector))
                 .unwrap_or(std::cmp::Ordering::Equal)
-                .then(right.importance.total_cmp(&left.importance))
                 .then(right.created_at.cmp(&left.created_at))
         });
         rows.truncate(limit);
@@ -275,7 +272,7 @@ impl ExtractionTable {
         };
         let normalized_query = query.trim();
         let query = FullTextSearchQuery::new(normalized_query.to_string())
-            .with_column(EXTRACTION_SEARCH_TEXT_COLUMN.to_string())?
+            .with_column(EXTRACTION_CONTENT_COLUMN.to_string())?
             .limit(Some(limit as i64));
         if let Ok(scanner) = dataset.scan().full_text_search(query) {
             if let Ok(batch) = scanner.try_into_batch().await {
@@ -367,7 +364,6 @@ fn merge_ranked(
             .copied()
             .unwrap_or_default()
             .total_cmp(&scores.get(&left.id).copied().unwrap_or_default())
-            .then(right.importance.total_cmp(&left.importance))
             .then(right.created_at.cmp(&left.created_at))
     });
     ranked.truncate(limit);
@@ -408,7 +404,6 @@ async fn fallback_full_text(
     scored.sort_by(|(left_score, left), (right_score, right)| {
         right_score
             .cmp(left_score)
-            .then(right.importance.total_cmp(&left.importance))
             .then(right.created_at.cmp(&left.created_at))
     });
     scored.truncate(limit);
@@ -416,7 +411,7 @@ async fn fallback_full_text(
 }
 
 fn lexical_score(row: &Extraction, tokens: &[String]) -> usize {
-    let haystack = normalize_search_text(&row.text);
+    let haystack = normalize_search_text(&row.content);
     tokens.iter().filter(|token| haystack.contains(token.as_str())).count()
 }
 
@@ -571,17 +566,19 @@ mod tests {
     }
 
     fn row(id: &str, text: &str, context: Option<&str>, vector: Vec<f32>) -> Extraction {
+        let content = format!(
+            "## Title\n\n{text}\n\n## Summary\n\n{text}\n\n## Content\n\n{}",
+            context.unwrap_or("")
+        );
         Extraction {
             id: id.to_string(),
-            text: text.to_string(),
-            context: context.map(str::to_string),
-            anchors: vec![],
+            title: text.to_string(),
+            summary: text.to_string(),
+            content,
+            cwd: "/repo/muninn".to_string(),
             vector,
-            importance: 0.7,
-            category: "Fact".to_string(),
             turn_refs: vec!["turn:1".to_string()],
-            observation_paths: vec![],
-            observed_root_anchors: vec![],
+            global_observation_paths: vec![],
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
         }
@@ -653,7 +650,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fts_search_matches_extraction_text_not_context() {
+    async fn fts_search_matches_extraction_content() {
         let _guard = llm_test_env_guard();
         let dir = tempfile::tempdir().unwrap();
         write_config(&dir);
@@ -684,7 +681,7 @@ mod tests {
             .unwrap();
 
         assert!(fts.iter().any(|item| item.id == "text-hit"));
-        assert!(!fts.iter().any(|item| item.id == "context-only"));
+        assert!(fts.iter().any(|item| item.id == "context-only"));
     }
 
     #[tokio::test]
@@ -719,7 +716,7 @@ mod tests {
             vec!["inserted", "updated"],
         );
         assert_eq!(
-            delta.iter().find(|row| row.id == "updated").unwrap().text,
+            delta.iter().find(|row| row.id == "updated").unwrap().summary,
             "Updated memory.",
         );
     }

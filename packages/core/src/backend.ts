@@ -13,6 +13,7 @@ import {
   getEmbeddingConfig,
   getExtractorLlmConfig,
   getObserverLlmConfig,
+  isObserverEnabled,
   getWatchdogConfig,
   validateMuninnConfigInput,
   validateMuninnConfigStorage,
@@ -42,12 +43,15 @@ export interface Turn {
   createdAt: string;
   updatedAt: string;
   sessionId?: string | null;
+  project: string;
+  cwd: string;
   agent: string;
   observer: string;
   title?: string | null;
   summary?: string | null;
   events: TurnEvent[];
   artifacts?: Artifact[] | null;
+  metadata?: Record<string, unknown> | null;
   prompt?: string | null;
   response?: string | null;
   observingEpoch?: number | null;
@@ -58,10 +62,13 @@ export interface Turn {
 export interface SessionSnapshot {
   snapshotId: string;
   sessionId: string;
+  project: string;
+  cwd: string;
+  agent: string;
   snapshotSequence: number;
   createdAt: string;
   updatedAt: string;
-  observer: string;
+  extractor: string;
   title: string;
   summary: string;
   content: string;
@@ -214,6 +221,19 @@ function combineWatermarks(
   };
 }
 
+function idleObserverWatermark(): MemoryWatermark {
+  return {
+    pending: {
+      turns: [],
+      extractions: [],
+    },
+    phases: {
+      extractor: 'idle',
+      observer: 'idle',
+    },
+  };
+}
+
 const backendCache = new Map<string, MuninnBackend>();
 const backendPromises = new Map<string, Promise<MuninnBackend>>();
 const bootstrapPromises = new Map<string, Promise<void>>();
@@ -228,6 +248,7 @@ export class MuninnBackend {
   private watchdog: Watchdog | null = null;
   private watchdogClient: NativeTables | null = null;
   private finalizeDrainPromise: Promise<void> | null = null;
+  private readonly observerEnabled: boolean;
 
   private constructor(
     private readonly client: NativeTables,
@@ -236,6 +257,7 @@ export class MuninnBackend {
   ) {
     this.memories = new Memories(client);
     this.checkpointLock = new AsyncCheckpointLock();
+    this.observerEnabled = isObserverEnabled();
     const extractorName = loadMuninnConfig()?.extractor?.name;
     this.sessionIndex = new SessionIndex(checkpoint?.sessionIndex ?? null, extractorName ?? null);
     this.sessionRegistry = extractorName
@@ -283,7 +305,9 @@ export class MuninnBackend {
 
   async accept(turnContent: TurnContent): Promise<void> {
     return this.checkpointLock.shared(async () => {
-      await this.ensureObserver();
+      if (this.observerEnabled) {
+        await this.ensureObserver();
+      }
       const extractor = await this.ensureExtractor();
       const registry = this.ensureSessionRegistry(extractor.name);
       await extractor.accept(turnContent, registry);
@@ -306,22 +330,22 @@ export class MuninnBackend {
 
   async memoryWatermark(): Promise<MemoryWatermark> {
     return this.checkpointLock.shared(async () => {
-      const observer = await this.ensureObserver();
+      const observer = this.observerEnabled ? await this.ensureObserver() : null;
       const extractor = await this.ensureExtractor();
       const extractorWatermark = await extractor.watermark();
-      const observerWatermark = await observer.watermark();
+      const observerWatermark = observer ? await observer.watermark() : idleObserverWatermark();
       return combineWatermarks(extractorWatermark, observerWatermark);
     });
   }
 
   async memoryFinalize(): Promise<MemoryWatermark> {
     const { observer, extractor } = await this.checkpointLock.shared(async () => {
-      const observer = await this.ensureObserver();
+      const observer = this.observerEnabled ? await this.ensureObserver() : null;
       const extractor = await this.ensureExtractor();
       return { observer, extractor };
     });
     const extractorWatermark = await extractor.finalize();
-    const observerWatermark = await observer.finalize();
+    const observerWatermark = observer ? await observer.finalize() : idleObserverWatermark();
     this.scheduleFinalizeDrain(extractor, observer);
     const watermark = combineWatermarks(extractorWatermark, observerWatermark);
     return watermark;
@@ -348,21 +372,25 @@ export class MuninnBackend {
       const observer = this.observer;
       const extractorCheckpoint = extractor?.exportCheckpoint();
       const observerCheckpoint = observer?.exportCheckpoint();
-      if (!extractor || !extractorCheckpoint || !observer || !observerCheckpoint) {
+      if (!extractor || !extractorCheckpoint) {
         return null;
       }
-      const [turnStats, sessionStats, extractionStats, observationStats] = await Promise.all([
+      if (this.observerEnabled && (!observer || !observerCheckpoint)) {
+        return null;
+      }
+      const [turnStats, sessionStats, extractionStats, observationContextStats, observationStats] = await Promise.all([
         this.client.turnTable.stats(),
         this.client.sessionTable.stats(),
         this.client.extractionTable.stats(),
-        this.client.observationTable.stats(),
+        this.client.globalObservationContextTable.stats(),
+        this.client.globalObservationTable.stats(),
       ]);
       const extractorSection: ExtractorCheckpoint = {
         baseline: {
           turn: turnStats?.version ?? 0,
           session: sessionStats?.version ?? 0,
           extraction: extractionStats?.version ?? 0,
-          observation: observationStats?.version ?? 0,
+          global_observation: observationStats?.version ?? 0,
         },
         committedEpoch: extractorCheckpoint.committedEpoch,
         nextEpoch: extractorCheckpoint.nextEpoch,
@@ -371,10 +399,17 @@ export class MuninnBackend {
         runs: extractorCheckpoint.runs,
         pendingExtractionChanges: extractorCheckpoint.pendingExtractionChanges,
       };
-      const observerSection: ObserverCheckpoint = {
+      const observerSection: ObserverCheckpoint = observerCheckpoint ? {
         baseline: observerCheckpoint.baseline,
         observeQueue: observerCheckpoint.observeQueue,
         runs: observerCheckpoint.runs,
+      } : {
+        baseline: {
+          globalObservationContext: observationContextStats?.version ?? 0,
+          global_observation: observationStats?.version ?? 0,
+        },
+        observeQueue: { cwdBuckets: [] },
+        runs: [],
       };
       return {
         schemaVersion: 7,
@@ -406,7 +441,7 @@ export class MuninnBackend {
     this.sessionRegistry = null;
   }
 
-  private scheduleFinalizeDrain(extractor: Extractor, observer: Observer): void {
+  private scheduleFinalizeDrain(extractor: Extractor, observer: Observer | null): void {
     if (this.finalizeDrainPromise) {
       return;
     }
@@ -420,11 +455,11 @@ export class MuninnBackend {
       });
   }
 
-  private async runFinalizeDrain(extractor: Extractor, observer: Observer): Promise<void> {
-    while (this.extractor === extractor && this.observer === observer) {
+  private async runFinalizeDrain(extractor: Extractor, observer: Observer | null): Promise<void> {
+    while (this.extractor === extractor && (!observer || this.observer === observer)) {
       const watermark = await extractor.watermark();
       if (watermark.pending.turns.length === 0 && watermark.phases.extractor === 'idle') {
-        await observer.finalize();
+        await observer?.finalize();
         await this.watchdog?.flushCheckpoint();
         return;
       }
@@ -440,10 +475,12 @@ export class MuninnBackend {
         checkpoint,
         this.checkpointLock,
         (changes) => {
-          if (changes.length > 0) {
+          if (this.observerEnabled && changes.length > 0) {
             this.observer?.enqueue(changes);
           }
-          this.observer?.notify();
+          if (this.observerEnabled) {
+            this.observer?.notify();
+          }
         },
         this.database,
       );
@@ -453,6 +490,9 @@ export class MuninnBackend {
   }
 
   private async ensureObserver(): Promise<Observer> {
+    if (!this.observerEnabled) {
+      throw new Error('observer is disabled.');
+    }
     if (!this.observer) {
       const checkpoint = this.checkpoint?.observer ?? null;
       this.observer = new Observer(this.client, checkpoint, this.checkpointLock, this.database);
@@ -461,9 +501,9 @@ export class MuninnBackend {
     return this.observer;
   }
 
-  private ensureSessionRegistry(observerName: string): SessionRegistry {
-    if (!this.sessionRegistry || this.sessionRegistry.observerName !== observerName) {
-      this.sessionRegistry = new SessionRegistry(this.client, observerName);
+  private ensureSessionRegistry(extractorName: string): SessionRegistry {
+    if (!this.sessionRegistry || this.sessionRegistry.extractorName !== extractorName) {
+      this.sessionRegistry = new SessionRegistry(this.client, extractorName);
     }
     return this.sessionRegistry;
   }
@@ -476,16 +516,17 @@ export class MuninnBackend {
       this.sessionRegistry.restoreSession(
         session.sessionId ?? undefined,
         session.agent,
+        { project: session.project, cwd: session.cwd },
         session.turns,
       );
     }
     const delta = await this.client.turnTable.delta({
-      observer: this.sessionRegistry.observerName,
+      observer: this.sessionRegistry.extractorName,
       baselineVersion: this.checkpoint.extractor.baseline.turn,
     });
     for (const row of delta) {
       const turn = readTurn(row);
-      if (!turn.observer || turn.observer !== this.sessionRegistry.observerName) {
+      if (!turn.observer || turn.observer !== this.sessionRegistry.extractorName) {
         continue;
       }
       if (!turn.prompt?.trim() || !turn.response?.trim()) {

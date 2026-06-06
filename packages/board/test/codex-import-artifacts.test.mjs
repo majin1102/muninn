@@ -312,7 +312,67 @@ test('preserves interleaved assistant and tool events in order', async () => {
   }
 });
 
-test('run import deletes legacy codex rows that predate import markers', async () => {
+test('run import stores raw session id with project cwd and metadata', async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), 'muninn-codex-import-raw-session-'));
+  const previousHome = process.env.MUNINN_HOME;
+  const previousObserverPollMs = process.env.MUNINN_OBSERVER_POLL_MS;
+  process.env.MUNINN_HOME = path.join(tempDir, 'muninn');
+  process.env.MUNINN_OBSERVER_POLL_MS = '60000';
+  try {
+    await writeTestConfig(process.env.MUNINN_HOME);
+
+    const sourceRoot = path.join(tempDir, 'codex');
+    const cwd = path.join(tempDir, 'workspace', 'muninn');
+    const sessionDir = path.join(sourceRoot, 'sessions', '2026', '06', '03');
+    await mkdir(sessionDir, { recursive: true });
+    await mkdir(cwd, { recursive: true });
+    await writeCodexSessionFile(sessionDir, {
+      fileName: 'rollout-raw-session.jsonl',
+      rawSessionId: '019e8632-raw-codex-session',
+      cwd,
+      timestamp: '2026-06-03T09:00:00.000Z',
+      prompt: 'raw session prompt',
+      response: 'raw session response',
+    });
+
+    const result = await runCodexImport({
+      sourceRoot,
+      projectKeys: ['muninn'],
+      projectLimit: 5,
+      artifactStore: path.join(tempDir, 'artifacts'),
+    }, 'req-run');
+
+    assert.equal(result.importedTurns, 1);
+
+    const persisted = await turns.list({
+      mode: { type: 'page', offset: 0, limit: 20 },
+      agent: 'codex',
+    });
+    const imported = persisted.find((turn) => turn.prompt === 'raw session prompt');
+    assert.ok(imported);
+    assert.equal(imported.sessionId, '019e8632-raw-codex-session');
+    assert.equal(imported.project, 'muninn');
+    assert.equal(imported.cwd, cwd);
+    assert.equal(imported.metadata?.ingest, 'codex-import');
+    assert.equal(imported.metadata?.sourceSessionId, '019e8632-raw-codex-session');
+    assert.equal(imported.metadata?.sourcePath, path.join(sessionDir, 'rollout-raw-session.jsonl'));
+  } finally {
+    await shutdownCoreForTests();
+    if (previousHome === undefined) {
+      delete process.env.MUNINN_HOME;
+    } else {
+      process.env.MUNINN_HOME = previousHome;
+    }
+    if (previousObserverPollMs === undefined) {
+      delete process.env.MUNINN_OBSERVER_POLL_MS;
+    } else {
+      process.env.MUNINN_OBSERVER_POLL_MS = previousObserverPollMs;
+    }
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('run import ignores unmarked legacy codex rows', async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), 'muninn-codex-import-cleanup-'));
   const previousHome = process.env.MUNINN_HOME;
   const previousObserverPollMs = process.env.MUNINN_OBSERVER_POLL_MS;
@@ -376,7 +436,7 @@ test('run import deletes legacy codex rows that predate import markers', async (
       artifactStore: path.join(tempDir, 'artifacts'),
     }, 'req-test');
 
-    assert.equal(result.deletedTurns, 1);
+    assert.equal(result.deletedTurns, 0);
     assert.equal(result.importedTurns, 1);
 
     const persisted = await turns.list({
@@ -384,8 +444,9 @@ test('run import deletes legacy codex rows that predate import markers', async (
       agent: 'codex',
     });
     const matching = persisted.filter((turn) => turn.prompt === 'legacy duplicated prompt');
-    assert.equal(matching.length, 1);
-    assert.equal(matching[0]?.response, 'fresh response');
+    assert.equal(matching.length, 2);
+    assert.ok(matching.some((turn) => turn.response === 'fresh response'));
+    assert.ok(matching.some((turn) => turn.response === 'legacy response without marker'));
   } finally {
     await shutdownCoreForTests();
     if (previousHome === undefined) {

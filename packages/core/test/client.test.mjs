@@ -154,10 +154,20 @@ function defaultStorageTarget(homeDir) {
 }
 
 function firstExtractionRef(hits) {
-  return hits
-    .flatMap((hit) => hit.references ?? [])
-    .map((ref) => ref.startsWith('extraction:') ? ref.slice('extraction:'.length) : ref)
-    .find((ref) => ref && !ref.startsWith('turn:') && !ref.startsWith('session:'));
+  for (const ref of hits.flatMap((hit) => [hit.memoryId, ...(hit.references ?? [])])) {
+    if (ref.startsWith('extraction:')) {
+      return ref.slice('extraction:'.length);
+    }
+    if (
+      ref
+      && !ref.startsWith('turn:')
+      && !ref.startsWith('session:')
+      && !ref.startsWith('global_observation:')
+    ) {
+      return ref;
+    }
+  }
+  return undefined;
 }
 
 async function writeMuninnConfig(configPath, {
@@ -809,6 +819,21 @@ test('validateSettings rejects missing observer config', async (t) => {
   );
 });
 
+test('validateSettings accepts disabled observer without observer name or llmProvider', async (t) => {
+  const { dir, homeDir } = await makeDatasetUri();
+  t.after(cleanupDataset(dir));
+
+  process.env.MUNINN_HOME = homeDir;
+
+  await assert.doesNotReject(
+    () => validateSettings(JSON.stringify(validSettings({
+      observer: {
+        enabled: false,
+      },
+    }), null, 2)),
+  );
+});
+
 test('validateSettings rejects missing providers config', async (t) => {
   const { dir, homeDir } = await makeDatasetUri();
   t.after(cleanupDataset(dir));
@@ -1125,16 +1150,13 @@ test('validateSettings rejects extraction dimension changes when the table exist
   await binding.extractionTable.upsert({
     rows: [{
       id: 'mem-1',
-      text: 'extraction text',
-      context: null,
-      anchors: [],
+      title: 'extraction text',
+      summary: 'extraction text',
+      content: '## Title\n\nextraction text\n\n## Summary\n\nextraction text\n\n## Content\n\n',
+      cwd: '/workspace/project-a',
       turnRefs: ['turn:1'],
-      observationPaths: [],
-      observedRootAnchors: [],
+      globalObservationPaths: [],
       vector: [0.1, 0.2, 0.3, 0.4],
-      importance: 0.7,
-      category: 'fact',
-      references: ['turn:1'],
       createdAt: '2024-01-01T00:00:00Z',
       updatedAt: '2024-01-01T00:00:00Z',
     }],
@@ -1236,7 +1258,7 @@ test('createNativeTables returns an independent native table binding', async (t)
   assert.notStrictEqual(standalone, singleton);
   assert.notStrictEqual(standalone.turnTable, singleton.turnTable);
   assert.notStrictEqual(standalone.extractionTable, singleton.extractionTable);
-  assert.notStrictEqual(standalone.observationTable, singleton.observationTable);
+  assert.notStrictEqual(standalone.globalObservationTable, singleton.globalObservationTable);
 });
 
 test('observer.watermark reports pending turns until the observer flush completes', async (t) => {
@@ -1383,16 +1405,13 @@ test('recall returns extraction memory ids and detail renders references', async
   await binding.extractionTable.upsert({
     rows: [{
       id: 'obs-1',
-      text: 'Caroline joined an LGBTQ support group in May 2023.',
-      context: null,
-      anchors: [],
+      title: 'Caroline support group',
+      summary: 'Caroline joined an LGBTQ support group in May 2023.',
+      content: '## Title\n\nCaroline support group\n\n## Summary\n\nCaroline joined an LGBTQ support group in May 2023.\n\n## Content\n\n',
+      cwd: '/workspace/project-a',
       turnRefs: ['turn:1'],
-      observationPaths: [],
-      observedRootAnchors: [],
+      globalObservationPaths: [],
       vector: [1, 0, 0, 0],
-      importance: 1,
-      category: 'fact',
-      references: ['turn:1'],
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     }],

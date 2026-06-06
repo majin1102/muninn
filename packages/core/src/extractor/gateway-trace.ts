@@ -4,7 +4,7 @@ import path from 'node:path';
 import type { SessionFragment } from './types.js';
 
 export async function writeGatewayTrace(event: {
-  observingEpoch: number;
+  extractionEpoch: number;
   durationMs?: number;
   sessionFragments: SessionFragment[];
 }): Promise<void> {
@@ -14,7 +14,7 @@ export async function writeGatewayTrace(event: {
   }
   await mkdir(path.dirname(file), { recursive: true });
   const line = `${JSON.stringify({
-    observingEpoch: event.observingEpoch,
+    extractionEpoch: event.extractionEpoch,
     ...(event.durationMs === undefined ? {} : { durationMs: event.durationMs }),
     sessionFragments: event.sessionFragments.map((fragment) => ({
       threadId: fragment.threadId,

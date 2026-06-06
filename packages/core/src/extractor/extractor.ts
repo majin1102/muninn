@@ -1,6 +1,6 @@
 import {
   type ExtractorCheckpoint,
-  type ObservingRun,
+  type ExtractorRun,
   type QueuedExtractionChange,
   type ThreadRef,
 } from '../checkpoint.js';
@@ -12,7 +12,7 @@ import type { SessionRegistry } from '../turn/registry.js';
 import { readTurn } from '../turn/types.js';
 import { EpochQueue, EpochSealedError, OpenEpoch, type SealedEpoch } from './epoch.js';
 import {
-  cloneObservingThreads,
+  cloneSessionMemoryThreads,
   getPendingIndex,
   getPendingIndexUpTo,
   isActiveThread,
@@ -20,8 +20,8 @@ import {
   replaySnapshots,
   threadFromSnapshots,
 } from './thread.js';
-import type { ObservingThread } from './types.js';
-import { buildExtraction, buildTouchedIndex, observeEpoch } from './update.js';
+import type { SessionMemoryThread } from './types.js';
+import { buildExtraction, buildTouchedIndex, extractEpoch } from './update.js';
 import { resolveDatabaseName } from '../config.js';
 import { writeMuninnLog } from '../logging.js';
 
@@ -33,7 +33,7 @@ export type ExtractorCheckpointState = {
   committedEpoch?: number;
   nextEpoch: number;
   threads: ThreadRef[];
-  runs: ObservingRun[];
+  runs: ExtractorRun[];
   pendingExtractionChanges: QueuedExtractionChange[];
 };
 
@@ -51,8 +51,9 @@ export class Extractor {
   private openEpoch!: OpenEpoch;
   private currentEpoch: SealedEpoch | null = null;
   private publishingEpochs: OpenEpoch[] = [];
-  private threads: ObservingThread[] = [];
+  private threads: SessionMemoryThread[] = [];
   private nextIndexRetryAt?: number;
+  private lastIndexError?: string;
   private pendingExtractionChanges: QueuedExtractionChange[] = [];
   private shuttingDown = false;
   private bootstrapped = false;
@@ -60,7 +61,7 @@ export class Extractor {
   private checkpointCommittedEpoch?: number;
   private checkpointNextEpoch = 0;
   private checkpointThreads: ThreadRef[] = [];
-  private checkpointRuns: ObservingRun[] = [];
+  private checkpointRuns: ExtractorRun[] = [];
   // Serializes sealed epoch publish order so epoch N never lands after epoch N+1.
   private publishChain: Promise<void> = Promise.resolve();
   private loopPromise: Promise<void> | null = null;
@@ -87,7 +88,7 @@ export class Extractor {
     this.epochTurns = config.epochTurns;
     this.epochWindowMs = config.epochWindowMs;
     this.pendingExtractionChanges = checkpoint?.pendingExtractionChanges.map(cloneQueuedExtractionChange) ?? [];
-    this.checkpointRuns = checkpoint?.runs.filter((run) => run.status === 'running').map(cloneObservingRun) ?? [];
+    this.checkpointRuns = checkpoint?.runs.filter((run) => run.status === 'running').map(cloneExtractorRun) ?? [];
   }
 
   private readonly database: string;
@@ -150,12 +151,15 @@ export class Extractor {
     const pendingTurnIds = [...pendingById.values()]
       .sort(compareTurns)
       .map((turn) => turn.turnId);
-    const phase = this.currentEpoch || this.hasPendingExtraction()
-      ? 'running'
+    const hasPendingExtraction = this.hasPendingExtraction();
+    const phase = this.lastIndexError && hasPendingExtraction
+      ? 'error'
+      : this.currentEpoch || hasPendingExtraction
+        ? 'running'
       : pendingTurnIds.length > 0
         ? 'pending'
         : 'idle';
-    return {
+    const watermark: MemoryWatermark = {
       pending: {
         turns: pendingTurnIds,
         extractions: [],
@@ -165,6 +169,13 @@ export class Extractor {
         observer: 'idle',
       },
     };
+    if (this.lastIndexError && hasPendingExtraction) {
+      watermark.error = {
+        phase: 'extractor',
+        message: this.lastIndexError,
+      };
+    }
+    return watermark;
   }
 
   async shutdown(): Promise<void> {
@@ -187,7 +198,7 @@ export class Extractor {
       committedEpoch: this.checkpointCommittedEpoch,
       nextEpoch: this.checkpointNextEpoch,
       threads: this.checkpointThreads.map((thread) => ({ ...thread })),
-      runs: this.checkpointRuns.map(cloneObservingRun),
+      runs: this.checkpointRuns.map(cloneExtractorRun),
       pendingExtractionChanges: this.pendingExtractionChanges.map(cloneQueuedExtractionChange),
     };
   }
@@ -248,7 +259,7 @@ export class Extractor {
           turn: 0,
           session: 0,
           extraction: 0,
-          observation: 0,
+          global_observation: 0,
         },
         nextEpoch: 0,
         recentSessions: [],
@@ -280,7 +291,7 @@ export class Extractor {
       const turnsByEpoch = new Map<number, Turn[]>();
       for (const turn of pendingTurns) {
         if (turn.observingEpoch == null) {
-          throw new Error(`pending observable turn ${turn.turnId} is missing observingEpoch`);
+          throw new Error(`pending observable turn ${turn.turnId} is missing extractionEpoch`);
         }
         const turns = turnsByEpoch.get(turn.observingEpoch) ?? [];
         turns.push(turn);
@@ -368,10 +379,10 @@ export class Extractor {
     }
 
     await this.checkpointLock.shared(async () => {
-      const threads = cloneObservingThreads(this.threads);
-      const result = await observeEpoch({
+      const threads = cloneSessionMemoryThreads(this.threads);
+      const result = await extractEpoch({
         client: this.client,
-        observerName: this.name,
+        extractorName: this.name,
         activeWindowDays: this.activeWindowDays,
         threads,
         sealedEpoch: this.currentEpoch!,
@@ -383,6 +394,7 @@ export class Extractor {
         const extractionChanges = await this.buildCurrentEpochIndex(result.touchedIds);
         this.mergePendingExtractionChanges(extractionChanges);
         this.handoffPendingExtractionChanges();
+        this.lastIndexError = undefined;
         if (!this.hasPendingExtraction()) {
           this.nextIndexRetryAt = undefined;
         }
@@ -391,6 +403,7 @@ export class Extractor {
           throw error;
         }
         const message = String(error);
+        this.lastIndexError = message;
         console.error(`[muninn:extractor] extraction index build failed: ${message}`);
         await writeMuninnLog(this.database, 'error', 'extractor', 'index_build_failed', { message });
         this.nextIndexRetryAt = Date.now() + INDEX_RETRY_DELAY_MS;
@@ -508,6 +521,7 @@ export class Extractor {
         const extractionChanges = await buildExtraction(this.client, this.threads, this.shutdownController.signal);
         this.mergePendingExtractionChanges(extractionChanges);
         this.handoffPendingExtractionChanges();
+        this.lastIndexError = undefined;
         this.refreshCheckpointSnapshot();
         this.nextIndexRetryAt = undefined;
       });
@@ -516,12 +530,14 @@ export class Extractor {
         throw error;
       }
       const message = String(error);
+      this.lastIndexError = message;
       console.error(`[muninn:extractor] extraction index retry failed: ${message}`);
       await writeMuninnLog(this.database, 'error', 'extractor', 'index_retry_failed', { message });
       this.nextIndexRetryAt = Date.now() + INDEX_RETRY_DELAY_MS;
     } finally {
       if (!this.hasPendingExtraction()) {
         this.nextIndexRetryAt = undefined;
+        this.lastIndexError = undefined;
       }
       this.notifyChange();
     }
@@ -529,7 +545,8 @@ export class Extractor {
 
   private mergePendingExtractionChanges(changes: QueuedExtractionChange[] | undefined): void {
     for (const change of changes ?? []) {
-      const index = this.pendingExtractionChanges.findIndex((pending) => pending.extraction.id === change.extraction.id);
+      const index = this.pendingExtractionChanges
+        .findIndex((pending) => pending.extraction.id === change.extraction.id);
       if (index < 0) {
         this.pendingExtractionChanges.push(cloneQueuedExtractionChange(change));
       } else {
@@ -551,7 +568,7 @@ export class Extractor {
     return this.threads
       .filter((thread) => isActiveThread(thread.updatedAt, this.activeWindowDays))
       .map((thread) => ({
-        sessionId: thread.sessionId ?? thread.observingId,
+        sessionId: thread.sessionId ?? thread.threadId,
         latestSnapshotId: thread.snapshotId ?? '',
         latestSnapshotSequence: thread.snapshots.length - 1,
         indexedSnapshotSequence: thread.indexedSnapshotSequence ?? null,
@@ -568,7 +585,7 @@ export class Extractor {
   }
 
   private async restoreCheckpointState(): Promise<{
-    threads: ObservingThread[];
+    threads: SessionMemoryThread[];
     committedEpoch?: number;
     pendingTurns: Turn[];
   } | null> {
@@ -608,7 +625,7 @@ export class Extractor {
     deltaRows: Array<import('./types.js').SessionSnapshot>,
     turnById: Map<string, Turn>,
   ): Promise<{
-    threads: ObservingThread[];
+    threads: SessionMemoryThread[];
     observedTurnIds: Set<string>;
     committedEpoch?: number;
   } | null> {
@@ -618,7 +635,7 @@ export class Extractor {
       rows.push(row);
       rowsById.set(row.sessionId, rows);
     }
-    const restored: ObservingThread[] = [];
+    const restored: SessionMemoryThread[] = [];
     const observedTurnIds = new Set<string>();
     let committedEpoch = section.committedEpoch;
     const turnCache = new Map(turnById);
@@ -708,7 +725,7 @@ export class Extractor {
         }
       }
       let previousRefs = new Set<string>();
-      let thread: ObservingThread | null = null;
+      let thread: SessionMemoryThread | null = null;
       for (const row of prefixRows) {
         const newRefs = row.references.filter((reference) => !previousRefs.has(reference));
         if (newRefs.length === 0) {
@@ -827,7 +844,7 @@ export class Extractor {
   }
 }
 
-function cloneObservingRun(run: ObservingRun): ObservingRun {
+function cloneExtractorRun(run: ExtractorRun): ExtractorRun {
   return {
     ...run,
     inputTurnIds: [...run.inputTurnIds],
@@ -846,11 +863,9 @@ function cloneQueuedExtractionChange(change: QueuedExtractionChange): QueuedExtr
     type: change.type,
     extraction: {
       ...change.extraction,
-      anchors: [...change.extraction.anchors],
       vector: [...change.extraction.vector],
       turnRefs: [...change.extraction.turnRefs],
-      observationPaths: [...change.extraction.observationPaths],
-      observedRootAnchors: [...change.extraction.observedRootAnchors],
+      globalObservationPaths: [...change.extraction.globalObservationPaths],
     },
   };
 }

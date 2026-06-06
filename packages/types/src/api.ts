@@ -110,7 +110,10 @@ export interface ToolCall {
 
 export interface TurnContent {
   sessionId: string;
+  project?: string;
+  cwd?: string;
   agent: string;
+  metadata?: Record<string, unknown> | null;
   createdAt?: string;
   updatedAt?: string;
   title?: string;
@@ -139,7 +142,8 @@ export interface SessionAgentsResponse {
 export interface SessionNode {
   sessionKey: string;
   displaySessionId: string;
-  projectKey?: string;
+  projectKey: string;
+  cwd?: string;
   latestUpdatedAt: string;
 }
 
@@ -167,21 +171,34 @@ export interface SessionSegmentPreview {
   createdAt: string;
 }
 
+export interface ExtractionPreview {
+  memoryId: string;
+  title: string;
+  createdAt: string;
+  markdown: string;
+  refs: string[];
+}
+
 export interface SessionTurnsResponse {
   turns: TurnPreview[];
   segments: SessionSegmentPreview[];
+  observations: ExtractionPreview[];
+  sessionSummary?: string;
   nextOffset: number | null;
   requestId: string;
 }
 
 export interface MemoryDocument {
   memoryId: string;
-  kind: 'turn' | 'session' | 'extraction';
+  kind: 'turn' | 'session' | 'extraction' | 'global_observation';
   title: string;
   markdown: string;
   agent?: string;
   observer?: string;
   sessionId?: string;
+  project?: string;
+  cwd?: string;
+  metadata?: Record<string, unknown> | null;
   prompt?: string;
   response?: string;
   events?: TurnEvent[];
@@ -202,7 +219,7 @@ export interface MemoryReference {
   summary: string;
 }
 
-export interface ObservingCard {
+export interface SessionSnapshotCard {
   memoryId: string;
   title: string;
   summary: string;
@@ -210,8 +227,8 @@ export interface ObservingCard {
   references: MemoryReference[];
 }
 
-export interface ObservingListResponse {
-  extractions: ObservingCard[];
+export interface SessionSnapshotListResponse {
+  sessionSnapshots: SessionSnapshotCard[];
   requestId: string;
 }
 

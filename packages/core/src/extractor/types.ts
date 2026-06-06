@@ -1,20 +1,16 @@
-export type ExtractionCategory = 'Preference' | 'Fact' | 'Decision' | 'Entity' | 'Concept' | 'Other';
-
 export type Extraction = {
   id?: string | null;
+  title?: string | null;
   text: string;
   context?: string | null;
-  anchors?: string[];
-  category: ExtractionCategory;
   references: string[];
   updatedMemory?: string | null;
 };
 
 export type ExtractionInput = {
+  title?: string | null;
   text: string;
   context?: string | null;
-  anchors?: string[];
-  category: ExtractionCategory;
   references: string[];
 };
 
@@ -28,8 +24,6 @@ export type ExtractionChange =
     type: 'add';
     text: string;
     context?: string | null;
-    anchors?: string[];
-    category: ExtractionCategory;
     references: string[];
     reason: string;
   }
@@ -38,8 +32,6 @@ export type ExtractionChange =
     extractionIds: string[];
     text: string;
     context?: string | null;
-    anchors?: string[];
-    category: ExtractionCategory;
     reason: string;
   }
   | {
@@ -47,8 +39,6 @@ export type ExtractionChange =
     extractionId: string;
     text: string;
     context?: string | null;
-    anchors?: string[];
-    category?: ExtractionCategory;
     references?: string[];
     reason: string;
   }
@@ -59,9 +49,12 @@ export type ExtractionChange =
   };
 
 export type SnapshotContent = {
-  threadKind?: ObservingThreadKind;
+  threadKind?: SessionMemoryThreadKind;
   sessionId?: string | null;
-  threadMemory: string;
+  project?: string;
+  cwd?: string;
+  agent?: string;
+  snapshotContent: string;
   extractions: Extraction[];
   contextRefs: ContextRef[];
   openQuestions?: string[];
@@ -69,16 +62,19 @@ export type SnapshotContent = {
   extractionChanges: ExtractionChange[];
 };
 
-export type ObservingThreadKind = 'session' | 'subject';
+export type SessionMemoryThreadKind = 'session' | 'subject';
 
-export type ObservingThread = {
-  observingId: string;
-  kind: ObservingThreadKind;
+export type SessionMemoryThread = {
+  threadId: string;
+  kind: SessionMemoryThreadKind;
   sessionId?: string | null;
+  project: string;
+  cwd: string;
+  agent: string;
   snapshotId?: string;
   snapshotIds: string[];
   snapshotEpochs?: number[];
-  observingEpoch: number;
+  extractionEpoch: number;
   title: string;
   summary: string;
   snapshots: SnapshotContent[];
@@ -92,10 +88,13 @@ export type ObservingThread = {
 export type SessionSnapshot = {
   snapshotId: string;
   sessionId: string;
+  project: string;
+  cwd: string;
+  agent: string;
   snapshotSequence: number;
   createdAt: string;
   updatedAt: string;
-  observer: string;
+  extractor: string;
   title: string;
   summary: string;
   content: string;
@@ -107,9 +106,9 @@ export type PendingIndex = {
   end: number;
 };
 
-export type ObservingThreadGatewayInput = {
+export type SessionMemoryThreadGatewayInput = {
   threadId: string;
-  kind: ObservingThreadKind;
+  kind: SessionMemoryThreadKind;
   title: string;
   summary: string;
 };
@@ -121,26 +120,26 @@ export type FragmentTurnInput = {
   summary?: string | null;
 };
 
-export type ObservingContent = {
+export type SessionMemoryContent = {
   title: string;
   summary: string;
-  threadMemory?: string;
+  snapshotContent?: string;
   extractions: Extraction[];
   openQuestions: string[];
   nextSteps: string[];
 };
 
-export type ObservingContentUpdate = Omit<ObservingContent, 'extractions'>;
+export type SessionMemoryContentUpdate = Omit<SessionMemoryContent, 'extractions'>;
 
-export type ObserveRequest = {
-  observingContent: ObservingContent;
+export type ExtractSessionMemoryRequest = {
+  sessionMemoryContent: SessionMemoryContent;
   turns: FragmentTurnInput[];
 };
 
-export type ObserveResult = {
+export type ExtractSessionMemoryResult = {
   title: string;
   summary: string;
-  threadMemory: string;
+  snapshotContent: string;
   extractions: Extraction[];
   openQuestions: string[];
   nextSteps: string[];

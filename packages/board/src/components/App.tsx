@@ -11,15 +11,21 @@ import {
   type ProjectNode,
   type ProjectSessionNode,
 } from '../lib/api.js';
+import {
+  selectedSessionKey,
+  sessionTreeCanExpand,
+  type SessionContentMode,
+} from '../lib/session_content_state.js';
 import { asErrorMessage } from '../lib/utils.js';
-import { ChatView } from './ChatView.js';
 import { PipelinesPage } from './PipelinesPage.js';
+import { SessionContentSplit } from './SessionContentSplit.js';
 import { SessionTree } from './SessionTree.js';
 import { SettingsPage } from './SettingsDialog.js';
 
 type RouteState = {
   view: PrimaryView;
   memoryId: string | null;
+  sessionSelectionId: string | null;
 };
 
 const navItems: Array<{ view: PrimaryView; label: string; icon: ComponentType }> = [
@@ -31,31 +37,44 @@ const navItems: Array<{ view: PrimaryView; label: string; icon: ComponentType }>
 ];
 
 const REPOSITORY_URL = 'https://github.com/majin1102/muninn';
-const SESSION_PANE_MIN_WIDTH = 400;
+const SESSION_PANE_MIN_WIDTH = 340;
+const SESSION_PANE_DEFAULT_WIDTH = 360;
 
 export function App() {
   const [apiBase] = useState(resolveApiBase);
   const [usesDemoData] = useState(resolveUsesDemoData);
   const [route, setRoute] = useState<RouteState>(() => parseRoute(window.location.hash));
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [sessionPaneWidth, setSessionPaneWidth] = useState(SESSION_PANE_MIN_WIDTH);
+  const [sessionPaneWidth, setSessionPaneWidth] = useState(SESSION_PANE_DEFAULT_WIDTH);
+  const [sessionContentMode, setSessionContentMode] = useState<SessionContentMode>('split');
   const [version, setVersion] = useState(DEFAULT_BACKEND_VERSION);
   const [projects, setProjects] = useState<ProjectNode[]>([]);
   const [projectLoading, setProjectLoading] = useState(false);
   const [projectError, setProjectError] = useState<string | null>(null);
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(() => parseRoute(window.location.hash).sessionSelectionId);
+  const [activeObservationId, setActiveObservationId] = useState<string | null>(() => parseRoute(window.location.hash).memoryId);
+  const [openObservationId, setOpenObservationId] = useState<string | null>(() => parseRoute(window.location.hash).memoryId);
+  const [openObservationRequestId, setOpenObservationRequestId] = useState(0);
+  const [focusMemoryId, setFocusMemoryId] = useState<string | null>(() => parseRoute(window.location.hash).memoryId);
+  const [focusRequestId, setFocusRequestId] = useState(0);
   const [document, setDocument] = useState<MemoryDocument | null>(null);
   const [documentLoading, setDocumentLoading] = useState(false);
   const [documentError, setDocumentError] = useState<string | null>(null);
   const contentShellRef = useRef<HTMLDivElement>(null);
   const client = useMemo(() => createBoardClient(apiBase, usesDemoData), [apiBase, usesDemoData]);
+  const routeTurnMemoryId = route.memoryId ? turnMemoryIdFromObservationMemoryId(route.memoryId) : null;
   const activeTurnSession = useMemo(() => (
-    route.memoryId ? findSessionForTurn(projects, route.memoryId) : null
-  ), [projects, route.memoryId]);
+    routeTurnMemoryId ? findSessionForTurn(projects, routeTurnMemoryId) : null
+  ), [projects, routeTurnMemoryId]);
   const documentSession = useMemo(() => (
     document ? findSessionForDocument(projects, document) : null
   ), [document, projects]);
-  const activeSession = activeTurnSession ?? documentSession;
+  const selectedSession = useMemo(() => (
+    selectedSessionId ? findSessionBySelection(projects, selectedSessionId) : null
+  ), [projects, selectedSessionId]);
+  const activeSession = activeTurnSession ?? documentSession ?? selectedSession;
   const activeSessionTurns = activeSession?.turns ?? [];
+  const activeSessionSelectionId = activeSession ? selectedSessionKey(activeSession) : selectedSessionId;
   const pendingActiveSessionSearch = Boolean(
     route.memoryId
     && !activeTurnSession
@@ -95,7 +114,7 @@ export function App() {
   }, [loadProjects, route.view]);
 
   useEffect(() => {
-    if (!route.memoryId) {
+    if (!routeTurnMemoryId) {
       setDocument(null);
       setDocumentError(null);
       return;
@@ -103,14 +122,14 @@ export function App() {
 
     setDocumentLoading(true);
     setDocumentError(null);
-    client.getDocument(route.memoryId)
+    client.getDocument(routeTurnMemoryId)
       .then(setDocument)
       .catch((error: unknown) => {
         setDocument(null);
         setDocumentError(asErrorMessage(error));
       })
       .finally(() => setDocumentLoading(false));
-  }, [client, route.memoryId]);
+  }, [client, routeTurnMemoryId]);
 
   useEffect(() => {
     if (route.view !== 'session' || !documentSession || documentSession.loaded || documentSession.loading) {
@@ -119,6 +138,43 @@ export function App() {
 
     void openSession(documentSession);
   }, [documentSession, route.view]);
+
+  useEffect(() => {
+    if (route.view !== 'session' || !selectedSession || selectedSession.loaded || selectedSession.loading) {
+      return;
+    }
+
+    void openSession(selectedSession);
+  }, [route.view, selectedSession]);
+
+  useEffect(() => {
+    if (route.memoryId) {
+      setSelectedSessionId(null);
+      setActiveObservationId(route.memoryId);
+      setOpenObservationId(route.memoryId);
+      setOpenObservationRequestId((current) => current + 1);
+      setFocusMemoryId(turnMemoryIdFromObservationMemoryId(route.memoryId));
+      setFocusRequestId((current) => current + 1);
+      return;
+    }
+    if (route.view === 'session' && route.sessionSelectionId) {
+      setSelectedSessionId(route.sessionSelectionId);
+      setActiveObservationId(null);
+      setOpenObservationId(null);
+      setOpenObservationRequestId((current) => current + 1);
+      setFocusMemoryId(null);
+      setFocusRequestId((current) => current + 1);
+      setDocument(null);
+      setDocumentError(null);
+    }
+  }, [route.memoryId, route.sessionSelectionId, route.view]);
+
+  useEffect(() => {
+    if (!route.memoryId || !activeTurnSession) {
+      return;
+    }
+    setSelectedSessionId(selectedSessionKey(activeTurnSession));
+  }, [activeTurnSession, route.memoryId]);
 
   useEffect(() => {
     if (route.view !== 'session' || !route.memoryId || activeTurnSession) {
@@ -155,6 +211,8 @@ export function App() {
       updateSession(session, {
         turns: response.turns,
         segments: response.segments,
+        observations: response.observations,
+        sessionSummary: response.sessionSummary,
         nextOffset: response.nextOffset,
         loading: false,
         loaded: true,
@@ -175,6 +233,8 @@ export function App() {
       updateSession(session, {
         turns: [...session.turns, ...response.turns],
         segments: response.segments.length > 0 ? response.segments : session.segments,
+        observations: response.observations.length > 0 ? response.observations : session.observations,
+        sessionSummary: response.sessionSummary ?? session.sessionSummary,
         nextOffset: response.nextOffset,
         loading: false,
         loaded: true,
@@ -185,15 +245,106 @@ export function App() {
     }
   }
 
+  async function loadUntilTurn(session: ProjectSessionNode, memoryId: string) {
+    if (hasTurn(session, memoryId) || session.nextOffset === null) {
+      return;
+    }
+
+    let turns = session.turns;
+    let segments = session.segments;
+    let observations = session.observations;
+    let sessionSummary = session.sessionSummary;
+    let nextOffset: number | null = session.nextOffset;
+
+    updateSession(session, { loading: true });
+    try {
+      while (!turns.some((turn) => turn.memoryId === memoryId) && nextOffset !== null) {
+        const response = await client.loadSessionTurns({
+          ...session,
+          turns,
+          segments,
+          observations,
+          sessionSummary,
+          nextOffset,
+          loaded: true,
+          loading: true,
+        }, nextOffset);
+        turns = [...turns, ...response.turns];
+        segments = response.segments.length > 0 ? response.segments : segments;
+        observations = response.observations.length > 0 ? response.observations : observations;
+        sessionSummary = response.sessionSummary ?? sessionSummary;
+        nextOffset = response.nextOffset;
+      }
+      updateSession(session, {
+        turns,
+        segments,
+        observations,
+        sessionSummary,
+        nextOffset,
+        loading: false,
+        loaded: true,
+      });
+    } catch (error) {
+      setProjectError(asErrorMessage(error));
+      updateSession(session, { loading: false });
+    }
+  }
+
+  function selectSession(session: ProjectSessionNode) {
+    const selectionId = selectedSessionKey(session);
+    setSelectedSessionId(selectionId);
+    setActiveObservationId(null);
+    setOpenObservationId(null);
+    setOpenObservationRequestId((current) => current + 1);
+    setFocusMemoryId(null);
+    setFocusRequestId((current) => current + 1);
+    setDocument(null);
+    setDocumentError(null);
+    window.location.hash = `#/session/s/${encodeURIComponent(selectionId)}`;
+    if (!session.loaded && !session.loading) {
+      void openSession(session);
+    }
+  }
+
   function updateSession(session: ProjectSessionNode, patch: Partial<ProjectSessionNode>) {
     setProjects((current) => current.map((project) => ({
       ...project,
       sessions: project.sessions.map((item) => (
-        item.agent === session.agent && item.sessionKey === session.sessionKey
+        sameSession(item, session)
           ? { ...item, ...patch }
           : item
       )),
     })));
+  }
+
+  function openObservationFromTree(memoryId: string, session: ProjectSessionNode) {
+    setSelectedSessionId(selectedSessionKey(session));
+    setActiveObservationId(memoryId);
+    setOpenObservationId(memoryId);
+    setOpenObservationRequestId((current) => current + 1);
+    setFocusMemoryId(turnMemoryIdFromObservationMemoryId(memoryId));
+    setFocusRequestId((current) => current + 1);
+    window.location.hash = `#/session/${encodeURIComponent(memoryId)}`;
+  }
+
+  function openObservationInPane(memoryId: string) {
+    setActiveObservationId(memoryId);
+    setOpenObservationId(memoryId);
+    setOpenObservationRequestId((current) => current + 1);
+  }
+
+  function locateConversationTurn(memoryId: string) {
+    const session = activeSession;
+    if (!session || hasTurn(session, memoryId)) {
+      setFocusMemoryId(memoryId);
+      setFocusRequestId((current) => current + 1);
+      return;
+    }
+
+    void loadUntilTurn(session, memoryId).finally(() => {
+      setFocusMemoryId(memoryId);
+      setFocusRequestId((current) => current + 1);
+    });
   }
 
   function openView(view: PrimaryView) {
@@ -298,36 +449,53 @@ export function App() {
       <main className="app-main">
         <div
           ref={contentShellRef}
-          className="content-shell"
+          className={sessionContentMode === 'collapsed' ? 'content-shell content-shell-session-tree-collapsed' : 'content-shell'}
           style={{ '--session-pane-width': `${sessionPaneWidth}px` } as CSSProperties}
         >
           {route.view === 'session' ? (
             <>
-              <aside className="project-pane">
+              {sessionContentMode !== 'collapsed' ? (
+                <aside className="project-pane">
                 <SessionTree
                   projects={projects}
-                  activeMemoryId={route.memoryId}
+                  selectedSessionId={activeSessionSelectionId}
+                  activeMemoryId={activeObservationId}
+                  canExpandSessions={sessionTreeCanExpand(sessionContentMode)}
                   loading={projectLoading}
                   error={projectError}
-                  onOpenSession={openSession}
-                  onOpenTurn={(memoryId) => {
-                    window.location.hash = `#/session/${encodeURIComponent(memoryId)}`;
+                  onOpenSession={selectSession}
+                  onLoadSession={(session) => {
+                    if (!session.loaded && !session.loading) {
+                      void openSession(session);
+                    }
                   }}
+                  onOpenTurn={openObservationFromTree}
                   onLoadMore={loadMore}
                 />
-                <button
-                  className="session-pane-resizer"
-                  type="button"
-                  aria-label="Resize session pane"
-                  onPointerDown={startSessionPaneResize}
-                  onMouseDown={startSessionPaneMouseResize}
-                />
-              </aside>
+                  <button
+                    className="session-pane-resizer"
+                    type="button"
+                    aria-label="Resize session pane"
+                    onPointerDown={startSessionPaneResize}
+                    onMouseDown={startSessionPaneMouseResize}
+                  />
+                </aside>
+              ) : null}
               <section className="conversation-pane">
-                <ChatView
+                <SessionContentSplit
+                  session={activeSession}
                   document={document}
-                  activeMemoryId={route.memoryId}
+                  activeObservationId={activeObservationId}
+                  openObservationId={openObservationId}
+                  openObservationRequestId={openObservationRequestId}
+                  focusMemoryId={focusMemoryId}
+                  focusRequestId={focusRequestId}
                   sessionTurns={activeSessionTurns}
+                  mode={sessionContentMode}
+                  onModeChange={setSessionContentMode}
+                  onActiveObservationChange={setActiveObservationId}
+                  onOpenObservation={openObservationInPane}
+                  onLocateConversationTurn={locateConversationTurn}
                   canLoadMoreAfter={Boolean(activeSession && activeSession.nextOffset !== null)}
                   loadingMoreAfter={activeSession?.loading ?? false}
                   onLoadMoreAfter={() => {
@@ -375,7 +543,22 @@ function findSessionForDocument(projects: ProjectNode[], document: MemoryDocumen
 
   for (const project of projects) {
     for (const session of project.sessions) {
-      if (session.sessionKey === document.sessionId && session.agent === document.agent) {
+      if (
+        session.sessionKey === document.sessionId
+        && session.agent === document.agent
+        && (!document.cwd || session.cwd === document.cwd)
+      ) {
+        return session;
+      }
+    }
+  }
+  return null;
+}
+
+function findSessionBySelection(projects: ProjectNode[], selection: string): ProjectNode['sessions'][number] | null {
+  for (const project of projects) {
+    for (const session of project.sessions) {
+      if (selectedSessionKey(session) === selection) {
         return session;
       }
     }
@@ -392,6 +575,16 @@ function findNextSessionToSearch(projects: ProjectNode[]): ProjectNode['sessions
     }
   }
   return null;
+}
+
+function sameSession(left: ProjectSessionNode, right: ProjectSessionNode): boolean {
+  return left.agent === right.agent
+    && (left.cwd ?? '') === (right.cwd ?? '')
+    && left.sessionKey === right.sessionKey;
+}
+
+function hasTurn(session: ProjectSessionNode, memoryId: string): boolean {
+  return session.turns.some((turn) => turn.memoryId === memoryId);
 }
 
 function GitHubMark() {
@@ -444,11 +637,24 @@ function parseRoute(hash: string): RouteState {
   const view = parts[0] as PrimaryView | undefined;
 
   if (view === 'search' || view === 'wiki' || view === 'pipelines' || view === 'settings') {
-    return { view, memoryId: null };
+    return { view, memoryId: null, sessionSelectionId: null };
+  }
+
+  if (parts[1] === 's') {
+    return {
+      view: 'session',
+      memoryId: null,
+      sessionSelectionId: parts[2] ? decodeURIComponent(parts.slice(2).join('/')) : null,
+    };
   }
 
   return {
     view: 'session',
     memoryId: parts[1] ? decodeURIComponent(parts.slice(1).join('/')) : null,
+    sessionSelectionId: null,
   };
+}
+
+function turnMemoryIdFromObservationMemoryId(memoryId: string): string {
+  return memoryId.split('~observation:')[0] ?? memoryId;
 }

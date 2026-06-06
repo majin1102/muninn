@@ -106,11 +106,11 @@ function parseSections(
     }
     const hint = parseHint(match[3] ?? '', validRefs);
     const parent = stack.at(-1);
-    const observingPath = `${parent?.observingPath ?? title} / ${heading}`;
+    const globalPath = `${parent?.globalPath ?? title} / ${heading}`;
     const section: DraftSection = {
       level,
       heading,
-      observingPath,
+      globalPath,
       sourceRefs: hint.sourceRefs,
       expandRefs: hint.expandRefs,
       body: '',
@@ -243,10 +243,10 @@ function editDistanceAtMost(left: string, right: string, limit: number): boolean
 function validateTree(sections: DraftSection[], validRefs: Set<string>): void {
   const paths = new Set<string>();
   for (const section of walk(sections)) {
-    if (paths.has(section.observingPath)) {
-      throw new Error(`duplicate observer section path: ${section.observingPath}`);
+    if (paths.has(section.globalPath)) {
+      throw new Error(`duplicate observer section path: ${section.globalPath}`);
     }
-    paths.add(section.observingPath);
+    paths.add(section.globalPath);
     const sectionRefs = refsForSection(section);
     if (section.children.length > 0 && sectionRefs.length > 0) {
       throw new Error(`non-leaf observer section cannot declare refs: ${section.heading}`);
@@ -273,10 +273,9 @@ function validateTree(sections: DraftSection[], validRefs: Set<string>): void {
   }
 }
 
-function validateTitle(title: string): void {
-  if (title.includes('/')) {
-    throw new Error(`observer document title cannot contain "/": ${title}`);
-  }
+function validateTitle(_title: string): void {
+  // The root title can be a cwd scope such as /Users/Nathan/workspace/muninn.
+  // Section headings still reject "/" so global_path segments stay unambiguous.
 }
 
 function trimBodies(sections: DraftSection[]): void {
@@ -348,7 +347,7 @@ function stripParent(section: DraftSection): ParsedObserverSection {
   return {
     level: section.level,
     heading: section.heading,
-    observingPath: section.observingPath,
+    globalPath: section.globalPath,
     sourceRefs: section.sourceRefs,
     expandRefs: section.expandRefs,
     body: section.body,

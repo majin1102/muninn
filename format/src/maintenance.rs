@@ -11,9 +11,9 @@ use lance_linalg::distance::MetricType;
 
 pub(crate) const SEMANTIC_VECTOR_INDEX_NAME: &str = "semantic_vector_idx";
 pub(crate) const EXTRACTION_FTS_INDEX_NAME: &str = "extraction_fts_idx";
-pub(crate) const EXTRACTION_SEARCH_TEXT_COLUMN: &str = "search_text";
-pub(crate) const OBSERVATION_FTS_INDEX_NAME: &str = "observation_fts_idx";
-pub(crate) const OBSERVATION_SEARCH_TEXT_COLUMN: &str = "text";
+pub(crate) const EXTRACTION_CONTENT_COLUMN: &str = "content";
+pub(crate) const GLOBAL_OBSERVATION_FTS_INDEX_NAME: &str = "global_observation_fts_idx";
+pub(crate) const GLOBAL_OBSERVATION_SEARCH_TEXT_COLUMN: &str = "text";
 
 pub(crate) async fn compact_dataset(dataset: Option<Dataset>) -> Result<bool> {
     let Some(mut dataset) = dataset else {
@@ -69,7 +69,7 @@ pub(crate) async fn ensure_extraction_fts_index(dataset: &mut Dataset) -> Result
     }
     dataset
         .create_index_builder(
-            &[EXTRACTION_SEARCH_TEXT_COLUMN],
+            &[EXTRACTION_CONTENT_COLUMN],
             IndexType::Inverted,
             &InvertedIndexParams::default(),
         )
@@ -78,8 +78,8 @@ pub(crate) async fn ensure_extraction_fts_index(dataset: &mut Dataset) -> Result
     Ok(true)
 }
 
-pub(crate) async fn ensure_observation_fts_index(dataset: &mut Dataset) -> Result<bool> {
-    if has_index_named(dataset, OBSERVATION_FTS_INDEX_NAME).await? {
+pub(crate) async fn ensure_global_observation_fts_index(dataset: &mut Dataset) -> Result<bool> {
+    if has_index_named(dataset, GLOBAL_OBSERVATION_FTS_INDEX_NAME).await? {
         return Ok(false);
     }
 
@@ -89,11 +89,11 @@ pub(crate) async fn ensure_observation_fts_index(dataset: &mut Dataset) -> Resul
     }
     dataset
         .create_index_builder(
-            &[OBSERVATION_SEARCH_TEXT_COLUMN],
+            &[GLOBAL_OBSERVATION_SEARCH_TEXT_COLUMN],
             IndexType::Inverted,
             &InvertedIndexParams::default(),
         )
-        .name(OBSERVATION_FTS_INDEX_NAME.to_string())
+        .name(GLOBAL_OBSERVATION_FTS_INDEX_NAME.to_string())
         .await?;
     Ok(true)
 }
@@ -103,12 +103,12 @@ pub(crate) async fn ensure_extraction_id_index(dataset: &mut Dataset) -> Result<
     Ok(false)
 }
 
-pub(crate) async fn ensure_observation_id_index(dataset: &mut Dataset) -> Result<bool> {
+pub(crate) async fn ensure_global_observation_id_index(dataset: &mut Dataset) -> Result<bool> {
     let _ = dataset;
     Ok(false)
 }
 
-pub(crate) async fn ensure_observation_context_id_index(dataset: &mut Dataset) -> Result<bool> {
+pub(crate) async fn ensure_global_observation_context_id_index(dataset: &mut Dataset) -> Result<bool> {
     let _ = dataset;
     Ok(false)
 }
@@ -132,12 +132,12 @@ pub(crate) async fn optimize_extraction(
     Ok(true)
 }
 
-pub(crate) async fn optimize_observation(
+pub(crate) async fn optimize_global_observation(
     dataset: &mut Dataset,
     merge_count: usize,
 ) -> Result<bool> {
     let mut names = Vec::new();
-    for name in [SEMANTIC_VECTOR_INDEX_NAME, OBSERVATION_FTS_INDEX_NAME] {
+    for name in [SEMANTIC_VECTOR_INDEX_NAME, GLOBAL_OBSERVATION_FTS_INDEX_NAME] {
         if has_index_named(dataset, name).await? {
             names.push(name.to_string());
         }
@@ -151,7 +151,7 @@ pub(crate) async fn optimize_observation(
     Ok(true)
 }
 
-pub(crate) async fn optimize_observation_context(
+pub(crate) async fn optimize_global_observation_context(
     dataset: &mut Dataset,
     merge_count: usize,
 ) -> Result<bool> {
@@ -177,13 +177,13 @@ mod tests {
 
     use super::{
         SEMANTIC_VECTOR_INDEX_NAME, cleanup_dataset, compact_dataset, ensure_extraction_id_index,
-        ensure_observation_context_id_index, ensure_observation_id_index,
+        ensure_global_observation_context_id_index, ensure_global_observation_id_index,
         ensure_semantic_vector_index, optimize_extraction,
     };
     use crate::config::{CONFIG_FILE_NAME, llm_test_env_guard};
     use crate::{
-        Extraction, ExtractionTable, MemoryId, MemoryLayer, Observation, ObservationContext,
-        ObservationContextTable, ObservationTable, TableOptions, Turn, TurnTable,
+        Extraction, ExtractionTable, MemoryId, MemoryLayer, GlobalObservation, GlobalObservationContext,
+        GlobalObservationContextTable, GlobalObservationTable, TableOptions, Turn, TurnTable,
     };
 
     fn test_table_options() -> TableOptions {
@@ -233,15 +233,13 @@ mod tests {
         table
             .upsert(vec![Extraction {
                 id: "row-1".to_string(),
-                text: "alpha".to_string(),
-                context: None,
-                anchors: vec![],
+                title: "alpha".to_string(),
+                summary: "alpha".to_string(),
+                content: "## Title\n\nalpha\n\n## Summary\n\nalpha\n\n## Content\n\n".to_string(),
+                cwd: "/repo/alpha".to_string(),
                 vector: vec![0.1, 0.2, 0.3, 0.4],
-                importance: 0.7,
-                category: "fact".to_string(),
                 turn_refs: vec!["turn:1".to_string()],
-                observation_paths: vec![],
-                observed_root_anchors: vec![],
+                global_observation_paths: vec![],
                 created_at: chrono::Utc::now(),
                 updated_at: chrono::Utc::now(),
             }])
@@ -276,28 +274,26 @@ mod tests {
         extraction_table
             .upsert(vec![Extraction {
                 id: "extraction-1".to_string(),
-                text: "alpha".to_string(),
-                context: None,
-                anchors: vec![],
+                title: "alpha".to_string(),
+                summary: "alpha".to_string(),
+                content: "## Title\n\nalpha\n\n## Summary\n\nalpha\n\n## Content\n\n".to_string(),
+                cwd: "/repo/alpha".to_string(),
                 vector: vec![0.1, 0.2, 0.3, 0.4],
-                importance: 0.7,
-                category: "fact".to_string(),
                 turn_refs: vec!["turn:1".to_string()],
-                observation_paths: vec![],
-                observed_root_anchors: vec![],
+                global_observation_paths: vec![],
                 created_at: now,
                 updated_at: now,
             }])
             .await
             .unwrap();
-        let mut extraction_dataset = extraction_table.try_open_dataset().await.unwrap().unwrap();
-        assert!(!ensure_extraction_id_index(&mut extraction_dataset).await.unwrap());
+        let mut session_global_observation_dataset = extraction_table.try_open_dataset().await.unwrap().unwrap();
+        assert!(!ensure_extraction_id_index(&mut session_global_observation_dataset).await.unwrap());
 
-        let observation_table = ObservationTable::new(test_table_options());
-        observation_table
-            .upsert(vec![Observation {
-                id: "observation-1".to_string(),
-                observing_path: "Alice / Plan".to_string(),
+        let global_observation_table = GlobalObservationTable::new(test_table_options());
+        global_observation_table
+            .upsert(vec![GlobalObservation {
+                id: "global-observation-1".to_string(),
+                global_path: "Alice / Plan".to_string(),
                 text: "Alice has a plan.".to_string(),
                 vector: vec![0.1, 0.2, 0.3, 0.4],
                 extraction_refs: vec!["extraction-1".to_string()],
@@ -306,14 +302,14 @@ mod tests {
             }])
             .await
             .unwrap();
-        let mut observation_dataset = observation_table.try_open_dataset().await.unwrap().unwrap();
-        assert!(!ensure_observation_id_index(&mut observation_dataset).await.unwrap());
+        let mut global_observation_dataset = global_observation_table.try_open_dataset().await.unwrap().unwrap();
+        assert!(!ensure_global_observation_id_index(&mut global_observation_dataset).await.unwrap());
 
-        let context_table = ObservationContextTable::new(test_table_options());
+        let context_table = GlobalObservationContextTable::new(test_table_options());
         context_table
-            .upsert(vec![ObservationContext {
+            .upsert(vec![GlobalObservationContext {
                 id: "context-1".to_string(),
-                observing_path: "Alice / Plan".to_string(),
+                global_path: "Alice / Plan".to_string(),
                 parent_id: None,
                 position: 0,
                 content: "Alice planning context.".to_string(),
@@ -327,7 +323,7 @@ mod tests {
             .unwrap();
         let mut context_dataset = context_table.try_open_dataset().await.unwrap().unwrap();
         assert!(
-            !ensure_observation_context_id_index(&mut context_dataset)
+            !ensure_global_observation_context_id_index(&mut context_dataset)
                 .await
                 .unwrap()
         );
@@ -368,15 +364,13 @@ mod tests {
         table
             .upsert(vec![Extraction {
                 id: "row-1".to_string(),
-                text: "alpha".to_string(),
-                context: None,
-                anchors: vec![],
+                title: "alpha".to_string(),
+                summary: "alpha".to_string(),
+                content: "## Title\n\nalpha\n\n## Summary\n\nalpha\n\n## Content\n\n".to_string(),
+                cwd: "/repo/alpha".to_string(),
                 vector: vec![0.1, 0.2, 0.3, 0.4],
-                importance: 0.7,
-                category: "fact".to_string(),
                 turn_refs: vec!["turn:1".to_string()],
-                observation_paths: vec![],
-                observed_root_anchors: vec![],
+                global_observation_paths: vec![],
                 created_at: chrono::Utc::now(),
                 updated_at: chrono::Utc::now(),
             }])
@@ -404,12 +398,15 @@ mod tests {
             created_at: now,
             updated_at: now,
             session_id: Some("group-a".to_string()),
+            project: "test-project".to_string(),
+            cwd: "/repo/test-project".to_string(),
             agent: "agent-a".to_string(),
             observer: "default-observer".to_string(),
             title: None,
             summary: Some("summary".to_string()),
             events: vec![],
             artifacts: None,
+            metadata: None,
             prompt: Some("prompt".to_string()),
             response: Some("response".to_string()),
             observing_epoch: None,

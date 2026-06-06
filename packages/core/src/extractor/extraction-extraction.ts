@@ -1,22 +1,13 @@
 import { randomUUID } from 'node:crypto';
 
 import type { Turn } from '../client.js';
-import { getEmbeddingConfig, getExtractorLlmConfig } from '../config.js';
+import { getExtractorLlmConfig } from '../config.js';
 import { loadDomainPrompt } from '../llm/domain-prompt.js';
 import { embedText } from '../llm/embedding-provider.js';
 import { generateText } from '../llm/provider.js';
 import { loadPromptTemplate, renderPromptTemplate } from '../llm/prompt-loader.js';
 import type { NativeTables, Extraction as StoredExtraction } from '../native.js';
-import type { ExtractionCategory, ExtractionInput } from './types.js';
-
-const CATEGORIES = new Set<ExtractionCategory>([
-  'Preference',
-  'Fact',
-  'Decision',
-  'Entity',
-  'Concept',
-  'Other',
-]);
+import type { ExtractionInput } from './types.js';
 
 export type ExtractionExtractionResult = {
   extractions: ExtractionInput[];
@@ -54,25 +45,29 @@ export async function extractExtractions(
 export async function commitExtractions(
   client: NativeTables,
   inputs: ExtractionInput[],
+  cwd: string,
   signal?: AbortSignal,
 ): Promise<StoredExtraction[]> {
   throwIfAborted(signal);
-  const embeddingConfig = getEmbeddingConfig();
+  const normalizedCwd = cwd.trim();
+  if (!normalizedCwd) {
+    throw new Error('cwd is required to commit extractions');
+  }
   const rows: StoredExtraction[] = [];
   for (const input of validateExtraction({ extractions: inputs }).extractions) {
     const text = input.text.trim();
+    const title = normalizeText(input.title ?? '') || text.slice(0, 80);
+    const summary = [title, text].filter(Boolean).join('\n\n');
     const now = new Date().toISOString();
     rows.push({
       id: randomUUID(),
-      text,
-      context: input.context ?? null,
-      anchors: [],
-      vector: await embedText(text, signal),
-      importance: embeddingConfig.defaultImportance,
-      category: extractionCategory(input.category),
+      title,
+      summary,
+      content: renderExtractionContent(title, text, input.context ?? null),
+      cwd: normalizedCwd,
+      vector: await embedText(summary, signal),
       turnRefs: [...new Set(input.references.map((reference) => reference.trim()).filter(Boolean))],
-      observationPaths: [],
-      observedRootAnchors: [],
+      globalObservationPaths: [],
       createdAt: now,
       updatedAt: now,
     });
@@ -81,6 +76,26 @@ export async function commitExtractions(
     await client.extractionTable.upsert({ rows });
   }
   return rows;
+}
+
+function renderExtractionContent(title: string, summary: string, content: string | null): string {
+  return [
+    '## Title',
+    '',
+    title,
+    '',
+    '## Summary',
+    '',
+    normalizeText(summary),
+    '',
+    '## Content',
+    '',
+    content?.trim() ?? '',
+  ].join('\n');
+}
+
+function normalizeText(value: string): string {
+  return value.split(/\s+/).join(' ').trim();
 }
 
 function buildMockExtraction(turns: Turn[]): ExtractionExtractionResult {
@@ -94,7 +109,6 @@ function buildMockExtraction(turns: Turn[]): ExtractionExtractionResult {
     if (text) {
       extractions.push({
         text,
-        category: 'Fact',
         references: [turn.turnId],
       });
     }
@@ -134,9 +148,6 @@ function validateExtractionInput(input: ExtractionInput): ExtractionInput {
   if (!text) {
     throw new Error('extraction.text must be a non-empty string');
   }
-  if (!CATEGORIES.has(input.category)) {
-    throw new Error(`invalid extraction category: ${String(input.category)}`);
-  }
   if (!Array.isArray(input.references)) {
     throw new Error('extraction.references must be an array');
   }
@@ -148,7 +159,8 @@ function validateExtractionInput(input: ExtractionInput): ExtractionInput {
   }
   return {
     text,
-    category: input.category,
+    title: typeof input.title === 'string' ? input.title.trim() || null : null,
+    context: typeof input.context === 'string' ? input.context.trim() || null : null,
     references,
   };
 }
@@ -173,24 +185,6 @@ function toExtractionContextTurn(turn: NonNullable<Turn['recentContext']>[number
     ...(turn.prompt ? { prompt: turn.prompt } : {}),
     ...(turn.response ? { response: turn.response } : {}),
   };
-}
-
-function extractionCategory(category: ExtractionCategory): string {
-  switch (category) {
-    case 'Preference':
-      return 'preference';
-    case 'Fact':
-      return 'fact';
-    case 'Decision':
-      return 'decision';
-    case 'Entity':
-      return 'entity';
-    case 'Concept':
-    case 'Other':
-      return 'other';
-    default:
-      return 'other';
-  }
 }
 
 function parseJson<T>(raw: string): T {

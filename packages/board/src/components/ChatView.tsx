@@ -2,10 +2,11 @@ import type { Artifact, MemoryDocument } from '@muninn/types';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Bot } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import userAvatarUrl from '../assets/user-avatar.png';
 import { logoForAgent, type AgentLogo } from '../lib/agent_logo.js';
 import type { ProjectTurnNode } from '../lib/api.js';
+import { chatTimelineItems, type ChatTimelineItem } from '../lib/chat_timeline_items.js';
 import { CHAT_CONTEXT_STEP, INITIAL_CHAT_CONTEXT_RADIUS, chatTurnWindow } from '../lib/chat_window.js';
 import { transcriptMessages, type TranscriptMessage } from '../lib/transcript.js';
 import { cn } from '../lib/utils.js';
@@ -23,7 +24,10 @@ import { ScrollArea } from './ui/scroll-area.js';
 type ChatViewProps = {
   document: MemoryDocument | null;
   activeMemoryId: string | null;
+  focusMemoryId: string | null;
+  focusRequestId: number;
   sessionTurns: ProjectTurnNode[];
+  onVisibleTurnIdsChange?: (turnIds: string[]) => void;
   canLoadMoreAfter?: boolean;
   loadingMoreAfter?: boolean;
   onLoadMoreAfter?: () => void;
@@ -31,16 +35,15 @@ type ChatViewProps = {
   error: string | null;
 };
 
-type ChatTimelineItem =
-  | { type: 'time'; key: string; timestamp: string }
-  | { type: 'entry'; key: string; entry: ChatTimelineEntry; index: number };
-
 const TIME_SEPARATOR_GAP_MS = 5 * 60 * 1000;
 
 export function ChatView({
   document,
   activeMemoryId,
+  focusMemoryId,
+  focusRequestId,
   sessionTurns,
+  onVisibleTurnIdsChange,
   canLoadMoreAfter = false,
   loadingMoreAfter = false,
   onLoadMoreAfter,
@@ -52,21 +55,21 @@ export function ChatView({
   const [beforeLimit, setBeforeLimit] = useState(INITIAL_CHAT_CONTEXT_RADIUS);
   const [afterLimit, setAfterLimit] = useState(INITIAL_CHAT_CONTEXT_RADIUS);
   const turnWindow = useMemo(
-    () => chatTurnWindow(sessionTurns, activeMemoryId, beforeLimit, afterLimit),
-    [activeMemoryId, afterLimit, beforeLimit, sessionTurns],
+    () => chatTurnWindow(sessionTurns, focusMemoryId, beforeLimit, afterLimit),
+    [afterLimit, beforeLimit, focusMemoryId, sessionTurns],
   );
   const entries = useMemo(() => (
     sessionTurns.length > 0 ? entriesFromTurns(turnWindow.turns) : entriesFromDocument(document)
   ), [document, sessionTurns.length, turnWindow.turns]);
-  const timelineItems = useMemo(() => chatTimelineItems(entries), [entries]);
+  const timelineItems = useMemo(() => chatTimelineItems(entries, TIME_SEPARATOR_GAP_MS), [entries]);
 
   useEffect(() => {
     setBeforeLimit(INITIAL_CHAT_CONTEXT_RADIUS);
     setAfterLimit(INITIAL_CHAT_CONTEXT_RADIUS);
-  }, [activeMemoryId]);
+  }, [focusMemoryId, focusRequestId]);
 
   useEffect(() => {
-    if (!activeMemoryId) {
+    if (!focusMemoryId) {
       return;
     }
 
@@ -74,7 +77,7 @@ export function ChatView({
       const scroller = scrollRef.current;
       const active = scroller
         ? Array.from(scroller.querySelectorAll<HTMLElement>('.chat-message-row'))
-          .find((row) => row.dataset.memoryId === activeMemoryId)
+          .find((row) => row.dataset.memoryId === focusMemoryId)
         : null;
       if (!active || !scroller) {
         return;
@@ -93,7 +96,37 @@ export function ChatView({
       window.cancelAnimationFrame(frame);
       window.clearTimeout(timeout);
     };
-  }, [activeMemoryId, timelineItems.length, turnWindow.turns]);
+  }, [focusMemoryId, focusRequestId, timelineItems.length, turnWindow.turns]);
+
+  useEffect(() => {
+    const scroller = scrollRef.current;
+    if (!scroller || !onVisibleTurnIdsChange) {
+      return;
+    }
+
+    let frame = 0;
+    const scheduleReport = () => {
+      if (frame !== 0) {
+        return;
+      }
+      frame = window.requestAnimationFrame(() => {
+        frame = 0;
+        onVisibleTurnIdsChange(visibleTurnIds(scroller));
+      });
+    };
+
+    scheduleReport();
+    scroller.addEventListener('scroll', scheduleReport, { passive: true });
+    window.addEventListener('resize', scheduleReport);
+
+    return () => {
+      if (frame !== 0) {
+        window.cancelAnimationFrame(frame);
+      }
+      scroller.removeEventListener('scroll', scheduleReport);
+      window.removeEventListener('resize', scheduleReport);
+    };
+  }, [onVisibleTurnIdsChange, timelineItems.length, turnWindow.turns]);
 
   if (loading) {
     return <div className="empty-state">Loading conversation...</div>;
@@ -158,6 +191,25 @@ export function ChatView({
   );
 }
 
+function visibleTurnIds(scroller: HTMLElement): string[] {
+  const scrollerRect = scroller.getBoundingClientRect();
+  const ids: string[] = [];
+  const seen = new Set<string>();
+  for (const row of Array.from(scroller.querySelectorAll<HTMLElement>('.chat-message-row[data-memory-id]'))) {
+    const memoryId = row.dataset.memoryId;
+    if (!memoryId || seen.has(memoryId)) {
+      continue;
+    }
+    const rowRect = row.getBoundingClientRect();
+    if (rowRect.bottom <= scrollerRect.top || rowRect.top >= scrollerRect.bottom) {
+      continue;
+    }
+    seen.add(memoryId);
+    ids.push(memoryId);
+  }
+  return ids;
+}
+
 function renderTimelineEntry(params: {
   item: Extract<ChatTimelineItem, { type: 'entry' }>;
   activeMemoryId: string | null;
@@ -180,30 +232,12 @@ function renderTimelineEntry(params: {
           <AgentAvatar logo={logoForAgent(group.agent ?? documentAgent)} />
         </Avatar>
         <div className="chat-message-content chat-message-content-tools">
-          <ToolCallList toolCalls={group.toolCalls} startedAt={group.startedAt} completedAt={group.completedAt} />
-        </div>
-      </section>
-    );
-  }
-
-  if (item.entry.type === 'totalTime') {
-    return (
-      <section
-        key={item.key}
-        data-memory-id={item.entry.totalTime.memoryId}
-        className={cn(
-          'chat-message-row chat-message-row-agent chat-total-time-row',
-          item.entry.totalTime.memoryId === activeMemoryId && 'chat-turn-active',
-        )}
-      >
-        <Avatar className="chat-avatar chat-avatar-agent chat-avatar-spacer">
-          <AgentAvatar logo={logoForAgent(documentAgent)} />
-        </Avatar>
-        <div className="chat-message-content chat-message-content-tools">
-          <ChatTimeMeta
-            label="total time"
-            startedAt={item.entry.totalTime.startedAt}
-            completedAt={item.entry.totalTime.completedAt}
+          <ToolCallList
+            toolCalls={group.toolCalls}
+            startedAt={group.startedAt}
+            completedAt={group.completedAt}
+            totalStartedAt={item.totalTime?.startedAt}
+            totalCompletedAt={item.totalTime?.completedAt}
           />
         </div>
       </section>
@@ -244,68 +278,18 @@ function renderTimelineEntry(params: {
               ) : null}
             </div>
             {message.role === 'agent' ? (
-              <ChatTimeMeta label="time" startedAt={message.startedAt} completedAt={message.completedAt} />
+              <ChatTimeMetaRow
+                items={[
+                  { label: 'reply', startedAt: message.startedAt, completedAt: message.completedAt },
+                  { label: 'total', startedAt: item.totalTime?.startedAt, completedAt: item.totalTime?.completedAt },
+                ]}
+              />
             ) : null}
           </>
         ) : null}
       </div>
     </section>
   );
-}
-
-function chatTimelineItems(entries: ChatTimelineEntry[]): ChatTimelineItem[] {
-  const items: ChatTimelineItem[] = [];
-  let previousSeparatorTime: Date | null = null;
-  entries.forEach((entry, index) => {
-    const timestamp = timestampForEntry(entry);
-    if (timestamp && shouldShowTimeSeparator(timestamp, previousSeparatorTime)) {
-      items.push({
-        type: 'time',
-        key: `time-${timestamp}-${index}`,
-        timestamp,
-      });
-      previousSeparatorTime = new Date(timestamp);
-    }
-    items.push({
-      type: 'entry',
-      key: keyForEntry(entry, index),
-      entry,
-      index,
-    });
-  });
-  return items;
-}
-
-function timestampForEntry(entry: ChatTimelineEntry): string | undefined {
-  if (entry.type === 'message') {
-    return entry.message.timestamp;
-  }
-  if (entry.type === 'toolGroup') {
-    return entry.group.timestamp;
-  }
-  return undefined;
-}
-
-function keyForEntry(entry: ChatTimelineEntry, index: number): string {
-  if (entry.type === 'message') {
-    return `${entry.message.memoryId ?? 'document'}-${entry.message.role}-${index}`;
-  }
-  if (entry.type === 'toolGroup') {
-    return `${entry.group.memoryId ?? 'document'}-tool-${index}`;
-  }
-  return `${entry.totalTime.memoryId ?? 'document'}-total-time-${index}`;
-}
-
-function shouldShowTimeSeparator(timestamp: string, previous: Date | null): boolean {
-  const current = new Date(timestamp);
-  if (Number.isNaN(current.getTime())) {
-    return false;
-  }
-  if (!previous) {
-    return true;
-  }
-  return current.toDateString() !== previous.toDateString()
-    || Math.abs(current.getTime() - previous.getTime()) >= TIME_SEPARATOR_GAP_MS;
 }
 
 function entriesFromDocument(document: MemoryDocument | null): ChatTimelineEntry[] {
@@ -393,8 +377,36 @@ function ChatTimeMeta({ label, startedAt, completedAt }: { label: string; starte
     return null;
   }
   return (
-    <div className="chat-time-meta" title={timeRangeTitle(startedAt, completedAt)}>
+    <span className="chat-time-meta" title={timeRangeTitle(startedAt, completedAt)}>
       {label}: {duration}
+    </span>
+  );
+}
+
+function ChatTimeMetaRow({
+  items,
+}: {
+  items: Array<{ label: string; startedAt?: string; completedAt?: string }>;
+}) {
+  const visible = items
+    .map((item) => ({
+      ...item,
+      duration: formatDuration(item.startedAt, item.completedAt),
+    }))
+    .filter((item) => item.duration);
+  if (visible.length === 0) {
+    return null;
+  }
+  return (
+    <div className="chat-time-meta-row">
+      {visible.map((item, index) => (
+        <Fragment key={item.label}>
+          {index > 0 ? <span className="chat-time-meta-separator">·</span> : null}
+          <span className="chat-time-meta" title={timeRangeTitle(item.startedAt, item.completedAt)}>
+            {item.label}: {item.duration}
+          </span>
+        </Fragment>
+      ))}
     </div>
   );
 }
@@ -438,10 +450,14 @@ function ToolCallList({
   toolCalls,
   startedAt,
   completedAt,
+  totalStartedAt,
+  totalCompletedAt,
 }: {
   toolCalls: ChatToolCall[];
   startedAt?: string;
   completedAt?: string;
+  totalStartedAt?: string;
+  totalCompletedAt?: string;
 }) {
   const summary = toolCallSummary(toolCalls);
   return (
@@ -480,7 +496,12 @@ function ToolCallList({
           ))}
         </div>
       </details>
-      <ChatTimeMeta label="time" startedAt={startedAt} completedAt={completedAt} />
+      <ChatTimeMetaRow
+        items={[
+          { label: 'tools', startedAt, completedAt },
+          { label: 'total', startedAt: totalStartedAt, completedAt: totalCompletedAt },
+        ]}
+      />
     </>
   );
 }

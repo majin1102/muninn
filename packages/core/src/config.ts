@@ -13,15 +13,14 @@ const DEFAULT_EXTRACTOR_CONTINUITY_HINTS = 1;
 const DEFAULT_EXTRACTOR_EPOCH_TURNS = 3;
 const DEFAULT_EXTRACTOR_EPOCH_WINDOW_MS = 10_000;
 const DEFAULT_OBSERVER_MAX_ATTEMPTS = 3;
-const DEFAULT_IMPORTANCE = 0.7;
 const DEFAULT_WATCHDOG_INTERVAL_MS = 60_000;
 const DEFAULT_WATCHDOG_COMPACT_MIN_FRAGMENTS = 8;
 const DEFAULT_WATCHDOG_TARGET_PARTITION_SIZE = 1_024;
 const DEFAULT_WATCHDOG_OPTIMIZE_MERGE_COUNT = 4;
 const DEFAULT_EXTRACTION_DIMENSIONS = 8;
 const DEFAULT_RECALL_MODE = 'hybrid';
-const DEFAULT_OBSERVER_ANCHOR_THRESHOLD = 8;
-const DEFAULT_OBSERVER_ANCHOR_BATCH_SIZE = 16;
+const DEFAULT_OBSERVER_CWD_THRESHOLD = 8;
+const DEFAULT_OBSERVER_CWD_BATCH_SIZE = 16;
 const DEFAULT_OBSERVER_CONTENT_BUDGET_CHARS = 24_000;
 
 export type RecallMode = 'vector' | 'fts' | 'hybrid';
@@ -54,11 +53,12 @@ type ExtractorConfigRecord = {
 };
 
 type ObserverConfigRecord = {
-  name: string;
-  llmProvider: string;
+  enabled?: boolean;
+  name?: string;
+  llmProvider?: string;
   maxAttempts?: number;
-  anchorThreshold?: number;
-  anchorBatchSize?: number;
+  cwdThreshold?: number;
+  cwdBatchSize?: number;
   contentBudgetChars?: number;
 };
 
@@ -118,7 +118,6 @@ export type EmbeddingConfig = {
   apiKey?: string;
   baseUrl?: string;
   dimensions: number;
-  defaultImportance: number;
 };
 
 export type RecallConfig = {
@@ -126,8 +125,8 @@ export type RecallConfig = {
 };
 
 export type ObserverRuntimeConfig = {
-  anchorThreshold: number;
-  anchorBatchSize: number;
+  cwdThreshold: number;
+  cwdBatchSize: number;
   contentBudgetChars: number;
 };
 
@@ -144,8 +143,9 @@ export type WatchdogConfig = {
 type CoreRuntimeConfig = {
   extractor: ExtractorConfigRecord;
   extractorLlm: LlmConfigRecord;
-  observer: ObserverConfigRecord;
-  observerLlm: LlmConfigRecord;
+  observer?: ObserverConfigRecord;
+  observerLlm?: LlmConfigRecord;
+  observerEnabled: boolean;
   embedding: EmbeddingConfigRecord & { dimensions: number };
 };
 
@@ -221,9 +221,12 @@ export function getExtractorLlmConfig(): ExtractorLlmConfig | null {
 }
 
 export function getObserverLlmConfig(): ObserverLlmConfig | null {
-  const { observer, observerLlm: llm } = requireCoreRuntimeConfig(loadMuninnConfig());
+  const { observer, observerLlm: llm, observerEnabled } = requireCoreRuntimeConfig(loadMuninnConfig());
+  if (!observerEnabled || !observer || !llm) {
+    return null;
+  }
   return {
-    name: observer.name,
+    name: observer.name!,
     maxAttempts: observer.maxAttempts ?? DEFAULT_OBSERVER_MAX_ATTEMPTS,
     provider: parseLlmProvider(llm.type),
     model: llm.model,
@@ -245,7 +248,6 @@ export function getEmbeddingConfig(): EmbeddingConfig {
     apiKey: embedding.apiKey,
     baseUrl: embedding.baseUrl,
     dimensions: embedding.dimensions,
-    defaultImportance: DEFAULT_IMPORTANCE,
   };
 }
 
@@ -253,6 +255,10 @@ export function getRecallConfig(): RecallConfig {
   return {
     mode: parseRecallMode(loadMuninnConfig()?.extractor?.recallMode ?? DEFAULT_RECALL_MODE),
   };
+}
+
+export function isObserverEnabled(): boolean {
+  return isObserverEnabledFromConfig(loadMuninnConfig());
 }
 
 export function getObserverRuntimeConfig(): ObserverRuntimeConfig {
@@ -265,8 +271,8 @@ export function getObserverRuntimeConfigFromConfigForTests(config: MuninnConfigR
 
 function getObserverRuntimeConfigFromConfig(config: MuninnConfigRecord | null): ObserverRuntimeConfig {
   return {
-    anchorThreshold: config?.observer?.anchorThreshold ?? DEFAULT_OBSERVER_ANCHOR_THRESHOLD,
-    anchorBatchSize: config?.observer?.anchorBatchSize ?? DEFAULT_OBSERVER_ANCHOR_BATCH_SIZE,
+    cwdThreshold: config?.observer?.cwdThreshold ?? DEFAULT_OBSERVER_CWD_THRESHOLD,
+    cwdBatchSize: config?.observer?.cwdBatchSize ?? DEFAULT_OBSERVER_CWD_BATCH_SIZE,
     contentBudgetChars: config?.observer?.contentBudgetChars ?? DEFAULT_OBSERVER_CONTENT_BUDGET_CHARS,
   };
 }
@@ -358,7 +364,8 @@ function requireCoreRuntimeConfig(config: MuninnConfigRecord | null): CoreRuntim
   if (!config?.extractor) {
     throw new Error('extractor is required.');
   }
-  if (!config?.observer) {
+  const observerEnabled = isObserverEnabledFromConfig(config);
+  if (observerEnabled && !config.observer) {
     throw new Error('observer is required.');
   }
   if (!config.providers) {
@@ -379,8 +386,10 @@ function requireCoreRuntimeConfig(config: MuninnConfigRecord | null): CoreRuntim
   requireNonEmptyString(extractor.name, 'extractor.name');
   requireNonEmptyString(extractor.llmProvider, 'extractor.llmProvider');
   requireNonEmptyString(extractor.embeddingProvider, 'extractor.embeddingProvider');
-  requireNonEmptyString(observer.name, 'observer.name');
-  requireNonEmptyString(observer.llmProvider, 'observer.llmProvider');
+  if (observerEnabled) {
+    requireNonEmptyString(observer?.name, 'observer.name');
+    requireNonEmptyString(observer?.llmProvider, 'observer.llmProvider');
+  }
   const embeddingProvider = extractor.embeddingProvider;
   const dimensions = effectiveEmbeddingDimensions(config);
 
@@ -391,12 +400,14 @@ function requireCoreRuntimeConfig(config: MuninnConfigRecord | null): CoreRuntim
   requireNonEmptyString(extractorLlm.type, `providers.llm.${extractor.llmProvider}.type`);
   parseLlmProvider(extractorLlm.type);
 
-  const observerLlm = llm[observer.llmProvider];
-  if (!observerLlm) {
-    throw new Error(`observer.llmProvider references missing providers.llm.${observer.llmProvider}.`);
+  const observerLlm = observerEnabled ? llm[observer!.llmProvider!] : undefined;
+  if (observerEnabled) {
+    if (!observerLlm) {
+      throw new Error(`observer.llmProvider references missing providers.llm.${observer!.llmProvider}.`);
+    }
+    requireNonEmptyString(observerLlm.type, `providers.llm.${observer!.llmProvider}.type`);
+    parseLlmProvider(observerLlm.type);
   }
-  requireNonEmptyString(observerLlm.type, `providers.llm.${observer.llmProvider}.type`);
-  parseLlmProvider(observerLlm.type);
 
   const embedding = embeddings[embeddingProvider];
   if (!embedding) {
@@ -410,11 +421,16 @@ function requireCoreRuntimeConfig(config: MuninnConfigRecord | null): CoreRuntim
     extractorLlm,
     observer,
     observerLlm,
+    observerEnabled,
     embedding: {
       ...embedding,
       dimensions,
     },
   };
+}
+
+function isObserverEnabledFromConfig(config: MuninnConfigRecord | null): boolean {
+  return config?.observer?.enabled !== false;
 }
 
 function parseLlmProvider(provider: string): 'mock' | 'openai' | 'openai-codex' {
@@ -453,7 +469,9 @@ function validateTopLevelConfig(config: MuninnConfigRecord): void {
 function validateConfiguredProviders(config: MuninnConfigRecord): void {
   validateReferencedLlmProvider(config.providers?.llm, config.turn?.llmProvider, 'turn.llmProvider');
   validateReferencedLlmProvider(config.providers?.llm, config.extractor?.llmProvider, 'extractor.llmProvider');
-  validateReferencedLlmProvider(config.providers?.llm, config.observer?.llmProvider, 'observer.llmProvider');
+  if (isObserverEnabledFromConfig(config)) {
+    validateReferencedLlmProvider(config.providers?.llm, config.observer?.llmProvider, 'observer.llmProvider');
+  }
   validateReferencedEmbeddingProvider(
     config.providers?.embedding,
     config.extractor?.embeddingProvider,
@@ -492,7 +510,7 @@ function validateExtractorConfig(extractor: unknown): void {
     throw new Error('extractor.llm is no longer supported; use extractor.llmProvider instead.');
   }
   if (config.defaultImportance !== undefined) {
-    throw new Error('extractor.defaultImportance is not supported; Muninn uses an internal default importance.');
+    throw new Error('extractor.defaultImportance is not supported; extraction importance has been removed.');
   }
   requireNonEmptyString(config.name, 'extractor.name');
   requireNonEmptyString(config.llmProvider, 'extractor.llmProvider');
@@ -516,11 +534,17 @@ function validateObserverConfig(observer: unknown): void {
   if (config.llm !== undefined) {
     throw new Error('observer.llm is no longer supported; use observer.llmProvider instead.');
   }
+  validateOptionalBoolean(config.enabled, 'observer.enabled');
+  if (config.enabled === false) {
+    validateOptionalString(config.name, 'observer.name');
+    validateOptionalString(config.llmProvider, 'observer.llmProvider');
+    return;
+  }
   requireNonEmptyString(config.name, 'observer.name');
   requireNonEmptyString(config.llmProvider, 'observer.llmProvider');
   validateOptionalPositiveInteger(config.maxAttempts, 'observer.maxAttempts');
-  validateOptionalPositiveInteger(config.anchorThreshold, 'observer.anchorThreshold');
-  validateOptionalPositiveInteger(config.anchorBatchSize, 'observer.anchorBatchSize');
+  validateOptionalPositiveInteger(config.cwdThreshold, 'observer.cwdThreshold');
+  validateOptionalPositiveInteger(config.cwdBatchSize, 'observer.cwdBatchSize');
   validateOptionalPositiveInteger(config.contentBudgetChars, 'observer.contentBudgetChars');
 }
 

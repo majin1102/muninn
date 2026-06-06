@@ -78,10 +78,8 @@ export async function previewCodexImport(options: CodexImportOptions, requestId:
 export async function runCodexImport(options: CodexImportOptions, requestId: string): Promise<CodexImportRunResponse> {
   const selection = await selectCodexImportSessions(options, 'preview');
   const selectedRawSessionIds = new Set(selection.sessions.map((session) => session.sessionId));
-  const selectedImportedSessionIds = new Set(selection.sessions.map(importSessionId));
   const existingImports = await collectExistingCodexImports({
     rawSessionIds: selectedRawSessionIds,
-    importedSessionIds: selectedImportedSessionIds,
   });
   const existingImportTurns = [...existingImports.values()].flat();
   let importedSessions = 0;
@@ -780,9 +778,18 @@ async function importCodexSession(session: CodexSession): Promise<{ importedTurn
 }
 
 function toTurnContent(session: CodexSession, turn: CodexTurn, index: number): TurnContent {
+  const metadata = {
+    ingest: 'codex-import',
+    sourcePath: session.sourcePath,
+    sourceSessionId: session.sessionId,
+    importedAt: new Date().toISOString(),
+  };
   return {
-    sessionId: importSessionId(session),
+    sessionId: session.sessionId,
+    project: session.projectKey,
+    cwd: session.cwd,
     agent: CODEX_IMPORT_AGENT,
+    metadata,
     createdAt: turn.promptTimestamp,
     updatedAt: turn.responseTimestamp,
     title: promptTitle(turn.prompt),
@@ -796,9 +803,13 @@ function toTurnContent(session: CodexSession, turn: CodexTurn, index: number): T
       source: 'import',
       content: JSON.stringify({
         marker: importMarker(session, index),
+        ingest: metadata.ingest,
         project: session.projectKey,
         session: session.sessionId,
         source: session.sourcePath,
+        sourcePath: session.sourcePath,
+        sourceSessionId: session.sessionId,
+        importedAt: metadata.importedAt,
         cwd: session.cwd,
         timestamp: turn.responseTimestamp,
         promptTimestamp: turn.promptTimestamp,
@@ -810,7 +821,6 @@ function toTurnContent(session: CodexSession, turn: CodexTurn, index: number): T
 
 async function collectExistingCodexImports(selected: {
   rawSessionIds: Set<string>;
-  importedSessionIds: Set<string>;
 }): Promise<Map<string, ExistingImportTurn[]>> {
   const existing = await turns.list({
     mode: { type: 'page', offset: 0, limit: 100_000 },
@@ -820,16 +830,11 @@ async function collectExistingCodexImports(selected: {
   for (const turn of existing) {
     let marker = markerFromTurn(turn);
     let sessionId = marker?.split('#', 1)[0] ?? '';
-    if (marker && !selected.rawSessionIds.has(sessionId)) {
+    if (!marker) {
       continue;
     }
-    if (!marker) {
-      const legacySessionId = typeof turn.sessionId === 'string' ? turn.sessionId : '';
-      if (!selected.importedSessionIds.has(legacySessionId)) {
-        continue;
-      }
-      marker = `legacy:${turn.turnId}`;
-      sessionId = legacySessionId;
+    if (!selected.rawSessionIds.has(sessionId)) {
+      continue;
     }
     if (!sessionId) {
       continue;
@@ -904,10 +909,6 @@ function latestProjectTime(project: CodexImportProjectPreview): string {
   return project.sessions[0]?.updatedAt ?? '';
 }
 
-function importSessionId(session: CodexSession): string {
-  return `${session.projectKey}/${slugify(session.title)}-${session.sessionId.slice(0, 8)}`;
-}
-
 function importMarker(session: CodexSession, turnIndex: number): string {
   return `${session.sessionId}#${turnIndex + 1}`;
 }
@@ -945,14 +946,6 @@ function turnSummary(turn: CodexTurn): string {
 function projectKeyFromCwd(cwd: string): string {
   const base = path.basename(cwd);
   return base || 'codex';
-}
-
-function slugify(value: string): string {
-  const normalized = value
-    .toLowerCase()
-    .replace(/[^a-z0-9\u4e00-\u9fa5]+/g, '-')
-    .replace(/^-+|-+$/g, '');
-  return truncate(normalized || 'session', 36);
 }
 
 function truncate(value: string, maxLength: number): string {

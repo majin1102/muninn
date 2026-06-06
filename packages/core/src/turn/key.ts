@@ -2,12 +2,17 @@ export function sessionKey(
   sessionId: string | undefined,
   agent: string,
   observer: string,
+  ownership: { project: string; cwd: string } = {
+    project: 'default',
+    cwd: process.cwd(),
+  },
 ): string {
   const normalizedSessionId = normalizeSessionId(sessionId);
+  const scope = `cwd:${ownership.cwd}`;
   if (normalizedSessionId) {
-    return `session:${normalizedSessionId}|agent:${agent}|observer:${observer}`;
+    return `${scope}|session:${normalizedSessionId}|agent:${agent}|observer:${observer}`;
   }
-  return `agent:${agent}|observer:${observer}`;
+  return `${scope}|agent:${agent}|observer:${observer}`;
 }
 
 export function normalizeSessionId(sessionId: string | null | undefined): string | undefined {

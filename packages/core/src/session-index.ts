@@ -6,6 +6,8 @@ import { readTurn } from './turn/types.js';
 type IndexedTurn = {
   sessionId?: string | null;
   agent: string;
+  project: string;
+  cwd: string;
   observer?: string | null;
   summary?: string | null;
   updatedAt: string;
@@ -20,11 +22,11 @@ export class SessionIndex {
 
   constructor(
     checkpoint: SessionIndexCheckpoint | null,
-    private readonly observerName: string | null,
+    private readonly extractorName: string | null,
   ) {
     this.baseline = checkpoint?.baseline ?? { turn: 0, session: 0 };
     for (const entry of checkpoint?.entries ?? []) {
-      this.entries.set(entryKey(entry.sessionId, entry.agent), { ...entry });
+      this.entries.set(entryKey(entry), { ...entry });
     }
   }
 
@@ -48,18 +50,18 @@ export class SessionIndex {
   }
 
   private async ensureFresh(client: NativeTables): Promise<void> {
-    if (this.dirty || this.baseline.turn === 0 || this.baseline.session === 0 || !this.observerName) {
+    if (this.dirty || this.baseline.turn === 0 || this.baseline.session === 0 || !this.extractorName) {
       await this.rebuild(client);
       return;
     }
 
     const [turnDelta, sessionDelta] = await Promise.all([
       client.turnTable.delta({
-        observer: this.observerName,
+        observer: this.extractorName,
         baselineVersion: this.baseline.turn,
       }),
       client.sessionTable.delta({
-        observer: this.observerName,
+        observer: this.extractorName,
         baselineVersion: this.baseline.session,
       }),
     ]);
@@ -105,12 +107,17 @@ export class SessionIndex {
     if (!turn.sessionId || !turn.summary?.trim()) {
       return;
     }
-    const key = entryKey(turn.sessionId, turn.agent);
+    const entryBase = {
+      sessionId: turn.sessionId,
+      agent: turn.agent,
+      project: turn.project,
+      cwd: turn.cwd,
+    };
+    const key = entryKey(entryBase);
     const current = this.entries.get(key);
     if (!current) {
       this.entries.set(key, {
-        sessionId: turn.sessionId,
-        agent: turn.agent,
+        ...entryBase,
         latestUpdatedAt: turn.updatedAt,
       });
       return;
@@ -126,7 +133,7 @@ export class SessionIndex {
   private applySnapshots(snapshots: SessionSnapshot[]): void {
     const latestBySession = new Map<string, SessionSnapshot>();
     for (const snapshot of snapshots) {
-      const current = latestBySession.get(snapshot.sessionId);
+      const current = latestBySession.get(entryKey(snapshot));
       if (
         !current
         || snapshot.snapshotSequence > current.snapshotSequence
@@ -135,13 +142,13 @@ export class SessionIndex {
           && snapshot.updatedAt > current.updatedAt
         )
       ) {
-        latestBySession.set(snapshot.sessionId, snapshot);
+        latestBySession.set(entryKey(snapshot), snapshot);
       }
     }
 
     for (const snapshot of latestBySession.values()) {
       for (const entry of this.entries.values()) {
-        if (entry.sessionId === snapshot.sessionId) {
+        if (entryKey(entry) === entryKey(snapshot)) {
           entry.snapshotId = snapshot.snapshotId;
           entry.title = snapshot.title;
         }
@@ -150,6 +157,10 @@ export class SessionIndex {
   }
 }
 
-function entryKey(sessionId: string, agent: string): string {
-  return `${agent}\0${sessionId}`;
+function entryKey(value: {
+  sessionId: string;
+  agent: string;
+  cwd: string;
+}): string {
+  return `${value.agent}\0${value.cwd}\0${value.sessionId}`;
 }

@@ -256,8 +256,8 @@ function VisualSettings({ draft, pathLabel }: { draft: MuninnSettingsDraft; path
         <OptionalSettingsRow draft={draft} label="Name" description="observer.name" path={['observer', 'name']} />
         <OptionalSettingsRow draft={draft} label="LLM provider" description="observer.llmProvider" path={['observer', 'llmProvider']} />
         <OptionalSettingsRow draft={draft} label="Max attempts" description="observer.maxAttempts" path={['observer', 'maxAttempts']} />
-        <OptionalSettingsRow draft={draft} label="Anchor threshold" description="observer.anchorThreshold" path={['observer', 'anchorThreshold']} />
-        <OptionalSettingsRow draft={draft} label="Anchor batch size" description="observer.anchorBatchSize" path={['observer', 'anchorBatchSize']} />
+        <OptionalSettingsRow draft={draft} label="CWD threshold" description="observer.cwdThreshold" path={['observer', 'cwdThreshold']} />
+        <OptionalSettingsRow draft={draft} label="CWD batch size" description="observer.cwdBatchSize" path={['observer', 'cwdBatchSize']} />
         <OptionalSettingsRow draft={draft} label="Content budget" description="observer.contentBudgetChars" path={['observer', 'contentBudgetChars']} />
       </SettingsSection>
 

@@ -19,6 +19,8 @@ export type RecentTurn = {
 export type RecentSessionCheckpoint = {
   sessionId?: string | null;
   agent: string;
+  project: string;
+  cwd: string;
   turns: RecentTurn[];
 };
 
@@ -35,19 +37,21 @@ export type ExtractorCheckpoint = {
     turn: number;
     session: number;
     extraction: number;
-    observation: number;
+    global_observation: number;
   };
   committedEpoch?: number;
   nextEpoch: number;
   recentSessions: RecentSessionCheckpoint[];
   threads: ThreadRef[];
-  runs: ObservingRun[];
+  runs: ExtractorRun[];
   pendingExtractionChanges: QueuedExtractionChange[];
 };
 
 export type SessionIndexEntry = {
   sessionId: string;
   agent: string;
+  project: string;
+  cwd: string;
   latestUpdatedAt: string;
   snapshotId?: string;
   title?: string;
@@ -77,27 +81,27 @@ export type CheckpointFile = CheckpointContent & {
   writerPid: number;
 };
 
-export type ObservingRunStatus = 'running' | 'completed' | 'failed';
+export type ExtractorRunStatus = 'running' | 'completed' | 'failed';
 
-export type ObservingRunStage =
+export type ExtractorRunStage =
   | 'fittingThreads'
   | 'committingExtractions'
-  | 'observingThreads'
+  | 'extractingSessionMemory'
   | 'committingSnapshots'
   | 'indexingSnapshots'
   | 'completed';
 
-export type ObservingRunError = {
+export type ExtractorRunError = {
   stage: string;
   message: string;
   at: string;
 };
 
-export type ObservingRun = {
+export type ExtractorRun = {
   observer: string;
   epoch: number;
-  status: ObservingRunStatus;
-  stage: ObservingRunStage;
+  status: ExtractorRunStatus;
+  stage: ExtractorRunStage;
   inputTurnIds: string[];
   pending?: {
     sessionFragments?: SessionFragment[];
@@ -108,31 +112,31 @@ export type ObservingRun = {
     snapshotIds: string[];
   };
   traceRefs: string[];
-  errors: ObservingRunError[];
+  errors: ExtractorRunError[];
 };
 
 export type ObserverRunStage =
   | 'selectingExtractions'
-  | 'generatingObservation'
+  | 'generatingGlobalObservation'
   | 'committingSnapshot'
-  | 'committingObservations'
+  | 'committingGlobalObservations'
   | 'completed'
   | 'failed';
 
 export type ObserverRun = {
   runId: string;
   observeId: string;
-  anchor: string;
+  cwd: string;
   stage: ObserverRunStage;
   pendingExtractionIds: string[];
   generatedContent?: string;
-  parsedObservationDrafts?: Array<{
+  parsedGlobalObservationDrafts?: Array<{
     id: string;
     text: string;
     references: string[];
   }>;
   committedSnapshotId?: string;
-  committedObservationIds?: string[];
+  committedGlobalObservationIds?: string[];
   errors: Array<{
     message: string;
     stage: string;
@@ -141,13 +145,13 @@ export type ObserverRun = {
 
 export type ObserverCheckpoint = {
   baseline: {
-    observationContext: number;
-    observation: number;
+    globalObservationContext: number;
+    global_observation: number;
   };
   observeQueue: {
-    anchors: Array<{
+    cwdBuckets: Array<{
       key: string;
-      anchor: string;
+      cwd: string;
       extractionChanges: QueuedExtractionChange[];
     }>;
   };
@@ -211,7 +215,7 @@ function parseExtractorSection(value: unknown): ExtractorCheckpoint | null {
   const nextEpoch = value.nextEpoch;
   const recentSessions = parseRecentSessions(value.recentSessions);
   const threads = parseThreads(value.threads);
-  const runs = parseObservingRuns(value.runs ?? []);
+  const runs = parseExtractorRuns(value.runs ?? []);
   const pendingExtractionChanges = parseQueuedExtractionChanges(value.pendingExtractionChanges);
   if (!baseline || typeof nextEpoch !== 'number' || !recentSessions || !threads || !runs || !pendingExtractionChanges) {
     return null;
@@ -239,7 +243,7 @@ function parseExtractorBaseline(value: unknown): ExtractorCheckpoint['baseline']
     typeof value.turn !== 'number'
     || typeof value.session !== 'number'
     || typeof value.extraction !== 'number'
-    || (value.observation != null && typeof value.observation !== 'number')
+    || typeof value.global_observation !== 'number'
   ) {
     return null;
   }
@@ -247,7 +251,7 @@ function parseExtractorBaseline(value: unknown): ExtractorCheckpoint['baseline']
     turn: value.turn,
     session: value.session,
     extraction: value.extraction,
-    observation: value.observation ?? 0,
+    global_observation: value.global_observation,
   };
 }
 
@@ -269,14 +273,14 @@ function parseObserverBaseline(value: unknown): ObserverCheckpoint['baseline'] |
     return null;
   }
   if (
-    typeof value.observationContext !== 'number'
-    || typeof value.observation !== 'number'
+    typeof value.globalObservationContext !== 'number'
+    || typeof value.global_observation !== 'number'
   ) {
     return null;
   }
   return {
-    observationContext: value.observationContext,
-    observation: value.observation,
+    globalObservationContext: value.globalObservationContext,
+    global_observation: value.global_observation,
   };
 }
 
@@ -294,6 +298,8 @@ function parseSessionIndexSection(value: unknown): SessionIndexCheckpoint | null
       !isObjectRecord(entry)
       || typeof entry.sessionId !== 'string'
       || typeof entry.agent !== 'string'
+      || typeof entry.project !== 'string'
+      || typeof entry.cwd !== 'string'
       || typeof entry.latestUpdatedAt !== 'string'
       || (entry.snapshotId != null && typeof entry.snapshotId !== 'string')
       || (entry.title != null && typeof entry.title !== 'string')
@@ -303,6 +309,8 @@ function parseSessionIndexSection(value: unknown): SessionIndexCheckpoint | null
     entries.push({
       sessionId: entry.sessionId,
       agent: entry.agent,
+      project: entry.project,
+      cwd: entry.cwd,
       latestUpdatedAt: entry.latestUpdatedAt,
       snapshotId: entry.snapshotId ?? undefined,
       title: entry.title ?? undefined,
@@ -322,15 +330,15 @@ function parseSessionIndexBaseline(value: unknown): SessionIndexCheckpoint['base
 }
 
 function parseObserveQueue(value: unknown): ObserverCheckpoint['observeQueue'] | null {
-  if (!isObjectRecord(value) || !Array.isArray(value.anchors)) {
+  if (!isObjectRecord(value) || !Array.isArray(value.cwdBuckets)) {
     return null;
   }
-  const anchors: ObserverCheckpoint['observeQueue']['anchors'] = [];
-  for (const bucket of value.anchors) {
+  const cwdBuckets: ObserverCheckpoint['observeQueue']['cwdBuckets'] = [];
+  for (const bucket of value.cwdBuckets) {
     if (
       !isObjectRecord(bucket)
       || typeof bucket.key !== 'string'
-      || typeof bucket.anchor !== 'string'
+      || typeof bucket.cwd !== 'string'
     ) {
       return null;
     }
@@ -338,13 +346,13 @@ function parseObserveQueue(value: unknown): ObserverCheckpoint['observeQueue'] |
     if (!extractionChanges) {
       return null;
     }
-    anchors.push({
+    cwdBuckets.push({
       key: bucket.key,
-      anchor: bucket.anchor,
+      cwd: bucket.cwd,
       extractionChanges,
     });
   }
-  return { anchors };
+  return { cwdBuckets };
 }
 
 function parseQueuedExtractionChanges(value: unknown): QueuedExtractionChange[] | null {
@@ -371,15 +379,13 @@ function parseStoredExtraction(value: unknown): Extraction | null {
   }
   if (
     typeof value.id !== 'string'
-    || typeof value.text !== 'string'
-    || (value.context != null && typeof value.context !== 'string')
-    || !isStringArray(value.anchors)
+    || typeof value.title !== 'string'
+    || typeof value.summary !== 'string'
+    || typeof value.content !== 'string'
+    || typeof value.cwd !== 'string'
     || !isNumberArray(value.vector)
-    || typeof value.importance !== 'number'
-    || typeof value.category !== 'string'
     || !isStringArray(value.turnRefs)
-    || !isStringArray(value.observationPaths)
-    || !isStringArray(value.observedRootAnchors)
+    || !isStringArray(value.globalObservationPaths)
     || typeof value.createdAt !== 'string'
     || typeof value.updatedAt !== 'string'
   ) {
@@ -387,15 +393,13 @@ function parseStoredExtraction(value: unknown): Extraction | null {
   }
   return {
     id: value.id,
-    text: value.text,
-    context: value.context ?? null,
-    anchors: [...value.anchors],
+    title: value.title,
+    summary: value.summary,
+    content: value.content,
+    cwd: value.cwd,
     vector: [...value.vector],
-    importance: value.importance,
-    category: value.category,
     turnRefs: [...value.turnRefs],
-    observationPaths: [...value.observationPaths],
-    observedRootAnchors: [...value.observedRootAnchors],
+    globalObservationPaths: [...value.globalObservationPaths],
     createdAt: value.createdAt,
     updatedAt: value.updatedAt,
   };
@@ -413,6 +417,8 @@ function parseRecentSessions(value: unknown): RecentSessionCheckpoint[] | null {
     if (
       (session.sessionId != null && typeof session.sessionId !== 'string')
       || typeof session.agent !== 'string'
+      || typeof session.project !== 'string'
+      || typeof session.cwd !== 'string'
     ) {
       return null;
     }
@@ -423,6 +429,8 @@ function parseRecentSessions(value: unknown): RecentSessionCheckpoint[] | null {
     sessions.push({
       sessionId: session.sessionId ?? null,
       agent: session.agent,
+      project: session.project,
+      cwd: session.cwd,
       turns,
     });
   }
@@ -496,13 +504,13 @@ function parseThreads(value: unknown): ThreadRef[] | null {
   return threads;
 }
 
-function parseObservingRuns(value: unknown): ObservingRun[] | null {
+function parseExtractorRuns(value: unknown): ExtractorRun[] | null {
   if (!Array.isArray(value)) {
     return null;
   }
-  const runs: ObservingRun[] = [];
+  const runs: ExtractorRun[] = [];
   for (const run of value) {
-    const parsed = parseObservingRun(run);
+    const parsed = parseExtractorRun(run);
     if (!parsed) {
       return null;
     }
@@ -511,7 +519,7 @@ function parseObservingRuns(value: unknown): ObservingRun[] | null {
   return runs;
 }
 
-function parseObservingRun(value: unknown): ObservingRun | null {
+function parseExtractorRun(value: unknown): ExtractorRun | null {
   if (!isObjectRecord(value)) {
     return null;
   }
@@ -547,7 +555,7 @@ function parseObservingRun(value: unknown): ObservingRun | null {
   };
 }
 
-function parseRunCommitted(value: unknown): ObservingRun['committed'] | null {
+function parseRunCommitted(value: unknown): ExtractorRun['committed'] | null {
   if (!isObjectRecord(value)) {
     return null;
   }
@@ -559,11 +567,11 @@ function parseRunCommitted(value: unknown): ObservingRun['committed'] | null {
   return { extractionIds, snapshotIds };
 }
 
-function parseRunPending(value: unknown): NonNullable<ObservingRun['pending']> | null {
+function parseRunPending(value: unknown): NonNullable<ExtractorRun['pending']> | null {
   if (!isObjectRecord(value)) {
     return null;
   }
-  const pending: NonNullable<ObservingRun['pending']> = {};
+  const pending: NonNullable<ExtractorRun['pending']> = {};
   if (value.sessionFragments != null) {
     if (!Array.isArray(value.sessionFragments)) {
       return null;
@@ -579,11 +587,11 @@ function parseRunPending(value: unknown): NonNullable<ObservingRun['pending']> |
   return pending;
 }
 
-function parseRunErrors(value: unknown): ObservingRunError[] | null {
+function parseRunErrors(value: unknown): ExtractorRunError[] | null {
   if (!Array.isArray(value)) {
     return null;
   }
-  const errors: ObservingRunError[] = [];
+  const errors: ExtractorRunError[] = [];
   for (const error of value) {
     if (
       !isObjectRecord(error)
@@ -624,7 +632,7 @@ function parseObserverRun(value: unknown): ObserverRun | null {
   if (
     typeof value.runId !== 'string'
     || typeof value.observeId !== 'string'
-    || typeof value.anchor !== 'string'
+    || typeof value.cwd !== 'string'
     || !isObserverRunStage(value.stage)
   ) {
     return null;
@@ -634,16 +642,16 @@ function parseObserverRun(value: unknown): ObserverRun | null {
   if (!pendingExtractionIds || !errors) {
     return null;
   }
-  const parsedObservationDrafts = value.parsedObservationDrafts == null
+  const parsedGlobalObservationDrafts = value.parsedGlobalObservationDrafts == null
     ? undefined
-    : parseObservationDrafts(value.parsedObservationDrafts);
-  if (value.parsedObservationDrafts != null && !parsedObservationDrafts) {
+    : parseGlobalObservationDrafts(value.parsedGlobalObservationDrafts);
+  if (value.parsedGlobalObservationDrafts != null && !parsedGlobalObservationDrafts) {
     return null;
   }
-  const committedObservationIds = value.committedObservationIds == null
+  const committedGlobalObservationIds = value.committedGlobalObservationIds == null
     ? undefined
-    : parseStringArray(value.committedObservationIds);
-  if (value.committedObservationIds != null && !committedObservationIds) {
+    : parseStringArray(value.committedGlobalObservationIds);
+  if (value.committedGlobalObservationIds != null && !committedGlobalObservationIds) {
     return null;
   }
   if (
@@ -655,22 +663,22 @@ function parseObserverRun(value: unknown): ObserverRun | null {
   return {
     runId: value.runId,
     observeId: value.observeId,
-    anchor: value.anchor,
+    cwd: value.cwd,
     stage: value.stage,
     pendingExtractionIds,
     ...(value.generatedContent == null ? {} : { generatedContent: value.generatedContent }),
-    ...(parsedObservationDrafts ? { parsedObservationDrafts } : {}),
+    ...(parsedGlobalObservationDrafts ? { parsedGlobalObservationDrafts } : {}),
     ...(value.committedSnapshotId == null ? {} : { committedSnapshotId: value.committedSnapshotId }),
-    ...(committedObservationIds ? { committedObservationIds } : {}),
+    ...(committedGlobalObservationIds ? { committedGlobalObservationIds } : {}),
     errors,
   };
 }
 
-function parseObservationDrafts(value: unknown): NonNullable<ObserverRun['parsedObservationDrafts']> | null {
+function parseGlobalObservationDrafts(value: unknown): NonNullable<ObserverRun['parsedGlobalObservationDrafts']> | null {
   if (!Array.isArray(value)) {
     return null;
   }
-  const drafts: NonNullable<ObserverRun['parsedObservationDrafts']> = [];
+  const drafts: NonNullable<ObserverRun['parsedGlobalObservationDrafts']> = [];
   for (const draft of value) {
     if (
       !isObjectRecord(draft)
@@ -728,14 +736,14 @@ function isNumberArray(value: unknown): value is number[] {
   return Array.isArray(value) && value.every((item) => typeof item === 'number');
 }
 
-function isRunStatus(value: unknown): value is ObservingRunStatus {
+function isRunStatus(value: unknown): value is ExtractorRunStatus {
   return value === 'running' || value === 'completed' || value === 'failed';
 }
 
-function isRunStage(value: unknown): value is ObservingRunStage {
+function isRunStage(value: unknown): value is ExtractorRunStage {
   return value === 'fittingThreads'
     || value === 'committingExtractions'
-    || value === 'observingThreads'
+    || value === 'extractingSessionMemory'
     || value === 'committingSnapshots'
     || value === 'indexingSnapshots'
     || value === 'completed';
@@ -743,9 +751,9 @@ function isRunStage(value: unknown): value is ObservingRunStage {
 
 function isObserverRunStage(value: unknown): value is ObserverRunStage {
   return value === 'selectingExtractions'
-    || value === 'generatingObservation'
+    || value === 'generatingGlobalObservation'
     || value === 'committingSnapshot'
-    || value === 'committingObservations'
+    || value === 'committingGlobalObservations'
     || value === 'completed'
     || value === 'failed';
 }

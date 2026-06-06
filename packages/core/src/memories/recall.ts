@@ -46,10 +46,10 @@ export async function recallMemories(
   const vector = mode === 'fts'
     ? []
     : await (options.embed ?? embedText)(trimmed);
-  const leafObservationIds = await loadLeafObservationIds(client);
-  const observationLimit = leafObservationIds ? queryLimit * 4 : queryLimit;
+  const leafGlobalObservationIds = await loadLeafGlobalObservationIds(client);
+  const observationLimit = leafGlobalObservationIds ? queryLimit * 4 : queryLimit;
   const [observationRows, extractionRows] = await Promise.all([
-    client.observationTable.search({
+    client.globalObservationTable.search({
       query: trimmed,
       vector,
       limit: observationLimit,
@@ -62,24 +62,24 @@ export async function recallMemories(
       mode,
     }),
   ]);
-  const filteredObservationRows = leafObservationIds
-    ? observationRows.filter((row) => leafObservationIds.has(row.id))
+  const filteredGlobalObservationRows = leafGlobalObservationIds
+    ? observationRows.filter((row) => leafGlobalObservationIds.has(row.id))
     : observationRows;
-  const observationRefs = await loadObservationContextRefs(client, filteredObservationRows.map((row) => row.id));
+  const observationRefs = await loadGlobalObservationContextRefs(client, filteredGlobalObservationRows.map((row) => row.id));
   const extractionDetails = await loadExtractionDetails(
     client,
-    filteredObservationRows.flatMap((row) => row.extractionRefs),
+    filteredGlobalObservationRows.flatMap((row) => row.extractionRefs),
   );
-  const curatedHits: RouteHit[] = filteredObservationRows.map((row) => ({
+  const curatedHits: RouteHit[] = filteredGlobalObservationRows.map((row) => ({
     route: 'curated',
-    memoryId: `observation:${row.id}`,
-    text: renderObservationHit(row.text, row.extractionRefs, extractionDetails),
+    memoryId: `global_observation:${row.id}`,
+    text: renderGlobalObservationHit(row.text, row.extractionRefs, extractionDetails),
     references: observationRefs.get(row.id) ?? row.extractionRefs,
   }));
   const rawHits: RouteHit[] = extractionRows.map((row) => ({
     route: 'raw',
     memoryId: `extraction:${row.id}`,
-    text: row.text,
+    text: row.content,
     references: row.turnRefs,
   }));
   const merged = mergeRoutes(curatedHits, rawHits, budget > 0 ? queryLimit : limit);
@@ -88,7 +88,7 @@ export async function recallMemories(
       return [];
     }
     const extractionById = new Map(extractionRows.map((row) => [`extraction:${row.id}`, row]));
-    const observationById = new Map(observationRows.map((row) => [`observation:${row.id}`, row]));
+    const observationById = new Map(observationRows.map((row) => [`global_observation:${row.id}`, row]));
     const curatedTextById = new Map(curatedHits.map((hit) => [hit.memoryId, hit.text]));
     const candidates = merged.map((hit) => {
       if (hit.route === 'curated') {
@@ -108,9 +108,7 @@ export async function recallMemories(
       }
       return {
         memoryId: hit.memoryId,
-        content: row.text,
-        context: row.context,
-        anchors: row.anchors,
+        content: row.content,
         refs: row.turnRefs,
       };
     });
@@ -136,9 +134,9 @@ export type { RecallMode };
 
 type ExtractionDetail = {
   id: string;
-  text: string;
-  context?: string | null;
-  anchors?: string[];
+  title: string;
+  summary: string;
+  content: string;
 };
 
 async function loadExtractionDetails(
@@ -153,22 +151,22 @@ async function loadExtractionDetails(
   return new Map(rows.map((row) => [row.id, row]));
 }
 
-async function loadObservationContextRefs(
+async function loadGlobalObservationContextRefs(
   client: NativeTables,
   ids: string[],
 ): Promise<Map<string, string[]>> {
   const uniqueIds = uniqueRefs(ids);
-  if (uniqueIds.length === 0 || typeof client.observationContextTable?.get !== 'function') {
+  if (uniqueIds.length === 0 || typeof client.globalObservationContextTable?.get !== 'function') {
     return new Map();
   }
-  const rows = await client.observationContextTable.get({ ids: uniqueIds });
+  const rows = await client.globalObservationContextTable.get({ ids: uniqueIds });
   return new Map(rows.map((row) => [
     row.id,
     uniqueRefs(row.sourceRefs ?? []),
   ]));
 }
 
-function renderObservationHit(
+function renderGlobalObservationHit(
   text: string,
   refs: string[],
   details: Map<string, ExtractionDetail>,
@@ -184,11 +182,7 @@ function renderObservationHit(
     if (!detail) {
       continue;
     }
-    const sourceContext = detail.context?.trim();
-    if (sourceContext) {
-      lines.push(`CONTEXT: ${sourceContext}`);
-    }
-    lines.push(`EXTRACTION: ${detail.text}`);
+    lines.push(`EXTRACTION: ${detail.content}`);
   }
   return lines.join('\n');
 }
@@ -230,12 +224,8 @@ function replaceSourceLine(
         return original;
       }
       embeddedRefs.add(id);
-      const sourceContext = detail.context?.trim();
       const continuationPrefix = prefix.replace(/-\s*$/, '  ');
-      if (sourceContext) {
-        return `${prefix}context: ${formatInlineBlock(sourceContext, continuationPrefix)}\n${continuationPrefix}extraction: ${formatInlineBlock(detail.text, continuationPrefix)}`;
-      }
-      return `${prefix}extraction: ${formatInlineBlock(detail.text, continuationPrefix)}`;
+      return `${prefix}extraction: ${formatInlineBlock(detail.content, continuationPrefix)}`;
     },
   );
 }
@@ -246,9 +236,9 @@ function formatInlineBlock(text: string, prefix: string): string {
   )).join('\n');
 }
 
-async function loadLeafObservationIds(client: NativeTables): Promise<Set<string> | null> {
+async function loadLeafGlobalObservationIds(client: NativeTables): Promise<Set<string> | null> {
   try {
-    const contexts = await client.observationContextTable.list({});
+    const contexts = await client.globalObservationContextTable.list({});
     if (contexts.length === 0) {
       return null;
     }
