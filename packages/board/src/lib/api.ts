@@ -303,9 +303,7 @@ export function createBoardClient(apiBase: string, usesDemoData: boolean): Board
       return fetchJson<SettingsConfigResponse>('/api/v1/ui/settings/config');
     },
     getPipelineTasks() {
-      return usesDemoData
-        ? getDemoPipelineTasks()
-        : fetchJson<PipelineTasksResponse>('/api/v1/ui/pipelines');
+      return getDemoPipelineTasks();
     },
     saveSettingsConfig(content) {
       return fetchJson<SettingsConfigResponse>('/api/v1/ui/settings/config', {

@@ -287,7 +287,6 @@ function PipelineSummary({ tasks }: { tasks: PipelineTask[] }) {
   return (
     <div className="pipeline-summary" aria-label="Pipeline summary">
       <section className="pipeline-summary-section pipeline-summary-section-state" aria-label="Pipeline state">
-        <h2>State</h2>
         <div className="pipeline-summary-state-grid">
           <SummaryItem status="running" label={`Running ${metrics.running}`} />
           <SummaryItem status="queued" label={`Queued ${metrics.queued}`} />
@@ -296,7 +295,6 @@ function PipelineSummary({ tasks }: { tasks: PipelineTask[] }) {
         </div>
       </section>
       <section className="pipeline-summary-section pipeline-summary-section-usage" aria-label="Pipeline usage">
-        <h2>Usage</h2>
         <div className="pipeline-summary-usage-grid">
           <UsageItem label="Input" metric={metrics.input} />
           <UsageItem label="Output" metric={metrics.output} />
@@ -319,8 +317,10 @@ function UsageItem({ label, metric }: { label: string; metric: PipelineTask['inp
   return (
     <span className="pipeline-summary-usage-item">
       <strong>{label}</strong>
-      <span>{formatBytes(metric.bytes)}</span>
-      <span>{formatTokens(metric.tokens)}</span>
+      <span className="pipeline-summary-usage-values">
+        <span className="pipeline-summary-usage-byte">{formatBytes(metric.bytes)}</span>
+        <span className="pipeline-summary-usage-token">{formatTokens(metric.tokens)}</span>
+      </span>
     </span>
   );
 }
