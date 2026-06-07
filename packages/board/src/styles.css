@@ -2817,8 +2817,8 @@ button.search-menu-item:hover,
 
 .search-qa-layout {
   display: grid;
-  grid-template-columns: minmax(300px, 0.86fr) 1px minmax(520px, 1.14fr);
-  gap: 28px;
+  grid-template-columns: minmax(0, 0.86fr) 1px minmax(0, 1.14fr);
+  gap: clamp(18px, 2.4vw, 28px);
   width: min(1180px, 100%);
   margin: 18px auto 0;
   align-items: start;
@@ -2832,10 +2832,12 @@ button.search-menu-item:hover,
 .search-answer-pane {
   min-width: 0;
   padding-top: 5px;
+  overflow-wrap: anywhere;
 }
 
 .search-evidence-pane {
   min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .search-qa-divider {
@@ -2942,6 +2944,7 @@ button.search-menu-item:hover,
 .search-result {
   padding: 17px 0 18px;
   border-bottom: 1px solid var(--border);
+  min-width: 0;
 }
 
 .search-result h2 {
@@ -2977,6 +2980,7 @@ button.search-menu-item:hover,
 .search-hit-content {
   max-height: 90px;
   overflow: hidden;
+  overflow-wrap: anywhere;
   white-space: pre-wrap;
   color: #3d4046;
   font-size: 13.5px;
@@ -3024,6 +3028,21 @@ button.search-menu-item:hover,
 
 .search-error {
   color: var(--destructive);
+}
+
+@media (max-width: 980px) {
+  .search-qa-layout {
+    grid-template-columns: 1fr;
+    gap: 20px;
+    width: min(680px, 100%);
+    margin-top: 16px;
+  }
+
+  .search-qa-divider {
+    width: 100%;
+    min-height: 1px;
+    height: 1px;
+  }
 }
 
 .settings-page {
