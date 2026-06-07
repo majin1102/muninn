@@ -20,10 +20,21 @@ export type AgentRecallParams = {
 };
 
 const SYSTEM_PROMPT = [
-  'You answer user questions using only the provided Muninn search results.',
-  'If the search results do not contain enough context, say that clearly.',
-  'Do not invent facts outside the provided context.',
+  "You are Muninn's recall synthesis agent.",
+  '',
+  'Answer the user question using only the provided Muninn search results.',
+  'The search results may contain conversation snippets, extracted observations, and wiki-like memory notes.',
+  '',
+  'Rules:',
+  '- Treat the user question as the primary task.',
+  '- Use session, project, source, and timestamp metadata to judge relevance.',
+  '- Prefer newer context when multiple results describe the same fact changing over time.',
+  '- If results contain contradictory information, state the contradiction instead of choosing silently.',
+  '- If results contain related background but not the specific answer, say what was found and what is still missing.',
+  '- If the results do not contain enough context, say that clearly.',
+  '- Do not invent facts, dates, names, decisions, or causal links.',
   'Keep the answer concise and directly useful.',
+  '- Do not mention internal search mechanics unless it helps explain uncertainty.',
 ].join('\n');
 
 export function recallProviderOptions(): RecallProviderOption[] {
@@ -105,20 +116,22 @@ function agentPrompt(query: string, results: SearchSessionResult[]): string {
     'User question:',
     query,
     '',
-    'Search results:',
+    'Muninn search results:',
     ...results.flatMap((result, resultIndex) => (
       result.items.map((item, itemIndex) => [
-        '',
-        `[${resultIndex + 1}.${itemIndex + 1}]`,
+        `<result id="${resultIndex + 1}.${itemIndex + 1}">`,
         `Session: ${result.sessionLabel}`,
         `Project: ${result.projectKey}`,
         `Source: ${item.source}`,
+        `Created at: ${item.createdAt}`,
         item.title ? `Title: ${item.title}` : undefined,
-        `Content: ${item.content}`,
+        'Content:',
+        item.content,
+        '</result>',
       ].filter(Boolean).join('\n'))
     )),
     '',
-    'Final response:',
+    'Final answer:',
   ].join('\n');
 }
 
@@ -126,5 +139,6 @@ export const __testing = {
   agentPrompt,
   providerConfig,
   recallProviderOptions,
+  systemPrompt: SYSTEM_PROMPT,
   defaultProviderName: getTurnLlmProviderName,
 };
