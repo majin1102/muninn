@@ -888,7 +888,7 @@ function SearchResults({
     return <div className="search-error">{error}</div>;
   }
   if (results.length === 0) {
-    return <div className="search-status">No matching context found.</div>;
+    return <div className="search-status">We couldn't find matching context.</div>;
   }
   return (
     <div className="search-results">
