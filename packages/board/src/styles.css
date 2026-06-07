@@ -2826,7 +2826,7 @@ button.search-menu-item:hover,
 
 .search-qa-layout-results-only {
   grid-template-columns: minmax(0, 1fr);
-  width: min(680px, 100%);
+  width: min(780px, 100%);
 }
 
 .search-answer-pane {
@@ -3033,7 +3033,7 @@ button.search-menu-item:hover,
   .search-qa-layout {
     grid-template-columns: 1fr;
     gap: 20px;
-    width: min(680px, 100%);
+    width: min(780px, 100%);
     margin-top: 16px;
   }
 
