@@ -39,7 +39,7 @@ const navItems: Array<{ view: PrimaryView; label: string; icon: ComponentType }>
 
 const REPOSITORY_URL = 'https://github.com/majin1102/muninn';
 const SESSION_PANE_MIN_WIDTH = 340;
-const SESSION_PANE_DEFAULT_WIDTH = 360;
+const SESSION_PANE_DEFAULT_WIDTH = SESSION_PANE_MIN_WIDTH;
 
 export function App() {
   const [apiBase] = useState(resolveApiBase);

@@ -250,6 +250,7 @@ export function PipelinesPage({ client }: PipelinesPageProps) {
         </div>
 
         <PipelineSummary tasks={visibleTasks} />
+        <PipelineStatusStrip tasks={visibleTasks} />
 
         {loading ? <div className="pipeline-empty">Loading pipelines...</div> : null}
         {error ? <div className="pipeline-empty pipeline-empty-error">{error}</div> : null}
@@ -284,18 +285,21 @@ function PipelineSummary({ tasks }: { tasks: PipelineTask[] }) {
   const metrics = useMemo(() => summarizeVisiblePipelineTasks(tasks), [tasks]);
   return (
     <div className="pipeline-summary" aria-label="Pipeline summary">
-      <section className="pipeline-summary-state" aria-label="Pipeline state">
-        <div className="pipeline-summary-state-grid">
-          <SummaryItem status="running" label={`Running ${metrics.running}`} />
-          <SummaryItem status="done" label={`Done ${metrics.done}`} />
-          <SummaryItem status="queued" label={`Queued ${metrics.queued}`} />
-          <SummaryItem status="failed" label={`Failed ${metrics.failed}`} />
-        </div>
-      </section>
-      <span className="pipeline-summary-divider" aria-hidden="true" />
       <UsageItem label="Input" metric={metrics.input} />
       <span className="pipeline-summary-divider" aria-hidden="true" />
       <UsageItem label="Output" metric={metrics.output} />
+    </div>
+  );
+}
+
+function PipelineStatusStrip({ tasks }: { tasks: PipelineTask[] }) {
+  const metrics = useMemo(() => summarizeVisiblePipelineTasks(tasks), [tasks]);
+  return (
+    <div className="pipeline-status-strip" aria-label="Pipeline state">
+      <SummaryItem status="running" label={`running ${metrics.running}`} />
+      <SummaryItem status="done" label={`done ${metrics.done}`} />
+      <SummaryItem status="queued" label={`queued ${metrics.queued}`} />
+      <SummaryItem status="failed" label={`failed ${metrics.failed}`} />
     </div>
   );
 }
@@ -312,10 +316,14 @@ function SummaryItem({ status, label }: { status: PipelineTaskStatus; label: str
 function UsageItem({ label, metric }: { label: string; metric: PipelineTask['input'] }) {
   return (
     <span className="pipeline-summary-usage-item">
-      <span className="pipeline-summary-usage-label">{label} data</span>
-      <span className="pipeline-summary-usage-value">{formatBytes(metric.bytes)}</span>
-      <span className="pipeline-summary-usage-label">{label} tokens</span>
-      <span className="pipeline-summary-usage-value">{formatTokenCount(metric.tokens)}</span>
+      <span className="pipeline-summary-usage-metric">
+        <span className="pipeline-summary-usage-label">{label} Data</span>
+        <span className="pipeline-summary-usage-value">{formatBytes(metric.bytes)}</span>
+      </span>
+      <span className="pipeline-summary-usage-metric">
+        <span className="pipeline-summary-usage-label">{label} Tokens</span>
+        <span className="pipeline-summary-usage-value">{formatTokenCount(metric.tokens)}</span>
+      </span>
     </span>
   );
 }
@@ -466,9 +474,6 @@ function PipelineCard({ task, selected, onInspect }: {
           <Eye />
         </button>
       </div>
-      <p className="pipeline-status-line">
-        <span>{capitalizeSentence(task.statusText)}</span>
-      </p>
       <div className="pipeline-io-grid">
         <PipelineMetricBox label="Input" metric={task.input} status={task.status} />
         {task.output ? (
@@ -483,12 +488,10 @@ function PipelineCard({ task, selected, onInspect }: {
 }
 
 function PipelineLifecycleLine({ task }: { task: PipelineTask }) {
+  const createdAt = task.status === 'queued' ? task.updatedAt : task.startedAt;
   return (
     <p className="pipeline-lifecycle-line">
-      <span>Duration {durationForTask(task)}</span>
-      {task.status === 'done' && task.toolCalls.length > 0 ? (
-        <span>Tool calls: {toolCallItems(task.toolCalls).join(' · ')}</span>
-      ) : null}
+      <span>Created at {formatCreatedTime(createdAt)} Duration {durationForTask(task)}</span>
     </p>
   );
 }
@@ -575,11 +578,11 @@ function PipelineInspectorSection({ title, items, fallback, tone = 'default' }: 
 function kindLabel(kind: PipelineTaskKind): string {
   switch (kind) {
     case 'session-observing':
-      return 'Session observing';
+      return 'Extraction';
     case 'global-observing':
-      return 'Global observing';
+      return 'Observation';
     case 'wiki-compiling':
-      return 'Wiki compiling';
+      return 'Dreaming';
   }
 }
 
@@ -594,10 +597,6 @@ function statusLabel(status: PipelineTaskStatus): string {
     case 'done':
       return 'Done';
   }
-}
-
-function capitalizeSentence(value: string): string {
-  return value.length > 0 ? `${value[0]!.toUpperCase()}${value.slice(1)}` : value;
 }
 
 function toolCallItems(calls: PipelineTask['toolCalls']): string[] {
@@ -757,7 +756,7 @@ function formatDateTime(value: string | undefined | null): string {
   }).format(date);
 }
 
-function formatTime(value: string | undefined | null): string {
+function formatTime(value: string | undefined | null, includeSeconds = false): string {
   if (!value) {
     return 'unknown';
   }
@@ -768,8 +767,37 @@ function formatTime(value: string | undefined | null): string {
   return new Intl.DateTimeFormat(undefined, {
     hour: '2-digit',
     minute: '2-digit',
+    second: includeSeconds ? '2-digit' : undefined,
     hour12: false,
   }).format(date);
+}
+
+function formatCreatedTime(value: string | undefined | null): string {
+  if (!value) {
+    return 'unknown';
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return 'unknown';
+  }
+  const now = new Date();
+  const sameDay =
+    date.getFullYear() === now.getFullYear() &&
+    date.getMonth() === now.getMonth() &&
+    date.getDate() === now.getDate();
+  const time = formatClockTime(date);
+  if (sameDay) {
+    return time;
+  }
+  return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())} ${time}`;
+}
+
+function formatClockTime(date: Date): string {
+  return `${pad2(date.getHours())}:${pad2(date.getMinutes())}:${pad2(date.getSeconds())}`;
+}
+
+function pad2(value: number): string {
+  return String(value).padStart(2, '0');
 }
 
 function formatDuration(start: string | undefined | null, end: string | undefined | null): string {
