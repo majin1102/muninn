@@ -297,7 +297,7 @@ export function createBoardClient(apiBase: string, usesDemoData: boolean): Board
         const body = await safeJson<ErrorResponse>(response);
         throw new Error(body?.errorMessage ?? `${response.status} ${response.statusText}`);
       }
-      await readAgentRecallStream(response, params.onEvent);
+      await readAgentRecallStream(response, params.onEvent, params.signal);
     },
     getSettingsConfig() {
       return fetchJson<SettingsConfigResponse>('/api/v1/ui/settings/config');
@@ -334,9 +334,13 @@ export function createBoardClient(apiBase: string, usesDemoData: boolean): Board
 async function readAgentRecallStream(
   response: Response,
   onEvent: (event: AgentRecallStreamEvent) => void,
+  signal?: AbortSignal,
 ): Promise<void> {
+  if (signal?.aborted) {
+    return;
+  }
   if (!response.body) {
-    parseAgentRecallLines(await response.text(), onEvent);
+    parseAgentRecallLines(await response.text(), onEvent, signal);
     return;
   }
   const reader = response.body.getReader();
@@ -348,13 +352,16 @@ async function readAgentRecallStream(
       if (done) {
         break;
       }
+      if (signal?.aborted) {
+        return;
+      }
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split('\n');
       buffer = lines.pop() ?? '';
-      parseAgentRecallLines(lines.join('\n'), onEvent);
+      parseAgentRecallLines(lines.join('\n'), onEvent, signal);
     }
     buffer += decoder.decode();
-    parseAgentRecallLines(buffer, onEvent);
+    parseAgentRecallLines(buffer, onEvent, signal);
   } finally {
     reader.releaseLock();
   }
@@ -363,8 +370,12 @@ async function readAgentRecallStream(
 function parseAgentRecallLines(
   raw: string,
   onEvent: (event: AgentRecallStreamEvent) => void,
+  signal?: AbortSignal,
 ) {
   for (const line of raw.split('\n')) {
+    if (signal?.aborted) {
+      return;
+    }
     const trimmed = line.trim();
     if (!trimmed) {
       continue;

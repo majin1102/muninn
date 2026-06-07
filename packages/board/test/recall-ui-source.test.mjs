@@ -11,3 +11,10 @@ test('recall UI runs search before optional streaming agent recall', async () =>
   assert.match(source, /setAnswerText\(\(current\) => `\$\{current\}\$\{agentEvent\.text\}`\)/);
   assert.doesNotMatch(source, /BotMessageSquare/);
 });
+
+test('recall API stream reader gates events after abort', async () => {
+  const source = await readFile(new URL('../src/lib/api.ts', import.meta.url), 'utf8');
+
+  assert.match(source, /readAgentRecallStream\(response, params\.onEvent, params\.signal\)/);
+  assert.match(source, /signal\?\.aborted/);
+});
