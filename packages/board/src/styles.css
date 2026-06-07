@@ -2943,7 +2943,6 @@ button.search-menu-item:hover,
 
 .search-result {
   padding: 17px 0 18px;
-  border-bottom: 1px solid var(--border);
   min-width: 0;
 }
 
