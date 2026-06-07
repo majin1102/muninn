@@ -27,7 +27,7 @@ import {
 } from '../demo/provider.js';
 import { trimTrailingSlash } from './utils.js';
 
-export type PrimaryView = 'search' | 'wiki' | 'session' | 'pipelines' | 'settings';
+export type PrimaryView = 'recall' | 'wiki' | 'session' | 'pipelines' | 'settings';
 
 export type ProjectTurnNode = TurnPreview & {
   agent: string;
@@ -78,7 +78,7 @@ export type BoardClient = {
     nextOffset: number | null;
   }>;
   getDocument(memoryId: string): Promise<MemoryDocument>;
-  search(params: {
+  recall(params: {
     query: string;
     projectKeys?: string[];
     sessionKeys?: string[];
@@ -235,7 +235,7 @@ export function createBoardClient(apiBase: string, usesDemoData: boolean): Board
       );
       return response.document;
     },
-    async search(params) {
+    async recall(params) {
       const searchParams = new URLSearchParams({
         query: params.query,
         sessionTopN: String(params.sessionTopN),
@@ -255,7 +255,7 @@ export function createBoardClient(apiBase: string, usesDemoData: boolean): Board
           requestId: 'demo-search',
         };
       }
-      return fetchJson<SearchResponse>(`/api/v1/ui/search?${searchParams.toString()}`);
+      return fetchJson<SearchResponse>(`/api/v1/ui/recall?${searchParams.toString()}`);
     },
     getSettingsConfig() {
       return fetchJson<SettingsConfigResponse>('/api/v1/ui/settings/config');

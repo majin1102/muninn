@@ -844,7 +844,7 @@ boardApp.get('/api/v1/ui/memories/:memoryId/document', async (c) => {
   return c.json(response);
 });
 
-boardApp.get('/api/v1/ui/search', async (c) => {
+boardApp.get('/api/v1/ui/recall', async (c) => {
   const query = normalizeText(c.req.query('query'));
   if (!query) {
     return c.json(errorResponse('invalidRequest', 'query is required'), 400);

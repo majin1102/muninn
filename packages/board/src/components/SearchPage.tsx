@@ -28,7 +28,7 @@ import {
 } from '../lib/search_state.js';
 import { asErrorMessage } from '../lib/utils.js';
 
-type SearchPageProps = {
+type RecallPageProps = {
   client: BoardClient;
   projects: ProjectNode[];
   projectsLoading: boolean;
@@ -63,13 +63,13 @@ type SearchOption = {
   sessionKey?: string;
 };
 
-export function SearchPage({
+export function RecallPage({
   client,
   projects,
   projectsLoading,
   projectError,
   onLoadProjects,
-}: SearchPageProps) {
+}: RecallPageProps) {
   const [controls, setControls] = useState<SearchControlsState>(() => defaultSearchControls());
   const [submitted, setSubmitted] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -162,7 +162,7 @@ export function SearchPage({
     setAnswer(null);
     setExpanded({});
     try {
-      const response = await client.search({
+      const response = await client.recall({
         query,
         projectKeys: controls.projectKeys,
         sessionKeys: sessionKeysForRequest(controls.sessionKeys, sessionOptions),
@@ -211,7 +211,7 @@ export function SearchPage({
       onPointerDownCapture={(event) => closeMenuOnOutsidePointer(event.nativeEvent)}
       onClickCapture={(event) => closeMenuOnOutsidePointer(event.nativeEvent)}
     >
-      {!submitted ? <h1 className="search-prompt-title">Search context across all your agents</h1> : null}
+      {!submitted ? <h1 className="search-prompt-title">Recall everything you worked on</h1> : null}
       <form className="search-form" onSubmit={submit}>
         <div
           ref={composerRef}
