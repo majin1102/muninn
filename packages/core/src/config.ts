@@ -202,6 +202,28 @@ export function getTurnLlmConfig(): TurnLlmConfig | null {
   };
 }
 
+export function getTurnLlmProviderName(): string | null {
+  return loadMuninnConfig()?.turn?.llmProvider ?? null;
+}
+
+export function listLlmProviderNames(): string[] {
+  return Object.keys(loadMuninnConfig()?.providers?.llm ?? {}).sort();
+}
+
+export function getNamedLlmConfig(name: string): TextProviderConfig | null {
+  const llm = loadMuninnConfig()?.providers?.llm?.[name];
+  if (!llm) {
+    return null;
+  }
+  return {
+    provider: parseLlmProvider(llm.type),
+    model: llm.model,
+    api: llm.api,
+    apiKey: llm.apiKey,
+    baseUrl: llm.baseUrl,
+  };
+}
+
 export function getExtractorLlmConfig(): ExtractorLlmConfig | null {
   const { extractor, extractorLlm: llm } = requireCoreRuntimeConfig(loadMuninnConfig());
   return {

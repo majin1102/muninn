@@ -14,7 +14,7 @@ import {
   type DemoSessionTimelineItem,
 } from './data.js';
 import { shiftPipelineTaskTimes, summarizePipelineTasks } from '../lib/pipeline_model.js';
-import type { SearchAnswer, SearchSessionResult } from '@muninn/types';
+import type { AgentRecallStreamEvent, RecallProvidersResponse, SearchSessionResult } from '@muninn/types';
 
 export async function getDemoSessionAgents(): Promise<DemoSessionAgentItem[]> {
   return demoAgents;
@@ -165,35 +165,52 @@ export async function getDemoSearchResults(params: {
     .slice(0, params.topN);
 }
 
-export function getDemoSearchAnswer(query: string, results: SearchSessionResult[]): SearchAnswer {
+export function getDemoRecallProviders(): RecallProvidersResponse {
+  return {
+    providers: [
+      { label: 'None', value: 'none' },
+      { label: 'Default', value: 'default' },
+      { label: 'OpenAI', value: 'openai' },
+      { label: 'Local', value: 'local' },
+    ],
+    requestId: 'demo-recall-providers',
+  };
+}
+
+export async function* streamDemoAgentRecall(
+  query: string,
+  results: SearchSessionResult[],
+): AsyncIterable<AgentRecallStreamEvent> {
   const hits = results.flatMap((result) => result.items.map((item) => ({ result, item })));
   if (hits.length === 0) {
-    return {
-      text: `I could not find enough context for "${query}" in the demo memory.`,
-      citations: [],
-    };
+    yield { type: 'done' };
+    return;
   }
   const topHits = hits.slice(0, 4);
-  return {
-    text: [
-      `Based on the context I found for "${query}":`,
-      '',
-      ...topHits.slice(0, 3).map(({ item }) => `- ${previewSentence(item.content)}`),
-      '',
-      `The right side keeps the source sessions and matched context so you can inspect the evidence directly.`,
-    ].join('\n'),
-    citations: topHits.map(({ result, item }) => ({
-      id: item.id,
-      label: item.title || result.sessionLabel,
-      source: item.source,
-      sessionKey: result.sessionKey,
-      memoryId: item.memoryId,
-    })),
-  };
+  const text = [
+    `Based on the context I found for "${query}":`,
+    '',
+    ...topHits.slice(0, 3).map(({ item }) => `- ${previewSentence(item.content)}`),
+    '',
+    `The right side keeps the source sessions and matched context so you can inspect the evidence directly.`,
+  ].join('\n');
+  for (const chunk of chunkText(text, 28)) {
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    yield { type: 'delta', text: chunk };
+  }
+  yield { type: 'done' };
 }
 
 function previewSentence(content: string): string {
   const normalized = content.replace(/\s+/g, ' ').trim();
   const sentence = normalized.match(/^[^.!?。！？]+[.!?。！？]?/)?.[0]?.trim() ?? normalized;
   return sentence.length > 180 ? `${sentence.slice(0, 177).trim()}...` : sentence;
+}
+
+function chunkText(text: string, size: number): string[] {
+  const chunks: string[] = [];
+  for (let index = 0; index < text.length; index += size) {
+    chunks.push(text.slice(index, index + size));
+  }
+  return chunks;
 }

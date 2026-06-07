@@ -304,24 +304,25 @@ export interface SearchSessionResult {
   items: SearchResultItem[];
 }
 
-export interface SearchAnswerCitation {
-  id: string;
-  label: string;
-  source: SearchResultItem['source'];
-  sessionKey: string;
-  memoryId?: string;
-}
-
-export interface SearchAnswer {
-  text: string;
-  citations: SearchAnswerCitation[];
-}
-
 export interface SearchResponse {
-  answer: SearchAnswer;
   results: SearchSessionResult[];
   requestId: string;
 }
+
+export interface RecallProviderOption {
+  label: string;
+  value: string;
+}
+
+export interface RecallProvidersResponse {
+  providers: RecallProviderOption[];
+  requestId: string;
+}
+
+export type AgentRecallStreamEvent =
+  | { type: 'delta'; text: string }
+  | { type: 'done' }
+  | { type: 'error'; errorMessage: string };
 
 export interface SettingsConfigResponse {
   pathLabel: string;

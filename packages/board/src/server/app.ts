@@ -17,7 +17,9 @@ import type {
   MemoryDocumentResponse,
   MemoryReference,
   PipelineTasksResponse,
+  RecallProvidersResponse,
   SearchResponse,
+  SearchSessionResult,
   SessionAgentsResponse,
   SessionGroupsResponse,
   SessionNode,
@@ -28,6 +30,7 @@ import type {
   SettingsConfigResponse,
   TurnPreview,
 } from '@muninn/types';
+import { agentRecallEvents, ndjsonStream, recallProviderOptions } from './agent_recall.js';
 import { previewCodexImport, runCodexImport } from './codex_import.js';
 import { renderRenderedMemoryDocument } from './render.js';
 import { searchBoardMemory } from './search.js';
@@ -844,7 +847,15 @@ boardApp.get('/api/v1/ui/memories/:memoryId/document', async (c) => {
   return c.json(response);
 });
 
-boardApp.get('/api/v1/ui/recall', async (c) => {
+boardApp.get('/api/v1/ui/recall/providers', (c) => {
+  const response: RecallProvidersResponse = {
+    providers: recallProviderOptions(),
+    requestId: generateRequestId(),
+  };
+  return c.json(response);
+});
+
+boardApp.get('/api/v1/ui/recall/search', async (c) => {
   const query = normalizeText(c.req.query('query'));
   if (!query) {
     return c.json(errorResponse('invalidRequest', 'query is required'), 400);
@@ -874,11 +885,36 @@ boardApp.get('/api/v1/ui/recall', async (c) => {
   });
 
   const response: SearchResponse = {
-    answer: search.answer,
     results: search.results,
     requestId: generateRequestId(),
   };
   return c.json(response);
+});
+
+boardApp.post('/api/v1/ui/recall/agent', async (c) => {
+  const body = await c.req.json().catch(() => null) as {
+    query?: unknown;
+    provider?: unknown;
+    results?: unknown;
+  } | null;
+  const query = normalizeText(typeof body?.query === 'string' ? body.query : undefined);
+  if (!query) {
+    return c.json(errorResponse('invalidRequest', 'query is required'), 400);
+  }
+  const provider = normalizeText(typeof body?.provider === 'string' ? body.provider : undefined) ?? 'default';
+  if (provider === 'none') {
+    return c.json(errorResponse('invalidRequest', 'provider none does not run agent recall'), 400);
+  }
+  const results = Array.isArray(body?.results) ? body.results as SearchSessionResult[] : null;
+  if (!results) {
+    return c.json(errorResponse('invalidRequest', 'results is required'), 400);
+  }
+  return ndjsonStream(agentRecallEvents({
+    query,
+    provider,
+    results,
+    signal: c.req.raw.signal,
+  }));
 });
 
 function normalizeTextList(values: string[] | undefined): string[] {

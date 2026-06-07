@@ -63,6 +63,40 @@ export async function generateText(
   }
 }
 
+export async function* generateTextStream(
+  task: LlmTask,
+  request: LlmTextRequest,
+): AsyncIterable<string> {
+  const config = task === 'turn'
+    ? getTurnLlmConfig()
+    : task === 'extractor'
+      ? getExtractorLlmConfig()
+      : getObserverLlmConfig();
+  if (!config) {
+    return;
+  }
+  yield* generateTextStreamWithConfig(config, request);
+}
+
+export async function* generateTextStreamWithConfig(
+  config: TextProviderConfig,
+  request: LlmTextRequest,
+): AsyncIterable<string> {
+  if (config.provider === 'mock') {
+    yield* streamMockText(request);
+    return;
+  }
+  try {
+    if (config.provider === 'openai-codex') {
+      yield* streamOpenAiCodexText(config, request);
+      return;
+    }
+    yield* streamOpenAiText(config, request);
+  } catch (error) {
+    throw wrapProviderError('llm stream request', config, error);
+  }
+}
+
 export async function generateWithTools(
   task: LlmTask,
   request: LlmToolRequest,
@@ -184,6 +218,20 @@ function generateMockText(request: LlmTextRequest): string {
     title: `Mock title: ${excerpt(seed)}`,
     summary: `Mock summary: ${excerpt(seed)}`,
   });
+}
+
+async function* streamMockText(request: LlmTextRequest): AsyncIterable<string> {
+  for (const chunk of chunkText(generateMockText(request), 24)) {
+    yield chunk;
+  }
+}
+
+function chunkText(text: string, size: number): string[] {
+  const chunks: string[] = [];
+  for (let index = 0; index < text.length; index += size) {
+    chunks.push(text.slice(index, index + size));
+  }
+  return chunks;
 }
 
 async function generateOpenAiWithTools(
@@ -399,6 +447,109 @@ async function generateOpenAiText(
   }
 }
 
+async function* streamOpenAiText(
+  config: TextProviderConfig,
+  request: LlmTextRequest,
+): AsyncIterable<string> {
+  throwIfAborted(request.signal);
+  if (!config.apiKey?.trim()) {
+    throw new Error('llm.apiKey is required for openai llm provider');
+  }
+
+  const apiStyle = normalizeApiStyle(config.api);
+  const baseUrl = config.baseUrl ?? (
+    apiStyle === 'chatCompletions'
+      ? 'https://api.openai.com/v1/chat/completions'
+      : 'https://api.openai.com/v1/responses'
+  );
+  const timeout = withProviderTimeout(request.signal, 'openai text stream request');
+  try {
+    const response = await fetch(
+      apiStyle === 'chatCompletions' ? normalizeChatCompletionsUrl(baseUrl) : baseUrl,
+      {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${config.apiKey}`,
+          'content-type': 'application/json',
+        },
+        signal: timeout.signal,
+        body: JSON.stringify(
+          apiStyle === 'chatCompletions'
+            ? {
+                model: config.model ?? 'gpt-5.4-mini',
+                stream: true,
+                messages: [
+                  { role: 'system', content: request.system },
+                  { role: 'user', content: request.prompt },
+                ],
+              }
+            : {
+                model: config.model ?? 'gpt-5.4-mini',
+                stream: true,
+                input: [
+                  {
+                    role: 'system',
+                    content: [{ type: 'input_text', text: request.system }],
+                  },
+                  {
+                    role: 'user',
+                    content: [{ type: 'input_text', text: request.prompt }],
+                  },
+                ],
+              },
+        ),
+      },
+    );
+
+    if (!response.ok) {
+      throw new Error(`openai request failed with status ${response.status}: ${await response.text()}`);
+    }
+
+    yield* streamResponseText(response);
+  } finally {
+    timeout.cleanup();
+  }
+}
+
+async function* streamOpenAiCodexText(
+  config: TextProviderConfig,
+  request: LlmTextRequest,
+): AsyncIterable<string> {
+  throwIfAborted(request.signal);
+  const auth = loadCodexCliAuth();
+  const timeout = withProviderTimeout(request.signal, 'openai-codex text stream request');
+  try {
+    const response = await fetch(normalizeCodexResponsesUrl(config.baseUrl), {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${auth.accessToken}`,
+        'content-type': 'application/json',
+      },
+      signal: timeout.signal,
+      body: JSON.stringify({
+        model: config.model ?? 'gpt-5.4',
+        instructions: request.system,
+        store: false,
+        stream: true,
+        input: [
+          {
+            role: 'user',
+            content: [{ type: 'input_text', text: request.prompt }],
+          },
+        ],
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`openai-codex request failed with status ${response.status}: ${await response.text()}`);
+    }
+
+    yield* streamResponseText(response);
+  } finally {
+    timeout.cleanup();
+  }
+}
+
 async function generateOpenAiCodexText(
   config: TextProviderConfig,
   request: LlmTextRequest,
@@ -550,6 +701,67 @@ function parseSseEvents(raw: string): Array<Record<string, unknown>> {
     }
   }
   return events;
+}
+
+async function* streamResponseText(response: Response): AsyncIterable<string> {
+  if (!response.body) {
+    for (const event of parseSseEvents(await response.text())) {
+      const delta = eventTextDelta(event);
+      if (delta) {
+        yield delta;
+      }
+    }
+    return;
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      buffer += decoder.decode(value, { stream: true });
+      const chunks = buffer.split(/\n\n+/);
+      buffer = chunks.pop() ?? '';
+      for (const chunk of chunks) {
+        for (const event of parseSseEvents(chunk)) {
+          const delta = eventTextDelta(event);
+          if (delta) {
+            yield delta;
+          }
+        }
+      }
+    }
+    buffer += decoder.decode();
+    if (buffer.trim()) {
+      for (const event of parseSseEvents(buffer)) {
+        const delta = eventTextDelta(event);
+        if (delta) {
+          yield delta;
+        }
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+function eventTextDelta(event: Record<string, unknown>): string | null {
+  const type = typeof event.type === 'string' ? event.type : '';
+  if (type.endsWith('output_text.delta') && typeof event.delta === 'string') {
+    return event.delta;
+  }
+
+  const choices = Array.isArray(event.choices)
+    ? event.choices as Array<{ delta?: { content?: unknown } }>
+    : [];
+  const chatDelta = choices
+    .map((choice) => typeof choice.delta?.content === 'string' ? choice.delta.content : '')
+    .join('');
+  return chatDelta || null;
 }
 
 function codexInstructions(messages: LlmToolMessage[]): string {

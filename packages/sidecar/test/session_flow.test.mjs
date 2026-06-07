@@ -923,6 +923,7 @@ test('board search groups conversation results by session and validates scope', 
   process.env.MUNINN_HOME = homeDir;
   await writeMuninnConfig(configPath, {
     storageUri: defaultStorageTarget(homeDir).uri,
+    turnProvider: 'mock',
     observerProvider: undefined,
   });
 
@@ -939,19 +940,35 @@ test('board search groups conversation results by session and validates scope', 
     response: 'This result belongs to a different project.',
   }));
 
-  const response = await app.request('/api/v1/ui/recall?query=board%20search&projectKey=muninn&sessionTopN=1&topN=10');
+  const response = await app.request('/api/v1/ui/recall/search?query=board%20search&projectKey=muninn&sessionTopN=1&topN=10');
   assert.equal(response.status, 200);
   const body = await json(response);
-  assert.match(body.answer.text, /Based on the context/);
-  assert.equal(body.answer.citations.length, 1);
-  assert.equal(body.answer.citations[0].sessionKey, 'muninn/search-alpha');
+  assert.equal('answer' in body, false);
   assert.equal(body.results.length, 1);
   assert.equal(body.results[0].projectKey, 'muninn');
   assert.equal(body.results[0].sessionKey, 'muninn/search-alpha');
   assert.equal(body.results[0].items.length, 1);
   assert.equal(body.results[0].items[0].source, 'conversation');
 
-  const sessionScope = await app.request('/api/v1/ui/recall?query=board&sessionKey=muninn%2Fsearch-alpha');
+  const agentResponse = await app.request('/api/v1/ui/recall/agent', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      query: 'board search',
+      provider: 'default',
+      results: body.results,
+    }),
+  });
+  assert.equal(agentResponse.status, 200);
+  assert.match(agentResponse.headers.get('content-type') ?? '', /application\/x-ndjson/);
+  const streamEvents = (await agentResponse.text())
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line));
+  assert.ok(streamEvents.some((event) => event.type === 'delta' && typeof event.text === 'string' && event.text.length > 0));
+  assert.equal(streamEvents.at(-1).type, 'done');
+
+  const sessionScope = await app.request('/api/v1/ui/recall/search?query=board&sessionKey=muninn%2Fsearch-alpha');
   assert.equal(sessionScope.status, 200);
   const sessionScopeBody = await json(sessionScope);
   assert.equal(sessionScopeBody.results.length, 1);

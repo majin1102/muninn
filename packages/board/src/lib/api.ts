@@ -6,7 +6,9 @@ import type {
   MemoryDocument,
   MemoryDocumentResponse,
   PipelineTasksResponse,
+  RecallProvidersResponse,
   SearchResponse,
+  AgentRecallStreamEvent,
   SessionAgentsResponse,
   SessionGroupsResponse,
   SessionNode,
@@ -19,8 +21,9 @@ import type {
 import {
   getDemoDocument,
   getDemoPipelineTasks,
-  getDemoSearchAnswer,
   getDemoSearchResults,
+  getDemoRecallProviders,
+  streamDemoAgentRecall,
   getDemoSessionAgents,
   getDemoSessionGroups,
   getDemoSessionTurns,
@@ -78,13 +81,21 @@ export type BoardClient = {
     nextOffset: number | null;
   }>;
   getDocument(memoryId: string): Promise<MemoryDocument>;
-  recall(params: {
+  searchRecall(params: {
     query: string;
     projectKeys?: string[];
     sessionKeys?: string[];
     sessionTopN: number;
     topN: number;
   }): Promise<SearchResponse>;
+  getRecallProviders(): Promise<RecallProvidersResponse>;
+  streamAgentRecall(params: {
+    query: string;
+    provider: string;
+    results: SearchResponse['results'];
+    signal?: AbortSignal;
+    onEvent: (event: AgentRecallStreamEvent) => void;
+  }): Promise<void>;
   getSettingsConfig(): Promise<SettingsConfigResponse>;
   getPipelineTasks(): Promise<PipelineTasksResponse>;
   saveSettingsConfig(content: string): Promise<SettingsConfigResponse>;
@@ -235,7 +246,7 @@ export function createBoardClient(apiBase: string, usesDemoData: boolean): Board
       );
       return response.document;
     },
-    async recall(params) {
+    async searchRecall(params) {
       const searchParams = new URLSearchParams({
         query: params.query,
         sessionTopN: String(params.sessionTopN),
@@ -250,12 +261,43 @@ export function createBoardClient(apiBase: string, usesDemoData: boolean): Board
       if (usesDemoData) {
         const results = await getDemoSearchResults(params);
         return {
-          answer: getDemoSearchAnswer(params.query, results),
           results,
           requestId: 'demo-search',
         };
       }
-      return fetchJson<SearchResponse>(`/api/v1/ui/recall?${searchParams.toString()}`);
+      return fetchJson<SearchResponse>(`/api/v1/ui/recall/search?${searchParams.toString()}`);
+    },
+    async getRecallProviders() {
+      if (usesDemoData) {
+        return getDemoRecallProviders();
+      }
+      return fetchJson<RecallProvidersResponse>('/api/v1/ui/recall/providers');
+    },
+    async streamAgentRecall(params) {
+      if (usesDemoData) {
+        for await (const event of streamDemoAgentRecall(params.query, params.results)) {
+          if (params.signal?.aborted) {
+            return;
+          }
+          params.onEvent(event);
+        }
+        return;
+      }
+      const response = await fetch(`${apiBase}/api/v1/ui/recall/agent`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        signal: params.signal,
+        body: JSON.stringify({
+          query: params.query,
+          provider: params.provider,
+          results: params.results,
+        }),
+      });
+      if (!response.ok) {
+        const body = await safeJson<ErrorResponse>(response);
+        throw new Error(body?.errorMessage ?? `${response.status} ${response.statusText}`);
+      }
+      await readAgentRecallStream(response, params.onEvent);
     },
     getSettingsConfig() {
       return fetchJson<SettingsConfigResponse>('/api/v1/ui/settings/config');
@@ -287,6 +329,48 @@ export function createBoardClient(apiBase: string, usesDemoData: boolean): Board
       });
     },
   };
+}
+
+async function readAgentRecallStream(
+  response: Response,
+  onEvent: (event: AgentRecallStreamEvent) => void,
+): Promise<void> {
+  if (!response.body) {
+    parseAgentRecallLines(await response.text(), onEvent);
+    return;
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() ?? '';
+      parseAgentRecallLines(lines.join('\n'), onEvent);
+    }
+    buffer += decoder.decode();
+    parseAgentRecallLines(buffer, onEvent);
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+function parseAgentRecallLines(
+  raw: string,
+  onEvent: (event: AgentRecallStreamEvent) => void,
+) {
+  for (const line of raw.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      continue;
+    }
+    onEvent(JSON.parse(trimmed) as AgentRecallStreamEvent);
+  }
 }
 
 async function projectTreeFromAgents(

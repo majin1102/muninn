@@ -1,8 +1,7 @@
-import type { SearchAnswer, SearchSessionResult } from '@muninn/types';
+import type { RecallProviderOption, SearchSessionResult } from '@muninn/types';
 import {
   ArrowUp,
   Bot,
-  BotMessageSquare,
   Check,
   ChevronDown,
   ChevronUp,
@@ -11,10 +10,20 @@ import {
   Folder,
   Image,
   Plus,
-  SlidersHorizontal,
   type LucideIcon,
 } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from 'react';
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ComponentType,
+  type FormEvent,
+  type KeyboardEvent,
+  type ReactNode,
+  type SVGProps,
+} from 'react';
+import ReactMarkdown from 'react-markdown';
 import { logoForAgent, type AgentLogo } from '../lib/agent_logo.js';
 import type { BoardClient, ProjectNode } from '../lib/api.js';
 import {
@@ -36,10 +45,9 @@ type RecallPageProps = {
   onLoadProjects: () => void;
 };
 
-const PROVIDER_OPTIONS = [
+const FALLBACK_PROVIDER_OPTIONS: RecallProviderOption[] = [
+  { label: 'None', value: 'none' },
   { label: 'Default', value: 'default' },
-  { label: 'OpenAI', value: 'openai' },
-  { label: 'Local', value: 'local' },
 ];
 const ADD_OPTIONS = [
   { label: 'Image', value: 'image', icon: Image },
@@ -62,6 +70,53 @@ type SearchOption = {
   description?: string;
   sessionKey?: string;
 };
+type AgentRecallStatus = 'idle' | 'thinking' | 'streaming' | 'done' | 'error';
+
+type SvgIcon = ComponentType<SVGProps<SVGSVGElement>>;
+
+function ProviderModelIcon({ className, ...props }: SVGProps<SVGSVGElement>) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      {...props}
+    >
+      <path d="M15 20.5v-3.3c0-1.2.4-2.3 1.2-3.2A7.2 7.2 0 0 0 18 9.1a7 7 0 0 0-7.1-6.7 6.7 6.7 0 0 0-6.6 5.9 8 8 0 0 1-.8 2.8l-1 1.8c-.3.6.1 1.3.8 1.3h1.4v2.2c0 1 .8 1.8 1.8 1.8h2.2v2.3" />
+    </svg>
+  );
+}
+
+function TopNIcon({ className, ...props }: SVGProps<SVGSVGElement>) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      {...props}
+    >
+      <g transform="translate(12 12) scale(.9) translate(-12 -12)">
+        <path d="M21 4h-7" />
+        <path d="M10 4H3" />
+        <path d="M21 12h-9" />
+        <path d="M8 12H3" />
+        <path d="M21 20h-5" />
+        <path d="M12 20H3" />
+        <path d="M14 2v4" />
+        <path d="M8 10v4" />
+        <path d="M16 18v4" />
+      </g>
+    </svg>
+  );
+}
 
 export function RecallPage({
   client,
@@ -72,16 +127,27 @@ export function RecallPage({
 }: RecallPageProps) {
   const [controls, setControls] = useState<SearchControlsState>(() => defaultSearchControls());
   const [submitted, setSubmitted] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [answer, setAnswer] = useState<SearchAnswer | null>(null);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
+  const [agentStatus, setAgentStatus] = useState<AgentRecallStatus>('idle');
+  const [agentError, setAgentError] = useState<string | null>(null);
+  const [answerText, setAnswerText] = useState('');
   const [results, setResults] = useState<SearchSessionResult[]>([]);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
-  const [provider, setProvider] = useState(PROVIDER_OPTIONS[0]?.value ?? 'default');
+  const [providerOptions, setProviderOptions] = useState<RecallProviderOption[]>(FALLBACK_PROVIDER_OPTIONS);
+  const [provider, setProvider] = useState('default');
   const [openMenu, setOpenMenu] = useState<SearchMenuKey | null>(null);
   const [sourceTab, setSourceTab] = useState<SearchSourceKey>('all');
   const [composerExpanded, setComposerExpanded] = useState(false);
   const composerRef = useRef<HTMLDivElement | null>(null);
+  const agentAbortRef = useRef<AbortController | null>(null);
+  const openMenuRef = useRef<SearchMenuKey | null>(null);
+  const submittedRef = useRef(false);
+  const composerExpandedRef = useRef(false);
+
+  openMenuRef.current = openMenu;
+  submittedRef.current = submitted;
+  composerExpandedRef.current = composerExpanded;
 
   const projectOptions = useMemo<SearchOption[]>(
     () => projects.map((project) => ({ label: project.label, value: project.projectKey })),
@@ -99,22 +165,51 @@ export function RecallPage({
   }, [onLoadProjects, projectError, projects.length, projectsLoading]);
 
   useEffect(() => {
-    if (!openMenu) {
-      return;
-    }
-    function closeOnOutsidePointerDown(event: PointerEvent) {
-      closeMenuOnOutsidePointer(event);
-    }
-    function closeOnOutsideClick(event: MouseEvent) {
-      closeMenuOnOutsidePointer(event);
-    }
-    document.addEventListener('pointerdown', closeOnOutsidePointerDown);
-    document.addEventListener('click', closeOnOutsideClick);
+    let cancelled = false;
+    void client.getRecallProviders()
+      .then((response) => {
+        if (cancelled) {
+          return;
+        }
+        const providers = response.providers.length > 0 ? response.providers : FALLBACK_PROVIDER_OPTIONS;
+        setProviderOptions(providers);
+        setProvider((current) => (
+          providers.some((option) => option.value === current)
+            ? current
+            : providers[0]?.value ?? 'default'
+        ));
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setProviderOptions(FALLBACK_PROVIDER_OPTIONS);
+        }
+      });
     return () => {
-      document.removeEventListener('pointerdown', closeOnOutsidePointerDown);
-      document.removeEventListener('click', closeOnOutsideClick);
+      cancelled = true;
     };
-  }, [openMenu]);
+  }, [client]);
+
+  useEffect(() => () => {
+    agentAbortRef.current?.abort();
+  }, []);
+
+  useEffect(() => {
+    function closeOnOutsidePointerDown(event: PointerEvent) {
+      if (isInsideComposer(event)) {
+        return;
+      }
+      if (openMenuRef.current) {
+        setOpenMenu(null);
+      }
+      if (submittedRef.current && composerExpandedRef.current) {
+        setComposerExpanded(false);
+      }
+    }
+    document.addEventListener('pointerdown', closeOnOutsidePointerDown, true);
+    return () => {
+      document.removeEventListener('pointerdown', closeOnOutsidePointerDown, true);
+    };
+  }, []);
 
   function patchControls(patch: Partial<SearchControlsState>) {
     setControls((current) => ({
@@ -139,10 +234,15 @@ export function RecallPage({
   }
 
   function closeMenuOnOutsidePointer(event: Pick<Event, 'composedPath' | 'target'>) {
-    if (!openMenu || isInsideComposer(event)) {
+    if (isInsideComposer(event)) {
       return;
     }
-    setOpenMenu(null);
+    if (openMenu) {
+      setOpenMenu(null);
+    }
+    if (submitted && composerExpanded) {
+      setComposerExpanded(false);
+    }
   }
 
   async function submit(event?: FormEvent<HTMLFormElement>) {
@@ -151,32 +251,76 @@ export function RecallPage({
     if (!query) {
       return;
     }
+    agentAbortRef.current?.abort();
+    const agentAbort = new AbortController();
+    agentAbortRef.current = agentAbort;
     if (document.activeElement instanceof HTMLElement) {
       document.activeElement.blur();
     }
     setOpenMenu(null);
     setComposerExpanded(false);
     setSubmitted(true);
-    setLoading(true);
-    setError(null);
-    setAnswer(null);
+    setSearchLoading(true);
+    setSearchError(null);
+    setAgentStatus('idle');
+    setAgentError(null);
+    setAnswerText('');
     setExpanded({});
+    let searchCompleted = false;
     try {
-      const response = await client.recall({
+      const response = await client.searchRecall({
         query,
         projectKeys: controls.projectKeys,
         sessionKeys: sessionKeysForRequest(controls.sessionKeys, sessionOptions),
         sessionTopN: controls.sessionTopN,
         topN: controls.topN,
       });
-      setAnswer(response.answer);
       setResults(response.results);
+      searchCompleted = true;
+      setSearchLoading(false);
+      if (provider === 'none' || response.results.length === 0) {
+        return;
+      }
+      setAgentStatus('thinking');
+      await client.streamAgentRecall({
+        query,
+        provider,
+        results: response.results,
+        signal: agentAbort.signal,
+        onEvent: (agentEvent) => {
+          if (agentAbort.signal.aborted) {
+            return;
+          }
+          if (agentEvent.type === 'delta') {
+            setAgentStatus((current) => current === 'thinking' ? 'streaming' : current);
+            setAnswerText((current) => `${current}${agentEvent.text}`);
+            return;
+          }
+          if (agentEvent.type === 'error') {
+            setAgentError(agentEvent.errorMessage);
+            setAgentStatus('error');
+            return;
+          }
+          setAgentStatus((current) => current === 'error' ? current : 'done');
+        },
+      });
     } catch (nextError) {
-      setAnswer(null);
-      setResults([]);
-      setError(asErrorMessage(nextError));
+      if (agentAbort.signal.aborted) {
+        return;
+      }
+      if (!searchCompleted) {
+        setResults([]);
+        setSearchError(asErrorMessage(nextError));
+        setSearchLoading(false);
+      } else {
+        setAgentError(asErrorMessage(nextError));
+        setAgentStatus('error');
+      }
     } finally {
-      setLoading(false);
+      if (agentAbortRef.current === agentAbort) {
+        agentAbortRef.current = null;
+      }
+      setSearchLoading(false);
     }
   }
 
@@ -204,6 +348,9 @@ export function RecallPage({
       sessionKeys: current.sessionKeys.filter((sessionKey) => allowedSessions.has(sessionKey)),
     }));
   }
+
+  const showAnswerPane = submitted && provider !== 'none' && !searchError && results.length > 0;
+  const qaClassName = showAnswerPane ? 'search-qa-layout' : 'search-qa-layout search-qa-layout-results-only';
 
   return (
     <div
@@ -238,10 +385,10 @@ export function RecallPage({
                   onClose={() => setOpenMenu(null)}
                 />
                 <SearchSelectMenu
-                  icon={BotMessageSquare}
+                  icon={ProviderModelIcon}
                   label="Provider"
                   value={provider}
-                  options={PROVIDER_OPTIONS}
+                  options={providerOptions}
                   open={openMenu === 'provider'}
                   hideLabel
                   onToggle={() => toggleMenu('provider')}
@@ -251,14 +398,14 @@ export function RecallPage({
                   }}
                 />
               </div>
-              <button className="search-submit-button" type="submit" aria-label="Search" disabled={!controls.query.trim() || loading}>
+              <button className="search-submit-button" type="submit" aria-label="Search" disabled={!controls.query.trim() || searchLoading}>
                 <ArrowUp />
               </button>
             </div>
           </div>
           <div className="search-controls" aria-label="Search controls">
             <SearchTopMenu
-              icon={SlidersHorizontal}
+              icon={TopNIcon}
               globalValue={controls.topN}
               sessionValue={controls.sessionTopN}
               open={openMenu === 'topN'}
@@ -299,16 +446,30 @@ export function RecallPage({
       </form>
       {projectError ? <div className="search-error">{projectError}</div> : null}
       {submitted ? (
-        <div className="search-qa-layout">
-          <section className="search-answer-pane" aria-label="Agent answer">
-            <SearchAnswerView loading={loading} error={error} answer={answer} />
-          </section>
-          <div className="search-qa-divider" aria-hidden="true" />
+        <div
+          className={qaClassName}
+          onPointerDownCapture={() => {
+            if (composerExpanded) {
+              setComposerExpanded(false);
+            }
+            if (openMenu) {
+              setOpenMenu(null);
+            }
+          }}
+        >
+          {showAnswerPane ? (
+            <>
+              <section className="search-answer-pane" aria-label="Agent answer">
+                <SearchAnswerView status={agentStatus} error={agentError} text={answerText} />
+              </section>
+              <div className="search-qa-divider" aria-hidden="true" />
+            </>
+          ) : null}
           <section className="search-evidence-pane" aria-label="Search evidence">
             <SearchSourceTabs value={sourceTab} onChange={setSourceTab} />
             <SearchResults
-              loading={loading}
-              error={error}
+              loading={searchLoading}
+              error={searchError}
               results={results}
               expanded={expanded}
               onToggle={(id) => setExpanded((current) => ({ ...current, [id]: !current[id] }))}
@@ -321,68 +482,39 @@ export function RecallPage({
 }
 
 function SearchAnswerView({
-  loading,
+  status,
   error,
-  answer,
+  text,
 }: {
-  loading: boolean;
+  status: AgentRecallStatus;
   error: string | null;
-  answer: SearchAnswer | null;
+  text: string;
 }) {
-  if (loading) {
+  if (status === 'thinking') {
     return (
       <div className="search-answer">
-        <div className="search-answer-avatar">
-          <BotMessageSquare />
-        </div>
-        <div className="search-answer-body">
-          <div className="search-answer-label">Muninn</div>
-          <p>Thinking across your agents' context...</p>
+        <div className="search-answer-thinking" aria-label="Thinking">
+          <span />
+          <span />
+          <span />
         </div>
       </div>
     );
   }
-  if (error) {
+  if (status === 'error') {
     return (
       <div className="search-answer">
-        <div className="search-answer-avatar search-answer-avatar-error">
-          <BotMessageSquare />
-        </div>
-        <div className="search-answer-body">
-          <div className="search-answer-label">Muninn</div>
-          <p>I could not complete this question.</p>
-        </div>
+        <div className="search-answer-error">{error ?? 'I could not complete this question.'}</div>
       </div>
     );
   }
-  if (!answer) {
+  if (!text.trim()) {
     return null;
   }
   return (
     <div className="search-answer">
-      <div className="search-answer-avatar">
-        <BotMessageSquare />
-      </div>
-      <div className="search-answer-body">
-        <div className="search-answer-label">Muninn</div>
-        <div className="search-answer-text">
-          {answer.text.split('\n').map((line, index) => (
-            line.trim().startsWith('- ') ? (
-              <p key={`${index}:${line}`} className="search-answer-bullet">{line.trim().slice(2)}</p>
-            ) : line.trim() ? (
-              <p key={`${index}:${line}`}>{line}</p>
-            ) : null
-          ))}
-        </div>
-        {answer.citations.length > 0 ? (
-          <div className="search-answer-citations" aria-label="Answer sources">
-            {answer.citations.map((citation, index) => (
-              <span key={`${citation.id}:${index}`} className="search-answer-citation">
-                {index + 1}. {citation.label}
-              </span>
-            ))}
-          </div>
-        ) : null}
+      <div className="search-answer-text">
+        <ReactMarkdown>{text}</ReactMarkdown>
       </div>
     </div>
   );
@@ -422,7 +554,7 @@ function SearchTopMenu({
   onGlobalChange,
   onSessionChange,
 }: {
-  icon: LucideIcon;
+  icon: SvgIcon;
   globalValue: number;
   sessionValue: number;
   open: boolean;
@@ -652,7 +784,7 @@ function SearchSelectMenu({
   onToggle,
   onChange,
 }: {
-  icon: LucideIcon;
+  icon: SvgIcon;
   label: string;
   value: string;
   options: Array<{ label: string; value: string }>;

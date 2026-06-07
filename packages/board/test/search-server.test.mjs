@@ -45,28 +45,22 @@ test('conversationCandidates respects query, project, and session scope', async 
   assert.equal(candidates[0].source, 'conversation');
 });
 
-test('buildAnswer summarizes top search evidence with citations', async () => {
+test('searchBoardMemory returns search results without building an answer', async () => {
   const { __testing } = await loadSearchServer();
-  const answer = __testing.buildAnswer('board search', [{
-    sessionKey: 'muninn/search-a',
-    sessionLabel: 'Search A',
-    projectKey: 'muninn',
-    latestUpdatedAt: '2026-06-04T00:00:00.000Z',
-    items: [{
-      id: 'conversation:1',
-      source: 'conversation',
-      title: 'Board search decision',
-      content: 'Board search should answer questions and keep evidence visible on the right.',
-      createdAt: '2026-06-04T00:00:00.000Z',
-      memoryId: 'turn:1',
-      links: [],
-    }],
-  }]);
+  const response = await __testing.searchBoardMemory({
+    query: 'board search',
+    sessionTopN: 2,
+    topN: 10,
+  }, {
+    listTurns: async () => [
+      turn({ sessionId: 'muninn/search-a', prompt: 'board search contract', response: 'response' }),
+    ],
+    recall: async () => [],
+  });
 
-  assert.match(answer.text, /Based on the context/);
-  assert.match(answer.text, /keep evidence visible/);
-  assert.equal(answer.citations.length, 1);
-  assert.equal(answer.citations[0].sessionKey, 'muninn/search-a');
+  assert.equal('answer' in response, false);
+  assert.equal(response.results.length, 1);
+  assert.equal(response.results[0].sessionKey, 'muninn/search-a');
 });
 
 function candidate(overrides) {
