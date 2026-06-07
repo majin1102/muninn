@@ -18,3 +18,10 @@ test('recall API stream reader gates events after abort', async () => {
   assert.match(source, /readAgentRecallStream\(response, params\.onEvent, params\.signal\)/);
   assert.match(source, /signal\?\.aborted/);
 });
+
+test('recall results render source links into the session route', async () => {
+  const source = await readFile(new URL('../src/components/SearchPage.tsx', import.meta.url), 'utf8');
+
+  assert.match(source, /item\.links/);
+  assert.equal(source.includes('#/session/${encodeURIComponent(link.memoryId)}'), true);
+});

@@ -1,4 +1,4 @@
-import type { RecallProviderOption, SearchSessionResult } from '@muninn/types';
+import type { RecallProviderOption, SearchResultLink, SearchSessionResult } from '@muninn/types';
 import {
   ArrowUp,
   Bot,
@@ -913,6 +913,7 @@ function SearchResults({
                       <span>{isExpanded ? 'Collapse' : 'Expand'}</span>
                     </button>
                   ) : null}
+                  <SearchHitLinks links={item.links} />
                 </section>
               );
             })}
@@ -921,6 +922,33 @@ function SearchResults({
       ))}
     </div>
   );
+}
+
+function SearchHitLinks({ links }: { links: SearchResultLink[] }) {
+  const visibleLinks = links
+    .map((link) => ({ link, href: searchLinkHref(link) }))
+    .filter((entry): entry is { link: SearchResultLink; href: string } => Boolean(entry.href));
+
+  if (visibleLinks.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="search-hit-links">
+      {visibleLinks.map(({ link, href }) => (
+        <a key={`${link.label}:${href}`} href={href} className="search-hit-link">
+          {link.label}
+        </a>
+      ))}
+    </div>
+  );
+}
+
+function searchLinkHref(link: SearchResultLink): string | null {
+  if (!link.memoryId) {
+    return null;
+  }
+  return `#/session/${encodeURIComponent(link.memoryId)}`;
 }
 
 function shouldPreview(content: string): boolean {

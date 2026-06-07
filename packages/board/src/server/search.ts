@@ -9,6 +9,8 @@ import type {
 } from '@muninn/types';
 
 type BoardTurn = Turn & { memoryId?: string };
+const AGENT_DEFAULT_SESSION_PREFIX = '__agent_default__:';
+const OBSERVER_DEFAULT_SESSION_PREFIX = '__observer_default__:';
 
 export type BoardSearchParams = {
   query: string;
@@ -81,9 +83,8 @@ function conversationCandidates(
 ): SearchCandidate[] {
   const query = scope.query.trim().toLowerCase();
   return turns.flatMap((turn) => {
-    const sessionKey = turn.sessionId ?? '';
-    const projectKey = projectKeyFromSessionKey(sessionKey);
-    if (!sessionKey || !matchesScope(projectKey, sessionKey, scope)) {
+    const session = searchSession(turn);
+    if (!matchesScope(session.projectKey, session.sessionKey, scope)) {
       return [];
     }
 
@@ -101,9 +102,9 @@ function conversationCandidates(
 
     const memoryId = turnMemoryId(turn);
     return [{
-      sessionKey,
-      sessionLabel: displayTitle(sessionKey),
-      projectKey,
+      sessionKey: session.sessionKey,
+      sessionLabel: session.sessionLabel,
+      projectKey: session.projectKey,
       latestUpdatedAt: turn.updatedAt,
       source: 'conversation' as const,
       memoryId,
@@ -115,7 +116,7 @@ function conversationCandidates(
         kind: 'turn' as const,
         label: 'Open turn',
         memoryId,
-        sessionKey,
+        sessionKey: session.sessionKey,
       }],
     }];
   });
@@ -133,19 +134,18 @@ function extractionCandidates(
     }
     const refTurn = (hit.references ?? [])
       .map((ref) => turnsById.get(ref))
-      .find((turn): turn is BoardTurn => Boolean(turn?.sessionId));
-    if (!refTurn?.sessionId) {
+      .find((turn): turn is BoardTurn => Boolean(turn));
+    if (!refTurn) {
       return [];
     }
-    const sessionKey = refTurn.sessionId;
-    const projectKey = projectKeyFromSessionKey(sessionKey);
-    if (!matchesScope(projectKey, sessionKey, scope)) {
+    const session = searchSession(refTurn);
+    if (!matchesScope(session.projectKey, session.sessionKey, scope)) {
       return [];
     }
     return [{
-      sessionKey,
-      sessionLabel: displayTitle(sessionKey),
-      projectKey,
+      sessionKey: session.sessionKey,
+      sessionLabel: session.sessionLabel,
+      projectKey: session.projectKey,
       latestUpdatedAt: refTurn.updatedAt,
       source: 'extraction' as const,
       memoryId: hit.memoryId,
@@ -157,7 +157,7 @@ function extractionCandidates(
         kind: 'memory' as const,
         label: 'Open memory',
         memoryId: hit.memoryId,
-        sessionKey,
+        sessionKey: session.sessionKey,
       }],
     }];
   });
@@ -243,10 +243,50 @@ function projectKeyFromSessionKey(sessionKey: string): string {
   return projectKey || 'Default Project';
 }
 
+function searchSession(turn: Pick<BoardTurn, 'sessionId' | 'agent' | 'observer' | 'project'>): {
+  sessionKey: string;
+  sessionLabel: string;
+  projectKey: string;
+} {
+  const sessionId = normalizeText(turn.sessionId);
+  if (sessionId) {
+    return {
+      sessionKey: sessionId,
+      sessionLabel: displayTitle(sessionId),
+      projectKey: projectKeyFromSessionKey(sessionId),
+    };
+  }
+
+  const projectKey = normalizeText(turn.project) ?? 'default';
+  const agent = normalizeText(turn.agent);
+  if (agent) {
+    return {
+      sessionKey: `${AGENT_DEFAULT_SESSION_PREFIX}${agent}`,
+      sessionLabel: 'Default Session',
+      projectKey,
+    };
+  }
+
+  const observer = normalizeText(turn.observer) ?? 'observer';
+  return {
+    sessionKey: `${OBSERVER_DEFAULT_SESSION_PREFIX}${observer}`,
+    sessionLabel: `Observer Default (${observer})`,
+    projectKey,
+  };
+}
+
 function displayTitle(sessionKey: string): string {
   const lastSlash = sessionKey.lastIndexOf('/');
   const raw = lastSlash >= 0 ? sessionKey.slice(lastSlash + 1) : sessionKey;
   return raw.replace(/-[0-9a-f]{7,}$/i, '') || sessionKey;
+}
+
+function normalizeText(value: string | undefined | null): string | undefined {
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
 }
 
 function eventsText(turn: BoardTurn): string | undefined {

@@ -3012,6 +3012,25 @@ button.search-menu-item:hover,
   height: 14px;
 }
 
+.search-hit-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 7px;
+}
+
+.search-hit-link {
+  color: #3d4046;
+  font-size: 12px;
+  font-weight: 500;
+  text-decoration: none;
+}
+
+.search-hit-link:hover {
+  color: #1a1c1f;
+  text-decoration: underline;
+}
+
 .search-status,
 .search-error {
   width: min(680px, 100%);

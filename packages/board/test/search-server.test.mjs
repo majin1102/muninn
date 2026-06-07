@@ -45,6 +45,58 @@ test('conversationCandidates respects query, project, and session scope', async 
   assert.equal(candidates[0].source, 'conversation');
 });
 
+test('conversationCandidates includes default agent sessions without sessionId', async () => {
+  const { __testing } = await loadSearchServer();
+  const candidates = __testing.conversationCandidates([
+    turn({
+      sessionId: null,
+      project: 'project-a',
+      agent: 'agent-a',
+      prompt: 'default session provider routing',
+      response: 'response',
+    }),
+  ], {
+    query: 'provider routing',
+    projectKeys: ['project-a'],
+    sessionKeys: ['__agent_default__:agent-a'],
+  });
+
+  assert.equal(candidates.length, 1);
+  assert.equal(candidates[0].sessionKey, '__agent_default__:agent-a');
+  assert.equal(candidates[0].sessionLabel, 'Default Session');
+  assert.equal(candidates[0].projectKey, 'project-a');
+  assert.equal(candidates[0].links[0].sessionKey, '__agent_default__:agent-a');
+});
+
+test('extractionCandidates groups hits through default agent session references', async () => {
+  const { __testing } = await loadSearchServer();
+  const candidates = __testing.extractionCandidates([
+    {
+      memoryId: 'extraction:1',
+      text: 'provider routing should remain visual first',
+      references: ['turn:default-agent'],
+    },
+  ], [
+    turn({
+      memoryId: 'turn:default-agent',
+      sessionId: null,
+      project: 'project-a',
+      agent: 'agent-a',
+      prompt: 'provider routing',
+      response: 'response',
+    }),
+  ], {
+    projectKeys: ['project-a'],
+    sessionKeys: ['__agent_default__:agent-a'],
+  });
+
+  assert.equal(candidates.length, 1);
+  assert.equal(candidates[0].sessionKey, '__agent_default__:agent-a');
+  assert.equal(candidates[0].sessionLabel, 'Default Session');
+  assert.equal(candidates[0].source, 'extraction');
+  assert.equal(candidates[0].links[0].sessionKey, '__agent_default__:agent-a');
+});
+
 test('searchBoardMemory returns search results without building an answer', async () => {
   const { __testing } = await loadSearchServer();
   const response = await __testing.searchBoardMemory({
@@ -80,9 +132,10 @@ function candidate(overrides) {
 
 function turn(overrides) {
   return {
-    memoryId: `turn:${overrides.sessionId}`,
+    memoryId: overrides.memoryId ?? `turn:${overrides.sessionId}`,
     sessionId: overrides.sessionId,
-    agent: 'codex_cli',
+    project: overrides.project,
+    agent: overrides.agent ?? 'codex_cli',
     observer: 'default',
     title: overrides.prompt,
     summary: overrides.prompt,
