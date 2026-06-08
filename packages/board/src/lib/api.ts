@@ -6,6 +6,9 @@ import type {
   MemoryDocument,
   MemoryDocumentResponse,
   PipelineTasksResponse,
+  RecallProvidersResponse,
+  SearchResponse,
+  AgentRecallStreamEvent,
   SessionAgentsResponse,
   SessionGroupsResponse,
   SessionNode,
@@ -18,13 +21,16 @@ import type {
 import {
   getDemoDocument,
   getDemoPipelineTasks,
+  getDemoSearchResults,
+  getDemoRecallProviders,
+  streamDemoAgentRecall,
   getDemoSessionAgents,
   getDemoSessionGroups,
   getDemoSessionTurns,
 } from '../demo/provider.js';
 import { trimTrailingSlash } from './utils.js';
 
-export type PrimaryView = 'search' | 'wiki' | 'session' | 'pipelines' | 'settings';
+export type PrimaryView = 'recall' | 'wiki' | 'session' | 'pipelines' | 'settings';
 
 export type ProjectTurnNode = TurnPreview & {
   agent: string;
@@ -75,6 +81,22 @@ export type BoardClient = {
     nextOffset: number | null;
   }>;
   getDocument(memoryId: string): Promise<MemoryDocument>;
+  searchRecall(params: {
+    query: string;
+    projectKeys?: string[];
+    sessionKeys?: string[];
+    sessionTopN: number;
+    topN: number;
+    signal?: AbortSignal;
+  }): Promise<SearchResponse>;
+  getRecallProviders(): Promise<RecallProvidersResponse>;
+  streamAgentRecall(params: {
+    query: string;
+    provider: string;
+    results: SearchResponse['results'];
+    signal?: AbortSignal;
+    onEvent: (event: AgentRecallStreamEvent) => void;
+  }): Promise<void>;
   getSettingsConfig(): Promise<SettingsConfigResponse>;
   getPipelineTasks(): Promise<PipelineTasksResponse>;
   saveSettingsConfig(content: string): Promise<SettingsConfigResponse>;
@@ -225,13 +247,67 @@ export function createBoardClient(apiBase: string, usesDemoData: boolean): Board
       );
       return response.document;
     },
+    async searchRecall(params) {
+      const searchParams = new URLSearchParams({
+        query: params.query,
+        sessionTopN: String(params.sessionTopN),
+        topN: String(params.topN),
+      });
+      for (const projectKey of params.projectKeys ?? []) {
+        searchParams.append('projectKey', projectKey);
+      }
+      for (const sessionKey of params.sessionKeys ?? []) {
+        searchParams.append('sessionKey', sessionKey);
+      }
+      if (usesDemoData) {
+        const results = await getDemoSearchResults(params);
+        if (params.signal?.aborted) {
+          throw new DOMException('Search aborted', 'AbortError');
+        }
+        return {
+          results,
+          requestId: 'demo-search',
+        };
+      }
+      return fetchJson<SearchResponse>(`/api/v1/ui/recall/search?${searchParams.toString()}`, { signal: params.signal });
+    },
+    async getRecallProviders() {
+      if (usesDemoData) {
+        return getDemoRecallProviders();
+      }
+      return fetchJson<RecallProvidersResponse>('/api/v1/ui/recall/providers');
+    },
+    async streamAgentRecall(params) {
+      if (usesDemoData) {
+        for await (const event of streamDemoAgentRecall(params.query, params.results)) {
+          if (params.signal?.aborted) {
+            return;
+          }
+          params.onEvent(event);
+        }
+        return;
+      }
+      const response = await fetch(`${apiBase}/api/v1/ui/recall/agent`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        signal: params.signal,
+        body: JSON.stringify({
+          query: params.query,
+          provider: params.provider,
+          results: params.results,
+        }),
+      });
+      if (!response.ok) {
+        const body = await safeJson<ErrorResponse>(response);
+        throw new Error(body?.errorMessage ?? `${response.status} ${response.statusText}`);
+      }
+      await readAgentRecallStream(response, params.onEvent, params.signal);
+    },
     getSettingsConfig() {
       return fetchJson<SettingsConfigResponse>('/api/v1/ui/settings/config');
     },
     getPipelineTasks() {
-      return usesDemoData
-        ? getDemoPipelineTasks()
-        : fetchJson<PipelineTasksResponse>('/api/v1/ui/pipelines');
+      return getDemoPipelineTasks();
     },
     saveSettingsConfig(content) {
       return fetchJson<SettingsConfigResponse>('/api/v1/ui/settings/config', {
@@ -255,6 +331,59 @@ export function createBoardClient(apiBase: string, usesDemoData: boolean): Board
       });
     },
   };
+}
+
+async function readAgentRecallStream(
+  response: Response,
+  onEvent: (event: AgentRecallStreamEvent) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  if (signal?.aborted) {
+    return;
+  }
+  if (!response.body) {
+    parseAgentRecallLines(await response.text(), onEvent, signal);
+    return;
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      if (signal?.aborted) {
+        return;
+      }
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() ?? '';
+      parseAgentRecallLines(lines.join('\n'), onEvent, signal);
+    }
+    buffer += decoder.decode();
+    parseAgentRecallLines(buffer, onEvent, signal);
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+function parseAgentRecallLines(
+  raw: string,
+  onEvent: (event: AgentRecallStreamEvent) => void,
+  signal?: AbortSignal,
+) {
+  for (const line of raw.split('\n')) {
+    if (signal?.aborted) {
+      return;
+    }
+    const trimmed = line.trim();
+    if (!trimmed) {
+      continue;
+    }
+    onEvent(JSON.parse(trimmed) as AgentRecallStreamEvent);
+  }
 }
 
 async function projectTreeFromAgents(

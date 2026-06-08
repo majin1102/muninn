@@ -3,7 +3,6 @@ import { ChevronDown, Eye, Search, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { BoardClient } from '../lib/api.js';
 import {
-  defaultSelectedPipelineTaskId,
   filterPipelineTasks,
   type PipelineStatusFilter,
   type PipelineTaskFilter,
@@ -146,7 +145,6 @@ export function PipelinesPage({ client }: PipelinesPageProps) {
     [customTimeRange, statusFilter, taskFilter, tasks, timeFilter],
   );
   const inspectedTask = tasks.find((task) => task.id === inspectedTaskId) ?? null;
-  const fallbackTaskId = useMemo(() => defaultSelectedPipelineTaskId(visibleTasks), [visibleTasks]);
 
   function syncDraftTimeFilter() {
     setDraftTimeFilter(timeFilter);
@@ -252,6 +250,7 @@ export function PipelinesPage({ client }: PipelinesPageProps) {
         </div>
 
         <PipelineSummary tasks={visibleTasks} />
+        <PipelineStatusStrip tasks={visibleTasks} />
 
         {loading ? <div className="pipeline-empty">Loading pipelines...</div> : null}
         {error ? <div className="pipeline-empty pipeline-empty-error">{error}</div> : null}
@@ -264,7 +263,7 @@ export function PipelinesPage({ client }: PipelinesPageProps) {
             <PipelineCard
               key={task.id}
               task={task}
-              selected={inspectedTaskId === task.id || (!inspectedTaskId && fallbackTaskId === task.id)}
+              selected={inspectedTaskId === task.id}
               onInspect={() => setInspectedTaskId(task.id)}
             />
           ))}
@@ -279,29 +278,28 @@ export function PipelinesPage({ client }: PipelinesPageProps) {
 }
 
 function PipelineUpdatedAt({ updatedAt }: { updatedAt: PipelineTasksResponse['summary']['updatedAt'] }) {
-  return <span className="pipeline-updated-at">updated {relativeTime(updatedAt)}</span>;
+  return <span className="pipeline-updated-at">Updated at {formatTime(updatedAt)}</span>;
 }
 
 function PipelineSummary({ tasks }: { tasks: PipelineTask[] }) {
   const metrics = useMemo(() => summarizeVisiblePipelineTasks(tasks), [tasks]);
   return (
     <div className="pipeline-summary" aria-label="Pipeline summary">
-      <section className="pipeline-summary-section pipeline-summary-section-state" aria-label="Pipeline state">
-        <h2>State</h2>
-        <div className="pipeline-summary-state-grid">
-          <SummaryItem status="running" label={`Running ${metrics.running}`} />
-          <SummaryItem status="queued" label={`Queued ${metrics.queued}`} />
-          <SummaryItem status="failed" label={`Failed ${metrics.failed}`} />
-          <SummaryItem status="done" label={`Done ${metrics.done}`} />
-        </div>
-      </section>
-      <section className="pipeline-summary-section pipeline-summary-section-usage" aria-label="Pipeline usage">
-        <h2>Usage</h2>
-        <div className="pipeline-summary-usage-grid">
-          <UsageItem label="Input" metric={metrics.input} />
-          <UsageItem label="Output" metric={metrics.output} />
-        </div>
-      </section>
+      <UsageItem label="Input" metric={metrics.input} />
+      <span className="pipeline-summary-divider" aria-hidden="true" />
+      <UsageItem label="Output" metric={metrics.output} />
+    </div>
+  );
+}
+
+function PipelineStatusStrip({ tasks }: { tasks: PipelineTask[] }) {
+  const metrics = useMemo(() => summarizeVisiblePipelineTasks(tasks), [tasks]);
+  return (
+    <div className="pipeline-status-strip" aria-label="Pipeline state">
+      <SummaryItem status="running" label={`running ${metrics.running}`} />
+      <SummaryItem status="done" label={`done ${metrics.done}`} />
+      <SummaryItem status="queued" label={`queued ${metrics.queued}`} />
+      <SummaryItem status="failed" label={`failed ${metrics.failed}`} />
     </div>
   );
 }
@@ -318,9 +316,14 @@ function SummaryItem({ status, label }: { status: PipelineTaskStatus; label: str
 function UsageItem({ label, metric }: { label: string; metric: PipelineTask['input'] }) {
   return (
     <span className="pipeline-summary-usage-item">
-      <strong>{label}</strong>
-      <span>{formatBytes(metric.bytes)}</span>
-      <span>{formatTokens(metric.tokens)}</span>
+      <span className="pipeline-summary-usage-metric">
+        <span className="pipeline-summary-usage-label">{label} Data</span>
+        <span className="pipeline-summary-usage-value">{formatBytes(metric.bytes)}</span>
+      </span>
+      <span className="pipeline-summary-usage-metric">
+        <span className="pipeline-summary-usage-label">{label} Tokens</span>
+        <span className="pipeline-summary-usage-value">{formatTokenCount(metric.tokens)}</span>
+      </span>
     </span>
   );
 }
@@ -454,15 +457,6 @@ function PipelineCard({ task, selected, onInspect }: {
   return (
     <article
       className={selected ? `pipeline-card pipeline-card-${task.status} pipeline-card-selected` : `pipeline-card pipeline-card-${task.status}`}
-      role="button"
-      tabIndex={0}
-      onClick={onInspect}
-      onKeyDown={(event) => {
-        if (event.key === 'Enter' || event.key === ' ') {
-          event.preventDefault();
-          onInspect();
-        }
-      }}
     >
       <div className="pipeline-card-top">
         <span className={`pipeline-dot pipeline-dot-${task.status}`} />
@@ -475,17 +469,11 @@ function PipelineCard({ task, selected, onInspect }: {
           className="pipeline-inspect-button"
           type="button"
           aria-label={`Inspect ${task.title}`}
-          onClick={(event) => {
-            event.stopPropagation();
-            onInspect();
-          }}
+          onClick={onInspect}
         >
           <Eye />
         </button>
       </div>
-      <p className="pipeline-status-line">
-        <span>{capitalizeSentence(task.statusText)}</span>
-      </p>
       <div className="pipeline-io-grid">
         <PipelineMetricBox label="Input" metric={task.input} status={task.status} />
         {task.output ? (
@@ -500,12 +488,10 @@ function PipelineCard({ task, selected, onInspect }: {
 }
 
 function PipelineLifecycleLine({ task }: { task: PipelineTask }) {
+  const createdAt = task.status === 'queued' ? task.updatedAt : task.startedAt;
   return (
     <p className="pipeline-lifecycle-line">
-      <span>Duration {durationForTask(task)}</span>
-      {task.status === 'done' && task.toolCalls.length > 0 ? (
-        <span>Tool calls: {toolCallItems(task.toolCalls).join(' · ')}</span>
-      ) : null}
+      <span>Created at {formatCreatedTime(createdAt)} Duration {durationForTask(task)}</span>
     </p>
   );
 }
@@ -592,11 +578,11 @@ function PipelineInspectorSection({ title, items, fallback, tone = 'default' }: 
 function kindLabel(kind: PipelineTaskKind): string {
   switch (kind) {
     case 'session-observing':
-      return 'Session observing';
+      return 'Extraction';
     case 'global-observing':
-      return 'Global observing';
+      return 'Observation';
     case 'wiki-compiling':
-      return 'Wiki compiling';
+      return 'Dreaming';
   }
 }
 
@@ -611,10 +597,6 @@ function statusLabel(status: PipelineTaskStatus): string {
     case 'done':
       return 'Done';
   }
-}
-
-function capitalizeSentence(value: string): string {
-  return value.length > 0 ? `${value[0]!.toUpperCase()}${value.slice(1)}` : value;
 }
 
 function toolCallItems(calls: PipelineTask['toolCalls']): string[] {
@@ -724,6 +706,13 @@ function formatTokens(tokens: number): string {
   return `${formatNumber(tokens / 1000)}K tokens`;
 }
 
+function formatTokenCount(tokens: number): string {
+  if (tokens < 1000) {
+    return String(tokens);
+  }
+  return `${formatNumber(tokens / 1000)}K`;
+}
+
 function formatNumber(value: number): string {
   return value >= 10 ? value.toFixed(0) : value.toFixed(1);
 }
@@ -767,6 +756,50 @@ function formatDateTime(value: string | undefined | null): string {
   }).format(date);
 }
 
+function formatTime(value: string | undefined | null, includeSeconds = false): string {
+  if (!value) {
+    return 'unknown';
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return 'unknown';
+  }
+  return new Intl.DateTimeFormat(undefined, {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: includeSeconds ? '2-digit' : undefined,
+    hour12: false,
+  }).format(date);
+}
+
+function formatCreatedTime(value: string | undefined | null): string {
+  if (!value) {
+    return 'unknown';
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return 'unknown';
+  }
+  const now = new Date();
+  const sameDay =
+    date.getFullYear() === now.getFullYear() &&
+    date.getMonth() === now.getMonth() &&
+    date.getDate() === now.getDate();
+  const time = formatClockTime(date);
+  if (sameDay) {
+    return time;
+  }
+  return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())} ${time}`;
+}
+
+function formatClockTime(date: Date): string {
+  return `${pad2(date.getHours())}:${pad2(date.getMinutes())}:${pad2(date.getSeconds())}`;
+}
+
+function pad2(value: number): string {
+  return String(value).padStart(2, '0');
+}
+
 function formatDuration(start: string | undefined | null, end: string | undefined | null): string {
   if (!start) {
     return 'unknown';
@@ -786,27 +819,4 @@ function formatDuration(start: string | undefined | null, end: string | undefine
     return `${hours}h`;
   }
   return `${hours}h ${minutes}m`;
-}
-
-function relativeTime(value: string | null): string {
-  if (!value) {
-    return 'just now';
-  }
-  const diffMs = Date.now() - new Date(value).getTime();
-  if (!Number.isFinite(diffMs) || diffMs < 0) {
-    return 'just now';
-  }
-  const seconds = Math.round(diffMs / 1000);
-  if (seconds < 60) {
-    return `${seconds}s ago`;
-  }
-  const minutes = Math.round(seconds / 60);
-  if (minutes < 60) {
-    return `${minutes}m ago`;
-  }
-  const hours = Math.round(minutes / 60);
-  if (hours < 24) {
-    return `${hours}h ago`;
-  }
-  return `${Math.round(hours / 24)}d ago`;
 }

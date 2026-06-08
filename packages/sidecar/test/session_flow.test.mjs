@@ -579,6 +579,8 @@ test('list and timeline cover the written flow, and recall returns indexed memor
   assert.equal(recallResponse.status, 200);
   const recalled = await json(recallResponse);
   assert.ok(recalled.memoryHits.length > 0);
+  assert.equal('text' in recalled.memoryHits[0], false);
+  assert.equal(typeof recalled.memoryHits[0].content, 'string');
 });
 
 test('benchmark locomo capture returns turn id and recall returns body-only hits', async (t) => {
@@ -830,18 +832,24 @@ test('ui session endpoints group by agent/session and return rendered turn docum
       agent: 'openclaw',
       prompt: 'first alpha prompt',
       response: 'first alpha response',
+      createdAt: '2026-06-04T08:00:00.000Z',
+      updatedAt: '2026-06-04T08:00:01.000Z',
     }),
     makeTurnContent({
       sessionId: 'group-a',
       agent: 'openclaw',
       prompt: 'second alpha prompt',
       response: 'second alpha response',
+      createdAt: '2026-06-04T08:01:00.000Z',
+      updatedAt: '2026-06-04T08:01:01.000Z',
     }),
     makeTurnContent({
       sessionId: 'group-b',
       agent: 'codex_cli',
       prompt: 'codex prompt',
       response: 'codex response',
+      createdAt: '2026-06-04T08:02:00.000Z',
+      updatedAt: '2026-06-04T08:02:01.000Z',
       events: [
         { type: 'userMessage', text: 'document prompt' },
         { type: 'toolCall', name: 'grep' },
@@ -912,6 +920,79 @@ test('ui session endpoints group by agent/session and return rendered turn docum
     { type: 'toolCall', name: 'sed' },
     { type: 'assistantMessage', text: 'document response' },
   ]);
+});
+
+test('board search groups recalled extraction results by session and validates scope', async (t) => {
+  const { dir, homeDir, configPath } = await makeDatasetUri();
+  t.after(async () => {
+    await shutdownCoreForTests();
+    await rm(dir, { recursive: true, force: true });
+  });
+  process.env.MUNINN_HOME = homeDir;
+  await writeMuninnConfig(configPath, {
+    storageUri: defaultStorageTarget(homeDir).uri,
+    turnProvider: 'mock',
+    observerProvider: undefined,
+  });
+
+  await captureTurn(makeTurnContent({
+    sessionId: 'muninn/search-alpha',
+    project: 'muninn',
+    cwd: '/workspace/muninn',
+    agent: 'codex_cli',
+    prompt: 'board search should group by session',
+    response: 'Search uses Session Top N and Top N controls.',
+  }));
+  await captureTurn(makeTurnContent({
+    sessionId: 'lance/search-beta',
+    project: 'lance',
+    cwd: '/workspace/lance',
+    agent: 'codex_cli',
+    prompt: 'board search should also find this',
+    response: 'This result belongs to a different project.',
+  }));
+  const finalizeResponse = await app.request('/api/v1/memory/finalize', { method: 'POST' });
+  assert.equal(finalizeResponse.status, 200);
+  await waitForWatermarkResolved();
+
+  const scopedSessionKey = ['muninn', 'codex_cli', 'muninn/search-alpha'].join('\u001f');
+  const response = await app.request('/api/v1/ui/recall/search?query=board%20search&projectKey=muninn&sessionTopN=1&topN=10');
+  assert.equal(response.status, 200);
+  const body = await json(response);
+  assert.equal('answer' in body, false);
+  assert.equal(body.results.length, 1);
+  assert.equal(body.results[0].projectKey, 'muninn');
+  assert.equal(body.results[0].sessionKey, scopedSessionKey);
+  assert.equal(body.results[0].items.length, 1);
+  assert.equal(body.results[0].items[0].source, 'extraction');
+
+  const agentResponse = await app.request('/api/v1/ui/recall/agent', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      query: 'board search',
+      provider: 'default',
+      results: body.results,
+    }),
+  });
+  assert.equal(agentResponse.status, 200);
+  assert.match(agentResponse.headers.get('content-type') ?? '', /application\/x-ndjson/);
+  const streamEvents = (await agentResponse.text())
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line));
+  assert.ok(streamEvents.some((event) => event.type === 'delta' && typeof event.text === 'string' && event.text.length > 0));
+  assert.equal(streamEvents.at(-1).type, 'done');
+
+  const scopedParams = new URLSearchParams({
+    query: 'board',
+    sessionKey: scopedSessionKey,
+  });
+  const sessionScope = await app.request(`/api/v1/ui/recall/search?${scopedParams.toString()}`);
+  assert.equal(sessionScope.status, 200);
+  const sessionScopeBody = await json(sessionScope);
+  assert.equal(sessionScopeBody.results.length, 1);
+  assert.equal(sessionScopeBody.results[0].sessionKey, scopedSessionKey);
 });
 
 test('ui session endpoints include native rows with indexed ownership fields', async (t) => {

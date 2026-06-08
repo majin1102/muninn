@@ -18,6 +18,7 @@ import {
 } from '../lib/session_content_state.js';
 import { asErrorMessage } from '../lib/utils.js';
 import { PipelinesPage } from './PipelinesPage.js';
+import { RecallPage } from './SearchPage.js';
 import { SessionContentSplit } from './SessionContentSplit.js';
 import { SessionTree } from './SessionTree.js';
 import { SettingsPage } from './SettingsDialog.js';
@@ -29,7 +30,7 @@ type RouteState = {
 };
 
 const navItems: Array<{ view: PrimaryView; label: string; icon: ComponentType }> = [
-  { view: 'search', label: 'Search', icon: Search },
+  { view: 'recall', label: 'Recall', icon: Search },
   { view: 'wiki', label: 'LLM Wiki', icon: BookOpen },
   { view: 'session', label: 'Session', icon: FileText },
   { view: 'pipelines', label: 'Pipelines', icon: PipelineIcon },
@@ -38,7 +39,7 @@ const navItems: Array<{ view: PrimaryView; label: string; icon: ComponentType }>
 
 const REPOSITORY_URL = 'https://github.com/majin1102/muninn';
 const SESSION_PANE_MIN_WIDTH = 340;
-const SESSION_PANE_DEFAULT_WIDTH = 360;
+const SESSION_PANE_DEFAULT_WIDTH = SESSION_PANE_MIN_WIDTH;
 
 export function App() {
   const [apiBase] = useState(resolveApiBase);
@@ -514,6 +515,14 @@ export function App() {
                 <SettingsPage client={client} />
               ) : route.view === 'pipelines' ? (
                 <PipelinesPage client={client} />
+              ) : route.view === 'recall' ? (
+                <RecallPage
+                  client={client}
+                  projects={projects}
+                  projectsLoading={projectLoading}
+                  projectError={projectError}
+                  onLoadProjects={loadProjects}
+                />
               ) : (
                 <EmptyView view={route.view} />
               )}
@@ -614,11 +623,11 @@ function releaseTag(version: string): string {
 }
 
 function EmptyView({ view }: { view: PrimaryView }) {
-  if (view === 'search') {
+  if (view === 'recall') {
     return (
       <div className="empty-panel">
         <Search />
-        <p>Search is ready for recall results.</p>
+        <p>Recall is ready.</p>
       </div>
     );
   }
@@ -636,7 +645,7 @@ function parseRoute(hash: string): RouteState {
   const parts = value.split('/').filter(Boolean);
   const view = parts[0] as PrimaryView | undefined;
 
-  if (view === 'search' || view === 'wiki' || view === 'pipelines' || view === 'settings') {
+  if (view === 'recall' || view === 'wiki' || view === 'pipelines' || view === 'settings') {
     return { view, memoryId: null, sessionSelectionId: null };
   }
 

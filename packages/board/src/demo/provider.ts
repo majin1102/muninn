@@ -3,6 +3,7 @@ import {
   demoAgents,
   demoDocuments,
   demoPipelineTasks,
+  demoSearchResults,
   demoSessionSnapshots,
   demoSessionGroups,
   demoSessionTurns,
@@ -13,6 +14,9 @@ import {
   type DemoSessionTimelineItem,
 } from './data.js';
 import { shiftPipelineTaskTimes, summarizePipelineTasks } from '../lib/pipeline_model.js';
+import type { AgentRecallStreamEvent, RecallProvidersResponse, SearchSessionResult } from '@muninn/types';
+
+const SESSION_SCOPE_SEPARATOR = '\u001f';
 
 export async function getDemoSessionAgents(): Promise<DemoSessionAgentItem[]> {
   return demoAgents;
@@ -29,8 +33,8 @@ export async function getDemoSessionTurns(
   limit: number,
 ): Promise<{
   turns: DemoSessionTimelineItem[];
-  segments: Array<{ memoryId: string; title: string; createdAt: string }>;
-  observations: Array<{ memoryId: string; title: string; createdAt: string; markdown: string; refs: string[] }>;
+  segments: Array<{ memoryId: string; title: string; createdAt: string; updatedAt: string }>;
+  observations: Array<{ memoryId: string; title: string; createdAt: string; updatedAt: string; markdown: string; refs: string[] }>;
   sessionSummary?: string;
   nextOffset: number | null;
 }> {
@@ -40,6 +44,7 @@ export async function getDemoSessionTurns(
     memoryId: turn.memoryId,
     title: turn.title ?? turn.summary,
     createdAt: turn.createdAt,
+    updatedAt: turn.updatedAt,
     markdown: [
       '### Summary',
       turn.summary,
@@ -56,6 +61,7 @@ export async function getDemoSessionTurns(
       memoryId: turn.memoryId,
       title: turn.title ?? turn.summary,
       createdAt: turn.createdAt,
+      updatedAt: turn.updatedAt,
     })),
     observations,
     sessionSummary: turns[0]?.summary,
@@ -135,4 +141,100 @@ export async function getDemoDocument(memoryId: string): Promise<DemoMemoryDocum
     throw new Error(`demo memory not found: ${memoryId}`);
   }
   return document;
+}
+
+export async function getDemoSearchResults(params: {
+  query: string;
+  projectKeys?: string[];
+  sessionKeys?: string[];
+  sessionTopN: number;
+  topN: number;
+}): Promise<SearchSessionResult[]> {
+  const query = params.query.trim().toLowerCase();
+  const projectKeys = new Set(params.projectKeys ?? []);
+  const sessionKeys = new Set(params.sessionKeys ?? []);
+  const results: SearchSessionResult[] = [];
+  let total = 0;
+  for (const result of demoSearchResults
+    .filter((result) => projectKeys.size === 0 || projectKeys.has(result.projectKey))
+    .filter((result) => matchesDemoSessionScope(result, sessionKeys))) {
+    if (total >= params.topN) {
+      break;
+    }
+    const items = result.items.filter((item) => (
+      !query
+      || result.sessionLabel.toLowerCase().includes(query)
+      || item.title?.toLowerCase().includes(query)
+      || item.content.toLowerCase().includes(query)
+    )).slice(0, Math.min(params.sessionTopN, params.topN - total));
+    if (items.length === 0) {
+      continue;
+    }
+    results.push({
+      ...result,
+      items,
+    });
+    total += items.length;
+  }
+  return results;
+}
+
+function matchesDemoSessionScope(result: SearchSessionResult, sessionKeys: Set<string>): boolean {
+  if (sessionKeys.size === 0 || sessionKeys.has(result.sessionKey)) {
+    return true;
+  }
+  return [...sessionKeys].some((sessionKey) => {
+    const [projectKey, _agent, rawSessionKey] = sessionKey.split(SESSION_SCOPE_SEPARATOR);
+    return projectKey === result.projectKey && rawSessionKey === result.sessionKey;
+  });
+}
+
+export function getDemoRecallProviders(): RecallProvidersResponse {
+  return {
+    providers: [
+      { label: 'None', value: 'none' },
+      { label: 'Default', value: 'default' },
+      { label: 'OpenAI', value: 'openai' },
+      { label: 'Local', value: 'local' },
+    ],
+    requestId: 'demo-recall-providers',
+  };
+}
+
+export async function* streamDemoAgentRecall(
+  query: string,
+  results: SearchSessionResult[],
+): AsyncIterable<AgentRecallStreamEvent> {
+  const hits = results.flatMap((result) => result.items.map((item) => ({ result, item })));
+  if (hits.length === 0) {
+    yield { type: 'done' };
+    return;
+  }
+  const topHits = hits.slice(0, 4);
+  const text = [
+    `Based on the context I found for "${query}":`,
+    '',
+    ...topHits.slice(0, 3).map(({ item }) => `- ${previewSentence(item.content)}`),
+    '',
+    `The right side keeps the source sessions and matched context so you can inspect the evidence directly.`,
+  ].join('\n');
+  for (const chunk of chunkText(text, 28)) {
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    yield { type: 'delta', text: chunk };
+  }
+  yield { type: 'done' };
+}
+
+function previewSentence(content: string): string {
+  const normalized = content.replace(/\s+/g, ' ').trim();
+  const sentence = normalized.match(/^[^.!?。！？]+[.!?。！？]?/)?.[0]?.trim() ?? normalized;
+  return sentence.length > 180 ? `${sentence.slice(0, 177).trim()}...` : sentence;
+}
+
+function chunkText(text: string, size: number): string[] {
+  const chunks: string[] = [];
+  for (let index = 0; index < text.length; index += size) {
+    chunks.push(text.slice(index, index + size));
+  }
+  return chunks;
 }

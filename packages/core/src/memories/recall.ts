@@ -1,7 +1,9 @@
-import type { NativeTables } from '../native.js';
-import type { RecallHit } from '../client.js';
+import type { Extraction, NativeTables } from '../native.js';
+import type { RecallHit, Turn } from '../client.js';
 import { embedText } from '../llm/embedding-provider.js';
 import { getRecallConfig, parseRecallMode, type RecallMode } from '../config.js';
+import { sessionKey as buildSessionKey } from '../turn/key.js';
+import { readTurn } from '../turn/types.js';
 import {
   recallMemoryContext,
   validateMemoryRecallResult,
@@ -13,6 +15,7 @@ type RecallOptions = {
   mode?: RecallMode;
   budget?: number;
   queryLimit?: number;
+  includeGlobalObservations?: boolean;
   embed?: (text: string) => Promise<number[]>;
   recallMemory?: (input: MemoryRecallInput) => Promise<MemoryRecallResult>;
 };
@@ -46,15 +49,18 @@ export async function recallMemories(
   const vector = mode === 'fts'
     ? []
     : await (options.embed ?? embedText)(trimmed);
-  const leafGlobalObservationIds = await loadLeafGlobalObservationIds(client);
+  const includeGlobalObservations = options.includeGlobalObservations !== false;
+  const leafGlobalObservationIds = includeGlobalObservations ? await loadLeafGlobalObservationIds(client) : null;
   const observationLimit = leafGlobalObservationIds ? queryLimit * 4 : queryLimit;
   const [observationRows, extractionRows] = await Promise.all([
-    client.globalObservationTable.search({
-      query: trimmed,
-      vector,
-      limit: observationLimit,
-      mode,
-    }),
+    includeGlobalObservations
+      ? client.globalObservationTable.search({
+        query: trimmed,
+        vector,
+        limit: observationLimit,
+        mode,
+      })
+      : Promise.resolve([]),
     client.extractionTable.search({
       query: trimmed,
       vector,
@@ -73,15 +79,17 @@ export async function recallMemories(
   const curatedHits: RouteHit[] = filteredGlobalObservationRows.map((row) => ({
     route: 'curated',
     memoryId: `global_observation:${row.id}`,
-    text: renderGlobalObservationHit(row.text, row.extractionRefs, extractionDetails),
+    title: row.text,
+    summary: row.text,
+    content: renderGlobalObservationHit(row.text, row.extractionRefs, extractionDetails),
     references: observationRefs.get(row.id) ?? row.extractionRefs,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
   }));
-  const rawHits: RouteHit[] = extractionRows.map((row) => ({
-    route: 'raw',
-    memoryId: `extraction:${row.id}`,
-    text: row.content,
-    references: row.turnRefs,
-  }));
+  const rawHits = await Promise.all(extractionRows.map(async (row) => ({
+    ...(await extractionHit(client, row)),
+    route: 'raw' as const,
+  })));
   const merged = mergeRoutes(curatedHits, rawHits, budget > 0 ? queryLimit : limit);
   if (budget > 0) {
     if (merged.length === 0) {
@@ -89,7 +97,7 @@ export async function recallMemories(
     }
     const extractionById = new Map(extractionRows.map((row) => [`extraction:${row.id}`, row]));
     const observationById = new Map(observationRows.map((row) => [`global_observation:${row.id}`, row]));
-    const curatedTextById = new Map(curatedHits.map((hit) => [hit.memoryId, hit.text]));
+    const hitById = new Map(merged.map((hit) => [hit.memoryId, hit]));
     const candidates = merged.map((hit) => {
       if (hit.route === 'curated') {
         const row = observationById.get(hit.memoryId);
@@ -98,8 +106,8 @@ export async function recallMemories(
         }
         return {
           memoryId: hit.memoryId,
-          content: curatedTextById.get(hit.memoryId) ?? row.text,
-          refs: hit.references ?? [],
+          content: hitById.get(hit.memoryId)?.content ?? row.text,
+          refs: hit.references,
         };
       }
       const row = extractionById.get(hit.memoryId);
@@ -123,8 +131,9 @@ export async function recallMemories(
     );
     return [{
       memoryId: 'recalled:memory',
-      text: recalled.content,
+      content: recalled.content,
       references: uniqueRefs(candidates.flatMap((candidate) => candidate.refs ?? [])),
+      ...hitMetadata(merged.find((hit) => hasSessionMetadata(hit))),
     }];
   }
   return merged.slice(0, limit).map(({ route: _route, ...hit }) => hit);
@@ -137,6 +146,9 @@ type ExtractionDetail = {
   title: string;
   summary: string;
   content: string;
+  turnRefs: string[];
+  createdAt: string;
+  updatedAt: string;
 };
 
 async function loadExtractionDetails(
@@ -149,6 +161,77 @@ async function loadExtractionDetails(
   }
   const rows = await client.extractionTable.get({ ids });
   return new Map(rows.map((row) => [row.id, row]));
+}
+
+async function extractionHit(client: NativeTables, row: Extraction): Promise<RecallHit> {
+  return {
+    memoryId: `extraction:${row.id}`,
+    title: row.title,
+    summary: row.summary,
+    content: row.content,
+    references: row.turnRefs,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+    ...await ownershipFromTurnRefs(client, row.turnRefs),
+  };
+}
+
+async function ownershipFromTurnRefs(client: NativeTables, refs: string[]): Promise<Partial<RecallHit>> {
+  for (const ref of refs) {
+    const turnId = turnMemoryId(ref);
+    if (!turnId) {
+      continue;
+    }
+    const rawTurn = await client.turnTable?.getTurn?.(turnId);
+    if (rawTurn) {
+      const turn = readTurn(rawTurn);
+      return {
+        project: turn.project,
+        sessionId: turn.sessionId ?? undefined,
+        agent: turn.agent,
+        cwd: turn.cwd,
+        sessionKey: buildSessionKey(turn.sessionId ?? undefined, turn.agent, turn.observer, {
+          project: turn.project,
+          cwd: turn.cwd,
+        }),
+        displaySession: await displaySession(client, turn),
+      };
+    }
+  }
+  return {};
+}
+
+async function displaySession(client: NativeTables, turn: Turn): Promise<string> {
+  const sessionId = turn.sessionId?.trim();
+  if (!sessionId) {
+    return 'Default Session';
+  }
+  const snapshots = typeof client.sessionTable?.threadSnapshots === 'function'
+    ? await client.sessionTable.threadSnapshots(sessionId).catch(() => [])
+    : [];
+  const newest = snapshots
+    ?.slice()
+    .filter((snapshot) => snapshot.cwd === turn.cwd && snapshot.agent === turn.agent)
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0];
+  return normalizeText(newest?.title) ?? displayTitle(sessionId);
+}
+
+function hitMetadata(hit: RouteHit | undefined): Partial<RecallHit> {
+  if (!hit) {
+    return {};
+  }
+  return {
+    project: hit.project,
+    sessionId: hit.sessionId,
+    agent: hit.agent,
+    cwd: hit.cwd,
+    sessionKey: hit.sessionKey,
+    displaySession: hit.displaySession,
+  };
+}
+
+function hasSessionMetadata(hit: RouteHit): boolean {
+  return Boolean(hit.project && hit.agent && hit.cwd);
 }
 
 async function loadGlobalObservationContextRefs(
@@ -284,6 +367,28 @@ function extractionRowId(ref: string): string | null {
 function extractionMemoryId(ref: string): string | null {
   const id = extractionRowId(ref);
   return id ? `extraction:${id}` : null;
+}
+
+function turnMemoryId(ref: string): string | null {
+  const trimmed = ref.trim();
+  if (!trimmed) {
+    return null;
+  }
+  return trimmed.startsWith('turn:') ? trimmed : null;
+}
+
+function displayTitle(sessionId: string): string {
+  const lastSlash = sessionId.lastIndexOf('/');
+  const raw = lastSlash >= 0 ? sessionId.slice(lastSlash + 1) : sessionId;
+  return raw.replace(/-[0-9a-f]{7,}$/i, '') || sessionId;
+}
+
+function normalizeText(value: string | undefined | null): string | undefined {
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
 }
 
 function mergeRoutes(curated: RouteHit[], raw: RouteHit[], limit: number): RouteHit[] {

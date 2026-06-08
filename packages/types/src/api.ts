@@ -1,6 +1,17 @@
 export interface MemoryHit {
   memoryId: string;
+  title?: string;
+  summary?: string;
   content: string;
+  references?: string[];
+  project?: string;
+  sessionId?: string;
+  agent?: string;
+  cwd?: string;
+  sessionKey?: string;
+  displaySession?: string;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface MemoryResponse {
@@ -169,12 +180,14 @@ export interface SessionSegmentPreview {
   memoryId: string;
   title: string;
   createdAt: string;
+  updatedAt?: string;
 }
 
 export interface ExtractionPreview {
   memoryId: string;
   title: string;
   createdAt: string;
+  updatedAt?: string;
   markdown: string;
   refs: string[];
 }
@@ -278,6 +291,45 @@ export interface PipelineTasksResponse {
   tasks: PipelineTask[];
   requestId: string;
 }
+
+export interface SearchResultItem {
+  id: string;
+  source: 'extraction' | 'conversation';
+  title?: string;
+  content: string;
+  references?: string[];
+  createdAt?: string;
+  memoryId?: string;
+}
+
+export interface SearchSessionResult {
+  sessionKey: string;
+  sessionLabel: string;
+  projectKey: string;
+  projectCwd?: string;
+  latestUpdatedAt: string;
+  items: SearchResultItem[];
+}
+
+export interface SearchResponse {
+  results: SearchSessionResult[];
+  requestId: string;
+}
+
+export interface RecallProviderOption {
+  label: string;
+  value: string;
+}
+
+export interface RecallProvidersResponse {
+  providers: RecallProviderOption[];
+  requestId: string;
+}
+
+export type AgentRecallStreamEvent =
+  | { type: 'delta'; text: string }
+  | { type: 'done' }
+  | { type: 'error'; errorMessage: string };
 
 export interface SettingsConfigResponse {
   pathLabel: string;

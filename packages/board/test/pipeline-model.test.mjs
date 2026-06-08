@@ -64,7 +64,7 @@ test('filters pipeline tasks by kind, status, and time', async () => {
   ];
 
   assert.deepEqual(
-    filterPipelineTasks(tasks, 'global-observing', 'active', 'last_24h', nowMs).map((item) => item.id),
+    filterPipelineTasks(tasks, 'global-observing', 'active', 'last_24h', { from: null, to: null }, nowMs).map((item) => item.id),
     ['running-global', 'queued-global'],
   );
 });

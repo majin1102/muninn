@@ -1,4 +1,4 @@
-import type { PipelineTask, ToolCall } from '@muninn/types';
+import type { PipelineTask, SearchSessionResult, ToolCall } from '@muninn/types';
 
 export type DemoSessionAgentItem = {
   agent: string;
@@ -49,6 +49,176 @@ export type DemoMemoryDocument = {
   updatedAt?: string;
 };
 
+const LONG_DEMO_PROJECT = 'memory-inbox-with-a-very-long-project-name-for-cross-agent-recall';
+const LONG_DEMO_SESSION = 'memory-inbox/daily-recall-and-cross-agent-search-regression-review-session';
+
+export const demoSearchResults: SearchSessionResult[] = [
+  {
+    sessionKey: 'board-mvp',
+    sessionLabel: 'board-mvp',
+    projectKey: 'board-mvp',
+    projectCwd: '/Users/Nathan/.codex/worktrees/dde8/muninn',
+    latestUpdatedAt: '2026-06-02T10:30:00.000Z',
+    items: [
+      {
+        id: 'demo-search-provider-model-1',
+        source: 'conversation',
+        title: 'Provider selector and model routing',
+        content: 'Search provider selection should start as a visual control with Default, OpenAI, and Local choices. The BotMessageSquare icon represents the future model/provider switch without implying hardware routing.',
+        createdAt: '2026-06-02T10:30:00.000Z',
+        memoryId: 'turn:1020',
+      },
+      {
+        id: 'demo-search-provider-extraction-1',
+        source: 'extraction',
+        title: 'Provider is not active backend routing yet',
+        content: [
+          '## Summary',
+          '',
+          'The provider menu is intentionally product-facing only in this version. Search still uses the Board search API and does not send provider-specific model parameters.',
+          '',
+          '## Content',
+          '',
+          'Provider selection is kept in the composer because future recall can route through model-backed, agent-backed, or file-backed search providers. In this version the selector is a visual contract: it shows where provider choice will live, but the backend still runs the same board recall path for every provider.',
+          '',
+          '- `Default` keeps the product ready for model-backed recall.',
+          '- `None` skips the answer pane and shows only search evidence.',
+          '- The provider icon should read as model-related without implying hardware routing.',
+        ].join('\n'),
+        createdAt: '2026-06-02T10:36:00.000Z',
+        memoryId: 'extraction:demo-provider-routing',
+        references: ['turn:1020', 'turn:1021'],
+      },
+      {
+        id: 'demo-search-board-long-1',
+        source: 'conversation',
+        title: 'Expandable result preview',
+        content: [
+          'Muninn Board Search uses a fixed-height preview for each hit item.',
+          'Long evidence remains available through expand and collapse controls.',
+          'This keeps session-level results scannable while preserving enough raw context for manual judgment.',
+          'The first version does not generate answers or summaries at the top of the page.',
+        ].join('\n'),
+        createdAt: '2026-06-01T07:15:00.000Z',
+        memoryId: 'turn:1010',
+      },
+    ],
+  },
+  {
+    sessionKey: 'memory-inbox/daily-recall',
+    sessionLabel: LONG_DEMO_SESSION,
+    projectKey: LONG_DEMO_PROJECT,
+    projectCwd: '/Users/Nathan/workspace/memory-inbox-with-a-very-long-project-name-for-cross-agent-recall',
+    latestUpdatedAt: '2026-06-01T13:32:00.000Z',
+    items: [
+      {
+        id: 'demo-search-memory-long-1',
+        source: 'conversation',
+        title: 'Long project and session title preview',
+        content: 'This demo result keeps a long project and session title visible in search filters so menu width, truncation, and single-line behavior can be checked directly.',
+        createdAt: '2026-06-01T13:32:00.000Z',
+        memoryId: 'turn:1601',
+      },
+      {
+        id: 'demo-search-multimodal-1',
+        source: 'conversation',
+        title: 'Multi-modal search intake',
+        content: 'The plus menu reserves space for image search, file search, and agent search. In the current version those entries are placeholders, but they make the composer ready for multi-modal recall workflows.',
+        createdAt: '2026-06-01T13:40:00.000Z',
+        memoryId: 'turn:1602',
+      },
+      {
+        id: 'demo-search-agent-icon-1',
+        source: 'extraction',
+        title: 'Session menu keeps agent icons',
+        content: 'Session filter rows keep Codex, Claude, OpenClaw, and fallback agent icons so duplicate session names can still be visually distinguished.',
+        createdAt: '2026-06-01T13:45:00.000Z',
+        memoryId: 'extraction:demo-agent-icons',
+      },
+    ],
+  },
+  {
+    sessionKey: 'auth-refactor',
+    sessionLabel: 'auth-refactor',
+    projectKey: 'auth-refactor',
+    latestUpdatedAt: '2026-06-01T12:01:00.000Z',
+    items: [
+      {
+        id: 'demo-search-auth-conversation-1',
+        source: 'conversation',
+        title: 'Board Search contract',
+        content: 'The team decided the Search page should behave like a search engine and group results by session, with Project and Session controls shaping the request scope.',
+        createdAt: '2026-06-01T12:01:00.000Z',
+        memoryId: 'turn:1005',
+      },
+      {
+        id: 'demo-search-auth-extraction-1',
+        source: 'extraction',
+        title: 'Request-level scope',
+        content: 'Project and Session filters are request-level search scope, not client-side filtering after a broad result set has already been returned.',
+        createdAt: '2026-06-01T12:05:00.000Z',
+        memoryId: 'extraction:demo-auth-search-scope',
+      },
+      {
+        id: 'demo-search-topn-1',
+        source: 'conversation',
+        title: 'Top N and Session Top N behavior',
+        content: 'Top N controls the number of returned session groups. Session Top N controls how many hit items are kept inside each session result. Both values are user-entered positive integers.',
+        createdAt: '2026-06-01T12:12:00.000Z',
+        memoryId: 'turn:1006',
+      },
+    ],
+  },
+  {
+    sessionKey: 'release-check',
+    sessionLabel: 'release-check',
+    projectKey: 'release-check',
+    latestUpdatedAt: '2026-05-26T12:00:00.000Z',
+    items: [
+      {
+        id: 'demo-search-benchmark-1',
+        source: 'conversation',
+        title: 'LoCoMo benchmark regression triage',
+        content: 'Release check reviewed a benchmark regression where recall improved for conversation evidence but extraction recall still missed a small set of LoCoMo questions.',
+        createdAt: '2026-05-26T12:00:00.000Z',
+        memoryId: 'turn:1301',
+      },
+      {
+        id: 'demo-search-benchmark-extraction-1',
+        source: 'extraction',
+        title: 'Benchmark evidence source split',
+        content: 'Benchmark search should show whether a hit came from conversation or extraction so release debugging can separate raw chat context from distilled memory facts.',
+        createdAt: '2026-05-26T12:08:00.000Z',
+        memoryId: 'extraction:demo-benchmark-source-split',
+      },
+    ],
+  },
+  {
+    sessionKey: 'sdk-cleanup',
+    sessionLabel: 'sdk-cleanup',
+    projectKey: 'sdk-cleanup',
+    latestUpdatedAt: '2026-05-18T12:00:00.000Z',
+    items: [
+      {
+        id: 'demo-search-links-1',
+        source: 'conversation',
+        title: 'Right pane link handoff',
+        content: 'Search result links are included now even though the right pane is not implemented in this version. Later the right pane can open the referenced turn, memory, or session without changing the search result shape.',
+        createdAt: '2026-05-18T12:00:00.000Z',
+        memoryId: 'turn:1401',
+      },
+      {
+        id: 'demo-search-contract-1',
+        source: 'extraction',
+        title: 'Stable result contract',
+        content: 'The Board client receives one stable result contract: session result, metadata line, and hit items. The UI should not branch on storage-specific shapes.',
+        createdAt: '2026-05-18T12:10:00.000Z',
+        memoryId: 'extraction:demo-stable-result-contract',
+      },
+    ],
+  },
+];
+
 export const demoAgents: DemoSessionAgentItem[] = [
   { agent: 'openclaw', latestUpdatedAt: '2026-06-01T12:01:00.000Z' },
   { agent: 'claude_code', latestUpdatedAt: '2026-05-29T12:00:00.000Z' },
@@ -61,7 +231,7 @@ export const demoPipelineTasks: DemoPipelineTask[] = [
     id: 'pipeline:global:lance-row-id',
     kind: 'global-observing',
     title: 'Global observing',
-    target: 'Entity: Lance row id',
+    target: 'Project: lance Session: row-id-recall',
     status: 'running',
     statusText: 'generating draft from 16 extractions',
     startedAt: '2026-06-04T08:12:12.000Z',
@@ -93,7 +263,7 @@ export const demoPipelineTasks: DemoPipelineTask[] = [
     id: 'pipeline:session:codex-import-timeline',
     kind: 'session-observing',
     title: 'Session observing',
-    target: 'codex session import timeline',
+    target: 'Project: muninn Session: codex session import timeline',
     status: 'done',
     statusText: 'produced 12 extractions and queued global work',
     startedAt: '2026-06-04T08:24:12.000Z',
@@ -118,7 +288,7 @@ export const demoPipelineTasks: DemoPipelineTask[] = [
     id: 'pipeline:wiki:memory-architecture',
     kind: 'wiki-compiling',
     title: 'Wiki compiling',
-    target: 'LLM Wiki: Memory architecture',
+    target: 'Project: muninn Session: memory architecture',
     status: 'queued',
     statusText: 'waiting for global observations before compiling wiki draft',
     updatedAt: '2026-06-04T08:35:12.000Z',
@@ -136,7 +306,7 @@ export const demoPipelineTasks: DemoPipelineTask[] = [
     id: 'pipeline:global:prompt-design',
     kind: 'global-observing',
     title: 'Global observing',
-    target: 'Entity: Muninn prompt design',
+    target: 'Project: muninn Session: prompt design',
     status: 'queued',
     statusText: 'waiting for extractions before global rewrite',
     updatedAt: '2026-06-04T08:34:12.000Z',
@@ -151,7 +321,7 @@ export const demoPipelineTasks: DemoPipelineTask[] = [
     id: 'pipeline:global:board-settings',
     kind: 'global-observing',
     title: 'Global observing',
-    target: 'Entity: Board settings',
+    target: 'Project: board-mvp Session: settings polish',
     status: 'failed',
     statusText: 'parser validation failed after 8 extractions · retry retained',
     startedAt: '2026-06-04T08:29:12.000Z',
@@ -188,7 +358,12 @@ export const demoSessionGroups: Record<string, DemoSessionGroupItem[]> = {
     { sessionKey: 'sdk-cleanup', displaySessionId: 'sdk-cleanup', projectKey: 'sdk-cleanup', latestUpdatedAt: '2026-05-18T12:00:00.000Z' },
   ],
   memory_agent: [
-    { sessionKey: 'memory-inbox/daily-recall', displaySessionId: 'memory-inbox/daily-recall', projectKey: 'memory-inbox', latestUpdatedAt: '2026-06-01T13:32:00.000Z' },
+    {
+      sessionKey: 'memory-inbox/daily-recall',
+      displaySessionId: LONG_DEMO_SESSION,
+      projectKey: LONG_DEMO_PROJECT,
+      latestUpdatedAt: '2026-06-01T13:32:00.000Z',
+    },
     { sessionKey: 'auth-refactor', displaySessionId: 'auth-refactor', projectKey: 'auth-refactor', latestUpdatedAt: '2026-05-18T12:00:00.000Z' },
   ],
 };

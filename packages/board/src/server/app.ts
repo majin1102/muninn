@@ -17,6 +17,9 @@ import type {
   MemoryDocumentResponse,
   MemoryReference,
   PipelineTasksResponse,
+  RecallProvidersResponse,
+  SearchResponse,
+  SearchSessionResult,
   SessionAgentsResponse,
   SessionGroupsResponse,
   SessionNode,
@@ -27,8 +30,10 @@ import type {
   SettingsConfigResponse,
   TurnPreview,
 } from '@muninn/types';
+import { agentRecallEvents, ndjsonStream, recallProviderOptions } from './agent_recall.js';
 import { previewCodexImport, runCodexImport } from './codex_import.js';
 import { renderRenderedMemoryDocument } from './render.js';
+import { searchBoardMemory } from './search.js';
 import { sessionDisplayTitle } from './session_labels.js';
 
 const AGENT_DEFAULT_SESSION_PREFIX = '__agent_default__:';
@@ -489,6 +494,7 @@ function buildSessionSegments(
     memoryId: observation.memoryId,
     title: observation.title,
     createdAt: observation.createdAt,
+    updatedAt: observation.updatedAt,
   }));
   return fromSnapshot.length > 0 ? fromSnapshot : fallbackTurnSegments(turnPreviews);
 }
@@ -535,6 +541,7 @@ function buildExtractions(
       memoryId: `${firstTurn.turn.memoryId}~observation:${i}`,
       title,
       createdAt: firstTurn.turn.createdAt,
+      updatedAt: firstTurn.turn.updatedAt,
       markdown: normalizeObservationMarkdown(block),
       refs,
       index: firstTurn.index,
@@ -622,6 +629,7 @@ function fallbackTurnSegments(turnPreviews: TurnPreview[]): SessionSegmentPrevie
     memoryId: turn.memoryId,
     title: turn.prompt ?? turn.title ?? turn.summary,
     createdAt: turn.createdAt,
+    updatedAt: turn.updatedAt,
   }));
 }
 
@@ -842,6 +850,81 @@ boardApp.get('/api/v1/ui/memories/:memoryId/document', async (c) => {
   return c.json(response);
 });
 
+boardApp.get('/api/v1/ui/recall/providers', (c) => {
+  const response: RecallProvidersResponse = {
+    providers: recallProviderOptions(),
+    requestId: generateRequestId(),
+  };
+  return c.json(response);
+});
+
+boardApp.get('/api/v1/ui/recall/search', async (c) => {
+  const query = normalizeText(c.req.query('query'));
+  if (!query) {
+    return c.json(errorResponse('invalidRequest', 'query is required'), 400);
+  }
+
+  const projectKeys = normalizeTextList(c.req.queries('projectKey'));
+  const sessionKeys = normalizeTextList(c.req.queries('sessionKey'));
+
+  const sessionTopN = parsePositiveInteger(c.req.query('sessionTopN'), 3);
+  if (typeof sessionTopN === 'string') {
+    return c.json(errorResponse('invalidRequest', `sessionTopN ${sessionTopN}`), 400);
+  }
+  const topN = parsePositiveInteger(c.req.query('topN'), 20);
+  if (typeof topN === 'string') {
+    return c.json(errorResponse('invalidRequest', `topN ${topN}`), 400);
+  }
+
+  const search = await searchBoardMemory({
+    query,
+    projectKeys,
+    sessionKeys,
+    sessionTopN,
+    topN,
+  }, {
+    recall: memories.recall,
+  });
+
+  const response: SearchResponse = {
+    results: search.results,
+    requestId: generateRequestId(),
+  };
+  return c.json(response);
+});
+
+boardApp.post('/api/v1/ui/recall/agent', async (c) => {
+  const body = await c.req.json().catch(() => null) as {
+    query?: unknown;
+    provider?: unknown;
+    results?: unknown;
+  } | null;
+  const query = normalizeText(typeof body?.query === 'string' ? body.query : undefined);
+  if (!query) {
+    return c.json(errorResponse('invalidRequest', 'query is required'), 400);
+  }
+  const provider = normalizeText(typeof body?.provider === 'string' ? body.provider : undefined) ?? 'default';
+  if (provider === 'none') {
+    return c.json(errorResponse('invalidRequest', 'provider none does not run agent recall'), 400);
+  }
+  const results = Array.isArray(body?.results) ? body.results as SearchSessionResult[] : null;
+  if (!results) {
+    return c.json(errorResponse('invalidRequest', 'results is required'), 400);
+  }
+  return ndjsonStream(agentRecallEvents({
+    query,
+    provider,
+    results,
+    signal: c.req.raw.signal,
+  }));
+});
+
+function normalizeTextList(values: string[] | undefined): string[] {
+  return [...new Set((values ?? [])
+    .map((value) => normalizeText(value))
+    .filter((value): value is string => Boolean(value) && value !== 'all'))];
+}
+
 boardApp.get(SESSION_SNAPSHOTS_ROUTE, async (c) => {
   console.log('[BOARD_UI_SESSION_SNAPSHOTS]');
 
@@ -1016,4 +1099,12 @@ function parseOptionalInteger(value: string | undefined): number | undefined {
   }
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function parsePositiveInteger(value: string | undefined, fallback: number): number | string {
+  if (value === undefined) {
+    return fallback;
+  }
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : 'must be a positive integer';
 }

@@ -86,8 +86,18 @@ export interface RenderedMemory {
 
 export interface RecallHit {
   memoryId: string;
-  text: string;
-  references?: string[];
+  title?: string;
+  summary?: string;
+  content: string;
+  references: string[];
+  project?: string;
+  sessionId?: string;
+  agent?: string;
+  cwd?: string;
+  sessionKey?: string;
+  displaySession?: string;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export type RecallMode = 'vector' | 'fts' | 'hybrid';
@@ -354,7 +364,7 @@ export class MuninnBackend {
   async recallMemories(
     query: string,
     limit?: number,
-    options?: { mode?: RecallMode; budget?: number; queryLimit?: number },
+    options?: { mode?: RecallMode; budget?: number; queryLimit?: number; includeGlobalObservations?: boolean },
   ): Promise<RecallHit[]> {
     await writeMuninnLog(this.database, 'info', 'recall', 'query', {
       query,
@@ -698,7 +708,7 @@ export const memories = {
   async recall(
     query: string,
     limit?: number,
-    options?: { mode?: RecallMode; budget?: number; queryLimit?: number; database?: string | null },
+    options?: { mode?: RecallMode; budget?: number; queryLimit?: number; includeGlobalObservations?: boolean; database?: string | null },
   ): Promise<RecallHit[]> {
     return (await getBackend(options?.database)).recallMemories(query, limit, options);
   },

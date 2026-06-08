@@ -89,7 +89,7 @@ export class Memories {
   async recall(
     query: string,
     limit?: number,
-    options?: { mode?: RecallMode; budget?: number; queryLimit?: number },
+    options?: { mode?: RecallMode; budget?: number; queryLimit?: number; includeGlobalObservations?: boolean },
   ): Promise<RecallHit[]> {
     return recallMemories(this.client, query, limit, options);
   }

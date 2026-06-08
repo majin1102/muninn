@@ -113,13 +113,13 @@ test('thread preparation candidates recall related memories and exclude reviewed
       calls.push({ query, limit });
       if (query.includes('support group')) {
         return [
-          { memoryId: 'extraction:obs-1', text: 'Current support extraction' },
-          { memoryId: 'extraction:old-support', text: 'Older support extraction' },
+          { memoryId: 'extraction:obs-1', content: 'Current support extraction' },
+          { memoryId: 'extraction:old-support', content: 'Older support extraction' },
         ];
       }
       return [
-        { memoryId: 'extraction:old-support', text: 'Older support extraction duplicate' },
-        { memoryId: 'extraction:career', text: 'Career extraction' },
+        { memoryId: 'extraction:old-support', content: 'Older support extraction duplicate' },
+        { memoryId: 'extraction:career', content: 'Career extraction' },
       ];
     },
   };

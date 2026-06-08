@@ -31,7 +31,7 @@ type SessionToolbarState = {
   customToTime: string;
 };
 
-const SESSION_TOOLBAR_STORAGE_KEY = 'muninn:board:session-toolbar-filter:v2';
+const SESSION_TOOLBAR_STORAGE_KEY = 'muninn:board:session-toolbar-filter:v3';
 const TURN_LIST_PAGE_SIZE = 20;
 
 export function SessionTree({
@@ -622,13 +622,13 @@ function filterProjects(projects: ProjectNode[], filter: ProjectFilter): Project
         || matchesQuery(session.agent, normalizedQuery);
       const items = session.segments.length > 0 ? session.segments : session.turns;
       const filteredItems = items
-        .filter((item) => isInRange(item.createdAt, filter.timeRange))
+        .filter((item) => isInRange(itemActivityAt(item), filter.timeRange))
         .filter((item) => (
           !normalizedQuery
           || sessionMatches
           || matchesQuery(segmentTitle(item), normalizedQuery)
         ))
-        .sort((left, right) => compare(left.createdAt, right.createdAt));
+        .sort((left, right) => compare(itemActivityAt(left), itemActivityAt(right)));
 
       if (normalizedQuery && !sessionMatches && filteredItems.length === 0) {
         return [];
@@ -659,6 +659,10 @@ function filterProjects(projects: ProjectNode[], filter: ProjectFilter): Project
 
 function matchesQuery(value: string, query: string): boolean {
   return !query || value.toLowerCase().includes(query);
+}
+
+function itemActivityAt(item: ProjectSegmentNode | ProjectTurnNode): string {
+  return item.updatedAt ?? item.createdAt;
 }
 
 function isInRange(value: string, range: TimeRange): boolean {
@@ -793,7 +797,7 @@ function timeInputValue(date: Date): string {
 function defaultSessionToolbarState(): SessionToolbarState {
   return {
     selectedAgents: [],
-    timePreset: 'last_7d',
+    timePreset: 'all',
     customFromDate: dateInputValue(daysAgo(7)),
     customFromTime: '00:00',
     customToDate: dateInputValue(new Date()),
@@ -891,7 +895,7 @@ function saveSessionToolbarStateToUrl(state: SessionToolbarState) {
     url.searchParams.append('agent', agent);
   }
 
-  setSearchParam(url, 'time', state.timePreset === 'last_7d' ? null : state.timePreset);
+  setSearchParam(url, 'time', state.timePreset === 'all' ? null : state.timePreset);
   url.searchParams.delete('sort');
   if (state.timePreset === 'custom') {
     setSearchParam(url, 'from', `${state.customFromDate}T${state.customFromTime}`);
