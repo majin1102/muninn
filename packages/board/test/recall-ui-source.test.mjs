@@ -12,6 +12,19 @@ test('recall UI runs search before optional streaming agent recall', async () =>
   assert.doesNotMatch(source, /BotMessageSquare/);
 });
 
+test('recall home title uses the Muninn logo with recalls copy', async () => {
+  const source = await readFile(new URL('../src/components/SearchPage.tsx', import.meta.url), 'utf8');
+  const styles = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8');
+
+  assert.match(source, /import muninnLogo from '\.\.\/assets\/muninn-raven-logo\.png'/);
+  assert.match(source, /<img src=\{muninnLogo\} alt="Muninn" \/>/);
+  assert.match(source, /className="search-prompt-brand">Muninn</);
+  assert.match(source, />recalls everything you worked on</);
+  assert.doesNotMatch(source, /Recall everything you worked on/);
+  assert.match(styles, /\.search-prompt-title img/);
+  assert.match(styles, /\.search-prompt-brand/);
+});
+
 test('recall API stream reader gates events after abort', async () => {
   const source = await readFile(new URL('../src/lib/api.ts', import.meta.url), 'utf8');
 

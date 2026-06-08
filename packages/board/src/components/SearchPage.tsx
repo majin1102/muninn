@@ -26,6 +26,7 @@ import {
   type SVGProps,
 } from 'react';
 import ReactMarkdown from 'react-markdown';
+import muninnLogo from '../assets/muninn-raven-logo.png';
 import { logoForAgent, type AgentLogo } from '../lib/agent_logo.js';
 import type { BoardClient, ProjectNode } from '../lib/api.js';
 import {
@@ -411,7 +412,13 @@ export function RecallPage({
       onPointerDownCapture={(event) => closeMenuOnOutsidePointer(event.nativeEvent)}
       onClickCapture={(event) => closeMenuOnOutsidePointer(event.nativeEvent)}
     >
-      {!submitted ? <h1 className="search-prompt-title">Recall everything you worked on</h1> : null}
+      {!submitted ? (
+        <h1 className="search-prompt-title">
+          <img src={muninnLogo} alt="Muninn" />
+          <span className="search-prompt-brand">Muninn</span>
+          <span>recalls everything you worked on</span>
+        </h1>
+      ) : null}
       <div className={submitted ? 'search-header-row' : 'search-header-row search-header-row-home'}>
         <form className="search-form" onSubmit={submit}>
           <div
