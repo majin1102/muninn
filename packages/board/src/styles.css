@@ -2386,11 +2386,27 @@ svg {
 .search-prompt-title {
   margin: 0 0 44px;
   color: #5d6168;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
   font-size: 24px;
   font-weight: 400;
   letter-spacing: 0;
   line-height: 1.35;
   text-align: center;
+}
+
+.search-prompt-title img {
+  width: 34px;
+  height: 34px;
+  object-fit: contain;
+}
+
+.search-prompt-brand {
+  color: #24272b;
+  font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+  font-weight: 600;
 }
 
 .search-composer {
