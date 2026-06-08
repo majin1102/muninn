@@ -52,17 +52,32 @@ test('groupCandidates skips over a saturated session to fill global top memories
 test('hitCandidates respects project and session scope from enriched recall metadata', async () => {
   const { __testing } = await loadSearchServer();
   const candidates = __testing.hitCandidates([
-    recallHit({ memoryId: 'extraction:1', sessionId: 'search-a', project: 'muninn' }),
-    recallHit({ memoryId: 'extraction:2', sessionId: 'search-b', project: 'muninn' }),
-    recallHit({ memoryId: 'extraction:3', sessionId: 'search-a', project: 'lance' }),
+    recallHit({ memoryId: 'extraction:1', sessionId: 'search-a', project: 'muninn', agent: 'codex' }),
+    recallHit({ memoryId: 'extraction:2', sessionId: 'search-b', project: 'muninn', agent: 'codex' }),
+    recallHit({ memoryId: 'extraction:3', sessionId: 'search-a', project: 'lance', agent: 'codex' }),
   ], {
     projectKeys: ['muninn'],
-    sessionKeys: ['search-a'],
+    sessionKeys: [sessionScopeKey('muninn', 'codex', 'search-a')],
   });
 
   assert.equal(candidates.length, 1);
-  assert.equal(candidates[0].sessionKey, 'search-a');
+  assert.equal(candidates[0].sessionKey, sessionScopeKey('muninn', 'codex', 'search-a'));
   assert.equal(candidates[0].source, 'extraction');
+});
+
+test('hitCandidates keeps same raw session ids separate across projects and agents', async () => {
+  const { __testing } = await loadSearchServer();
+  const grouped = __testing.groupCandidates(__testing.hitCandidates([
+    recallHit({ memoryId: 'extraction:1', sessionId: 'same-session', project: 'muninn', agent: 'codex' }),
+    recallHit({ memoryId: 'extraction:2', sessionId: 'same-session', project: 'lance', agent: 'codex' }),
+    recallHit({ memoryId: 'extraction:3', sessionId: 'same-session', project: 'muninn', agent: 'claude' }),
+  ], {}), { sessionTopN: 3, topN: 10 });
+
+  assert.deepEqual(grouped.map((result) => result.sessionKey), [
+    sessionScopeKey('muninn', 'codex', 'same-session'),
+    sessionScopeKey('lance', 'codex', 'same-session'),
+    sessionScopeKey('muninn', 'claude', 'same-session'),
+  ]);
 });
 
 test('hitCandidates filters extraction hits without real session metadata', async () => {
@@ -171,7 +186,7 @@ test('searchBoardMemory uses recall hits without scanning turns or building an a
   assert.equal('answer' in response, false);
   assert.equal(recallOptions.includeGlobalObservations, false);
   assert.equal(response.results.length, 1);
-  assert.equal(response.results[0].sessionKey, 'search-a');
+  assert.equal(response.results[0].sessionKey, sessionScopeKey('muninn', 'codex', 'search-a'));
   assert.equal(response.results[0].projectCwd, '/workspace/muninn');
 });
 
@@ -206,4 +221,8 @@ function recallHit(overrides) {
     createdAt: overrides.createdAt ?? '2026-06-04T00:00:00.000Z',
     updatedAt: overrides.updatedAt ?? '2026-06-04T00:00:00.000Z',
   };
+}
+
+function sessionScopeKey(projectKey, agent, sessionKey) {
+  return `${projectKey}\u001f${agent}\u001f${sessionKey}`;
 }

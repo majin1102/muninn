@@ -51,7 +51,7 @@ export function sessionOptionsForProjects(
 
 export function sessionKeysForRequest(values: string[], options: SearchSessionOption[]): string[] {
   const optionByValue = new Map(options.map((option) => [option.value, option]));
-  return [...new Set(values.map((value) => optionByValue.get(value)?.sessionKey ?? value))];
+  return [...new Set(values.map((value) => optionByValue.get(value)?.value ?? value))];
 }
 
 export function normalizeSearchN(value: string, fallback: number): number {

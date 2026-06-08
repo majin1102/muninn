@@ -16,6 +16,8 @@ import {
 import { shiftPipelineTaskTimes, summarizePipelineTasks } from '../lib/pipeline_model.js';
 import type { AgentRecallStreamEvent, RecallProvidersResponse, SearchSessionResult } from '@muninn/types';
 
+const SESSION_SCOPE_SEPARATOR = '\u001f';
+
 export async function getDemoSessionAgents(): Promise<DemoSessionAgentItem[]> {
   return demoAgents;
 }
@@ -155,7 +157,7 @@ export async function getDemoSearchResults(params: {
   let total = 0;
   for (const result of demoSearchResults
     .filter((result) => projectKeys.size === 0 || projectKeys.has(result.projectKey))
-    .filter((result) => sessionKeys.size === 0 || sessionKeys.has(result.sessionKey))) {
+    .filter((result) => matchesDemoSessionScope(result, sessionKeys))) {
     if (total >= params.topN) {
       break;
     }
@@ -175,6 +177,16 @@ export async function getDemoSearchResults(params: {
     total += items.length;
   }
   return results;
+}
+
+function matchesDemoSessionScope(result: SearchSessionResult, sessionKeys: Set<string>): boolean {
+  if (sessionKeys.size === 0 || sessionKeys.has(result.sessionKey)) {
+    return true;
+  }
+  return [...sessionKeys].some((sessionKey) => {
+    const [projectKey, _agent, rawSessionKey] = sessionKey.split(SESSION_SCOPE_SEPARATOR);
+    return projectKey === result.projectKey && rawSessionKey === result.sessionKey;
+  });
 }
 
 export function getDemoRecallProviders(): RecallProvidersResponse {

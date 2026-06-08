@@ -33,6 +33,8 @@ export type BoardSearchResult = {
   results: SearchSessionResult[];
 };
 
+const SESSION_SCOPE_SEPARATOR = '\u001f';
+
 type SearchDeps = {
   recall: (query: string, limit?: number, options?: {
     mode?: 'vector' | 'fts' | 'hybrid';
@@ -240,15 +242,20 @@ function searchSession(hit: RecallHit): {
   projectKey: string;
 } | null {
   const projectKey = normalizeText(hit.project);
+  const agent = normalizeText(hit.agent);
   const sessionId = normalizeText(hit.sessionId);
-  if (!sessionId || !projectKey) {
+  if (!sessionId || !projectKey || !agent) {
     return null;
   }
   return {
-    sessionKey: sessionId,
+    sessionKey: sessionScopeKey(projectKey, agent, sessionId),
     sessionLabel: normalizeText(hit.displaySession) ?? displayTitle(sessionId),
     projectKey,
   };
+}
+
+function sessionScopeKey(projectKey: string, agent: string, sessionKey: string): string {
+  return [projectKey, agent, sessionKey].join(SESSION_SCOPE_SEPARATOR);
 }
 
 function displayTitle(sessionKey: string): string {

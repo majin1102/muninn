@@ -138,3 +138,10 @@ test('recall top control labels memory caps explicitly', async () => {
   assert.match(source, />Per session</);
   assert.doesNotMatch(source, />Global</);
 });
+
+test('demo recall search accepts scoped session filter values', async () => {
+  const source = await readFile(new URL('../src/demo/provider.ts', import.meta.url), 'utf8');
+
+  assert.match(source, /matchesDemoSessionScope\(result, sessionKeys\)/);
+  assert.match(source, /const \[projectKey, _agent, rawSessionKey\] = sessionKey\.split\(SESSION_SCOPE_SEPARATOR\)/);
+});

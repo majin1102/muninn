@@ -937,12 +937,16 @@ test('board search groups recalled extraction results by session and validates s
 
   await captureTurn(makeTurnContent({
     sessionId: 'muninn/search-alpha',
+    project: 'muninn',
+    cwd: '/workspace/muninn',
     agent: 'codex_cli',
     prompt: 'board search should group by session',
     response: 'Search uses Session Top N and Top N controls.',
   }));
   await captureTurn(makeTurnContent({
     sessionId: 'lance/search-beta',
+    project: 'lance',
+    cwd: '/workspace/lance',
     agent: 'codex_cli',
     prompt: 'board search should also find this',
     response: 'This result belongs to a different project.',
@@ -951,13 +955,14 @@ test('board search groups recalled extraction results by session and validates s
   assert.equal(finalizeResponse.status, 200);
   await waitForWatermarkResolved();
 
-  const response = await app.request('/api/v1/ui/recall/search?query=board%20search&projectKey=project-a&sessionTopN=1&topN=10');
+  const scopedSessionKey = ['muninn', 'codex_cli', 'muninn/search-alpha'].join('\u001f');
+  const response = await app.request('/api/v1/ui/recall/search?query=board%20search&projectKey=muninn&sessionTopN=1&topN=10');
   assert.equal(response.status, 200);
   const body = await json(response);
   assert.equal('answer' in body, false);
   assert.equal(body.results.length, 1);
-  assert.equal(body.results[0].projectKey, 'project-a');
-  assert.equal(body.results[0].sessionKey, '__agent_default__:codex_cli');
+  assert.equal(body.results[0].projectKey, 'muninn');
+  assert.equal(body.results[0].sessionKey, scopedSessionKey);
   assert.equal(body.results[0].items.length, 1);
   assert.equal(body.results[0].items[0].source, 'extraction');
 
@@ -979,11 +984,15 @@ test('board search groups recalled extraction results by session and validates s
   assert.ok(streamEvents.some((event) => event.type === 'delta' && typeof event.text === 'string' && event.text.length > 0));
   assert.equal(streamEvents.at(-1).type, 'done');
 
-  const sessionScope = await app.request('/api/v1/ui/recall/search?query=board&sessionKey=__agent_default__%3Acodex_cli');
+  const scopedParams = new URLSearchParams({
+    query: 'board',
+    sessionKey: scopedSessionKey,
+  });
+  const sessionScope = await app.request(`/api/v1/ui/recall/search?${scopedParams.toString()}`);
   assert.equal(sessionScope.status, 200);
   const sessionScopeBody = await json(sessionScope);
   assert.equal(sessionScopeBody.results.length, 1);
-  assert.equal(sessionScopeBody.results[0].sessionKey, '__agent_default__:codex_cli');
+  assert.equal(sessionScopeBody.results[0].sessionKey, scopedSessionKey);
 });
 
 test('ui session endpoints include native rows with indexed ownership fields', async (t) => {

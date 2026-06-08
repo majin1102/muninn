@@ -93,7 +93,7 @@ test('sessionOptionsForProjects disambiguates duplicate session keys by agent', 
     'auth-refactor / openclaw',
     'auth-refactor / claude_code',
   ]);
-  assert.deepEqual(sessionKeysForRequest([options[0].value], options), ['auth-refactor']);
+  assert.deepEqual(sessionKeysForRequest([options[0].value], options), [sessionOptionValue('auth-refactor', 'openclaw', 'auth-refactor')]);
 });
 
 test('normalizeSearchN keeps positive integer select values only', async () => {
