@@ -242,7 +242,7 @@ memoryLoader.post('/api/v1/benchmark/locomo/recall', async (c) => {
       if (!rendered) {
         continue;
       }
-      hits.push(toLocomoHit(rendered, row.text));
+      hits.push(toLocomoHit(rendered, row.content));
     }
     return c.json({ hits, requestId: generateRequestId() });
   } catch (error) {
@@ -334,12 +334,12 @@ function parseLocomoManifest(value: unknown): LocomoImportManifest | null {
 }
 
 function toRecalledLocomoHit(
-  row: { memoryId: string; text: string },
+  row: { memoryId: string; content: string },
 ): LocomoBridgeHit {
   return {
     memory_id: row.memoryId,
-    matched_text: row.text,
-    detail: row.text,
+    matched_text: row.content,
+    detail: row.content,
   };
 }
 

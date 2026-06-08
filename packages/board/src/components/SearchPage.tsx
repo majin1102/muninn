@@ -1,4 +1,4 @@
-import type { RecallProviderOption, SearchResultLink, SearchSessionResult } from '@muninn/types';
+import type { RecallProviderOption, SearchSessionResult } from '@muninn/types';
 import {
   ArrowUp,
   Bot,
@@ -17,9 +17,11 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type ComponentType,
   type FormEvent,
   type KeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
   type ReactNode,
   type SVGProps,
 } from 'react';
@@ -62,6 +64,9 @@ const SOURCE_TABS: Array<{ label: string; value: SearchSourceKey }> = [
   { label: 'LLM Wiki', value: 'llmWiki' },
 ];
 const SEARCH_FILTER_SINGLE_NAME_LIMIT = 24;
+const DEFAULT_SEARCH_SPLIT_RATIO = 52;
+const MIN_SEARCH_SPLIT_RATIO = 42;
+const MAX_SEARCH_SPLIT_RATIO = 62;
 type SearchMenuKey = 'add' | 'provider' | 'project' | 'session' | 'topN';
 type SearchOption = {
   label: string;
@@ -73,6 +78,9 @@ type SearchOption = {
 type AgentRecallStatus = 'idle' | 'thinking' | 'streaming' | 'done' | 'error';
 
 type SvgIcon = ComponentType<SVGProps<SVGSVGElement>>;
+type SearchLayoutStyle = CSSProperties & {
+  '--search-answer-ratio'?: string;
+};
 
 function ProviderModelIcon({ className, ...props }: SVGProps<SVGSVGElement>) {
   return (
@@ -139,7 +147,9 @@ export function RecallPage({
   const [openMenu, setOpenMenu] = useState<SearchMenuKey | null>(null);
   const [sourceTab, setSourceTab] = useState<SearchSourceKey>('all');
   const [composerExpanded, setComposerExpanded] = useState(false);
+  const [splitRatio, setSplitRatio] = useState(DEFAULT_SEARCH_SPLIT_RATIO);
   const composerRef = useRef<HTMLDivElement | null>(null);
+  const splitLayoutRef = useRef<HTMLDivElement | null>(null);
   const agentAbortRef = useRef<AbortController | null>(null);
   const openMenuRef = useRef<SearchMenuKey | null>(null);
   const submittedRef = useRef(false);
@@ -245,6 +255,38 @@ export function RecallPage({
     }
   }
 
+  function updateSplitRatio(clientX: number) {
+    const layout = splitLayoutRef.current;
+    if (!layout) {
+      return;
+    }
+    const rect = layout.getBoundingClientRect();
+    if (rect.width <= 0) {
+      return;
+    }
+    setSplitRatio(clampSearchSplitRatio(((clientX - rect.left) / rect.width) * 100));
+  }
+
+  function beginSplitDrag(event: ReactPointerEvent<HTMLButtonElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    updateSplitRatio(event.clientX);
+  }
+
+  function dragSplit(event: ReactPointerEvent<HTMLButtonElement>) {
+    if (!event.currentTarget.hasPointerCapture(event.pointerId)) {
+      return;
+    }
+    updateSplitRatio(event.clientX);
+  }
+
+  function endSplitDrag(event: ReactPointerEvent<HTMLButtonElement>) {
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  }
+
   async function submit(event?: FormEvent<HTMLFormElement>) {
     event?.preventDefault();
     const query = controls.query.trim();
@@ -274,7 +316,11 @@ export function RecallPage({
         sessionKeys: sessionKeysForRequest(controls.sessionKeys, sessionOptions),
         sessionTopN: controls.sessionTopN,
         topN: controls.topN,
+        signal: agentAbort.signal,
       });
+      if (agentAbort.signal.aborted) {
+        return;
+      }
       setResults(response.results);
       searchCompleted = true;
       setSearchLoading(false);
@@ -282,6 +328,10 @@ export function RecallPage({
         return;
       }
       setAgentStatus('thinking');
+      await waitForPaint();
+      if (agentAbort.signal.aborted) {
+        return;
+      }
       await client.streamAgentRecall({
         query,
         provider,
@@ -351,6 +401,9 @@ export function RecallPage({
 
   const showAnswerPane = submitted && provider !== 'none' && !searchError && results.length > 0;
   const qaClassName = showAnswerPane ? 'search-qa-layout' : 'search-qa-layout search-qa-layout-results-only';
+  const qaStyle: SearchLayoutStyle | undefined = showAnswerPane
+    ? { '--search-answer-ratio': `${splitRatio}%` }
+    : undefined;
 
   return (
     <div
@@ -359,95 +412,99 @@ export function RecallPage({
       onClickCapture={(event) => closeMenuOnOutsidePointer(event.nativeEvent)}
     >
       {!submitted ? <h1 className="search-prompt-title">Recall everything you worked on</h1> : null}
-      <form className="search-form" onSubmit={submit}>
-        <div
-          ref={composerRef}
-          className={submitted && composerExpanded ? 'search-composer search-composer-expanded' : 'search-composer'}
-        >
-          <div className="search-input-shell">
-            <textarea
-              value={controls.query}
-              rows={3}
-              onChange={(event) => patchControls({ query: event.target.value })}
-              onClick={() => setComposerExpanded(true)}
-              onFocus={() => setComposerExpanded(true)}
-              onPointerDown={() => setComposerExpanded(true)}
-              onInput={resizeTextarea}
-              onKeyDown={submitFromTextarea}
-            />
-            <div className="search-main-toolbar">
-              <div className="search-main-tools">
-                <SearchActionMenu
-                  icon={Plus}
-                  label="Add"
-                  open={openMenu === 'add'}
-                  onToggle={() => toggleMenu('add')}
-                  onClose={() => setOpenMenu(null)}
-                />
-                <SearchSelectMenu
-                  icon={ProviderModelIcon}
-                  label="Provider"
-                  value={provider}
-                  options={providerOptions}
-                  open={openMenu === 'provider'}
-                  hideLabel
-                  onToggle={() => toggleMenu('provider')}
-                  onChange={(value) => {
-                    setProvider(value);
-                    setOpenMenu(null);
-                  }}
-                />
+      <div className={submitted ? 'search-header-row' : 'search-header-row search-header-row-home'}>
+        <form className="search-form" onSubmit={submit}>
+          <div
+            ref={composerRef}
+            className={submitted && composerExpanded ? 'search-composer search-composer-expanded' : 'search-composer'}
+          >
+            <div className="search-input-shell">
+              <textarea
+                value={controls.query}
+                rows={3}
+                onChange={(event) => patchControls({ query: event.target.value })}
+                onClick={() => setComposerExpanded(true)}
+                onFocus={() => setComposerExpanded(true)}
+                onPointerDown={() => setComposerExpanded(true)}
+                onInput={resizeTextarea}
+                onKeyDown={submitFromTextarea}
+              />
+              <div className="search-main-toolbar">
+                <div className="search-main-tools">
+                  <SearchActionMenu
+                    icon={Plus}
+                    label="Add"
+                    open={openMenu === 'add'}
+                    onToggle={() => toggleMenu('add')}
+                    onClose={() => setOpenMenu(null)}
+                  />
+                  <SearchSelectMenu
+                    icon={ProviderModelIcon}
+                    label="Provider"
+                    value={provider}
+                    options={providerOptions}
+                    open={openMenu === 'provider'}
+                    hideLabel
+                    onToggle={() => toggleMenu('provider')}
+                    onChange={(value) => {
+                      setProvider(value);
+                      setOpenMenu(null);
+                    }}
+                  />
+                </div>
+                <button className="search-submit-button" type="submit" aria-label="Search" disabled={!controls.query.trim() || searchLoading}>
+                  <ArrowUp />
+                </button>
               </div>
-              <button className="search-submit-button" type="submit" aria-label="Search" disabled={!controls.query.trim() || searchLoading}>
-                <ArrowUp />
-              </button>
+            </div>
+            <div className="search-controls" aria-label="Search controls">
+              <SearchTopMenu
+                icon={TopNIcon}
+                globalValue={controls.topN}
+                sessionValue={controls.sessionTopN}
+                open={openMenu === 'topN'}
+                onToggle={() => toggleMenu('topN')}
+                onGlobalChange={(value) => {
+                  patchControls({ topN: normalizeSearchN(value, DEFAULT_TOP_N) });
+                }}
+                onSessionChange={(value) => {
+                  patchControls({ sessionTopN: normalizeSearchN(value, DEFAULT_SESSION_TOP_N) });
+                }}
+              />
+              <SearchMultiSelectMenu
+                icon={<Folder className="search-control-icon" />}
+                label="Project"
+                values={controls.projectKeys}
+                disabled={projectsLoading}
+                hideLabelWhenSingle
+                singleNameLimit={SEARCH_FILTER_SINGLE_NAME_LIMIT}
+                open={openMenu === 'project'}
+                onToggle={() => toggleMenu('project')}
+                onChange={patchProjectKeys}
+                options={projectOptions}
+              />
+              <SearchMultiSelectMenu
+                icon={<FileText className="search-control-icon" />}
+                label="Session"
+                values={controls.sessionKeys}
+                hideLabelWhenSingle
+                singleNameLimit={SEARCH_FILTER_SINGLE_NAME_LIMIT}
+                open={openMenu === 'session'}
+                onToggle={() => toggleMenu('session')}
+                onChange={(sessionKeys) => patchControls({ sessionKeys })}
+                options={sessionOptions}
+                optionIcon={(option) => (option.agent ? <AgentLogoMark logo={logoForAgent(option.agent)} /> : null)}
+              />
             </div>
           </div>
-          <div className="search-controls" aria-label="Search controls">
-            <SearchTopMenu
-              icon={TopNIcon}
-              globalValue={controls.topN}
-              sessionValue={controls.sessionTopN}
-              open={openMenu === 'topN'}
-              onToggle={() => toggleMenu('topN')}
-              onGlobalChange={(value) => {
-                patchControls({ topN: normalizeSearchN(value, DEFAULT_TOP_N) });
-              }}
-              onSessionChange={(value) => {
-                patchControls({ sessionTopN: normalizeSearchN(value, DEFAULT_SESSION_TOP_N) });
-              }}
-            />
-            <SearchMultiSelectMenu
-              icon={<Folder className="search-control-icon" />}
-              label="Project"
-              values={controls.projectKeys}
-              disabled={projectsLoading}
-              hideLabelWhenSingle
-              singleNameLimit={SEARCH_FILTER_SINGLE_NAME_LIMIT}
-              open={openMenu === 'project'}
-              onToggle={() => toggleMenu('project')}
-              onChange={patchProjectKeys}
-              options={projectOptions}
-            />
-            <SearchMultiSelectMenu
-              icon={<FileText className="search-control-icon" />}
-              label="Session"
-              values={controls.sessionKeys}
-              hideLabelWhenSingle
-              singleNameLimit={SEARCH_FILTER_SINGLE_NAME_LIMIT}
-              open={openMenu === 'session'}
-              onToggle={() => toggleMenu('session')}
-              onChange={(sessionKeys) => patchControls({ sessionKeys })}
-              options={sessionOptions}
-              optionIcon={(option) => (option.agent ? <AgentLogoMark logo={logoForAgent(option.agent)} /> : null)}
-            />
-          </div>
-        </div>
-      </form>
+        </form>
+      </div>
       {projectError ? <div className="search-error">{projectError}</div> : null}
       {submitted ? (
         <div
+          ref={splitLayoutRef}
           className={qaClassName}
+          style={qaStyle}
           onPointerDownCapture={() => {
             if (composerExpanded) {
               setComposerExpanded(false);
@@ -462,7 +519,20 @@ export function RecallPage({
               <section className="search-answer-pane" aria-label="Agent answer">
                 <SearchAnswerView status={agentStatus} error={agentError} text={answerText} />
               </section>
-              <div className="search-qa-divider" aria-hidden="true" />
+              <button
+                className="search-qa-divider"
+                type="button"
+                role="separator"
+                aria-label="Resize answer and search results"
+                aria-orientation="vertical"
+                aria-valuemin={MIN_SEARCH_SPLIT_RATIO}
+                aria-valuemax={MAX_SEARCH_SPLIT_RATIO}
+                aria-valuenow={Math.round(splitRatio)}
+                onPointerDown={beginSplitDrag}
+                onPointerMove={dragSplit}
+                onPointerUp={endSplitDrag}
+                onPointerCancel={endSplitDrag}
+              />
             </>
           ) : null}
           <section className="search-evidence-pane" aria-label="Search evidence">
@@ -508,6 +578,13 @@ function SearchAnswerView({
       </div>
     );
   }
+  if (status === 'done' && !text.trim()) {
+    return (
+      <div className="search-answer">
+        <div className="search-answer-empty">No answer generated.</div>
+      </div>
+    );
+  }
   if (!text.trim()) {
     return null;
   }
@@ -518,6 +595,14 @@ function SearchAnswerView({
       </div>
     </div>
   );
+}
+
+function waitForPaint(): Promise<void> {
+  return new Promise((resolve) => requestAnimationFrame(() => resolve()));
+}
+
+function clampSearchSplitRatio(value: number): number {
+  return Math.min(MAX_SEARCH_SPLIT_RATIO, Math.max(MIN_SEARCH_SPLIT_RATIO, value));
 }
 
 function SearchSourceTabs({
@@ -601,7 +686,7 @@ function SearchTopMenu({
       {open ? (
         <SearchPopover title="Top">
           <label className="search-number-row">
-            <span>Global</span>
+            <span>Total memories</span>
             <input
               type="number"
               min="1"
@@ -618,7 +703,7 @@ function SearchTopMenu({
             />
           </label>
           <label className="search-number-row">
-            <span>Session</span>
+            <span>Per session</span>
             <input
               type="number"
               min="1"
@@ -890,74 +975,209 @@ function SearchResults({
   if (results.length === 0) {
     return <div className="search-status">We couldn't find matching context.</div>;
   }
+  const projectGroups = groupResultsByProject(results);
   return (
     <div className="search-results">
-      {results.map((result) => (
-        <article key={result.sessionKey} className="search-result">
-          <h2>{result.sessionLabel}</h2>
-          <div className="search-result-meta">Project: {result.projectKey}</div>
-          <div className="search-result-items">
-            {result.items.map((item) => {
-              const isExpandable = shouldPreview(item.content);
-              const isExpanded = Boolean(expanded[item.id]);
-              return (
-                <section key={item.id} className="search-hit">
-                  <div className="search-hit-source">Source: {item.source}</div>
-                  {item.title ? <h3>{item.title}</h3> : null}
-                  <div className={hitContentClass(isExpandable, isExpanded)}>
-                    {item.content}
-                  </div>
-                  {isExpandable ? (
-                    <button className="search-hit-toggle" type="button" onClick={() => onToggle(item.id)}>
-                      {isExpanded ? <ChevronUp /> : <ChevronDown />}
-                      <span>{isExpanded ? 'Collapse' : 'Expand'}</span>
-                    </button>
-                  ) : null}
-                  <SearchHitLinks links={item.links} />
-                </section>
-              );
-            })}
+      {projectGroups.map((project) => (
+        <section key={project.key} className="search-project-group">
+          <div className="search-project-heading">
+            <h2>{project.projectKey}</h2>
+            {project.cwds.length > 0 ? (
+              <div className="search-project-cwd-menu">
+                <button
+                  className="search-project-cwd-trigger"
+                  type="button"
+                  aria-label={`${project.projectKey} working directories`}
+                >
+                  ...
+                </button>
+                <div className="search-project-cwd-popover" role="tooltip">
+                  {project.cwds.map((cwd) => (
+                    <div key={cwd} className="search-project-cwd">{cwd}</div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
           </div>
-        </article>
+          {project.sessions.map((result) => (
+            <article key={result.sessionKey} className="search-result">
+              <div className="search-result-heading">
+                <h3>{result.sessionLabel}</h3>
+                <span className="search-result-meta">{memoryCountLabel(result.items.length)}</span>
+              </div>
+              <div className="search-result-items">
+                {result.items.map((item) => {
+                  const expandedContent = searchExpandedContent(item.content);
+                  const isExpandable = shouldPreview(expandedContent) || (item.references?.length ?? 0) > 0;
+                  const isExpanded = Boolean(expanded[item.id]);
+                  return (
+                    <section key={item.id} className="search-hit">
+                      {item.title ? (
+                        <div className="search-hit-label-row">
+                          <span className="search-hit-label">{item.title}</span>
+                        </div>
+                      ) : null}
+                      <p className="search-hit-snippet">{searchSnippet(item.content)}</p>
+                      {isExpandable ? (
+                        <button className="search-hit-toggle" type="button" onClick={() => onToggle(item.id)}>
+                          {isExpanded ? <ChevronUp /> : <ChevronDown />}
+                          <span>{isExpanded ? 'Collapse' : 'Expand'}</span>
+                        </button>
+                      ) : null}
+                      {isExpanded ? (
+                        <div className="search-hit-content-box">
+                          {item.createdAt ? <div className="search-hit-content-time">{formatHitDateTime(item.createdAt)}</div> : null}
+                          <div className="search-hit-content">
+                            <ReactMarkdown>{expandedContent}</ReactMarkdown>
+                          </div>
+                          <SearchTurnReferences references={item.references ?? []} />
+                        </div>
+                      ) : null}
+                    </section>
+                  );
+                })}
+              </div>
+            </article>
+          ))}
+        </section>
       ))}
     </div>
   );
 }
 
-function SearchHitLinks({ links }: { links: SearchResultLink[] }) {
-  const visibleLinks = links
-    .map((link) => ({ link, href: searchLinkHref(link) }))
-    .filter((entry): entry is { link: SearchResultLink; href: string } => Boolean(entry.href));
+type SearchProjectGroup = {
+  key: string;
+  projectKey: string;
+  cwds: string[];
+  sessions: SearchSessionResult[];
+};
 
-  if (visibleLinks.length === 0) {
+function groupResultsByProject(results: SearchSessionResult[]): SearchProjectGroup[] {
+  const groups = new Map<string, SearchProjectGroup>();
+  for (const result of results) {
+    const cwd = normalizeOptionalText(result.projectCwd);
+    const key = result.projectKey;
+    const group = groups.get(key) ?? {
+      key,
+      projectKey: result.projectKey,
+      cwds: [],
+      sessions: [],
+    };
+    if (cwd && !group.cwds.includes(cwd)) {
+      group.cwds.push(cwd);
+    }
+    group.sessions.push(result);
+    groups.set(key, group);
+  }
+  return [...groups.values()];
+}
+
+function normalizeOptionalText(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function memoryCountLabel(count: number): string {
+  return `${count} ${count === 1 ? 'memory' : 'memories'}`;
+}
+
+function SearchTurnReferences({ references }: { references: string[] }) {
+  const turnReferences = references.filter((reference) => reference.startsWith('turn:'));
+
+  if (turnReferences.length === 0) {
     return null;
   }
 
   return (
-    <div className="search-hit-links">
-      {visibleLinks.map(({ link, href }) => (
-        <a key={`${link.label}:${href}`} href={href} className="search-hit-link">
-          {link.label}
-        </a>
-      ))}
+    <div className="search-hit-references">
+      <div className="search-hit-references-title">Referenced turns</div>
+      <div className="search-hit-reference-list">
+        {turnReferences.map((reference) => (
+          <a key={reference} href={`#/session/${encodeURIComponent(reference)}`} className="observation-inline-citation search-hit-reference">
+            [{turnReferenceLabel(reference)}]
+          </a>
+        ))}
+      </div>
     </div>
   );
-}
-
-function searchLinkHref(link: SearchResultLink): string | null {
-  if (!link.memoryId) {
-    return null;
-  }
-  return `#/session/${encodeURIComponent(link.memoryId)}`;
 }
 
 function shouldPreview(content: string): boolean {
   return content.length > 220 || content.split('\n').length > 3;
 }
 
-function hitContentClass(isExpandable: boolean, isExpanded: boolean): string {
-  if (!isExpandable) {
-    return 'search-hit-content search-hit-content-complete';
+function searchSnippet(content: string): string {
+  const source = markdownSection(content, 'Summary') ?? content;
+  const plain = markdownToPlainText(source);
+  return truncateSnippet(plain, 260);
+}
+
+function searchExpandedContent(content: string): string {
+  return markdownSection(content, 'Content') ?? content;
+}
+
+function markdownSection(content: string, heading: string): string | null {
+  const lines = content.split('\n');
+  const section: string[] = [];
+  let collecting = false;
+  let sectionLevel = 0;
+  for (const line of lines) {
+    const headingMatch = line.trim().match(/^(#{1,6})\s+(.+?)\s*$/);
+    if (headingMatch) {
+      const currentLevel = headingMatch[1].length;
+      const currentHeading = headingMatch[2].trim();
+      if (collecting && currentLevel <= sectionLevel) {
+        break;
+      }
+      if (!collecting && currentHeading.toLowerCase() === heading.toLowerCase()) {
+        collecting = true;
+        sectionLevel = currentLevel;
+        continue;
+      }
+    }
+    if (collecting) {
+      section.push(line);
+    }
   }
-  return isExpanded ? 'search-hit-content search-hit-content-expanded' : 'search-hit-content';
+  const value = section.join('\n').trim();
+  return value.length > 0 ? value : null;
+}
+
+function markdownToPlainText(content: string): string {
+  return content
+    .replace(/```[\s\S]*?```/g, ' ')
+    .split('\n')
+    .filter((line) => !/^#{1,6}\s+(Title|Summary|Content)\s*$/i.test(line.trim()))
+    .join(' ')
+    .replace(/!\[[^\]]*]\([^)]*\)/g, ' ')
+    .replace(/\[([^\]]+)]\([^)]+\)/g, '$1')
+    .replace(/[`*_>#]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function truncateSnippet(text: string, limit: number): string {
+  if (text.length <= limit) {
+    return text;
+  }
+  const preview = text.slice(0, limit).trimEnd();
+  const lastSpace = preview.lastIndexOf(' ');
+  return `${lastSpace > 80 ? preview.slice(0, lastSpace) : preview}...`;
+}
+
+function formatHitDateTime(value: string): string {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) {
+    return value;
+  }
+  const year = date.getFullYear();
+  const month = `${date.getMonth() + 1}`.padStart(2, '0');
+  const day = `${date.getDate()}`.padStart(2, '0');
+  const hour = `${date.getHours()}`.padStart(2, '0');
+  const minute = `${date.getMinutes()}`.padStart(2, '0');
+  return `${year}-${month}-${day} ${hour}:${minute}`;
+}
+
+function turnReferenceLabel(reference: string): string {
+  return `detail: ${reference.replace(/^turn:/, 'turn ')}`;
 }

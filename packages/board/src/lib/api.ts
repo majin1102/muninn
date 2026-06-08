@@ -87,6 +87,7 @@ export type BoardClient = {
     sessionKeys?: string[];
     sessionTopN: number;
     topN: number;
+    signal?: AbortSignal;
   }): Promise<SearchResponse>;
   getRecallProviders(): Promise<RecallProvidersResponse>;
   streamAgentRecall(params: {
@@ -260,12 +261,15 @@ export function createBoardClient(apiBase: string, usesDemoData: boolean): Board
       }
       if (usesDemoData) {
         const results = await getDemoSearchResults(params);
+        if (params.signal?.aborted) {
+          throw new DOMException('Search aborted', 'AbortError');
+        }
         return {
           results,
           requestId: 'demo-search',
         };
       }
-      return fetchJson<SearchResponse>(`/api/v1/ui/recall/search?${searchParams.toString()}`);
+      return fetchJson<SearchResponse>(`/api/v1/ui/recall/search?${searchParams.toString()}`, { signal: params.signal });
     },
     async getRecallProviders() {
       if (usesDemoData) {

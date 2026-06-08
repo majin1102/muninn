@@ -57,6 +57,7 @@ export const demoSearchResults: SearchSessionResult[] = [
     sessionKey: 'board-mvp',
     sessionLabel: 'board-mvp',
     projectKey: 'board-mvp',
+    projectCwd: '/Users/Nathan/.codex/worktrees/dde8/muninn',
     latestUpdatedAt: '2026-06-02T10:30:00.000Z',
     items: [
       {
@@ -66,16 +67,27 @@ export const demoSearchResults: SearchSessionResult[] = [
         content: 'Search provider selection should start as a visual control with Default, OpenAI, and Local choices. The BotMessageSquare icon represents the future model/provider switch without implying hardware routing.',
         createdAt: '2026-06-02T10:30:00.000Z',
         memoryId: 'turn:1020',
-        links: [{ kind: 'turn', label: 'Open turn', memoryId: 'turn:1020', sessionKey: 'board-mvp' }],
       },
       {
         id: 'demo-search-provider-extraction-1',
         source: 'extraction',
         title: 'Provider is not active backend routing yet',
-        content: 'The provider menu is intentionally product-facing only in this version. Search still uses the Board search API and does not send provider-specific model parameters.',
+        content: [
+          '## Summary',
+          '',
+          'The provider menu is intentionally product-facing only in this version. Search still uses the Board search API and does not send provider-specific model parameters.',
+          '',
+          '## Content',
+          '',
+          'Provider selection is kept in the composer because future recall can route through model-backed, agent-backed, or file-backed search providers. In this version the selector is a visual contract: it shows where provider choice will live, but the backend still runs the same board recall path for every provider.',
+          '',
+          '- `Default` keeps the product ready for model-backed recall.',
+          '- `None` skips the answer pane and shows only search evidence.',
+          '- The provider icon should read as model-related without implying hardware routing.',
+        ].join('\n'),
         createdAt: '2026-06-02T10:36:00.000Z',
         memoryId: 'extraction:demo-provider-routing',
-        links: [{ kind: 'memory', label: 'Open memory', memoryId: 'extraction:demo-provider-routing', sessionKey: 'board-mvp' }],
+        references: ['turn:1020', 'turn:1021'],
       },
       {
         id: 'demo-search-board-long-1',
@@ -89,7 +101,6 @@ export const demoSearchResults: SearchSessionResult[] = [
         ].join('\n'),
         createdAt: '2026-06-01T07:15:00.000Z',
         memoryId: 'turn:1010',
-        links: [{ kind: 'turn', label: 'Open turn', memoryId: 'turn:1010', sessionKey: 'board-mvp' }],
       },
     ],
   },
@@ -97,6 +108,7 @@ export const demoSearchResults: SearchSessionResult[] = [
     sessionKey: 'memory-inbox/daily-recall',
     sessionLabel: LONG_DEMO_SESSION,
     projectKey: LONG_DEMO_PROJECT,
+    projectCwd: '/Users/Nathan/workspace/memory-inbox-with-a-very-long-project-name-for-cross-agent-recall',
     latestUpdatedAt: '2026-06-01T13:32:00.000Z',
     items: [
       {
@@ -106,7 +118,6 @@ export const demoSearchResults: SearchSessionResult[] = [
         content: 'This demo result keeps a long project and session title visible in search filters so menu width, truncation, and single-line behavior can be checked directly.',
         createdAt: '2026-06-01T13:32:00.000Z',
         memoryId: 'turn:1601',
-        links: [{ kind: 'turn', label: 'Open turn', memoryId: 'turn:1601', sessionKey: 'memory-inbox/daily-recall' }],
       },
       {
         id: 'demo-search-multimodal-1',
@@ -115,7 +126,6 @@ export const demoSearchResults: SearchSessionResult[] = [
         content: 'The plus menu reserves space for image search, file search, and agent search. In the current version those entries are placeholders, but they make the composer ready for multi-modal recall workflows.',
         createdAt: '2026-06-01T13:40:00.000Z',
         memoryId: 'turn:1602',
-        links: [{ kind: 'turn', label: 'Open turn', memoryId: 'turn:1602', sessionKey: 'memory-inbox/daily-recall' }],
       },
       {
         id: 'demo-search-agent-icon-1',
@@ -124,7 +134,6 @@ export const demoSearchResults: SearchSessionResult[] = [
         content: 'Session filter rows keep Codex, Claude, OpenClaw, and fallback agent icons so duplicate session names can still be visually distinguished.',
         createdAt: '2026-06-01T13:45:00.000Z',
         memoryId: 'extraction:demo-agent-icons',
-        links: [{ kind: 'memory', label: 'Open memory', memoryId: 'extraction:demo-agent-icons', sessionKey: 'memory-inbox/daily-recall' }],
       },
     ],
   },
@@ -141,7 +150,6 @@ export const demoSearchResults: SearchSessionResult[] = [
         content: 'The team decided the Search page should behave like a search engine and group results by session, with Project and Session controls shaping the request scope.',
         createdAt: '2026-06-01T12:01:00.000Z',
         memoryId: 'turn:1005',
-        links: [{ kind: 'turn', label: 'Open turn', memoryId: 'turn:1005', sessionKey: 'auth-refactor' }],
       },
       {
         id: 'demo-search-auth-extraction-1',
@@ -150,7 +158,6 @@ export const demoSearchResults: SearchSessionResult[] = [
         content: 'Project and Session filters are request-level search scope, not client-side filtering after a broad result set has already been returned.',
         createdAt: '2026-06-01T12:05:00.000Z',
         memoryId: 'extraction:demo-auth-search-scope',
-        links: [{ kind: 'memory', label: 'Open memory', memoryId: 'extraction:demo-auth-search-scope' }],
       },
       {
         id: 'demo-search-topn-1',
@@ -159,7 +166,6 @@ export const demoSearchResults: SearchSessionResult[] = [
         content: 'Top N controls the number of returned session groups. Session Top N controls how many hit items are kept inside each session result. Both values are user-entered positive integers.',
         createdAt: '2026-06-01T12:12:00.000Z',
         memoryId: 'turn:1006',
-        links: [{ kind: 'turn', label: 'Open turn', memoryId: 'turn:1006', sessionKey: 'auth-refactor' }],
       },
     ],
   },
@@ -176,7 +182,6 @@ export const demoSearchResults: SearchSessionResult[] = [
         content: 'Release check reviewed a benchmark regression where recall improved for conversation evidence but extraction recall still missed a small set of LoCoMo questions.',
         createdAt: '2026-05-26T12:00:00.000Z',
         memoryId: 'turn:1301',
-        links: [{ kind: 'turn', label: 'Open turn', memoryId: 'turn:1301', sessionKey: 'release-check' }],
       },
       {
         id: 'demo-search-benchmark-extraction-1',
@@ -185,7 +190,6 @@ export const demoSearchResults: SearchSessionResult[] = [
         content: 'Benchmark search should show whether a hit came from conversation or extraction so release debugging can separate raw chat context from distilled memory facts.',
         createdAt: '2026-05-26T12:08:00.000Z',
         memoryId: 'extraction:demo-benchmark-source-split',
-        links: [{ kind: 'memory', label: 'Open memory', memoryId: 'extraction:demo-benchmark-source-split', sessionKey: 'release-check' }],
       },
     ],
   },
@@ -202,7 +206,6 @@ export const demoSearchResults: SearchSessionResult[] = [
         content: 'Search result links are included now even though the right pane is not implemented in this version. Later the right pane can open the referenced turn, memory, or session without changing the search result shape.',
         createdAt: '2026-05-18T12:00:00.000Z',
         memoryId: 'turn:1401',
-        links: [{ kind: 'turn', label: 'Open turn', memoryId: 'turn:1401', sessionKey: 'sdk-cleanup' }],
       },
       {
         id: 'demo-search-contract-1',
@@ -211,7 +214,6 @@ export const demoSearchResults: SearchSessionResult[] = [
         content: 'The Board client receives one stable result contract: session result, metadata line, and hit items. The UI should not branch on storage-specific shapes.',
         createdAt: '2026-05-18T12:10:00.000Z',
         memoryId: 'extraction:demo-stable-result-contract',
-        links: [{ kind: 'memory', label: 'Open memory', memoryId: 'extraction:demo-stable-result-contract', sessionKey: 'sdk-cleanup' }],
       },
     ],
   },

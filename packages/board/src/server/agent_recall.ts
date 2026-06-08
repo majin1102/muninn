@@ -39,11 +39,16 @@ const SYSTEM_PROMPT = [
 ].join('\n');
 
 export function recallProviderOptions(): RecallProviderOption[] {
-  const names = listLlmProviderNames();
+  return providerOptions(listLlmProviderNames());
+}
+
+function providerOptions(names: string[]): RecallProviderOption[] {
   return [
     { label: 'None', value: 'none' },
     { label: 'Default', value: 'default' },
-    ...names.map((name) => ({ label: name, value: name })),
+    ...names
+      .filter((name) => !['none', 'default'].includes(name.trim().toLowerCase()))
+      .map((name) => ({ label: name, value: name })),
   ];
 }
 
@@ -145,6 +150,7 @@ function promptText(value: string): string {
 
 export const __testing = {
   agentPrompt,
+  providerOptions,
   providerConfig,
   recallProviderOptions,
   systemPrompt: SYSTEM_PROMPT,

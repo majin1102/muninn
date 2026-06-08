@@ -1,16 +1,10 @@
 import type {
   RecallHit,
-  Turn,
 } from '@muninn/core';
 import type {
   SearchResultItem,
-  SearchResultLink,
   SearchSessionResult,
 } from '@muninn/types';
-
-type BoardTurn = Turn & { memoryId?: string };
-const AGENT_DEFAULT_SESSION_PREFIX = '__agent_default__:';
-const OBSERVER_DEFAULT_SESSION_PREFIX = '__observer_default__:';
 
 export type BoardSearchParams = {
   query: string;
@@ -24,14 +18,15 @@ export type SearchCandidate = {
   sessionKey: string;
   sessionLabel: string;
   projectKey: string;
+  projectCwd?: string;
   latestUpdatedAt: string;
-  source: 'extraction' | 'conversation';
+  source: SearchResultItem['source'];
   memoryId?: string;
   title?: string;
   content: string;
+  references: string[];
   createdAt?: string;
   score: number;
-  links: SearchResultLink[];
 };
 
 export type BoardSearchResult = {
@@ -39,8 +34,12 @@ export type BoardSearchResult = {
 };
 
 type SearchDeps = {
-  listTurns: (params: { mode: { type: 'recency'; limit: number } }) => Promise<Turn[]>;
-  recall: (query: string, limit?: number, options?: { mode?: 'vector' | 'fts' | 'hybrid'; budget?: number; queryLimit?: number }) => Promise<RecallHit[]>;
+  recall: (query: string, limit?: number, options?: {
+    mode?: 'vector' | 'fts' | 'hybrid';
+    budget?: number;
+    queryLimit?: number;
+    includeGlobalObservations?: boolean;
+  }) => Promise<RecallHit[]>;
 };
 
 export async function searchBoardMemory(params: BoardSearchParams, deps: SearchDeps): Promise<BoardSearchResult> {
@@ -51,114 +50,52 @@ export async function searchBoardMemory(params: BoardSearchParams, deps: SearchD
     };
   }
 
-  const allTurns = await deps.listTurns({
-    mode: { type: 'recency', limit: 1_000_000 },
-  });
-  const conversations = conversationCandidates(allTurns, {
-    query,
-    projectKeys: params.projectKeys,
-    sessionKeys: params.sessionKeys,
-  });
-
-  const extractionHits = await deps.recall(query, Math.max(params.topN * params.sessionTopN, params.topN), {
+  const extractionHits = await deps.recall(query, Math.max(params.topN * params.sessionTopN, params.topN * 3), {
     mode: 'hybrid',
     budget: 0,
+    includeGlobalObservations: false,
   });
-  const extractions = extractionCandidates(extractionHits, allTurns, {
+  const candidates = hitCandidates(extractionHits, {
     projectKeys: params.projectKeys,
     sessionKeys: params.sessionKeys,
   });
 
   return {
-    results: groupCandidates([...conversations, ...extractions], {
+    results: groupCandidates(candidates, {
       sessionTopN: params.sessionTopN,
       topN: params.topN,
     }),
   };
 }
 
-function conversationCandidates(
-  turns: BoardTurn[],
-  scope: { query: string; projectKeys?: string[]; sessionKeys?: string[] },
-): SearchCandidate[] {
-  const query = scope.query.trim().toLowerCase();
-  return turns.flatMap((turn) => {
-    const session = searchSession(turn);
-    if (!matchesScope(session.projectKey, session.sessionKey, scope)) {
-      return [];
-    }
-
-    const text = [
-      turn.title,
-      turn.summary,
-      turn.prompt,
-      turn.response,
-      eventsText(turn),
-    ].filter((value): value is string => Boolean(value?.trim())).join('\n\n');
-    const score = scoreText(text, query);
-    if (score <= 0) {
-      return [];
-    }
-
-    const memoryId = turnMemoryId(turn);
-    return [{
-      sessionKey: session.sessionKey,
-      sessionLabel: session.sessionLabel,
-      projectKey: session.projectKey,
-      latestUpdatedAt: turn.updatedAt,
-      source: 'conversation' as const,
-      memoryId,
-      title: turn.title ?? turn.summary ?? undefined,
-      content: text,
-      createdAt: turn.createdAt,
-      score,
-      links: [{
-        kind: 'turn' as const,
-        label: 'Open turn',
-        memoryId,
-        sessionKey: session.sessionKey,
-      }],
-    }];
-  });
-}
-
-function extractionCandidates(
+function hitCandidates(
   hits: RecallHit[],
-  turns: BoardTurn[],
   scope: { projectKeys?: string[]; sessionKeys?: string[] },
 ): SearchCandidate[] {
-  const turnsById = new Map(turns.map((turn) => [turnMemoryId(turn), turn]));
   return hits.flatMap((hit, index) => {
-    if (!hit.memoryId.startsWith('extraction:') && !hit.memoryId.startsWith('observation:')) {
+    if (!hit.memoryId.startsWith('extraction:')) {
       return [];
     }
-    const refTurn = (hit.references ?? [])
-      .map((ref) => turnsById.get(ref))
-      .find((turn): turn is BoardTurn => Boolean(turn));
-    if (!refTurn) {
+    const resolved = searchSession(hit);
+    if (!resolved) {
       return [];
     }
-    const session = searchSession(refTurn);
-    if (!matchesScope(session.projectKey, session.sessionKey, scope)) {
+    if (!matchesScope(resolved.projectKey, resolved.sessionKey, scope)) {
       return [];
     }
     return [{
-      sessionKey: session.sessionKey,
-      sessionLabel: session.sessionLabel,
-      projectKey: session.projectKey,
-      latestUpdatedAt: refTurn.updatedAt,
+      sessionKey: resolved.sessionKey,
+      sessionLabel: resolved.sessionLabel,
+      projectKey: resolved.projectKey,
+      projectCwd: normalizeText(hit.cwd),
+      latestUpdatedAt: hit.updatedAt ?? hit.createdAt ?? '',
       source: 'extraction' as const,
       memoryId: hit.memoryId,
-      title: 'Extraction match',
-      content: hit.text,
-      createdAt: refTurn.createdAt,
+      title: hit.title ?? hit.summary ?? 'Extraction match',
+      content: hit.content,
+      references: hit.references ?? [],
+      createdAt: hit.createdAt,
       score: 90 - index,
-      links: [{
-        kind: 'memory' as const,
-        label: 'Open memory',
-        memoryId: hit.memoryId,
-        sessionKey: session.sessionKey,
-      }],
     }];
   });
 }
@@ -167,8 +104,9 @@ function groupCandidates(
   candidates: SearchCandidate[],
   limits: { sessionTopN: number; topN: number },
 ): SearchSessionResult[] {
+  const selected = selectCandidates(candidates, limits);
   const grouped = new Map<string, SearchCandidate[]>();
-  for (const candidate of candidates) {
+  for (const candidate of selected) {
     const current = grouped.get(candidate.sessionKey) ?? [];
     current.push(candidate);
     grouped.set(candidate.sessionKey, current);
@@ -176,12 +114,13 @@ function groupCandidates(
 
   return [...grouped.entries()]
     .map(([sessionKey, items]) => {
-      const sorted = items.slice().sort(compareCandidates);
+      const sorted = dedupeCoveredCandidates(items).sort(compareCandidates);
       const first = sorted[0]!;
       return {
         sessionKey,
         sessionLabel: first.sessionLabel,
         projectKey: first.projectKey,
+        projectCwd: first.projectCwd,
         latestUpdatedAt: sorted.reduce((latest, item) => (
           item.latestUpdatedAt > latest ? item.latestUpdatedAt : latest
         ), first.latestUpdatedAt),
@@ -193,8 +132,74 @@ function groupCandidates(
       right.score - left.score
       || right.latestUpdatedAt.localeCompare(left.latestUpdatedAt)
     ))
-    .slice(0, limits.topN)
     .map(({ score: _score, ...result }) => result);
+}
+
+function selectCandidates(
+  candidates: SearchCandidate[],
+  limits: { sessionTopN: number; topN: number },
+): SearchCandidate[] {
+  const grouped = new Map<string, SearchCandidate[]>();
+  for (const candidate of candidates) {
+    const current = grouped.get(candidate.sessionKey) ?? [];
+    current.push(candidate);
+    grouped.set(candidate.sessionKey, current);
+  }
+
+  const sorted = [...grouped.values()]
+    .flatMap((items) => dedupeCoveredCandidates(items))
+    .sort(compareCandidates);
+  const sessionCounts = new Map<string, number>();
+  const selected: SearchCandidate[] = [];
+  for (const candidate of sorted) {
+    const sessionCount = sessionCounts.get(candidate.sessionKey) ?? 0;
+    if (sessionCount >= limits.sessionTopN) {
+      continue;
+    }
+    selected.push(candidate);
+    sessionCounts.set(candidate.sessionKey, sessionCount + 1);
+    if (selected.length >= limits.topN) {
+      break;
+    }
+  }
+  return selected;
+}
+
+function dedupeCoveredCandidates(candidates: SearchCandidate[]): SearchCandidate[] {
+  const sorted = candidates.slice().sort(compareCoverageCandidates);
+  const kept: SearchCandidate[] = [];
+  for (const candidate of sorted) {
+    if (coveredByKept(candidate, kept)) {
+      continue;
+    }
+    kept.push(candidate);
+  }
+  return kept;
+}
+
+function coveredByKept(candidate: SearchCandidate, kept: SearchCandidate[]): boolean {
+  const title = normalizeText(candidate.title)?.toLowerCase();
+  if (!title || candidate.references.length === 0) {
+    return false;
+  }
+  const refs = new Set(candidate.references);
+  return kept.some((item) => {
+    if (item.source !== candidate.source || item.sessionKey !== candidate.sessionKey) {
+      return false;
+    }
+    if (normalizeText(item.title)?.toLowerCase() !== title) {
+      return false;
+    }
+    if (item.references.length < refs.size) {
+      return false;
+    }
+    const itemRefs = new Set(item.references);
+    return [...refs].every((ref) => itemRefs.has(ref));
+  });
+}
+
+function compareCoverageCandidates(left: SearchCandidate, right: SearchCandidate): number {
+  return right.references.length - left.references.length || compareCandidates(left, right);
 }
 
 function candidateToItem(candidate: SearchCandidate): SearchResultItem {
@@ -203,23 +208,14 @@ function candidateToItem(candidate: SearchCandidate): SearchResultItem {
     source: candidate.source,
     title: candidate.title,
     content: candidate.content,
+    references: candidate.references,
     createdAt: candidate.createdAt,
     memoryId: candidate.memoryId,
-    links: candidate.links,
   };
 }
 
 function compareCandidates(left: SearchCandidate, right: SearchCandidate): number {
   return right.score - left.score || (right.createdAt ?? '').localeCompare(left.createdAt ?? '');
-}
-
-function scoreText(text: string, query: string): number {
-  const haystack = text.toLowerCase();
-  if (haystack.includes(query)) {
-    return 100 + query.length;
-  }
-  const terms = query.split(/\s+/).filter(Boolean);
-  return terms.reduce((score, term) => score + (haystack.includes(term) ? 1 : 0), 0);
 }
 
 function matchesScope(
@@ -238,39 +234,19 @@ function matchesScope(
   return true;
 }
 
-function projectKeyFromSessionKey(sessionKey: string): string {
-  const [projectKey] = sessionKey.split('/').filter(Boolean);
-  return projectKey || 'Default Project';
-}
-
-function searchSession(turn: Pick<BoardTurn, 'sessionId' | 'agent' | 'observer' | 'project'>): {
+function searchSession(hit: RecallHit): {
   sessionKey: string;
   sessionLabel: string;
   projectKey: string;
-} {
-  const sessionId = normalizeText(turn.sessionId);
-  if (sessionId) {
-    return {
-      sessionKey: sessionId,
-      sessionLabel: displayTitle(sessionId),
-      projectKey: projectKeyFromSessionKey(sessionId),
-    };
+} | null {
+  const projectKey = normalizeText(hit.project);
+  const sessionId = normalizeText(hit.sessionId);
+  if (!sessionId || !projectKey) {
+    return null;
   }
-
-  const projectKey = normalizeText(turn.project) ?? 'default';
-  const agent = normalizeText(turn.agent);
-  if (agent) {
-    return {
-      sessionKey: `${AGENT_DEFAULT_SESSION_PREFIX}${agent}`,
-      sessionLabel: 'Default Session',
-      projectKey,
-    };
-  }
-
-  const observer = normalizeText(turn.observer) ?? 'observer';
   return {
-    sessionKey: `${OBSERVER_DEFAULT_SESSION_PREFIX}${observer}`,
-    sessionLabel: `Observer Default (${observer})`,
+    sessionKey: sessionId,
+    sessionLabel: normalizeText(hit.displaySession) ?? displayTitle(sessionId),
     projectKey,
   };
 }
@@ -289,22 +265,8 @@ function normalizeText(value: string | undefined | null): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
-function eventsText(turn: BoardTurn): string | undefined {
-  const text = turn.events
-    ?.map((event) => 'text' in event ? event.text : 'output' in event ? event.output : 'input' in event ? event.input : undefined)
-    .filter((value): value is string => Boolean(value?.trim()))
-    .join('\n');
-  return text || undefined;
-}
-
-function turnMemoryId(turn: BoardTurn): string {
-  return turn.memoryId ?? turn.turnId;
-}
-
 export const __testing = {
-  conversationCandidates,
-  extractionCandidates,
+  hitCandidates,
   groupCandidates,
-  scoreText,
   searchBoardMemory,
 };

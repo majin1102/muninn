@@ -2978,6 +2978,47 @@ test('muninn.memoryFinalize triggers drain and returns pending watermark without
 test('recallMemories searches curated and raw routes then returns curated-first hits', async () => {
   const calls = [];
   const client = {
+    turnTable: {
+      getTurn: async (turnId) => {
+        if (turnId !== 'turn:session-2') {
+          return null;
+        }
+        return {
+          turnId,
+          sessionId: 'session-2',
+          project: 'memory-project',
+          cwd: '/workspace/memory-project',
+          agent: 'codex',
+          observer: 'default-extractor',
+          title: 'Session 2 title',
+          summary: 'Session 2 summary',
+          events: [],
+          createdAt: '2024-01-02T00:00:00Z',
+          updatedAt: '2024-01-02T00:00:00Z',
+        };
+      },
+    },
+    sessionTable: {
+      threadSnapshots: async (sessionId) => (
+        sessionId === 'session-2'
+          ? [{
+            snapshotId: 'session:snapshot-2',
+            sessionId,
+            project: 'memory-project',
+            cwd: '/workspace/memory-project',
+            agent: 'codex',
+            snapshotSequence: 1,
+            createdAt: '2024-01-03T00:00:00Z',
+            updatedAt: '2024-01-03T00:00:00Z',
+            extractor: 'default-extractor',
+            title: 'Readable session title',
+            summary: 'Readable summary',
+            content: 'Readable content',
+            references: ['turn:session-2'],
+          }]
+          : []
+      ),
+    },
     globalObservationTable: {
       search: async (params) => {
         calls.push(['observation', params]);
@@ -3005,7 +3046,7 @@ test('recallMemories searches curated and raw routes then returns curated-first 
           anchors: [],
           vector: [],
           category: 'Fact',
-          turnRefs: ['session:2'],
+          turnRefs: ['turn:session-2'],
           observationPaths: [],
           observedRootAnchors: [],
           createdAt: '2024-01-01T00:00:00Z',
@@ -3020,13 +3061,27 @@ test('recallMemories searches curated and raw routes then returns curated-first 
   assert.deepEqual(hits, [
     {
       memoryId: 'global_observation:curated-1',
-      text: 'OBSERVATION: Caroline plans to research adoption agencies.',
+      title: 'Caroline plans to research adoption agencies.',
+      summary: 'Caroline plans to research adoption agencies.',
+      content: 'OBSERVATION: Caroline plans to research adoption agencies.',
       references: ['extraction:raw-1'],
+      createdAt: '2024-01-01T00:00:00Z',
+      updatedAt: '2024-01-01T00:00:00Z',
     },
     {
       memoryId: 'extraction:raw-2',
-      text: extractionContent('Counseling work', 'Caroline is interested in counseling work.'),
-      references: ['session:2'],
+      title: 'Counseling work',
+      summary: 'Counseling work\n\nCaroline is interested in counseling work.',
+      content: extractionContent('Counseling work', 'Caroline is interested in counseling work.'),
+      references: ['turn:session-2'],
+      project: 'memory-project',
+      sessionId: 'session-2',
+      agent: 'codex',
+      cwd: '/workspace/memory-project',
+      sessionKey: 'cwd:/workspace/memory-project|session:session-2|agent:codex|observer:default-extractor',
+      displaySession: 'Readable session title',
+      createdAt: '2024-01-01T00:00:00Z',
+      updatedAt: '2024-01-01T00:00:00Z',
     },
   ]);
   assert.deepEqual(calls.map(([table]) => table), ['observation', 'extraction']);
@@ -3042,6 +3097,81 @@ test('recallMemories searches curated and raw routes then returns curated-first 
     limit: 3,
     mode: 'hybrid',
   });
+});
+
+test('recallMemories enriches extraction hits from raw turn session_id', async () => {
+  const client = {
+    turnTable: {
+      getTurn: async (turnId) => {
+        assert.equal(turnId, 'turn:raw-session');
+        return {
+          turnId,
+          session_id: ' session-from-native ',
+          project: 'memory-project',
+          cwd: '/workspace/memory-project',
+          agent: 'codex',
+          observer: 'default-extractor',
+          title: 'Raw session title',
+          summary: 'Raw session summary',
+          events: [],
+          createdAt: '2024-01-02T00:00:00Z',
+          updatedAt: '2024-01-02T00:00:00Z',
+        };
+      },
+    },
+    sessionTable: {
+      threadSnapshots: async (sessionId) => {
+        assert.equal(sessionId, 'session-from-native');
+        return [{
+          snapshotId: 'session:snapshot-native',
+          sessionId,
+          project: 'memory-project',
+          cwd: '/workspace/memory-project',
+          agent: 'codex',
+          snapshotSequence: 1,
+          createdAt: '2024-01-03T00:00:00Z',
+          updatedAt: '2024-01-03T00:00:00Z',
+          extractor: 'default-extractor',
+          title: 'Native session title',
+          summary: 'Native summary',
+          content: 'Native content',
+          references: ['turn:raw-session'],
+        }];
+      },
+    },
+    globalObservationTable: {
+      search: async () => [],
+    },
+    extractionTable: {
+      search: async () => [{
+        id: 'raw-native',
+        title: 'Native turn ownership',
+        summary: 'Native row uses snake case session id.',
+        content: extractionContent('Native turn ownership', 'Native row uses snake case session id.'),
+        anchors: [],
+        vector: [],
+        category: 'Fact',
+        turnRefs: ['turn:raw-session'],
+        observationPaths: [],
+        observedRootAnchors: [],
+        createdAt: '2024-01-01T00:00:00Z',
+        updatedAt: '2024-01-01T00:00:00Z',
+      }],
+    },
+  };
+
+  const hits = await recallMemories(client, 'native session', 1, {
+    embed: async () => [1, 0],
+    includeGlobalObservations: false,
+  });
+
+  assert.equal(hits[0]?.memoryId, 'extraction:raw-native');
+  assert.equal(hits[0]?.sessionId, 'session-from-native');
+  assert.equal(hits[0]?.project, 'memory-project');
+  assert.equal(hits[0]?.cwd, '/workspace/memory-project');
+  assert.equal(hits[0]?.agent, 'codex');
+  assert.equal(hits[0]?.sessionKey, 'cwd:/workspace/memory-project|session:session-from-native|agent:codex|observer:default-extractor');
+  assert.equal(hits[0]?.displaySession, 'Native session title');
 });
 
 test('recallMemories filters raw hits source by selected curated hits', async () => {
@@ -3200,21 +3330,21 @@ test('recallMemories includes referenced extraction text for observation hits', 
   const hits = await recallMemories(client, 'Caroline summer plans', 1, { embed: async () => [1, 0] });
 
   assert.equal(hits[0].memoryId, 'global_observation:curated-1');
-  assert.match(hits[0].text, /OBSERVATION: Caroline is working on summer plans/);
-  assert.match(hits[0].text, /- \[priority\] adoption research/);
-  assert.match(hits[0].text, /- extraction: ## Title/);
-  assert.match(hits[0].text, /^  Adoption agency research$/m);
-  assert.match(hits[0].text, /^  ## Content$/m);
-  assert.match(hits[0].text, /^  Melanie asked Caroline about her summer plans\.$/m);
-  assert.match(hits[0].text, /^  The discussion focused on next steps\.$/m);
-  assert.match(hits[0].text, /- Caroline compared multiple adoption options\./);
-  assert.doesNotMatch(hits[0].text, /\[raw-2, raw-3\]/);
-  assert.doesNotMatch(hits[0].text, /\[raw-1\]/);
-  assert.doesNotMatch(hits[0].text, /^CONTEXT: Melanie asked Caroline about her summer plans\.$/m);
-  assert.doesNotMatch(hits[0].text, /^EXTRACTION: Caroline researched adoption agencies\.$/m);
-  assert.match(hits[0].text, /^EXTRACTION: ## Title$/m);
-  assert.match(hits[0].text, /^Inclusive adoption agency$/m);
-  assert.match(hits[0].text, /Source extractions:/);
+  assert.match(hits[0].content, /OBSERVATION: Caroline is working on summer plans/);
+  assert.match(hits[0].content, /- \[priority\] adoption research/);
+  assert.match(hits[0].content, /- extraction: ## Title/);
+  assert.match(hits[0].content, /^  Adoption agency research$/m);
+  assert.match(hits[0].content, /^  ## Content$/m);
+  assert.match(hits[0].content, /^  Melanie asked Caroline about her summer plans\.$/m);
+  assert.match(hits[0].content, /^  The discussion focused on next steps\.$/m);
+  assert.match(hits[0].content, /- Caroline compared multiple adoption options\./);
+  assert.doesNotMatch(hits[0].content, /\[raw-2, raw-3\]/);
+  assert.doesNotMatch(hits[0].content, /\[raw-1\]/);
+  assert.doesNotMatch(hits[0].content, /^CONTEXT: Melanie asked Caroline about her summer plans\.$/m);
+  assert.doesNotMatch(hits[0].content, /^EXTRACTION: Caroline researched adoption agencies\.$/m);
+  assert.match(hits[0].content, /^EXTRACTION: ## Title$/m);
+  assert.match(hits[0].content, /^Inclusive adoption agency$/m);
+  assert.match(hits[0].content, /Source extractions:/);
   assert.deepEqual(hits[0].references, ['raw-1', 'raw-2']);
   assert.deepEqual(calls, [
     ['extraction', {
@@ -3455,7 +3585,7 @@ test('recallMemories returns recalled memory when budget is positive', async () 
 
   assert.deepEqual(hits, [{
     memoryId: 'recalled:memory',
-    text: 'Caroline researched adoption agencies.',
+    content: 'Caroline researched adoption agencies.',
     references: ['extraction:obs-2', 'D12:17'],
   }]);
   assert.equal(calls[0].limit, 20);
@@ -3511,7 +3641,7 @@ test('recallMemories uses candidate refs for recalled memory', async () => {
 
   assert.deepEqual(hits, [{
     memoryId: 'recalled:memory',
-    text: 'Caroline researched adoption agencies.',
+    content: 'Caroline researched adoption agencies.',
     references: ['extraction:curated-source', 'D2:8'],
   }]);
 });

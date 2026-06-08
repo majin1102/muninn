@@ -31,8 +31,8 @@ export async function getDemoSessionTurns(
   limit: number,
 ): Promise<{
   turns: DemoSessionTimelineItem[];
-  segments: Array<{ memoryId: string; title: string; createdAt: string }>;
-  observations: Array<{ memoryId: string; title: string; createdAt: string; markdown: string; refs: string[] }>;
+  segments: Array<{ memoryId: string; title: string; createdAt: string; updatedAt: string }>;
+  observations: Array<{ memoryId: string; title: string; createdAt: string; updatedAt: string; markdown: string; refs: string[] }>;
   sessionSummary?: string;
   nextOffset: number | null;
 }> {
@@ -42,6 +42,7 @@ export async function getDemoSessionTurns(
     memoryId: turn.memoryId,
     title: turn.title ?? turn.summary,
     createdAt: turn.createdAt,
+    updatedAt: turn.updatedAt,
     markdown: [
       '### Summary',
       turn.summary,
@@ -58,6 +59,7 @@ export async function getDemoSessionTurns(
       memoryId: turn.memoryId,
       title: turn.title ?? turn.summary,
       createdAt: turn.createdAt,
+      updatedAt: turn.updatedAt,
     })),
     observations,
     sessionSummary: turns[0]?.summary,
@@ -149,20 +151,30 @@ export async function getDemoSearchResults(params: {
   const query = params.query.trim().toLowerCase();
   const projectKeys = new Set(params.projectKeys ?? []);
   const sessionKeys = new Set(params.sessionKeys ?? []);
-  return demoSearchResults
+  const results: SearchSessionResult[] = [];
+  let total = 0;
+  for (const result of demoSearchResults
     .filter((result) => projectKeys.size === 0 || projectKeys.has(result.projectKey))
-    .filter((result) => sessionKeys.size === 0 || sessionKeys.has(result.sessionKey))
-    .map((result) => ({
+    .filter((result) => sessionKeys.size === 0 || sessionKeys.has(result.sessionKey))) {
+    if (total >= params.topN) {
+      break;
+    }
+    const items = result.items.filter((item) => (
+      !query
+      || result.sessionLabel.toLowerCase().includes(query)
+      || item.title?.toLowerCase().includes(query)
+      || item.content.toLowerCase().includes(query)
+    )).slice(0, Math.min(params.sessionTopN, params.topN - total));
+    if (items.length === 0) {
+      continue;
+    }
+    results.push({
       ...result,
-      items: result.items.filter((item) => (
-        !query
-        || result.sessionLabel.toLowerCase().includes(query)
-        || item.title?.toLowerCase().includes(query)
-        || item.content.toLowerCase().includes(query)
-      )).slice(0, params.sessionTopN),
-    }))
-    .filter((result) => result.items.length > 0)
-    .slice(0, params.topN);
+      items,
+    });
+    total += items.length;
+  }
+  return results;
 }
 
 export function getDemoRecallProviders(): RecallProvidersResponse {

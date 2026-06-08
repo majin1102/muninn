@@ -181,8 +181,8 @@ export async function collectCandidateMemories(params: {
       seen.add(hit.memoryId);
       candidates.push({
         memoryId: hit.memoryId,
-        title: hit.text,
-        summary: hit.text,
+        title: hit.title ?? hit.summary ?? hit.content,
+        summary: hit.summary ?? hit.content,
       });
     }
   }

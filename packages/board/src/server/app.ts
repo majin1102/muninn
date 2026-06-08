@@ -494,6 +494,7 @@ function buildSessionSegments(
     memoryId: observation.memoryId,
     title: observation.title,
     createdAt: observation.createdAt,
+    updatedAt: observation.updatedAt,
   }));
   return fromSnapshot.length > 0 ? fromSnapshot : fallbackTurnSegments(turnPreviews);
 }
@@ -540,6 +541,7 @@ function buildExtractions(
       memoryId: `${firstTurn.turn.memoryId}~observation:${i}`,
       title,
       createdAt: firstTurn.turn.createdAt,
+      updatedAt: firstTurn.turn.updatedAt,
       markdown: normalizeObservationMarkdown(block),
       refs,
       index: firstTurn.index,
@@ -627,6 +629,7 @@ function fallbackTurnSegments(turnPreviews: TurnPreview[]): SessionSegmentPrevie
     memoryId: turn.memoryId,
     title: turn.prompt ?? turn.title ?? turn.summary,
     createdAt: turn.createdAt,
+    updatedAt: turn.updatedAt,
   }));
 }
 
@@ -880,7 +883,6 @@ boardApp.get('/api/v1/ui/recall/search', async (c) => {
     sessionTopN,
     topN,
   }, {
-    listTurns: turns.list,
     recall: memories.recall,
   });
 

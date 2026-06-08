@@ -46,11 +46,13 @@ test('builds snapshot extraction segments ordered by first turn createdAt', () =
       memoryId: 'turn:1~observation:1',
       title: '更早的问题段落',
       createdAt: '2026-06-02T10:00:00.000Z',
+      updatedAt: '2026-06-02T10:00:00.000Z',
     },
     {
       memoryId: 'turn:2~observation:0',
       title: '晚一点的问题段落',
       createdAt: '2026-06-02T10:10:00.000Z',
+      updatedAt: '2026-06-02T10:10:00.000Z',
     },
   ]);
 });
@@ -74,6 +76,7 @@ test('uses extraction title heading for segment titles', () => {
       memoryId: 'turn:1~observation:0',
       title: 'Discussion segment navigation',
       createdAt: '2026-06-02T10:00:00.000Z',
+      updatedAt: '2026-06-02T10:00:00.000Z',
     },
   ]);
 });
@@ -96,6 +99,7 @@ test('parses extraction headings when Markdown leaves blank lines after headings
       memoryId: 'turn:1~observation:0',
       title: 'Markdown heading spacing',
       createdAt: '2026-06-02T10:00:00.000Z',
+      updatedAt: '2026-06-02T10:00:00.000Z',
       markdown: [
         '### Summary',
         '',
@@ -137,6 +141,7 @@ test('builds snapshot observations with markdown and refs', () => {
       memoryId: 'turn:1~observation:0',
       title: 'Prompt budget rules',
       createdAt: '2026-06-02T10:00:00.000Z',
+      updatedAt: '2026-06-02T10:00:00.000Z',
       markdown: ['### Summary', 'Summary content.', '', '### Content', '- Keep Markdown bullets.'].join('\n'),
       refs: ['turn:1', 'turn:2'],
     },
@@ -144,6 +149,7 @@ test('builds snapshot observations with markdown and refs', () => {
       memoryId: 'turn:2~observation:1',
       title: 'Title language',
       createdAt: '2026-06-02T10:10:00.000Z',
+      updatedAt: '2026-06-02T10:10:00.000Z',
       markdown: ['### Summary', 'Write in the session language.'].join('\n'),
       refs: ['turn:2'],
     },
@@ -156,11 +162,13 @@ test('falls back to user prompt list when snapshot has no usable extraction refs
       memoryId: 'turn:2',
       title: 'fallback prompt b',
       createdAt: '2026-06-02T10:10:00.000Z',
+      updatedAt: '2026-06-02T10:10:00.000Z',
     },
     {
       memoryId: 'turn:1',
       title: 'fallback prompt a',
       createdAt: '2026-06-02T10:00:00.000Z',
+      updatedAt: '2026-06-02T10:00:00.000Z',
     },
   ]);
 });
@@ -188,11 +196,13 @@ test('session turn page segments use snapshot content when available', async () 
       memoryId: 'turn:1~observation:1',
       title: 'snapshot segment a',
       createdAt: '2026-06-02T10:00:00.000Z',
+      updatedAt: '2026-06-02T10:00:00.000Z',
     },
     {
       memoryId: 'turn:2~observation:0',
       title: 'snapshot segment b',
       createdAt: '2026-06-02T10:10:00.000Z',
+      updatedAt: '2026-06-02T10:10:00.000Z',
     },
   ]);
   assert.deepEqual(page.observations.map((observation) => observation.title), [

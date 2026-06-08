@@ -579,6 +579,8 @@ test('list and timeline cover the written flow, and recall returns indexed memor
   assert.equal(recallResponse.status, 200);
   const recalled = await json(recallResponse);
   assert.ok(recalled.memoryHits.length > 0);
+  assert.equal('text' in recalled.memoryHits[0], false);
+  assert.equal(typeof recalled.memoryHits[0].content, 'string');
 });
 
 test('benchmark locomo capture returns turn id and recall returns body-only hits', async (t) => {
@@ -920,7 +922,7 @@ test('ui session endpoints group by agent/session and return rendered turn docum
   ]);
 });
 
-test('board search groups conversation results by session and validates scope', async (t) => {
+test('board search groups recalled extraction results by session and validates scope', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(async () => {
     await shutdownCoreForTests();
@@ -945,16 +947,19 @@ test('board search groups conversation results by session and validates scope', 
     prompt: 'board search should also find this',
     response: 'This result belongs to a different project.',
   }));
+  const finalizeResponse = await app.request('/api/v1/memory/finalize', { method: 'POST' });
+  assert.equal(finalizeResponse.status, 200);
+  await waitForWatermarkResolved();
 
-  const response = await app.request('/api/v1/ui/recall/search?query=board%20search&projectKey=muninn&sessionTopN=1&topN=10');
+  const response = await app.request('/api/v1/ui/recall/search?query=board%20search&projectKey=project-a&sessionTopN=1&topN=10');
   assert.equal(response.status, 200);
   const body = await json(response);
   assert.equal('answer' in body, false);
   assert.equal(body.results.length, 1);
-  assert.equal(body.results[0].projectKey, 'muninn');
-  assert.equal(body.results[0].sessionKey, 'muninn/search-alpha');
+  assert.equal(body.results[0].projectKey, 'project-a');
+  assert.equal(body.results[0].sessionKey, '__agent_default__:codex_cli');
   assert.equal(body.results[0].items.length, 1);
-  assert.equal(body.results[0].items[0].source, 'conversation');
+  assert.equal(body.results[0].items[0].source, 'extraction');
 
   const agentResponse = await app.request('/api/v1/ui/recall/agent', {
     method: 'POST',
@@ -974,11 +979,11 @@ test('board search groups conversation results by session and validates scope', 
   assert.ok(streamEvents.some((event) => event.type === 'delta' && typeof event.text === 'string' && event.text.length > 0));
   assert.equal(streamEvents.at(-1).type, 'done');
 
-  const sessionScope = await app.request('/api/v1/ui/recall/search?query=board&sessionKey=muninn%2Fsearch-alpha');
+  const sessionScope = await app.request('/api/v1/ui/recall/search?query=board&sessionKey=__agent_default__%3Acodex_cli');
   assert.equal(sessionScope.status, 200);
   const sessionScopeBody = await json(sessionScope);
   assert.equal(sessionScopeBody.results.length, 1);
-  assert.equal(sessionScopeBody.results[0].sessionKey, 'muninn/search-alpha');
+  assert.equal(sessionScopeBody.results[0].sessionKey, '__agent_default__:codex_cli');
 });
 
 test('ui session endpoints include native rows with indexed ownership fields', async (t) => {
