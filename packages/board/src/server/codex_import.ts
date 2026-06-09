@@ -54,6 +54,21 @@ type ExistingImportTurn = {
 };
 
 type ArtifactMode = 'preview' | 'copy';
+type ArtifactWriteOptions = {
+  artifactStore: string;
+  artifactMode: ArtifactMode;
+  sessionId: string;
+  agent: string;
+  source: Artifact['source'];
+  key: string;
+  timestamp: string;
+  baseDirs: string[];
+};
+type PendingToolCall = {
+  name: string;
+  input: string | null;
+  timestamp: string;
+};
 
 export type CodexImportOptions = {
   sourceRoot?: string;
@@ -207,6 +222,7 @@ async function readCodexSession(sourcePath: string, options: { artifactStore: st
   let responseTimestamp: string | null = null;
   let pendingArtifacts: Artifact[] = [];
   let pendingEvents: TurnEvent[] = [];
+  let toolCallsById = new Map<string, PendingToolCall>();
 
   const flushPendingTurn = () => {
     if (promptParts.length === 0 || !responseText) {
@@ -226,6 +242,7 @@ async function readCodexSession(sourcePath: string, options: { artifactStore: st
     responseTimestamp = null;
     pendingArtifacts = [];
     pendingEvents = [];
+    toolCallsById = new Map();
   };
 
   for (const [lineIndex, line] of content.split(/\n/).entries()) {
@@ -246,18 +263,51 @@ async function readCodexSession(sourcePath: string, options: { artifactStore: st
       continue;
     }
 
+    const artifactBase = {
+      artifactStore: options.artifactStore,
+      artifactMode: options.artifactMode ?? 'copy',
+      sessionId,
+      agent: CODEX_IMPORT_AGENT,
+      baseDirs: [cwd, path.dirname(sourcePath)],
+    };
+
     const toolCall = toolCallFromEntry(entry, lineIndex);
     if (toolCall) {
       if (promptParts.length > 0) {
         pendingEvents.push(toolCall);
+        if (toolCall.id) {
+          toolCallsById.set(toolCall.id, {
+            name: toolCall.name,
+            input: toolCall.input ?? null,
+            timestamp: toolCall.timestamp ?? updatedAt,
+          });
+        }
       }
       continue;
     }
 
-    const output = toolOutputFromEntry(entry);
+    const output = await toolOutputFromEntry(entry, {
+      ...artifactBase,
+      timestamp: stringValue(entry.timestamp) ?? updatedAt,
+      fallbackArtifacts: async (id) => {
+        const call = toolCallsById.get(id);
+        if (!call) {
+          return [];
+        }
+        return artifactsFromToolCall(call.name, call.input, {
+          ...artifactBase,
+          source: 'tool',
+          keyPrefix: `${id}-input`,
+          timestamp: call.timestamp,
+        });
+      },
+    });
     if (output) {
       if (promptParts.length > 0) {
         pendingEvents.push(output);
+        if (output.type === 'toolOutput' && output.artifacts && output.artifacts.length > 0) {
+          pendingArtifacts.push(...output.artifacts);
+        }
       }
       updatedAt = output.timestamp ?? updatedAt;
       continue;
@@ -267,6 +317,9 @@ async function readCodexSession(sourcePath: string, options: { artifactStore: st
       artifactStore: options.artifactStore,
       artifactMode: options.artifactMode ?? 'copy',
       artifactIndexStart: sessionTurns.length + promptParts.length,
+      sessionId,
+      agent: CODEX_IMPORT_AGENT,
+      timestamp: stringValue(entry.timestamp) ?? updatedAt,
       baseDirs: [cwd, path.dirname(sourcePath)],
     });
     if (message) {
@@ -321,7 +374,15 @@ async function readCodexSession(sourcePath: string, options: { artifactStore: st
 
 async function messageFromEntry(
   entry: Record<string, unknown>,
-  options: { artifactStore: string; artifactMode: ArtifactMode; artifactIndexStart: number; baseDirs: string[] },
+  options: {
+    artifactStore: string;
+    artifactMode: ArtifactMode;
+    artifactIndexStart: number;
+    sessionId: string;
+    agent: string;
+    timestamp: string;
+    baseDirs: string[];
+  },
 ): Promise<CodexMessage | null> {
   if (entry.type !== 'response_item' || !isRecord(entry.payload)) {
     return null;
@@ -336,10 +397,25 @@ async function messageFromEntry(
   const content = await contentFromParts(entry.payload.content, {
     artifactStore: options.artifactStore,
     artifactMode: options.artifactMode,
+    sessionId: options.sessionId,
+    agent: options.agent,
     source: role === 'user' ? 'prompt' : 'response',
     keyPrefix: `${role}-${options.artifactIndexStart + 1}`,
+    timestamp: options.timestamp,
     baseDirs: options.baseDirs,
   });
+  if (content.text) {
+    content.artifacts.push(...await artifactsFromMarkdownText(content.text, {
+      artifactStore: options.artifactStore,
+      artifactMode: options.artifactMode,
+      sessionId: options.sessionId,
+      agent: options.agent,
+      source: role === 'user' ? 'prompt' : 'response',
+      keyPrefix: `${role}-${options.artifactIndexStart + 1}-link`,
+      timestamp: options.timestamp,
+      baseDirs: options.baseDirs,
+    }));
+  }
   const text = content.text;
   if (!text) {
     if (content.artifacts.length === 0) {
@@ -395,8 +471,11 @@ async function contentFromParts(
   options: {
     artifactStore: string;
     artifactMode: ArtifactMode;
+    sessionId: string;
+    agent: string;
     source: Artifact['source'];
     keyPrefix: string;
+    timestamp: string;
     baseDirs: string[];
   },
 ): Promise<{ text: string | null; artifacts: Artifact[] }> {
@@ -417,8 +496,11 @@ async function contentFromParts(
     const artifact = await artifactFromPart(part, {
       artifactStore: options.artifactStore,
       artifactMode: options.artifactMode,
+      sessionId: options.sessionId,
+      agent: options.agent,
       source: options.source,
       key: `${options.keyPrefix}-artifact-${index + 1}`,
+      timestamp: options.timestamp,
       baseDirs: options.baseDirs,
     });
     if (artifact) {
@@ -429,7 +511,7 @@ async function contentFromParts(
   return { text: text.length > 0 ? text : null, artifacts };
 }
 
-function toolCallFromEntry(entry: Record<string, unknown>, index: number): TurnEvent | null {
+function toolCallFromEntry(entry: Record<string, unknown>, index: number): Extract<TurnEvent, { type: 'toolCall' }> | null {
   if (entry.type !== 'response_item' || !isRecord(entry.payload) || entry.payload.type !== 'function_call') {
     return null;
   }
@@ -445,7 +527,18 @@ function toolCallFromEntry(entry: Record<string, unknown>, index: number): TurnE
   };
 }
 
-function toolOutputFromEntry(entry: Record<string, unknown>): TurnEvent | null {
+async function toolOutputFromEntry(
+  entry: Record<string, unknown>,
+  options: {
+    artifactStore: string;
+    artifactMode: ArtifactMode;
+    sessionId: string;
+    agent: string;
+    timestamp: string;
+    baseDirs: string[];
+    fallbackArtifacts: (id: string) => Promise<Artifact[]>;
+  },
+): Promise<TurnEvent | null> {
   if (entry.type !== 'response_item' || !isRecord(entry.payload) || entry.payload.type !== 'function_call_output') {
     return null;
   }
@@ -453,11 +546,31 @@ function toolOutputFromEntry(entry: Record<string, unknown>): TurnEvent | null {
   if (!id) {
     return null;
   }
-  const output = stringFromUnknown(entry.payload.output ?? entry.payload.content);
+  const rawOutput = entry.payload.output ?? entry.payload.content;
+  let output = stringFromUnknown(rawOutput);
+  let artifacts: Artifact[] = [];
+  if (Array.isArray(rawOutput)) {
+    const content = await contentFromParts(rawOutput, {
+      artifactStore: options.artifactStore,
+      artifactMode: options.artifactMode,
+      sessionId: options.sessionId,
+      agent: options.agent,
+      source: 'tool',
+      keyPrefix: `${id}-output`,
+      timestamp: options.timestamp,
+      baseDirs: options.baseDirs,
+    });
+    output = content.text;
+    artifacts = content.artifacts;
+  }
+  if (artifacts.length === 0) {
+    artifacts = await options.fallbackArtifacts(id);
+  }
   return {
     type: 'toolOutput',
     id,
     ...(output ? { output } : {}),
+    ...(artifacts.length > 0 ? { artifacts } : {}),
     ...(stringValue(entry.timestamp) ? { timestamp: stringValue(entry.timestamp)! } : {}),
   };
 }
@@ -467,8 +580,11 @@ async function artifactFromPart(
   options: {
     artifactStore: string;
     artifactMode: ArtifactMode;
+    sessionId: string;
+    agent: string;
     source: Artifact['source'];
     key: string;
+    timestamp: string;
     baseDirs: string[];
   },
 ): Promise<Artifact | null> {
@@ -495,13 +611,136 @@ function artifactUrl(value: unknown): string | null {
   return null;
 }
 
+async function artifactsFromToolCall(
+  name: string,
+  input: string | null,
+  options: Omit<ArtifactWriteOptions, 'key'> & { keyPrefix: string },
+): Promise<Artifact[]> {
+  if (!input) {
+    return [];
+  }
+  const parsed = safeParse(input);
+  if (!parsed) {
+    return [];
+  }
+
+  const candidates: string[] = [];
+  if (name === 'view_image') {
+    const imagePath = stringValue(parsed.path) ?? stringValue(parsed.file_path) ?? stringValue(parsed.filePath);
+    if (imagePath) {
+      candidates.push(imagePath);
+    }
+  }
+
+  if (name === 'apply_patch') {
+    const patch = stringValue(parsed.patch);
+    if (patch) {
+      candidates.push(...pathsFromApplyPatch(patch));
+    }
+  }
+
+  const artifacts: Artifact[] = [];
+  for (const [index, candidate] of candidates.entries()) {
+    const artifact = await fileArtifactFromPath(candidate, {
+      ...options,
+      key: `${options.keyPrefix}-artifact-${index + 1}`,
+    });
+    if (artifact) {
+      artifacts.push(artifact);
+    }
+  }
+  return artifacts;
+}
+
+async function artifactsFromMarkdownText(
+  text: string,
+  options: Omit<ArtifactWriteOptions, 'key'> & { keyPrefix: string },
+): Promise<Artifact[]> {
+  const candidates = pathsFromMarkdownLinks(text);
+  const artifacts: Artifact[] = [];
+  for (const [index, candidate] of candidates.entries()) {
+    const artifact = await fileArtifactFromPath(candidate, {
+      ...options,
+      key: `${options.keyPrefix}-artifact-${index + 1}`,
+    });
+    if (artifact) {
+      artifacts.push(artifact);
+    }
+  }
+  return artifacts;
+}
+
+function pathsFromMarkdownLinks(text: string): string[] {
+  const paths: string[] = [];
+  const markdownLinkPattern = /!?\[[^\]]*]\(([^)\s]+(?:\s[^)]*?)?)\)/g;
+  for (const match of text.matchAll(markdownLinkPattern)) {
+    const value = cleanMarkdownUrl(match[1]);
+    if (isImportArtifactCandidate(value)) {
+      paths.push(value);
+    }
+  }
+  const fileUrlPattern = /\bfile:\/\/[^\s)]+/g;
+  for (const match of text.matchAll(fileUrlPattern)) {
+    if (isImportArtifactCandidate(match[0])) {
+      paths.push(match[0]);
+    }
+  }
+  return [...new Set(paths)];
+}
+
+function cleanMarkdownUrl(value: string): string {
+  const trimmed = value.trim();
+  const quoted = trimmed.match(/^["'](.+)["']$/);
+  const withoutTitle = (quoted?.[1] ?? trimmed).split(/\s+["'][^"']*["']\s*$/)[0] ?? trimmed;
+  return decodeURI(withoutTitle.trim());
+}
+
+function pathsFromApplyPatch(patch: string): string[] {
+  const paths: string[] = [];
+  for (const line of patch.split(/\n/)) {
+    const match = line.match(/^\*\*\* (?:Add File|Update File|Move to):\s+(.+?)\s*$/);
+    if (match && isImportArtifactCandidate(match[1])) {
+      paths.push(match[1]);
+    }
+  }
+  return [...new Set(paths)];
+}
+
+function isImportArtifactCandidate(value: string): boolean {
+  if (!value || /^https?:\/\//i.test(value) || value.startsWith('artifact://')) {
+    return false;
+  }
+  const target = value.startsWith('file://') ? tryFilePathFromFileUrl(value) : value;
+  if (!target) {
+    return false;
+  }
+  const extension = path.extname(target).toLowerCase();
+  return [
+    '.png',
+    '.jpg',
+    '.jpeg',
+    '.gif',
+    '.webp',
+    '.svg',
+    '.md',
+    '.html',
+    '.htm',
+    '.txt',
+    '.log',
+    '.json',
+  ].includes(extension);
+}
+
 async function imageArtifactFromUrl(
   value: string,
   options: {
     artifactStore: string;
     artifactMode: ArtifactMode;
+    sessionId: string;
+    agent: string;
     source: Artifact['source'];
     key: string;
+    timestamp: string;
     baseDirs: string[];
   },
 ): Promise<Artifact | null> {
@@ -516,13 +755,13 @@ async function imageArtifactFromUrl(
   }
 
   if (value.startsWith('data:')) {
-    const saved = await saveDataUrlArtifact(value, options.artifactStore);
+    const saved = await saveDataUrlArtifact(value, options);
     return {
       key: options.key,
       kind: 'image',
       source: options.source,
       uri: saved.uri,
-      name: saved.name,
+      name: artifactNameFromValue(value, 'image'),
       mimeType: saved.mimeType,
       sizeBytes: saved.sizeBytes,
     };
@@ -548,13 +787,13 @@ async function imageArtifactFromUrl(
 
 async function imageArtifactFromLocalPath(
   filePath: string,
-  options: { artifactStore: string; source: Artifact['source']; key: string; baseDirs: string[] },
+  options: ArtifactWriteOptions,
 ): Promise<Artifact | null> {
   const resolved = await resolveLocalArtifactPath(filePath, options.baseDirs);
   if (!resolved) {
     return null;
   }
-  const saved = await saveLocalFileArtifact(resolved, options.artifactStore);
+  const saved = await saveLocalFileArtifact(resolved, options);
   return {
     key: options.key,
     kind: 'image',
@@ -571,8 +810,11 @@ async function fileArtifactFromPath(
   options: {
     artifactStore: string;
     artifactMode: ArtifactMode;
+    sessionId: string;
+    agent: string;
     source: Artifact['source'];
     key: string;
+    timestamp: string;
     baseDirs: string[];
   },
 ): Promise<Artifact | null> {
@@ -602,7 +844,7 @@ async function fileArtifactFromPath(
   if (!resolved) {
     return null;
   }
-  const saved = await saveLocalFileArtifact(resolved, options.artifactStore);
+  const saved = await saveLocalFileArtifact(resolved, options);
   const kind = saved.mimeType?.startsWith('image/') ? 'image' : 'file';
   const artifact: Artifact = {
     key: options.key,
@@ -619,7 +861,7 @@ async function fileArtifactFromPath(
   return artifact;
 }
 
-async function saveDataUrlArtifact(value: string, artifactStore: string): Promise<StoredArtifact> {
+async function saveDataUrlArtifact(value: string, options: ArtifactWriteOptions): Promise<StoredArtifact> {
   const match = value.match(/^data:([^;,]+)?(?:;base64)?,(.*)$/s);
   if (!match) {
     throw new Error('invalid data URL artifact');
@@ -628,13 +870,23 @@ async function saveDataUrlArtifact(value: string, artifactStore: string): Promis
   const payload = value.includes(';base64,')
     ? Buffer.from(match[2], 'base64')
     : Buffer.from(decodeURIComponent(match[2]), 'utf8');
-  return writeArtifactBytes(payload, artifactStore, extensionForMimeType(mimeType), mimeType);
+  return writeArtifactBytes(payload, {
+    ...options,
+    originalName: artifactNameFromValue(value, 'image'),
+    extension: extensionForMimeType(mimeType),
+    mimeType,
+  });
 }
 
-async function saveLocalFileArtifact(filePath: string, artifactStore: string): Promise<StoredArtifact> {
+async function saveLocalFileArtifact(filePath: string, options: ArtifactWriteOptions): Promise<StoredArtifact> {
   const content = await readFile(filePath);
   const mimeType = mimeTypeFromPath(filePath);
-  return writeArtifactBytes(content, artifactStore, path.extname(filePath), mimeType);
+  return writeArtifactBytes(content, {
+    ...options,
+    originalName: path.basename(filePath),
+    extension: path.extname(filePath),
+    mimeType,
+  });
 }
 
 async function resolveLocalArtifactPath(filePath: string, baseDirs: string[]): Promise<string | null> {
@@ -666,26 +918,45 @@ type StoredArtifact = {
 
 async function writeArtifactBytes(
   content: Buffer,
-  artifactStore: string,
-  extension: string,
-  mimeType?: string,
+  options: ArtifactWriteOptions & { originalName: string; extension: string; mimeType?: string },
 ): Promise<StoredArtifact> {
   const hash = crypto.createHash('sha256').update(content).digest('hex');
-  const safeExtension = extension && /^\.[a-z0-9]+$/i.test(extension) ? extension.toLowerCase() : '';
-  const name = `${hash}${safeExtension}`;
-  await mkdir(artifactStore, { recursive: true });
-  const target = path.join(artifactStore, name);
+  const safeExtension = options.extension && /^\.[a-z0-9]+$/i.test(options.extension) ? options.extension.toLowerCase() : '';
+  const originalBase = path.basename(options.originalName, path.extname(options.originalName));
+  const safeBase = safeFilenamePart(originalBase || 'artifact');
+  const timestamp = timestampForFilename(options.timestamp);
+  const sessionDir = `sessions/${safeFilenamePart(`${options.agent}-${options.sessionId}`)}`;
+  let name = `${safeBase}-${timestamp}${safeExtension}`;
+  let relativePath = `${sessionDir}/${name}`;
+  let target = path.join(options.artifactStore, relativePath);
+  try {
+    await stat(target);
+    name = `${safeBase}-${timestamp}-${hash.slice(0, 6)}${safeExtension}`;
+    relativePath = `${sessionDir}/${name}`;
+    target = path.join(options.artifactStore, relativePath);
+  } catch {
+    // No conflict.
+  }
+  await mkdir(path.dirname(target), { recursive: true });
   await writeFile(target, content);
   return {
-    uri: `artifact://${name}`,
+    uri: `artifact://${relativePath}`,
     name,
-    mimeType,
+    mimeType: options.mimeType,
     sizeBytes: content.byteLength,
   };
 }
 
 function filePathFromFileUrl(value: string): string {
   return decodeURIComponent(new URL(value).pathname);
+}
+
+function tryFilePathFromFileUrl(value: string): string | null {
+  try {
+    return filePathFromFileUrl(value);
+  } catch {
+    return null;
+  }
 }
 
 function artifactNameFromValue(value: string, fallback: string): string {
@@ -699,8 +970,27 @@ function artifactNameFromValue(value: string, fallback: string): string {
   if (value.startsWith('data:')) {
     return fallback;
   }
-  const localPath = value.startsWith('file://') ? filePathFromFileUrl(value) : value;
+  const localPath = value.startsWith('file://') ? tryFilePathFromFileUrl(value) : value;
+  if (!localPath) {
+    return fallback;
+  }
   return path.basename(localPath) || fallback;
+}
+
+function safeFilenamePart(value: string): string {
+  const normalized = value
+    .normalize('NFKD')
+    .replace(/[^a-zA-Z0-9._-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .replace(/-{2,}/g, '-')
+    .toLowerCase();
+  return normalized || 'artifact';
+}
+
+function timestampForFilename(value: string): string {
+  const date = new Date(value);
+  const source = Number.isNaN(date.getTime()) ? new Date() : date;
+  return source.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
 }
 
 function mimeTypeFromPath(value: string): string | undefined {
@@ -718,6 +1008,10 @@ function mimeTypeFromPath(value: string): string | undefined {
     case '.svg':
       return 'image/svg+xml';
     case '.md':
+      return 'text/plain';
+    case '.html':
+    case '.htm':
+      return 'text/html';
     case '.txt':
     case '.log':
       return 'text/plain';
@@ -740,6 +1034,8 @@ function extensionForMimeType(mimeType: string): string {
       return '.webp';
     case 'image/svg+xml':
       return '.svg';
+    case 'text/html':
+      return '.html';
     case 'text/plain':
       return '.txt';
     case 'application/json':

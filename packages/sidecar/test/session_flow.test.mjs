@@ -425,23 +425,33 @@ test('turn/capture accepts typed image and file artifacts', async (t) => {
   assert.match(detail.document.markdown, /shot\.png/);
 });
 
-test('ui artifact endpoint serves only artifact store files by hash name', async (t) => {
+test('artifact endpoint serves safe artifact store relative paths only', async (t) => {
   const { dir, homeDir } = await makeDatasetUri();
   t.after(async () => rm(dir, { recursive: true, force: true }));
 
   process.env.MUNINN_HOME = homeDir;
   const artifactName = 'a'.repeat(64) + '.png';
+  const sessionArtifactName = 'sessions/codex-session/render-20260608T140000Z.png';
   const artifactDir = path.join(homeDir, 'default', 'artifacts');
-  await mkdir(artifactDir, { recursive: true });
+  await mkdir(path.join(artifactDir, 'sessions', 'codex-session'), { recursive: true });
   await writeFile(path.join(artifactDir, artifactName), Buffer.from('89504e470d0a1a0a', 'hex'));
+  await writeFile(path.join(artifactDir, sessionArtifactName), Buffer.from('89504e470d0a1a0b', 'hex'));
 
-  const good = await app.request(`/api/v1/ui/artifacts/${artifactName}`);
+  const good = await app.request(`/api/v1/artifacts/${artifactName}`);
   assert.equal(good.status, 200);
   assert.equal(good.headers.get('content-type'), 'image/png');
   assert.deepEqual(Buffer.from(await good.arrayBuffer()), Buffer.from('89504e470d0a1a0a', 'hex'));
 
-  const bad = await app.request('/api/v1/ui/artifacts/not-safe.png');
-  assert.equal(bad.status, 400);
+  const nested = await app.request(`/api/v1/artifacts/${encodeURIComponent(sessionArtifactName)}`);
+  assert.equal(nested.status, 200);
+  assert.equal(nested.headers.get('content-type'), 'image/png');
+  assert.deepEqual(Buffer.from(await nested.arrayBuffer()), Buffer.from('89504e470d0a1a0b', 'hex'));
+
+  const missing = await app.request('/api/v1/artifacts/not-safe.png');
+  assert.equal(missing.status, 404);
+
+  const traversal = await app.request(`/api/v1/artifacts/${encodeURIComponent('../muninn.json')}`);
+  assert.equal(traversal.status, 400);
 });
 
 test('turn/capture rejects legacy snake_case turn fields', async (t) => {
