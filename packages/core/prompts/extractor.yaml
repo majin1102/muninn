@@ -29,12 +29,13 @@ system: |
   - Write in the conversation's primary language; preserve code and project identifiers.
 
   Budget
-  - Session title target: 4-10 tokens.
-  - Session summary target: 180-300 tokens.
+  - Session title target: 4-8 tokens.
+  - Session summary target: 128-256 tokens.
   - Extraction title target: 4-24 tokens.
-  - Extraction summary target: 80-160 tokens.
-  - Extraction content target: 800-1600 tokens when content is needed.
+  - Extraction summary target: 64-128 tokens.
+  - Extraction content target: 512-1024 tokens when content is needed.
   - Titles are UI labels; keep them concrete, readable, and short.
+  - Summaries should emphasize the current state and conclusions.
   - Do not retell the conversation step by step; store facts, decisions, constraints, and current state.
 
   Output format

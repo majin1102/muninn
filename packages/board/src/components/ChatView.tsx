@@ -1,4 +1,4 @@
-import type { Artifact, MemoryDocument } from '@muninn/types';
+import type { MemoryDocument } from '@muninn/types';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Bot } from 'lucide-react';
@@ -17,6 +17,7 @@ import {
   type ChatTimelineEntry,
   type ChatToolCall,
 } from '../server/chat_timeline.js';
+import { ArtifactList } from './ArtifactList.js';
 import { Avatar } from './ui/avatar.js';
 import { Button } from './ui/button.js';
 import { ScrollArea } from './ui/scroll-area.js';
@@ -234,6 +235,7 @@ function renderTimelineEntry(params: {
         <div className="chat-message-content chat-message-content-tools">
           <ToolCallList
             toolCalls={group.toolCalls}
+            agent={group.agent ?? documentAgent}
             startedAt={group.startedAt}
             completedAt={group.completedAt}
             totalStartedAt={item.totalTime?.startedAt}
@@ -273,10 +275,10 @@ function renderTimelineEntry(params: {
           <>
             <div className="chat-bubble">
               <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.body}</ReactMarkdown>
-              {message.artifacts && message.artifacts.length > 0 ? (
-                <ArtifactList artifacts={message.artifacts} />
-              ) : null}
             </div>
+            {message.artifacts && message.artifacts.length > 0 ? (
+              <ArtifactList artifacts={message.artifacts} agent={message.agent ?? documentAgent} />
+            ) : null}
             {message.role === 'agent' ? (
               <ChatTimeMetaRow
                 items={[
@@ -411,55 +413,23 @@ function ChatTimeMetaRow({
   );
 }
 
-function ArtifactList({ artifacts }: { artifacts: Artifact[] }) {
-  const visible = artifacts.filter((artifact) => artifact.kind !== 'metadata');
-  if (visible.length === 0) {
-    return null;
-  }
-  return (
-    <div className="chat-artifact-list">
-      {visible.map((artifact) => (
-        artifact.kind === 'image' ? (
-          <a
-            key={artifact.key}
-            href={artifactHref(artifact)}
-            className="chat-artifact-image-link"
-            target="_blank"
-            rel="noreferrer"
-          >
-            <img src={artifactHref(artifact)} alt={artifact.name ?? artifact.key} className="chat-artifact-image" />
-          </a>
-        ) : (
-          <a
-            key={artifact.key}
-            href={artifactHref(artifact)}
-            className="chat-artifact-file"
-            target="_blank"
-            rel="noreferrer"
-          >
-            <span className="chat-artifact-file-name">{artifact.name ?? artifact.key}</span>
-            <span className="chat-artifact-file-meta">{artifactMeta(artifact)}</span>
-          </a>
-        )
-      ))}
-    </div>
-  );
-}
-
 function ToolCallList({
   toolCalls,
+  agent,
   startedAt,
   completedAt,
   totalStartedAt,
   totalCompletedAt,
 }: {
   toolCalls: ChatToolCall[];
+  agent?: string;
   startedAt?: string;
   completedAt?: string;
   totalStartedAt?: string;
   totalCompletedAt?: string;
 }) {
   const summary = toolCallSummary(toolCalls);
+  const artifacts = toolCalls.flatMap((toolCall) => toolCall.artifacts ?? []);
   return (
     <>
       <details className="chat-tool-call-group">
@@ -496,6 +466,9 @@ function ToolCallList({
           ))}
         </div>
       </details>
+      {artifacts.length > 0 ? (
+        <ArtifactList artifacts={artifacts} agent={agent} />
+      ) : null}
       <ChatTimeMetaRow
         items={[
           { label: 'tools', startedAt, completedAt },
@@ -554,34 +527,6 @@ function toolCallSummary(toolCalls: ChatToolCall[]): string {
   return [...counts.entries()]
     .map(([name, count]) => `${name} x${count}`)
     .join(', ');
-}
-
-function artifactHref(artifact: Artifact): string {
-  if (!artifact.uri) {
-    return '#';
-  }
-  if (artifact.uri.startsWith('artifact://')) {
-    return `/api/v1/ui/artifacts/${encodeURIComponent(artifact.uri.slice('artifact://'.length))}`;
-  }
-  return artifact.uri;
-}
-
-function artifactMeta(artifact: Artifact): string {
-  const parts = [
-    artifact.mimeType,
-    artifact.sizeBytes !== undefined ? formatBytes(artifact.sizeBytes) : undefined,
-  ].filter(Boolean);
-  return parts.join(' / ') || artifact.kind;
-}
-
-function formatBytes(value: number): string {
-  if (value < 1024) {
-    return `${value} B`;
-  }
-  if (value < 1024 * 1024) {
-    return `${Math.round(value / 1024)} KB`;
-  }
-  return `${(value / 1024 / 1024).toFixed(1)} MB`;
 }
 
 function compactText(value: string): string {

@@ -44,6 +44,24 @@ async function artifactFileCount(dir) {
   }
 }
 
+async function artifactFilesRecursive(dir) {
+  try {
+    const entries = await readdir(dir, { withFileTypes: true });
+    const files = [];
+    for (const entry of entries) {
+      const entryPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        files.push(...await artifactFilesRecursive(entryPath));
+      } else if (entry.isFile()) {
+        files.push(entryPath);
+      }
+    }
+    return files;
+  } catch {
+    return [];
+  }
+}
+
 async function writeCodexSessionFile(sessionDir, {
   fileName,
   rawSessionId,
@@ -681,7 +699,7 @@ test('preview does not write artifacts but run imports relative and missing atta
   }
 });
 
-test('run import records artifact copy failures per session', async () => {
+test('run import skips invalid data URL artifacts without failing the session', async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), 'muninn-codex-import-artifact-copy-failure-'));
   const previousHome = process.env.MUNINN_HOME;
   const previousObserverPollMs = process.env.MUNINN_OBSERVER_POLL_MS;
@@ -720,17 +738,17 @@ test('run import records artifact copy failures per session', async () => {
       artifactStore: path.join(tempDir, 'artifacts'),
     }, 'req-run');
 
-    assert.equal(result.importedTurns, 1);
-    assert.equal(result.failedSessions.length, 1);
-    assert.equal(result.failedSessions[0]?.sessionId, 'raw-bad-artifact-copy');
-    assert.match(result.failedSessions[0]?.errorMessage ?? '', /invalid data URL artifact/);
+    assert.equal(result.importedTurns, 2);
+    assert.equal(result.failedSessions.length, 0);
 
     const persisted = await turns.list({
       mode: { type: 'page', offset: 0, limit: 20 },
       agent: 'codex',
     });
     assert.ok(persisted.some((turn) => turn.prompt === 'good artifact copy prompt'));
-    assert.ok(!persisted.some((turn) => turn.prompt === 'bad artifact copy prompt'));
+    const badImport = persisted.find((turn) => turn.prompt === 'bad artifact copy prompt');
+    assert.ok(badImport);
+    assert.equal(badImport.artifacts.filter((artifact) => artifact.kind === 'image').length, 0);
   } finally {
     await shutdownCoreForTests();
     if (previousHome === undefined) {
@@ -811,6 +829,320 @@ test('run import only copies artifacts for selected sessions', async () => {
     } else {
       process.env.MUNINN_OBSERVER_POLL_MS = previousObserverPollMs;
     }
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('run import stores tool image artifacts under the codex session directory', async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), 'muninn-codex-import-tool-image-'));
+  const previousHome = process.env.MUNINN_HOME;
+  const previousObserverPollMs = process.env.MUNINN_OBSERVER_POLL_MS;
+  process.env.MUNINN_HOME = path.join(tempDir, 'muninn');
+  process.env.MUNINN_OBSERVER_POLL_MS = '60000';
+  try {
+    await writeTestConfig(process.env.MUNINN_HOME);
+
+    const sourceRoot = path.join(tempDir, 'codex');
+    const workspaceDir = path.join(tempDir, 'workspace', 'muninn');
+    const sessionDir = path.join(sourceRoot, 'sessions', '2026', '06', '08');
+    await mkdir(sessionDir, { recursive: true });
+    await mkdir(workspaceDir, { recursive: true });
+    const imagePath = path.join(workspaceDir, 'render output.png');
+    const imageBytes = Buffer.from('89504e470d0a1a0a', 'hex');
+    await writeFile(imagePath, imageBytes);
+
+    const entries = [
+      {
+        timestamp: '2026-06-08T14:00:00.000Z',
+        type: 'session_meta',
+        payload: {
+          id: 'raw/tool session',
+          cwd: workspaceDir,
+          timestamp: '2026-06-08T14:00:00.000Z',
+        },
+      },
+      {
+        timestamp: '2026-06-08T14:01:00.000Z',
+        type: 'response_item',
+        payload: {
+          type: 'message',
+          role: 'user',
+          content: [{ type: 'input_text', text: 'render a screenshot' }],
+        },
+      },
+      {
+        timestamp: '2026-06-08T14:01:10.000Z',
+        type: 'response_item',
+        payload: {
+          type: 'function_call',
+          call_id: 'call-view',
+          name: 'view_image',
+          arguments: JSON.stringify({ path: imagePath }),
+        },
+      },
+      {
+        timestamp: '2026-06-08T14:01:20.000Z',
+        type: 'response_item',
+        payload: {
+          type: 'function_call_output',
+          call_id: 'call-view',
+          output: [
+            { type: 'input_text', text: 'Rendered image:' },
+            { type: 'input_image', image_url: `file://${imagePath}` },
+          ],
+        },
+      },
+      {
+        timestamp: '2026-06-08T14:02:00.000Z',
+        type: 'response_item',
+        payload: {
+          type: 'message',
+          role: 'assistant',
+          content: [{ type: 'output_text', text: 'rendered.' }],
+        },
+      },
+    ];
+    await writeFile(
+      path.join(sessionDir, 'rollout-tool-image.jsonl'),
+      `${entries.map((entry) => JSON.stringify(entry)).join('\n')}\n`,
+    );
+
+    const artifactStore = path.join(process.env.MUNINN_HOME, 'default', 'artifacts');
+    const result = await runCodexImport({
+      sourceRoot,
+      projectKeys: ['muninn'],
+      projectLimit: 5,
+    }, 'req-run');
+
+    assert.equal(result.failedSessions.length, 0);
+    assert.equal(result.importedTurns, 1);
+    const files = await artifactFilesRecursive(artifactStore);
+    assert.equal(files.length, 1);
+    assert.match(files[0], /artifacts\/sessions\/codex-raw-tool-session\/render-output-20260608T140120Z\.png$/);
+
+    const persisted = await turns.list({
+      mode: { type: 'page', offset: 0, limit: 20 },
+      agent: 'codex',
+    });
+    const imported = persisted.find((turn) => turn.prompt === 'render a screenshot');
+    assert.ok(imported);
+    const image = imported.artifacts.find((artifact) => artifact.source === 'tool' && artifact.kind === 'image');
+    assert.ok(image);
+    assert.equal(image.uri, 'artifact://sessions/codex-raw-tool-session/render-output-20260608T140120Z.png');
+    assert.equal(image.name, 'render output.png');
+    assert.deepEqual(await readFile(files[0]), imageBytes);
+    const toolOutput = imported.events.find((event) => event.type === 'toolOutput');
+    assert.equal(toolOutput.artifacts.length, 1);
+    assert.equal(toolOutput.artifacts[0].uri, image.uri);
+  } finally {
+    await shutdownCoreForTests();
+    if (previousHome === undefined) {
+      delete process.env.MUNINN_HOME;
+    } else {
+      process.env.MUNINN_HOME = previousHome;
+    }
+    if (previousObserverPollMs === undefined) {
+      delete process.env.MUNINN_OBSERVER_POLL_MS;
+    } else {
+      process.env.MUNINN_OBSERVER_POLL_MS = previousObserverPollMs;
+    }
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('run import captures markdown links and apply_patch files with safe conflicting names', async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), 'muninn-codex-import-doc-artifacts-'));
+  const previousHome = process.env.MUNINN_HOME;
+  const previousObserverPollMs = process.env.MUNINN_OBSERVER_POLL_MS;
+  process.env.MUNINN_HOME = path.join(tempDir, 'muninn');
+  process.env.MUNINN_OBSERVER_POLL_MS = '60000';
+  try {
+    await writeTestConfig(process.env.MUNINN_HOME);
+
+    const sourceRoot = path.join(tempDir, 'codex');
+    const workspaceDir = path.join(tempDir, 'workspace', 'muninn');
+    const sessionDir = path.join(sourceRoot, 'sessions', '2026', '06', '08');
+    await mkdir(sessionDir, { recursive: true });
+    await mkdir(path.join(workspaceDir, 'docs'), { recursive: true });
+    await writeFile(path.join(workspaceDir, 'docs', 'research note.md'), '# Research\n');
+    await writeFile(path.join(workspaceDir, 'docs', 'design.md'), '# Design\n');
+
+    const entries = [
+      {
+        timestamp: '2026-06-08T15:00:00.000Z',
+        type: 'session_meta',
+        payload: {
+          id: 'docs-session',
+          cwd: workspaceDir,
+          timestamp: '2026-06-08T15:00:00.000Z',
+        },
+      },
+      {
+        timestamp: '2026-06-08T15:01:00.000Z',
+        type: 'response_item',
+        payload: {
+          type: 'message',
+          role: 'user',
+          content: [{ type: 'input_text', text: 'import docs' }],
+        },
+      },
+      {
+        timestamp: '2026-06-08T15:01:20.000Z',
+        type: 'response_item',
+        payload: {
+          type: 'function_call',
+          call_id: 'call-patch',
+          name: 'apply_patch',
+          arguments: JSON.stringify({
+            patch: [
+              '*** Begin Patch',
+              '*** Update File: docs/research note.md',
+              '*** Update File: docs/design.md',
+              '*** End Patch',
+            ].join('\n'),
+          }),
+        },
+      },
+      {
+        timestamp: '2026-06-08T15:01:20.000Z',
+        type: 'response_item',
+        payload: {
+          type: 'function_call_output',
+          call_id: 'call-patch',
+          output: 'Success. Updated files.',
+        },
+      },
+      {
+        timestamp: '2026-06-08T15:01:20.000Z',
+        type: 'response_item',
+        payload: {
+          type: 'message',
+          role: 'assistant',
+          content: [{
+            type: 'output_text',
+            text: 'See [research](docs/research note.md) and [design](docs/design.md).',
+          }],
+        },
+      },
+    ];
+    await writeFile(
+      path.join(sessionDir, 'rollout-docs.jsonl'),
+      `${entries.map((entry) => JSON.stringify(entry)).join('\n')}\n`,
+    );
+
+    const artifactStore = path.join(process.env.MUNINN_HOME, 'default', 'artifacts');
+    const result = await runCodexImport({
+      sourceRoot,
+      projectKeys: ['muninn'],
+      projectLimit: 5,
+    }, 'req-run');
+
+    assert.equal(result.failedSessions.length, 0);
+    assert.equal(result.importedTurns, 1);
+    const files = (await artifactFilesRecursive(artifactStore)).map((file) => path.relative(artifactStore, file)).sort();
+    assert.deepEqual(files, [
+      'sessions/codex-docs-session/design-20260608T150120Z-2c1f01.md',
+      'sessions/codex-docs-session/design-20260608T150120Z.md',
+      'sessions/codex-docs-session/research-note-20260608T150120Z-eb390b.md',
+      'sessions/codex-docs-session/research-note-20260608T150120Z.md',
+    ]);
+
+    const persisted = await turns.list({
+      mode: { type: 'page', offset: 0, limit: 20 },
+      agent: 'codex',
+    });
+    const imported = persisted.find((turn) => turn.prompt === 'import docs');
+    assert.ok(imported);
+    const docs = imported.artifacts.filter((artifact) => artifact.kind === 'file');
+    assert.equal(docs.length, 4);
+    assert.ok(docs.every((artifact) => artifact.content?.startsWith('# ')));
+    assert.ok(docs.every((artifact) => artifact.uri?.startsWith('artifact://sessions/codex-docs-session/')));
+  } finally {
+    await shutdownCoreForTests();
+    if (previousHome === undefined) {
+      delete process.env.MUNINN_HOME;
+    } else {
+      process.env.MUNINN_HOME = previousHome;
+    }
+    if (previousObserverPollMs === undefined) {
+      delete process.env.MUNINN_OBSERVER_POLL_MS;
+    } else {
+      process.env.MUNINN_OBSERVER_POLL_MS = previousObserverPollMs;
+    }
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('markdown artifact scan skips malformed file urls', async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), 'muninn-codex-import-bad-file-url-'));
+  try {
+    const sessionPath = path.join(tempDir, 'bad-file-url.jsonl');
+    const entries = [
+      {
+        timestamp: '2026-06-08T16:00:00.000Z',
+        type: 'session_meta',
+        payload: {
+          id: 'bad-file-url-session',
+          cwd: tempDir,
+          timestamp: '2026-06-08T16:00:00.000Z',
+        },
+      },
+      {
+        timestamp: '2026-06-08T16:01:00.000Z',
+        type: 'response_item',
+        payload: {
+          type: 'message',
+          role: 'user',
+          content: [{ type: 'input_text', text: 'import docs' }],
+        },
+      },
+      {
+        timestamp: '2026-06-08T16:01:20.000Z',
+        type: 'response_item',
+        payload: {
+          type: 'function_call',
+          call_id: 'call-bad-image',
+          name: 'view_image',
+          arguments: '{}',
+        },
+      },
+      {
+        timestamp: '2026-06-08T16:01:21.000Z',
+        type: 'response_item',
+        payload: {
+          type: 'function_call_output',
+          call_id: 'call-bad-image',
+          output: [
+            { type: 'input_image', image_url: 'file://%E0%A4%A' },
+            { type: 'input_image', image_url: 'https://%' },
+            { type: 'input_image', image_url: 'data:text/plain,%E0%A4%A' },
+            { type: 'input_file', file_path: 'file://%E0%A4%A' },
+            { type: 'input_file', file_path: 'https://%' },
+          ],
+        },
+      },
+      {
+        timestamp: '2026-06-08T16:01:30.000Z',
+        type: 'response_item',
+        payload: {
+          type: 'message',
+          role: 'assistant',
+          content: [{
+            type: 'output_text',
+            text: 'Ignore [bad](file://...`，所以：) and [encoded](bad%zz.md) but keep importing.',
+          }],
+        },
+      },
+    ];
+    await writeFile(sessionPath, `${entries.map((entry) => JSON.stringify(entry)).join('\n')}\n`);
+
+    const session = await __testing.readCodexSession(sessionPath, {
+      artifactStore: path.join(tempDir, 'artifacts'),
+    });
+
+    assert.equal(session.turns.length, 1);
+    assert.deepEqual(session.turns[0].artifacts, []);
+  } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
 });

@@ -1071,10 +1071,10 @@ boardApp.post('/api/v1/ui/import/codex', async (c) => {
   return c.json(response);
 });
 
-boardApp.get('/api/v1/ui/artifacts/:name', async (c) => {
-  const name = c.req.param('name');
-  if (!/^[a-f0-9]{64}(?:\.[a-z0-9]+)?$/i.test(name)) {
-    return c.json(errorResponse('invalidRequest', 'invalid artifact name'), 400);
+boardApp.get('/api/v1/artifacts/*', async (c) => {
+  const name = safeDecodeURIComponent(c.req.path.slice('/api/v1/artifacts/'.length));
+  if (!isSafeArtifactPath(name)) {
+    return c.json(errorResponse('invalidRequest', 'invalid artifact path'), 400);
   }
 
   const store = resolveArtifactStorePath();
@@ -1092,6 +1092,25 @@ boardApp.get('/api/v1/ui/artifacts/:name', async (c) => {
     return c.json(errorResponse('notFound', 'artifact not found'), 404);
   }
 });
+
+function safeDecodeURIComponent(value: string): string | null {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return null;
+  }
+}
+
+function isSafeArtifactPath(value: string | null): value is string {
+  if (!value || path.isAbsolute(value) || value.includes('\0')) {
+    return false;
+  }
+  const parts = value.split('/');
+  if (parts.some((part) => part === '' || part === '.' || part === '..')) {
+    return false;
+  }
+  return parts.every((part) => /^[a-z0-9._-]+$/i.test(part));
+}
 
 function parseOptionalInteger(value: string | undefined): number | undefined {
   if (value === undefined) {

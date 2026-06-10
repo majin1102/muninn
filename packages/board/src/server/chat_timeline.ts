@@ -26,6 +26,7 @@ export type ChatToolGroup = {
 export type ChatToolCall = ToolCall & {
   startedAt?: string;
   completedAt?: string;
+  artifacts?: Artifact[];
 };
 
 export type ChatTotalTime = {
@@ -142,6 +143,7 @@ export function entriesFromEvents(events: TurnEvent[], context: TimelineContext)
           ...pendingToolCalls[index],
           output: event.output,
           completedAt: event.timestamp,
+          artifacts: event.artifacts,
         };
       } else if (event.output) {
         pendingToolCalls.push({
@@ -149,6 +151,7 @@ export function entriesFromEvents(events: TurnEvent[], context: TimelineContext)
           name: 'tool_output',
           output: event.output,
           completedAt: event.timestamp,
+          artifacts: event.artifacts,
         });
       }
       rememberTimestamp(event.timestamp);

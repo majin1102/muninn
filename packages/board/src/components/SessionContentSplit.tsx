@@ -1,6 +1,6 @@
 import type { CSSProperties, PointerEvent } from 'react';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import type { MemoryDocument } from '@muninn/types';
+import type { Artifact, MemoryDocument } from '@muninn/types';
 import { FileText } from 'lucide-react';
 import type { ProjectSessionNode, ProjectTurnNode } from '../lib/api.js';
 import { chatTurnWindow } from '../lib/chat_window.js';
@@ -18,9 +18,11 @@ import {
   type SessionContentMode,
 } from '../lib/session_content_state.js';
 import { cn } from '../lib/utils.js';
+import { ArtifactList } from './ArtifactList.js';
 import { ChatView } from './ChatView.js';
 import { LocateIcon } from './icons.js';
 import { ObservationPane } from './ObservationPane.js';
+import { ScrollArea } from './ui/scroll-area.js';
 
 type SessionContentSplitProps = {
   session: ProjectSessionNode | null | undefined;
@@ -89,6 +91,7 @@ export function SessionContentSplit({
       .map((turn) => turn.memoryId)
       .filter((memoryId): memoryId is string => Boolean(memoryId))
   ), [sessionTurns]);
+  const sessionArtifacts = useMemo(() => collectSessionArtifacts(document, sessionTurns), [document, sessionTurns]);
   const conversationObservation = useMemo(() => observationForConversationWindow(
     session?.observations ?? [],
     conversationWindowTurnIds,
@@ -278,10 +281,41 @@ export function SessionContentSplit({
             error={error}
           />
         ) : (
-          <div className="session-artifacts-empty">No artifacts yet.</div>
+          <SessionArtifacts artifacts={sessionArtifacts} agent={session?.agent ?? document?.agent ?? document?.observer} />
         )}
       </section>
     </div>
+  );
+}
+
+function collectSessionArtifacts(document: MemoryDocument | null, sessionTurns: ProjectTurnNode[]): Artifact[] {
+  const artifacts: Artifact[] = [];
+  const seen = new Set<string>();
+  for (const artifact of [
+    ...(document?.artifacts ?? []),
+    ...sessionTurns.flatMap((turn) => turn.artifacts ?? []),
+  ]) {
+    if (artifact.kind === 'metadata') {
+      continue;
+    }
+    const key = artifact.uri ?? artifact.key;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    artifacts.push(artifact);
+  }
+  return artifacts;
+}
+
+function SessionArtifacts({ artifacts, agent }: { artifacts: Artifact[]; agent?: string }) {
+  if (artifacts.length === 0) {
+    return <div className="session-artifacts-empty">No artifacts yet.</div>;
+  }
+  return (
+    <ScrollArea className="session-artifacts-scroll">
+      <ArtifactList artifacts={artifacts} agent={agent} variant="session" />
+    </ScrollArea>
   );
 }
 

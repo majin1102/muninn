@@ -12,13 +12,38 @@ test('recall UI runs search before optional streaming agent recall', async () =>
   assert.doesNotMatch(source, /BotMessageSquare/);
 });
 
+test('recall state is restored from and persisted to the hash query', async () => {
+  const source = await readFile(new URL('../src/components/SearchPage.tsx', import.meta.url), 'utf8');
+  const appSource = await readFile(new URL('../src/components/App.tsx', import.meta.url), 'utf8');
+
+  assert.match(appSource, /const \[path\] = value\.split\('\?'/);
+  assert.match(source, /controlsFromRecallHash\(\)/);
+  assert.match(source, /writeRecallHash\(controls, provider\)/);
+  assert.match(source, /restoreRecallSearchRef/);
+  assert.match(source, /void submit\(\)/);
+  assert.match(source, /new URLSearchParams\(query/);
+  assert.match(source, /params\.set\('q', controls\.query\)/);
+}
+);
+
+test('recall restored search waits for provider options to be validated', async () => {
+  const source = await readFile(new URL('../src/components/SearchPage.tsx', import.meta.url), 'utf8');
+
+  assert.match(source, /const \[providerReady, setProviderReady\] = useState\(false\)/);
+  assert.match(source, /normalizeRecallProvider\(current, providers\)/);
+  assert.match(source, /normalizeRecallProvider\(current, FALLBACK_PROVIDER_OPTIONS\)/);
+  assert.match(source, /setProviderReady\(true\)/);
+  assert.match(source, /if \(!providerReady \|\| !restoreRecallSearchRef\.current\)/);
+  assert.match(source, /\}, \[providerReady\]\)/);
+});
+
 test('recall home title uses the Muninn logo with recalls copy', async () => {
   const source = await readFile(new URL('../src/components/SearchPage.tsx', import.meta.url), 'utf8');
   const styles = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8');
 
   assert.match(source, /import muninnLogo from '\.\.\/assets\/muninn-raven-logo\.png'/);
   assert.match(source, /<img src=\{muninnLogo\} alt="Muninn" \/>/);
-  assert.match(source, /className="search-prompt-brand">Muninn</);
+  assert.doesNotMatch(source, /className="search-prompt-brand">Muninn</);
   assert.match(source, />recalls everything you worked on</);
   assert.doesNotMatch(source, /Recall everything you worked on/);
   assert.match(styles, /\.search-prompt-title img/);

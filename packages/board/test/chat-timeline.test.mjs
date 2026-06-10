@@ -70,6 +70,32 @@ test('groups consecutive tool calls before the next message', () => {
   assert.equal(entries[2].group.toolCalls[1].output, 'README.md');
 });
 
+test('attaches tool output artifacts to the matching timeline tool call', async () => {
+  const { entriesFromEvents } = await loadSourceChatTimeline();
+  const entries = entriesFromEvents([
+    { type: 'toolCall', id: 'call-1', name: 'view_image', input: '{"path":"render.png"}' },
+    {
+      type: 'toolOutput',
+      id: 'call-1',
+      output: 'rendered',
+      artifacts: [{
+        key: 'tool-call-1-artifact-1',
+        kind: 'image',
+        source: 'tool',
+        uri: 'artifact://sessions/codex-session/render-20260608T140000Z.png',
+        name: 'render.png',
+      }],
+    },
+  ], {
+    memoryId: 'turn:tool-artifact',
+    agent: 'codex',
+  });
+
+  assert.deepEqual(entries.map((entry) => entry.type), ['toolGroup']);
+  assert.equal(entries[0].group.toolCalls[0].artifacts.length, 1);
+  assert.equal(entries[0].group.toolCalls[0].artifacts[0].uri, 'artifact://sessions/codex-session/render-20260608T140000Z.png');
+});
+
 test('fallback data still renders tool calls and total time', () => {
   const entries = __testing.entriesFromFallback({
     memoryId: 'turn:3',
