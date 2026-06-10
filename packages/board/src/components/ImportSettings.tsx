@@ -1,7 +1,8 @@
+import { ChevronRight } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { BoardClient } from '../lib/api.js';
 import type { ImportAgentProject, ImportSessionsListResponse } from '@muninn/types';
-import { asErrorMessage } from '../lib/utils.js';
+import { asErrorMessage, formatRelativeTime, formatTimestamp } from '../lib/utils.js';
 import { Button } from './ui/button.js';
 import { Switch } from './ui/switch.js';
 
@@ -130,7 +131,7 @@ function ProjectRow({ project }: { project: ImportAgentProject }) {
   return (
     <div className={open ? 'import-proj import-proj-open' : 'import-proj'}>
       <div className="import-proj-row" role="button" tabIndex={0} onClick={() => setOpen((value) => !value)} onKeyDown={(event) => { if (event.key === 'Enter') setOpen((value) => !value); }}>
-        <span className="import-chev">▶</span>
+        <ChevronRight className="tree-chevron import-chev" />
         <span className="import-proj-main">
           <span className="import-proj-name">{project.projectKey}</span>
           <span className="import-proj-sub">{project.sessionCount} sessions{project.importedCount > 0 ? ` · ${project.importedCount} captured` : ''}</span>
@@ -145,7 +146,7 @@ function ProjectRow({ project }: { project: ImportAgentProject }) {
           {project.sessions.map((session) => (
             <div className="import-sess" key={session.sessionId}>
               <span className="import-sess-title">{session.title}</span>
-              <span className="import-sess-time">{session.turnCount}t · {formatTime(session.updatedAt)}</span>
+              <span className="import-sess-time" title={formatTimestamp(session.updatedAt)}>{session.turnCount}t · {formatRelativeTime(session.updatedAt)}</span>
               <span className={session.imported ? 'import-sess-cap' : 'import-sess-cap import-sess-cap-off'}>{session.imported ? 'Captured' : 'Not captured'}</span>
             </div>
           ))}
@@ -166,17 +167,24 @@ function ImportPicker({
   onCancel: () => void;
   onImport: (sourcePaths: string[]) => Promise<void>;
 }) {
-  const rows = useMemo(
-    () => projects.flatMap((project) => project.sessions.map((session) => ({ project: project.projectKey, session }))),
-    [projects],
-  );
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [importing, setImporting] = useState(false);
 
-  const visible = rows.filter((row) => row.session.title.toLowerCase().includes(query.trim().toLowerCase()) || row.project.toLowerCase().includes(query.trim().toLowerCase()));
-  const selectable = visible.filter((row) => !row.session.imported);
-  const allSelected = selectable.length > 0 && selectable.every((row) => selected.has(row.session.sourcePath));
+  const needle = query.trim().toLowerCase();
+  const groups = useMemo(
+    () => projects
+      .map((project) => ({
+        projectKey: project.projectKey,
+        sessions: project.sessions.filter((session) => !needle
+          || session.title.toLowerCase().includes(needle)
+          || project.projectKey.toLowerCase().includes(needle)),
+      }))
+      .filter((group) => group.sessions.length > 0),
+    [needle, projects],
+  );
+  const selectable = groups.flatMap((group) => group.sessions).filter((session) => !session.imported);
+  const allSelected = selectable.length > 0 && selectable.every((session) => selected.has(session.sourcePath));
 
   function toggle(path: string) {
     setSelected((current) => {
@@ -194,9 +202,9 @@ function ImportPicker({
     setSelected((current) => {
       const next = new Set(current);
       if (allSelected) {
-        selectable.forEach((row) => next.delete(row.session.sourcePath));
+        selectable.forEach((session) => next.delete(session.sourcePath));
       } else {
-        selectable.forEach((row) => next.add(row.session.sourcePath));
+        selectable.forEach((session) => next.add(session.sourcePath));
       }
       return next;
     });
@@ -216,26 +224,33 @@ function ImportPicker({
           </span>
         </div>
         <div className="import-modal-body">
-          {visible.length === 0 ? (
+          {groups.length === 0 ? (
             <div className="import-empty">No sessions match.</div>
-          ) : visible.map((row) => {
-            const isSel = selected.has(row.session.sourcePath);
-            return (
-              <div
-                className={`import-pick${row.session.imported ? ' import-pick-dim' : ''}${isSel ? ' import-pick-sel' : ''}`}
-                key={row.session.sourcePath}
-                role="button"
-                tabIndex={row.session.imported ? -1 : 0}
-                onClick={() => { if (!row.session.imported) toggle(row.session.sourcePath); }}
-                onKeyDown={(event) => { if (event.key === 'Enter' && !row.session.imported) toggle(row.session.sourcePath); }}
-              >
-                <span className="import-cb">{isSel ? '✓' : ''}</span>
-                <span className="import-pick-title">{row.session.title}</span>
-                <span className="import-pick-proj">{row.project}</span>
-                <span className="import-pick-meta">{row.session.imported ? <span className="import-tag">captured</span> : `${row.session.turnCount}t · ${formatTime(row.session.updatedAt)}`}</span>
+          ) : groups.map((group) => (
+            <div className="import-pick-group" key={group.projectKey}>
+              <div className="import-pick-group-head">
+                <span className="import-pick-group-name">{group.projectKey}</span>
+                <span className="import-pick-group-meta">{group.sessions.length} sessions</span>
               </div>
-            );
-          })}
+              {group.sessions.map((session) => {
+                const isSel = selected.has(session.sourcePath);
+                return (
+                  <div
+                    className={`import-pick${session.imported ? ' import-pick-dim' : ''}${isSel ? ' import-pick-sel' : ''}`}
+                    key={session.sourcePath}
+                    role="button"
+                    tabIndex={session.imported ? -1 : 0}
+                    onClick={() => { if (!session.imported) toggle(session.sourcePath); }}
+                    onKeyDown={(event) => { if (event.key === 'Enter' && !session.imported) toggle(session.sourcePath); }}
+                  >
+                    <span className="import-cb">{isSel ? '✓' : ''}</span>
+                    <span className="import-pick-title">{session.title}</span>
+                    <span className="import-pick-meta" title={formatTimestamp(session.updatedAt)}>{session.imported ? <span className="import-tag">captured</span> : `${session.turnCount}t · ${formatRelativeTime(session.updatedAt)}`}</span>
+                  </div>
+                );
+              })}
+            </div>
+          ))}
         </div>
         <div className="import-modal-foot">
           <span className="import-modal-count">{selected.size} selected</span>
@@ -258,21 +273,4 @@ function ImportPicker({
       </div>
     </div>
   );
-}
-
-function formatTime(iso: string): string {
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) {
-    return '';
-  }
-  const diffMs = Date.now() - date.getTime();
-  const hours = Math.floor(diffMs / 3_600_000);
-  if (hours < 1) {
-    return 'just now';
-  }
-  if (hours < 24) {
-    return `${hours}h ago`;
-  }
-  const days = Math.floor(hours / 24);
-  return `${days}d ago`;
 }
