@@ -33,7 +33,14 @@ import type {
   TurnPreview,
 } from '@muninn/types';
 import { agentRecallEvents, ndjsonStream, recallProviderOptions } from './agent_recall.js';
-import { importSelectedCodexSessions, listCodexImportSessions, listImportedCodexSessions, previewCodexImport, runCodexImport } from './codex_import.js';
+import { codexAdapter, previewCodexImport, runCodexImport } from './codex_import.js';
+import { claudeAdapter } from './claude_import.js';
+import { importSelectedSessions, listImportedSessions, listLocalSessions, type ImportAdapter } from './import_core.js';
+
+const importAdapters: Record<string, ImportAdapter> = {
+  codex: codexAdapter,
+  'claude-code': claudeAdapter,
+};
 import { renderRenderedMemoryDocument } from './render.js';
 import { searchBoardMemory } from './search.js';
 import { sessionDisplayTitle } from './session_labels.js';
@@ -1073,17 +1080,22 @@ boardApp.post('/api/v1/ui/import/codex', async (c) => {
   return c.json(response);
 });
 
-boardApp.get('/api/v1/ui/import/codex/sessions', async (c) => {
-  if (c.req.query('scope') === 'imported') {
-    const response: ImportSessionsListResponse = await listImportedCodexSessions(generateRequestId());
-    return c.json(response);
+boardApp.get('/api/v1/ui/import/:agent/sessions', async (c) => {
+  const adapter = importAdapters[c.req.param('agent')];
+  if (!adapter) {
+    return c.json(errorResponse('invalidRequest', 'unknown import agent'), 404);
   }
-  const sourceRoot = c.req.query('sourceRoot');
-  const response: ImportSessionsListResponse = await listCodexImportSessions({ sourceRoot }, generateRequestId());
+  const response: ImportSessionsListResponse = c.req.query('scope') === 'imported'
+    ? await listImportedSessions(adapter, generateRequestId())
+    : await listLocalSessions(adapter, generateRequestId());
   return c.json(response);
 });
 
-boardApp.post('/api/v1/ui/import/codex/sessions', async (c) => {
+boardApp.post('/api/v1/ui/import/:agent/sessions', async (c) => {
+  const adapter = importAdapters[c.req.param('agent')];
+  if (!adapter) {
+    return c.json(errorResponse('invalidRequest', 'unknown import agent'), 404);
+  }
   let body: { sourcePaths?: string[] } = {};
   try {
     body = await c.req.json<{ sourcePaths?: string[] }>();
@@ -1095,7 +1107,7 @@ boardApp.post('/api/v1/ui/import/codex/sessions', async (c) => {
     return c.json(errorResponse('invalidRequest', 'sourcePaths is required'), 400);
   }
   invalidateSessionTreeCache();
-  const response: ImportSelectedResponse = await importSelectedCodexSessions(sourcePaths, generateRequestId());
+  const response: ImportSelectedResponse = await importSelectedSessions(adapter, sourcePaths, generateRequestId());
   invalidateSessionTreeCache();
   return c.json(response);
 });

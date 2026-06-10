@@ -14,6 +14,16 @@ import { Switch } from './ui/switch.js';
 type LoadStatus = 'loading' | 'ready' | 'error';
 
 export function ImportSettings({ client }: { client: BoardClient }) {
+  return (
+    <div className="import-settings">
+      <AgentImportSection client={client} agent="codex" label="Codex" />
+      <AgentImportSection client={client} agent="claude-code" label="Claude Code" />
+      <AgentSection label="Trae" status="Not found" supported={false} placeholder="No Trae data directory found on this machine. Connect Trae to enable capture." />
+    </div>
+  );
+}
+
+function AgentImportSection({ client, agent, label }: { client: BoardClient; agent: string; label: string }) {
   const [imported, setImported] = useState<ImportSessionsListResponse | null>(null);
   const [importedStatus, setImportedStatus] = useState<LoadStatus>('loading');
   const [importedError, setImportedError] = useState<string | null>(null);
@@ -25,7 +35,7 @@ export function ImportSettings({ client }: { client: BoardClient }) {
   const loadImported = useCallback(() => {
     setImportedStatus('loading');
     setImportedError(null);
-    client.listCodexImportSessions('imported')
+    client.listImportSessions(agent, 'imported')
       .then((response) => {
         setImported(response);
         setImportedStatus('ready');
@@ -34,7 +44,7 @@ export function ImportSettings({ client }: { client: BoardClient }) {
         setImportedError(asErrorMessage(loadError));
         setImportedStatus('error');
       });
-  }, [client]);
+  }, [agent, client]);
 
   useEffect(() => {
     loadImported();
@@ -47,7 +57,7 @@ export function ImportSettings({ client }: { client: BoardClient }) {
       return scanPromiseRef.current;
     }
     setScanError(null);
-    const promise = client.listCodexImportSessions()
+    const promise = client.listImportSessions(agent)
       .catch((scanFailure: unknown) => {
         scanPromiseRef.current = null;
         setScanError(asErrorMessage(scanFailure));
@@ -55,7 +65,7 @@ export function ImportSettings({ client }: { client: BoardClient }) {
       });
     scanPromiseRef.current = promise;
     return promise;
-  }, [client]);
+  }, [agent, client]);
 
   const importedProjects = imported?.projects ?? [];
   const importedSessionIds = useMemo(
@@ -63,7 +73,7 @@ export function ImportSettings({ client }: { client: BoardClient }) {
     [importedProjects],
   );
 
-  const codexStatus = importedStatus === 'error'
+  const status = importedStatus === 'error'
     ? 'Unavailable'
     : `Connected${imported ? ` · ${imported.sourceRoot}` : ''}`;
 
@@ -79,55 +89,50 @@ export function ImportSettings({ client }: { client: BoardClient }) {
   ) : null;
 
   return (
-    <div className="import-settings">
-      <AgentSection label="Codex" status={codexStatus} supported result={resultNode}>
-        {importedStatus === 'error' ? (
-          <div className="import-empty">{importedError}</div>
-        ) : importedStatus === 'loading' && !imported ? (
-          <div className="import-empty">Loading captured sessions…</div>
-        ) : (
-          <div className="import-card">
-            {importedProjects.map((project) => (
-              <ProjectRow
-                key={project.projectKey}
-                project={project}
-                importedSessionIds={importedSessionIds}
-                ensureScan={ensureScan}
-              />
-            ))}
-            <div
-              className="import-action-row"
-              role="button"
-              tabIndex={0}
-              onClick={() => setPickerOpen(true)}
-              onKeyDown={(event) => { if (event.key === 'Enter') setPickerOpen(true); }}
-            >
-              <Plus className="import-action-icon" aria-hidden="true" />
-              <span>Import projects and sessions</span>
-            </div>
-            {scanError ? <div className="import-scan-row import-scan-row-static import-result-error">{scanError}</div> : null}
+    <AgentSection label={label} status={status} supported result={resultNode}>
+      {importedStatus === 'error' ? (
+        <div className="import-empty">{importedError}</div>
+      ) : importedStatus === 'loading' && !imported ? (
+        <div className="import-empty">Loading captured sessions…</div>
+      ) : (
+        <div className="import-card">
+          {importedProjects.map((project) => (
+            <ProjectRow
+              key={project.projectKey}
+              project={project}
+              importedSessionIds={importedSessionIds}
+              ensureScan={ensureScan}
+            />
+          ))}
+          <div
+            className="import-action-row"
+            role="button"
+            tabIndex={0}
+            onClick={() => setPickerOpen(true)}
+            onKeyDown={(event) => { if (event.key === 'Enter') setPickerOpen(true); }}
+          >
+            <Plus className="import-action-icon" aria-hidden="true" />
+            <span>Import projects and sessions</span>
           </div>
-        )}
-      </AgentSection>
-
-      <AgentSection label="Claude Code" status="Detected · adapter pending · ~/.claude/projects" supported={false} placeholder="Claude Code adapter coming soon. Sessions are detected but capture and import are not wired yet." />
-      <AgentSection label="Trae" status="Not found" supported={false} placeholder="No Trae data directory found on this machine. Connect Trae to enable capture." />
+          {scanError ? <div className="import-scan-row import-scan-row-static import-result-error">{scanError}</div> : null}
+        </div>
+      )}
 
       {pickerOpen ? (
         <ImportPicker
-          agentLabel="Codex"
+          agentLabel={label}
           ensureScan={ensureScan}
           importedSessionIds={importedSessionIds}
           onCancel={() => setPickerOpen(false)}
           onImport={async (paths) => {
-            const result = await client.importCodexSessionsByPaths(paths);
+            const result = await client.importSessionsByPaths(agent, paths);
             setImportResult(result);
             setPickerOpen(false);
             loadImported();
           }}
         />
       ) : null}
-    </div>
+    </AgentSection>
   );
 }
 

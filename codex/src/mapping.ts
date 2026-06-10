@@ -33,8 +33,12 @@ export type CodexSession = {
 export type ArtifactMode = 'preview' | 'copy';
 
 export type ToTurnContentOptions = {
+  /** Agent identifier stored on the turn (defaults to 'codex'). */
+  agent?: string;
   /** Provenance tag stored on metadata + the import marker artifact. */
   ingest?: string;
+  /** Artifact key used for the dedup marker (defaults to 'codex.import'). */
+  markerKey?: string;
 };
 
 export const CODEX_IMPORT_AGENT = 'codex';
@@ -734,7 +738,9 @@ async function fileArtifactFromPath(
   return artifact;
 }
 
-async function saveDataUrlArtifact(value: string, options: ArtifactWriteOptions): Promise<StoredArtifact> {
+export async function saveDataUrlArtifact(value: string, options: ArtifactWriteOptions): Promise<StoredArtifact>;
+export async function saveDataUrlArtifact(value: string, artifactStore: string): Promise<StoredArtifact>;
+export async function saveDataUrlArtifact(value: string, optionsOrStore: ArtifactWriteOptions | string): Promise<StoredArtifact> {
   const match = value.match(/^data:([^;,]+)?(?:;base64)?,(.*)$/s);
   if (!match) {
     throw new Error('invalid data URL artifact');
@@ -743,12 +749,26 @@ async function saveDataUrlArtifact(value: string, options: ArtifactWriteOptions)
   const payload = value.includes(';base64,')
     ? Buffer.from(match[2], 'base64')
     : Buffer.from(decodeURIComponent(match[2]), 'utf8');
+  const options = typeof optionsOrStore === 'string' ? legacyArtifactWriteOptions(optionsOrStore) : optionsOrStore;
   return writeArtifactBytes(payload, {
     ...options,
     originalName: artifactNameFromValue(value, 'image'),
     extension: extensionForMimeType(mimeType),
     mimeType,
   });
+}
+
+function legacyArtifactWriteOptions(artifactStore: string): ArtifactWriteOptions {
+  return {
+    artifactStore,
+    artifactMode: 'copy',
+    sessionId: 'shared',
+    agent: CODEX_IMPORT_AGENT,
+    source: 'import',
+    key: 'data-url',
+    timestamp: new Date().toISOString(),
+    baseDirs: [],
+  };
 }
 
 async function trySaveDataUrlArtifact(value: string, options: ArtifactWriteOptions): Promise<StoredArtifact | null> {
@@ -790,7 +810,7 @@ async function resolveLocalArtifactPath(filePath: string, baseDirs: string[]): P
   return null;
 }
 
-type StoredArtifact = {
+export type StoredArtifact = {
   uri: string;
   name: string;
   mimeType?: string;
@@ -945,6 +965,7 @@ function stringFromUnknown(value: unknown): string | null {
 }
 
 export function toTurnContent(session: CodexSession, turn: CodexTurn, index: number, options: ToTurnContentOptions = {}): TurnContent {
+  const markerKey = options.markerKey ?? IMPORT_ARTIFACT_KEY;
   const metadata = {
     ingest: options.ingest ?? DEFAULT_INGEST,
     sourcePath: session.sourcePath,
@@ -955,7 +976,7 @@ export function toTurnContent(session: CodexSession, turn: CodexTurn, index: num
     sessionId: session.sessionId,
     project: session.projectKey,
     cwd: session.cwd,
-    agent: CODEX_IMPORT_AGENT,
+    agent: options.agent ?? CODEX_IMPORT_AGENT,
     metadata,
     createdAt: turn.promptTimestamp,
     updatedAt: turn.responseTimestamp,
@@ -965,7 +986,7 @@ export function toTurnContent(session: CodexSession, turn: CodexTurn, index: num
     response: turn.response,
     events: turn.events,
     artifacts: [{
-      key: IMPORT_ARTIFACT_KEY,
+      key: markerKey,
       kind: 'metadata',
       source: 'import',
       content: JSON.stringify({
@@ -990,8 +1011,8 @@ export function importMarker(session: CodexSession, turnIndex: number): string {
   return `${session.sessionId}#${turnIndex + 1}`;
 }
 
-export function markerFromTurn(turn: { response?: string | null; artifacts?: Array<{ key: string; content?: string }> | null }): string | null {
-  const artifact = turn.artifacts?.find((item) => item.key === IMPORT_ARTIFACT_KEY);
+export function markerFromTurn(turn: { response?: string | null; artifacts?: Array<{ key: string; content?: string }> | null }, markerKey: string = IMPORT_ARTIFACT_KEY): string | null {
+  const artifact = turn.artifacts?.find((item) => item.key === markerKey);
   if (artifact?.content) {
     const parsed = safeParse(artifact.content);
     if (parsed) {

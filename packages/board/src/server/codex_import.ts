@@ -19,10 +19,8 @@ import type {
   CodexImportProjectPreview,
   CodexImportRunResponse,
   CodexImportSessionPreview,
-  ImportAgentProject,
-  ImportSelectedResponse,
-  ImportSessionsListResponse,
 } from '@muninn/types';
+import type { ImportAdapter } from './import_core.js';
 
 type ImportSelection = {
   sourceRoot: string;
@@ -280,198 +278,16 @@ function latestProjectTime(project: CodexImportProjectPreview): string {
   return project.sessions[0]?.updatedAt ?? '';
 }
 
-// ---- Per-session import (Import & Capture settings) ----
-
-export async function listCodexImportSessions(options: CodexImportOptions, requestId: string): Promise<ImportSessionsListResponse> {
-  const sourceRoot = options.sourceRoot ?? path.join(os.homedir(), '.codex');
-  const artifactStore = options.artifactStore ?? defaultArtifactStore();
-  const sessionFiles = await listCodexSessionFiles(sourceRoot);
-  // Skip any session file that fails to parse (e.g. a transcript too large to
-  // read into a string) so one bad file never fails the whole listing.
-  const sessions = (await Promise.all(sessionFiles.map((file) => readCodexSession(file, { artifactStore, artifactMode: 'preview' }).catch(() => null))))
-    .filter((session): session is CodexSession => session !== null)
-    .filter((session) => !isExcludedImportSession(session))
-    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
-
-  const existing = await collectExistingCodexImports({ rawSessionIds: new Set(sessions.map((session) => session.sessionId)) });
-
-  const grouped = new Map<string, ImportAgentProject>();
-  for (const session of sessions) {
-    const imported = existing.has(session.sessionId);
-    const project = grouped.get(session.projectKey) ?? {
-      projectKey: session.projectKey,
-      cwd: session.cwd,
-      sessionCount: 0,
-      importedCount: 0,
-      sessions: [],
-    };
-    project.sessions.push({
-      sessionId: session.sessionId,
-      title: session.title,
-      sourcePath: session.sourcePath,
-      updatedAt: session.updatedAt,
-      turnCount: session.turns.length,
-      artifactCount: session.turns.reduce((total, turn) => total + turn.artifacts.length, 0),
-      imported,
-    });
-    project.sessionCount += 1;
-    project.importedCount += imported ? 1 : 0;
-    grouped.set(session.projectKey, project);
-  }
-
-  const projects = [...grouped.values()].sort((left, right) => (
-    (right.sessions[0]?.updatedAt ?? '').localeCompare(left.sessions[0]?.updatedAt ?? '')
-  ));
-
-  return {
-    sourceRoot,
-    projectCount: projects.length,
-    sessionCount: sessions.length,
-    importedCount: projects.reduce((total, project) => total + project.importedCount, 0),
-    projects,
-    requestId,
-  };
-}
-
-/** DB-only fast path: list sessions already captured into Muninn, without scanning local disk. */
-export async function listImportedCodexSessions(requestId: string): Promise<ImportSessionsListResponse> {
-  const existing = await turns.list({
-    mode: { type: 'page', offset: 0, limit: 100_000 },
-    agent: CODEX_IMPORT_AGENT,
-  });
-
-  type SessionAggregate = {
-    sessionId: string;
-    project: string;
-    cwd: string;
-    title: string;
-    firstCreatedAt: string;
-    sourcePath: string;
-    updatedAt: string;
-    turnCount: number;
-    artifactCount: number;
-  };
-  const bySession = new Map<string, SessionAggregate>();
-  for (const turn of existing) {
-    const sessionId = turn.sessionId?.trim();
-    if (!sessionId) {
-      continue;
-    }
-    let aggregate = bySession.get(sessionId);
-    if (!aggregate) {
-      aggregate = {
-        sessionId,
-        project: turn.project,
-        cwd: turn.cwd,
-        title: turn.title ?? '',
-        firstCreatedAt: turn.createdAt,
-        sourcePath: sourcePathFromTurn(turn) ?? '',
-        updatedAt: turn.updatedAt,
-        turnCount: 0,
-        artifactCount: 0,
-      };
-      bySession.set(sessionId, aggregate);
-    }
-    aggregate.turnCount += 1;
-    aggregate.artifactCount += (turn.artifacts ?? []).filter((artifact) => artifact.key !== IMPORT_ARTIFACT_KEY).length;
-    if (turn.title && turn.createdAt <= aggregate.firstCreatedAt) {
-      aggregate.title = turn.title;
-      aggregate.firstCreatedAt = turn.createdAt;
-    }
-    if (turn.updatedAt > aggregate.updatedAt) {
-      aggregate.updatedAt = turn.updatedAt;
-    }
-    if (!aggregate.sourcePath) {
-      aggregate.sourcePath = sourcePathFromTurn(turn) ?? '';
-    }
-  }
-
-  const grouped = new Map<string, ImportAgentProject>();
-  const aggregates = [...bySession.values()].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
-  for (const aggregate of aggregates) {
-    const project = grouped.get(aggregate.project) ?? {
-      projectKey: aggregate.project,
-      cwd: aggregate.cwd,
-      sessionCount: 0,
-      importedCount: 0,
-      sessions: [],
-    };
-    project.sessions.push({
-      sessionId: aggregate.sessionId,
-      title: aggregate.title || aggregate.sessionId.slice(0, 12),
-      sourcePath: aggregate.sourcePath,
-      updatedAt: aggregate.updatedAt,
-      turnCount: aggregate.turnCount,
-      artifactCount: aggregate.artifactCount,
-      imported: true,
-    });
-    project.sessionCount += 1;
-    project.importedCount += 1;
-    grouped.set(aggregate.project, project);
-  }
-
-  const projects = [...grouped.values()].sort((left, right) => (
-    (right.sessions[0]?.updatedAt ?? '').localeCompare(left.sessions[0]?.updatedAt ?? '')
-  ));
-
-  return {
-    sourceRoot: path.join(os.homedir(), '.codex'),
-    projectCount: projects.length,
-    sessionCount: bySession.size,
-    importedCount: bySession.size,
-    projects,
-    requestId,
-  };
-}
-
-function sourcePathFromTurn(turn: { artifacts?: Array<{ key: string; content?: string }> | null }): string | null {
-  const artifact = turn.artifacts?.find((item) => item.key === IMPORT_ARTIFACT_KEY);
-  if (!artifact?.content) {
-    return null;
-  }
-  try {
-    const parsed = JSON.parse(artifact.content) as { sourcePath?: unknown };
-    return typeof parsed.sourcePath === 'string' && parsed.sourcePath.length > 0 ? parsed.sourcePath : null;
-  } catch {
-    return null;
-  }
-}
-
-export async function importSelectedCodexSessions(sourcePaths: string[], requestId: string): Promise<ImportSelectedResponse> {
-  const artifactStore = defaultArtifactStore();
-  const failedSessions: ImportSelectedResponse['failedSessions'] = [];
-  const loaded: CodexSession[] = [];
-  for (const sourcePath of sourcePaths) {
-    try {
-      const session = await readCodexSession(sourcePath, { artifactStore, artifactMode: 'copy' });
-      if (session) {
-        loaded.push(session);
-      }
-    } catch (error) {
-      failedSessions.push({ sourcePath, errorMessage: error instanceof Error ? error.message : String(error) });
-    }
-  }
-
-  // Replace any prior import of the selected sessions so re-import stays idempotent.
-  const existing = await collectExistingCodexImports({ rawSessionIds: new Set(loaded.map((session) => session.sessionId)) });
-  await deleteExistingImport([...existing.values()].flat());
-
-  let importedSessions = 0;
-  let importedTurns = 0;
-  for (const session of loaded) {
-    try {
-      const result = await importCodexSession(session);
-      if (result.importedTurns > 0) {
-        importedSessions += 1;
-        importedTurns += result.importedTurns;
-      }
-    } catch (error) {
-      failedSessions.push({ sourcePath: session.sourcePath, errorMessage: error instanceof Error ? error.message : String(error) });
-    }
-  }
-
-  return { importedSessions, importedTurns, failedSessions, requestId };
-}
+// Adapter consumed by import_core for the generic per-session list/import flow.
+export const codexAdapter: ImportAdapter = {
+  agent: CODEX_IMPORT_AGENT,
+  markerKey: IMPORT_ARTIFACT_KEY,
+  ingest: 'codex-import',
+  sourceRoot: path.join(os.homedir(), '.codex'),
+  listSessionFiles: () => listCodexSessionFiles(path.join(os.homedir(), '.codex')),
+  readSession: (sourcePath, options) => readCodexSession(sourcePath, options),
+  isExcluded: (session) => isExcludedImportSession(session),
+};
 
 export const __testing = {
   readCodexSession,

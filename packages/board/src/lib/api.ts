@@ -104,8 +104,8 @@ export type BoardClient = {
   saveSettingsConfig(content: string): Promise<SettingsConfigResponse>;
   previewCodexImport(projectLimit?: number, projectKeys?: string[]): Promise<CodexImportPreviewResponse>;
   importCodexSessions(projectLimit?: number, projectKeys?: string[]): Promise<CodexImportRunResponse>;
-  listCodexImportSessions(scope?: 'imported'): Promise<ImportSessionsListResponse>;
-  importCodexSessionsByPaths(sourcePaths: string[]): Promise<ImportSelectedResponse>;
+  listImportSessions(agent: string, scope?: 'imported'): Promise<ImportSessionsListResponse>;
+  importSessionsByPaths(agent: string, sourcePaths: string[]): Promise<ImportSelectedResponse>;
 };
 
 type VersionResponse = {
@@ -334,12 +334,12 @@ export function createBoardClient(apiBase: string, usesDemoData: boolean): Board
         body: JSON.stringify({ projectLimit, projectKeys }),
       });
     },
-    listCodexImportSessions(scope) {
+    listImportSessions(agent, scope) {
       const suffix = scope ? `?scope=${scope}` : '';
-      return fetchJson<ImportSessionsListResponse>(`/api/v1/ui/import/codex/sessions${suffix}`);
+      return fetchJson<ImportSessionsListResponse>(`/api/v1/ui/import/${agent}/sessions${suffix}`);
     },
-    importCodexSessionsByPaths(sourcePaths: string[]) {
-      return fetchJson<ImportSelectedResponse>('/api/v1/ui/import/codex/sessions', {
+    importSessionsByPaths(agent, sourcePaths) {
+      return fetchJson<ImportSelectedResponse>(`/api/v1/ui/import/${agent}/sessions`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ sourcePaths }),
