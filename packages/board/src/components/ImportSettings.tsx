@@ -1,4 +1,4 @@
-import { ChevronRight } from 'lucide-react';
+import { ChevronRight, Plus } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { BoardClient } from '../lib/api.js';
 import type {
@@ -102,7 +102,8 @@ export function ImportSettings({ client }: { client: BoardClient }) {
               onClick={() => setPickerOpen(true)}
               onKeyDown={(event) => { if (event.key === 'Enter') setPickerOpen(true); }}
             >
-              Import projects…
+              <Plus className="import-action-icon" aria-hidden="true" />
+              <span>Import sessions</span>
             </div>
             {scanError ? <div className="import-scan-row import-scan-row-static import-result-error">{scanError}</div> : null}
           </div>

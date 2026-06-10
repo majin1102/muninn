@@ -5254,11 +5254,11 @@ button.search-menu-item:hover,
   color: var(--muted-foreground);
 }
 
-/* Nested session sub-table: quiet inset panel with hairline row separators. */
+/* Nested session sub-table: inset panel, crisp full-width row dividers. */
 .import-sess-list {
-  padding: 0 18px 0 44px;
+  padding-left: 44px;
   border-top: 1px solid var(--border);
-  background: #fcfcfc;
+  background: #fbfbfc;
 }
 
 .import-sess {
@@ -5266,13 +5266,13 @@ button.search-menu-item:hover,
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 14px;
   align-items: center;
-  min-height: 34px;
-  padding: 6px 0;
+  min-height: 38px;
+  padding: 6px 18px 6px 0;
 }
 
 .import-sess + .import-sess,
 .import-sess + .import-sess-scan-row {
-  border-top: 1px solid #f0f0f0;
+  border-top: 1px solid var(--border);
 }
 
 /* dim = not yet imported into Muninn */
@@ -5280,11 +5280,11 @@ button.search-menu-item:hover,
   opacity: 0.5;
 }
 
-/* Table-row import entry: regular single-row height, centered, text-only hover. */
+/* "Add row" affordance: left-aligned + icon, regular row height, text-only hover. */
 .import-action-row {
   display: flex;
   align-items: center;
-  justify-content: center;
+  gap: 7px;
   min-height: 44px;
   padding: 11px 18px;
   border-top: 1px solid var(--border);
@@ -5296,6 +5296,11 @@ button.search-menu-item:hover,
 
 .import-action-row:hover {
   color: var(--foreground);
+}
+
+.import-action-icon {
+  width: 14px;
+  height: 14px;
 }
 
 .import-card > .import-action-row:first-child {
