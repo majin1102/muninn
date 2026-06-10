@@ -5254,16 +5254,25 @@ button.search-menu-item:hover,
   color: var(--muted-foreground);
 }
 
+/* Nested session sub-table: quiet inset panel with hairline row separators. */
 .import-sess-list {
-  padding: 2px 18px 14px 46px;
+  padding: 0 18px 0 44px;
+  border-top: 1px solid var(--border);
+  background: #fcfcfc;
 }
 
 .import-sess {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 14px;
-  align-items: baseline;
-  padding: 7px 0;
+  align-items: center;
+  min-height: 34px;
+  padding: 6px 0;
+}
+
+.import-sess + .import-sess,
+.import-sess + .import-sess-scan-row {
+  border-top: 1px solid #f0f0f0;
 }
 
 /* dim = not yet imported into Muninn */
@@ -5271,7 +5280,7 @@ button.search-menu-item:hover,
   opacity: 0.5;
 }
 
-/* Table-row import entry: regular single-row height, centered. */
+/* Table-row import entry: regular single-row height, centered, text-only hover. */
 .import-action-row {
   display: flex;
   align-items: center;
@@ -5282,10 +5291,10 @@ button.search-menu-item:hover,
   color: var(--muted-foreground);
   font-size: 13px;
   cursor: pointer;
+  transition: color 0.12s ease;
 }
 
 .import-action-row:hover {
-  background: #fafafa;
   color: var(--foreground);
 }
 
@@ -5319,19 +5328,24 @@ button.search-menu-item:hover,
 }
 
 .import-sess-scan-row {
-  padding: 7px 0;
+  padding: 10px 0;
   color: #8f9195;
   font-size: 12px;
   text-align: center;
   cursor: pointer;
+  transition: color 0.12s ease;
 }
 
 .import-sess-scan-row:hover {
-  color: var(--muted-foreground);
+  color: var(--foreground);
 }
 
 .import-sess-scan-row.import-scan-row-static {
   cursor: default;
+}
+
+.import-sess-scan-row.import-scan-row-static:hover {
+  color: #8f9195;
 }
 
 .import-result {
