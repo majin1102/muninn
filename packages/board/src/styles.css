@@ -5146,17 +5146,6 @@ button.search-menu-item:hover,
   color: var(--foreground);
 }
 
-.import-agent-link {
-  font-size: 13px;
-  color: var(--muted-foreground);
-  cursor: pointer;
-}
-
-.import-agent-link:hover {
-  color: var(--foreground);
-  text-decoration: underline;
-}
-
 /* padding-right matches the card row inset so the header switch aligns with the list switches */
 /* padding-right = card row inset (18px) + 1px card border so the header's
    Auto capture switch aligns exactly with the per-project ones inside the card */
@@ -5278,15 +5267,30 @@ button.search-menu-item:hover,
 }
 
 /* dim = not yet imported into Muninn */
-.import-proj-local,
 .import-sess-local {
   opacity: 0.5;
 }
 
-.import-hint-row {
+/* Table-row import entry: same height as a project row, centered. */
+.import-action-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 72px;
   padding: 15px 18px;
+  border-top: 1px solid var(--border);
   color: var(--muted-foreground);
   font-size: 13px;
+  cursor: pointer;
+}
+
+.import-action-row:hover {
+  background: #fafafa;
+  color: var(--foreground);
+}
+
+.import-card > .import-action-row:first-child {
+  border-top: 0;
 }
 
 .import-scan-row {

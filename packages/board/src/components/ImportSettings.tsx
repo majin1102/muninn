@@ -17,10 +17,7 @@ export function ImportSettings({ client }: { client: BoardClient }) {
   const [imported, setImported] = useState<ImportSessionsListResponse | null>(null);
   const [importedStatus, setImportedStatus] = useState<LoadStatus>('loading');
   const [importedError, setImportedError] = useState<string | null>(null);
-  const [scanData, setScanData] = useState<ImportSessionsListResponse | null>(null);
-  const [scanning, setScanning] = useState(false);
   const [scanError, setScanError] = useState<string | null>(null);
-  const [revealProjects, setRevealProjects] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [importResult, setImportResult] = useState<ImportSelectedResponse | null>(null);
   const scanPromiseRef = useRef<Promise<ImportSessionsListResponse> | null>(null);
@@ -49,20 +46,12 @@ export function ImportSettings({ client }: { client: BoardClient }) {
     if (scanPromiseRef.current) {
       return scanPromiseRef.current;
     }
-    setScanning(true);
     setScanError(null);
     const promise = client.listCodexImportSessions()
-      .then((response) => {
-        setScanData(response);
-        return response;
-      })
       .catch((scanFailure: unknown) => {
         scanPromiseRef.current = null;
         setScanError(asErrorMessage(scanFailure));
         throw scanFailure;
-      })
-      .finally(() => {
-        setScanning(false);
       });
     scanPromiseRef.current = promise;
     return promise;
@@ -73,31 +62,6 @@ export function ImportSettings({ client }: { client: BoardClient }) {
     () => new Set(importedProjects.flatMap((project) => project.sessions.map((session) => session.sessionId))),
     [importedProjects],
   );
-  const localProjects = useMemo(() => {
-    if (!scanData || !revealProjects) {
-      return [] as ImportAgentProject[];
-    }
-    const importedKeys = new Set(importedProjects.map((project) => project.projectKey));
-    return scanData.projects
-      .filter((project) => !importedKeys.has(project.projectKey))
-      .map((project) => ({
-        ...project,
-        sessions: project.sessions.filter((session) => !importedSessionIds.has(session.sessionId)),
-      }))
-      .filter((project) => project.sessions.length > 0);
-  }, [importedProjects, importedSessionIds, revealProjects, scanData]);
-
-  async function revealAllProjects() {
-    if (scanning) {
-      return;
-    }
-    try {
-      await ensureScan();
-      setRevealProjects(true);
-    } catch {
-      // surfaced via the scanError row
-    }
-  }
 
   const codexStatus = importedStatus === 'error'
     ? 'Unavailable'
@@ -116,16 +80,13 @@ export function ImportSettings({ client }: { client: BoardClient }) {
 
   return (
     <div className="import-settings">
-      <AgentSection label="Codex" status={codexStatus} supported onImport={() => setPickerOpen(true)} result={resultNode}>
+      <AgentSection label="Codex" status={codexStatus} supported result={resultNode}>
         {importedStatus === 'error' ? (
           <div className="import-empty">{importedError}</div>
         ) : importedStatus === 'loading' && !imported ? (
           <div className="import-empty">Loading captured sessions…</div>
         ) : (
           <div className="import-card">
-            {importedProjects.length === 0 && localProjects.length === 0 ? (
-              <div className="import-hint-row">No captured sessions yet — scan local projects to import history.</div>
-            ) : null}
             {importedProjects.map((project) => (
               <ProjectRow
                 key={project.projectKey}
@@ -134,22 +95,15 @@ export function ImportSettings({ client }: { client: BoardClient }) {
                 ensureScan={ensureScan}
               />
             ))}
-            {localProjects.map((project) => (
-              <ProjectRow key={`local-${project.projectKey}`} project={project} local />
-            ))}
-            {!revealProjects ? (
-              <div
-                className="import-scan-row"
-                role="button"
-                tabIndex={0}
-                onClick={() => void revealAllProjects()}
-                onKeyDown={(event) => { if (event.key === 'Enter') void revealAllProjects(); }}
-              >
-                {scanning ? 'Scanning local projects…' : 'Scan local projects…'}
-              </div>
-            ) : localProjects.length === 0 ? (
-              <div className="import-scan-row import-scan-row-static">All local projects already imported.</div>
-            ) : null}
+            <div
+              className="import-action-row"
+              role="button"
+              tabIndex={0}
+              onClick={() => setPickerOpen(true)}
+              onKeyDown={(event) => { if (event.key === 'Enter') setPickerOpen(true); }}
+            >
+              Import projects…
+            </div>
             {scanError ? <div className="import-scan-row import-scan-row-static import-result-error">{scanError}</div> : null}
           </div>
         )}
@@ -181,7 +135,6 @@ function AgentSection({
   status,
   supported,
   placeholder,
-  onImport,
   result,
   children,
 }: {
@@ -189,7 +142,6 @@ function AgentSection({
   status: string;
   supported: boolean;
   placeholder?: string;
-  onImport?: () => void;
   result?: ReactNode;
   children?: ReactNode;
 }) {
@@ -200,11 +152,6 @@ function AgentSection({
     <section className="import-agent">
       <div className="import-agent-head">
         <span className="import-agent-name">{label}</span>
-        {supported ? (
-          <span className="import-agent-link" role="button" tabIndex={0} onClick={onImport} onKeyDown={(event) => { if (event.key === 'Enter') onImport?.(); }}>
-            Import
-          </span>
-        ) : null}
       </div>
       <div className="import-agent-subrow">
         <span className="import-agent-sub">{status}</span>
@@ -224,17 +171,15 @@ function AgentSection({
 
 function ProjectRow({
   project,
-  local = false,
   importedSessionIds,
   ensureScan,
 }: {
   project: ImportAgentProject;
-  local?: boolean;
   importedSessionIds?: Set<string>;
   ensureScan?: () => Promise<ImportSessionsListResponse>;
 }) {
   const [open, setOpen] = useState(false);
-  const [capture, setCapture] = useState(!local);
+  const [capture, setCapture] = useState(true);
   const [scannedSessions, setScannedSessions] = useState<ImportAgentSession[] | null>(null);
   const [localScanning, setLocalScanning] = useState(false);
 
@@ -259,12 +204,12 @@ function ProjectRow({
   }
 
   return (
-    <div className={`import-proj${open ? ' import-proj-open' : ''}${local ? ' import-proj-local' : ''}`}>
+    <div className={`import-proj${open ? ' import-proj-open' : ''}`}>
       <div className="import-proj-row" role="button" tabIndex={0} onClick={() => setOpen((value) => !value)} onKeyDown={(event) => { if (event.key === 'Enter') setOpen((value) => !value); }}>
         <ChevronRight className="tree-chevron import-chev" />
         <span className="import-proj-main">
           <span className="import-proj-name">{project.projectKey}</span>
-          <span className="import-proj-sub">{project.sessionCount} sessions{!local && project.importedCount > 0 ? ` · ${project.importedCount} captured` : ''}</span>
+          <span className="import-proj-sub">{project.sessionCount} sessions{project.importedCount > 0 ? ` · ${project.importedCount} captured` : ''}</span>
         </span>
         <span className="import-capture-ctl" onClick={(event) => event.stopPropagation()}>
           <span className="import-ctl-label">Capture</span>
@@ -274,27 +219,25 @@ function ProjectRow({
       {open ? (
         <div className="import-sess-list">
           {project.sessions.map((session) => (
-            <SessionRow key={session.sessionId} session={session} dim={local} />
+            <SessionRow key={session.sessionId} session={session} />
           ))}
-          {!local ? (
-            scannedSessions === null ? (
-              <div
-                className="import-sess-scan-row"
-                role="button"
-                tabIndex={0}
-                onClick={() => void revealLocalSessions()}
-                onKeyDown={(event) => { if (event.key === 'Enter') void revealLocalSessions(); }}
-              >
-                {localScanning ? 'Scanning local sessions…' : 'Scan local sessions…'}
-              </div>
-            ) : localSessions && localSessions.length > 0 ? (
-              localSessions.map((session) => (
-                <SessionRow key={session.sessionId} session={session} dim />
-              ))
-            ) : (
-              <div className="import-sess-scan-row import-scan-row-static">All local sessions already imported.</div>
-            )
-          ) : null}
+          {scannedSessions === null ? (
+            <div
+              className="import-sess-scan-row"
+              role="button"
+              tabIndex={0}
+              onClick={() => void revealLocalSessions()}
+              onKeyDown={(event) => { if (event.key === 'Enter') void revealLocalSessions(); }}
+            >
+              {localScanning ? 'Scanning local sessions…' : 'Scan local sessions…'}
+            </div>
+          ) : localSessions && localSessions.length > 0 ? (
+            localSessions.map((session) => (
+              <SessionRow key={session.sessionId} session={session} dim />
+            ))
+          ) : (
+            <div className="import-sess-scan-row import-scan-row-static">All local sessions already imported.</div>
+          )}
         </div>
       ) : null}
     </div>
