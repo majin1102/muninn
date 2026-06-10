@@ -5241,15 +5241,18 @@ button.search-menu-item:hover,
   transform: rotate(90deg);
 }
 
+/* Match Visual .settings-row-copy exactly: grid gap 4px, label 13/600 lh 1.35,
+   desc 13/400 muted lh 1.42 */
 .import-proj-main {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  gap: 4px;
   min-width: 0;
 }
 
 .import-proj-name {
   font-size: 13px;
   font-weight: 600;
+  line-height: 1.35;
   color: var(--foreground);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -5258,8 +5261,8 @@ button.search-menu-item:hover,
 
 .import-proj-sub {
   font-size: 13px;
+  line-height: 1.42;
   color: var(--muted-foreground);
-  margin-top: 2px;
 }
 
 .import-sess-list {
