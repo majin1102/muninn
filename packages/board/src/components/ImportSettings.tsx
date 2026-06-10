@@ -99,7 +99,7 @@ function AgentSection({
         <span className="import-agent-spacer" />
         {supported ? (
           <span className="import-capture-ctl">
-            <span className="import-ctl-label">Auto capture</span>
+            <span className="import-ctl-label">Capture</span>
             <Switch checked={defaultCapture} onChange={setDefaultCapture} ariaLabel={`${label} default auto-capture`} />
           </span>
         ) : null}
@@ -127,7 +127,6 @@ function AgentSection({
 function ProjectRow({ project }: { project: ImportAgentProject }) {
   const [open, setOpen] = useState(false);
   const [auto, setAuto] = useState(project.importedCount > 0);
-  const latestUpdatedAt = project.sessions[0]?.updatedAt ?? '';
 
   return (
     <div className={open ? 'import-proj import-proj-open' : 'import-proj'}>
@@ -137,22 +136,16 @@ function ProjectRow({ project }: { project: ImportAgentProject }) {
           <span className="import-proj-name">{project.projectKey}</span>
           <span className="import-proj-sub">{project.sessionCount} sessions{project.importedCount > 0 ? ` · ${project.importedCount} captured` : ''}</span>
         </span>
-        <span className="import-proj-meta">
-          {latestUpdatedAt ? (
-            <span className="tree-meta tree-time" title={formatTimestamp(latestUpdatedAt)}>{formatRelativeTime(latestUpdatedAt)}</span>
-          ) : null}
-          <span className="import-capture-ctl" onClick={(event) => event.stopPropagation()}>
-            <span className="import-ctl-label">Auto capture</span>
-            <Switch checked={auto} onChange={setAuto} ariaLabel={`${project.projectKey} auto-capture`} />
-          </span>
+        <span className="import-capture-ctl" onClick={(event) => event.stopPropagation()}>
+          <span className="import-ctl-label">Capture</span>
+          <Switch checked={auto} onChange={setAuto} ariaLabel={`${project.projectKey} capture`} />
         </span>
       </div>
       {open ? (
         <div className="import-sess-list">
           {project.sessions.map((session) => (
-            <div className="import-sess" key={session.sessionId}>
+            <div className={session.imported ? 'import-sess import-sess-captured' : 'import-sess'} key={session.sessionId}>
               <span className="import-sess-title">{session.title}</span>
-              <span className={session.imported ? 'import-sess-cap' : 'import-sess-cap import-sess-cap-off'}>{session.imported ? 'Captured' : 'Not captured'}</span>
               <span className="tree-meta tree-time" title={formatTimestamp(session.updatedAt)}>{formatRelativeTime(session.updatedAt)}</span>
             </div>
           ))}
@@ -176,6 +169,19 @@ function ImportPicker({
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [importing, setImporting] = useState(false);
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+
+  function toggleGroup(projectKey: string) {
+    setCollapsed((current) => {
+      const next = new Set(current);
+      if (next.has(projectKey)) {
+        next.delete(projectKey);
+      } else {
+        next.add(projectKey);
+      }
+      return next;
+    });
+  }
 
   const needle = query.trim().toLowerCase();
   const groups = useMemo(
@@ -232,13 +238,16 @@ function ImportPicker({
         <div className="import-modal-body">
           {groups.length === 0 ? (
             <div className="import-empty">No sessions match.</div>
-          ) : groups.map((group) => (
-            <div className="import-pick-group" key={group.projectKey}>
-              <div className="import-pick-group-head">
+          ) : groups.map((group) => {
+            const groupOpen = !collapsed.has(group.projectKey);
+            return (
+            <div className={groupOpen ? 'import-pick-group import-pick-group-open' : 'import-pick-group'} key={group.projectKey}>
+              <div className="import-pick-group-head" role="button" tabIndex={0} onClick={() => toggleGroup(group.projectKey)} onKeyDown={(event) => { if (event.key === 'Enter') toggleGroup(group.projectKey); }}>
+                <ChevronRight className="tree-chevron import-chev" />
                 <span className="import-pick-group-name">{group.projectKey}</span>
                 <span className="import-pick-group-meta">{group.sessions.length} sessions</span>
               </div>
-              {group.sessions.map((session) => {
+              {groupOpen ? group.sessions.map((session) => {
                 const isSel = selected.has(session.sourcePath);
                 return (
                   <div
@@ -254,9 +263,10 @@ function ImportPicker({
                     <span className="import-pick-meta tree-time" title={formatTimestamp(session.updatedAt)}>{session.imported ? <span className="import-tag">captured</span> : formatRelativeTime(session.updatedAt)}</span>
                   </div>
                 );
-              })}
+              }) : null}
             </div>
-          ))}
+            );
+          })}
         </div>
         <div className="import-modal-foot">
           <span className="import-modal-count">{selected.size} selected</span>

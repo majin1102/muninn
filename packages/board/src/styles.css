@@ -5268,10 +5268,14 @@ button.search-menu-item:hover,
 
 .import-sess {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 14px;
   align-items: baseline;
   padding: 7px 0;
+}
+
+.import-sess-captured {
+  opacity: 0.5;
 }
 
 .import-sess-title {
@@ -5382,12 +5386,17 @@ button.search-menu-item:hover,
 
 .import-pick-group-head {
   display: flex;
-  align-items: baseline;
-  gap: 10px;
-  padding: 10px 18px 4px;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 18px 8px;
   position: sticky;
   top: 0;
   background: var(--card);
+  cursor: pointer;
+}
+
+.import-pick-group-open .import-chev {
+  transform: rotate(90deg);
 }
 
 .import-pick-group-name {
