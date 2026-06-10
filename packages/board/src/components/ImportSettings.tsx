@@ -103,7 +103,7 @@ export function ImportSettings({ client }: { client: BoardClient }) {
               onKeyDown={(event) => { if (event.key === 'Enter') setPickerOpen(true); }}
             >
               <Plus className="import-action-icon" aria-hidden="true" />
-              <span>Import sessions</span>
+              <span>Import projects and sessions</span>
             </div>
             {scanError ? <div className="import-scan-row import-scan-row-static import-result-error">{scanError}</div> : null}
           </div>
@@ -146,9 +146,6 @@ function AgentSection({
   result?: ReactNode;
   children?: ReactNode;
 }) {
-  // Per-agent default capture. Policy persistence is deferred; local UI state for now.
-  const [defaultCapture, setDefaultCapture] = useState(supported);
-
   return (
     <section className="import-agent">
       <div className="import-agent-head">
@@ -156,13 +153,6 @@ function AgentSection({
       </div>
       <div className="import-agent-subrow">
         <span className="import-agent-sub">{status}</span>
-        <span className="import-agent-spacer" />
-        {supported ? (
-          <span className="import-capture-ctl">
-            <span className="import-ctl-label">Capture</span>
-            <Switch checked={defaultCapture} onChange={setDefaultCapture} ariaLabel={`${label} capture`} />
-          </span>
-        ) : null}
       </div>
       {result}
       {supported ? children : <div className="import-empty">{placeholder}</div>}
@@ -214,7 +204,7 @@ function ProjectRow({
         </span>
         <span className="import-capture-ctl" onClick={(event) => event.stopPropagation()}>
           <span className="import-ctl-label">Capture</span>
-          <Switch checked={capture} onChange={setCapture} ariaLabel={`${project.projectKey} capture`} />
+          <Switch size="sm" checked={capture} onChange={setCapture} ariaLabel={`${project.projectKey} capture`} />
         </span>
       </div>
       {open ? (
