@@ -5175,6 +5175,12 @@ button.search-menu-item:hover,
   color: #8f9195;
 }
 
+.import-proj-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 16px;
+}
+
 .import-capture-ctl {
   display: inline-flex;
   align-items: center;

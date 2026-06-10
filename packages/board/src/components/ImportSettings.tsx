@@ -127,6 +127,7 @@ function AgentSection({
 function ProjectRow({ project }: { project: ImportAgentProject }) {
   const [open, setOpen] = useState(false);
   const [auto, setAuto] = useState(project.importedCount > 0);
+  const latestUpdatedAt = project.sessions[0]?.updatedAt ?? '';
 
   return (
     <div className={open ? 'import-proj import-proj-open' : 'import-proj'}>
@@ -136,9 +137,14 @@ function ProjectRow({ project }: { project: ImportAgentProject }) {
           <span className="import-proj-name">{project.projectKey}</span>
           <span className="import-proj-sub">{project.sessionCount} sessions{project.importedCount > 0 ? ` · ${project.importedCount} captured` : ''}</span>
         </span>
-        <span className="import-capture-ctl" onClick={(event) => event.stopPropagation()}>
-          <span className="import-ctl-label">auto-capture</span>
-          <Switch checked={auto} onChange={setAuto} ariaLabel={`${project.projectKey} auto-capture`} />
+        <span className="import-proj-meta">
+          {latestUpdatedAt ? (
+            <span className="tree-meta tree-time" title={formatTimestamp(latestUpdatedAt)}>{formatRelativeTime(latestUpdatedAt)}</span>
+          ) : null}
+          <span className="import-capture-ctl" onClick={(event) => event.stopPropagation()}>
+            <span className="import-ctl-label">auto-capture</span>
+            <Switch checked={auto} onChange={setAuto} ariaLabel={`${project.projectKey} auto-capture`} />
+          </span>
         </span>
       </div>
       {open ? (
@@ -146,8 +152,8 @@ function ProjectRow({ project }: { project: ImportAgentProject }) {
           {project.sessions.map((session) => (
             <div className="import-sess" key={session.sessionId}>
               <span className="import-sess-title">{session.title}</span>
-              <span className="import-sess-time" title={formatTimestamp(session.updatedAt)}>{session.turnCount}t · {formatRelativeTime(session.updatedAt)}</span>
               <span className={session.imported ? 'import-sess-cap' : 'import-sess-cap import-sess-cap-off'}>{session.imported ? 'Captured' : 'Not captured'}</span>
+              <span className="tree-meta tree-time" title={formatTimestamp(session.updatedAt)}>{formatRelativeTime(session.updatedAt)}</span>
             </div>
           ))}
         </div>
