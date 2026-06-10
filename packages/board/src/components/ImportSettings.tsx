@@ -99,7 +99,7 @@ function AgentSection({
         <span className="import-agent-spacer" />
         {supported ? (
           <span className="import-capture-ctl">
-            <span className="import-ctl-label">auto-capture</span>
+            <span className="import-ctl-label">Auto capture</span>
             <Switch checked={defaultCapture} onChange={setDefaultCapture} ariaLabel={`${label} default auto-capture`} />
           </span>
         ) : null}
@@ -142,7 +142,7 @@ function ProjectRow({ project }: { project: ImportAgentProject }) {
             <span className="tree-meta tree-time" title={formatTimestamp(latestUpdatedAt)}>{formatRelativeTime(latestUpdatedAt)}</span>
           ) : null}
           <span className="import-capture-ctl" onClick={(event) => event.stopPropagation()}>
-            <span className="import-ctl-label">auto-capture</span>
+            <span className="import-ctl-label">Auto capture</span>
             <Switch checked={auto} onChange={setAuto} ariaLabel={`${project.projectKey} auto-capture`} />
           </span>
         </span>
@@ -251,7 +251,7 @@ function ImportPicker({
                   >
                     <span className="import-cb">{isSel ? '✓' : ''}</span>
                     <span className="import-pick-title">{session.title}</span>
-                    <span className="import-pick-meta" title={formatTimestamp(session.updatedAt)}>{session.imported ? <span className="import-tag">captured</span> : `${session.turnCount}t · ${formatRelativeTime(session.updatedAt)}`}</span>
+                    <span className="import-pick-meta tree-time" title={formatTimestamp(session.updatedAt)}>{session.imported ? <span className="import-tag">captured</span> : formatRelativeTime(session.updatedAt)}</span>
                   </div>
                 );
               })}

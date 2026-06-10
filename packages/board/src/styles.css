@@ -5158,11 +5158,13 @@ button.search-menu-item:hover,
 }
 
 /* padding-right matches the card row inset so the header switch aligns with the list switches */
+/* padding-right = card row inset (18px) + 1px card border so the header's
+   Auto capture switch aligns exactly with the per-project ones inside the card */
 .import-agent-subrow {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding-right: 16px;
+  padding-right: 19px;
   margin-bottom: 14px;
 }
 
@@ -5211,9 +5213,10 @@ button.search-menu-item:hover,
 
 .import-proj-row {
   display: grid;
-  grid-template-columns: 16px 1fr auto;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
   align-items: center;
   gap: 12px;
+  min-height: 72px;
   padding: 15px 18px;
   cursor: pointer;
   border-top: 1px solid var(--border);
@@ -5248,12 +5251,15 @@ button.search-menu-item:hover,
   font-size: 13px;
   font-weight: 600;
   color: var(--foreground);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .import-proj-sub {
-  font-size: 12px;
-  color: #8f9195;
-  margin-top: 1px;
+  font-size: 13px;
+  color: var(--muted-foreground);
+  margin-top: 2px;
 }
 
 .import-sess-list {
@@ -5262,7 +5268,7 @@ button.search-menu-item:hover,
 
 .import-sess {
   display: grid;
-  grid-template-columns: 1fr auto auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   gap: 14px;
   align-items: baseline;
   padding: 7px 0;
@@ -5271,6 +5277,9 @@ button.search-menu-item:hover,
 .import-sess-title {
   font-size: 13px;
   color: var(--foreground);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .import-sess-time {
@@ -5374,7 +5383,6 @@ button.search-menu-item:hover,
 .import-pick-group-head {
   display: flex;
   align-items: baseline;
-  justify-content: space-between;
   gap: 10px;
   padding: 10px 18px 4px;
   position: sticky;
@@ -5383,23 +5391,36 @@ button.search-menu-item:hover,
 }
 
 .import-pick-group-name {
+  flex: 1;
+  min-width: 0;
   font-size: 12px;
   font-weight: 600;
   color: var(--muted-foreground);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .import-pick-group-meta {
+  flex: none;
   font-size: 12px;
   color: #8f9195;
 }
 
 .import-pick {
   display: grid;
-  grid-template-columns: 16px 1fr auto;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
   gap: 12px;
   align-items: center;
   padding: 9px 18px 9px 30px;
   cursor: pointer;
+}
+
+.import-pick-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .import-pick:hover {
