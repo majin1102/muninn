@@ -134,7 +134,7 @@ export function RecallPage({
   projectError,
   onLoadProjects,
 }: RecallPageProps) {
-  const [controls, setControls] = useState<SearchControlsState>(() => defaultSearchControls());
+  const [controls, setControls] = useState<SearchControlsState>(() => controlsFromRecallHash());
   const [submitted, setSubmitted] = useState(false);
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
@@ -144,7 +144,8 @@ export function RecallPage({
   const [results, setResults] = useState<SearchSessionResult[]>([]);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [providerOptions, setProviderOptions] = useState<RecallProviderOption[]>(FALLBACK_PROVIDER_OPTIONS);
-  const [provider, setProvider] = useState('default');
+  const [providerReady, setProviderReady] = useState(false);
+  const [provider, setProvider] = useState(() => providerFromRecallHash());
   const [openMenu, setOpenMenu] = useState<SearchMenuKey | null>(null);
   const [sourceTab, setSourceTab] = useState<SearchSourceKey>('all');
   const [composerExpanded, setComposerExpanded] = useState(false);
@@ -155,6 +156,7 @@ export function RecallPage({
   const openMenuRef = useRef<SearchMenuKey | null>(null);
   const submittedRef = useRef(false);
   const composerExpandedRef = useRef(false);
+  const restoreRecallSearchRef = useRef(controls.query.trim().length > 0);
 
   openMenuRef.current = openMenu;
   submittedRef.current = submitted;
@@ -176,6 +178,10 @@ export function RecallPage({
   }, [onLoadProjects, projectError, projects.length, projectsLoading]);
 
   useEffect(() => {
+    writeRecallHash(controls, provider);
+  }, [controls, provider]);
+
+  useEffect(() => {
     let cancelled = false;
     void client.getRecallProviders()
       .then((response) => {
@@ -184,15 +190,14 @@ export function RecallPage({
         }
         const providers = response.providers.length > 0 ? response.providers : FALLBACK_PROVIDER_OPTIONS;
         setProviderOptions(providers);
-        setProvider((current) => (
-          providers.some((option) => option.value === current)
-            ? current
-            : providers[0]?.value ?? 'default'
-        ));
+        setProvider((current) => normalizeRecallProvider(current, providers));
+        setProviderReady(true);
       })
       .catch(() => {
         if (!cancelled) {
           setProviderOptions(FALLBACK_PROVIDER_OPTIONS);
+          setProvider((current) => normalizeRecallProvider(current, FALLBACK_PROVIDER_OPTIONS));
+          setProviderReady(true);
         }
       });
     return () => {
@@ -203,6 +208,14 @@ export function RecallPage({
   useEffect(() => () => {
     agentAbortRef.current?.abort();
   }, []);
+
+  useEffect(() => {
+    if (!providerReady || !restoreRecallSearchRef.current) {
+      return;
+    }
+    restoreRecallSearchRef.current = false;
+    void submit();
+  }, [providerReady]);
 
   useEffect(() => {
     function closeOnOutsidePointerDown(event: PointerEvent) {
@@ -415,7 +428,6 @@ export function RecallPage({
       {!submitted ? (
         <h1 className="search-prompt-title">
           <img src={muninnLogo} alt="Muninn" />
-          <span className="search-prompt-brand">Muninn</span>
           <span>recalls everything you worked on</span>
         </h1>
       ) : null}
@@ -606,6 +618,64 @@ function SearchAnswerView({
 
 function waitForPaint(): Promise<void> {
   return new Promise((resolve) => requestAnimationFrame(() => resolve()));
+}
+
+function controlsFromRecallHash(): SearchControlsState {
+  const params = recallHashParams();
+  const defaults = defaultSearchControls();
+  return {
+    query: params.get('q') ?? defaults.query,
+    projectKeys: params.getAll('project').filter(Boolean),
+    sessionKeys: params.getAll('session').filter(Boolean),
+    sessionTopN: normalizeSearchN(params.get('sessionTopN') ?? '', defaults.sessionTopN),
+    topN: normalizeSearchN(params.get('topN') ?? '', defaults.topN),
+  };
+}
+
+function providerFromRecallHash(): string {
+  return recallHashParams().get('provider') || 'default';
+}
+
+function normalizeRecallProvider(provider: string, providers: RecallProviderOption[]): string {
+  return providers.some((option) => option.value === provider)
+    ? provider
+    : providers[0]?.value ?? 'default';
+}
+
+function writeRecallHash(controls: SearchControlsState, provider: string) {
+  if (!currentHashPath().startsWith('recall')) {
+    return;
+  }
+
+  const params = new URLSearchParams();
+  if (controls.query.trim()) {
+    params.set('q', controls.query);
+  }
+  for (const projectKey of controls.projectKeys) {
+    params.append('project', projectKey);
+  }
+  for (const sessionKey of controls.sessionKeys) {
+    params.append('session', sessionKey);
+  }
+  params.set('topN', String(controls.topN));
+  params.set('sessionTopN', String(controls.sessionTopN));
+  params.set('provider', provider);
+
+  const query = params.toString();
+  const nextHash = query ? `#/recall?${query}` : '#/recall';
+  if (window.location.hash === nextHash) {
+    return;
+  }
+  window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}${nextHash}`);
+}
+
+function recallHashParams(): URLSearchParams {
+  const [, query = ''] = window.location.hash.replace(/^#\/?/, '').split('?');
+  return new URLSearchParams(query);
+}
+
+function currentHashPath(): string {
+  return window.location.hash.replace(/^#\/?/, '').split('?')[0] ?? '';
 }
 
 function clampSearchSplitRatio(value: number): number {

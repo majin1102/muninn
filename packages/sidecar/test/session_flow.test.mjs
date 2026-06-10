@@ -452,6 +452,9 @@ test('artifact endpoint serves safe artifact store relative paths only', async (
 
   const traversal = await app.request(`/api/v1/artifacts/${encodeURIComponent('../muninn.json')}`);
   assert.equal(traversal.status, 400);
+
+  const malformed = await app.request('/api/v1/artifacts/%E0%A4%A');
+  assert.equal(malformed.status, 400);
 });
 
 test('turn/capture rejects legacy snake_case turn fields', async (t) => {

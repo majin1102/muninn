@@ -2811,9 +2811,10 @@ svg {
 }
 
 .search-prompt-title img {
-  width: 34px;
-  height: 34px;
+  width: 40px;
+  height: 40px;
   object-fit: contain;
+  transform: translateY(-4px);
 }
 
 .search-prompt-brand {
@@ -3921,7 +3922,7 @@ button.search-menu-item:hover,
 .settings-section h2 {
   margin: 0;
   color: var(--foreground);
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 600;
   line-height: 1.35;
   letter-spacing: 0;

@@ -17,6 +17,7 @@ type SettingsPageProps = {
 };
 
 type SettingsMode = 'visual' | 'json';
+type PipelineSettingsTab = 'extractor' | 'observer';
 type SaveStatus = 'idle' | 'loading' | 'saved' | 'saving' | 'invalid' | 'failed' | 'unavailable';
 const DEFAULT_DATABASE = 'main';
 const DEFAULT_MUNINN_HOME = '/Users/Nathan/.muninn';
@@ -29,7 +30,7 @@ const DEFAULT_WATCHDOG_CONFIG = {
 };
 
 export function SettingsPage({ client }: SettingsPageProps) {
-  const [mode, setMode] = useState<SettingsMode>('visual');
+  const [mode, setMode] = useState<SettingsMode>(() => initialSettingsHashState().mode);
   const [draft, setDraft] = useState<MuninnSettingsDraft | null>(null);
   const [jsonText, setJsonText] = useState('');
   const [jsonDirty, setJsonDirty] = useState(false);
@@ -134,6 +135,7 @@ export function SettingsPage({ client }: SettingsPageProps) {
       setJsonDirty(false);
     }
     setMode(nextMode);
+    writeSettingsHash({ mode: nextMode });
   }
 
   const visualDisabled = draft === null;
@@ -221,8 +223,19 @@ export function SettingsPage({ client }: SettingsPageProps) {
 function VisualSettings({ draft, pathLabel }: { draft: MuninnSettingsDraft; pathLabel: string }) {
   const llmProviders = providerEntries(getSettingValue(draft, ['providers', 'llm']));
   const [providerCapability, setProviderCapability] = useState<'llm' | 'embedding'>(
-    llmProviders.length > 0 ? 'llm' : 'embedding',
+    () => initialSettingsHashState().providerCapability ?? (llmProviders.length > 0 ? 'llm' : 'embedding'),
   );
+  const [pipelineTab, setPipelineTab] = useState<PipelineSettingsTab>(() => initialSettingsHashState().pipelineTab);
+
+  function selectProviderCapability(capability: 'llm' | 'embedding') {
+    setProviderCapability(capability);
+    writeSettingsHash({ providerCapability: capability });
+  }
+
+  function selectPipelineTab(tab: PipelineSettingsTab) {
+    setPipelineTab(tab);
+    writeSettingsHash({ pipelineTab: tab });
+  }
 
   return (
     <div className="settings-visual">
@@ -236,29 +249,19 @@ function VisualSettings({ draft, pathLabel }: { draft: MuninnSettingsDraft; path
         action={(
           <ProviderCapabilityTabs
             capability={providerCapability}
-            onSelect={setProviderCapability}
+            onSelect={selectProviderCapability}
           />
         )}
       >
         <ProviderGroups draft={draft} capability={providerCapability} />
       </SettingsSection>
 
-      <SettingsSection title="Extractor">
-        <OptionalSettingsRow draft={draft} label="Name" description="extractor.name" path={['extractor', 'name']} />
-        <OptionalSettingsRow draft={draft} label="LLM provider" description="extractor.llmProvider" path={['extractor', 'llmProvider']} />
-        <OptionalSettingsRow draft={draft} label="Embedding provider" description="extractor.embeddingProvider" path={['extractor', 'embeddingProvider']} />
-        <OptionalSettingsRow draft={draft} label="Recall mode" description="extractor.recallMode" path={['extractor', 'recallMode']} />
-        <OptionalSettingsRow draft={draft} label="Max attempts" description="extractor.maxAttempts" path={['extractor', 'maxAttempts']} />
-        <OptionalSettingsRow draft={draft} label="Active window days" description="extractor.activeWindowDays" path={['extractor', 'activeWindowDays']} />
-      </SettingsSection>
-
-      <SettingsSection title="Observer">
-        <OptionalSettingsRow draft={draft} label="Name" description="observer.name" path={['observer', 'name']} />
-        <OptionalSettingsRow draft={draft} label="LLM provider" description="observer.llmProvider" path={['observer', 'llmProvider']} />
-        <OptionalSettingsRow draft={draft} label="Max attempts" description="observer.maxAttempts" path={['observer', 'maxAttempts']} />
-        <OptionalSettingsRow draft={draft} label="CWD threshold" description="observer.cwdThreshold" path={['observer', 'cwdThreshold']} />
-        <OptionalSettingsRow draft={draft} label="CWD batch size" description="observer.cwdBatchSize" path={['observer', 'cwdBatchSize']} />
-        <OptionalSettingsRow draft={draft} label="Content budget" description="observer.contentBudgetChars" path={['observer', 'contentBudgetChars']} />
+      <SettingsSection
+        title="Pipelines"
+        unframed
+      >
+        <PipelineTabs tab={pipelineTab} onSelect={selectPipelineTab} />
+        <PipelineSettings draft={draft} tab={pipelineTab} />
       </SettingsSection>
 
       <SettingsSection title="Maintenance">
@@ -354,6 +357,101 @@ function ProviderCapabilityTabs({ capability, onSelect }: { capability: 'llm' | 
       </button>
     </div>
   );
+}
+
+function PipelineTabs({ tab, onSelect }: { tab: PipelineSettingsTab; onSelect: (tab: PipelineSettingsTab) => void }) {
+  return (
+    <div className="settings-provider-capability-tabs" role="tablist" aria-label="Pipeline settings">
+      <button
+        className={tab === 'extractor' ? 'settings-provider-capability-tab settings-provider-capability-tab-active' : 'settings-provider-capability-tab'}
+        type="button"
+        onClick={() => onSelect('extractor')}
+      >
+        Extractor
+      </button>
+      <button
+        className={tab === 'observer' ? 'settings-provider-capability-tab settings-provider-capability-tab-active' : 'settings-provider-capability-tab'}
+        type="button"
+        onClick={() => onSelect('observer')}
+      >
+        Observer
+      </button>
+    </div>
+  );
+}
+
+function PipelineSettings({ draft, tab }: { draft: MuninnSettingsDraft; tab: PipelineSettingsTab }) {
+  if (tab === 'extractor') {
+    return (
+      <div className="settings-card">
+        <OptionalSettingsRow draft={draft} label="Name" description="extractor.name" path={['extractor', 'name']} />
+        <OptionalSettingsRow draft={draft} label="LLM provider" description="extractor.llmProvider" path={['extractor', 'llmProvider']} />
+        <OptionalSettingsRow draft={draft} label="Embedding provider" description="extractor.embeddingProvider" path={['extractor', 'embeddingProvider']} />
+        <OptionalSettingsRow draft={draft} label="Recall mode" description="extractor.recallMode" path={['extractor', 'recallMode']} />
+        <OptionalSettingsRow draft={draft} label="Max attempts" description="extractor.maxAttempts" path={['extractor', 'maxAttempts']} />
+        <OptionalSettingsRow draft={draft} label="Active window days" description="extractor.activeWindowDays" path={['extractor', 'activeWindowDays']} />
+      </div>
+    );
+  }
+
+  return (
+    <div className="settings-card">
+      <OptionalSettingsRow draft={draft} label="Name" description="observer.name" path={['observer', 'name']} />
+      <OptionalSettingsRow draft={draft} label="LLM provider" description="observer.llmProvider" path={['observer', 'llmProvider']} />
+      <OptionalSettingsRow draft={draft} label="Max attempts" description="observer.maxAttempts" path={['observer', 'maxAttempts']} />
+      <OptionalSettingsRow draft={draft} label="CWD threshold" description="observer.cwdThreshold" path={['observer', 'cwdThreshold']} />
+      <OptionalSettingsRow draft={draft} label="CWD batch size" description="observer.cwdBatchSize" path={['observer', 'cwdBatchSize']} />
+      <OptionalSettingsRow draft={draft} label="Content budget" description="observer.contentBudgetChars" path={['observer', 'contentBudgetChars']} />
+    </div>
+  );
+}
+
+type SettingsHashState = {
+  mode: SettingsMode;
+  providerCapability: 'llm' | 'embedding' | null;
+  pipelineTab: PipelineSettingsTab;
+};
+
+function initialSettingsHashState(): SettingsHashState {
+  const params = settingsHashParams();
+  const mode = params.get('mode') === 'json' ? 'json' : 'visual';
+  const provider = params.get('provider');
+  const pipeline = params.get('pipeline');
+  return {
+    mode,
+    providerCapability: provider === 'llm' || provider === 'embedding' ? provider : null,
+    pipelineTab: pipeline === 'observer' ? 'observer' : 'extractor',
+  };
+}
+
+function writeSettingsHash(patch: Partial<SettingsHashState>) {
+  if (!currentHashPath().startsWith('settings')) {
+    return;
+  }
+  const state = {
+    ...initialSettingsHashState(),
+    ...patch,
+  };
+  const params = new URLSearchParams();
+  params.set('mode', state.mode);
+  if (state.providerCapability) {
+    params.set('provider', state.providerCapability);
+  }
+  params.set('pipeline', state.pipelineTab);
+  window.history.replaceState(
+    null,
+    '',
+    `${window.location.pathname}${window.location.search}#/settings?${params.toString()}`,
+  );
+}
+
+function settingsHashParams(): URLSearchParams {
+  const [, query = ''] = window.location.hash.replace(/^#\/?/, '').split('?');
+  return new URLSearchParams(query);
+}
+
+function currentHashPath(): string {
+  return window.location.hash.replace(/^#\/?/, '').split('?')[0] ?? '';
 }
 
 function providerEntries(value: unknown): Array<[string, unknown]> {

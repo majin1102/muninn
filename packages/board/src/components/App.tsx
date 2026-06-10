@@ -642,7 +642,8 @@ function EmptyView({ view }: { view: PrimaryView }) {
 
 function parseRoute(hash: string): RouteState {
   const value = hash.replace(/^#\/?/, '');
-  const parts = value.split('/').filter(Boolean);
+  const [path] = value.split('?');
+  const parts = path.split('/').filter(Boolean);
   const view = parts[0] as PrimaryView | undefined;
 
   if (view === 'recall' || view === 'wiki' || view === 'pipelines' || view === 'settings') {

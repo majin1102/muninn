@@ -699,7 +699,7 @@ test('preview does not write artifacts but run imports relative and missing atta
   }
 });
 
-test('run import records artifact copy failures per session', async () => {
+test('run import skips invalid data URL artifacts without failing the session', async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), 'muninn-codex-import-artifact-copy-failure-'));
   const previousHome = process.env.MUNINN_HOME;
   const previousObserverPollMs = process.env.MUNINN_OBSERVER_POLL_MS;
@@ -738,17 +738,17 @@ test('run import records artifact copy failures per session', async () => {
       artifactStore: path.join(tempDir, 'artifacts'),
     }, 'req-run');
 
-    assert.equal(result.importedTurns, 1);
-    assert.equal(result.failedSessions.length, 1);
-    assert.equal(result.failedSessions[0]?.sessionId, 'raw-bad-artifact-copy');
-    assert.match(result.failedSessions[0]?.errorMessage ?? '', /invalid data URL artifact/);
+    assert.equal(result.importedTurns, 2);
+    assert.equal(result.failedSessions.length, 0);
 
     const persisted = await turns.list({
       mode: { type: 'page', offset: 0, limit: 20 },
       agent: 'codex',
     });
     assert.ok(persisted.some((turn) => turn.prompt === 'good artifact copy prompt'));
-    assert.ok(!persisted.some((turn) => turn.prompt === 'bad artifact copy prompt'));
+    const badImport = persisted.find((turn) => turn.prompt === 'bad artifact copy prompt');
+    assert.ok(badImport);
+    assert.equal(badImport.artifacts.filter((artifact) => artifact.kind === 'image').length, 0);
   } finally {
     await shutdownCoreForTests();
     if (previousHome === undefined) {
@@ -1100,11 +1100,36 @@ test('markdown artifact scan skips malformed file urls', async () => {
         timestamp: '2026-06-08T16:01:20.000Z',
         type: 'response_item',
         payload: {
+          type: 'function_call',
+          call_id: 'call-bad-image',
+          name: 'view_image',
+          arguments: '{}',
+        },
+      },
+      {
+        timestamp: '2026-06-08T16:01:21.000Z',
+        type: 'response_item',
+        payload: {
+          type: 'function_call_output',
+          call_id: 'call-bad-image',
+          output: [
+            { type: 'input_image', image_url: 'file://%E0%A4%A' },
+            { type: 'input_image', image_url: 'https://%' },
+            { type: 'input_image', image_url: 'data:text/plain,%E0%A4%A' },
+            { type: 'input_file', file_path: 'file://%E0%A4%A' },
+            { type: 'input_file', file_path: 'https://%' },
+          ],
+        },
+      },
+      {
+        timestamp: '2026-06-08T16:01:30.000Z',
+        type: 'response_item',
+        payload: {
           type: 'message',
           role: 'assistant',
           content: [{
             type: 'output_text',
-            text: 'Ignore [bad](file://...`，所以：) and keep importing.',
+            text: 'Ignore [bad](file://...`，所以：) and [encoded](bad%zz.md) but keep importing.',
           }],
         },
       },

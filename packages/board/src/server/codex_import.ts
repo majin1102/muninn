@@ -675,7 +675,7 @@ function pathsFromMarkdownLinks(text: string): string[] {
   const markdownLinkPattern = /!?\[[^\]]*]\(([^)\s]+(?:\s[^)]*?)?)\)/g;
   for (const match of text.matchAll(markdownLinkPattern)) {
     const value = cleanMarkdownUrl(match[1]);
-    if (isImportArtifactCandidate(value)) {
+    if (value && isImportArtifactCandidate(value)) {
       paths.push(value);
     }
   }
@@ -688,11 +688,19 @@ function pathsFromMarkdownLinks(text: string): string[] {
   return [...new Set(paths)];
 }
 
-function cleanMarkdownUrl(value: string): string {
+function cleanMarkdownUrl(value: string): string | null {
   const trimmed = value.trim();
   const quoted = trimmed.match(/^["'](.+)["']$/);
   const withoutTitle = (quoted?.[1] ?? trimmed).split(/\s+["'][^"']*["']\s*$/)[0] ?? trimmed;
-  return decodeURI(withoutTitle.trim());
+  return safeDecodeURI(withoutTitle.trim());
+}
+
+function safeDecodeURI(value: string): string | null {
+  try {
+    return decodeURI(value);
+  } catch {
+    return null;
+  }
 }
 
 function pathsFromApplyPatch(patch: string): string[] {
@@ -755,7 +763,10 @@ async function imageArtifactFromUrl(
   }
 
   if (value.startsWith('data:')) {
-    const saved = await saveDataUrlArtifact(value, options);
+    const saved = await trySaveDataUrlArtifact(value, options);
+    if (!saved) {
+      return null;
+    }
     return {
       key: options.key,
       kind: 'image',
@@ -768,16 +779,21 @@ async function imageArtifactFromUrl(
   }
 
   if (value.startsWith('file://')) {
-    return imageArtifactFromLocalPath(filePathFromFileUrl(value), options);
+    const localPath = tryFilePathFromFileUrl(value);
+    return localPath ? imageArtifactFromLocalPath(localPath, options) : null;
   }
 
   if (/^https?:\/\//i.test(value)) {
+    const name = artifactNameFromHttpUrl(value);
+    if (!name) {
+      return null;
+    }
     return {
       key: options.key,
       kind: 'image',
       source: options.source,
       uri: value,
-      name: path.basename(new URL(value).pathname) || 'image',
+      name,
       mimeType: mimeTypeFromPath(value) ?? 'image/*',
     };
   }
@@ -819,17 +835,24 @@ async function fileArtifactFromPath(
   },
 ): Promise<Artifact | null> {
   if (/^https?:\/\//i.test(filePath)) {
+    const name = artifactNameFromHttpUrl(filePath);
+    if (!name) {
+      return null;
+    }
     return {
       key: options.key,
       kind: mimeTypeFromPath(filePath)?.startsWith('image/') ? 'image' : 'file',
       source: options.source,
       uri: filePath,
-      name: path.basename(new URL(filePath).pathname) || 'artifact',
+      name,
       mimeType: mimeTypeFromPath(filePath),
     };
   }
 
-  const localPath = filePath.startsWith('file://') ? filePathFromFileUrl(filePath) : filePath;
+  const localPath = filePath.startsWith('file://') ? tryFilePathFromFileUrl(filePath) : filePath;
+  if (!localPath) {
+    return null;
+  }
   if (options.artifactMode === 'preview') {
     return {
       key: options.key,
@@ -876,6 +899,14 @@ async function saveDataUrlArtifact(value: string, options: ArtifactWriteOptions)
     extension: extensionForMimeType(mimeType),
     mimeType,
   });
+}
+
+async function trySaveDataUrlArtifact(value: string, options: ArtifactWriteOptions): Promise<StoredArtifact | null> {
+  try {
+    return await saveDataUrlArtifact(value, options);
+  } catch {
+    return null;
+  }
 }
 
 async function saveLocalFileArtifact(filePath: string, options: ArtifactWriteOptions): Promise<StoredArtifact> {
@@ -975,6 +1006,14 @@ function artifactNameFromValue(value: string, fallback: string): string {
     return fallback;
   }
   return path.basename(localPath) || fallback;
+}
+
+function artifactNameFromHttpUrl(value: string): string | null {
+  try {
+    return path.basename(new URL(value).pathname) || 'artifact';
+  } catch {
+    return null;
+  }
 }
 
 function safeFilenamePart(value: string): string {

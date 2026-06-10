@@ -1072,7 +1072,7 @@ boardApp.post('/api/v1/ui/import/codex', async (c) => {
 });
 
 boardApp.get('/api/v1/artifacts/*', async (c) => {
-  const name = decodeURIComponent(c.req.path.slice('/api/v1/artifacts/'.length));
+  const name = safeDecodeURIComponent(c.req.path.slice('/api/v1/artifacts/'.length));
   if (!isSafeArtifactPath(name)) {
     return c.json(errorResponse('invalidRequest', 'invalid artifact path'), 400);
   }
@@ -1093,7 +1093,15 @@ boardApp.get('/api/v1/artifacts/*', async (c) => {
   }
 });
 
-function isSafeArtifactPath(value: string): boolean {
+function safeDecodeURIComponent(value: string): string | null {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return null;
+  }
+}
+
+function isSafeArtifactPath(value: string | null): value is string {
   if (!value || path.isAbsolute(value) || value.includes('\0')) {
     return false;
   }
