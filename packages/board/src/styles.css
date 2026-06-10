@@ -5271,13 +5271,13 @@ button.search-menu-item:hover,
   opacity: 0.5;
 }
 
-/* Table-row import entry: same height as a project row, centered. */
+/* Table-row import entry: regular single-row height, centered. */
 .import-action-row {
   display: flex;
   align-items: center;
   justify-content: center;
-  min-height: 72px;
-  padding: 15px 18px;
+  min-height: 44px;
+  padding: 11px 18px;
   border-top: 1px solid var(--border);
   color: var(--muted-foreground);
   font-size: 13px;
@@ -5322,6 +5322,7 @@ button.search-menu-item:hover,
   padding: 7px 0;
   color: #8f9195;
   font-size: 12px;
+  text-align: center;
   cursor: pointer;
 }
 

@@ -209,7 +209,7 @@ function ProjectRow({
         <ChevronRight className="tree-chevron import-chev" />
         <span className="import-proj-main">
           <span className="import-proj-name">{project.projectKey}</span>
-          <span className="import-proj-sub">{project.sessionCount} sessions{project.importedCount > 0 ? ` · ${project.importedCount} captured` : ''}</span>
+          <span className="import-proj-sub">{project.sessionCount} sessions</span>
         </span>
         <span className="import-capture-ctl" onClick={(event) => event.stopPropagation()}>
           <span className="import-ctl-label">Capture</span>
