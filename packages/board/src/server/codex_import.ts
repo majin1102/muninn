@@ -5,6 +5,7 @@ import path from 'node:path';
 import { addMessage, turns } from '@muninn/core';
 import {
   CODEX_IMPORT_AGENT,
+  IMPORT_ARTIFACT_KEY,
   defaultArtifactStore,
   importMarker,
   markerFromTurn,
@@ -285,7 +286,9 @@ export async function listCodexImportSessions(options: CodexImportOptions, reque
   const sourceRoot = options.sourceRoot ?? path.join(os.homedir(), '.codex');
   const artifactStore = options.artifactStore ?? defaultArtifactStore();
   const sessionFiles = await listCodexSessionFiles(sourceRoot);
-  const sessions = (await Promise.all(sessionFiles.map((file) => readCodexSession(file, { artifactStore, artifactMode: 'preview' }))))
+  // Skip any session file that fails to parse (e.g. a transcript too large to
+  // read into a string) so one bad file never fails the whole listing.
+  const sessions = (await Promise.all(sessionFiles.map((file) => readCodexSession(file, { artifactStore, artifactMode: 'preview' }).catch(() => null))))
     .filter((session): session is CodexSession => session !== null)
     .filter((session) => !isExcludedImportSession(session))
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
@@ -328,6 +331,110 @@ export async function listCodexImportSessions(options: CodexImportOptions, reque
     projects,
     requestId,
   };
+}
+
+/** DB-only fast path: list sessions already captured into Muninn, without scanning local disk. */
+export async function listImportedCodexSessions(requestId: string): Promise<ImportSessionsListResponse> {
+  const existing = await turns.list({
+    mode: { type: 'page', offset: 0, limit: 100_000 },
+    agent: CODEX_IMPORT_AGENT,
+  });
+
+  type SessionAggregate = {
+    sessionId: string;
+    project: string;
+    cwd: string;
+    title: string;
+    firstCreatedAt: string;
+    sourcePath: string;
+    updatedAt: string;
+    turnCount: number;
+    artifactCount: number;
+  };
+  const bySession = new Map<string, SessionAggregate>();
+  for (const turn of existing) {
+    const sessionId = turn.sessionId?.trim();
+    if (!sessionId) {
+      continue;
+    }
+    let aggregate = bySession.get(sessionId);
+    if (!aggregate) {
+      aggregate = {
+        sessionId,
+        project: turn.project,
+        cwd: turn.cwd,
+        title: turn.title ?? '',
+        firstCreatedAt: turn.createdAt,
+        sourcePath: sourcePathFromTurn(turn) ?? '',
+        updatedAt: turn.updatedAt,
+        turnCount: 0,
+        artifactCount: 0,
+      };
+      bySession.set(sessionId, aggregate);
+    }
+    aggregate.turnCount += 1;
+    aggregate.artifactCount += (turn.artifacts ?? []).filter((artifact) => artifact.key !== IMPORT_ARTIFACT_KEY).length;
+    if (turn.title && turn.createdAt <= aggregate.firstCreatedAt) {
+      aggregate.title = turn.title;
+      aggregate.firstCreatedAt = turn.createdAt;
+    }
+    if (turn.updatedAt > aggregate.updatedAt) {
+      aggregate.updatedAt = turn.updatedAt;
+    }
+    if (!aggregate.sourcePath) {
+      aggregate.sourcePath = sourcePathFromTurn(turn) ?? '';
+    }
+  }
+
+  const grouped = new Map<string, ImportAgentProject>();
+  const aggregates = [...bySession.values()].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+  for (const aggregate of aggregates) {
+    const project = grouped.get(aggregate.project) ?? {
+      projectKey: aggregate.project,
+      cwd: aggregate.cwd,
+      sessionCount: 0,
+      importedCount: 0,
+      sessions: [],
+    };
+    project.sessions.push({
+      sessionId: aggregate.sessionId,
+      title: aggregate.title || aggregate.sessionId.slice(0, 12),
+      sourcePath: aggregate.sourcePath,
+      updatedAt: aggregate.updatedAt,
+      turnCount: aggregate.turnCount,
+      artifactCount: aggregate.artifactCount,
+      imported: true,
+    });
+    project.sessionCount += 1;
+    project.importedCount += 1;
+    grouped.set(aggregate.project, project);
+  }
+
+  const projects = [...grouped.values()].sort((left, right) => (
+    (right.sessions[0]?.updatedAt ?? '').localeCompare(left.sessions[0]?.updatedAt ?? '')
+  ));
+
+  return {
+    sourceRoot: path.join(os.homedir(), '.codex'),
+    projectCount: projects.length,
+    sessionCount: bySession.size,
+    importedCount: bySession.size,
+    projects,
+    requestId,
+  };
+}
+
+function sourcePathFromTurn(turn: { artifacts?: Array<{ key: string; content?: string }> | null }): string | null {
+  const artifact = turn.artifacts?.find((item) => item.key === IMPORT_ARTIFACT_KEY);
+  if (!artifact?.content) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(artifact.content) as { sourcePath?: unknown };
+    return typeof parsed.sourcePath === 'string' && parsed.sourcePath.length > 0 ? parsed.sourcePath : null;
+  } catch {
+    return null;
+  }
 }
 
 export async function importSelectedCodexSessions(sourcePaths: string[], requestId: string): Promise<ImportSelectedResponse> {

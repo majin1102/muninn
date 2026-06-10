@@ -5277,8 +5277,70 @@ button.search-menu-item:hover,
   padding: 7px 0;
 }
 
-.import-sess-captured {
+/* dim = not yet imported into Muninn */
+.import-proj-local,
+.import-sess-local {
   opacity: 0.5;
+}
+
+.import-hint-row {
+  padding: 15px 18px;
+  color: var(--muted-foreground);
+  font-size: 13px;
+}
+
+.import-scan-row {
+  padding: 11px 18px;
+  border-top: 1px solid var(--border);
+  color: var(--muted-foreground);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.import-scan-row:hover {
+  background: #fafafa;
+}
+
+.import-card > .import-scan-row:first-child {
+  border-top: 0;
+}
+
+.import-scan-row-static {
+  cursor: default;
+}
+
+.import-scan-row-static:hover {
+  background: transparent;
+  color: var(--muted-foreground);
+}
+
+.import-sess-scan-row {
+  padding: 7px 0;
+  color: #8f9195;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.import-sess-scan-row:hover {
+  color: var(--muted-foreground);
+}
+
+.import-sess-scan-row.import-scan-row-static {
+  cursor: default;
+}
+
+.import-result {
+  margin: -4px 0 14px;
+}
+
+.import-result-line {
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+
+.import-result-error {
+  font-size: 12px;
+  color: #c33838;
 }
 
 .import-sess-title {

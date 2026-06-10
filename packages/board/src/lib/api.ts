@@ -104,7 +104,7 @@ export type BoardClient = {
   saveSettingsConfig(content: string): Promise<SettingsConfigResponse>;
   previewCodexImport(projectLimit?: number, projectKeys?: string[]): Promise<CodexImportPreviewResponse>;
   importCodexSessions(projectLimit?: number, projectKeys?: string[]): Promise<CodexImportRunResponse>;
-  listCodexImportSessions(): Promise<ImportSessionsListResponse>;
+  listCodexImportSessions(scope?: 'imported'): Promise<ImportSessionsListResponse>;
   importCodexSessionsByPaths(sourcePaths: string[]): Promise<ImportSelectedResponse>;
 };
 
@@ -334,8 +334,9 @@ export function createBoardClient(apiBase: string, usesDemoData: boolean): Board
         body: JSON.stringify({ projectLimit, projectKeys }),
       });
     },
-    listCodexImportSessions() {
-      return fetchJson<ImportSessionsListResponse>('/api/v1/ui/import/codex/sessions');
+    listCodexImportSessions(scope) {
+      const suffix = scope ? `?scope=${scope}` : '';
+      return fetchJson<ImportSessionsListResponse>(`/api/v1/ui/import/codex/sessions${suffix}`);
     },
     importCodexSessionsByPaths(sourcePaths: string[]) {
       return fetchJson<ImportSelectedResponse>('/api/v1/ui/import/codex/sessions', {
