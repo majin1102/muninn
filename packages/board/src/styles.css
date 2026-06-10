@@ -5449,6 +5449,14 @@ button.search-menu-item:hover,
   padding: 4px 0;
 }
 
+/* plain quiet text states inside the modal body — no framed box */
+.import-modal-placeholder {
+  padding: 26px 18px;
+  text-align: center;
+  color: var(--muted-foreground);
+  font-size: 13px;
+}
+
 .import-pick-group + .import-pick-group {
   border-top: 1px solid var(--border);
 }

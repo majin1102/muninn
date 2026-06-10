@@ -272,7 +272,7 @@ function ImportPicker({
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [importing, setImporting] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
-  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     let cancelled = false;
@@ -344,7 +344,7 @@ function ImportPicker({
   }
 
   function toggleGroup(projectKey: string) {
-    setCollapsed((current) => {
+    setExpanded((current) => {
       const next = new Set(current);
       if (next.has(projectKey)) {
         next.delete(projectKey);
@@ -370,13 +370,13 @@ function ImportPicker({
         </div>
         <div className="import-modal-body">
           {loadError ? (
-            <div className="import-empty">{loadError}</div>
+            <div className="import-modal-placeholder import-result-error">{loadError}</div>
           ) : !data ? (
-            <div className="import-empty">Scanning local sessions…</div>
+            <div className="import-modal-placeholder">Scanning local sessions…</div>
           ) : groups.length === 0 ? (
-            <div className="import-empty">No sessions match.</div>
+            <div className="import-modal-placeholder">No sessions match.</div>
           ) : groups.map((group) => {
-            const groupOpen = !collapsed.has(group.projectKey);
+            const groupOpen = expanded.has(group.projectKey);
             return (
             <div className={groupOpen ? 'import-pick-group import-pick-group-open' : 'import-pick-group'} key={group.projectKey}>
               <div className="import-pick-group-head" role="button" tabIndex={0} onClick={() => toggleGroup(group.projectKey)} onKeyDown={(event) => { if (event.key === 'Enter') toggleGroup(group.projectKey); }}>
