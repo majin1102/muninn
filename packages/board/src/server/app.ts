@@ -13,6 +13,8 @@ import type {
   AgentNode,
   CodexImportPreviewResponse,
   CodexImportRunResponse,
+  ImportSelectedResponse,
+  ImportSessionsListResponse,
   ErrorResponse,
   MemoryDocumentResponse,
   MemoryReference,
@@ -31,7 +33,7 @@ import type {
   TurnPreview,
 } from '@muninn/types';
 import { agentRecallEvents, ndjsonStream, recallProviderOptions } from './agent_recall.js';
-import { previewCodexImport, runCodexImport } from './codex_import.js';
+import { importSelectedCodexSessions, listCodexImportSessions, previewCodexImport, runCodexImport } from './codex_import.js';
 import { renderRenderedMemoryDocument } from './render.js';
 import { searchBoardMemory } from './search.js';
 import { sessionDisplayTitle } from './session_labels.js';
@@ -1067,6 +1069,29 @@ boardApp.post('/api/v1/ui/import/codex', async (c) => {
     projectLimit: body.projectLimit,
     projectKeys: body.projectKeys,
   }, generateRequestId());
+  invalidateSessionTreeCache();
+  return c.json(response);
+});
+
+boardApp.get('/api/v1/ui/import/codex/sessions', async (c) => {
+  const sourceRoot = c.req.query('sourceRoot');
+  const response: ImportSessionsListResponse = await listCodexImportSessions({ sourceRoot }, generateRequestId());
+  return c.json(response);
+});
+
+boardApp.post('/api/v1/ui/import/codex/sessions', async (c) => {
+  let body: { sourcePaths?: string[] } = {};
+  try {
+    body = await c.req.json<{ sourcePaths?: string[] }>();
+  } catch {
+    body = {};
+  }
+  const sourcePaths = Array.isArray(body.sourcePaths) ? body.sourcePaths.filter((path): path is string => typeof path === 'string' && path.length > 0) : [];
+  if (sourcePaths.length === 0) {
+    return c.json(errorResponse('invalidRequest', 'sourcePaths is required'), 400);
+  }
+  invalidateSessionTreeCache();
+  const response: ImportSelectedResponse = await importSelectedCodexSessions(sourcePaths, generateRequestId());
   invalidateSessionTreeCache();
   return c.json(response);
 });

@@ -11,12 +11,13 @@ import {
 } from '../lib/settings-model.js';
 import { asErrorMessage } from '../lib/utils.js';
 import { Button } from './ui/button.js';
+import { ImportSettings } from './ImportSettings.js';
 
 type SettingsPageProps = {
   client: BoardClient;
 };
 
-type SettingsMode = 'visual' | 'json';
+type SettingsMode = 'visual' | 'json' | 'import';
 type PipelineSettingsTab = 'extractor' | 'observer';
 type SaveStatus = 'idle' | 'loading' | 'saved' | 'saving' | 'invalid' | 'failed' | 'unavailable';
 const DEFAULT_DATABASE = 'main';
@@ -157,7 +158,13 @@ export function SettingsPage({ client }: SettingsPageProps) {
         <button className={mode === 'json' ? 'settings-mode-tab settings-mode-tab-active' : 'settings-mode-tab'} type="button" onClick={() => selectMode('json')}>
           Json
         </button>
+        <button className={mode === 'import' ? 'settings-mode-tab settings-mode-tab-active' : 'settings-mode-tab'} type="button" onClick={() => selectMode('import')}>
+          Import
+        </button>
       </div>
+      {mode === 'import' ? <ImportSettings client={client} /> : (
+      <>
+      {/* eslint-disable-next-line react/jsx-no-useless-fragment */}
       {schemaMismatch ? (
         <div className="settings-readonly-tip settings-schema-tip">
           <CircleAlert aria-hidden="true" />
@@ -216,6 +223,8 @@ export function SettingsPage({ client }: SettingsPageProps) {
       {mode === 'visual' && statusMessage && status !== 'unavailable' ? (
         <div className="settings-status-error">{statusMessage}</div>
       ) : null}
+      </>
+      )}
     </section>
   );
 }

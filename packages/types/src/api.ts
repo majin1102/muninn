@@ -376,3 +376,42 @@ export interface CodexImportRunResponse extends CodexImportPreviewResponse {
     errorMessage: string;
   }>;
 }
+
+// ---- Per-session import (Import & Capture settings) ----
+
+export interface ImportAgentSession {
+  sessionId: string;
+  title: string;
+  sourcePath: string;
+  updatedAt: string;
+  turnCount: number;
+  artifactCount: number;
+  imported: boolean;
+}
+
+export interface ImportAgentProject {
+  projectKey: string;
+  cwd: string;
+  sessionCount: number;
+  importedCount: number;
+  sessions: ImportAgentSession[];
+}
+
+export interface ImportSessionsListResponse {
+  sourceRoot: string;
+  projectCount: number;
+  sessionCount: number;
+  importedCount: number;
+  projects: ImportAgentProject[];
+  requestId: string;
+}
+
+export interface ImportSelectedResponse {
+  importedSessions: number;
+  importedTurns: number;
+  failedSessions: Array<{
+    sourcePath: string;
+    errorMessage: string;
+  }>;
+  requestId: string;
+}

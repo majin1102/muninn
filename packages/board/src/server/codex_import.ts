@@ -18,6 +18,9 @@ import type {
   CodexImportProjectPreview,
   CodexImportRunResponse,
   CodexImportSessionPreview,
+  ImportAgentProject,
+  ImportSelectedResponse,
+  ImportSessionsListResponse,
 } from '@muninn/types';
 
 type ImportSelection = {
@@ -274,6 +277,93 @@ function toSessionPreview(session: CodexSession): CodexImportSessionPreview {
 
 function latestProjectTime(project: CodexImportProjectPreview): string {
   return project.sessions[0]?.updatedAt ?? '';
+}
+
+// ---- Per-session import (Import & Capture settings) ----
+
+export async function listCodexImportSessions(options: CodexImportOptions, requestId: string): Promise<ImportSessionsListResponse> {
+  const sourceRoot = options.sourceRoot ?? path.join(os.homedir(), '.codex');
+  const artifactStore = options.artifactStore ?? defaultArtifactStore();
+  const sessionFiles = await listCodexSessionFiles(sourceRoot);
+  const sessions = (await Promise.all(sessionFiles.map((file) => readCodexSession(file, { artifactStore, artifactMode: 'preview' }))))
+    .filter((session): session is CodexSession => session !== null)
+    .filter((session) => !isExcludedImportSession(session))
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+
+  const existing = await collectExistingCodexImports({ rawSessionIds: new Set(sessions.map((session) => session.sessionId)) });
+
+  const grouped = new Map<string, ImportAgentProject>();
+  for (const session of sessions) {
+    const imported = existing.has(session.sessionId);
+    const project = grouped.get(session.projectKey) ?? {
+      projectKey: session.projectKey,
+      cwd: session.cwd,
+      sessionCount: 0,
+      importedCount: 0,
+      sessions: [],
+    };
+    project.sessions.push({
+      sessionId: session.sessionId,
+      title: session.title,
+      sourcePath: session.sourcePath,
+      updatedAt: session.updatedAt,
+      turnCount: session.turns.length,
+      artifactCount: session.turns.reduce((total, turn) => total + turn.artifacts.length, 0),
+      imported,
+    });
+    project.sessionCount += 1;
+    project.importedCount += imported ? 1 : 0;
+    grouped.set(session.projectKey, project);
+  }
+
+  const projects = [...grouped.values()].sort((left, right) => (
+    (right.sessions[0]?.updatedAt ?? '').localeCompare(left.sessions[0]?.updatedAt ?? '')
+  ));
+
+  return {
+    sourceRoot,
+    projectCount: projects.length,
+    sessionCount: sessions.length,
+    importedCount: projects.reduce((total, project) => total + project.importedCount, 0),
+    projects,
+    requestId,
+  };
+}
+
+export async function importSelectedCodexSessions(sourcePaths: string[], requestId: string): Promise<ImportSelectedResponse> {
+  const artifactStore = defaultArtifactStore();
+  const failedSessions: ImportSelectedResponse['failedSessions'] = [];
+  const loaded: CodexSession[] = [];
+  for (const sourcePath of sourcePaths) {
+    try {
+      const session = await readCodexSession(sourcePath, { artifactStore, artifactMode: 'copy' });
+      if (session) {
+        loaded.push(session);
+      }
+    } catch (error) {
+      failedSessions.push({ sourcePath, errorMessage: error instanceof Error ? error.message : String(error) });
+    }
+  }
+
+  // Replace any prior import of the selected sessions so re-import stays idempotent.
+  const existing = await collectExistingCodexImports({ rawSessionIds: new Set(loaded.map((session) => session.sessionId)) });
+  await deleteExistingImport([...existing.values()].flat());
+
+  let importedSessions = 0;
+  let importedTurns = 0;
+  for (const session of loaded) {
+    try {
+      const result = await importCodexSession(session);
+      if (result.importedTurns > 0) {
+        importedSessions += 1;
+        importedTurns += result.importedTurns;
+      }
+    } catch (error) {
+      failedSessions.push({ sourcePath: session.sourcePath, errorMessage: error instanceof Error ? error.message : String(error) });
+    }
+  }
+
+  return { importedSessions, importedTurns, failedSessions, requestId };
 }
 
 export const __testing = {

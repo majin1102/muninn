@@ -2,6 +2,8 @@ import type {
   AgentNode,
   CodexImportPreviewResponse,
   CodexImportRunResponse,
+  ImportSelectedResponse,
+  ImportSessionsListResponse,
   ErrorResponse,
   MemoryDocument,
   MemoryDocumentResponse,
@@ -102,6 +104,8 @@ export type BoardClient = {
   saveSettingsConfig(content: string): Promise<SettingsConfigResponse>;
   previewCodexImport(projectLimit?: number, projectKeys?: string[]): Promise<CodexImportPreviewResponse>;
   importCodexSessions(projectLimit?: number, projectKeys?: string[]): Promise<CodexImportRunResponse>;
+  listCodexImportSessions(): Promise<ImportSessionsListResponse>;
+  importCodexSessionsByPaths(sourcePaths: string[]): Promise<ImportSelectedResponse>;
 };
 
 type VersionResponse = {
@@ -328,6 +332,16 @@ export function createBoardClient(apiBase: string, usesDemoData: boolean): Board
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ projectLimit, projectKeys }),
+      });
+    },
+    listCodexImportSessions() {
+      return fetchJson<ImportSessionsListResponse>('/api/v1/ui/import/codex/sessions');
+    },
+    importCodexSessionsByPaths(sourcePaths: string[]) {
+      return fetchJson<ImportSelectedResponse>('/api/v1/ui/import/codex/sessions', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ sourcePaths }),
       });
     },
   };
