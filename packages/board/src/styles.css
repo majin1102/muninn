@@ -5382,10 +5382,11 @@ button.search-menu-item:hover,
   z-index: 40;
 }
 
+/* Fixed size so the modal does not resize between scanning and loaded states. */
 .import-modal {
-  width: 560px;
+  width: 720px;
   max-width: calc(100vw - 40px);
-  max-height: 80vh;
+  height: min(680px, 80vh);
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -5445,14 +5446,18 @@ button.search-menu-item:hover,
 }
 
 .import-modal-body {
+  flex: 1;
   overflow: auto;
   padding: 4px 0;
 }
 
 /* plain quiet text states inside the modal body — no framed box */
 .import-modal-placeholder {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   padding: 26px 18px;
-  text-align: center;
   color: var(--muted-foreground);
   font-size: 13px;
 }
