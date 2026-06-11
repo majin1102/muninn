@@ -1,5 +1,5 @@
 import { addMessage, turns } from '@muninn/core';
-import { invalidateSessionTreeCache } from '@muninn/board/server';
+import { invalidateSessionTreeCache, isCaptureEnabled } from '@muninn/board/server';
 import { Hono } from 'hono';
 import type {
   Artifact,
@@ -214,6 +214,15 @@ memoryWriter.post('/api/v1/turn/capture', async (c) => {
   }
   if (!body.turn) {
     return c.json(errorResponse('invalidRequest', 'turn is required'), 400);
+  }
+
+  // Live hook captures are gated by the per-project capture allowlist; manual
+  // imports (ingest ending in '-import') and other writers are unaffected.
+  const ingest = typeof body.turn.metadata?.ingest === 'string' ? body.turn.metadata.ingest : '';
+  if (ingest.endsWith('-hook') && body.turn.project) {
+    if (!(await isCaptureEnabled(body.turn.agent, body.turn.project))) {
+      return c.body(null, 204);
+    }
   }
 
   try {

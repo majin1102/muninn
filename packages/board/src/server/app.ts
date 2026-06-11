@@ -36,6 +36,10 @@ import { agentRecallEvents, ndjsonStream, recallProviderOptions } from './agent_
 import { codexAdapter, previewCodexImport, runCodexImport } from './codex_import.js';
 import { claudeAdapter } from './claude_import.js';
 import { importSelectedSessions, listImportedSessions, listLocalSessions, type ImportAdapter } from './import_core.js';
+import { setCaptureEnabled } from './capture_policy.js';
+
+// Re-exported so the sidecar capture endpoint can gate live hook captures.
+export { isCaptureEnabled } from './capture_policy.js';
 
 const importAdapters: Record<string, ImportAdapter> = {
   codex: codexAdapter,
@@ -1089,6 +1093,24 @@ boardApp.get('/api/v1/ui/import/:agent/sessions', async (c) => {
     ? await listImportedSessions(adapter, generateRequestId())
     : await listLocalSessions(adapter, generateRequestId());
   return c.json(response);
+});
+
+boardApp.put('/api/v1/ui/import/:agent/capture-policy', async (c) => {
+  const agent = c.req.param('agent');
+  if (!importAdapters[agent]) {
+    return c.json(errorResponse('invalidRequest', 'unknown import agent'), 404);
+  }
+  let body: { projectKey?: string; enabled?: boolean } = {};
+  try {
+    body = await c.req.json<{ projectKey?: string; enabled?: boolean }>();
+  } catch {
+    body = {};
+  }
+  if (typeof body.projectKey !== 'string' || !body.projectKey || typeof body.enabled !== 'boolean') {
+    return c.json(errorResponse('invalidRequest', 'projectKey and enabled are required'), 400);
+  }
+  await setCaptureEnabled(agent, body.projectKey, body.enabled);
+  return c.body(null, 204);
 });
 
 boardApp.post('/api/v1/ui/import/:agent/sessions', async (c) => {

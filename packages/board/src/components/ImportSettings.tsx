@@ -99,6 +99,8 @@ function AgentImportSection({ client, agent, label }: { client: BoardClient; age
           {importedProjects.map((project) => (
             <ProjectRow
               key={project.projectKey}
+              client={client}
+              agent={agent}
               project={project}
               importedSessionIds={importedSessionIds}
               ensureScan={ensureScan}
@@ -166,16 +168,20 @@ function AgentSection({
 }
 
 function ProjectRow({
+  client,
+  agent,
   project,
   importedSessionIds,
   ensureScan,
 }: {
+  client: BoardClient;
+  agent: string;
   project: ImportAgentProject;
   importedSessionIds?: Set<string>;
   ensureScan?: () => Promise<ImportSessionsListResponse>;
 }) {
   const [open, setOpen] = useState(false);
-  const [capture, setCapture] = useState(true);
+  const [capture, setCapture] = useState(project.captureEnabled ?? false);
   const [scannedSessions, setScannedSessions] = useState<ImportAgentSession[] | null>(null);
   const [localScanning, setLocalScanning] = useState(false);
 
@@ -209,7 +215,12 @@ function ProjectRow({
         </span>
         <span className="import-capture-ctl" onClick={(event) => event.stopPropagation()}>
           <span className="import-ctl-label">Capture</span>
-          <Switch size="sm" checked={capture} onChange={setCapture} ariaLabel={`${project.projectKey} capture`} />
+          <Switch
+            size="sm"
+            checked={capture}
+            onChange={(value) => { setCapture(value); void client.setCapturePolicy(agent, project.projectKey, value); }}
+            ariaLabel={`${project.projectKey} capture`}
+          />
         </span>
       </div>
       {open ? (

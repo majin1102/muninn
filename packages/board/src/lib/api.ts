@@ -106,6 +106,7 @@ export type BoardClient = {
   importCodexSessions(projectLimit?: number, projectKeys?: string[]): Promise<CodexImportRunResponse>;
   listImportSessions(agent: string, scope?: 'imported'): Promise<ImportSessionsListResponse>;
   importSessionsByPaths(agent: string, sourcePaths: string[]): Promise<ImportSelectedResponse>;
+  setCapturePolicy(agent: string, projectKey: string, enabled: boolean): Promise<void>;
 };
 
 type VersionResponse = {
@@ -343,6 +344,13 @@ export function createBoardClient(apiBase: string, usesDemoData: boolean): Board
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ sourcePaths }),
+      });
+    },
+    async setCapturePolicy(agent, projectKey, enabled) {
+      await fetch(`${apiBase}/api/v1/ui/import/${agent}/capture-policy`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ projectKey, enabled }),
       });
     },
   };

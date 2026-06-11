@@ -394,6 +394,8 @@ export interface ImportAgentProject {
   cwd: string;
   sessionCount: number;
   importedCount: number;
+  /** Whether the live hook auto-captures new sessions for this project. */
+  captureEnabled?: boolean;
   sessions: ImportAgentSession[];
 }
 

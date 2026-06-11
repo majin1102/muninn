@@ -980,7 +980,7 @@ export function toTurnContent(session: CodexSession, turn: CodexTurn, index: num
     metadata,
     createdAt: turn.promptTimestamp,
     updatedAt: turn.responseTimestamp,
-    title: promptTitle(turn.prompt),
+    // No title on imported turns — leave it empty for the observer/extractor to own.
     summary: turnSummary(turn),
     prompt: turn.prompt,
     response: turn.response,
@@ -1028,13 +1028,19 @@ export function markerFromTurn(turn: { response?: string | null; artifacts?: Arr
 }
 
 function titleFromTurns(turns: CodexTurn[], fallback: string): string {
-  const first = turns[0]?.prompt.split(/\n/).find((line) => line.trim().length > 0)?.trim();
-  return first ? truncate(first, 48) : fallback.slice(0, 12);
+  const first = turns[0] ? displayTitleFromPrompt(turns[0].prompt) : '';
+  return first || fallback.slice(0, 12);
 }
 
-function promptTitle(prompt: string): string {
-  const line = prompt.split(/\n/).find((item) => item.trim().length > 0)?.trim() ?? prompt.trim();
-  return truncate(line, 100);
+// Slash-command turns wrap their text in <command-*> / <local-command-*> /
+// <system-reminder> tags; strip those delimiters (keep inner text) for a
+// readable display title. The stored prompt itself is left untouched.
+const WRAPPER_TAGS = /<\/?(?:command-[a-z-]+|local-command-[a-z-]+|system-reminder)>/gi;
+
+export function displayTitleFromPrompt(prompt: string): string {
+  const cleaned = prompt.replace(WRAPPER_TAGS, '');
+  const line = cleaned.split(/\n/).map((value) => value.trim()).find((value) => value.length > 0) ?? cleaned.trim();
+  return truncate(line, 80);
 }
 
 function turnSummary(turn: CodexTurn): string {
@@ -1070,4 +1076,198 @@ function stringValue(value: unknown): string | null {
 export function defaultArtifactStore(): string {
   const home = process.env.MUNINN_HOME ?? path.join(os.homedir(), '.muninn');
   return path.join(home, 'default', 'artifacts');
+}
+
+// ---- Claude Code transcript parsing ----
+
+export const CLAUDE_AGENT = 'claude-code';
+export const CLAUDE_MARKER_KEY = 'claude-code.import';
+
+/**
+ * Parse a Claude Code transcript (`~/.claude/projects/<cwd>/<sessionId>.jsonl`)
+ * into the shared session shape. A new turn starts at each `type:'user'` line
+ * whose `message.content` is a plain string (the real prompt); assistant text /
+ * tool_use and the following user tool_result blocks belong to that turn.
+ */
+export async function readClaudeSession(
+  sourcePath: string,
+  options: { artifactStore: string; artifactMode?: ArtifactMode },
+): Promise<CodexSession | null> {
+  const content = await readFile(sourcePath, 'utf8');
+  const fallbackUpdatedAt = (await stat(sourcePath)).mtime.toISOString();
+  const artifactMode = options.artifactMode ?? 'copy';
+  let sessionId = path.basename(sourcePath, '.jsonl');
+  let cwd = os.homedir();
+  let updatedAt = fallbackUpdatedAt;
+
+  const sessionTurns: CodexTurn[] = [];
+  let promptParts: string[] = [];
+  let promptTimestamp: string | null = null;
+  let responseParts: string[] = [];
+  let responseTimestamp: string | null = null;
+  let events: TurnEvent[] = [];
+  let artifacts: Artifact[] = [];
+  let artifactSeq = 0;
+
+  const resetTurn = () => {
+    promptParts = [];
+    promptTimestamp = null;
+    responseParts = [];
+    responseTimestamp = null;
+    events = [];
+    artifacts = [];
+  };
+  const flush = () => {
+    if (promptParts.length === 0 || responseParts.length === 0) {
+      return;
+    }
+    const prompt = promptParts.join('\n\n').trim();
+    const response = responseParts.join('\n\n').trim();
+    if (!prompt || !response) {
+      resetTurn();
+      return;
+    }
+    sessionTurns.push({
+      prompt,
+      response,
+      promptTimestamp: promptTimestamp ?? responseTimestamp ?? updatedAt,
+      responseTimestamp: responseTimestamp ?? promptTimestamp ?? updatedAt,
+      events: events.map((event) => ({ ...event })),
+      artifacts: [...artifacts],
+    });
+    resetTurn();
+  };
+
+  const saveImages = async (blocks: unknown, source: Artifact['source']): Promise<void> => {
+    if (!Array.isArray(blocks) || artifactMode !== 'copy') {
+      return;
+    }
+    for (const block of blocks) {
+      if (!isRecord(block) || block.type !== 'image') {
+        continue;
+      }
+      const dataUrl = imageBlockToDataUrl(block.source);
+      if (!dataUrl) {
+        continue;
+      }
+      try {
+        const saved = await saveDataUrlArtifact(dataUrl, options.artifactStore);
+        artifactSeq += 1;
+        artifacts.push({ key: `claude-image-${artifactSeq}`, kind: 'image', source, uri: saved.uri, name: saved.name, mimeType: saved.mimeType, sizeBytes: saved.sizeBytes });
+      } catch {
+        // ignore unsavable image
+      }
+    }
+  };
+
+  for (const line of content.split(/\n/)) {
+    if (!line.trim()) {
+      continue;
+    }
+    const entry = safeParse(line);
+    if (!entry || entry.isSidechain === true) {
+      continue;
+    }
+    sessionId = stringValue(entry.sessionId) ?? sessionId;
+    cwd = stringValue(entry.cwd) ?? cwd;
+    const timestamp = stringValue(entry.timestamp);
+    if (timestamp) {
+      updatedAt = timestamp;
+    }
+
+    const message = isRecord(entry.message) ? entry.message : null;
+    if (entry.type === 'user' && message) {
+      const raw = message.content;
+      if (typeof raw === 'string') {
+        const text = raw.trim();
+        if (!text) {
+          continue;
+        }
+        flush();
+        promptParts.push(text);
+        promptTimestamp = timestamp ?? promptTimestamp;
+        events.push({ type: 'userMessage', text, ...(timestamp ? { timestamp } : {}) });
+      } else if (Array.isArray(raw) && promptParts.length > 0) {
+        for (const block of raw) {
+          if (!isRecord(block)) {
+            continue;
+          }
+          if (block.type === 'tool_result') {
+            const output = textFromContent(block.content);
+            events.push({ type: 'toolOutput', ...(stringValue(block.tool_use_id) ? { id: stringValue(block.tool_use_id)! } : {}), ...(output ? { output } : {}), ...(timestamp ? { timestamp } : {}) });
+            await saveImages(block.content, 'tool');
+          } else if (block.type === 'image') {
+            await saveImages([block], 'prompt');
+          }
+        }
+      }
+      continue;
+    }
+
+    if (entry.type === 'assistant' && message && promptParts.length > 0) {
+      const blocks = Array.isArray(message.content) ? message.content : [];
+      const textParts: string[] = [];
+      for (const block of blocks) {
+        if (!isRecord(block)) {
+          continue;
+        }
+        if (block.type === 'text') {
+          const text = stringValue(block.text);
+          if (text) {
+            textParts.push(text);
+          }
+        } else if (block.type === 'tool_use') {
+          const name = stringValue(block.name) ?? 'tool';
+          const input = block.input === undefined ? undefined : JSON.stringify(block.input);
+          events.push({ type: 'toolCall', ...(stringValue(block.id) ? { id: stringValue(block.id)! } : {}), name, ...(input ? { input } : {}), ...(timestamp ? { timestamp } : {}) });
+        }
+      }
+      if (textParts.length > 0) {
+        const text = textParts.join('\n\n');
+        responseParts.push(text);
+        events.push({ type: 'assistantMessage', text, ...(timestamp ? { timestamp } : {}) });
+      }
+      if (timestamp) {
+        responseTimestamp = timestamp;
+      }
+    }
+  }
+  flush();
+
+  if (sessionTurns.length === 0) {
+    return null;
+  }
+
+  return {
+    sessionId,
+    cwd,
+    projectKey: path.basename(cwd) || 'claude-code',
+    sourcePath,
+    updatedAt,
+    title: titleFromTurns(sessionTurns, sessionId),
+    turns: sessionTurns,
+  };
+}
+
+function imageBlockToDataUrl(source: unknown): string | null {
+  if (!isRecord(source) || source.type !== 'base64') {
+    return null;
+  }
+  const mediaType = stringValue(source.media_type) ?? 'image/png';
+  const data = stringValue(source.data);
+  return data ? `data:${mediaType};base64,${data}` : null;
+}
+
+function textFromContent(content: unknown): string {
+  if (typeof content === 'string') {
+    return content.trim();
+  }
+  if (!Array.isArray(content)) {
+    return '';
+  }
+  return content
+    .map((block) => (isRecord(block) && block.type === 'text' ? stringValue(block.text) ?? '' : ''))
+    .filter(Boolean)
+    .join('\n\n')
+    .trim();
 }

@@ -10,7 +10,8 @@
     }
   },
   "bin": {
-    "muninn-codex-hook": "./dist/cli.js"
+    "muninn-codex-hook": "./dist/cli.js",
+    "muninn-claude-hook": "./dist/claude-cli.js"
   },
   "scripts": {
     "build": "pnpm --filter @muninn/types build && tsc -p tsconfig.json",

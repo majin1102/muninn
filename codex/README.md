@@ -90,6 +90,27 @@ echo '{"hook_event_name":"Stop","transcript_path":"/path/to/rollout-....jsonl"}'
   | MUNINN_SIDECAR_URL=http://localhost:8080 node dist/cli.js
 ```
 
+## Claude Code hook
+
+The same package ships a `muninn-claude-hook` bin (`dist/claude-cli.js`) for
+Claude Code, which has its own `Stop` hook. Add to `~/.claude/settings.json`:
+
+```json
+{
+  "hooks": {
+    "Stop": [
+      { "hooks": [ { "type": "command", "command": "node /ABSOLUTE/PATH/TO/muninn/codex/dist/claude-cli.js" } ] }
+    ]
+  }
+}
+```
+
+Claude pipes `{ session_id, transcript_path, cwd, hook_event_name }` on stdin; on
+`Stop` the bin parses `~/.claude/projects/<cwd>/<sessionId>.jsonl` and captures
+the latest turn (`agent: claude-code`). Only projects you've enabled for capture
+(toggled on in **Settings → Import**, or imported once) are stored — the sidecar
+drops captures for projects that aren't enabled.
+
 ## Scope / roadmap
 
 - **Now:** `Stop` → capture. The transcript already contains the full turn

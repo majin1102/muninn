@@ -1,6 +1,8 @@
+import path from 'node:path';
 import { addMessage, turns } from '@muninn/core';
 import {
   defaultArtifactStore,
+  displayTitleFromPrompt,
   importMarker,
   markerFromTurn,
   toTurnContent,
@@ -12,6 +14,7 @@ import type {
   ImportSelectedResponse,
   ImportSessionsListResponse,
 } from '@muninn/types';
+import { getCapturePolicy, setCaptureEnabled } from './capture_policy.js';
 
 /**
  * Per-agent descriptor that drives the generic import flow. Each agent supplies
@@ -57,7 +60,7 @@ export async function listImportedSessions(adapter: ImportAdapter, requestId: st
         sessionId,
         project: turn.project,
         cwd: turn.cwd,
-        title: turn.title ?? '',
+        title: displayTitleFromPrompt(turn.prompt ?? ''),
         firstCreatedAt: turn.createdAt,
         sourcePath: sourcePathFromTurn(turn, adapter.markerKey) ?? '',
         updatedAt: turn.updatedAt,
@@ -68,8 +71,9 @@ export async function listImportedSessions(adapter: ImportAdapter, requestId: st
     }
     aggregate.turnCount += 1;
     aggregate.artifactCount += (turn.artifacts ?? []).filter((artifact) => artifact.key !== adapter.markerKey).length;
-    if (turn.title && turn.createdAt <= aggregate.firstCreatedAt) {
-      aggregate.title = turn.title;
+    // Earliest turn's prompt drives the session display title.
+    if (turn.createdAt <= aggregate.firstCreatedAt) {
+      aggregate.title = displayTitleFromPrompt(turn.prompt ?? '') || aggregate.title;
       aggregate.firstCreatedAt = turn.createdAt;
     }
     if (turn.updatedAt > aggregate.updatedAt) {
@@ -94,6 +98,7 @@ export async function listImportedSessions(adapter: ImportAdapter, requestId: st
     },
   })));
 
+  await applyCapturePolicy(adapter, projects);
   return {
     sourceRoot: adapter.sourceRoot,
     projectCount: projects.length,
@@ -102,6 +107,13 @@ export async function listImportedSessions(adapter: ImportAdapter, requestId: st
     projects,
     requestId,
   };
+}
+
+async function applyCapturePolicy(adapter: ImportAdapter, projects: ImportAgentProject[]): Promise<void> {
+  const policy = await getCapturePolicy(adapter.agent);
+  for (const project of projects) {
+    project.captureEnabled = policy[project.projectKey] === true;
+  }
 }
 
 /** Disk scan: every local session for this agent, flagged imported/not. */
@@ -130,6 +142,7 @@ export async function listLocalSessions(adapter: ImportAdapter, requestId: strin
     },
   })));
 
+  await applyCapturePolicy(adapter, projects);
   return {
     sourceRoot: adapter.sourceRoot,
     projectCount: projects.length,
@@ -144,8 +157,14 @@ export async function listLocalSessions(adapter: ImportAdapter, requestId: strin
 export async function importSelectedSessions(adapter: ImportAdapter, sourcePaths: string[], requestId: string): Promise<ImportSelectedResponse> {
   const artifactStore = defaultArtifactStore();
   const failedSessions: ImportSelectedResponse['failedSessions'] = [];
+  const root = path.resolve(adapter.sourceRoot) + path.sep;
   const loaded: CodexSession[] = [];
   for (const sourcePath of sourcePaths) {
+    // Only allow files under the agent's source root (no arbitrary file reads).
+    if (!path.resolve(sourcePath).startsWith(root)) {
+      failedSessions.push({ sourcePath, errorMessage: 'path is outside the agent source root' });
+      continue;
+    }
     try {
       const session = await adapter.readSession(sourcePath, { artifactStore, artifactMode: 'copy' });
       if (session) {
@@ -161,6 +180,7 @@ export async function importSelectedSessions(adapter: ImportAdapter, sourcePaths
 
   let importedSessions = 0;
   let importedTurns = 0;
+  const enabledProjects = new Set<string>();
   for (const session of loaded) {
     try {
       let turnsForSession = 0;
@@ -177,10 +197,16 @@ export async function importSelectedSessions(adapter: ImportAdapter, sourcePaths
       if (turnsForSession > 0) {
         importedSessions += 1;
         importedTurns += turnsForSession;
+        enabledProjects.add(session.projectKey);
       }
     } catch (error) {
       failedSessions.push({ sourcePath: session.sourcePath, errorMessage: error instanceof Error ? error.message : String(error) });
     }
+  }
+
+  // Importing a project opts it into live auto-capture going forward.
+  for (const projectKey of enabledProjects) {
+    await setCaptureEnabled(adapter.agent, projectKey, true);
   }
 
   return { importedSessions, importedTurns, failedSessions, requestId };

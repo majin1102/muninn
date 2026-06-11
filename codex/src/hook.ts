@@ -2,11 +2,60 @@ import type { Dirent } from 'node:fs';
 import { readdir } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { defaultArtifactStore, readCodexSession, toTurnContent } from './mapping.js';
+import { defaultArtifactStore, readCodexSession, toTurnContent, type ArtifactMode, type CodexSession, type ToTurnContentOptions } from './mapping.js';
 import { createMuninnClient, type MuninnClient } from './client.js';
 import { resolveHookConfig } from './config.js';
 
 const HOOK_INGEST = 'codex-hook';
+
+/**
+ * Generic Stop-hook capture: parse the just-completed transcript and POST its
+ * latest turn to the sidecar. Shared by the Codex and Claude Code hook CLIs.
+ */
+export async function captureFromTranscript(params: {
+  transcriptPath: string;
+  readSession: (sourcePath: string, options: { artifactStore: string; artifactMode: ArtifactMode }) => Promise<CodexSession | null>;
+  toTurnOptions: ToTurnContentOptions;
+  label: string;
+  client?: MuninnClient;
+}): Promise<boolean> {
+  let session: CodexSession | null;
+  try {
+    session = await params.readSession(params.transcriptPath, { artifactStore: defaultArtifactStore(), artifactMode: 'copy' });
+  } catch (error) {
+    process.stderr.write(`[${params.label}] failed to read transcript ${params.transcriptPath}: ${String(error)}\n`);
+    return false;
+  }
+  if (!session || session.turns.length === 0) {
+    return false;
+  }
+  const lastIndex = session.turns.length - 1;
+  const turn = toTurnContent(session, session.turns[lastIndex], lastIndex, params.toTurnOptions);
+  const client = params.client ?? createMuninnClient({ config: resolveHookConfig() });
+  return client.captureTurn({ turn });
+}
+
+/** Read all of stdin (the hook event JSON). Resolves '' on a TTY. */
+export function readStdin(): Promise<string> {
+  return new Promise((resolve) => {
+    const chunks: Buffer[] = [];
+    let settled = false;
+    const finish = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      resolve(Buffer.concat(chunks).toString('utf8'));
+    };
+    if (process.stdin.isTTY) {
+      finish();
+      return;
+    }
+    process.stdin.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
+    process.stdin.on('end', finish);
+    process.stdin.on('error', finish);
+  });
+}
 
 /**
  * Subset of the Codex lifecycle-hook payload (Claude-Code-style, snake_case
@@ -39,26 +88,13 @@ export async function handleStop(
   if (!transcriptPath) {
     return false;
   }
-
-  let session;
-  try {
-    session = await readCodexSession(transcriptPath, {
-      artifactStore: defaultArtifactStore(),
-      artifactMode: 'copy',
-    });
-  } catch (error) {
-    process.stderr.write(`[muninn-codex-hook] failed to read transcript ${transcriptPath}: ${String(error)}\n`);
-    return false;
-  }
-  if (!session || session.turns.length === 0) {
-    return false;
-  }
-
-  const lastIndex = session.turns.length - 1;
-  const turn = toTurnContent(session, session.turns[lastIndex], lastIndex, { ingest: HOOK_INGEST });
-
-  const client = deps.client ?? createMuninnClient({ config: resolveHookConfig() });
-  return client.captureTurn({ turn });
+  return captureFromTranscript({
+    transcriptPath,
+    readSession: readCodexSession,
+    toTurnOptions: { ingest: HOOK_INGEST },
+    label: 'muninn-codex-hook',
+    client: deps.client,
+  });
 }
 
 async function resolveTranscriptPath(payload: CodexHookPayload, sessionsRoot?: string): Promise<string | null> {
