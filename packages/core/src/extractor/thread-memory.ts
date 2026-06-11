@@ -3,6 +3,7 @@ import type { Extraction } from './types.js';
 export type ParsedSnapshotContent = {
   title: string;
   summary: string;
+  signals: string;
   snapshotContent: string;
   extractionMarkdown: string;
   extractions: Extraction[];
@@ -11,6 +12,7 @@ export type ParsedSnapshotContent = {
 export type ParsedSnapshotPatch = {
   title?: string;
   summary?: string;
+  signals?: string;
   updates: Array<{
     sequence: number;
     refs: string[];
@@ -47,16 +49,29 @@ export function parseSnapshotContent(
   if (summaryIndex === undefined) {
     throw new Error('snapshot content document must include ## Summary');
   }
+  const signalsIndex = headingIndex(lines, 2, 'Signals');
+  if (signalsIndex !== undefined && summaryIndex > signalsIndex) {
+    throw new Error('snapshot content document headings must order ## Summary before ## Signals');
+  }
   const extractionsIndex = headingIndex(lines, 2, 'Extractions');
   if (extractionsIndex !== undefined && summaryIndex > extractionsIndex) {
     throw new Error('snapshot content document headings must order ## Summary before ## Extractions');
   }
+  if (signalsIndex !== undefined && extractionsIndex !== undefined && signalsIndex > extractionsIndex) {
+    throw new Error('snapshot content document headings must order ## Signals before ## Extractions');
+  }
 
-  const summaryEnd = extractionsIndex ?? lines.length;
+  const summaryEnd = Math.min(
+    signalsIndex ?? lines.length,
+    extractionsIndex ?? lines.length,
+  );
   const summary = lines.slice(summaryIndex + 1, summaryEnd).join('\n').trim();
   if (!normalizeText(summary)) {
     throw new Error('snapshot content document summary cannot be empty');
   }
+  const signals = signalsIndex === undefined
+    ? ''
+    : lines.slice(signalsIndex + 1, extractionsIndex ?? lines.length).join('\n').trim();
 
   const extractionMarkdown = extractionsIndex === undefined
     ? ''
@@ -65,6 +80,7 @@ export function parseSnapshotContent(
   return {
     title,
     summary,
+    signals,
     snapshotContent,
     extractionMarkdown,
     extractions: parseSnapshotContentUnits(extractionMarkdown, validReferences),
@@ -84,16 +100,29 @@ export function parseSnapshotPatch(
   const lines = patch.split(/\r?\n/);
   const title = parseOptionalTitle(lines);
   const summaryIndex = headingIndex(lines, 2, 'Summary');
+  const signalsIndex = headingIndex(lines, 2, 'Signals');
   const extractionsIndex = headingIndex(lines, 2, 'Extractions');
+  if (summaryIndex !== undefined && signalsIndex !== undefined && summaryIndex > signalsIndex) {
+    throw new Error('snapshot patch headings must order ## Summary before ## Signals');
+  }
+  if (summaryIndex !== undefined && extractionsIndex !== undefined && summaryIndex > extractionsIndex) {
+    throw new Error('snapshot patch headings must order ## Summary before ## Extractions');
+  }
+  if (signalsIndex !== undefined && extractionsIndex !== undefined && signalsIndex > extractionsIndex) {
+    throw new Error('snapshot patch headings must order ## Signals before ## Extractions');
+  }
   const summary = summaryIndex === undefined
     ? undefined
     : lines
-      .slice(summaryIndex + 1, extractionsIndex === undefined ? lines.length : extractionsIndex)
+      .slice(summaryIndex + 1, Math.min(signalsIndex ?? lines.length, extractionsIndex ?? lines.length))
       .join('\n')
       .trim();
   if (summaryIndex !== undefined && !normalizeText(summary ?? '')) {
     throw new Error('snapshot patch summary cannot be empty');
   }
+  const signals = signalsIndex === undefined
+    ? undefined
+    : lines.slice(signalsIndex + 1, extractionsIndex ?? lines.length).join('\n').trim();
 
   const extractionMarkdown = extractionsIndex === undefined
     ? ''
@@ -102,6 +131,7 @@ export function parseSnapshotPatch(
   return {
     ...(title === undefined ? {} : { title }),
     ...(summary === undefined ? {} : { summary }),
+    ...(signals === undefined ? {} : { signals }),
     updates: units.updates,
     additions: units.additions,
   };
@@ -132,12 +162,20 @@ export function parseSnapshotContentUnits(
   });
 }
 
-export function renderSnapshotContent(title: string, summary: string, extractions: Extraction[]): string {
+export function renderSnapshotContent(
+  title: string,
+  summary: string,
+  signals: string,
+  extractions: Extraction[],
+): string {
   return [
     `# ${normalizeTitle(title)}`,
     '',
     '## Summary',
     summary.trim(),
+    '',
+    '## Signals',
+    signals.trim(),
     '',
     '## Extractions',
     extractions.map((extraction) => renderExtractionBlock(extraction)).join('\n\n----\n\n'),

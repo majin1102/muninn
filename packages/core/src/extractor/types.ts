@@ -55,6 +55,7 @@ export type SnapshotContent = {
   cwd?: string;
   agent?: string;
   snapshotContent: string;
+  signals?: string;
   extractions: Extraction[];
   contextRefs: ContextRef[];
   openQuestions?: string[];
@@ -123,6 +124,7 @@ export type FragmentTurnInput = {
 export type SessionMemoryContent = {
   title: string;
   summary: string;
+  signals?: string;
   snapshotContent?: string;
   extractions: Extraction[];
   openQuestions: string[];
@@ -139,6 +141,7 @@ export type ExtractSessionMemoryRequest = {
 export type ExtractSessionMemoryResult = {
   title: string;
   summary: string;
+  signals: string;
   snapshotContent: string;
   extractions: Extraction[];
   openQuestions: string[];

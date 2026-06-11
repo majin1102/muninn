@@ -86,6 +86,7 @@ export function cloneSessionMemoryThread(thread: SessionMemoryThread): SessionMe
       cwd: snapshot.cwd ?? thread.cwd,
       agent: snapshot.agent ?? thread.agent,
       snapshotContent: snapshot.snapshotContent,
+      signals: snapshot.signals ?? '',
       extractions: snapshot.extractions.map((extraction) => ({
         id: extraction.id ?? null,
         title: extraction.title ?? null,
@@ -204,6 +205,7 @@ export function currentSessionMemoryContent(thread: SessionMemoryThread): Sessio
   return {
     title: thread.title,
     summary: thread.summary,
+    signals: snapshot.signals ?? '',
     snapshotContent: snapshot.snapshotContent,
     extractions: snapshot.extractions,
     openQuestions: snapshot.openQuestions ?? [],
@@ -233,6 +235,7 @@ export function applyExtractionResult(
     cwd: thread.cwd,
     agent: thread.agent,
     snapshotContent: result.snapshotContent ?? '',
+    signals: result.signals ?? '',
     extractions: patched.extractions,
     contextRefs: mergeContextRefs(
       current.contextRefs,
@@ -339,6 +342,7 @@ function deserializeSnapshot(row: SessionSnapshot): SnapshotContent {
     cwd: row.cwd,
     agent: row.agent,
     snapshotContent: parsed.snapshotContent,
+    signals: parsed.signals,
     extractions: parsed.extractions,
     contextRefs: row.references.map((turnId) => ({ turnId, summary: turnId })),
     openQuestions: [],
@@ -355,6 +359,7 @@ function emptySnapshot(): SnapshotContent {
     cwd: process.cwd(),
     agent: 'unknown',
     snapshotContent: '',
+    signals: '',
     extractions: [],
     contextRefs: [],
     openQuestions: [],

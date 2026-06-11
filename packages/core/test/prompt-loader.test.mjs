@@ -186,7 +186,7 @@ test('thread session memory prompt uses generic recall-ready memory guidance', (
   assert.match(system, /Return a Markdown snapshot patch, not a full snapshot/);
   assert.match(system, /# <Session Title>/);
   assert.match(system, /### Title/);
-  assert.match(system, /Session title target: 4-10 tokens/);
+  assert.match(system, /Session title target: 4-8 tokens/);
   assert.match(system, /Extraction title target: 4-24 tokens/);
   assert.match(system, /## Summary/);
   assert.match(system, /## Extractions/);
@@ -228,7 +228,7 @@ test('thread session memory prompt uses generic recall-ready memory guidance', (
   assert.doesNotMatch(system, /stay neutral and concrete without overstating long-term meaning/);
   assert.doesNotMatch(system, /meta labels/);
   assert.doesNotMatch(system, /Prefer 6-14 words/);
-  assert.match(system, /4-10 tokens/);
+  assert.match(system, /4-8 tokens/);
   assert.match(system, /Summary/);
   assert.doesNotMatch(system, /Thread state/);
   assert.doesNotMatch(system, /contextRefs/);
@@ -246,9 +246,18 @@ test('session memory prompt preserves the current extraction schema', () => {
   const system = template.system;
 
   assert.match(system, /Each extraction must include `### Title` and `### Summary`/);
+  assert.match(system, /Always maintain `## Signals` after `## Summary`/);
+  assert.match(system, /Notice signals when/);
+  assert.match(system, /The user corrects the agent, repeats a requirement, or says something should be remembered or avoided next time/);
+  assert.match(system, /durable preference, habit, communication style, review style, or decision standard/);
+  assert.match(system, /project convention, environment detail, tool quirk, API quirk, or recurring workflow/);
+  assert.match(system, /reusable procedure, debugging path, prompt rule, or skill-worthy workflow/);
+  assert.match(system, /Preserve existing signals that are still valid/);
+  assert.match(system, /Remove a signal only when it is resolved, superseded, contradicted, or no longer useful for future recall/);
+  assert.match(system, /Merge related new evidence into an existing bullet instead of appending a turn-by-turn log/);
   assert.match(system, /`### Content` is optional/);
-  assert.match(system, /Extraction summary target: 80-160 tokens/);
-  assert.match(system, /Extraction content target: 800-1600 tokens when content is needed/);
+  assert.match(system, /Extraction summary target: 64-128 tokens/);
+  assert.match(system, /Extraction content target: 512-1024 tokens when content is needed/);
   assert.match(system, /Use `### Content` for structured details/);
   assert.doesNotMatch(system, /Signals:/);
   assert.doesNotMatch(system, /Title:/);
@@ -263,6 +272,7 @@ test('session memory prompt preserves the current extraction schema', () => {
   assert.match(system, /Existing extraction updates must start with metadata containing the existing `sequence` number and `refs`/);
   assert.match(system, /Metadata refs must only include actual supporting turn ids from the current batch/);
   assert.match(system, /Never output placeholder or copied example refs/);
+  assert.match(system, /A decision remains unresolved and would change future work; remove it once it is answered or no longer blocks future work/);
   assert.doesNotMatch(system, /refs: \[turn:x/);
   assert.doesNotMatch(system, /1-3 memory anchor lines/);
   assert.doesNotMatch(system, /\[Entity\] Alex/);
@@ -392,6 +402,7 @@ test('session memory prompt uses raw turns and returns snapshot content document
   assert.match(system, /do not wrap the whole response in a code fence or add prose outside the document/);
   assert.doesNotMatch(system, /one `# <session title>`/);
   assert.match(system, /Include `## Summary` only when the session summary should change/);
+  assert.match(system, /Include `## Signals` only when session signals should change/);
   assert.match(system, /Include `## Extractions` only when any extraction changes or new extraction is created/);
   assert.doesNotMatch(system, /extraction rows, or extraction ids/);
   assert.doesNotMatch(system, /contextRefs/);
@@ -406,6 +417,7 @@ test('session memory prompt uses raw turns and returns snapshot content document
   assert.match(system, /Example output/);
   assert.match(system, /Example output\n-----------------/);
   assert.match(system, /Example output\n-----------------\n# 报表导出默认设置\n\n## Summary\n\n本会话继续收敛报表导出功能/);
+  assert.match(system, /## Signals\n\n- Repeated requirement:/);
   assert.match(system, /## Current Snapshot/);
   assert.match(system, /# 报表导出默认设置/);
   assert.doesNotMatch(system, /# Report export defaults/);
