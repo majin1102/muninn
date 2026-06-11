@@ -3839,39 +3839,49 @@ button.search-menu-item:hover,
 }
 
 .settings-mode-tabs {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  width: fit-content;
-  margin: 0 0 10px;
+  display: flex;
+  align-items: flex-end;
+  gap: 34px;
+  width: 100%;
+  margin: 0 0 30px;
   padding: 0;
   border-radius: 0;
+  border-bottom: 1px solid var(--border);
   background: transparent;
 }
 
 .settings-page-json .settings-mode-tabs {
-  margin-bottom: 28px;
+  margin-bottom: 30px;
 }
 
 .settings-mode-tab {
   appearance: none;
   border: 0;
-  border-radius: 6px;
+  position: relative;
+  min-height: 32px;
+  padding: 0;
+  border-radius: 0;
   background: transparent;
   color: var(--muted-foreground);
   cursor: pointer;
   font: inherit;
   font-size: 13px;
-  font-weight: 500;
-  line-height: 1;
-  min-height: 28px;
-  padding: 0 10px;
+  font-weight: 600;
+  line-height: 18px;
 }
 
 .settings-mode-tab-active {
-  background: var(--muted);
   color: var(--foreground);
-  font-weight: 600;
+}
+
+.settings-mode-tab-active::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  bottom: -1px;
+  left: 0;
+  height: 1px;
+  background: var(--foreground);
 }
 
 .settings-mode-tab:disabled {
@@ -5143,71 +5153,7 @@ button.search-menu-item:hover,
 .import-settings {
   display: grid;
   gap: 34px;
-  margin-top: 20px;
-}
-
-.import-agent {
-  display: block;
-}
-
-.import-agent-head {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 4px;
-}
-
-.import-agent-name {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--foreground);
-}
-
-/* padding-right matches the card row inset so the header switch aligns with the list switches */
-/* padding-right = card row inset (18px) + 1px card border so the header's
-   Auto capture switch aligns exactly with the per-project ones inside the card */
-.import-agent-subrow {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding-right: 19px;
-  margin-bottom: 14px;
-}
-
-.import-agent-spacer {
-  flex: 1;
-}
-
-.import-agent-sub {
-  font-size: 12px;
-  color: #8f9195;
-}
-
-.import-proj-meta {
-  display: inline-flex;
-  align-items: center;
-  gap: 16px;
-}
-
-.import-capture-ctl {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.import-ctl-label {
-  font-size: 12px;
-  color: #8f9195;
-}
-
-.import-empty {
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: #fcfcfc;
-  color: var(--muted-foreground);
-  font-size: 13px;
-  padding: 22px 18px;
-  text-align: center;
+  margin-top: 0;
 }
 
 .import-card {
@@ -5215,6 +5161,117 @@ button.search-menu-item:hover,
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--card);
+}
+
+.import-section {
+  display: grid;
+  gap: 16px;
+}
+
+.import-section-head {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.import-section-head h2 {
+  margin: 0;
+  color: var(--foreground);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.import-section-head span {
+  color: var(--muted-foreground);
+  font-size: 13px;
+  line-height: 1.42;
+}
+
+.import-agent-row {
+  min-height: 52px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 18px;
+  align-items: center;
+  padding: 10px 18px;
+  border-top: 1px solid var(--border);
+}
+
+.import-card > .import-agent-row:first-child {
+  border-top: 0;
+}
+
+.import-agent-main {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  line-height: 20px;
+}
+
+.import-agent-logo,
+.import-session-agent-logo {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: #ffffff;
+  color: var(--muted-foreground);
+}
+
+.import-agent-logo {
+  width: 20px;
+  height: 20px;
+}
+
+.import-session-agent-logo {
+  width: 14px;
+  height: 14px;
+  border-radius: 4px;
+}
+
+.import-agent-logo .agent-logo-image,
+.import-session-agent-logo .agent-logo-image,
+.import-agent-logo .agent-logo-fallback,
+.import-session-agent-logo .agent-logo-fallback {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.import-session-agent-logo .agent-logo-fallback {
+  width: 12px;
+  height: 12px;
+}
+
+.import-agent-name {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--foreground);
+  font-size: 13px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.import-inline-meta {
+  color: #8f9195;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.import-empty-row {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  padding: 9px 18px;
+  border-top: 1px solid var(--border);
+  color: var(--muted-foreground);
+  font-size: 13px;
 }
 
 .import-proj-row {
@@ -5232,15 +5289,20 @@ button.search-menu-item:hover,
   border-top: 0;
 }
 
+.import-action-row + .import-proj .import-proj-row,
+.import-action-row + .import-empty-row {
+  border-top: 1px solid var(--border);
+}
+
 .import-proj-row:hover {
   background: #fafafa;
 }
 
 .import-chev {
   width: 13px;
-  font-size: 11px;
+  height: 13px;
   color: #8f9195;
-  transition: transform 0.15s ease;
+  transition: transform 120ms ease;
 }
 
 .import-proj-open .import-chev {
@@ -5255,7 +5317,15 @@ button.search-menu-item:hover,
   min-width: 0;
 }
 
+.import-proj-title-line {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+}
+
 .import-proj-name {
+  min-width: 0;
   font-size: 13px;
   font-weight: 600;
   line-height: 1.35;
@@ -5281,46 +5351,44 @@ button.search-menu-item:hover,
 
 .import-sess {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 14px;
+  grid-template-columns: minmax(0, 1fr) 48px 18px;
+  gap: 8px;
   align-items: center;
-  min-height: 44px;
-  padding: 8px 18px 8px 46px;
+  min-height: 36px;
+  padding: 6px 18px 6px 46px;
 }
 
-.import-sess + .import-sess,
-.import-sess + .import-sess-scan-row {
+.import-sess + .import-sess {
   border-top: 1px solid var(--border);
 }
 
-/* dim = not yet imported into Muninn */
-.import-sess-local {
-  opacity: 0.5;
-}
-
-/* "Add row" affordance: left-aligned + icon, quiet footer surface, text-only hover. */
 .import-action-row {
   display: flex;
   align-items: center;
-  justify-content: center;
-  gap: 7px;
+  gap: 8px;
   min-height: 44px;
-  padding: 11px 18px;
-  border-top: 1px solid var(--border);
-  background: #fbfbfc;
+  width: 100%;
+  padding: 9px 18px;
+  border: 0;
+  background: transparent;
   color: var(--muted-foreground);
+  font: inherit;
   font-size: 13px;
+  font-weight: 500;
   cursor: pointer;
-  transition: color 0.12s ease;
+  text-align: left;
 }
 
 .import-action-row:hover {
+  background: #fafafa;
   color: var(--foreground);
 }
 
 .import-action-icon {
-  width: 14px;
-  height: 14px;
+  width: 16px;
+  height: 16px;
+  color: #3f4248;
+  stroke-width: 2;
 }
 
 .import-card > .import-action-row:first-child {
@@ -5391,27 +5459,43 @@ button.search-menu-item:hover,
 }
 
 .import-sess-title {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
   font-size: 13px;
   color: var(--foreground);
+  overflow: hidden;
+}
+
+.import-sess-title span:last-child {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.import-sess-time {
-  font-size: 13px;
-  color: #8f9195;
+.import-delete-button {
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #a4a7ad;
+  cursor: pointer;
 }
 
-.import-sess-cap {
-  font-size: 12px;
-  color: var(--muted-foreground);
-  min-width: 88px;
-  text-align: right;
+.import-delete-button:hover {
+  color: #c33838;
 }
 
-.import-sess-cap-off {
-  color: #8f9195;
+.import-delete-button svg {
+  width: 16px;
+  height: 16px;
+  stroke-width: 1.8;
 }
 
 /* import picker modal */

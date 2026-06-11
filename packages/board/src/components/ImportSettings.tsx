@@ -1,5 +1,5 @@
-import { ChevronRight, Plus } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Bot, ChevronRight, Plus, Trash2 } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { BoardClient } from '../lib/api.js';
 import type {
   ImportAgentProject,
@@ -7,42 +7,108 @@ import type {
   ImportSelectedResponse,
   ImportSessionsListResponse,
 } from '@muninn/types';
+import { logoForAgent, type AgentLogo } from '../lib/agent_logo.js';
 import { asErrorMessage, formatRelativeTime, formatTimestamp } from '../lib/utils.js';
 import { Button } from './ui/button.js';
 import { Switch } from './ui/switch.js';
 
 type LoadStatus = 'loading' | 'ready' | 'error';
+type ImportAgentKey = 'codex' | 'claude-code';
+
+const IMPORT_AGENTS: Array<{ key: ImportAgentKey; label: string }> = [
+  { key: 'codex', label: 'Codex' },
+  { key: 'claude-code', label: 'Claude Code' },
+];
 
 export function ImportSettings({ client }: { client: BoardClient }) {
+  const codex = useImportAgent(client, 'codex');
+  const claude = useImportAgent(client, 'claude-code');
+  const agents = [
+    { key: 'codex' as const, label: 'Codex', data: codex },
+    { key: 'claude-code' as const, label: 'Claude Code', data: claude },
+  ];
+  const [pickerAgent, setPickerAgent] = useState<ImportAgentKey | null>(null);
+
   return (
     <div className="import-settings">
-      <AgentImportSection client={client} agent="codex" label="Codex" />
-      <AgentImportSection client={client} agent="claude-code" label="Claude Code" />
-      <AgentSection label="Trae" status="Not found" supported={false} placeholder="No Trae data directory found on this machine. Connect Trae to enable capture." />
+      <section className="import-section">
+        <div className="import-section-head">
+          <h2>Agent capture</h2>
+          <span>Include agents in automatic session capture.</span>
+        </div>
+        <div className="import-card">
+          {agents.map(({ key, label, data }) => (
+            <AgentCaptureRow key={key} agent={key} label={label} sourceRoot={data.imported?.sourceRoot} />
+          ))}
+        </div>
+      </section>
+
+      <section className="import-section">
+        <div className="import-section-head">
+          <h2>Project capture</h2>
+          <span>Include imported projects in automatic session capture.</span>
+        </div>
+        <div className="import-card">
+          <button className="import-action-row" type="button" onClick={() => setPickerAgent('codex')}>
+            <Plus className="import-action-icon" aria-hidden="true" />
+            <span>Import projects...</span>
+          </button>
+          {agents.map(({ key, data }) => (
+            <ProjectCaptureList
+              key={key}
+              client={client}
+              agent={key}
+              loadImported={data.loadImported}
+              projects={data.imported?.projects ?? []}
+              status={data.status}
+              error={data.error}
+            />
+          ))}
+        </div>
+      </section>
+
+      {pickerAgent ? (
+        <ImportPicker
+          agentLabel={IMPORT_AGENTS.find((agent) => agent.key === pickerAgent)?.label ?? pickerAgent}
+          ensureScan={pickerAgent === 'codex' ? codex.ensureScan : claude.ensureScan}
+          importedSessionIds={pickerAgent === 'codex' ? codex.importedSessionIds : claude.importedSessionIds}
+          onCancel={() => setPickerAgent(null)}
+          onImport={async (paths) => {
+            const result = await client.importSessionsByPaths(pickerAgent, paths);
+            if (pickerAgent === 'codex') {
+              codex.setImportResult(result);
+              codex.loadImported();
+            } else {
+              claude.setImportResult(result);
+              claude.loadImported();
+            }
+            setPickerAgent(null);
+          }}
+        />
+      ) : null}
     </div>
   );
 }
 
-function AgentImportSection({ client, agent, label }: { client: BoardClient; agent: string; label: string }) {
+function useImportAgent(client: BoardClient, agent: ImportAgentKey) {
   const [imported, setImported] = useState<ImportSessionsListResponse | null>(null);
-  const [importedStatus, setImportedStatus] = useState<LoadStatus>('loading');
-  const [importedError, setImportedError] = useState<string | null>(null);
+  const [status, setStatus] = useState<LoadStatus>('loading');
+  const [error, setError] = useState<string | null>(null);
   const [scanError, setScanError] = useState<string | null>(null);
-  const [pickerOpen, setPickerOpen] = useState(false);
-  const [importResult, setImportResult] = useState<ImportSelectedResponse | null>(null);
   const scanPromiseRef = useRef<Promise<ImportSessionsListResponse> | null>(null);
+  const [, setImportResult] = useState<ImportSelectedResponse | null>(null);
 
   const loadImported = useCallback(() => {
-    setImportedStatus('loading');
-    setImportedError(null);
+    setStatus('loading');
+    setError(null);
     client.listImportSessions(agent, 'imported')
       .then((response) => {
         setImported(response);
-        setImportedStatus('ready');
+        setStatus('ready');
       })
       .catch((loadError: unknown) => {
-        setImportedError(asErrorMessage(loadError));
-        setImportedStatus('error');
+        setError(asErrorMessage(loadError));
+        setStatus('error');
       });
   }, [agent, client]);
 
@@ -73,97 +139,52 @@ function AgentImportSection({ client, agent, label }: { client: BoardClient; age
     [importedProjects],
   );
 
-  const status = importedStatus === 'error'
-    ? 'Unavailable'
-    : `Connected${imported ? ` · ${imported.sourceRoot}` : ''}`;
+  return { imported, status, error: scanError ?? error, ensureScan, importedSessionIds, loadImported, setImportResult };
+}
 
-  const resultNode = importResult ? (
-    <div className="import-result">
-      <div className="import-result-line">
-        Imported {importResult.importedSessions} session{importResult.importedSessions === 1 ? '' : 's'} · {importResult.importedTurns} turn{importResult.importedTurns === 1 ? '' : 's'}
-      </div>
-      {importResult.failedSessions.map((failed) => (
-        <div className="import-result-error" key={failed.sourcePath}>{failed.sourcePath}: {failed.errorMessage}</div>
-      ))}
-    </div>
-  ) : null;
+function AgentCaptureRow({ agent, label, sourceRoot }: { agent: string; label: string; sourceRoot?: string }) {
+  const [capture, setCapture] = useState(true);
+  const logo = logoForAgent(agent);
 
   return (
-    <AgentSection label={label} status={status} supported result={resultNode}>
-      {importedStatus === 'error' ? (
-        <div className="import-empty">{importedError}</div>
-      ) : importedStatus === 'loading' && !imported ? (
-        <div className="import-empty">Loading captured sessions…</div>
-      ) : (
-        <div className="import-card">
-          {importedProjects.map((project) => (
-            <ProjectRow
-              key={project.projectKey}
-              client={client}
-              agent={agent}
-              project={project}
-              importedSessionIds={importedSessionIds}
-              ensureScan={ensureScan}
-            />
-          ))}
-          <div
-            className="import-action-row"
-            role="button"
-            tabIndex={0}
-            onClick={() => setPickerOpen(true)}
-            onKeyDown={(event) => { if (event.key === 'Enter') setPickerOpen(true); }}
-          >
-            <Plus className="import-action-icon" aria-hidden="true" />
-            <span>Import projects and sessions</span>
-          </div>
-          {scanError ? <div className="import-scan-row import-scan-row-static import-result-error">{scanError}</div> : null}
-        </div>
-      )}
-
-      {pickerOpen ? (
-        <ImportPicker
-          agentLabel={label}
-          ensureScan={ensureScan}
-          importedSessionIds={importedSessionIds}
-          onCancel={() => setPickerOpen(false)}
-          onImport={async (paths) => {
-            const result = await client.importSessionsByPaths(agent, paths);
-            setImportResult(result);
-            setPickerOpen(false);
-            loadImported();
-          }}
-        />
-      ) : null}
-    </AgentSection>
+    <div className="import-agent-row">
+      <span className="import-agent-main">
+        <AgentLogoIcon logo={logo} variant="agent" />
+        <span className="import-agent-name">{label}</span>
+        {sourceRoot ? <span className="import-inline-meta">{sourceRoot}</span> : null}
+      </span>
+      <Switch size="sm" checked={capture} onChange={setCapture} ariaLabel={`${label} capture`} />
+    </div>
   );
 }
 
-function AgentSection({
-  label,
+function ProjectCaptureList({
+  client,
+  agent,
+  loadImported,
+  projects,
   status,
-  supported,
-  placeholder,
-  result,
-  children,
+  error,
 }: {
-  label: string;
-  status: string;
-  supported: boolean;
-  placeholder?: string;
-  result?: ReactNode;
-  children?: ReactNode;
+  client: BoardClient;
+  agent: ImportAgentKey;
+  loadImported: () => void;
+  projects: ImportAgentProject[];
+  status: LoadStatus;
+  error: string | null;
 }) {
+  if (status === 'error') {
+    return <div className="import-empty-row">{error}</div>;
+  }
+  if (status === 'loading' && projects.length === 0) {
+    return <div className="import-empty-row">Loading captured sessions...</div>;
+  }
   return (
-    <section className="import-agent">
-      <div className="import-agent-head">
-        <span className="import-agent-name">{label}</span>
-      </div>
-      <div className="import-agent-subrow">
-        <span className="import-agent-sub">{status}</span>
-      </div>
-      {result}
-      {supported ? children : <div className="import-empty">{placeholder}</div>}
-    </section>
+    <>
+      {projects.map((project) => (
+        <ProjectRow key={`${agent}:${project.projectKey}`} client={client} agent={agent} project={project} loadImported={loadImported} />
+      ))}
+    </>
   );
 }
 
@@ -171,54 +192,35 @@ function ProjectRow({
   client,
   agent,
   project,
-  importedSessionIds,
-  ensureScan,
+  loadImported,
 }: {
   client: BoardClient;
-  agent: string;
+  agent: ImportAgentKey;
   project: ImportAgentProject;
-  importedSessionIds?: Set<string>;
-  ensureScan?: () => Promise<ImportSessionsListResponse>;
+  loadImported: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const [capture, setCapture] = useState(project.captureEnabled ?? false);
-  const [scannedSessions, setScannedSessions] = useState<ImportAgentSession[] | null>(null);
-  const [localScanning, setLocalScanning] = useState(false);
-
-  // Filter at render time against the live imported set, so freshly imported
-  // sessions un-dim (move to the imported list) without rescanning.
-  const localSessions = scannedSessions?.filter((session) => !(importedSessionIds?.has(session.sessionId))) ?? null;
-
-  async function revealLocalSessions() {
-    if (!ensureScan || localScanning) {
-      return;
-    }
-    setLocalScanning(true);
-    try {
-      const data = await ensureScan();
-      const scanProject = data.projects.find((item) => item.projectKey === project.projectKey);
-      setScannedSessions(scanProject?.sessions ?? []);
-    } catch {
-      // section-level scan error row covers messaging
-    } finally {
-      setLocalScanning(false);
-    }
-  }
 
   return (
     <div className={`import-proj${open ? ' import-proj-open' : ''}`}>
       <div className="import-proj-row" role="button" tabIndex={0} onClick={() => setOpen((value) => !value)} onKeyDown={(event) => { if (event.key === 'Enter') setOpen((value) => !value); }}>
         <ChevronRight className="tree-chevron import-chev" />
         <span className="import-proj-main">
-          <span className="import-proj-name">{project.projectKey}</span>
-          <span className="import-proj-sub">{project.sessionCount} sessions</span>
+          <span className="import-proj-title-line">
+            <span className="import-proj-name">{project.projectKey}</span>
+            <span className="import-inline-meta">{project.sessionCount} sessions</span>
+          </span>
+          <span className="import-proj-sub">{project.cwd}</span>
         </span>
-        <span className="import-capture-ctl" onClick={(event) => event.stopPropagation()}>
-          <span className="import-ctl-label">Capture</span>
+        <span onClick={(event) => event.stopPropagation()}>
           <Switch
             size="sm"
             checked={capture}
-            onChange={(value) => { setCapture(value); void client.setCapturePolicy(agent, project.projectKey, value); }}
+            onChange={(value) => {
+              setCapture(value);
+              void client.setCapturePolicy(agent, project.projectKey, value).then(loadImported);
+            }}
             ariaLabel={`${project.projectKey} capture`}
           />
         </span>
@@ -226,37 +228,40 @@ function ProjectRow({
       {open ? (
         <div className="import-sess-list">
           {project.sessions.map((session) => (
-            <SessionRow key={session.sessionId} session={session} />
+            <SessionRow key={session.sessionId} session={session} agent={agent} />
           ))}
-          {scannedSessions === null ? (
-            <div
-              className="import-sess-scan-row"
-              role="button"
-              tabIndex={0}
-              onClick={() => void revealLocalSessions()}
-              onKeyDown={(event) => { if (event.key === 'Enter') void revealLocalSessions(); }}
-            >
-              {localScanning ? 'Scanning local sessions…' : 'Scan local sessions…'}
-            </div>
-          ) : localSessions && localSessions.length > 0 ? (
-            localSessions.map((session) => (
-              <SessionRow key={session.sessionId} session={session} dim />
-            ))
-          ) : (
-            <div className="import-sess-scan-row import-scan-row-static">All local sessions already imported.</div>
-          )}
         </div>
       ) : null}
     </div>
   );
 }
 
-function SessionRow({ session, dim = false }: { session: ImportAgentSession; dim?: boolean }) {
+function SessionRow({ session, agent }: { session: ImportAgentSession; agent: string }) {
+  const logo = logoForAgent(agent);
+
   return (
-    <div className={dim ? 'import-sess import-sess-local' : 'import-sess'}>
-      <span className="import-sess-title">{session.title}</span>
+    <div className="import-sess">
+      <span className="import-sess-title">
+        <AgentLogoIcon logo={logo} variant="session" />
+        <span>{session.title}</span>
+      </span>
       <span className="tree-meta tree-time" title={formatTimestamp(session.updatedAt)}>{formatRelativeTime(session.updatedAt)}</span>
+      <button className="import-delete-button" type="button" aria-label={`Delete ${session.title}`}>
+        <Trash2 aria-hidden="true" />
+      </button>
     </div>
+  );
+}
+
+function AgentLogoIcon({ logo, variant }: { logo: AgentLogo; variant: 'agent' | 'session' }) {
+  return (
+    <span className={variant === 'agent' ? 'import-agent-logo' : 'import-session-agent-logo'} title={logo.label}>
+      {logo.fallback ? (
+        <Bot className="agent-logo-fallback" aria-label={logo.label} />
+      ) : (
+        <img src={logo.src} alt={logo.label} className="agent-logo-image" />
+      )}
+    </span>
   );
 }
 
