@@ -1,0 +1,38 @@
+name: Claude CI
+
+on:
+  pull_request:
+    paths:
+      - "claude/**"
+      - "common/**"
+      - "package.json"
+      - "pnpm-workspace.yaml"
+      - ".github/workflows/claude-ci.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "claude/**"
+      - "common/**"
+      - "package.json"
+      - "pnpm-workspace.yaml"
+      - ".github/workflows/claude-ci.yml"
+
+jobs:
+  claude:
+    name: claude-ci
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Test @muninn/claude
+        run: pnpm --filter @muninn/claude test

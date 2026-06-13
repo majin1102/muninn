@@ -1,0 +1,68 @@
+name: Server CI
+
+on:
+  pull_request:
+    paths:
+      - "server/**"
+      - "format/**"
+      - "common/**"
+      - "codex/**"
+      - "claude/**"
+      - "openclaw/plugin/**"
+      - "benchmark/locomo/**"
+      - "package.json"
+      - "pnpm-workspace.yaml"
+      - ".github/workflows/server-ci.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "server/**"
+      - "format/**"
+      - "common/**"
+      - "codex/**"
+      - "claude/**"
+      - "openclaw/plugin/**"
+      - "benchmark/locomo/**"
+      - "package.json"
+      - "pnpm-workspace.yaml"
+      - ".github/workflows/server-ci.yml"
+
+jobs:
+  server:
+    name: server-ci
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+            server/native -> server/native/target
+
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: Install dependencies
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Check Rust format
+        run: cargo check --manifest-path format/Cargo.toml
+
+      - name: Check native addon
+        run: cargo check --manifest-path server/native/Cargo.toml
+
+      - name: Test @muninn/server
+        run: pnpm --filter @muninn/server test
+
+      - name: Test @muninn/benchmark-locomo
+        run: pnpm --filter @muninn/benchmark-locomo test

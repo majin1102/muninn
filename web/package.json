@@ -4,7 +4,8 @@
   "private": true,
   "scripts": {
     "build": "pnpm --filter @muninn/common build && tsc -p tsconfig.json --noEmit && vite build && mkdir -p dist/assets && cp -R src/assets/. dist/assets/",
-    "dev": "vite --host 127.0.0.1"
+    "dev": "vite --host 127.0.0.1",
+    "test": "node --test test/*.test.mjs"
   },
   "dependencies": {
     "@muninn/common": "workspace:*",
