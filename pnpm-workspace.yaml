@@ -2,6 +2,7 @@ packages:
   - 'common'
   - 'web'
   - 'server'
+  - 'mcp'
   - 'packages/*'
   - 'benchmark/*'
   - 'codex'
