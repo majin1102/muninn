@@ -5,6 +5,7 @@ import type {
   SearchResultItem,
   SearchSessionResult,
 } from '@muninn/types';
+import * as SessionIdentity from '@muninn/types/session-identity';
 
 export type BoardSearchParams = {
   query: string;
@@ -17,6 +18,7 @@ export type BoardSearchParams = {
 export type SearchCandidate = {
   sessionKey: string;
   sessionLabel: string;
+  agent: string;
   projectKey: string;
   projectCwd?: string;
   latestUpdatedAt: string;
@@ -32,8 +34,6 @@ export type SearchCandidate = {
 export type BoardSearchResult = {
   results: SearchSessionResult[];
 };
-
-const SESSION_SCOPE_SEPARATOR = '\u001f';
 
 type SearchDeps = {
   recall: (query: string, limit?: number, options?: {
@@ -88,6 +88,7 @@ function hitCandidates(
     return [{
       sessionKey: resolved.sessionKey,
       sessionLabel: resolved.sessionLabel,
+      agent: resolved.agent,
       projectKey: resolved.projectKey,
       projectCwd: normalizeText(hit.cwd),
       latestUpdatedAt: hit.updatedAt ?? hit.createdAt ?? '',
@@ -121,6 +122,7 @@ function groupCandidates(
       return {
         sessionKey,
         sessionLabel: first.sessionLabel,
+        agent: first.agent,
         projectKey: first.projectKey,
         projectCwd: first.projectCwd,
         latestUpdatedAt: sorted.reduce((latest, item) => (
@@ -239,6 +241,7 @@ function matchesScope(
 function searchSession(hit: RecallHit): {
   sessionKey: string;
   sessionLabel: string;
+  agent: string;
   projectKey: string;
 } | null {
   const projectKey = normalizeText(hit.project);
@@ -248,14 +251,11 @@ function searchSession(hit: RecallHit): {
     return null;
   }
   return {
-    sessionKey: sessionScopeKey(projectKey, agent, sessionId),
+    sessionKey: SessionIdentity.sessionIdentityKey({ project: projectKey, agent, sessionId }),
     sessionLabel: normalizeText(hit.displaySession) ?? displayTitle(sessionId),
+    agent,
     projectKey,
   };
-}
-
-function sessionScopeKey(projectKey: string, agent: string, sessionKey: string): string {
-  return [projectKey, agent, sessionKey].join(SESSION_SCOPE_SEPARATOR);
 }
 
 function displayTitle(sessionKey: string): string {

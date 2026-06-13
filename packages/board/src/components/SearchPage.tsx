@@ -523,7 +523,7 @@ export function RecallPage({
           </div>
         </form>
       </div>
-      {projectError ? <div className="search-error">{projectError}</div> : null}
+      {projectError ? <div className="search-error search-page-error">{projectError}</div> : null}
       {submitted ? (
         <div
           ref={splitLayoutRef}

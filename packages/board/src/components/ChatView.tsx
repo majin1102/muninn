@@ -1,7 +1,7 @@
 import type { MemoryDocument } from '@muninn/types';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { Bot } from 'lucide-react';
+import { Bot, CircleAlert, MessageSquare } from 'lucide-react';
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import userAvatarUrl from '../assets/user-avatar.png';
 import { logoForAgent, type AgentLogo } from '../lib/agent_logo.js';
@@ -20,6 +20,7 @@ import {
 import { ArtifactList } from './ArtifactList.js';
 import { Avatar } from './ui/avatar.js';
 import { Button } from './ui/button.js';
+import { EmptyState } from './ui/empty-state.js';
 import { ScrollArea } from './ui/scroll-area.js';
 
 type ChatViewProps = {
@@ -130,18 +131,16 @@ export function ChatView({
   }, [onVisibleTurnIdsChange, timelineItems.length, turnWindow.turns]);
 
   if (loading) {
-    return <div className="empty-state">Loading conversation...</div>;
+    return <EmptyState className="content-empty-panel chat-empty" icon={MessageSquare} title="Loading conversation..." />;
   }
 
   if (error) {
-    return <div className="error-state">{error}</div>;
+    return <EmptyState className="content-empty-panel chat-empty" icon={CircleAlert} title={error} tone="danger" />;
   }
 
   if (!document && sessionTurns.length === 0) {
     return (
-      <div className="chat-empty">
-        <p>Select a turn from the project tree.</p>
-      </div>
+      <EmptyState className="content-empty-panel chat-empty" icon={MessageSquare} title="Select a turn from the project tree." variant="passive" />
     );
   }
 

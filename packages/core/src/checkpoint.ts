@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import { loadMuninnConfig, resolveDatabaseHome, resolveDatabaseName, resolveStorageTarget } from './config.js';
@@ -53,6 +53,7 @@ export type SessionIndexEntry = {
   project: string;
   cwd: string;
   latestUpdatedAt: string;
+  firstTurnSequence?: number;
   snapshotId?: string;
   title?: string;
 };
@@ -207,6 +208,15 @@ export function serializeCheckpointFile(file: CheckpointFile): string {
   return `${JSON.stringify(file, null, 2)}\n`;
 }
 
+export async function writeCheckpointFile(file: CheckpointFile, database?: string | null): Promise<void> {
+  const targetPath = resolveCheckpointPath(database);
+  const directory = path.dirname(targetPath);
+  const tmpPath = `${targetPath}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`;
+  await mkdir(directory, { recursive: true });
+  await writeFile(tmpPath, serializeCheckpointFile(file), 'utf8');
+  await rename(tmpPath, targetPath);
+}
+
 function parseExtractorSection(value: unknown): ExtractorCheckpoint | null {
   if (!isObjectRecord(value)) {
     return null;
@@ -306,12 +316,18 @@ function parseSessionIndexSection(value: unknown): SessionIndexCheckpoint | null
     ) {
       return null;
     }
+    const firstTurnSequence = typeof entry.firstTurnSequence === 'number'
+      && Number.isInteger(entry.firstTurnSequence)
+      && entry.firstTurnSequence >= 0
+      ? entry.firstTurnSequence
+      : undefined;
     entries.push({
       sessionId: entry.sessionId,
       agent: entry.agent,
       project: entry.project,
       cwd: entry.cwd,
       latestUpdatedAt: entry.latestUpdatedAt,
+      ...(firstTurnSequence !== undefined ? { firstTurnSequence } : {}),
       snapshotId: entry.snapshotId ?? undefined,
       title: entry.title ?? undefined,
     });

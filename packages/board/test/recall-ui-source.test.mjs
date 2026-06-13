@@ -181,5 +181,19 @@ test('demo recall search accepts scoped session filter values', async () => {
   const source = await readFile(new URL('../src/demo/provider.ts', import.meta.url), 'utf8');
 
   assert.match(source, /matchesDemoSessionScope\(result, sessionKeys\)/);
-  assert.match(source, /const \[projectKey, _agent, rawSessionKey\] = sessionKey\.split\(SESSION_SCOPE_SEPARATOR\)/);
+  assert.match(source, /sessionIdentityKeyMatches\(sessionKey, \{/);
+});
+
+test('wiki and conversation empty states use the same passive placement', async () => {
+  const appSource = await readFile(new URL('../src/components/App.tsx', import.meta.url), 'utf8');
+  const chatSource = await readFile(new URL('../src/components/ChatView.tsx', import.meta.url), 'utf8');
+  const splitSource = await readFile(new URL('../src/components/SessionContentSplit.tsx', import.meta.url), 'utf8');
+  const styles = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8');
+
+  assert.match(appSource, /className="content-empty-panel" icon=\{BookOpen\} title="LLM Wiki is empty for now\." variant="passive"/);
+  assert.match(chatSource, /className="content-empty-panel chat-empty" icon=\{MessageSquare\} title="Select a turn from the project tree\." variant="passive"/);
+  assert.match(splitSource, /className="content-empty-panel" icon=\{FileText\} title="Choose a session to view its context\." variant="passive"/);
+  assert.match(styles, /\.content-empty-panel \{/);
+  assert.match(styles, /\.empty-state-block-passive \.empty-state-icon/);
+  assert.doesNotMatch(styles, /\.session-context-empty \{/);
 });

@@ -13,7 +13,7 @@ import { resolveCheckpointPath } from '../dist/checkpoint.js';
 const { createNativeTables, getNativeTables } = native;
 
 const {
-  addMessage,
+  captureTurn,
   memories,
   observer,
   turns,
@@ -131,7 +131,7 @@ async function writeTurnAndGet(turn) {
       { type: 'assistantMessage', text: turn.response },
     ],
   };
-  await addMessage(content);
+  await captureTurn(content);
   const listed = await turns.list({
     mode: { type: 'recency', limit: 20 },
     agent: content.agent,
@@ -325,7 +325,7 @@ test('extractor config accepts an optional domain prompt name', async (t) => {
   assert.equal(extractorConfig.domainPrompt, 'chat');
 });
 
-test('addMessage and turns.get roundtrip through the native binding', async (t) => {
+test('captureTurn and turns.get roundtrip through the native binding', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(cleanupDataset(dir));
 
@@ -348,7 +348,7 @@ test('addMessage and turns.get roundtrip through the native binding', async (t) 
   assert.equal(detail.response, 'alpha response');
 });
 
-test('addMessage normalizes sessionId whitespace through the native binding', async (t) => {
+test('captureTurn normalizes sessionId whitespace through the native binding', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(cleanupDataset(dir));
 
@@ -395,7 +395,7 @@ test('blank sessionId is rejected', async (t) => {
   await writeMuninnConfig(configPath);
 
   await assert.rejects(
-    () => addMessage(makeTurnContent({
+    () => captureTurn(makeTurnContent({
       sessionId: '   ',
       prompt: 'default prompt',
       response: 'default response',
@@ -404,7 +404,7 @@ test('blank sessionId is rejected', async (t) => {
   );
 });
 
-test('addMessage without sessionId is rejected', async (t) => {
+test('captureTurn without sessionId is rejected', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(cleanupDataset(dir));
 
@@ -412,7 +412,7 @@ test('addMessage without sessionId is rejected', async (t) => {
   await writeMuninnConfig(configPath);
 
   await assert.rejects(
-    () => addMessage(makeTurnContent({
+    () => captureTurn(makeTurnContent({
       sessionId: undefined,
       prompt: 'default-session prompt',
       response: 'default-session response',
@@ -421,7 +421,7 @@ test('addMessage without sessionId is rejected', async (t) => {
   );
 });
 
-test('addMessage dedupes identical prompt and response within the same session', async (t) => {
+test('captureTurn dedupes identical prompt and response within the same session', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(cleanupDataset(dir));
 
@@ -466,7 +466,7 @@ test('turns.list returns the recent window in chronological order, and memories.
     prompt: 'second prompt',
     response: 'second response',
   }));
-  await addMessage(makeTurnContent({
+  await captureTurn(makeTurnContent({
     sessionId: 'group-b',
     agent: 'agent-b',
     prompt: 'other prompt',
@@ -566,14 +566,14 @@ test('shutdownCoreForTests allows the native binding to restart cleanly', async 
   process.env.MUNINN_HOME = homeDir;
   await writeMuninnConfig(configPath);
 
-  await addMessage(makeTurnContent({
+  await captureTurn(makeTurnContent({
     prompt: 'first prompt',
     response: 'first response',
   }));
 
   await shutdownCoreForTests();
 
-  await addMessage(makeTurnContent({
+  await captureTurn(makeTurnContent({
     prompt: 'second prompt',
     response: 'second response',
   }));
@@ -664,7 +664,7 @@ test('cold start does not wait for the first watchdog interval before serving wr
     },
   });
 
-  await addMessage(makeTurnContent({
+  await captureTurn(makeTurnContent({
     sessionId: 'group-a',
     agent: 'agent-a',
     prompt: 'cold-start prompt',
@@ -681,7 +681,7 @@ test('cold start does not wait for the first watchdog interval before serving wr
   assert.match(logContent, /"dataset":"turn"/);
 });
 
-test('addMessage rejects empty message payloads through the native binding', async (t) => {
+test('captureTurn rejects empty turn payloads through the native binding', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(cleanupDataset(dir));
 
@@ -689,7 +689,7 @@ test('addMessage rejects empty message payloads through the native binding', asy
   await writeMuninnConfig(configPath);
 
   await assert.rejects(
-    () => addMessage({ sessionId: 'group-a', agent: 'agent-a' }),
+    () => captureTurn({ sessionId: 'group-a', agent: 'agent-a' }),
     /turn must include prompt/i,
   );
 });
@@ -701,7 +701,7 @@ test('validateSettings rejects extraction index dimension changes that mismatch 
   process.env.MUNINN_HOME = homeDir;
   await writeMuninnConfig(configPath, { observerProvider: 'mock' });
 
-  await addMessage(makeTurnContent({
+  await captureTurn(makeTurnContent({
     sessionId: 'group-a',
     agent: 'agent-a',
     prompt: 'extraction prompt',
@@ -989,7 +989,7 @@ test('validateSettings rejects omitted extraction dimensions for an existing non
   process.env.MUNINN_HOME = homeDir;
   await writeMuninnConfig(configPath, { observerProvider: 'mock', semanticDimensions: 4 });
 
-  await addMessage(makeTurnContent({
+  await captureTurn(makeTurnContent({
     sessionId: 'group-a',
     agent: 'agent-a',
     prompt: 'extraction prompt',
@@ -1190,7 +1190,7 @@ test('validateSettings checks the pending storage target instead of the current 
     observerProvider: 'mock',
     storageUri: toFileStoreUri(storageB),
   });
-  await addMessage(makeTurnContent({
+  await captureTurn(makeTurnContent({
     sessionId: 'group-b',
     agent: 'agent-b',
     prompt: 'storage b prompt',
@@ -1296,7 +1296,40 @@ test('observer.watermark reports pending turns until the observer flush complete
   assert.deepEqual(resolved.pending.turns, []);
 });
 
-test('addMessage summarizes response turns when a summary provider is configured', async (t) => {
+test('observer.flushPending drains the current extraction batch without finalize', async (t) => {
+  const { dir, homeDir, configPath } = await makeDatasetUri();
+  t.after(cleanupDataset(dir));
+
+  process.env.MUNINN_HOME = homeDir;
+  await writeMuninnConfig(configPath, {
+    observerProvider: 'mock',
+    epochTurns: 10,
+    epochWindowMs: 60_000,
+  });
+
+  const created = await writeTurnAndGet(makeTurnContent({
+    prompt: 'batch flush prompt',
+    response: 'batch flush response',
+  }));
+
+  const pending = await observer.watermark();
+  assert.deepEqual(pending.pending.turns, [created.turnId]);
+
+  await observer.flushPending();
+  let resolved = null;
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    resolved = await observer.watermark();
+    if (resolved.pending.turns.length === 0 && resolved.phases.extractor === 'idle') {
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  assert.ok(resolved);
+  assert.deepEqual(resolved.pending.turns, []);
+  assert.equal(resolved.phases.extractor, 'idle');
+});
+
+test('captureTurn summarizes response turns when a summary provider is configured', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(cleanupDataset(dir));
 
@@ -1317,7 +1350,7 @@ test('addMessage summarizes response turns when a summary provider is configured
   assert.equal(detail.response, 'response body');
 });
 
-test('addMessage persists response turns when the summarizer is not configured', async (t) => {
+test('captureTurn persists response turns when the summarizer is not configured', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(cleanupDataset(dir));
 
@@ -1433,7 +1466,7 @@ test('rendered memory page mode paginates after combining session and observing 
   await writeMuninnConfig(configPath, { turnProvider: 'mock', observerProvider: 'mock' });
 
   for (let index = 0; index < 3; index += 1) {
-    await addMessage(makeTurnContent({
+    await captureTurn(makeTurnContent({
       sessionId: `group-${index}`,
       agent: `agent-${index}`,
       prompt: `prompt ${index}`,

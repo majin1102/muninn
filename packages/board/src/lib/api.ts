@@ -2,8 +2,12 @@ import type {
   AgentNode,
   CodexImportPreviewResponse,
   CodexImportRunResponse,
+  DeleteImportedProjectResponse,
+  ImportLocalProjectsResponse,
+  ImportProjectsResponse,
   ImportSelectedResponse,
   ImportSessionsListResponse,
+  ImportedProjectsResponse,
   ErrorResponse,
   MemoryDocument,
   MemoryDocumentResponse,
@@ -23,13 +27,22 @@ import type {
 import {
   getDemoDocument,
   getDemoPipelineTasks,
+  getDemoImportSessions,
+  getDemoImportedProjects,
   getDemoSearchResults,
   getDemoRecallProviders,
+  importDemoProjects,
+  importDemoSessionsByPaths,
+  deleteDemoImportedProject,
+  setDemoAgentCapturePolicy,
+  setDemoCapturePolicy,
   streamDemoAgentRecall,
   getDemoSessionAgents,
   getDemoSessionGroups,
   getDemoSessionTurns,
 } from '../demo/provider.js';
+import { projectDisplayLabel, projectDisplayLabels } from './project_display.js';
+import { sampleSettingsDraft, settingsDraftToJson } from './settings-model.js';
 import { trimTrailingSlash } from './utils.js';
 
 export type PrimaryView = 'recall' | 'wiki' | 'session' | 'pipelines' | 'settings';
@@ -104,9 +117,14 @@ export type BoardClient = {
   saveSettingsConfig(content: string): Promise<SettingsConfigResponse>;
   previewCodexImport(projectLimit?: number, projectKeys?: string[]): Promise<CodexImportPreviewResponse>;
   importCodexSessions(projectLimit?: number, projectKeys?: string[]): Promise<CodexImportRunResponse>;
-  listImportSessions(agent: string, scope?: 'imported'): Promise<ImportSessionsListResponse>;
+  listImportedProjects(): Promise<ImportedProjectsResponse>;
+  listLocalProjects(agent: string): Promise<ImportLocalProjectsResponse>;
+  listImportSessions(agent: string, scope?: 'imported', project?: string): Promise<ImportSessionsListResponse>;
+  importProjects(agent: string, projects: string[]): Promise<ImportProjectsResponse>;
   importSessionsByPaths(agent: string, sourcePaths: string[]): Promise<ImportSelectedResponse>;
-  setCapturePolicy(agent: string, projectKey: string, enabled: boolean): Promise<void>;
+  deleteImportedProject(agent: string, project: string): Promise<DeleteImportedProjectResponse>;
+  setAgentCapturePolicy(agent: string, enabled: boolean): Promise<void>;
+  setCapturePolicy(agent: string, project: string, enabled: boolean): Promise<void>;
 };
 
 type VersionResponse = {
@@ -132,7 +150,11 @@ export function resolveApiBase(): string {
     return trimTrailingSlash(window.location.origin);
   }
 
-  return 'http://localhost:8080';
+  if (window.location.hostname) {
+    return `${window.location.protocol}//${window.location.hostname}:8080`;
+  }
+
+  return 'http://127.0.0.1:8080';
 }
 
 export function resolveUsesDemoData(): boolean {
@@ -148,6 +170,14 @@ export function createBoardClient(apiBase: string, usesDemoData: boolean): Board
       throw new Error(body?.errorMessage ?? `${response.status} ${response.statusText}`);
     }
     return response.json() as Promise<T>;
+  }
+
+  async function fetchVoid(path: string, init?: RequestInit): Promise<void> {
+    const response = await fetch(`${apiBase}${path}`, init);
+    if (!response.ok) {
+      const body = await safeJson<ErrorResponse>(response);
+      throw new Error(body?.errorMessage ?? `${response.status} ${response.statusText}`);
+    }
   }
 
   return {
@@ -212,9 +242,7 @@ export function createBoardClient(apiBase: string, usesDemoData: boolean): Board
         offset: String(offset),
         limit: '100',
       });
-      if (session.cwd) {
-        params.set('cwd', session.cwd);
-      }
+      params.set('project', session.projectKey);
       const response = usesDemoData
         ? await getDemoSessionTurns(session.agent, session.sessionKey, offset, 100)
         : await fetchJson<SessionTurnsResponse>(
@@ -309,50 +337,185 @@ export function createBoardClient(apiBase: string, usesDemoData: boolean): Board
       await readAgentRecallStream(response, params.onEvent, params.signal);
     },
     getSettingsConfig() {
+      if (usesDemoData) {
+        return demoSettingsConfig();
+      }
       return fetchJson<SettingsConfigResponse>('/api/v1/ui/settings/config');
     },
     getPipelineTasks() {
       return getDemoPipelineTasks();
     },
     saveSettingsConfig(content) {
+      if (usesDemoData) {
+        return Promise.resolve({
+          pathLabel: '~/.muninn/muninn.json',
+          content,
+          requestId: 'demo-settings-save',
+        });
+      }
       return fetchJson<SettingsConfigResponse>('/api/v1/ui/settings/config', {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ content }),
       });
     },
-    previewCodexImport(projectLimit = 5, projectKeys = ['muninn', 'lance']) {
+    previewCodexImport(projectLimit = 5, projectKeys = []) {
+      if (usesDemoData) {
+        return demoPreviewImport(projectLimit, projectKeys);
+      }
       const params = new URLSearchParams({ projectLimit: String(projectLimit) });
       for (const projectKey of projectKeys) {
         params.append('projectKey', projectKey);
       }
       return fetchJson<CodexImportPreviewResponse>(`/api/v1/ui/import/codex/preview?${params.toString()}`);
     },
-    importCodexSessions(projectLimit = 5, projectKeys = ['muninn', 'lance']) {
+    importCodexSessions(projectLimit = 5, projectKeys = []) {
+      if (usesDemoData) {
+        return demoRunCodexImport(projectLimit, projectKeys);
+      }
       return fetchJson<CodexImportRunResponse>('/api/v1/ui/import/codex', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ projectLimit, projectKeys }),
       });
     },
-    listImportSessions(agent, scope) {
-      const suffix = scope ? `?scope=${scope}` : '';
+    listImportedProjects() {
+      if (usesDemoData) {
+        return getDemoImportedProjects();
+      }
+      return fetchJson<ImportedProjectsResponse>('/api/v1/ui/import/projects');
+    },
+    async listLocalProjects(agent) {
+      if (usesDemoData) {
+        const response = await getDemoImportSessions(agent);
+        const projects = response.projects.map((project) => ({
+          project: project.project,
+          latestUpdatedAt: project.sessions[0]?.updatedAt ?? '',
+        }));
+        return {
+          sourceRoot: response.sourceRoot,
+          projectCount: projects.length,
+          projects,
+          requestId: response.requestId,
+        };
+      }
+      return fetchJson<ImportLocalProjectsResponse>(`/api/v1/ui/import/${agent}/local-projects`);
+    },
+    listImportSessions(agent, scope, project) {
+      if (usesDemoData) {
+        return getDemoImportSessions(agent, scope);
+      }
+      const params = new URLSearchParams();
+      if (scope) {
+        params.set('scope', scope);
+      }
+      if (project) {
+        params.set('project', project);
+      }
+      const suffix = params.size > 0 ? `?${params.toString()}` : '';
       return fetchJson<ImportSessionsListResponse>(`/api/v1/ui/import/${agent}/sessions${suffix}`);
     },
+    importProjects(agent, projects) {
+      if (usesDemoData) {
+        return importDemoProjects(agent, projects);
+      }
+      return fetchJson<ImportProjectsResponse>(`/api/v1/ui/import/${agent}/projects`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ projects }),
+      });
+    },
     importSessionsByPaths(agent, sourcePaths) {
+      if (usesDemoData) {
+        return importDemoSessionsByPaths(agent, sourcePaths);
+      }
       return fetchJson<ImportSelectedResponse>(`/api/v1/ui/import/${agent}/sessions`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ sourcePaths }),
       });
     },
-    async setCapturePolicy(agent, projectKey, enabled) {
-      await fetch(`${apiBase}/api/v1/ui/import/${agent}/capture-policy`, {
-        method: 'PUT',
+    deleteImportedProject(agent, project) {
+      if (usesDemoData) {
+        return deleteDemoImportedProject(agent, project);
+      }
+      return fetchJson<DeleteImportedProjectResponse>(`/api/v1/ui/import/${agent}/project`, {
+        method: 'DELETE',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ projectKey, enabled }),
+        body: JSON.stringify({ project }),
       });
     },
+    async setAgentCapturePolicy(agent, enabled) {
+      if (usesDemoData) {
+        await setDemoAgentCapturePolicy(agent, enabled);
+        return;
+      }
+      await fetchVoid(`/api/v1/ui/import/${agent}/agent-capture`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ enabled }),
+      });
+    },
+    async setCapturePolicy(agent, project, enabled) {
+      if (usesDemoData) {
+        await setDemoCapturePolicy(agent, project, enabled);
+        return;
+      }
+      await fetchVoid(`/api/v1/ui/import/${agent}/capture-policy`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ project, enabled }),
+      });
+    },
+  };
+}
+
+function demoSettingsConfig(): Promise<SettingsConfigResponse> {
+  return Promise.resolve({
+    pathLabel: '~/.muninn/muninn.json',
+    content: settingsDraftToJson(sampleSettingsDraft()),
+    requestId: 'demo-settings-config',
+  });
+}
+
+async function demoPreviewImport(projectLimit: number, projectKeys: string[]): Promise<CodexImportPreviewResponse> {
+  const imported = await getDemoImportSessions('codex', 'imported');
+  const allowed = new Set(projectKeys);
+  const projects = imported.projects
+    .filter((project) => allowed.size === 0 || allowed.has(project.project))
+    .slice(0, projectLimit)
+    .map((project) => ({
+      projectKey: project.project,
+      cwd: project.project,
+      sessions: project.sessions.map((session) => ({
+        ...session,
+        sourcePath: session.sourcePath ?? '',
+        cwd: project.project,
+        turnCount: session.turnCount ?? 0,
+        artifactCount: session.artifactCount ?? 0,
+      })),
+    }));
+  return {
+    sourceRoot: imported.sourceRoot,
+    projectLimit,
+    projectCount: projects.length,
+    sessionCount: projects.reduce((total, project) => total + project.sessions.length, 0),
+    turnCount: projects.reduce((total, project) => total + project.sessions.reduce((sum, session) => sum + session.turnCount, 0), 0),
+    artifactCount: projects.reduce((total, project) => total + project.sessions.reduce((sum, session) => sum + session.artifactCount, 0), 0),
+    projects,
+    requestId: 'demo-codex-preview',
+  };
+}
+
+async function demoRunCodexImport(projectLimit: number, projectKeys: string[]): Promise<CodexImportRunResponse> {
+  const preview = await demoPreviewImport(projectLimit, projectKeys);
+  return {
+    ...preview,
+    deletedTurns: 0,
+    importedSessions: preview.sessionCount,
+    importedTurns: preview.turnCount,
+    skippedTurns: 0,
+    failedSessions: [],
   };
 }
 
@@ -443,12 +606,18 @@ async function projectTreeFromAgents(
     }
   }
 
-  return [...projects.values()]
+  const projectList = [...projects.values()]
     .map((project) => ({
       ...project,
       sessions: project.sessions.sort((left, right) => left.latestUpdatedAt.localeCompare(right.latestUpdatedAt)),
     }))
     .sort((left, right) => left.latestUpdatedAt.localeCompare(right.latestUpdatedAt));
+  const labels = projectDisplayLabels(projectList.map((project) => project.projectKey));
+
+  return projectList.map((project) => ({
+    ...project,
+    label: labels.get(project.projectKey) ?? projectDisplayLabel(project.projectKey),
+  }));
 }
 
 function projectKeyFromSession(session: SessionNode): string {

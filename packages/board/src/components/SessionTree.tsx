@@ -1,8 +1,9 @@
-import { Bot, Check, ChevronDown, ChevronRight, Folder, MessageSquare, Search, X } from 'lucide-react';
+import { Bot, Check, ChevronDown, ChevronRight, Folder, MessageSquare, Plus, Search, X } from 'lucide-react';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { RefObject } from 'react';
 import { logoForAgent, type AgentLogo } from '../lib/agent_logo.js';
 import type { ProjectNode, ProjectSegmentNode, ProjectSessionNode, ProjectTurnNode } from '../lib/api.js';
+import * as SessionIdentity from '@muninn/types/session-identity';
 import { formatRelativeTime, formatTimestamp } from '../lib/utils.js';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from './ui/collapsible.js';
 import { Button } from './ui/button.js';
@@ -18,6 +19,7 @@ type SessionTreeProps = {
   onLoadSession: (session: ProjectSessionNode) => void;
   onOpenTurn: (memoryId: string, session: ProjectSessionNode) => void;
   onLoadMore: (session: ProjectSessionNode) => void;
+  onImportSessions?: () => void;
 };
 
 type TimePreset = 'all' | 'last_6h' | 'last_24h' | 'last_7d' | 'last_30d' | 'custom';
@@ -45,6 +47,7 @@ export function SessionTree({
   onLoadSession,
   onOpenTurn,
   onLoadMore,
+  onImportSessions,
 }: SessionTreeProps) {
   const initialToolbarState = useRef<SessionToolbarState>(loadSessionToolbarState());
   const [query, setQuery] = useState('');
@@ -213,8 +216,9 @@ export function SessionTree({
   if (projects.length === 0) {
     return (
       <div className="session-import-empty">
-        <button type="button" disabled>
-          Import sessions
+        <button type="button" className="empty-action-row session-import-empty-action" onClick={onImportSessions} disabled={!onImportSessions}>
+          <Plus aria-hidden="true" />
+          <span>Import sessions</span>
         </button>
       </div>
     );
@@ -685,7 +689,11 @@ function uniqueAgents(projects: ProjectNode[]): string[] {
 }
 
 function sessionKey(session: ProjectSessionNode): string {
-  return `${session.agent}:${session.cwd ?? ''}:${session.sessionKey}`;
+  return SessionIdentity.sessionIdentityKey({
+    project: session.projectKey,
+    agent: session.agent,
+    sessionId: session.sessionKey,
+  });
 }
 
 function hasActiveSessionChild(session: ProjectSessionNode, activeMemoryId: string | null): boolean {

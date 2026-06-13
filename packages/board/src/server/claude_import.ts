@@ -2,7 +2,7 @@ import type { Dirent } from 'node:fs';
 import { readdir } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { CLAUDE_AGENT, CLAUDE_MARKER_KEY, readClaudeSession } from '@muninn/codex';
+import { CLAUDE_AGENT, CLAUDE_MARKER_KEY, readClaudeSession, readClaudeSessionSummary } from '@muninn/codex';
 import type { ImportAdapter } from './import_core.js';
 
 export const CLAUDE_IMPORT_AGENT = CLAUDE_AGENT;
@@ -19,6 +19,7 @@ export const claudeAdapter: ImportAdapter = {
   ingest: CLAUDE_INGEST,
   sourceRoot: claudeProjectsRoot(),
   listSessionFiles: () => listClaudeSessionFiles(claudeProjectsRoot()),
+  readSessionSummary: (sourcePath) => readClaudeSessionSummary(sourcePath),
   readSession: (sourcePath, options) => readClaudeSession(sourcePath, options),
 };
 

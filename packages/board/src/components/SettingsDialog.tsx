@@ -146,6 +146,9 @@ export function SettingsPage({ client }: SettingsPageProps) {
   return (
     <section className={`settings-page settings-page-${mode}`}>
       <div className="settings-mode-tabs" role="tablist" aria-label="Settings editor mode">
+        <button className={mode === 'import' ? 'settings-mode-tab settings-mode-tab-active' : 'settings-mode-tab'} type="button" onClick={() => selectMode('import')}>
+          Import
+        </button>
         <button
           className={mode === 'visual' ? 'settings-mode-tab settings-mode-tab-active' : 'settings-mode-tab'}
           type="button"
@@ -157,9 +160,6 @@ export function SettingsPage({ client }: SettingsPageProps) {
         </button>
         <button className={mode === 'json' ? 'settings-mode-tab settings-mode-tab-active' : 'settings-mode-tab'} type="button" onClick={() => selectMode('json')}>
           Json
-        </button>
-        <button className={mode === 'import' ? 'settings-mode-tab settings-mode-tab-active' : 'settings-mode-tab'} type="button" onClick={() => selectMode('import')}>
-          Import
         </button>
       </div>
       {mode === 'import' ? <ImportSettings client={client} /> : (
@@ -423,7 +423,8 @@ type SettingsHashState = {
 
 function initialSettingsHashState(): SettingsHashState {
   const params = settingsHashParams();
-  const mode = params.get('mode') === 'json' ? 'json' : 'visual';
+  const rawMode = params.get('mode');
+  const mode: SettingsMode = rawMode === 'json' || rawMode === 'import' ? rawMode : 'visual';
   const provider = params.get('provider');
   const pipeline = params.get('pipeline');
   return {

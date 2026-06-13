@@ -22,6 +22,7 @@ import { RecallPage } from './SearchPage.js';
 import { SessionContentSplit } from './SessionContentSplit.js';
 import { SessionTree } from './SessionTree.js';
 import { SettingsPage } from './SettingsDialog.js';
+import { EmptyState } from './ui/empty-state.js';
 
 type RouteState = {
   view: PrimaryView;
@@ -472,6 +473,9 @@ export function App() {
                   }}
                   onOpenTurn={openObservationFromTree}
                   onLoadMore={loadMore}
+                  onImportSessions={() => {
+                    window.location.hash = '#/settings?mode=import&pipeline=extractor';
+                  }}
                 />
                   <button
                     className="session-pane-resizer"
@@ -555,7 +559,7 @@ function findSessionForDocument(projects: ProjectNode[], document: MemoryDocumen
       if (
         session.sessionKey === document.sessionId
         && session.agent === document.agent
-        && (!document.cwd || session.cwd === document.cwd)
+        && (!document.project || session.projectKey === document.project)
       ) {
         return session;
       }
@@ -588,7 +592,7 @@ function findNextSessionToSearch(projects: ProjectNode[]): ProjectNode['sessions
 
 function sameSession(left: ProjectSessionNode, right: ProjectSessionNode): boolean {
   return left.agent === right.agent
-    && (left.cwd ?? '') === (right.cwd ?? '')
+    && left.projectKey === right.projectKey
     && left.sessionKey === right.sessionKey;
 }
 
@@ -625,18 +629,12 @@ function releaseTag(version: string): string {
 function EmptyView({ view }: { view: PrimaryView }) {
   if (view === 'recall') {
     return (
-      <div className="empty-panel">
-        <Search />
-        <p>Recall is ready.</p>
-      </div>
+      <EmptyState className="content-empty-panel" icon={Search} title="Recall is ready." variant="passive" />
     );
   }
 
   return (
-    <div className="empty-panel">
-      <BookOpen />
-      <p>LLM Wiki is empty for now.</p>
-    </div>
+    <EmptyState className="content-empty-panel" icon={BookOpen} title="LLM Wiki is empty for now." variant="passive" />
   );
 }
 

@@ -1,8 +1,14 @@
 import crypto from 'node:crypto';
-import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { createReadStream } from 'node:fs';
+import { mkdir, open, readFile, realpath, rename, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { createInterface } from 'node:readline';
+import { promisify } from 'node:util';
 import type { Artifact, TurnContent, TurnEvent } from '@muninn/types';
+
+const execFileAsync = promisify(execFile);
 
 export type CodexMessage = {
   role: 'user' | 'assistant';
@@ -23,12 +29,15 @@ export type CodexTurn = {
 export type CodexSession = {
   sessionId: string;
   cwd: string;
-  projectKey: string;
+  project: string;
   sourcePath: string;
   updatedAt: string;
   title: string;
+  promptPreview?: string;
   turns: CodexTurn[];
 };
+
+export type CodexSessionSummary = Omit<CodexSession, 'turns'>;
 
 export type ArtifactMode = 'preview' | 'copy';
 
@@ -45,6 +54,9 @@ export const CODEX_IMPORT_AGENT = 'codex';
 export const IMPORT_ARTIFACT_KEY = 'codex.import';
 const SMALL_TEXT_ARTIFACT_LIMIT = 16 * 1024;
 const DEFAULT_INGEST = 'codex-import';
+const SUMMARY_SCAN_MAX_LINES = 2_000;
+const PROMPT_PREVIEW_LIMIT = 1_000;
+const TIMESTAMP_TAIL_CHUNK_BYTES = 64 * 1024;
 
 type ArtifactWriteOptions = {
   artifactStore: string;
@@ -215,14 +227,79 @@ export async function readCodexSession(sourcePath: string, options: { artifactSt
     return null;
   }
 
+  const project = await resolveProjectIdentity(cwd);
   return {
     sessionId,
     cwd,
-    projectKey: projectKeyFromCwd(cwd),
+    project: project.project,
     sourcePath,
     updatedAt,
     title: titleFromTurns(sessionTurns, sessionId),
     turns: sessionTurns,
+  };
+}
+
+export async function readCodexSessionSummary(sourcePath: string): Promise<CodexSessionSummary | null> {
+  const fallbackUpdatedAt = (await stat(sourcePath)).mtime.toISOString();
+  let sessionId = path.basename(sourcePath, '.jsonl');
+  let cwd = os.homedir();
+  let title: string | null = null;
+  let promptPreview: string | null = null;
+  let sawAssistant = false;
+  let isSubagentSession = false;
+  let scanned = 0;
+
+  for await (const line of readJsonlLines(sourcePath)) {
+    scanned += 1;
+    if (scanned > SUMMARY_SCAN_MAX_LINES) {
+      break;
+    }
+    if (!line.trim()) {
+      continue;
+    }
+    const entry = safeParse(line);
+    if (!entry) {
+      continue;
+    }
+
+    if (entry.type === 'session_meta' && isRecord(entry.payload)) {
+      sessionId = stringValue(entry.payload.id) ?? sessionId;
+      cwd = stringValue(entry.payload.cwd) ?? cwd;
+      isSubagentSession = isSubagentSession || entry.payload.thread_source === 'subagent';
+      isSubagentSession = isSubagentSession || hasSubagentSource(entry.payload.source);
+      continue;
+    }
+
+    if (entry.type !== 'response_item' || !isRecord(entry.payload) || entry.payload.type !== 'message') {
+      continue;
+    }
+    if (entry.payload.role === 'user' && !title) {
+      const prompt = summaryPromptFromText(textFromCodexContent(entry.payload.content));
+      if (!prompt) {
+        continue;
+      }
+      promptPreview = truncate(prompt, PROMPT_PREVIEW_LIMIT);
+      title = titleFromPromptText(prompt, sessionId);
+    } else if (entry.payload.role === 'assistant' && title) {
+      sawAssistant = true;
+      break;
+    }
+  }
+
+  if (isSubagentSession || !title || !sawAssistant) {
+    return null;
+  }
+
+  const project = await resolveProjectIdentity(cwd);
+  const updatedAt = await latestTranscriptTimestamp(sourcePath, fallbackUpdatedAt);
+  return {
+    sessionId,
+    cwd,
+    project: project.project,
+    sourcePath,
+    updatedAt,
+    title,
+    ...(promptPreview ? { promptPreview } : {}),
   };
 }
 
@@ -966,15 +1043,17 @@ function stringFromUnknown(value: unknown): string | null {
 
 export function toTurnContent(session: CodexSession, turn: CodexTurn, index: number, options: ToTurnContentOptions = {}): TurnContent {
   const markerKey = options.markerKey ?? IMPORT_ARTIFACT_KEY;
+  const sourceTurnSequence = index;
   const metadata = {
     ingest: options.ingest ?? DEFAULT_INGEST,
     sourcePath: session.sourcePath,
     sourceSessionId: session.sessionId,
+    sourceTurnSequence,
     importedAt: new Date().toISOString(),
   };
   return {
     sessionId: session.sessionId,
-    project: session.projectKey,
+    project: session.project,
     cwd: session.cwd,
     agent: options.agent ?? CODEX_IMPORT_AGENT,
     metadata,
@@ -992,11 +1071,12 @@ export function toTurnContent(session: CodexSession, turn: CodexTurn, index: num
       content: JSON.stringify({
         marker: importMarker(session, index),
         ingest: metadata.ingest,
-        project: session.projectKey,
+        project: session.project,
         session: session.sessionId,
         source: session.sourcePath,
         sourcePath: session.sourcePath,
         sourceSessionId: session.sessionId,
+        sourceTurnSequence,
         importedAt: metadata.importedAt,
         cwd: session.cwd,
         timestamp: turn.responseTimestamp,
@@ -1032,6 +1112,18 @@ function titleFromTurns(turns: CodexTurn[], fallback: string): string {
   return first || fallback.slice(0, 12);
 }
 
+function titleFromPromptText(prompt: string | null, fallback: string): string {
+  const title = prompt ? displayTitleFromPrompt(prompt) : '';
+  return title || fallback.slice(0, 12);
+}
+
+function summaryPromptFromText(text: string | null): string | null {
+  if (!text || isContextMessage(text)) {
+    return null;
+  }
+  return normalizeUserMessage(text);
+}
+
 // Slash-command turns wrap their text in <command-*> / <local-command-*> /
 // <system-reminder> tags; strip those delimiters (keep inner text) for a
 // readable display title. The stored prompt itself is left untouched.
@@ -1047,9 +1139,309 @@ function turnSummary(turn: CodexTurn): string {
   return truncate(`${turn.prompt.trim()}\n\n${turn.response.trim()}`, 1_000);
 }
 
-function projectKeyFromCwd(cwd: string): string {
-  const base = path.basename(cwd);
-  return base || 'codex';
+export type ProjectIdentity = {
+  project: string;
+};
+
+const PROJECT_CACHE_VERSION = 2;
+const projectIdentityCache = new Map<string, ProjectIdentity>();
+const projectIdentityInflight = new Map<string, Promise<ProjectIdentity>>();
+
+export async function resolveProjectIdentity(cwd: string): Promise<ProjectIdentity> {
+  const fallback = await realpathOrResolved(cwd || os.homedir());
+  const cachedIdentity = projectIdentityCache.get(fallback);
+  if (cachedIdentity) {
+    return cachedIdentity;
+  }
+  const inflight = projectIdentityInflight.get(fallback);
+  if (inflight) {
+    return inflight;
+  }
+
+  const promise = resolveProjectIdentityCached(fallback);
+  projectIdentityInflight.set(fallback, promise);
+  try {
+    const identity = await promise;
+    projectIdentityCache.set(fallback, identity);
+    return identity;
+  } finally {
+    projectIdentityInflight.delete(fallback);
+  }
+}
+
+async function resolveProjectIdentityCached(fallback: string): Promise<ProjectIdentity> {
+  const cached = await readProjectCache(fallback);
+  if (cached) {
+    if (cached.project === fallback) {
+      const recovered = await resolveDeletedCodexWorktreeProject(fallback);
+      if (recovered) {
+        const project = await resolveGithubProjectIdentity(recovered) ?? recovered;
+        try {
+          await writeProjectCache(fallback, project);
+        } catch {
+          // Cache writes are an optimization; import should continue if the
+          // local cache path is temporarily unavailable.
+        }
+        return { project };
+      }
+    }
+    return { project: cached.project };
+  }
+
+  const identity = await resolveProjectIdentityUncached(fallback);
+  try {
+    await writeProjectCache(fallback, identity.project);
+  } catch {
+    // Cache writes are an optimization; import should continue if the local
+    // cache path is temporarily unavailable.
+  }
+  return identity;
+}
+
+async function resolveProjectIdentityUncached(cwd: string): Promise<ProjectIdentity> {
+  try {
+    const { stdout: topLevelStdout } = await execFileAsync('git', ['-C', cwd, 'rev-parse', '--show-toplevel']);
+    const topLevelRaw = topLevelStdout.trim();
+    if (!topLevelRaw) {
+      return { project: cwd };
+    }
+    const topLevel = await realpathOrResolved(topLevelRaw);
+
+    const { stdout: commonDirStdout } = await execFileAsync('git', ['-C', cwd, 'rev-parse', '--path-format=absolute', '--git-common-dir']);
+    const commonDirRaw = commonDirStdout.trim();
+    if (!commonDirRaw) {
+      return { project: await resolveGithubProjectIdentity(topLevel) ?? topLevel };
+    }
+    const commonDir = await realpathOrResolved(commonDirRaw);
+    const canonical = commonDir.endsWith(`${path.sep}.git`) ? path.dirname(commonDir) : topLevel;
+    return { project: await resolveGithubProjectIdentity(canonical) ?? canonical };
+  } catch {
+    const recovered = await resolveDeletedCodexWorktreeProject(cwd);
+    if (recovered) {
+      return { project: await resolveGithubProjectIdentity(recovered) ?? recovered };
+    }
+    return { project: cwd };
+  }
+}
+
+async function resolveGithubProjectIdentity(repoPath: string): Promise<string | null> {
+  for (const remote of ['origin', 'upstream']) {
+    try {
+      const { stdout } = await execFileAsync('git', ['-C', repoPath, 'remote', 'get-url', remote]);
+      const identity = githubProjectFromRemoteUrl(stdout.trim());
+      if (identity) {
+        return identity;
+      }
+    } catch {
+      // Missing remotes or non-git paths fall through to the next candidate.
+    }
+  }
+  return null;
+}
+
+function githubProjectFromRemoteUrl(remoteUrl: string): string | null {
+  const value = remoteUrl.trim();
+  if (!value) {
+    return null;
+  }
+
+  if (!value.includes('://')) {
+    const scpMatch = value.match(/^(?:[^@]+@)?github\.com:([^/\s]+)\/(.+)$/i);
+    if (scpMatch) {
+      return githubProjectIdentity(scpMatch[1], scpMatch[2]);
+    }
+  }
+
+  try {
+    const parsed = new URL(value);
+    if (parsed.hostname.toLowerCase() !== 'github.com') {
+      return null;
+    }
+    const parts = parsed.pathname.split('/').filter(Boolean);
+    if (parts.length !== 2) {
+      return null;
+    }
+    return githubProjectIdentity(parts[0], parts[1]);
+  } catch {
+    return null;
+  }
+}
+
+function githubProjectIdentity(owner: string, repo: string): string | null {
+  const normalizedOwner = owner.trim().toLowerCase();
+  const normalizedRepo = repo.trim().replace(/\/+$/, '').replace(/\.git$/i, '').toLowerCase();
+  if (!normalizedOwner || !normalizedRepo || normalizedOwner.includes('/') || normalizedRepo.includes('/')) {
+    return null;
+  }
+  return `github.com/${normalizedOwner}/${normalizedRepo}`;
+}
+
+async function resolveDeletedCodexWorktreeProject(cwd: string): Promise<string | null> {
+  const home = path.resolve(os.homedir());
+  const worktreesRoot = path.join(home, '.codex', 'worktrees');
+  const relative = path.relative(worktreesRoot, cwd);
+  if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) {
+    return null;
+  }
+
+  const parts = relative.split(path.sep).filter(Boolean);
+  const repoName = parts[1];
+  if (!repoName) {
+    return null;
+  }
+
+  const candidate = path.join(home, 'workspace', repoName);
+  try {
+    const { stdout } = await execFileAsync('git', ['-C', candidate, 'rev-parse', '--show-toplevel']);
+    const topLevel = await realpathOrResolved(stdout.trim());
+    const candidateRealpath = await realpathOrResolved(candidate);
+    return topLevel === candidateRealpath ? candidateRealpath : null;
+  } catch {
+    return null;
+  }
+}
+
+async function realpathOrResolved(value: string): Promise<string> {
+  const resolved = path.resolve(value);
+  try {
+    return await realpath(resolved);
+  } catch {
+    return resolved;
+  }
+}
+
+async function* readJsonlLines(sourcePath: string): AsyncGenerator<string> {
+  const input = createReadStream(sourcePath, { encoding: 'utf8' });
+  const lines = createInterface({ input, crlfDelay: Infinity });
+  try {
+    for await (const line of lines) {
+      yield line;
+    }
+  } finally {
+    lines.close();
+    input.destroy();
+  }
+}
+
+async function latestTranscriptTimestamp(sourcePath: string, fallback: string): Promise<string> {
+  let handle: Awaited<ReturnType<typeof open>> | null = null;
+  try {
+    handle = await open(sourcePath, 'r');
+    const { size } = await handle.stat();
+    let position = size;
+    let partial = '';
+
+    while (position > 0) {
+      const readSize = Math.min(TIMESTAMP_TAIL_CHUNK_BYTES, position);
+      position -= readSize;
+      const buffer = Buffer.allocUnsafe(readSize);
+      const { bytesRead } = await handle.read(buffer, 0, readSize, position);
+      partial = `${buffer.subarray(0, bytesRead).toString('utf8')}${partial}`;
+
+      const lines = partial.split(/\n/);
+      partial = lines.shift() ?? '';
+      for (let index = lines.length - 1; index >= 0; index -= 1) {
+        const timestamp = timestampFromJsonlLine(lines[index]);
+        if (timestamp) {
+          return timestamp;
+        }
+      }
+    }
+
+    return timestampFromJsonlLine(partial) ?? fallback;
+  } catch {
+    return fallback;
+  } finally {
+    await handle?.close();
+  }
+}
+
+function timestampFromJsonlLine(line: string): string | null {
+  if (!line.trim()) {
+    return null;
+  }
+  return timestampFromTranscriptEntry(safeParse(line));
+}
+
+function timestampFromTranscriptEntry(entry: unknown): string | null {
+  if (!isRecord(entry)) {
+    return null;
+  }
+  const directTimestamp = stringValue(entry.timestamp);
+  if (directTimestamp) {
+    return directTimestamp;
+  }
+  const payload = isRecord(entry.payload) ? entry.payload : null;
+  return stringValue(payload?.timestamp);
+}
+
+function textFromCodexContent(content: unknown): string | null {
+  if (!Array.isArray(content)) {
+    return null;
+  }
+  const parts: string[] = [];
+  for (const part of content) {
+    if (!isRecord(part)) {
+      continue;
+    }
+    const text = stringValue(part.text);
+    if (text) {
+      parts.push(text);
+    }
+  }
+  const text = parts.join('\n\n').trim();
+  return text.length > 0 ? text : null;
+}
+
+type ProjectCacheFile = {
+  version: 2;
+  projectsByCwd: Record<string, { project: string; resolvedAt: string }>;
+};
+
+function projectCachePath(): string {
+  const home = process.env.MUNINN_HOME ?? path.join(os.homedir(), '.muninn');
+  return path.join(home, 'project-cache.json');
+}
+
+async function readProjectCache(cwd: string): Promise<{ project: string; resolvedAt: string } | null> {
+  try {
+    const parsed = JSON.parse(await readFile(projectCachePath(), 'utf8')) as Partial<ProjectCacheFile>;
+    if (parsed.version !== PROJECT_CACHE_VERSION) {
+      return null;
+    }
+    const entry = parsed.projectsByCwd?.[cwd];
+    return entry && typeof entry.project === 'string' ? entry : null;
+  } catch {
+    return null;
+  }
+}
+
+async function writeProjectCache(cwd: string, project: string): Promise<void> {
+  let cache: ProjectCacheFile = { version: PROJECT_CACHE_VERSION, projectsByCwd: {} };
+  try {
+    const parsed = JSON.parse(await readFile(projectCachePath(), 'utf8')) as Partial<ProjectCacheFile>;
+    if (
+      parsed
+      && typeof parsed === 'object'
+      && !Array.isArray(parsed)
+      && parsed.version === PROJECT_CACHE_VERSION
+      && parsed.projectsByCwd
+      && typeof parsed.projectsByCwd === 'object'
+    ) {
+      cache = { version: PROJECT_CACHE_VERSION, projectsByCwd: { ...parsed.projectsByCwd } };
+    }
+  } catch {
+    // Create a new cache below.
+  }
+  cache.projectsByCwd[cwd] = { project, resolvedAt: new Date().toISOString() };
+  await atomicWriteFile(projectCachePath(), `${JSON.stringify(cache, null, 2)}\n`);
+}
+
+async function atomicWriteFile(file: string, content: string): Promise<void> {
+  await mkdir(path.dirname(file), { recursive: true });
+  const tmpPath = `${file}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`;
+  await writeFile(tmpPath, content, 'utf8');
+  await rename(tmpPath, file);
 }
 
 function truncate(value: string, maxLength: number): string {
@@ -1082,6 +1474,67 @@ export function defaultArtifactStore(): string {
 
 export const CLAUDE_AGENT = 'claude-code';
 export const CLAUDE_MARKER_KEY = 'claude-code.import';
+
+export async function readClaudeSessionSummary(sourcePath: string): Promise<CodexSessionSummary | null> {
+  const fallbackUpdatedAt = (await stat(sourcePath)).mtime.toISOString();
+  let sessionId = path.basename(sourcePath, '.jsonl');
+  let cwd = os.homedir();
+  let title: string | null = null;
+  let promptPreview: string | null = null;
+  let sawAssistant = false;
+  let scanned = 0;
+
+  for await (const line of readJsonlLines(sourcePath)) {
+    scanned += 1;
+    if (scanned > SUMMARY_SCAN_MAX_LINES) {
+      break;
+    }
+    if (!line.trim()) {
+      continue;
+    }
+    const entry = safeParse(line);
+    if (!entry || entry.isSidechain === true) {
+      continue;
+    }
+    sessionId = stringValue(entry.sessionId) ?? sessionId;
+    cwd = stringValue(entry.cwd) ?? cwd;
+
+    const message = isRecord(entry.message) ? entry.message : null;
+    if (entry.type === 'user' && message && !title) {
+      const raw = message.content;
+      if (typeof raw === 'string') {
+        const prompt = summaryPromptFromText(raw);
+        if (!prompt) {
+          continue;
+        }
+        promptPreview = truncate(prompt, PROMPT_PREVIEW_LIMIT);
+        title = titleFromPromptText(prompt, sessionId);
+      }
+    } else if (entry.type === 'assistant' && message && title) {
+      const blocks = Array.isArray(message.content) ? message.content : [];
+      sawAssistant = blocks.some((block) => isRecord(block) && block.type === 'text' && Boolean(stringValue(block.text)));
+      if (sawAssistant) {
+        break;
+      }
+    }
+  }
+
+  if (!title || !sawAssistant) {
+    return null;
+  }
+
+  const project = await resolveProjectIdentity(cwd);
+  const updatedAt = await latestTranscriptTimestamp(sourcePath, fallbackUpdatedAt);
+  return {
+    sessionId,
+    cwd,
+    project: project.project,
+    sourcePath,
+    updatedAt,
+    title,
+    ...(promptPreview ? { promptPreview } : {}),
+  };
+}
 
 /**
  * Parse a Claude Code transcript (`~/.claude/projects/<cwd>/<sessionId>.jsonl`)
@@ -1238,10 +1691,11 @@ export async function readClaudeSession(
     return null;
   }
 
+  const project = await resolveProjectIdentity(cwd);
   return {
     sessionId,
     cwd,
-    projectKey: path.basename(cwd) || 'claude-code',
+    project: project.project,
     sourcePath,
     updatedAt,
     title: titleFromTurns(sessionTurns, sessionId),

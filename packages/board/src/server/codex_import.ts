@@ -2,7 +2,7 @@ import type { Dirent } from 'node:fs';
 import { readdir } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { addMessage, turns } from '@muninn/core';
+import { captureTurn, turns } from '@muninn/core';
 import {
   CODEX_IMPORT_AGENT,
   IMPORT_ARTIFACT_KEY,
@@ -10,6 +10,7 @@ import {
   importMarker,
   markerFromTurn,
   readCodexSession,
+  readCodexSessionSummary,
   toTurnContent,
   type ArtifactMode,
   type CodexSession,
@@ -20,6 +21,7 @@ import type {
   CodexImportRunResponse,
   CodexImportSessionPreview,
 } from '@muninn/types';
+import * as SessionIdentity from '@muninn/types/session-identity';
 import type { ImportAdapter } from './import_core.js';
 
 type ImportSelection = {
@@ -34,6 +36,7 @@ type ExistingImportTurn = {
   turnId: string;
   marker: string;
 };
+type CodexImportTurn = Awaited<ReturnType<typeof turns.list>>[number];
 
 export type CodexImportOptions = {
   sourceRoot?: string;
@@ -43,9 +46,9 @@ export type CodexImportOptions = {
 };
 
 const DEFAULT_PROJECT_LIMIT = 5;
-const DEFAULT_PROJECT_KEYS = ['muninn', 'lance'];
 const MUNINN_E2E_SESSION_TURN_LIMIT = 1_000;
 const DELETE_BATCH_SIZE = 100;
+const TURN_PAGE_SIZE = 10_000;
 
 export async function previewCodexImport(options: CodexImportOptions, requestId: string): Promise<CodexImportPreviewResponse> {
   const selection = await selectCodexImportSessions(options, 'preview');
@@ -54,9 +57,13 @@ export async function previewCodexImport(options: CodexImportOptions, requestId:
 
 export async function runCodexImport(options: CodexImportOptions, requestId: string): Promise<CodexImportRunResponse> {
   const selection = await selectCodexImportSessions(options, 'preview');
-  const selectedRawSessionIds = new Set(selection.sessions.map((session) => session.sessionId));
+  const selectedSessionKeys = new Set(selection.sessions.map((session) => SessionIdentity.sessionIdentityKey({
+    project: session.project,
+    agent: CODEX_IMPORT_AGENT,
+    sessionId: session.sessionId,
+  })));
   const existingImports = await collectExistingCodexImports({
-    rawSessionIds: selectedRawSessionIds,
+    sessionKeys: selectedSessionKeys,
   });
   const existingImportTurns = [...existingImports.values()].flat();
   let importedSessions = 0;
@@ -107,16 +114,16 @@ async function selectCodexImportSessions(options: CodexImportOptions, artifactMo
   const sessionFiles = await listCodexSessionFiles(sourceRoot);
   const sessions = (await Promise.all(sessionFiles.map((file) => readCodexSession(file, { artifactStore, artifactMode }))))
     .filter((session): session is CodexSession => session !== null)
-    .filter((session) => projectKeys.has(session.projectKey))
+    .filter((session) => projectKeys.size === 0 || projectKeys.has(session.project))
     .filter((session) => !isExcludedImportSession(session))
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
 
   const grouped = new Map<string, CodexSession[]>();
   for (const session of sessions) {
-    const existing = grouped.get(session.projectKey) ?? [];
+    const existing = grouped.get(session.project) ?? [];
     if (existing.length < projectLimit) {
       existing.push(session);
-      grouped.set(session.projectKey, existing);
+      grouped.set(session.project, existing);
     }
   }
 
@@ -181,7 +188,7 @@ async function importCodexSession(session: CodexSession): Promise<{ importedTurn
       continue;
     }
 
-    await addMessage(toTurnContent(session, turn, index));
+    await captureTurn(toTurnContent(session, turn, index));
     importedMarkers.add(marker);
     importedTurns += 1;
   }
@@ -189,30 +196,41 @@ async function importCodexSession(session: CodexSession): Promise<{ importedTurn
 }
 
 async function collectExistingCodexImports(selected: {
-  rawSessionIds: Set<string>;
+  sessionKeys: Set<string>;
 }): Promise<Map<string, ExistingImportTurn[]>> {
-  const existing = await turns.list({
-    mode: { type: 'page', offset: 0, limit: 100_000 },
-    agent: CODEX_IMPORT_AGENT,
-  });
   const grouped = new Map<string, ExistingImportTurn[]>();
-  for (const turn of existing) {
+  for (const turn of await listCodexImportTurns()) {
     let marker = markerFromTurn(turn);
     let sessionId = marker?.split('#', 1)[0] ?? '';
     if (!marker) {
       continue;
     }
-    if (!selected.rawSessionIds.has(sessionId)) {
-      continue;
-    }
     if (!sessionId) {
       continue;
     }
-    const turnsForSession = grouped.get(sessionId) ?? [];
+    const key = SessionIdentity.sessionIdentityKey({ project: turn.project, agent: CODEX_IMPORT_AGENT, sessionId });
+    if (!selected.sessionKeys.has(key)) {
+      continue;
+    }
+    const turnsForSession = grouped.get(key) ?? [];
     turnsForSession.push({ turnId: turn.turnId, marker });
-    grouped.set(sessionId, turnsForSession);
+    grouped.set(key, turnsForSession);
   }
   return grouped;
+}
+
+async function listCodexImportTurns(): Promise<CodexImportTurn[]> {
+  const allTurns: CodexImportTurn[] = [];
+  for (let offset = 0; ; offset += TURN_PAGE_SIZE) {
+    const page = await turns.list({
+      mode: { type: 'page', offset, limit: TURN_PAGE_SIZE },
+      agent: CODEX_IMPORT_AGENT,
+    });
+    allTurns.push(...page);
+    if (page.length < TURN_PAGE_SIZE) {
+      return allTurns;
+    }
+  }
 }
 
 async function deleteExistingImport(existing: ExistingImportTurn[]): Promise<number> {
@@ -235,12 +253,11 @@ function normalizeProjectLimit(value: number | undefined): number {
 }
 
 function normalizeProjectKeys(value: string[] | undefined): Set<string> {
-  const keys = value && value.length > 0 ? value : DEFAULT_PROJECT_KEYS;
-  return new Set(keys.map((key) => key.trim()).filter((key) => key.length > 0));
+  return new Set((value ?? []).map((key) => key.trim()).filter((key) => key.length > 0));
 }
 
 function isExcludedImportSession(session: CodexSession): boolean {
-  if (session.projectKey !== 'muninn') {
+  if (path.basename(session.project) !== 'muninn') {
     return false;
   }
   return session.title.trim().toLowerCase() === 'e2e'
@@ -285,6 +302,7 @@ export const codexAdapter: ImportAdapter = {
   ingest: 'codex-import',
   sourceRoot: path.join(os.homedir(), '.codex'),
   listSessionFiles: () => listCodexSessionFiles(path.join(os.homedir(), '.codex')),
+  readSessionSummary: (sourcePath) => readCodexSessionSummary(sourcePath),
   readSession: (sourcePath, options) => readCodexSession(sourcePath, options),
   isExcluded: (session) => isExcludedImportSession(session),
 };

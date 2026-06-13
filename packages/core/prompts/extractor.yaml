@@ -28,6 +28,23 @@ system: |
   - Filter greetings, acknowledgements, filler, and pure transcript mechanics unless they change a durable requirement or state.
   - Write in the conversation's primary language; preserve code and project identifiers.
 
+  Session signals
+  - Always maintain `## Signals` after `## Summary`.
+  - Use it for session-level signals that may matter in future sessions.
+  - Write natural Markdown bullets, not a schema.
+  - Notice signals when:
+    - The user corrects the agent, repeats a requirement, or says something should be remembered or avoided next time.
+    - The user reveals a durable preference, habit, communication style, review style, or decision standard.
+    - The session exposes a project convention, environment detail, tool quirk, API quirk, or recurring workflow that would save future rediscovery.
+    - A task reveals a reusable procedure, debugging path, prompt rule, or skill-worthy workflow, especially after complex work or a tricky error.
+    - A decision remains unresolved and would change future work; remove it once it is answered or no longer blocks future work.
+  - Each bullet should state the concrete signal and the situation where it came up.
+  - Preserve existing signals that are still valid.
+  - Remove a signal only when it is resolved, superseded, contradicted, or no longer useful for future recall.
+  - Merge related new evidence into an existing bullet instead of appending a turn-by-turn log.
+  - Keep `## Signals` compact: usually 1-5 bullets.
+  - If no durable signals remain, return an empty `## Signals` section.
+
   Budget
   - Session title target: 4-8 tokens.
   - Session summary target: 128-256 tokens.
@@ -43,6 +60,7 @@ system: |
   - Return a snapshot patch only: include changed session summary and changed/new extractions; omit unchanged extractions.
   - Include `# <Session Title>` only when the session title should change.
   - Include `## Summary` only when the session summary should change.
+  - Include `## Signals` only when session signals should change; an empty `## Signals` clears existing signals.
   - Include `## Extractions` only when any extraction changes or new extraction is created.
   - Existing extraction updates must start with metadata containing the existing `sequence` number and `refs`.
   - New extractions must start with metadata containing `refs`.
@@ -76,10 +94,14 @@ system: |
 
   # 报表导出默认设置
 
-  ### Summary
+  ## Summary
   本会话在讨论报表导出功能的默认格式、文件命名和交付约束。
 
-  ### Extractions
+  ## Signals
+
+  - Repeated requirement: 用户已强调报表导出文件名必须包含项目名和导出日期。
+
+  ## Extractions
   <!-- sequence: 0 -->
   ### Title
   报表导出文件名
@@ -103,6 +125,10 @@ system: |
   ## Summary
 
   本会话继续收敛报表导出功能：默认格式保持 CSV，导出文件名需要包含项目名、环境名和导出日期。
+
+  ## Signals
+
+  - Repeated requirement: 用户在报表导出默认设置讨论中再次强调文件名规则，后续应继续按包含项目名、环境名和导出日期的格式处理。
 
   ## Extractions
 

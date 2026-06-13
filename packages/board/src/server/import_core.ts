@@ -1,20 +1,24 @@
 import path from 'node:path';
-import { addMessage, turns } from '@muninn/core';
+import { captureTurn, isCanonicalProjectIdentity, observer, sessions, turns } from '@muninn/core';
 import {
   defaultArtifactStore,
-  displayTitleFromPrompt,
   importMarker,
-  markerFromTurn,
   toTurnContent,
   type ArtifactMode,
   type CodexSession,
+  type CodexSessionSummary,
 } from '@muninn/codex';
 import type {
+  DeleteImportedProjectResponse,
   ImportAgentProject,
+  ImportLocalProjectsResponse,
+  ImportProjectsResponse,
   ImportSelectedResponse,
   ImportSessionsListResponse,
+  SessionIdentity,
 } from '@muninn/types';
-import { getCapturePolicy, setCaptureEnabled } from './capture_policy.js';
+import * as SessionIdentityKey from '@muninn/types/session-identity';
+import { getCapturePolicy, removeCapturePolicy, setCaptureEnabled } from './capture_policy.js';
 
 /**
  * Per-agent descriptor that drives the generic import flow. Each agent supplies
@@ -27,73 +31,27 @@ export type ImportAdapter = {
   ingest: string;
   sourceRoot: string;
   listSessionFiles(): Promise<string[]>;
+  readSessionSummary(sourcePath: string): Promise<CodexSessionSummary | null>;
   readSession(sourcePath: string, options: { artifactStore: string; artifactMode: ArtifactMode }): Promise<CodexSession | null>;
   isExcluded?(session: CodexSession): boolean;
 };
 
 const DELETE_BATCH_SIZE = 100;
+const TURN_PAGE_SIZE = 10_000;
+const LOCAL_SESSION_SCAN_CONCURRENCY = 8;
+type ImportTurn = Awaited<ReturnType<typeof turns.list>>[number];
 
 /** DB-only fast path: sessions already captured into Muninn for this agent. */
 export async function listImportedSessions(adapter: ImportAdapter, requestId: string): Promise<ImportSessionsListResponse> {
-  const existing = await turns.list({ mode: { type: 'page', offset: 0, limit: 100_000 }, agent: adapter.agent });
-
-  type SessionAggregate = {
-    sessionId: string;
-    project: string;
-    cwd: string;
-    title: string;
-    firstCreatedAt: string;
-    sourcePath: string;
-    updatedAt: string;
-    turnCount: number;
-    artifactCount: number;
-  };
-  const bySession = new Map<string, SessionAggregate>();
-  for (const turn of existing) {
-    const sessionId = turn.sessionId?.trim();
-    if (!sessionId) {
-      continue;
-    }
-    let aggregate = bySession.get(sessionId);
-    if (!aggregate) {
-      aggregate = {
-        sessionId,
-        project: turn.project,
-        cwd: turn.cwd,
-        title: displayTitleFromPrompt(turn.prompt ?? ''),
-        firstCreatedAt: turn.createdAt,
-        sourcePath: sourcePathFromTurn(turn, adapter.markerKey) ?? '',
-        updatedAt: turn.updatedAt,
-        turnCount: 0,
-        artifactCount: 0,
-      };
-      bySession.set(sessionId, aggregate);
-    }
-    aggregate.turnCount += 1;
-    aggregate.artifactCount += (turn.artifacts ?? []).filter((artifact) => artifact.key !== adapter.markerKey).length;
-    // Earliest turn's prompt drives the session display title.
-    if (turn.createdAt <= aggregate.firstCreatedAt) {
-      aggregate.title = displayTitleFromPrompt(turn.prompt ?? '') || aggregate.title;
-      aggregate.firstCreatedAt = turn.createdAt;
-    }
-    if (turn.updatedAt > aggregate.updatedAt) {
-      aggregate.updatedAt = turn.updatedAt;
-    }
-    if (!aggregate.sourcePath) {
-      aggregate.sourcePath = sourcePathFromTurn(turn, adapter.markerKey) ?? '';
-    }
-  }
-
-  const projects = groupProjects([...bySession.values()].map((aggregate) => ({
-    projectKey: aggregate.project,
-    cwd: aggregate.cwd,
+  const indexEntries = (await sessions.index()).filter((entry) => entry.agent === adapter.agent);
+  const projects = groupProjects(indexEntries.map((entry) => ({
+    project: entry.project,
     session: {
-      sessionId: aggregate.sessionId,
-      title: aggregate.title || aggregate.sessionId.slice(0, 12),
-      sourcePath: aggregate.sourcePath,
-      updatedAt: aggregate.updatedAt,
-      turnCount: aggregate.turnCount,
-      artifactCount: aggregate.artifactCount,
+      sessionId: entry.sessionId,
+      project: entry.project,
+      cwd: entry.cwd,
+      title: entry.title || entry.sessionId.slice(0, 12),
+      updatedAt: entry.latestUpdatedAt,
       imported: true,
     },
   })));
@@ -102,8 +60,8 @@ export async function listImportedSessions(adapter: ImportAdapter, requestId: st
   return {
     sourceRoot: adapter.sourceRoot,
     projectCount: projects.length,
-    sessionCount: bySession.size,
-    importedCount: bySession.size,
+    sessionCount: indexEntries.length,
+    importedCount: indexEntries.length,
     projects,
     requestId,
   };
@@ -112,34 +70,53 @@ export async function listImportedSessions(adapter: ImportAdapter, requestId: st
 async function applyCapturePolicy(adapter: ImportAdapter, projects: ImportAgentProject[]): Promise<void> {
   const policy = await getCapturePolicy(adapter.agent);
   for (const project of projects) {
-    project.captureEnabled = policy[project.projectKey] === true;
+    project.captureEnabled = policy[project.project] === true;
   }
 }
 
 /** Disk scan: every local session for this agent, flagged imported/not. */
-export async function listLocalSessions(adapter: ImportAdapter, requestId: string): Promise<ImportSessionsListResponse> {
-  const artifactStore = defaultArtifactStore();
+export async function listLocalProjects(adapter: ImportAdapter, requestId: string): Promise<ImportLocalProjectsResponse> {
+  const files = await adapter.listSessionFiles();
+  const summaries = (await mapConcurrent(files, LOCAL_SESSION_SCAN_CONCURRENCY, (file) => (
+    adapter.readSessionSummary(file).catch(() => null)
+  )))
+    .filter((session): session is CodexSessionSummary => session !== null);
+  const byProject = new Map<string, { project: string; latestUpdatedAt: string }>();
+  for (const session of summaries) {
+    const current = byProject.get(session.project);
+    if (!current || session.updatedAt > current.latestUpdatedAt) {
+      byProject.set(session.project, { project: session.project, latestUpdatedAt: session.updatedAt });
+    }
+  }
+  const projects = [...byProject.values()].sort((left, right) => (
+    right.latestUpdatedAt.localeCompare(left.latestUpdatedAt)
+  ));
+  return {
+    sourceRoot: adapter.sourceRoot,
+    projectCount: projects.length,
+    projects,
+    requestId,
+  };
+}
+
+/** Disk scan: local sessions for this agent, optionally scoped to one project. */
+export async function listLocalSessions(adapter: ImportAdapter, requestId: string, project?: string): Promise<ImportSessionsListResponse> {
   const files = await adapter.listSessionFiles();
   // Skip any file that fails to parse (e.g. a transcript too large to read into
   // a string) so one bad file never fails the whole listing.
-  const sessions = (await Promise.all(files.map((file) => adapter.readSession(file, { artifactStore, artifactMode: 'preview' }).catch(() => null))))
-    .filter((session): session is CodexSession => session !== null)
-    .filter((session) => !adapter.isExcluded?.(session))
+  const sessions = (await mapConcurrent(files, LOCAL_SESSION_SCAN_CONCURRENCY, (file) => (
+    adapter.readSessionSummary(file).catch(() => null)
+  )))
+    .filter((session): session is CodexSessionSummary => session !== null)
+    .filter((session) => !project || session.project === project)
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
 
-  const importedIds = await importedSessionIds(adapter);
+  const indexedSessions = await sessionsIndexForAgent(adapter.agent);
+  const importedSessionKeys = new Set(indexedSessions.map(SessionIdentityKey.sessionIdentityKey));
+  const indexByIdentity = new Map(indexedSessions.map((entry) => [SessionIdentityKey.sessionIdentityKey(entry), entry]));
   const projects = groupProjects(sessions.map((session) => ({
-    projectKey: session.projectKey,
-    cwd: session.cwd,
-    session: {
-      sessionId: session.sessionId,
-      title: session.title,
-      sourcePath: session.sourcePath,
-      updatedAt: session.updatedAt,
-      turnCount: session.turns.length,
-      artifactCount: session.turns.reduce((total, turn) => total + turn.artifacts.length, 0),
-      imported: importedIds.has(session.sessionId),
-    },
+    project: session.project,
+    session: localSessionNode(adapter, session, indexByIdentity, importedSessionKeys),
   })));
 
   await applyCapturePolicy(adapter, projects);
@@ -153,12 +130,12 @@ export async function listLocalSessions(adapter: ImportAdapter, requestId: strin
   };
 }
 
-/** Import the selected source files; re-import replaces prior turns idempotently. */
+/** Import the selected source files without replacing existing imported turns. */
 export async function importSelectedSessions(adapter: ImportAdapter, sourcePaths: string[], requestId: string): Promise<ImportSelectedResponse> {
   const artifactStore = defaultArtifactStore();
   const failedSessions: ImportSelectedResponse['failedSessions'] = [];
   const root = path.resolve(adapter.sourceRoot) + path.sep;
-  const loaded: CodexSession[] = [];
+  const selectedSummaries: CodexSessionSummary[] = [];
   for (const sourcePath of sourcePaths) {
     // Only allow files under the agent's source root (no arbitrary file reads).
     if (!path.resolve(sourcePath).startsWith(root)) {
@@ -166,75 +143,110 @@ export async function importSelectedSessions(adapter: ImportAdapter, sourcePaths
       continue;
     }
     try {
-      const session = await adapter.readSession(sourcePath, { artifactStore, artifactMode: 'copy' });
-      if (session) {
-        loaded.push(session);
+      const summary = await adapter.readSessionSummary(sourcePath);
+      if (summary) {
+        selectedSummaries.push(summary);
       }
     } catch (error) {
       failedSessions.push({ sourcePath, errorMessage: error instanceof Error ? error.message : String(error) });
     }
   }
 
-  const selectedIds = new Set(loaded.map((session) => session.sessionId));
-  await deleteExistingTurns(adapter, selectedIds);
+  const indexByIdentity = new Map((await sessions.index()).map((entry) => [SessionIdentityKey.sessionIdentityKey(entry), entry]));
+  const importablePaths: string[] = [];
+  for (const summary of selectedSummaries) {
+    const entry = indexByIdentity.get(identityKey(adapter, summary));
+    if (entry?.firstTurnSequence === 0) {
+      failedSessions.push({ sourcePath: summary.sourcePath, errorMessage: 'session already imported' });
+      continue;
+    }
+    importablePaths.push(summary.sourcePath);
+  }
 
   let importedSessions = 0;
   let importedTurns = 0;
   const enabledProjects = new Set<string>();
-  for (const session of loaded) {
+  for (const sourcePath of importablePaths) {
     try {
+      const session = await adapter.readSession(sourcePath, { artifactStore, artifactMode: 'copy' });
+      if (!session || adapter.isExcluded?.(session)) {
+        continue;
+      }
       let turnsForSession = 0;
       const seen = new Set<string>();
+      const existingSequences = await existingSourceSequences(adapter, session);
       for (const [index, turn] of session.turns.entries()) {
+        if (existingSequences.has(index)) {
+          continue;
+        }
         const marker = importMarker(session, index);
         if (seen.has(marker)) {
           continue;
         }
-        await addMessage(toTurnContent(session, turn, index, { agent: adapter.agent, ingest: adapter.ingest, markerKey: adapter.markerKey }));
+        await captureTurn(toTurnContent(session, turn, index, { agent: adapter.agent, ingest: adapter.ingest, markerKey: adapter.markerKey }));
         seen.add(marker);
+        existingSequences.add(index);
         turnsForSession += 1;
       }
       if (turnsForSession > 0) {
         importedSessions += 1;
         importedTurns += turnsForSession;
-        enabledProjects.add(session.projectKey);
+        enabledProjects.add(session.project);
       }
     } catch (error) {
-      failedSessions.push({ sourcePath: session.sourcePath, errorMessage: error instanceof Error ? error.message : String(error) });
+      failedSessions.push({ sourcePath, errorMessage: error instanceof Error ? error.message : String(error) });
     }
   }
 
+  if (importedTurns > 0) {
+    await observer.flushPending();
+  }
+
   // Importing a project opts it into live auto-capture going forward.
-  for (const projectKey of enabledProjects) {
-    await setCaptureEnabled(adapter.agent, projectKey, true);
+  for (const project of enabledProjects) {
+    if (isCanonicalProjectIdentity(project)) {
+      await setCaptureEnabled(adapter.agent, project, true);
+    }
   }
 
   return { importedSessions, importedTurns, failedSessions, requestId };
 }
 
-async function importedSessionIds(adapter: ImportAdapter): Promise<Set<string>> {
-  const existing = await turns.list({ mode: { type: 'page', offset: 0, limit: 100_000 }, agent: adapter.agent });
-  const ids = new Set<string>();
-  for (const turn of existing) {
-    const marker = markerFromTurn(turn, adapter.markerKey);
-    const sessionId = marker?.split('#', 1)[0] ?? turn.sessionId ?? '';
-    if (sessionId) {
-      ids.add(sessionId);
-    }
+export async function importProjects(adapter: ImportAdapter, projects: string[], requestId: string): Promise<ImportProjectsResponse> {
+  const uniqueProjects = [...new Set(projects.map((project) => project.trim()).filter((project) => project.length > 0))];
+  for (const project of uniqueProjects) {
+    await setCaptureEnabled(adapter.agent, project, true);
   }
-  return ids;
+  return {
+    importedProjects: uniqueProjects.length,
+    requestId,
+  };
 }
 
-async function deleteExistingTurns(adapter: ImportAdapter, sessionIds: Set<string>): Promise<number> {
-  if (sessionIds.size === 0) {
+export async function deleteImportedProject(adapter: ImportAdapter, project: string, requestId: string): Promise<DeleteImportedProjectResponse> {
+  const sessionKeys = new Set(
+    (await sessions.index())
+      .filter((entry) => entry.agent === adapter.agent && entry.project === project)
+      .map(SessionIdentityKey.sessionIdentityKey),
+  );
+  const deletedTurns = await deleteProjectTurns(adapter, sessionKeys);
+  await sessions.refreshIndex();
+  await removeCapturePolicy(adapter.agent, project);
+  return {
+    deletedSessions: sessionKeys.size,
+    deletedTurns,
+    requestId,
+  };
+}
+
+async function deleteProjectTurns(adapter: ImportAdapter, sessionKeys: Set<string>): Promise<number> {
+  if (sessionKeys.size === 0) {
     return 0;
   }
-  const existing = await turns.list({ mode: { type: 'page', offset: 0, limit: 100_000 }, agent: adapter.agent });
   const turnIds: string[] = [];
-  for (const turn of existing) {
-    const marker = markerFromTurn(turn, adapter.markerKey);
-    const sessionId = marker?.split('#', 1)[0] ?? turn.sessionId ?? '';
-    if (sessionId && sessionIds.has(sessionId)) {
+  for (const turn of await listAgentTurns(adapter.agent)) {
+    const key = turn.sessionId ? identityKey(adapter, { project: turn.project, sessionId: turn.sessionId }) : null;
+    if (key && sessionKeys.has(key)) {
       turnIds.push(turn.turnId);
     }
   }
@@ -245,12 +257,81 @@ async function deleteExistingTurns(adapter: ImportAdapter, sessionIds: Set<strin
   return deleted;
 }
 
-function groupProjects(rows: Array<{ projectKey: string; cwd: string; session: ImportAgentProject['sessions'][number] }>): ImportAgentProject[] {
+async function listAgentTurns(agent: string): Promise<ImportTurn[]> {
+  const allTurns: ImportTurn[] = [];
+  for (let offset = 0; ; offset += TURN_PAGE_SIZE) {
+    const page = await turns.list({
+      mode: { type: 'page', offset, limit: TURN_PAGE_SIZE },
+      agent,
+    });
+    allTurns.push(...page);
+    if (page.length < TURN_PAGE_SIZE) {
+      return allTurns;
+    }
+  }
+}
+
+async function existingSourceSequences(adapter: ImportAdapter, session: Pick<SessionIdentity, 'project' | 'sessionId'>): Promise<Set<number>> {
+  const sequences = new Set<number>();
+  for (let offset = 0; ; offset += TURN_PAGE_SIZE) {
+    const page = await turns.list({
+      mode: { type: 'page', offset, limit: TURN_PAGE_SIZE },
+      agent: adapter.agent,
+      sessionId: session.sessionId,
+    });
+    for (const turn of page) {
+      if (turn.project !== session.project) {
+        continue;
+      }
+      const value = turn.metadata?.sourceTurnSequence;
+      if (typeof value === 'number' && Number.isInteger(value) && value >= 0) {
+        sequences.add(value);
+      }
+    }
+    if (page.length < TURN_PAGE_SIZE) {
+      break;
+    }
+  }
+  return sequences;
+}
+
+async function sessionsIndexForAgent(agent: string): Promise<Array<Awaited<ReturnType<typeof sessions.index>>[number]>> {
+  return (await sessions.index()).filter((entry) => entry.agent === agent);
+}
+
+function localSessionNode(
+  adapter: ImportAdapter,
+  session: CodexSessionSummary,
+  indexByIdentity: Map<string, Awaited<ReturnType<typeof sessions.index>>[number]>,
+  importedSessionKeys: Set<string>,
+): ImportAgentProject['sessions'][number] {
+  const key = identityKey(adapter, session);
+  const entry = importedSessionKeys.has(key) ? indexByIdentity.get(key) : undefined;
+  return {
+    sessionId: session.sessionId,
+    project: session.project,
+    cwd: session.cwd,
+    title: session.title,
+    promptPreview: session.promptPreview,
+    sourcePath: session.sourcePath,
+    updatedAt: session.updatedAt,
+    imported: entry?.firstTurnSequence === 0,
+  };
+}
+
+function identityKey(adapter: Pick<ImportAdapter, 'agent'>, session: Pick<SessionIdentity, 'project' | 'sessionId'>): string {
+  return SessionIdentityKey.sessionIdentityKey({
+    project: session.project,
+    agent: adapter.agent,
+    sessionId: session.sessionId,
+  });
+}
+
+function groupProjects(rows: Array<{ project: string; session: ImportAgentProject['sessions'][number] }>): ImportAgentProject[] {
   const grouped = new Map<string, ImportAgentProject>();
   for (const row of rows) {
-    const project = grouped.get(row.projectKey) ?? {
-      projectKey: row.projectKey,
-      cwd: row.cwd,
+    const project = grouped.get(row.project) ?? {
+      project: row.project,
       sessionCount: 0,
       importedCount: 0,
       sessions: [],
@@ -258,7 +339,7 @@ function groupProjects(rows: Array<{ projectKey: string; cwd: string; session: I
     project.sessions.push(row.session);
     project.sessionCount += 1;
     project.importedCount += row.session.imported ? 1 : 0;
-    grouped.set(row.projectKey, project);
+    grouped.set(row.project, project);
   }
   for (const project of grouped.values()) {
     project.sessions.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
@@ -268,15 +349,21 @@ function groupProjects(rows: Array<{ projectKey: string; cwd: string; session: I
   ));
 }
 
-function sourcePathFromTurn(turn: { artifacts?: Array<{ key: string; content?: string }> | null }, markerKey: string): string | null {
-  const artifact = turn.artifacts?.find((item) => item.key === markerKey);
-  if (!artifact?.content) {
-    return null;
-  }
-  try {
-    const parsed = JSON.parse(artifact.content) as { sourcePath?: unknown };
-    return typeof parsed.sourcePath === 'string' && parsed.sourcePath.length > 0 ? parsed.sourcePath : null;
-  } catch {
-    return null;
-  }
+async function mapConcurrent<T, R>(
+  items: T[],
+  concurrency: number,
+  task: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+  const workerCount = Math.min(Math.max(1, concurrency), items.length);
+  const workers = Array.from({ length: workerCount }, async () => {
+    while (nextIndex < items.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      results[index] = await task(items[index]);
+    }
+  });
+  await Promise.all(workers);
+  return results;
 }

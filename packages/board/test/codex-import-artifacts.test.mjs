@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import core, { addMessage, turns } from '@muninn/core';
+import core, { captureTurn, turns } from '@muninn/core';
 import { __testing, previewCodexImport, runCodexImport } from '../dist-server/codex_import.js';
+import { codexAdapter } from '../dist-server/codex_import.js';
+import { importSelectedSessions } from '../dist-server/import_core.js';
 
 const { shutdownCoreForTests } = core;
 
@@ -355,7 +357,6 @@ test('run import stores raw session id with project cwd and metadata', async () 
 
     const result = await runCodexImport({
       sourceRoot,
-      projectKeys: ['muninn'],
       projectLimit: 5,
       artifactStore: path.join(tempDir, 'artifacts'),
     }, 'req-run');
@@ -369,11 +370,224 @@ test('run import stores raw session id with project cwd and metadata', async () 
     const imported = persisted.find((turn) => turn.prompt === 'raw session prompt');
     assert.ok(imported);
     assert.equal(imported.sessionId, '019e8632-raw-codex-session');
-    assert.equal(imported.project, 'muninn');
+    assert.equal(imported.project, await realpath(cwd));
     assert.equal(imported.cwd, cwd);
     assert.equal(imported.metadata?.ingest, 'codex-import');
     assert.equal(imported.metadata?.sourceSessionId, '019e8632-raw-codex-session');
     assert.equal(imported.metadata?.sourcePath, path.join(sessionDir, 'rollout-raw-session.jsonl'));
+  } finally {
+    await shutdownCoreForTests();
+    if (previousHome === undefined) {
+      delete process.env.MUNINN_HOME;
+    } else {
+      process.env.MUNINN_HOME = previousHome;
+    }
+    if (previousObserverPollMs === undefined) {
+      delete process.env.MUNINN_OBSERVER_POLL_MS;
+    } else {
+      process.env.MUNINN_OBSERVER_POLL_MS = previousObserverPollMs;
+    }
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('session import fails when firstTurnSequence is zero', async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), 'muninn-codex-import-already-imported-'));
+  const previousHome = process.env.MUNINN_HOME;
+  const previousObserverPollMs = process.env.MUNINN_OBSERVER_POLL_MS;
+  process.env.MUNINN_HOME = path.join(tempDir, 'muninn');
+  process.env.MUNINN_OBSERVER_POLL_MS = '60000';
+  try {
+    await writeTestConfig(process.env.MUNINN_HOME);
+
+    const sourceRoot = path.join(tempDir, 'codex');
+    const cwd = path.join(tempDir, 'workspace', 'already-imported');
+    const sessionDir = path.join(sourceRoot, 'sessions', '2026', '06', '13');
+    await mkdir(sessionDir, { recursive: true });
+    await mkdir(cwd, { recursive: true });
+    const sourcePath = path.join(sessionDir, 'already-imported.jsonl');
+    await writeCodexSessionFile(sessionDir, {
+      fileName: path.basename(sourcePath),
+      rawSessionId: 'already-imported-session',
+      cwd,
+      timestamp: '2026-06-13T01:00:00.000Z',
+      prompt: 'already imported prompt',
+      response: 'already imported response',
+    });
+    const project = await realpath(cwd);
+
+    await captureTurn({
+      sessionId: 'already-imported-session',
+      project,
+      cwd,
+      agent: 'codex',
+      metadata: { sourceTurnSequence: 0 },
+      createdAt: '2026-06-13T01:01:00.000Z',
+      updatedAt: '2026-06-13T01:02:00.000Z',
+      prompt: 'already imported prompt',
+      response: 'already imported old response',
+      events: [
+        { type: 'userMessage', text: 'already imported prompt', timestamp: '2026-06-13T01:01:00.000Z' },
+        { type: 'assistantMessage', text: 'already imported old response', timestamp: '2026-06-13T01:02:00.000Z' },
+      ],
+    });
+
+    const result = await importSelectedSessions(
+      { ...codexAdapter, sourceRoot },
+      [sourcePath],
+      'req-already-imported',
+    );
+
+    assert.equal(result.importedTurns, 0);
+    assert.equal(result.importedSessions, 0);
+    assert.equal(result.failedSessions.length, 1);
+    assert.equal(result.failedSessions[0].errorMessage, 'session already imported');
+
+    const persisted = await turns.list({
+      mode: { type: 'page', offset: 0, limit: 20 },
+      agent: 'codex',
+      sessionId: 'already-imported-session',
+    });
+    assert.equal(persisted.length, 1);
+    assert.equal(persisted[0].response, 'already imported old response');
+  } finally {
+    await shutdownCoreForTests();
+    if (previousHome === undefined) {
+      delete process.env.MUNINN_HOME;
+    } else {
+      process.env.MUNINN_HOME = previousHome;
+    }
+    if (previousObserverPollMs === undefined) {
+      delete process.env.MUNINN_OBSERVER_POLL_MS;
+    } else {
+      process.env.MUNINN_OBSERVER_POLL_MS = previousObserverPollMs;
+    }
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('session import allows later hook coverage and skips duplicate source turn', async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), 'muninn-codex-import-late-coverage-'));
+  const previousHome = process.env.MUNINN_HOME;
+  const previousObserverPollMs = process.env.MUNINN_OBSERVER_POLL_MS;
+  process.env.MUNINN_HOME = path.join(tempDir, 'muninn');
+  process.env.MUNINN_OBSERVER_POLL_MS = '60000';
+  try {
+    await writeTestConfig(process.env.MUNINN_HOME);
+
+    const sourceRoot = path.join(tempDir, 'codex');
+    const cwd = path.join(tempDir, 'workspace', 'late-coverage');
+    const sessionDir = path.join(sourceRoot, 'sessions', '2026', '06', '13');
+    await mkdir(sessionDir, { recursive: true });
+    await mkdir(cwd, { recursive: true });
+    const sourcePath = path.join(sessionDir, 'late-coverage.jsonl');
+    const entries = [
+      {
+        timestamp: '2026-06-13T02:00:00.000Z',
+        type: 'session_meta',
+        payload: {
+          id: 'late-coverage-session',
+          cwd,
+          timestamp: '2026-06-13T02:00:00.000Z',
+        },
+      },
+      {
+        timestamp: '2026-06-13T02:01:00.000Z',
+        type: 'response_item',
+        payload: {
+          type: 'message',
+          role: 'user',
+          content: [{ type: 'input_text', text: 'first late prompt' }],
+        },
+      },
+      {
+        timestamp: '2026-06-13T02:02:00.000Z',
+        type: 'response_item',
+        payload: {
+          type: 'message',
+          role: 'assistant',
+          content: [{ type: 'output_text', text: 'first late response' }],
+        },
+      },
+      {
+        timestamp: '2026-06-13T02:03:00.000Z',
+        type: 'response_item',
+        payload: {
+          type: 'message',
+          role: 'user',
+          content: [{ type: 'input_text', text: 'second late prompt' }],
+        },
+      },
+      {
+        timestamp: '2026-06-13T02:04:00.000Z',
+        type: 'response_item',
+        payload: {
+          type: 'message',
+          role: 'assistant',
+          content: [{ type: 'output_text', text: 'second late response' }],
+        },
+      },
+      {
+        timestamp: '2026-06-13T02:05:00.000Z',
+        type: 'response_item',
+        payload: {
+          type: 'message',
+          role: 'user',
+          content: [{ type: 'input_text', text: 'third late prompt' }],
+        },
+      },
+      {
+        timestamp: '2026-06-13T02:06:00.000Z',
+        type: 'response_item',
+        payload: {
+          type: 'message',
+          role: 'assistant',
+          content: [{ type: 'output_text', text: 'third late response' }],
+        },
+      },
+    ];
+    await writeFile(sourcePath, `${entries.map((entry) => JSON.stringify(entry)).join('\n')}\n`);
+    const project = await realpath(cwd);
+
+    await captureTurn({
+      sessionId: 'late-coverage-session',
+      project,
+      cwd,
+      agent: 'codex',
+      metadata: { sourceTurnSequence: 2 },
+      createdAt: '2026-06-13T02:05:00.000Z',
+      updatedAt: '2026-06-13T02:06:00.000Z',
+      prompt: 'third late prompt',
+      response: 'third live response',
+      events: [
+        { type: 'userMessage', text: 'third late prompt', timestamp: '2026-06-13T02:05:00.000Z' },
+        { type: 'assistantMessage', text: 'third live response', timestamp: '2026-06-13T02:06:00.000Z' },
+      ],
+    });
+
+    const result = await importSelectedSessions(
+      { ...codexAdapter, sourceRoot },
+      [sourcePath],
+      'req-late-coverage',
+    );
+
+    assert.equal(result.importedTurns, 2);
+    assert.equal(result.importedSessions, 1);
+    assert.equal(result.failedSessions.length, 0, JSON.stringify(result.failedSessions));
+
+    const persisted = await turns.list({
+      mode: { type: 'page', offset: 0, limit: 20 },
+      agent: 'codex',
+      sessionId: 'late-coverage-session',
+    });
+    assert.deepEqual(
+      persisted
+        .filter((turn) => turn.project === project)
+        .map((turn) => turn.metadata?.sourceTurnSequence)
+        .sort((left, right) => left - right),
+      [0, 1, 2],
+    );
+    assert.equal(persisted.filter((turn) => turn.project === project && turn.metadata?.sourceTurnSequence === 2).length, 1);
   } finally {
     await shutdownCoreForTests();
     if (previousHome === undefined) {
@@ -434,7 +648,7 @@ test('run import ignores unmarked legacy codex rows', async () => {
     ];
     await writeFile(sessionPath, `${entries.map((entry) => JSON.stringify(entry)).join('\n')}\n`);
 
-    await addMessage({
+    await captureTurn({
       sessionId: 'muninn/legacy-duplicated-prompt-session-',
       agent: 'codex',
       createdAt: '2026-06-02T01:02:00.000Z',
@@ -449,7 +663,6 @@ test('run import ignores unmarked legacy codex rows', async () => {
 
     const result = await runCodexImport({
       sourceRoot,
-      projectKeys: ['muninn'],
       projectLimit: 5,
       artifactStore: path.join(tempDir, 'artifacts'),
     }, 'req-test');
@@ -488,21 +701,27 @@ test('run import only deletes existing marker turns for selected codex sessions'
   process.env.MUNINN_HOME = path.join(tempDir, 'muninn');
   process.env.MUNINN_OBSERVER_POLL_MS = '60000';
   try {
-    await writeTestConfig(process.env.MUNINN_HOME);
+	    await writeTestConfig(process.env.MUNINN_HOME);
 
-    const sourceRoot = path.join(tempDir, 'codex');
-    const sessionDir = path.join(sourceRoot, 'sessions', '2026', '06', '03');
-    await mkdir(sessionDir, { recursive: true });
-    const entries = [
-      {
-        timestamp: '2026-06-03T01:00:00.000Z',
-        type: 'session_meta',
-        payload: {
-          id: 'raw-selected-session',
-          cwd: '/Users/Nathan/workspace/muninn',
-          timestamp: '2026-06-03T01:00:00.000Z',
-        },
-      },
+	    const sourceRoot = path.join(tempDir, 'codex');
+	    const selectedProjectRaw = path.join(tempDir, 'workspace', 'muninn');
+	    const otherProjectRaw = path.join(tempDir, 'workspace', 'lance');
+	    const sessionDir = path.join(sourceRoot, 'sessions', '2026', '06', '03');
+	    await mkdir(sessionDir, { recursive: true });
+	    await mkdir(selectedProjectRaw, { recursive: true });
+	    await mkdir(otherProjectRaw, { recursive: true });
+	    const selectedProject = await realpath(selectedProjectRaw);
+	    const otherProject = await realpath(otherProjectRaw);
+	    const entries = [
+	      {
+	        timestamp: '2026-06-03T01:00:00.000Z',
+	        type: 'session_meta',
+	        payload: {
+	          id: 'raw-selected-session',
+	          cwd: selectedProject,
+	          timestamp: '2026-06-03T01:00:00.000Z',
+	        },
+	      },
       {
         timestamp: '2026-06-03T01:01:00.000Z',
         type: 'response_item',
@@ -527,11 +746,13 @@ test('run import only deletes existing marker turns for selected codex sessions'
       `${entries.map((entry) => JSON.stringify(entry)).join('\n')}\n`,
     );
 
-    await addMessage({
-      sessionId: 'muninn/selected-prompt-raw-sele',
-      agent: 'codex',
-      createdAt: '2026-06-03T01:01:00.000Z',
-      updatedAt: '2026-06-03T01:02:00.000Z',
+	    await captureTurn({
+	      sessionId: 'muninn/selected-prompt-raw-sele',
+	      project: selectedProject,
+	      cwd: selectedProject,
+	      agent: 'codex',
+	      createdAt: '2026-06-03T01:01:00.000Z',
+	      updatedAt: '2026-06-03T01:02:00.000Z',
       prompt: 'selected prompt',
       response: 'selected stale response',
       events: [
@@ -545,9 +766,11 @@ test('run import only deletes existing marker turns for selected codex sessions'
         content: JSON.stringify({ marker: 'raw-selected-session#1' }),
       }],
     });
-    await addMessage({
-      sessionId: 'lance/other-session-raw-othe',
-      agent: 'codex',
+	    await captureTurn({
+	      sessionId: 'lance/other-session-raw-othe',
+	      project: otherProject,
+	      cwd: otherProject,
+	      agent: 'codex',
       createdAt: '2026-06-03T02:01:00.000Z',
       updatedAt: '2026-06-03T02:02:00.000Z',
       prompt: 'other prompt',
@@ -566,7 +789,6 @@ test('run import only deletes existing marker turns for selected codex sessions'
 
     const result = await runCodexImport({
       sourceRoot,
-      projectKeys: ['muninn'],
       projectLimit: 5,
       artifactStore: path.join(tempDir, 'artifacts'),
     }, 'req-test');
@@ -653,7 +875,6 @@ test('preview does not write artifacts but run imports relative and missing atta
     const artifactStore = path.join(tempDir, 'artifacts');
     const preview = await previewCodexImport({
       sourceRoot,
-      projectKeys: ['muninn'],
       projectLimit: 5,
       artifactStore,
     }, 'req-preview');
@@ -663,12 +884,11 @@ test('preview does not write artifacts but run imports relative and missing atta
 
     const result = await runCodexImport({
       sourceRoot,
-      projectKeys: ['muninn'],
       projectLimit: 5,
       artifactStore,
     }, 'req-run');
 
-    assert.equal(result.failedSessions.length, 0);
+    assert.equal(result.failedSessions.length, 0, JSON.stringify(result.failedSessions));
     assert.equal(result.importedTurns, 1);
     assert.equal(await artifactFileCount(artifactStore), 1);
 
@@ -733,13 +953,12 @@ test('run import skips invalid data URL artifacts without failing the session', 
 
     const result = await runCodexImport({
       sourceRoot,
-      projectKeys: ['muninn'],
       projectLimit: 5,
       artifactStore: path.join(tempDir, 'artifacts'),
     }, 'req-run');
 
     assert.equal(result.importedTurns, 2);
-    assert.equal(result.failedSessions.length, 0);
+    assert.equal(result.failedSessions.length, 0, JSON.stringify(result.failedSessions));
 
     const persisted = await turns.list({
       mode: { type: 'page', offset: 0, limit: 20 },
@@ -803,7 +1022,6 @@ test('run import only copies artifacts for selected sessions', async () => {
     const artifactStore = path.join(tempDir, 'artifacts');
     const result = await runCodexImport({
       sourceRoot,
-      projectKeys: ['muninn'],
       projectLimit: 1,
       artifactStore,
     }, 'req-run');
@@ -910,7 +1128,6 @@ test('run import stores tool image artifacts under the codex session directory',
     const artifactStore = path.join(process.env.MUNINN_HOME, 'default', 'artifacts');
     const result = await runCodexImport({
       sourceRoot,
-      projectKeys: ['muninn'],
       projectLimit: 5,
     }, 'req-run');
 
@@ -1033,7 +1250,6 @@ test('run import captures markdown links and apply_patch files with safe conflic
     const artifactStore = path.join(process.env.MUNINN_HOME, 'default', 'artifacts');
     const result = await runCodexImport({
       sourceRoot,
-      projectKeys: ['muninn'],
       projectLimit: 5,
     }, 'req-run');
 
@@ -1057,6 +1273,131 @@ test('run import captures markdown links and apply_patch files with safe conflic
     assert.equal(docs.length, 4);
     assert.ok(docs.every((artifact) => artifact.content?.startsWith('# ')));
     assert.ok(docs.every((artifact) => artifact.uri?.startsWith('artifact://sessions/codex-docs-session/')));
+  } finally {
+    await shutdownCoreForTests();
+    if (previousHome === undefined) {
+      delete process.env.MUNINN_HOME;
+    } else {
+      process.env.MUNINN_HOME = previousHome;
+    }
+    if (previousObserverPollMs === undefined) {
+      delete process.env.MUNINN_OBSERVER_POLL_MS;
+    } else {
+      process.env.MUNINN_OBSERVER_POLL_MS = previousObserverPollMs;
+    }
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('run import replaces matching project agent session identity when raw session id is shared', async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), 'muninn-codex-import-identity-'));
+  const previousHome = process.env.MUNINN_HOME;
+  const previousObserverPollMs = process.env.MUNINN_OBSERVER_POLL_MS;
+  process.env.MUNINN_HOME = path.join(tempDir, 'muninn');
+  process.env.MUNINN_OBSERVER_POLL_MS = '60000';
+  try {
+    await writeTestConfig(process.env.MUNINN_HOME);
+
+    const sourceRoot = path.join(tempDir, 'codex');
+    const targetProjectRaw = path.join(tempDir, 'workspace', 'target');
+    const targetWorktreeRaw = path.join(tempDir, '.codex', 'worktrees', 'abcd', 'target');
+    const otherProjectRaw = path.join(tempDir, 'workspace', 'other');
+    const sessionDir = path.join(sourceRoot, 'sessions', '2026', '06', '12');
+    await mkdir(sessionDir, { recursive: true });
+    await mkdir(targetProjectRaw, { recursive: true });
+    await mkdir(targetWorktreeRaw, { recursive: true });
+    await mkdir(otherProjectRaw, { recursive: true });
+    const targetProject = await realpath(targetProjectRaw);
+    const targetWorktree = await realpath(targetWorktreeRaw);
+    const otherProject = await realpath(otherProjectRaw);
+
+    const markerArtifact = (project, cwd) => ({
+      key: 'codex.import',
+      kind: 'metadata',
+      source: 'import',
+      content: JSON.stringify({
+        marker: 'shared-session#1',
+        project,
+        cwd,
+        sourceSessionId: 'shared-session',
+      }),
+    });
+
+    await captureTurn({
+      sessionId: 'shared-session',
+      project: targetProject,
+      cwd: targetProject,
+      agent: 'codex',
+      createdAt: '2026-06-12T01:00:00.000Z',
+      updatedAt: '2026-06-12T01:01:00.000Z',
+      summary: 'old target',
+      prompt: 'old target',
+      response: 'old target',
+      events: [
+        { type: 'userMessage', text: 'old target', timestamp: '2026-06-12T01:00:00.000Z' },
+        { type: 'assistantMessage', text: 'old target', timestamp: '2026-06-12T01:01:00.000Z' },
+      ],
+      artifacts: [markerArtifact(targetProject, targetProject)],
+    });
+    await captureTurn({
+      sessionId: 'shared-session',
+      project: targetProject,
+      cwd: targetWorktree,
+      agent: 'codex',
+      createdAt: '2026-06-12T01:10:00.000Z',
+      updatedAt: '2026-06-12T01:11:00.000Z',
+      summary: 'old target worktree',
+      prompt: 'old target worktree',
+      response: 'old target worktree',
+      events: [
+        { type: 'userMessage', text: 'old target worktree', timestamp: '2026-06-12T01:10:00.000Z' },
+        { type: 'assistantMessage', text: 'old target worktree', timestamp: '2026-06-12T01:11:00.000Z' },
+      ],
+      artifacts: [markerArtifact(targetProject, targetWorktree)],
+    });
+    await captureTurn({
+      sessionId: 'shared-session',
+      project: otherProject,
+      cwd: otherProject,
+      agent: 'codex',
+      createdAt: '2026-06-12T01:00:00.000Z',
+      updatedAt: '2026-06-12T01:01:00.000Z',
+      summary: 'other project',
+      prompt: 'other project',
+      response: 'other project',
+      events: [
+        { type: 'userMessage', text: 'other project', timestamp: '2026-06-12T01:00:00.000Z' },
+        { type: 'assistantMessage', text: 'other project', timestamp: '2026-06-12T01:01:00.000Z' },
+      ],
+      artifacts: [markerArtifact(otherProject, otherProject)],
+    });
+
+    await writeCodexSessionFile(sessionDir, {
+      fileName: 'shared-session.jsonl',
+      rawSessionId: 'shared-session',
+      cwd: targetProject,
+      timestamp: '2026-06-12T02:00:00.000Z',
+      prompt: 'new target',
+      response: 'new target',
+    });
+
+    const result = await runCodexImport({
+      sourceRoot,
+      projectLimit: 5,
+    }, 'req-identity');
+
+    assert.equal(result.failedSessions.length, 0, JSON.stringify(result.failedSessions));
+    assert.equal(result.deletedTurns, 2);
+    assert.equal(result.importedTurns, 1);
+
+    const persisted = await turns.list({
+      mode: { type: 'page', offset: 0, limit: 20 },
+      agent: 'codex',
+    });
+    assert.equal(persisted.some((turn) => turn.project === targetProject && turn.prompt === 'old target'), false);
+    assert.equal(persisted.some((turn) => turn.project === targetProject && turn.prompt === 'old target worktree'), false);
+    assert.equal(persisted.some((turn) => turn.project === targetProject && turn.prompt === 'new target'), true);
+    assert.equal(persisted.some((turn) => turn.project === otherProject && turn.prompt === 'other project'), true);
   } finally {
     await shutdownCoreForTests();
     if (previousHome === undefined) {

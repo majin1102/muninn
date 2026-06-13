@@ -1,3 +1,5 @@
+import * as SessionIdentity from '@muninn/types/session-identity';
+
 export type SessionContentMode = 'split' | 'conversation' | 'collapsed';
 
 export const OBSERVATION_MIN_WIDTH = 320;
@@ -130,9 +132,14 @@ export function locateObservationEnabled(
 }
 
 export function selectedSessionKey(session: {
+  projectKey: string;
   agent: string;
   cwd?: string;
   sessionKey: string;
 }): string {
-  return `${session.agent}:${session.cwd ?? ''}:${session.sessionKey}`;
+  return SessionIdentity.sessionIdentityKey({
+    project: session.projectKey,
+    agent: session.agent,
+    sessionId: session.sessionKey,
+  });
 }

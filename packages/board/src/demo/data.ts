@@ -1,4 +1,4 @@
-import type { PipelineTask, SearchSessionResult, ToolCall } from '@muninn/types';
+import type { ImportAgentProject, PipelineTask, SearchSessionResult, ToolCall } from '@muninn/types';
 
 export type DemoSessionAgentItem = {
   agent: string;
@@ -49,13 +49,201 @@ export type DemoMemoryDocument = {
   updatedAt?: string;
 };
 
+export type DemoImportAgentData = {
+  sourceRoot: string;
+  projects: ImportAgentProject[];
+};
+
 const LONG_DEMO_PROJECT = 'memory-inbox-with-a-very-long-project-name-for-cross-agent-recall';
 const LONG_DEMO_SESSION = 'memory-inbox/daily-recall-and-cross-agent-search-regression-review-session';
+
+export const demoImportAgents: Record<string, DemoImportAgentData> = {
+  codex: {
+    sourceRoot: '/Users/Nathan/.codex',
+    projects: [
+      {
+        project: '/Users/Nathan/workspace/muninn',
+        sessionCount: 3,
+        importedCount: 2,
+        captureEnabled: true,
+        sessions: [
+          {
+            sessionId: 'codex-muninn-import-ui',
+            project: '/Users/Nathan/workspace/muninn',
+            cwd: '/Users/Nathan/workspace/muninn',
+            title: 'Import settings interaction polish',
+            sourcePath: '/Users/Nathan/.codex/sessions/2026/06/11/codex-muninn-import-ui.jsonl',
+            updatedAt: '2026-06-11T10:36:00.000Z',
+            turnCount: 18,
+            artifactCount: 4,
+            imported: true,
+          },
+          {
+            sessionId: 'codex-muninn-rebase-main',
+            project: '/Users/Nathan/workspace/muninn',
+            cwd: '/Users/Nathan/workspace/muninn',
+            title: 'Rebase import tab onto origin/main',
+            sourcePath: '/Users/Nathan/.codex/sessions/2026/06/11/codex-muninn-rebase-main.jsonl',
+            updatedAt: '2026-06-11T09:42:00.000Z',
+            turnCount: 11,
+            artifactCount: 1,
+            imported: true,
+          },
+          {
+            sessionId: 'codex-muninn-demo-data',
+            project: '/Users/Nathan/workspace/muninn',
+            cwd: '/Users/Nathan/workspace/muninn',
+            title: 'Add realistic demo data for Import',
+            sourcePath: '/Users/Nathan/.codex/sessions/2026/06/11/codex-muninn-demo-data.jsonl',
+            updatedAt: '2026-06-11T08:18:00.000Z',
+            turnCount: 6,
+            artifactCount: 0,
+            imported: false,
+          },
+        ],
+      },
+      {
+        project: '/Users/Nathan/workspace/lance',
+        sessionCount: 2,
+        importedCount: 1,
+        captureEnabled: false,
+        sessions: [
+          {
+            sessionId: 'codex-lance-storage-format',
+            project: '/Users/Nathan/workspace/lance',
+            cwd: '/Users/Nathan/workspace/lance',
+            title: 'Check typed table storage format',
+            sourcePath: '/Users/Nathan/.codex/sessions/2026/06/10/codex-lance-storage-format.jsonl',
+            updatedAt: '2026-06-10T15:12:00.000Z',
+            turnCount: 9,
+            artifactCount: 2,
+            imported: true,
+          },
+          {
+            sessionId: 'codex-lance-ci-notes',
+            project: '/Users/Nathan/workspace/lance',
+            cwd: '/Users/Nathan/workspace/lance',
+            title: 'Review CI notes before capture',
+            sourcePath: '/Users/Nathan/.codex/sessions/2026/06/09/codex-lance-ci-notes.jsonl',
+            updatedAt: '2026-06-09T11:20:00.000Z',
+            turnCount: 4,
+            artifactCount: 0,
+            imported: false,
+          },
+        ],
+      },
+      {
+        project: '/Users/Nathan/archive/muninn',
+        sessionCount: 1,
+        importedCount: 1,
+        captureEnabled: false,
+        sessions: [
+          {
+            sessionId: 'codex-archive-muninn-cleanup',
+            project: '/Users/Nathan/archive/muninn',
+            cwd: '/Users/Nathan/archive/muninn',
+            title: 'Archive project import check',
+            sourcePath: '/Users/Nathan/.codex/sessions/2026/06/08/codex-archive-muninn-cleanup.jsonl',
+            updatedAt: '2026-06-08T16:42:00.000Z',
+            turnCount: 5,
+            artifactCount: 0,
+            imported: true,
+          },
+        ],
+      },
+      {
+        project: '/Users/Nathan/workspace/amoro',
+        sessionCount: 2,
+        importedCount: 0,
+        captureEnabled: false,
+        sessions: [
+          {
+            sessionId: 'codex-amoro-query-plan',
+            project: '/Users/Nathan/workspace/amoro',
+            cwd: '/Users/Nathan/workspace/amoro',
+            title: 'Review Amoro query planner notes',
+            sourcePath: '/Users/Nathan/.codex/sessions/2026/06/11/codex-amoro-query-plan.jsonl',
+            updatedAt: '2026-06-11T06:30:00.000Z',
+            turnCount: 8,
+            artifactCount: 1,
+            imported: false,
+          },
+          {
+            sessionId: 'codex-amoro-ui-filter',
+            project: '/Users/Nathan/workspace/amoro',
+            cwd: '/Users/Nathan/workspace/amoro',
+            title: 'Tune table filter interactions',
+            sourcePath: '/Users/Nathan/.codex/sessions/2026/06/10/codex-amoro-ui-filter.jsonl',
+            updatedAt: '2026-06-10T13:08:00.000Z',
+            turnCount: 5,
+            artifactCount: 0,
+            imported: false,
+          },
+        ],
+      },
+    ],
+  },
+  'claude-code': {
+    sourceRoot: '/Users/Nathan/.claude/projects',
+    projects: [
+      {
+        project: '/Users/Nathan/workspace/muninn',
+        sessionCount: 2,
+        importedCount: 1,
+        captureEnabled: true,
+        sessions: [
+          {
+            sessionId: 'claude-muninn-capture-policy',
+            project: '/Users/Nathan/workspace/muninn',
+            cwd: '/Users/Nathan/workspace/muninn',
+            title: 'Capture policy wording and behavior',
+            sourcePath: '/Users/Nathan/.claude/projects/Users-Nathan-workspace-muninn/claude-muninn-capture-policy.jsonl',
+            updatedAt: '2026-06-11T07:55:00.000Z',
+            turnCount: 7,
+            artifactCount: 1,
+            imported: true,
+          },
+          {
+            sessionId: 'claude-muninn-hook-smoke',
+            project: '/Users/Nathan/workspace/muninn',
+            cwd: '/Users/Nathan/workspace/muninn',
+            title: 'Claude hook smoke test plan',
+            sourcePath: '/Users/Nathan/.claude/projects/Users-Nathan-workspace-muninn/claude-muninn-hook-smoke.jsonl',
+            updatedAt: '2026-06-10T18:28:00.000Z',
+            turnCount: 5,
+            artifactCount: 0,
+            imported: false,
+          },
+        ],
+      },
+      {
+        project: '/Users/Nathan/workspace/openclaw',
+        sessionCount: 1,
+        importedCount: 0,
+        captureEnabled: false,
+        sessions: [
+          {
+            sessionId: 'claude-openclaw-memory-review',
+            project: '/Users/Nathan/workspace/openclaw',
+            cwd: '/Users/Nathan/workspace/openclaw',
+            title: 'Memory review notes for OpenClaw',
+            sourcePath: '/Users/Nathan/.claude/projects/Users-Nathan-workspace-openclaw/claude-openclaw-memory-review.jsonl',
+            updatedAt: '2026-06-08T14:04:00.000Z',
+            turnCount: 3,
+            artifactCount: 0,
+            imported: false,
+          },
+        ],
+      },
+    ],
+  },
+};
 
 export const demoSearchResults: SearchSessionResult[] = [
   {
     sessionKey: 'board-mvp',
     sessionLabel: 'board-mvp',
+    agent: 'openclaw',
     projectKey: 'board-mvp',
     projectCwd: '/Users/Nathan/.codex/worktrees/dde8/muninn',
     latestUpdatedAt: '2026-06-02T10:30:00.000Z',
@@ -107,6 +295,7 @@ export const demoSearchResults: SearchSessionResult[] = [
   {
     sessionKey: 'memory-inbox/daily-recall',
     sessionLabel: LONG_DEMO_SESSION,
+    agent: 'memory_agent',
     projectKey: LONG_DEMO_PROJECT,
     projectCwd: '/Users/Nathan/workspace/memory-inbox-with-a-very-long-project-name-for-cross-agent-recall',
     latestUpdatedAt: '2026-06-01T13:32:00.000Z',
@@ -140,6 +329,7 @@ export const demoSearchResults: SearchSessionResult[] = [
   {
     sessionKey: 'auth-refactor',
     sessionLabel: 'auth-refactor',
+    agent: 'openclaw',
     projectKey: 'auth-refactor',
     latestUpdatedAt: '2026-06-01T12:01:00.000Z',
     items: [
@@ -172,6 +362,7 @@ export const demoSearchResults: SearchSessionResult[] = [
   {
     sessionKey: 'release-check',
     sessionLabel: 'release-check',
+    agent: 'claude_code',
     projectKey: 'release-check',
     latestUpdatedAt: '2026-05-26T12:00:00.000Z',
     items: [
@@ -196,6 +387,7 @@ export const demoSearchResults: SearchSessionResult[] = [
   {
     sessionKey: 'sdk-cleanup',
     sessionLabel: 'sdk-cleanup',
+    agent: 'codex_cli',
     projectKey: 'sdk-cleanup',
     latestUpdatedAt: '2026-05-18T12:00:00.000Z',
     items: [

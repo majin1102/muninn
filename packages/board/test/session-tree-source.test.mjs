@@ -29,3 +29,30 @@ test('session tree filters child items by activity time', async () => {
   assert.match(source, /\.sort\(\(left, right\) => compare\(itemActivityAt\(left\), itemActivityAt\(right\)\)\)/);
   assert.doesNotMatch(source, /\.filter\(\(item\) => isInRange\(item\.createdAt, filter\.timeRange\)\)/);
 });
+
+test('session tree empty import guide is actionable', async () => {
+  const source = await readFile(new URL('../src/components/SessionTree.tsx', import.meta.url), 'utf8');
+
+  assert.match(source, /onImportSessions\?: \(\) => void/);
+  assert.match(source, /className="empty-action-row session-import-empty-action"/);
+  assert.match(source, /onClick=\{onImportSessions\}/);
+  assert.match(source, /<Plus aria-hidden="true" \/>/);
+  assert.doesNotMatch(source, /Import as ImportIcon/);
+  assert.doesNotMatch(source, /<button type="button" disabled>/);
+});
+
+test('session tree uses project agent session identity instead of cwd for row keys', async () => {
+  const treeSource = await readFile(new URL('../src/components/SessionTree.tsx', import.meta.url), 'utf8');
+  const stateSource = await readFile(new URL('../src/lib/session_content_state.ts', import.meta.url), 'utf8');
+  const apiSource = await readFile(new URL('../src/lib/api.ts', import.meta.url), 'utf8');
+  const serverSource = await readFile(new URL('../src/server/app.ts', import.meta.url), 'utf8');
+
+  assert.match(treeSource, /SessionIdentity\.sessionIdentityKey\(\{\s*project: session\.projectKey,\s*agent: session\.agent,\s*sessionId: session\.sessionKey,/);
+  assert.doesNotMatch(treeSource, /session\.agent\}:\$\{session\.cwd \?\? ''\}:\$\{session\.sessionKey\}/);
+  assert.match(stateSource, /projectKey: string;/);
+  assert.match(stateSource, /SessionIdentity\.sessionIdentityKey\(\{\s*project: session\.projectKey,\s*agent: session\.agent,\s*sessionId: session\.sessionKey,/);
+  assert.match(apiSource, /params\.set\('project', session\.projectKey\)/);
+  assert.doesNotMatch(apiSource, /params\.set\('cwd', session\.cwd\)/);
+  assert.match(serverSource, /const project = normalizeText\(c\.req\.query\('project'\)\)/);
+  assert.doesNotMatch(serverSource, /cwd is required/);
+});

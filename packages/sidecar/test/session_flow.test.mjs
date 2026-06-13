@@ -88,9 +88,9 @@ async function captureTurn(turn) {
   });
 }
 
-function sessionTurnsPath(agent, sessionKey, { cwd = TEST_CWD, offset = 0, limit = 10 } = {}) {
+function sessionTurnsPath(agent, sessionKey, { project = TEST_PROJECT, offset = 0, limit = 10 } = {}) {
   const params = new URLSearchParams({
-    cwd,
+    project,
     offset: String(offset),
     limit: String(limit),
   });

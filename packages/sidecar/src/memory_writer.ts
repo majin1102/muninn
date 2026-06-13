@@ -1,4 +1,4 @@
-import { addMessage, turns } from '@muninn/core';
+import { captureTurn, turns } from '@muninn/core';
 import { invalidateSessionTreeCache, isCaptureEnabled } from '@muninn/board/server';
 import { Hono } from 'hono';
 import type {
@@ -226,7 +226,7 @@ memoryWriter.post('/api/v1/turn/capture', async (c) => {
   }
 
   try {
-    await addMessage(body.turn, body.database);
+    await captureTurn(body.turn, body.database);
   } catch (error) {
     const mapped = mapCoreWriteError(error);
     return c.json(mapped.body, mapped.status as 400 | 500);
@@ -253,7 +253,7 @@ memoryWriter.post('/api/v1/benchmark/locomo/turn/capture', async (c) => {
   }
 
   try {
-    await addMessage(body.turn, body.database);
+    await captureTurn(body.turn, body.database);
     const written = await findWrittenTurn(body.turn, body.database);
     if (!written) {
       return c.json(errorResponse('internalError', 'failed to resolve captured turn'), 500);

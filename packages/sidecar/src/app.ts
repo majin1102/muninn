@@ -7,14 +7,21 @@ import { generateRequestId } from './utils.js';
 
 export const app = new Hono();
 
+const BOARD_CORS_ORIGINS = [
+  'http://localhost:4173',
+  'http://127.0.0.1:4173',
+  'http://localhost:5173',
+  'http://127.0.0.1:5173',
+];
+
 app.use('/api/*', cors({
-  origin: ['http://localhost:4173', 'http://127.0.0.1:4173'],
+  origin: BOARD_CORS_ORIGINS,
 }));
 app.use('/version', cors({
-  origin: ['http://localhost:4173', 'http://127.0.0.1:4173'],
+  origin: BOARD_CORS_ORIGINS,
 }));
 app.use('/health', cors({
-  origin: ['http://localhost:4173', 'http://127.0.0.1:4173'],
+  origin: BOARD_CORS_ORIGINS,
 }));
 
 // 健康检查
