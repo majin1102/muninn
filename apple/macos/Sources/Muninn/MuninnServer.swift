@@ -30,7 +30,7 @@ final class MuninnServer: ObservableObject {
             try launch.process.run()
             let session = MuninnServerSession(
                 baseURL: launch.baseURL,
-                appURL: launch.baseURL.appending(path: "app/"),
+                appURL: appURL(for: launch.baseURL),
                 apiToken: launch.apiToken
             )
             try await waitForHealth(baseURL: launch.baseURL)
@@ -115,6 +115,12 @@ final class MuninnServer: ObservableObject {
 
         throw MuninnServerError.healthTimeout(lastError?.localizedDescription ?? "server did not respond")
     }
+}
+
+private func appURL(for baseURL: URL) -> URL {
+    var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false)!
+    components.path = "/app/"
+    return components.url!
 }
 
 private struct ServerRuntime {
