@@ -1,0 +1,11 @@
+{
+  "name": "@muninn/format",
+  "version": "0.1.0",
+  "private": true,
+  "files": [
+    "Cargo.toml",
+    "src",
+    "README.md"
+  ],
+  "license": "UNLICENSED"
+}

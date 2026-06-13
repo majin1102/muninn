@@ -8,6 +8,7 @@
   "files": [
     "dist",
     "native/Cargo.toml",
+    "native/build.rs",
     "native/src",
     "native/muninn_native.node",
     "prompts",
@@ -34,6 +35,7 @@
     "@muninn/claude": "workspace:*",
     "@muninn/codex": "workspace:*",
     "@muninn/common": "workspace:*",
+    "@muninn/format": "workspace:*",
     "hono": "^4.0.0"
   },
   "devDependencies": {
