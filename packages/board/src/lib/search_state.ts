@@ -1,3 +1,4 @@
+import * as SessionIdentity from '@muninn/types/session-identity';
 import type { ProjectNode } from './api.js';
 
 export type SearchControlsState = {
@@ -40,7 +41,11 @@ export function sessionOptionsForProjects(
     .filter((project) => selected.size === 0 || selected.has(project.projectKey))
     .flatMap((project) => project.sessions.map((session) => ({
       label: session.displaySessionId,
-      value: sessionOptionValue(project.projectKey, session.agent, session.sessionKey),
+      value: SessionIdentity.sessionIdentityKey({
+        project: project.projectKey,
+        agent: session.agent,
+        sessionId: session.sessionKey,
+      }),
       agent: session.agent,
       description: `${project.label} / ${session.agent}`,
       projectKey: project.projectKey,
@@ -57,8 +62,4 @@ export function sessionKeysForRequest(values: string[], options: SearchSessionOp
 export function normalizeSearchN(value: string, fallback: number): number {
   const parsed = Number(value);
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback;
-}
-
-function sessionOptionValue(projectKey: string, agent: string, sessionKey: string): string {
-  return `${projectKey}\u001f${agent}\u001f${sessionKey}`;
 }

@@ -4,7 +4,11 @@ import test from 'node:test';
 import ts from 'typescript';
 
 async function loadSearchServer() {
-  const source = await readFile(new URL('../src/server/search.ts', import.meta.url), 'utf8');
+  const identitySource = await readFile(new URL('../../types/src/session_identity.ts', import.meta.url), 'utf8');
+  const searchSource = await readFile(new URL('../src/server/search.ts', import.meta.url), 'utf8');
+  const source = `${identitySource}\n${searchSource
+    .replace("import * as SessionIdentity from '@muninn/types/session-identity';\n", '')
+    .replaceAll('SessionIdentity.sessionIdentityKey', 'sessionIdentityKey')}`;
   const compiled = ts.transpileModule(source, {
     compilerOptions: {
       module: ts.ModuleKind.ES2022,
@@ -78,6 +82,33 @@ test('hitCandidates keeps same raw session ids separate across projects and agen
     sessionScopeKey('lance', 'codex', 'same-session'),
     sessionScopeKey('muninn', 'claude', 'same-session'),
   ]);
+});
+
+test('hitCandidates merges same project agent and raw session id across worktrees', async () => {
+  const { __testing } = await loadSearchServer();
+  const grouped = __testing.groupCandidates(__testing.hitCandidates([
+    recallHit({
+      memoryId: 'extraction:1',
+      sessionId: 'same-session',
+      project: '/workspace/muninn',
+      agent: 'codex',
+      cwd: '/Users/Nathan/.codex/worktrees/aaaa/muninn',
+      references: ['turn:1'],
+    }),
+    recallHit({
+      memoryId: 'extraction:2',
+      sessionId: 'same-session',
+      project: '/workspace/muninn',
+      agent: 'codex',
+      cwd: '/Users/Nathan/.codex/worktrees/bbbb/muninn',
+      references: ['turn:2'],
+    }),
+  ], {}), { sessionTopN: 3, topN: 10 });
+
+  assert.deepEqual(grouped.map((result) => result.sessionKey), [
+    sessionScopeKey('/workspace/muninn', 'codex', 'same-session'),
+  ]);
+  assert.equal(grouped[0].items.length, 2);
 });
 
 test('hitCandidates filters extraction hits without real session metadata', async () => {

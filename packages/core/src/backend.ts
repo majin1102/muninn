@@ -20,6 +20,7 @@ import {
 } from './config.js';
 import {
   readCheckpointFile,
+  writeCheckpointFile,
   type CheckpointContent,
   type CheckpointFile,
   type ExtractorCheckpoint,
@@ -338,6 +339,24 @@ export class MuninnBackend {
     return this.checkpointLock.shared(async () => this.sessionIndex.list(this.client));
   }
 
+  async refreshSessionIndex(): Promise<SessionIndexEntry[]> {
+    return this.checkpointLock.exclusive(async () => {
+      this.sessionIndex.markDirty();
+      const entries = await this.sessionIndex.list(this.client);
+      const checkpoint = await readCheckpointFile(this.database);
+      if (!checkpoint) {
+        return entries;
+      }
+      await writeCheckpointFile({
+        ...checkpoint,
+        writtenAt: new Date().toISOString(),
+        writerPid: process.pid,
+        sessionIndex: this.sessionIndex.currentCheckpoint(),
+      }, this.database);
+      return entries;
+    });
+  }
+
   async memoryWatermark(): Promise<MemoryWatermark> {
     return this.checkpointLock.shared(async () => {
       const observer = this.observerEnabled ? await this.ensureObserver() : null;
@@ -359,6 +378,19 @@ export class MuninnBackend {
     this.scheduleFinalizeDrain(extractor, observer);
     const watermark = combineWatermarks(extractorWatermark, observerWatermark);
     return watermark;
+  }
+
+  async memoryFlushPending(): Promise<MemoryWatermark> {
+    const { observer, extractor } = await this.checkpointLock.shared(async () => {
+      const observer = this.observerEnabled ? await this.ensureObserver() : null;
+      const extractor = await this.ensureExtractor();
+      return { observer, extractor };
+    });
+    await extractor.flushPending();
+    await this.watchdog?.flushCheckpoint();
+    const extractorWatermark = await extractor.watermark();
+    const observerWatermark = observer ? await observer.watermark() : idleObserverWatermark();
+    return combineWatermarks(extractorWatermark, observerWatermark);
   }
 
   async recallMemories(
@@ -592,7 +624,7 @@ export async function getBackend(database?: string | null): Promise<MuninnBacken
   return promise;
 }
 
-export async function addMessage(turnContent: TurnContent, database?: string | null): Promise<void> {
+export async function captureTurn(turnContent: TurnContent, database?: string | null): Promise<void> {
   const databaseName = resolveDatabaseName(database);
   await writeMuninnLog(databaseName, 'info', 'sidecar', 'turn_capture', {
     sessionId: turnContent.sessionId,
@@ -669,6 +701,12 @@ export const sessions = {
     await writeMuninnLog(databaseName, 'info', 'list', 'session_index', {});
     return (await getBackend(databaseName)).listSessionIndex();
   },
+
+  async refreshIndex(database?: string | null): Promise<SessionIndexEntry[]> {
+    const databaseName = resolveDatabaseName(database);
+    await writeMuninnLog(databaseName, 'info', 'refresh', 'session_index_refresh', {});
+    return (await getBackend(databaseName)).refreshSessionIndex();
+  },
 };
 
 export const memories = {
@@ -718,6 +756,9 @@ export const observer = {
   async watermark(database?: string | null): Promise<MemoryWatermark> {
     return (await getBackend(database)).memoryWatermark();
   },
+  async flushPending(database?: string | null): Promise<MemoryWatermark> {
+    return (await getBackend(database)).memoryFlushPending();
+  },
   async finalize(database?: string | null): Promise<MemoryWatermark> {
     return (await getBackend(database)).memoryFinalize();
   },
@@ -743,7 +784,7 @@ export const __testing = {
 };
 
 const core = {
-  addMessage,
+  captureTurn,
   validateSettings,
   turns,
   sessions,

@@ -71,14 +71,17 @@ Use these as the Board baseline until extracted into CSS variables.
 | `tab-active-text` | `#1a1c1f` | Active toolbar tab text. |
 | `switch-on` | `#339cff` | Enabled switch state. |
 | `switch-off` | `#e4e4e7` | Disabled switch state. |
-| `primary-button` | `#339cff` | Primary action button background. |
+| `primary-button` | `foreground token` | Primary submit or commit button background. In light mode this renders as neutral black. |
+| `primary-button-hover` | `foreground / 80%` | Primary submit or commit button hover background. In light mode this renders as dark gray. |
+| `primary-button-text` | `dropdown-background token` | Primary submit or commit button text. In light mode this renders as white. |
 | `danger` | `#c33838` | Invalid, failed, destructive messaging. |
 
 Rules:
 
 - Tabs use neutral selected styling, following Codex settings toolbar tabs.
 - Blue in switches means enabled state.
-- Dark primary buttons mean commit or submit action.
+- Foreground primary buttons mean commit or submit action.
+- Do not use blue for submit buttons. Blue is reserved for enabled binary state unless a feature has a stronger explicit reason.
 - Time metadata should stay subtle even when row text is body-colored.
 
 ## Component Standards
@@ -104,7 +107,7 @@ Rules:
 
 - Tabs must not perform submit/save actions.
 - Do not use active tab styling for primary buttons.
-- Do not use blue for selected tabs; reserve blue for actions and enabled state.
+- Do not use blue for selected tabs; reserve blue for enabled binary state.
 - Keep tab labels short and literal.
 
 ### Provider Selector
@@ -132,16 +135,36 @@ Use for explicit submit or commit actions:
 
 - `Save`
 - `Apply`
+- `Import` when it confirms a modal selection.
+- icon-only submit buttons, such as Recall search submit.
 - future destructive confirmations only when paired with danger color.
 
-Style:
+Codex app implementation reference:
 
-- Height: `34px`.
-- Padding: `0 12px`.
-- Radius: `6px`.
-- Background: `#339cff`.
-- Text: white.
-- Font: `13px / 400`.
+- Color: `primary` maps to `bg-token-foreground`.
+- Hover: `enabled:hover:bg-token-foreground/80`.
+- Open state: `data-[state=open]:bg-token-foreground/80`.
+- Text: `text-token-dropdown-background`.
+- Default radius: `rounded-full`.
+- Default size: `px-2 py-0.5 text-sm leading-[18px]`.
+
+Board style:
+
+- Height: about `30-34px`, depending on local density.
+- Padding: `0 10-12px`.
+- Radius: `6px`. Codex app's shared button primitive often uses pill primary buttons, but Muninn Board keeps rounded-rectangle buttons so actions align with its Settings rows, tables, and compact control surfaces.
+- Background: foreground token, with static fallback `#111111`.
+- Hover background: foreground token at `80%`, with static fallback around `#333333`.
+- Active background: foreground token at full strength, with static fallback `#000000`.
+- Text: dropdown background token, with static fallback `#ffffff`.
+- Font: `13px / 500`.
+
+Rules:
+
+- Use one primary button per action cluster.
+- Do not use primary styling for navigation, tabs, filters, row expansion, or passive import entry points.
+- Icon-only submit buttons, such as composer or search submit, are the exception to Muninn's rounded-rectangle button shape: use a circular foreground button with an arrow icon, matching Codex's composer submit affordance.
+- Icon-only submit buttons should use the same foreground primary color and `foreground / 80%` hover state, but remain visually small.
 
 #### Secondary Button
 
@@ -149,7 +172,8 @@ Use for lower-emphasis actions that still perform an operation:
 
 - `Reset`
 - `Copy`
-- `Import` when not primary.
+- `Import` when it opens an import flow rather than confirming it.
+- `Import sessions` empty-state entry points.
 
 Style:
 
@@ -177,6 +201,7 @@ Rules:
 - Do not make primary action buttons look like active segmented tabs.
 - Do not use white text on active tabs.
 - Icon-only buttons should use familiar icons and a tooltip or accessible label.
+- Keep optional row actions ghost/neutral. Do not turn row-level import/delete icons into filled primary buttons.
 
 ### Switches And Binary Pills
 
@@ -281,8 +306,8 @@ Before shipping Board UI changes:
 
 - Confirm control semantics: tab, button, switch, or filter.
 - Confirm text sizes follow the `13px` baseline, with `12px` only for helper or compact sidebar controls.
-- Confirm active tabs use neutral selected styling, not blue action styling.
-- Confirm action blue and switch blue are not reused as selected tab styling.
+- Confirm active tabs use neutral selected styling, not blue selected styling.
+- Confirm submit actions use foreground-token primary styling, while switches keep blue enabled styling.
 - Confirm Visual and Json widths do not shift when switching modes.
 - Confirm no text overlaps or changes layout unexpectedly.
 - Run:

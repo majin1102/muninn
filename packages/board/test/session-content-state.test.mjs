@@ -33,8 +33,9 @@ test('allows session tree expansion only when observation pane is collapsed', ()
   assert.equal(sessionTreeCanExpand('conversation'), true);
 });
 
-test('toggles session tree layout between conversation-only and split modes', () => {
-  assert.equal(toggleSessionTreeLayoutMode('conversation'), 'split');
+test('toggles session tree layout through conversation collapsed and split modes', () => {
+  assert.equal(toggleSessionTreeLayoutMode('conversation'), 'collapsed');
+  assert.equal(toggleSessionTreeLayoutMode('collapsed'), 'split');
   assert.equal(toggleSessionTreeLayoutMode('split'), 'conversation');
 });
 
@@ -102,10 +103,11 @@ test('enables observation locate only when the window match is not already activ
   assert.equal(locateObservationEnabled(observation, 'obs:1', ['turn:9'], { memoryId: 'obs:1', refs: ['turn:9'] }), true);
 });
 
-test('resolves selected session identity from agent, cwd, and session key', () => {
+test('resolves selected session identity from project agent and session key', () => {
   assert.equal(selectedSessionKey({
+    projectKey: '/Users/Nathan/workspace/muninn',
     agent: 'codex',
     cwd: '/Users/Nathan/workspace/muninn',
     sessionKey: 'raw-session-id',
-  }), 'codex:/Users/Nathan/workspace/muninn:raw-session-id');
+  }), '/Users/Nathan/workspace/muninn\u001fcodex\u001fraw-session-id');
 });

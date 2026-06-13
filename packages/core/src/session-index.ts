@@ -1,6 +1,8 @@
 import type { NativeTables } from './native.js';
+import type { Turn } from './client.js';
 import type { SessionIndexCheckpoint, SessionIndexEntry } from './checkpoint.js';
 import type { SessionSnapshot } from './extractor/types.js';
+import { sessionIdentityKey } from '@muninn/types/session-identity';
 import { readTurn } from './turn/types.js';
 
 type IndexedTurn = {
@@ -10,6 +12,7 @@ type IndexedTurn = {
   cwd: string;
   observer?: string | null;
   summary?: string | null;
+  metadata?: Record<string, unknown> | null;
   updatedAt: string;
 };
 
@@ -43,6 +46,10 @@ export class SessionIndex {
 
   async exportCheckpoint(client: NativeTables): Promise<SessionIndexCheckpoint> {
     await this.ensureFresh(client);
+    return this.currentCheckpoint();
+  }
+
+  currentCheckpoint(): SessionIndexCheckpoint {
     return {
       baseline: { ...this.baseline },
       entries: [...this.entries.values()].map((entry) => ({ ...entry })),
@@ -82,20 +89,23 @@ export class SessionIndex {
   }
 
   private async rebuild(client: NativeTables): Promise<void> {
-    const [turnRows, snapshotRows, turnStats, sessionStats] = await Promise.all([
-      client.turnTable.listTurns({
-        mode: { type: 'page', offset: 0, limit: REBUILD_LIMIT },
-      }),
-      client.sessionTable.listSnapshots({}),
+    const [snapshotRows, turnStats, sessionStats] = await Promise.all([
+      client.sessionTable.listSnapshots(this.extractorName ? { observer: this.extractorName } : {}),
       client.turnTable.stats(),
       client.sessionTable.stats(),
     ]);
+    const turnRows = await this.listAllTurns(client, turnStats?.rowCount);
 
     this.entries.clear();
     for (const turn of turnRows) {
-      this.upsertTurn(readTurn(turn));
+      const decoded = readTurn(turn);
+      if (!this.extractorName || decoded.observer === this.extractorName) {
+        this.upsertTurn(decoded);
+      }
     }
-    this.applySnapshots(snapshotRows);
+    this.applySnapshots(this.extractorName
+      ? snapshotRows.filter((snapshot) => snapshot.extractor === this.extractorName)
+      : snapshotRows);
     this.baseline = {
       turn: turnStats?.version ?? 0,
       session: sessionStats?.version ?? 0,
@@ -103,10 +113,35 @@ export class SessionIndex {
     this.dirty = false;
   }
 
+  private async listAllTurns(client: NativeTables, rowCount?: number): Promise<Turn[]> {
+    const rows: Turn[] = [];
+    let offset = 0;
+    while (true) {
+      const page = await client.turnTable.listTurns({
+        mode: { type: 'page', offset, limit: REBUILD_LIMIT },
+        ...(this.extractorName ? { observer: this.extractorName } : {}),
+      });
+      if (page.length === 0) {
+        break;
+      }
+      rows.push(...page);
+      offset += REBUILD_LIMIT;
+      if (rowCount === undefined) {
+        if (page.length < REBUILD_LIMIT) {
+          break;
+        }
+      } else if (offset >= rowCount) {
+        break;
+      }
+    }
+    return rows;
+  }
+
   private upsertTurn(turn: IndexedTurn): void {
     if (!turn.sessionId || !turn.summary?.trim()) {
       return;
     }
+    const sequence = sourceTurnSequence(turn);
     const entryBase = {
       sessionId: turn.sessionId,
       agent: turn.agent,
@@ -119,13 +154,26 @@ export class SessionIndex {
       this.entries.set(key, {
         ...entryBase,
         latestUpdatedAt: turn.updatedAt,
+        ...(sequence !== undefined ? { firstTurnSequence: sequence } : {}),
       });
       return;
     }
+    const firstTurnSequence = sequence === undefined
+      ? current.firstTurnSequence
+      : Math.min(current.firstTurnSequence ?? sequence, sequence);
     if (turn.updatedAt > current.latestUpdatedAt) {
       this.entries.set(key, {
         ...current,
+        cwd: turn.cwd,
         latestUpdatedAt: turn.updatedAt,
+        ...(firstTurnSequence !== undefined ? { firstTurnSequence } : {}),
+      });
+      return;
+    }
+    if (firstTurnSequence !== current.firstTurnSequence) {
+      this.entries.set(key, {
+        ...current,
+        firstTurnSequence,
       });
     }
   }
@@ -160,7 +208,18 @@ export class SessionIndex {
 function entryKey(value: {
   sessionId: string;
   agent: string;
-  cwd: string;
+  project: string;
 }): string {
-  return `${value.agent}\0${value.cwd}\0${value.sessionId}`;
+  return sessionIdentityKey({
+    project: value.project,
+    agent: value.agent,
+    sessionId: value.sessionId,
+  });
+}
+
+function sourceTurnSequence(turn: IndexedTurn): number | undefined {
+  const value = turn.metadata?.sourceTurnSequence;
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0
+    ? value
+    : undefined;
 }

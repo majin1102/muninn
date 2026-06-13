@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Muninn Board — Settings › Import (design mock)</title>
+<style>
+  /* Tokens mirror packages/board/src/styles.css */
+  :root {
+    --background: #fff; --foreground: #1a1c1f; --card: #fff;
+    --muted: #f0f0f0; --muted-foreground: #5f6062; --subtle: #8f9195;
+    --border: #ececec; --ring: #a1a1aa;
+    --sidebar: #f9f9f9; --sidebar-hover: #efefef; --sidebar-border: #ececec;
+    --primary: #0f172a; --primary-foreground: #fff;
+    --destructive: #b91c1c; --switch-on: #339cff; --switch-off: #e4e4e7;
+    --radius: 8px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    font-size: 13px; line-height: 1.5; color: var(--foreground); letter-spacing: 0; background: var(--background);
+    -webkit-font-smoothing: antialiased;
+  }
+  .app { display: flex; min-height: 100vh; }
+
+  /* sidebar (context) */
+  .sidebar { width: 208px; flex: 0 0 208px; border-right: 1px solid var(--sidebar-border); background: var(--sidebar); padding: 14px 10px; }
+  .brand { display: flex; align-items: center; gap: 8px; padding: 6px 8px 16px; }
+  .brand .logo { width: 22px; height: 22px; border-radius: 6px; background: var(--foreground); display: grid; place-items: center; color: #fff; font-weight: 600; font-size: 12px; }
+  .brand .name { font-weight: 600; }
+  .nav-item { display: flex; align-items: center; gap: 10px; height: 32px; padding: 0 10px; border-radius: var(--radius); color: var(--muted-foreground); font-weight: 500; cursor: pointer; }
+  .nav-item:hover { background: var(--sidebar-hover); }
+  .nav-item.active { background: var(--sidebar-hover); color: var(--foreground); font-weight: 600; }
+  .nav-item .ico { width: 16px; }
+
+  .main { flex: 1; overflow: auto; }
+  .page { max-width: 900px; margin: 0 auto; padding: 38px 32px 56px; }
+
+  /* settings mode tabs — mirror .settings-mode-tabs / .settings-mode-tab */
+  .settings-mode-tabs { display: inline-flex; align-items: center; gap: 2px; width: fit-content; margin: 0 0 26px; }
+  .settings-mode-tab { appearance: none; border: 0; border-radius: 6px; background: transparent; color: var(--muted-foreground); cursor: pointer; font: inherit; font-size: 13px; font-weight: 500; line-height: 1; min-height: 28px; padding: 0 10px; }
+  .settings-mode-tab-active { background: var(--muted); color: var(--foreground); font-weight: 600; }
+
+  /* placeholder for Visual/Json (existing settings live there) */
+  .placeholder { border: 1px solid var(--border); border-radius: var(--radius); background: #fcfcfc; color: var(--muted-foreground); font-size: 13px; padding: 28px 18px; text-align: center; }
+  .placeholder .small { font-size: 12px; color: var(--subtle); margin-top: 4px; }
+
+  /* agent block */
+  .agent-sec { margin-bottom: 34px; }
+  .agent-head { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
+  .agent-name { font-size: 13px; font-weight: 600; }
+  .agent-import { font-size: 13px; color: var(--muted-foreground); cursor: pointer; }
+  .agent-import:hover { color: var(--foreground); text-decoration: underline; }
+  /* second line: directory on the left, auto-capture on the right; padding-right
+     matches the card row inset (16px) so the switch aligns with the list switches */
+  .agent-subrow { display: flex; align-items: center; gap: 10px; padding-right: 16px; margin-bottom: 14px; }
+  .agent-subrow .spacer { flex: 1; }
+  .agent-sub { font-size: 12px; color: var(--subtle); }
+  .agent-sub code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; color: var(--muted-foreground); }
+  .dot-live { width: 6px; height: 6px; border-radius: 999px; background: var(--switch-on); display: inline-block; }
+
+  .card { overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius); background: var(--card); }
+
+  /* project rows (list, expandable) */
+  .proj-row { display: grid; grid-template-columns: 16px 1fr auto; align-items: center; gap: 12px; padding: 13px 16px; cursor: pointer; border-top: 1px solid var(--border); }
+  .card > .proj:first-child .proj-row { border-top: 0; }
+  .proj-row:hover { background: #fafafa; }
+  .chev { width: 13px; color: var(--subtle); transition: transform .15s ease; display: inline-block; font-size: 11px; }
+  .proj.open .chev { transform: rotate(90deg); }
+  .proj-main { display: flex; flex-direction: column; min-width: 0; }
+  .proj-name { font-size: 13px; font-weight: 600; }
+  .proj-sub { font-size: 12px; color: var(--subtle); margin-top: 1px; display: inline-flex; gap: 7px; align-items: center; }
+  .proj-ctl { display: inline-flex; align-items: center; gap: 9px; }
+  .ctl-lab { font-size: 12px; color: var(--muted-foreground); }
+
+  .sess-list { display: none; padding: 0 16px 12px 44px; }
+  .proj.open .sess-list { display: block; }
+  .sess { display: grid; grid-template-columns: 1fr auto auto; gap: 14px; align-items: baseline; padding: 7px 0; }
+  .sess-title { font-size: 13px; color: var(--foreground); }
+  .sess-time { font-size: 13px; color: var(--subtle); }
+  .sess-cap { font-size: 12px; color: var(--muted-foreground); min-width: 88px; text-align: right; }
+  .sess-cap.off { color: var(--subtle); }
+
+  /* switch — single size 42x24 (matches .settings-switch) */
+  .switch { position: relative; width: 42px; height: 24px; border-radius: 999px; background: var(--switch-off); border: 0; cursor: pointer; padding: 0; flex: 0 0 auto; transition: background .15s ease; }
+  .switch::after { content: ""; position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(15,23,42,.18); transition: transform .15s ease; }
+  .switch.on { background: var(--switch-on); }
+  .switch.on::after { transform: translateX(18px); }
+
+  /* buttons (mirror .ui-button) */
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 34px; padding: 0 12px; border: 1px solid transparent; border-radius: var(--radius); font-size: 13px; font-family: inherit; cursor: pointer; }
+  .btn-default { background: var(--primary); color: var(--primary-foreground); }
+  .btn-default:hover { background: #1b2536; }
+  .btn-ghost { background: transparent; color: var(--muted-foreground); }
+  .btn-ghost:hover { background: var(--muted); color: var(--foreground); }
+  .btn-sm { min-height: 28px; padding: 0 9px; font-size: 12px; }
+  .btn:disabled { opacity: .6; cursor: not-allowed; }
+
+  .empty { border: 1px solid var(--border); border-radius: var(--radius); padding: 22px 18px; text-align: center; color: var(--muted-foreground); background: #fcfcfc; }
+  .empty .big { font-size: 13px; font-weight: 600; color: var(--foreground); margin-bottom: 4px; }
+  .empty .small { font-size: 12px; color: var(--subtle); }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; color: var(--muted-foreground); }
+  .hide { display: none !important; }
+
+  /* import picker modal */
+  .overlay { position: fixed; inset: 0; background: rgba(15,23,42,.30); display: none; align-items: center; justify-content: center; z-index: 40; }
+  .overlay.show { display: flex; }
+  .modal { width: 560px; max-width: calc(100vw - 40px); max-height: 80vh; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: 0 18px 50px rgba(15,23,42,.22); display: flex; flex-direction: column; overflow: hidden; }
+  .modal-head { padding: 16px 18px 12px; border-bottom: 1px solid var(--border); }
+  .modal-head .mt { font-size: 13px; font-weight: 600; }
+  .modal-head .ms { font-size: 12px; color: var(--subtle); margin-top: 3px; }
+  .modal-tools { display: flex; gap: 10px; align-items: center; padding: 10px 18px; border-bottom: 1px solid var(--border); }
+  .modal-tools input { flex: 1; min-height: 30px; border: 1px solid var(--border); border-radius: 7px; padding: 0 10px; font-size: 13px; font-family: inherit; background: #f4f4f5; color: var(--foreground); outline: none; }
+  .modal-tools input:focus { border-color: var(--ring); box-shadow: 0 0 0 2px rgba(51,156,255,.16); }
+  .modal-tools .selall { font-size: 12px; color: var(--muted-foreground); cursor: pointer; white-space: nowrap; }
+  .modal-body { overflow: auto; padding: 4px 0; }
+  .pick { display: grid; grid-template-columns: 16px 1fr auto auto; gap: 12px; align-items: center; padding: 9px 18px; cursor: pointer; }
+  .pick:hover { background: #fafafa; }
+  .pick.dim { opacity: .5; cursor: default; }
+  .cb { width: 16px; height: 16px; border: 1.5px solid #cfd1d4; border-radius: 4px; display: inline-grid; place-items: center; color: #fff; font-size: 10px; }
+  .pick.sel .cb { background: var(--primary); border-color: var(--primary); }
+  .pick .pt { font-size: 13px; } .pick .pp { font-size: 12px; color: var(--subtle); } .pick .pm { font-size: 12px; color: var(--subtle); }
+  .tag-imported { font-size: 11px; color: var(--subtle); border: 1px solid var(--border); border-radius: 999px; padding: 1px 7px; }
+  .modal-foot { padding: 12px 18px; border-top: 1px solid var(--border); display: flex; align-items: center; gap: 10px; }
+  .modal-foot .cnt { margin-right: auto; font-size: 12px; color: var(--muted-foreground); }
+
+  .toast { position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%); background: var(--foreground); color: #fff; font-size: 12px; padding: 8px 14px; border-radius: var(--radius); opacity: 0; transition: opacity .2s ease; pointer-events: none; z-index: 60; }
+  .toast.show { opacity: 1; }
+  .note { max-width: 900px; margin: 0 auto; padding: 0 32px 40px; color: var(--subtle); font-size: 12px; }
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand"><span class="logo">M</span><span class="name">Muninn</span></div>
+    <div class="nav-item"><span class="ico">🔍</span>Recall</div>
+    <div class="nav-item"><span class="ico">📖</span>LLM Wiki</div>
+    <div class="nav-item"><span class="ico">📄</span>Session</div>
+    <div class="nav-item"><span class="ico">🧩</span>Pipelines</div>
+    <div class="nav-item active"><span class="ico">⚙️</span>Settings</div>
+  </aside>
+
+  <main class="main">
+    <div class="page">
+      <!-- Settings mode tabs: Import added alongside Visual / Json -->
+      <div class="settings-mode-tabs" role="tablist" aria-label="Settings editor mode">
+        <button class="settings-mode-tab" data-mode="visual">Visual</button>
+        <button class="settings-mode-tab" data-mode="json">Json</button>
+        <button class="settings-mode-tab settings-mode-tab-active" data-mode="import">Import</button>
+      </div>
+      <div id="host"></div>
+    </div>
+
+    <p class="note">Design mock · tokens mirror <code>packages/board/src/styles.css</code>. <b>Import</b> is added to the existing Visual / Json mode tabs; below it are the per-agent capture sections.</p>
+  </main>
+</div>
+
+<div class="overlay" id="overlay">
+  <div class="modal">
+    <div class="modal-head">
+      <div class="mt" id="modalTitle">Import Codex sessions</div>
+      <div class="ms">Select local sessions to import. Already-imported sessions are dimmed.</div>
+    </div>
+    <div class="modal-tools">
+      <input id="modalSearch" placeholder="Search sessions…" />
+      <span class="selall" id="selAll">Select all</span>
+    </div>
+    <div class="modal-body" id="pickList"></div>
+    <div class="modal-foot">
+      <span class="cnt" id="pickCount">0 selected</span>
+      <button class="btn btn-ghost btn-sm" id="cancelImport">Cancel</button>
+      <button class="btn btn-default btn-sm" id="confirmImport" disabled>Import</button>
+    </div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+  const $ = (s, r = document) => r.querySelector(s);
+  const toast = (m) => { const t = $('#toast'); t.textContent = m; t.classList.add('show'); clearTimeout(t._t); t._t = setTimeout(() => t.classList.remove('show'), 1400); };
+
+  const AGENTS = [
+    { id: 'codex', label: 'Codex', supported: true, status: 'Connected', root: '~/.codex', defaultCapture: true,
+      projects: [
+        { name: 'muninn', sessions: 12, live: true, auto: true, items: [
+          { t: 'stabilize board recall scoped sessions', turns: 8, time: '2h ago', cap: true },
+          { t: 'brand recall homepage title', turns: 6, time: '5h ago', cap: true },
+          { t: 'add board search experience', turns: 7, time: '1d ago', cap: true } ] },
+        { name: 'lance', sessions: 5, auto: false, items: [
+          { t: 'format lance schema migration', turns: 6, time: '3d ago', cap: false },
+          { t: 'index partition tuning', turns: 4, time: '4d ago', cap: false } ] },
+        { name: 'openclaw', sessions: 3, auto: true, items: [
+          { t: 'plugin hook artifact capture', turns: 5, time: '6d ago', cap: true } ] },
+      ] },
+    { id: 'claude', label: 'Claude Code', supported: true, status: 'Detected · adapter pending', root: '~/.claude/projects', defaultCapture: false,
+      projects: [
+        { name: 'muninn', sessions: 9, auto: false, items: [ { t: 'wire codex import UI', turns: 5, time: '1d ago', cap: false } ] },
+        { name: 'hermes-agent', sessions: 2, auto: false, items: [ { t: 'tool schema refactor', turns: 3, time: '8d ago', cap: false } ] },
+      ] },
+    { id: 'trae', label: 'Trae', supported: false, status: 'Not found', root: null, defaultCapture: false, projects: [] },
+  ];
+
+  const sw = (on) => `<button class="switch${on ? ' on' : ''}" data-switch aria-label="toggle"></button>`;
+
+  function projectsCard(a) {
+    if (!a.supported && a.projects.length === 0) {
+      return `<div class="empty"><div class="big">${a.label} not detected</div><div class="small">No data directory found on this machine. Connect ${a.label} to enable capture.</div></div>`;
+    }
+    const projRows = a.projects.map((p, i) => `
+      <div class="proj" data-proj="${i}">
+        <div class="proj-row" data-toggle>
+          <span class="chev">▶</span>
+          <div class="proj-main">
+            <span class="proj-name">${p.name}</span>
+            <span class="proj-sub">${p.sessions} sessions${p.live ? ' · <span class="dot-live"></span> live' : ''}</span>
+          </div>
+          <div class="proj-ctl" onclick="event.stopPropagation()">
+            <span class="ctl-lab">auto-capture</span>${sw(!!p.auto)}
+          </div>
+        </div>
+        <div class="sess-list">
+          ${p.items.map((s) => `
+            <div class="sess">
+              <span class="sess-title">${s.t}</span>
+              <span class="sess-time">${s.turns}t · ${s.time}</span>
+              <span class="sess-cap${s.cap ? '' : ' off'}">${s.cap ? 'Captured' : 'Not captured'}</span>
+            </div>`).join('')}
+        </div>
+      </div>`).join('');
+    return `<div class="card">${projRows}</div>`;
+  }
+
+  // header line 1: title + inline "Import" text label; line 2: directory + auto-capture
+  function agentHeader(a) {
+    return `
+      <div class="agent-head">
+        <span class="agent-name">${a.label}</span>
+        ${a.supported ? `<span class="agent-import" data-import="${a.id}">Import</span>` : ''}
+      </div>
+      <div class="agent-subrow">
+        <span class="agent-sub">${a.status}${a.root ? ' · <code>' + a.root + '</code>' : ''}</span>
+        <span class="spacer"></span>
+        ${a.supported ? `<span class="proj-ctl"><span class="ctl-lab">auto-capture</span>${sw(a.defaultCapture)}</span>` : ''}
+      </div>`;
+  }
+
+  function renderImport() {
+    $('#host').innerHTML = AGENTS.map((a) => `<section class="agent-sec">${agentHeader(a)}${projectsCard(a)}</section>`).join('');
+    document.querySelectorAll('[data-toggle]').forEach((el) => el.addEventListener('click', () => el.closest('.proj').classList.toggle('open')));
+    document.querySelectorAll('[data-switch]').forEach((el) => el.addEventListener('click', (e) => { e.stopPropagation(); el.classList.toggle('on'); }));
+    document.querySelectorAll('[data-import]').forEach((el) => el.addEventListener('click', () => openImport(el.dataset.import)));
+  }
+
+  function renderPlaceholder(mode) {
+    $('#host').innerHTML = `<div class="placeholder">Existing muninn.json configuration (${mode === 'json' ? 'Json' : 'Visual'}) lives here.<div class="small">Storage · Providers · Extractor · Observer · Maintenance</div></div>`;
+  }
+
+  // mode tabs
+  document.querySelectorAll('.settings-mode-tab').forEach((tab) => {
+    tab.addEventListener('click', () => {
+      document.querySelectorAll('.settings-mode-tab').forEach((t) => t.classList.remove('settings-mode-tab-active'));
+      tab.classList.add('settings-mode-tab-active');
+      const mode = tab.dataset.mode;
+      mode === 'import' ? renderImport() : renderPlaceholder(mode);
+    });
+  });
+
+  // import modal
+  const IMPORTED = new Set(['muninn / brand recall homepage title']);
+  function openImport(agentId) {
+    const a = AGENTS.find((x) => x.id === agentId);
+    $('#modalTitle').textContent = `Import ${a.label} sessions`;
+    const rows = [];
+    a.projects.forEach((p) => p.items.forEach((s) => rows.push({ key: `${p.name} / ${s.t}`, proj: p.name, t: s.t, m: `${s.turns}t · ${s.time}` })));
+    const list = $('#pickList');
+    list.innerHTML = rows.map((r, i) => {
+      const imported = IMPORTED.has(r.key);
+      return `<div class="pick${imported ? ' dim' : ''}" data-i="${i}">
+        <span class="cb"></span><span class="pt">${r.t}</span><span class="pp">${r.proj}</span>
+        <span class="pm">${imported ? '<span class="tag-imported">imported</span>' : r.m}</span></div>`;
+    }).join('');
+    list.querySelectorAll('.pick:not(.dim)').forEach((el) => el.addEventListener('click', () => { el.classList.toggle('sel'); el.querySelector('.cb').textContent = el.classList.contains('sel') ? '✓' : ''; count(); }));
+    count();
+    $('#overlay').classList.add('show');
+  }
+  function count() { const n = document.querySelectorAll('.pick.sel').length; $('#pickCount').textContent = `${n} selected`; $('#confirmImport').disabled = n === 0; }
+  $('#selAll').addEventListener('click', () => { const picks = document.querySelectorAll('.pick:not(.dim)'); const all = [...picks].every((p) => p.classList.contains('sel')); picks.forEach((p) => { p.classList.toggle('sel', !all); p.querySelector('.cb').textContent = !all ? '✓' : ''; }); count(); });
+  $('#cancelImport').addEventListener('click', () => $('#overlay').classList.remove('show'));
+  $('#overlay').addEventListener('click', (e) => { if (e.target.id === 'overlay') $('#overlay').classList.remove('show'); });
+  $('#confirmImport').addEventListener('click', () => { const n = document.querySelectorAll('.pick.sel').length; $('#overlay').classList.remove('show'); toast(`Imported ${n} session${n === 1 ? '' : 's'}`); });
+
+  renderImport();
+</script>
+</body>
+</html>

@@ -32,7 +32,7 @@ const { __testing: updateTesting } = updateModule;
 const { __testing: threadTesting } = threadModule;
 const { __testing: observingGatewayTesting } = observingGatewayModule;
 const { createSessionMemoryThread, getPendingIndex, getPendingIndexUpTo, loadThreads, toSessionSnapshot } = threadModule;
-const { addMessage, observer: observerApi, shutdownCoreForTests } = core;
+const { captureTurn, observer: observerApi, shutdownCoreForTests } = core;
 const CHECKPOINT_SCHEMA_VERSION = 7;
 let defaultConfigDir = null;
 
@@ -670,12 +670,16 @@ function extractionContent(title, summary, content = '') {
 function snapshotContentFixture(units, {
   title = 'Painting Memory',
   summary = 'This thread tracks durable painting memory.',
+  signals = '',
 } = {}) {
   return [
     `# ${title}`,
     '',
     '## Summary',
     summary,
+    '',
+    '## Signals',
+    signals,
     '',
     '## Extractions',
     typeof units === 'string' ? units : units.join('\n'),
@@ -4595,6 +4599,85 @@ test('observer validation derives extractions from titled snapshot content', () 
   }]);
 });
 
+test('observer validation preserves session-level signals in snapshot content', () => {
+  const result = observingGatewayTesting.validateExtractSessionMemoryResultForTests(
+    snapshotContentFixture([
+      '<!-- refs: [turn:13] -->',
+      '### Title',
+      'Extractor signal handling',
+      '',
+      '### Summary',
+      'The extractor should record durable session-level signals in memory content.',
+      '',
+      '### Content',
+      '- Keep the signal recall-ready without a rigid pseudo-schema.',
+    ].join('\n'), {
+      title: 'Extractor Signals',
+      summary: 'Extractor prompt design refined durable signal handling.',
+      signals: [
+        '- User preference: The user prefers natural Markdown bullets for extractor signals.',
+        '- Reusable workflow or skill gap: Confirm parser support before asking the model to emit a new Markdown section.',
+      ].join('\n'),
+    }),
+    {
+      sessionMemoryContent: {
+        title: 'Extractor Signals',
+        summary: '',
+        extractions: [],
+        openQuestions: [],
+        nextSteps: [],
+      },
+      turns: [{
+        turnId: 'turn:13',
+        summary: 'The user asked for durable signal handling in extractor memory content.',
+      }],
+    },
+  );
+
+  assert.equal(result.signals, [
+    '- User preference: The user prefers natural Markdown bullets for extractor signals.',
+    '- Reusable workflow or skill gap: Confirm parser support before asking the model to emit a new Markdown section.',
+  ].join('\n'));
+  assert.equal(result.extractions[0]?.context, '- Keep the signal recall-ready without a rigid pseudo-schema.');
+  assert.match(result.snapshotContent, /## Signals\n- User preference:/);
+  assert.match(result.snapshotContent, /### Content\n- Keep the signal recall-ready/);
+});
+
+test('snapshot patch can preserve, replace, and clear session-level signals', () => {
+  const baseInput = {
+    sessionMemoryContent: {
+      title: 'Extractor Signals',
+      summary: 'Extractor prompt design.',
+      signals: '- User preference: Keep signal bullets natural.',
+      extractions: [],
+      openQuestions: [],
+      nextSteps: [],
+    },
+    turns: [{
+      turnId: 'turn:13',
+      summary: 'The user refined extractor signal handling.',
+    }],
+  };
+
+  const preserved = observingGatewayTesting.validateExtractSessionMemoryResultForTests([
+    '## Summary',
+    'Extractor prompt design continues.',
+  ].join('\n'), baseInput);
+  assert.equal(preserved.signals, '- User preference: Keep signal bullets natural.');
+
+  const replaced = observingGatewayTesting.validateExtractSessionMemoryResultForTests([
+    '## Signals',
+    '- Repeated requirement or correction: Signals are session-level state.',
+  ].join('\n'), baseInput);
+  assert.equal(replaced.signals, '- Repeated requirement or correction: Signals are session-level state.');
+
+  const cleared = observingGatewayTesting.validateExtractSessionMemoryResultForTests([
+    '## Signals',
+    '',
+  ].join('\n'), baseInput);
+  assert.equal(cleared.signals, '');
+});
+
 test('observer validation keeps independent refs per snapshot content unit', () => {
   const result = observingGatewayTesting.validateExtractSessionMemoryResultForTests(
     snapshotContentFixture([
@@ -4735,6 +4818,65 @@ test('observer validation accepts markdown fenced snapshot content', () => {
     { title: 'Painting Memory', summary: 'Melanie discussed a lake sunrise painting.' },
   ));
   assert.deepEqual(result.extractions[0].references, ['turn:13']);
+});
+
+test('observer validation rejects session signals after extractions', () => {
+  assert.throws(
+    () => observingGatewayTesting.validateExtractSessionMemoryResultForTests([
+      '# Painting Memory',
+      '',
+      '## Summary',
+      'Melanie discussed a lake sunrise painting.',
+      '',
+      '## Extractions',
+      '<!-- refs: [turn:13] -->',
+      '### Title',
+      'Lake sunrise painting',
+      '',
+      '### Summary',
+      'Melanie painted a lake sunrise in 2022.',
+      '',
+      '## Signals',
+      '- User preference: Keep signals top-level.',
+    ].join('\n'), {
+      sessionMemoryContent: {
+        title: 'Painting',
+        summary: '',
+        extractions: [],
+        openQuestions: [],
+        nextSteps: [],
+      },
+      turns: [{ turnId: 'turn:13', summary: 'Melanie discussed painting.' }],
+    }),
+    /order ## Signals before ## Extractions/i,
+  );
+});
+
+test('snapshot patch rejects session signals after extractions', () => {
+  assert.throws(
+    () => observingGatewayTesting.validateExtractSessionMemoryResultForTests([
+      '## Extractions',
+      '<!-- refs: [turn:13] -->',
+      '### Title',
+      'Lake sunrise painting',
+      '',
+      '### Summary',
+      'Melanie painted a lake sunrise in 2022.',
+      '',
+      '## Signals',
+      '- User preference: Keep signals top-level.',
+    ].join('\n'), {
+      sessionMemoryContent: {
+        title: 'Painting',
+        summary: '',
+        extractions: [],
+        openQuestions: [],
+        nextSteps: [],
+      },
+      turns: [{ turnId: 'turn:13', summary: 'Melanie discussed painting.' }],
+    }),
+    /order ## Signals before ## Extractions/i,
+  );
 });
 
 test('observer validation rejects snapshot content units without metadata', () => {
@@ -4970,9 +5112,11 @@ test('thread session get_extraction expands visible extraction sequences only', 
   assert.ok(firstUserMessage);
   assert.match(firstUserMessage.content, /## Current Snapshot/);
   assert.match(firstUserMessage.content, /# Caroline support group/);
+  assert.match(firstUserMessage.content, /## Summary/);
+  assert.match(firstUserMessage.content, /## Signals\n\(empty\)/);
+  assert.match(firstUserMessage.content, /## Extractions/);
   assert.match(firstUserMessage.content, /### Title/);
   assert.match(firstUserMessage.content, /### Summary/);
-  assert.match(firstUserMessage.content, /### Extractions/);
   assert.doesNotMatch(firstUserMessage.content, /Extraction Index/);
   assert.match(firstUserMessage.content, /<!-- sequence: 0 -->/);
   assert.match(firstUserMessage.content, /Support group attendance/);
@@ -5349,7 +5493,7 @@ test('thread session omits default session summary from memory input', async (t)
 
   const firstUserMessage = requests[0].messages.find((message) => message.role === 'user');
   assert.ok(firstUserMessage);
-  assert.match(firstUserMessage.content, /### Summary\n\(empty\)/);
+  assert.match(firstUserMessage.content, /## Summary\n\(empty\)/);
   assert.doesNotMatch(firstUserMessage.content, /Default session thread/);
   assert.doesNotMatch(firstUserMessage.content, /existingSnapshotContent/);
 });
@@ -6667,7 +6811,7 @@ test('observer shutdown relies on restart replay for unpublished observer work',
     globalThis.fetch = originalFetch;
   });
 
-  await addMessage(makeTurnContent('replay prompt', 'replay response'));
+  await captureTurn(makeTurnContent('replay prompt', 'replay response'));
 
   await shutdownCoreForTests();
 

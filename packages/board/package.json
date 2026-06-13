@@ -9,10 +9,11 @@
     }
   },
   "scripts": {
-    "build": "pnpm --filter @muninn/types build && tsc -p tsconfig.json --noEmit && vite build && tsc -p tsconfig.server.json && mkdir -p dist/assets && cp -R src/assets/. dist/assets/",
+    "build": "pnpm --filter @muninn/types build && pnpm --filter @muninn/codex build && tsc -p tsconfig.json --noEmit && vite build && tsc -p tsconfig.server.json && mkdir -p dist/assets && cp -R src/assets/. dist/assets/",
     "dev": "tsc --watch"
   },
   "dependencies": {
+    "@muninn/codex": "workspace:*",
     "@muninn/core": "workspace:*",
     "@muninn/types": "workspace:*",
     "@vitejs/plugin-react": "^5.0.0",

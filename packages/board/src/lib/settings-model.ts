@@ -44,6 +44,16 @@ export const SAMPLE_SETTINGS: JsonObject = {
     maxAttempts: 3,
     activeWindowDays: 30,
   },
+  capture: {
+    agents: {
+      codex: true,
+      'claude-code': true,
+    },
+    projects: {
+      codex: {},
+      'claude-code': {},
+    },
+  },
   watchdog: {
     enabled: true,
     intervalMs: 60000,

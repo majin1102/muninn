@@ -75,13 +75,19 @@ type ProvidersConfigRecord = {
   embedding?: Record<string, EmbeddingConfigRecord>;
 };
 
-type MuninnConfigRecord = {
+export type CaptureConfigRecord = {
+  agents?: Record<string, boolean>;
+  projects?: Record<string, Record<string, boolean>>;
+};
+
+export type MuninnConfigRecord = {
   storage?: Record<string, unknown>;
   turn?: TurnConfigRecord;
   extractor?: ExtractorConfigRecord;
   observer?: ObserverConfigRecord;
   providers?: ProvidersConfigRecord;
   watchdog?: Record<string, unknown>;
+  capture?: CaptureConfigRecord;
 };
 
 export type TextProviderConfig = {
@@ -138,6 +144,11 @@ export type WatchdogConfig = {
     targetPartitionSize: number;
     optimizeMergeCount: number;
   };
+};
+
+export type CaptureConfig = {
+  agents: Record<string, boolean>;
+  projects: Record<string, Record<string, boolean>>;
 };
 
 type CoreRuntimeConfig = {
@@ -321,6 +332,26 @@ export function getWatchdogConfig(): WatchdogConfig {
   };
 }
 
+export function getCaptureConfig(): CaptureConfig {
+  return getCaptureConfigFromConfig(loadMuninnConfig());
+}
+
+export function getCaptureConfigFromConfigForTests(config: MuninnConfigRecord | null): CaptureConfig {
+  return getCaptureConfigFromConfig(config);
+}
+
+export function getCaptureConfigFromConfig(config: MuninnConfigRecord | null): CaptureConfig {
+  return {
+    agents: { ...(config?.capture?.agents ?? {}) },
+    projects: Object.fromEntries(
+      Object.entries(config?.capture?.projects ?? {}).map(([agent, projects]) => [
+        agent,
+        { ...projects },
+      ]),
+    ),
+  };
+}
+
 export function parseMuninnConfigContent(content: string): MuninnConfigRecord {
   let parsed: unknown;
   try {
@@ -486,6 +517,7 @@ function validateTopLevelConfig(config: MuninnConfigRecord): void {
   validateObserverConfig(config.observer);
   validateProvidersConfig(config.providers);
   validateWatchdogConfig(config.watchdog);
+  validateCaptureConfig(config.capture);
 }
 
 function validateConfiguredProviders(config: MuninnConfigRecord): void {
@@ -650,6 +682,43 @@ function validateWatchdogConfig(watchdog: unknown): void {
       'watchdog.extraction.optimizeMergeCount',
     );
   }
+}
+
+function validateCaptureConfig(capture: unknown): void {
+  if (capture === undefined) {
+    return;
+  }
+  const config = expectRecord(capture, 'capture');
+  if (config.agents !== undefined) {
+    const agents = expectRecord(config.agents, 'capture.agents');
+    for (const [agent, enabled] of Object.entries(agents)) {
+      if (typeof enabled !== 'boolean') {
+        throw new Error(`capture.agents.${agent} must be a boolean.`);
+      }
+    }
+  }
+  if (config.projects !== undefined) {
+    const agents = expectRecord(config.projects, 'capture.projects');
+    for (const [agent, projectsValue] of Object.entries(agents)) {
+      const projects = expectRecord(projectsValue, `capture.projects.${agent}`);
+      for (const [projectKey, enabled] of Object.entries(projects)) {
+        if (!isCanonicalProjectIdentity(projectKey)) {
+          throw new Error(`capture.projects.${agent}.${projectKey} must be a canonical project identity.`);
+        }
+        if (typeof enabled !== 'boolean') {
+          throw new Error(`capture.projects.${agent}.${projectKey} must be a boolean.`);
+        }
+      }
+    }
+  }
+}
+
+export function isCanonicalProjectIdentity(projectKey: string): boolean {
+  if (path.isAbsolute(projectKey)) {
+    return true;
+  }
+  const match = /^github\.com\/([^/]+)\/([^/]+)$/.exec(projectKey);
+  return Boolean(match?.[1] && match?.[2]);
 }
 
 function validateReferencedLlmProvider(

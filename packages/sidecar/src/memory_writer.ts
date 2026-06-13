@@ -1,5 +1,5 @@
-import { addMessage, turns } from '@muninn/core';
-import { invalidateSessionTreeCache } from '@muninn/board/server';
+import { captureTurn, turns } from '@muninn/core';
+import { invalidateSessionTreeCache, isCaptureEnabled } from '@muninn/board/server';
 import { Hono } from 'hono';
 import type {
   Artifact,
@@ -216,8 +216,17 @@ memoryWriter.post('/api/v1/turn/capture', async (c) => {
     return c.json(errorResponse('invalidRequest', 'turn is required'), 400);
   }
 
+  // Live hook captures are gated by the per-project capture allowlist; manual
+  // imports (ingest ending in '-import') and other writers are unaffected.
+  const ingest = typeof body.turn.metadata?.ingest === 'string' ? body.turn.metadata.ingest : '';
+  if (ingest.endsWith('-hook') && body.turn.project) {
+    if (!(await isCaptureEnabled(body.turn.agent, body.turn.project))) {
+      return c.body(null, 204);
+    }
+  }
+
   try {
-    await addMessage(body.turn, body.database);
+    await captureTurn(body.turn, body.database);
   } catch (error) {
     const mapped = mapCoreWriteError(error);
     return c.json(mapped.body, mapped.status as 400 | 500);
@@ -244,7 +253,7 @@ memoryWriter.post('/api/v1/benchmark/locomo/turn/capture', async (c) => {
   }
 
   try {
-    await addMessage(body.turn, body.database);
+    await captureTurn(body.turn, body.database);
     const written = await findWrittenTurn(body.turn, body.database);
     if (!written) {
       return c.json(errorResponse('internalError', 'failed to resolve captured turn'), 500);

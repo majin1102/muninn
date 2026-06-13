@@ -88,9 +88,9 @@ async function captureTurn(turn) {
   });
 }
 
-function sessionTurnsPath(agent, sessionKey, { cwd = TEST_CWD, offset = 0, limit = 10 } = {}) {
+function sessionTurnsPath(agent, sessionKey, { project = TEST_PROJECT, offset = 0, limit = 10 } = {}) {
   const params = new URLSearchParams({
-    cwd,
+    project,
     offset: String(offset),
     limit: String(limit),
   });
@@ -1030,7 +1030,7 @@ test('ui session endpoints include native rows with indexed ownership fields', a
       project: TEST_PROJECT,
       cwd: TEST_CWD,
       agent: 'agent-a',
-      observer: 'default',
+      observer: 'test-observer',
       title: 'historical default prompt',
       summary: 'historical default prompt historical default response',
       events: [

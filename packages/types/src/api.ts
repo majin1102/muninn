@@ -305,6 +305,7 @@ export interface SearchResultItem {
 export interface SearchSessionResult {
   sessionKey: string;
   sessionLabel: string;
+  agent: string;
   projectKey: string;
   projectCwd?: string;
   latestUpdatedAt: string;
@@ -375,4 +376,104 @@ export interface CodexImportRunResponse extends CodexImportPreviewResponse {
     sourcePath: string;
     errorMessage: string;
   }>;
+}
+
+// ---- Per-session import (Import & Capture settings) ----
+
+export interface ImportAgentSession {
+  sessionId: string;
+  project: string;
+  cwd: string;
+  title: string;
+  promptPreview?: string;
+  sourcePath?: string;
+  updatedAt: string;
+  turnCount?: number;
+  artifactCount?: number;
+  imported: boolean;
+}
+
+export interface ImportAgentProject {
+  project: string;
+  sessionCount: number;
+  importedCount: number;
+  /** Whether the live hook auto-captures new sessions for this project. */
+  captureEnabled?: boolean;
+  sessions: ImportAgentSession[];
+}
+
+export interface ImportAgentLocalProject {
+  project: string;
+  latestUpdatedAt: string;
+}
+
+export interface ImportLocalProjectsResponse {
+  sourceRoot: string;
+  projectCount: number;
+  projects: ImportAgentLocalProject[];
+  requestId: string;
+}
+
+export interface ImportSessionsListResponse {
+  sourceRoot: string;
+  projectCount: number;
+  sessionCount: number;
+  importedCount: number;
+  projects: ImportAgentProject[];
+  requestId: string;
+}
+
+export interface ImportedProjectAgent {
+  agent: string;
+  sessionCount: number;
+  importedCount: number;
+  captureEnabled?: boolean;
+}
+
+export interface ImportedProjectSession {
+  agent: string;
+  session: ImportAgentSession;
+}
+
+export interface ImportedProjectGroup {
+  project: string;
+  sessionCount: number;
+  importedCount: number;
+  latestUpdatedAt: string;
+  agents: ImportedProjectAgent[];
+  sessions: ImportedProjectSession[];
+}
+
+export interface ImportedProjectsResponse {
+  agents: Array<{
+    agent: string;
+    sourceRoot: string;
+    captureEnabled?: boolean;
+  }>;
+  projectCount: number;
+  sessionCount: number;
+  importedCount: number;
+  projects: ImportedProjectGroup[];
+  requestId: string;
+}
+
+export interface ImportSelectedResponse {
+  importedSessions: number;
+  importedTurns: number;
+  failedSessions: Array<{
+    sourcePath: string;
+    errorMessage: string;
+  }>;
+  requestId: string;
+}
+
+export interface ImportProjectsResponse {
+  importedProjects: number;
+  requestId: string;
+}
+
+export interface DeleteImportedProjectResponse {
+  deletedSessions: number;
+  deletedTurns: number;
+  requestId: string;
 }

@@ -171,8 +171,13 @@ export function RecallPage({
     [controls.projectKeys, projects],
   );
 
+  // Auto-load projects once. Guard with a ref so a legitimately empty result
+  // does not retrigger the effect (projectsLoading flips while projects stays
+  // empty), which otherwise loops forever and flickers the Project control.
+  const autoLoadedProjects = useRef(false);
   useEffect(() => {
-    if (projects.length === 0 && !projectsLoading && !projectError) {
+    if (!autoLoadedProjects.current && projects.length === 0 && !projectsLoading && !projectError) {
+      autoLoadedProjects.current = true;
       onLoadProjects();
     }
   }, [onLoadProjects, projectError, projects.length, projectsLoading]);
@@ -518,7 +523,7 @@ export function RecallPage({
           </div>
         </form>
       </div>
-      {projectError ? <div className="search-error">{projectError}</div> : null}
+      {projectError ? <div className="search-error search-page-error">{projectError}</div> : null}
       {submitted ? (
         <div
           ref={splitLayoutRef}

@@ -1,7 +1,8 @@
-import type { PipelineTasksResponse } from '@muninn/types';
+import type { DeleteImportedProjectResponse, ImportedProjectsResponse, ImportProjectsResponse, ImportSelectedResponse, ImportSessionsListResponse, PipelineTasksResponse } from '@muninn/types';
 import {
   demoAgents,
   demoDocuments,
+  demoImportAgents,
   demoPipelineTasks,
   demoSearchResults,
   demoSessionSnapshots,
@@ -15,8 +16,15 @@ import {
 } from './data.js';
 import { shiftPipelineTaskTimes, summarizePipelineTasks } from '../lib/pipeline_model.js';
 import type { AgentRecallStreamEvent, RecallProvidersResponse, SearchSessionResult } from '@muninn/types';
+import { sessionIdentityKeyMatches } from '@muninn/types/session-identity';
 
-const SESSION_SCOPE_SEPARATOR = '\u001f';
+const demoImportState = structuredClone(demoImportAgents);
+const demoRegisteredProjects: Record<string, Set<string>> = Object.fromEntries(
+  Object.keys(demoImportState).map((agent) => [agent, new Set<string>()]),
+);
+const demoAgentCapture: Record<string, boolean> = Object.fromEntries(
+  Object.keys(demoImportState).map((agent) => [agent, true]),
+);
 
 export async function getDemoSessionAgents(): Promise<DemoSessionAgentItem[]> {
   return demoAgents;
@@ -24,6 +32,181 @@ export async function getDemoSessionAgents(): Promise<DemoSessionAgentItem[]> {
 
 export async function getDemoSessionGroups(agent: string): Promise<DemoSessionGroupItem[]> {
   return demoSessionGroups[agent] ?? [];
+}
+
+export async function getDemoImportSessions(agent: string, scope?: 'imported'): Promise<ImportSessionsListResponse> {
+  const data = demoImportState[agent] ?? { sourceRoot: demoImportRoot(agent), projects: [] };
+  const projects = data.projects
+    .map((project) => ({
+      ...project,
+      sessions: project.sessions.filter((session) => scope !== 'imported' || session.imported),
+    }))
+    .filter((project) => project.sessions.length > 0)
+    .map((project) => ({
+      ...project,
+      sessionCount: project.sessions.length,
+      importedCount: project.sessions.filter((session) => session.imported).length,
+    }));
+  return {
+    sourceRoot: data.sourceRoot,
+    projectCount: projects.length,
+    sessionCount: projects.reduce((total, project) => total + project.sessionCount, 0),
+    importedCount: projects.reduce((total, project) => total + project.importedCount, 0),
+    projects,
+    requestId: `demo-import-${agent}`,
+  };
+}
+
+export async function getDemoImportedProjects(): Promise<ImportedProjectsResponse> {
+  const grouped = new Map<string, ImportedProjectsResponse['projects'][number]>();
+
+  for (const [agent, data] of Object.entries(demoImportState)) {
+    for (const project of data.projects) {
+      const importedSessions = project.sessions.filter((session) => session.imported);
+      if (importedSessions.length === 0 && !demoRegisteredProjects[agent]?.has(project.project)) {
+        continue;
+      }
+      const latestUpdatedAt = importedSessions[0]?.updatedAt ?? '';
+      const group = grouped.get(project.project) ?? {
+        project: project.project,
+        sessionCount: 0,
+        importedCount: 0,
+        latestUpdatedAt,
+        agents: [],
+        sessions: [],
+      };
+      group.sessionCount += importedSessions.length;
+      group.importedCount += importedSessions.length;
+      if (latestUpdatedAt > group.latestUpdatedAt) {
+        group.latestUpdatedAt = latestUpdatedAt;
+      }
+      group.agents.push({
+        agent,
+        sessionCount: importedSessions.length,
+        importedCount: importedSessions.length,
+        captureEnabled: project.captureEnabled,
+      });
+      group.sessions.push(...importedSessions.map((session) => ({ agent, session })));
+      grouped.set(project.project, group);
+    }
+  }
+
+  const projects = [...grouped.values()]
+    .map((project) => ({
+      ...project,
+      agents: project.agents.sort((left, right) => left.agent.localeCompare(right.agent)),
+      sessions: project.sessions.sort((left, right) => right.session.updatedAt.localeCompare(left.session.updatedAt)),
+    }))
+    .sort((left, right) => right.latestUpdatedAt.localeCompare(left.latestUpdatedAt));
+
+  return {
+    agents: Object.entries(demoImportState).map(([agent, data]) => ({
+      agent,
+      sourceRoot: data.sourceRoot,
+      captureEnabled: demoAgentCapture[agent] !== false,
+    })),
+    projectCount: projects.length,
+    sessionCount: projects.reduce((total, project) => total + project.sessionCount, 0),
+    importedCount: projects.reduce((total, project) => total + project.importedCount, 0),
+    projects,
+    requestId: 'demo-import-projects',
+  };
+}
+
+export async function importDemoProjects(agent: string, projects: string[]): Promise<ImportProjectsResponse> {
+  const data = demoImportState[agent];
+  if (!data) {
+    return { importedProjects: 0, requestId: `demo-import-projects-${agent}` };
+  }
+  const registered = demoRegisteredProjects[agent] ?? new Set<string>();
+  demoRegisteredProjects[agent] = registered;
+  let importedProjects = 0;
+  for (const project of new Set(projects)) {
+    const item = data.projects.find((candidate) => candidate.project === project);
+    if (!item || registered.has(project)) {
+      continue;
+    }
+    registered.add(project);
+    item.captureEnabled = true;
+    importedProjects += 1;
+  }
+  return { importedProjects, requestId: `demo-import-projects-${agent}` };
+}
+
+export async function importDemoSessionsByPaths(agent: string, sourcePaths: string[]): Promise<ImportSelectedResponse> {
+  const data = demoImportState[agent];
+  if (!data) {
+    return { importedSessions: 0, importedTurns: 0, failedSessions: [], requestId: `demo-import-${agent}` };
+  }
+  const selected = new Set(sourcePaths);
+  let importedSessions = 0;
+  let importedTurns = 0;
+  for (const project of data.projects) {
+    let changedProject = false;
+    for (const session of project.sessions) {
+      if (!session.sourcePath || !selected.has(session.sourcePath) || session.imported) {
+        continue;
+      }
+      session.imported = true;
+      importedSessions += 1;
+      importedTurns += session.turnCount ?? 0;
+      changedProject = true;
+    }
+    if (changedProject) {
+      project.captureEnabled = true;
+      const registered = demoRegisteredProjects[agent] ?? new Set<string>();
+      registered.add(project.project);
+      demoRegisteredProjects[agent] = registered;
+    }
+    project.importedCount = project.sessions.filter((session) => session.imported).length;
+    project.sessionCount = project.sessions.length;
+  }
+  return {
+    importedSessions,
+    importedTurns,
+    failedSessions: [],
+    requestId: `demo-import-${agent}`,
+  };
+}
+
+export async function deleteDemoImportedProject(agent: string, project: string): Promise<DeleteImportedProjectResponse> {
+  const item = demoImportState[agent]?.projects.find((candidate) => candidate.project === project);
+  if (!item) {
+    return { deletedSessions: 0, deletedTurns: 0, requestId: `demo-delete-${agent}` };
+  }
+  const deletedSessions = item.sessions.filter((session) => session.imported).length;
+  const deletedTurns = item.sessions.reduce((total, session) => (
+    total + (session.imported ? session.turnCount ?? 0 : 0)
+  ), 0);
+  for (const session of item.sessions) {
+    session.imported = false;
+  }
+  item.importedCount = 0;
+  item.captureEnabled = false;
+  demoRegisteredProjects[agent]?.delete(project);
+  return {
+    deletedSessions,
+    deletedTurns,
+    requestId: `demo-delete-${agent}`,
+  };
+}
+
+export async function setDemoCapturePolicy(agent: string, project: string, enabled: boolean): Promise<void> {
+  const item = demoImportState[agent]?.projects.find((candidate) => candidate.project === project);
+  if (item) {
+    item.captureEnabled = enabled;
+    const registered = demoRegisteredProjects[agent] ?? new Set<string>();
+    registered.add(project);
+    demoRegisteredProjects[agent] = registered;
+  }
+}
+
+export async function setDemoAgentCapturePolicy(agent: string, enabled: boolean): Promise<void> {
+  demoAgentCapture[agent] = enabled;
+}
+
+function demoImportRoot(agent: string): string {
+  return agent === 'claude-code' ? '/Users/Nathan/.claude/projects' : '/Users/Nathan/.codex';
 }
 
 export async function getDemoSessionTurns(
@@ -184,8 +367,11 @@ function matchesDemoSessionScope(result: SearchSessionResult, sessionKeys: Set<s
     return true;
   }
   return [...sessionKeys].some((sessionKey) => {
-    const [projectKey, _agent, rawSessionKey] = sessionKey.split(SESSION_SCOPE_SEPARATOR);
-    return projectKey === result.projectKey && rawSessionKey === result.sessionKey;
+    return sessionIdentityKeyMatches(sessionKey, {
+      project: result.projectKey,
+      agent: result.agent,
+      sessionId: result.sessionKey,
+    });
   });
 }
 

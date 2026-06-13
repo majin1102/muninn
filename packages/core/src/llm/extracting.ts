@@ -292,6 +292,7 @@ function buildMockSnapshotContent(input: ExtractSessionMemoryRequest): string {
   return renderSnapshotContent(
     input.sessionMemoryContent.title || 'Mock session memory thread',
     input.sessionMemoryContent.summary || 'This thread tracks session conversation memory.',
+    input.sessionMemoryContent.signals ?? '',
     extractions,
   );
 }
@@ -356,15 +357,18 @@ function validateExtractSessionMemoryResult(
   const validNewReferences = validSessionMemoryReferences(input);
   const current = input?.sessionMemoryContent.extractions ?? [];
   const currentSummary = input?.sessionMemoryContent.summary ?? '';
+  const currentSignals = input?.sessionMemoryContent.signals ?? '';
   const currentTitle = input?.sessionMemoryContent.title ?? '';
   const patch = parseSnapshotPatch(result, validNewReferences);
   validateUpdatedSequencesWereRead(patch, options.readExtractionSequences);
   const nextExtractions = mergePatchExtractions(current, patch, validNewReferences);
   const summary = patch.summary ?? currentSummary;
+  const signals = patch.signals ?? currentSignals;
   const title = patch.title ?? currentTitle;
   const snapshotContent = renderSnapshotContent(
     title || 'Session memory snapshot',
     summary || 'This session has no durable memory summary yet.',
+    signals,
     nextExtractions,
   );
   const parsed = parseSnapshotContent(
@@ -375,6 +379,7 @@ function validateExtractSessionMemoryResult(
   return {
     title: parsed.title,
     summary: parsed.summary,
+    signals: parsed.signals,
     snapshotContent: parsed.snapshotContent,
     extractions: parsed.extractions,
     openQuestions: input?.sessionMemoryContent.openQuestions ?? [],
@@ -406,6 +411,7 @@ function validateMockSessionMemoryResult(result: string, input: ExtractSessionMe
   return {
     title: input.sessionMemoryContent.title || parsed.title,
     summary: parsed.summary,
+    signals: parsed.signals,
     snapshotContent: parsed.snapshotContent,
     extractions: parsed.extractions,
     openQuestions: input.sessionMemoryContent.openQuestions,
@@ -552,6 +558,7 @@ function buildSnapshotView(content: ExtractSessionMemoryRequest['sessionMemoryCo
 } {
   const rawTitle = normalizeText(content.title ?? '');
   const rawSummary = normalizeText(content.summary ?? '');
+  const rawSignals = normalizeText(content.signals ?? '');
   const title = isGeneratedSnapshotTitle(rawTitle, rawSummary) ? '' : rawTitle;
   const summary = isDefaultSummary(rawSummary)
     ? ''
@@ -569,10 +576,10 @@ function buildSnapshotView(content: ExtractSessionMemoryRequest['sessionMemoryCo
   }));
 
   let visibleEntries = [...extractionEntries];
-  let markdown = renderSnapshotViewMarkdown(title, summary, visibleEntries);
+  let markdown = renderSnapshotViewMarkdown(title, summary, rawSignals, visibleEntries);
   while (estimateTokens(markdown) > SNAPSHOT_VIEW_TOKEN_CAP && visibleEntries.length > 0) {
     visibleEntries = visibleEntries.slice(1);
-    markdown = renderSnapshotViewMarkdown(title, summary, visibleEntries);
+    markdown = renderSnapshotViewMarkdown(title, summary, rawSignals, visibleEntries);
   }
 
   return {
@@ -584,6 +591,7 @@ function buildSnapshotView(content: ExtractSessionMemoryRequest['sessionMemoryCo
 function renderSnapshotViewMarkdown(
   title: string,
   summary: string,
+  signals: string,
   entries: Array<{ sequence: number; markdown: string }>,
 ): string {
   return [
@@ -591,10 +599,13 @@ function renderSnapshotViewMarkdown(
     '',
     `# ${title || '(empty)'}`,
     '',
-    '### Summary',
+    '## Summary',
     summary || '(empty)',
     '',
-    '### Extractions',
+    '## Signals',
+    signals || '(empty)',
+    '',
+    '## Extractions',
     entries.length > 0 ? entries.map((entry) => entry.markdown).join('\n\n----\n\n') : '(empty)',
   ].join('\n');
 }

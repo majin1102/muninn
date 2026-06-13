@@ -7,12 +7,17 @@ import {
   memories,
   sessions,
   turns,
+  isCanonicalProjectIdentity,
 } from '@muninn/core';
 import { Hono } from 'hono';
 import type {
   AgentNode,
   CodexImportPreviewResponse,
   CodexImportRunResponse,
+  ImportedProjectsResponse,
+  ImportLocalProjectsResponse,
+  ImportSelectedResponse,
+  ImportSessionsListResponse,
   ErrorResponse,
   MemoryDocumentResponse,
   MemoryReference,
@@ -31,7 +36,18 @@ import type {
   TurnPreview,
 } from '@muninn/types';
 import { agentRecallEvents, ndjsonStream, recallProviderOptions } from './agent_recall.js';
-import { previewCodexImport, runCodexImport } from './codex_import.js';
+import { codexAdapter, previewCodexImport, runCodexImport } from './codex_import.js';
+import { claudeAdapter } from './claude_import.js';
+import { deleteImportedProject, importProjects, importSelectedSessions, listImportedSessions, listLocalProjects, listLocalSessions, type ImportAdapter } from './import_core.js';
+import { getCapturePolicy, isAgentCaptureEnabled, setAgentCaptureEnabled, setCaptureEnabled } from './capture_policy.js';
+
+// Re-exported so the sidecar capture endpoint can gate live hook captures.
+export { isCaptureEnabled } from './capture_policy.js';
+
+const importAdapters: Record<string, ImportAdapter> = {
+  codex: codexAdapter,
+  'claude-code': claudeAdapter,
+};
 import { renderRenderedMemoryDocument } from './render.js';
 import { searchBoardMemory } from './search.js';
 import { sessionDisplayTitle } from './session_labels.js';
@@ -151,6 +167,16 @@ function defaultConfigContent(): string {
     '        "type": "mock",',
     '        "dimensions": 8',
     '      }',
+    '    }',
+    '  },',
+    '  "capture": {',
+    '    "agents": {',
+    '      "codex": true,',
+    '      "claude-code": true',
+    '    },',
+    '    "projects": {',
+    '      "codex": {},',
+    '      "claude-code": {}',
     '    }',
     '  },',
     '  "watchdog": {',
@@ -388,7 +414,7 @@ async function enrichMemoryDocument(
 
 async function loadSessionTurnPreviewsPage(params: {
   agent: string;
-  cwd?: string;
+  project: string;
   sessionKey: string;
   offset: number;
   limit: number;
@@ -405,7 +431,7 @@ async function loadSessionTurnPreviewsPage(params: {
     ...(isDefaultSessionKey(params.sessionKey) ? {} : { sessionId: params.sessionKey }),
   }))
     .filter((turn) => matchesSessionNode(turn, params.sessionKey))
-    .filter((turn) => !params.cwd || turn.cwd === params.cwd)
+    .filter((turn) => turn.project === params.project)
     .filter(hasSummary)
     .sort((left, right) => (
       left.createdAt.localeCompare(right.createdAt)
@@ -413,7 +439,7 @@ async function loadSessionTurnPreviewsPage(params: {
       || left.turnId.localeCompare(right.turnId)
     ));
   const previews = allTurns.map(toTurnPreview);
-  const snapshotContent = await loadSessionSnapshotContent(params.agent, params.sessionKey, params.cwd);
+  const snapshotContent = await loadSessionSnapshotContent(params.project, params.agent, params.sessionKey);
   return buildSessionTurnPage({
     turns: previews,
     snapshotContent,
@@ -422,12 +448,12 @@ async function loadSessionTurnPreviewsPage(params: {
   });
 }
 
-async function loadSessionSnapshotContent(agent: string, sessionKey: string, cwd?: string): Promise<string | null> {
+async function loadSessionSnapshotContent(project: string, agent: string, sessionKey: string): Promise<string | null> {
   const sessionIndex = await sessions.index();
   const session = sessionIndex.find((entry) => (
-    entry.agent === agent
+    entry.project === project
+    && entry.agent === agent
     && entry.sessionId === sessionKey
-    && (!cwd || entry.cwd === cwd)
   ));
 
   if (!session?.snapshotId) {
@@ -785,17 +811,17 @@ boardApp.get('/api/v1/ui/session/agents/:agent/sessions', async (c) => {
 boardApp.get('/api/v1/ui/session/agents/:agent/sessions/:sessionKey/turns', async (c) => {
   const agent = c.req.param('agent');
   const sessionKey = c.req.param('sessionKey');
-  const cwd = normalizeText(c.req.query('cwd'));
+  const project = normalizeText(c.req.query('project'));
   const offsetRaw = c.req.query('offset');
   const limitRaw = c.req.query('limit');
 
   const offset = offsetRaw ? Number(offsetRaw) : 0;
   const limit = limitRaw ? Number(limitRaw) : 10;
 
-  console.log('[BOARD_UI_SESSION_TURNS] agent:', agent, 'cwd:', cwd, 'sessionKey:', sessionKey, 'offset:', offset, 'limit:', limit);
+  console.log('[BOARD_UI_SESSION_TURNS] agent:', agent, 'project:', project, 'sessionKey:', sessionKey, 'offset:', offset, 'limit:', limit);
 
-  if (!cwd) {
-    return c.json(errorResponse('invalidRequest', 'cwd is required'), 400);
+  if (!project) {
+    return c.json(errorResponse('invalidRequest', 'project is required'), 400);
   }
 
   if (Number.isNaN(offset) || offset < 0) {
@@ -808,7 +834,7 @@ boardApp.get('/api/v1/ui/session/agents/:agent/sessions/:sessionKey/turns', asyn
 
   const page = await loadSessionTurnPreviewsPage({
     agent,
-    cwd,
+    project,
     sessionKey,
     offset,
     limit,
@@ -1067,6 +1093,214 @@ boardApp.post('/api/v1/ui/import/codex', async (c) => {
     projectLimit: body.projectLimit,
     projectKeys: body.projectKeys,
   }, generateRequestId());
+  invalidateSessionTreeCache();
+  return c.json(response);
+});
+
+boardApp.get('/api/v1/ui/import/projects', async (c) => {
+  const requestId = generateRequestId();
+  const importedByAgent = await Promise.all(Object.values(importAdapters).map(async (adapter) => ({
+    adapter,
+    response: await listImportedSessions(adapter, requestId),
+  })));
+  const grouped = new Map<string, ImportedProjectsResponse['projects'][number]>();
+
+  for (const { adapter, response } of importedByAgent) {
+    for (const project of response.projects) {
+      const latestUpdatedAt = project.sessions[0]?.updatedAt ?? '';
+      const group = grouped.get(project.project) ?? {
+        project: project.project,
+        sessionCount: 0,
+        importedCount: 0,
+        latestUpdatedAt,
+        agents: [],
+        sessions: [],
+      };
+      group.sessionCount += project.sessionCount;
+      group.importedCount += project.importedCount;
+      if (latestUpdatedAt > group.latestUpdatedAt) {
+        group.latestUpdatedAt = latestUpdatedAt;
+      }
+      group.agents.push({
+        agent: adapter.agent,
+        sessionCount: project.sessionCount,
+        importedCount: project.importedCount,
+        captureEnabled: project.captureEnabled,
+      });
+      group.sessions.push(...project.sessions.map((session) => ({ agent: adapter.agent, session })));
+      grouped.set(project.project, group);
+    }
+  }
+
+  for (const { adapter } of importedByAgent) {
+    const policy = await getCapturePolicy(adapter.agent);
+    for (const [project, enabled] of Object.entries(policy)) {
+      if (!enabled || !isCanonicalProjectIdentity(project)) {
+        continue;
+      }
+      const group = grouped.get(project) ?? {
+        project,
+        sessionCount: 0,
+        importedCount: 0,
+        latestUpdatedAt: '',
+        agents: [],
+        sessions: [],
+      };
+      if (!group.agents.some((agent) => agent.agent === adapter.agent)) {
+        group.agents.push({
+          agent: adapter.agent,
+          sessionCount: 0,
+          importedCount: 0,
+          captureEnabled: true,
+        });
+      }
+      grouped.set(project, group);
+    }
+  }
+
+  const projects = [...grouped.values()]
+    .map((project) => ({
+      ...project,
+      agents: project.agents.sort((left, right) => left.agent.localeCompare(right.agent)),
+      sessions: project.sessions.sort((left, right) => right.session.updatedAt.localeCompare(left.session.updatedAt)),
+    }))
+    .sort((left, right) => right.latestUpdatedAt.localeCompare(left.latestUpdatedAt));
+
+  const response: ImportedProjectsResponse = {
+    agents: await Promise.all(importedByAgent.map(async ({ adapter }) => ({
+      agent: adapter.agent,
+      sourceRoot: adapter.sourceRoot,
+      captureEnabled: await isAgentCaptureEnabled(adapter.agent),
+    }))),
+    projectCount: projects.length,
+    sessionCount: projects.reduce((total, project) => total + project.sessionCount, 0),
+    importedCount: projects.reduce((total, project) => total + project.importedCount, 0),
+    projects,
+    requestId,
+  };
+
+  return c.json(response);
+});
+
+boardApp.get('/api/v1/ui/import/:agent/sessions', async (c) => {
+  const adapter = importAdapters[c.req.param('agent')];
+  if (!adapter) {
+    return c.json(errorResponse('invalidRequest', 'unknown import agent'), 404);
+  }
+  const project = normalizeText(c.req.query('project'));
+  const response: ImportSessionsListResponse = c.req.query('scope') === 'imported'
+    ? await listImportedSessions(adapter, generateRequestId())
+    : await listLocalSessions(adapter, generateRequestId(), project);
+  return c.json(response);
+});
+
+boardApp.get('/api/v1/ui/import/:agent/local-projects', async (c) => {
+  const adapter = importAdapters[c.req.param('agent')];
+  if (!adapter) {
+    return c.json(errorResponse('invalidRequest', 'unknown import agent'), 404);
+  }
+  const response: ImportLocalProjectsResponse = await listLocalProjects(adapter, generateRequestId());
+  return c.json(response);
+});
+
+boardApp.put('/api/v1/ui/import/:agent/capture-policy', async (c) => {
+  const agent = c.req.param('agent');
+  if (!importAdapters[agent]) {
+    return c.json(errorResponse('invalidRequest', 'unknown import agent'), 404);
+  }
+  let body: { project?: string; enabled?: boolean } = {};
+  try {
+    body = await c.req.json<{ project?: string; enabled?: boolean }>();
+  } catch {
+    body = {};
+  }
+  if (typeof body.project !== 'string' || !body.project || typeof body.enabled !== 'boolean') {
+    return c.json(errorResponse('invalidRequest', 'project and enabled are required'), 400);
+  }
+  if (!isCanonicalProjectIdentity(body.project)) {
+    return c.json(errorResponse('invalidRequest', 'project must be a canonical project identity'), 400);
+  }
+  await setCaptureEnabled(agent, body.project, body.enabled);
+  return c.body(null, 204);
+});
+
+boardApp.put('/api/v1/ui/import/:agent/agent-capture', async (c) => {
+  const agent = c.req.param('agent');
+  if (!importAdapters[agent]) {
+    return c.json(errorResponse('invalidRequest', 'unknown import agent'), 404);
+  }
+  let body: { enabled?: boolean } = {};
+  try {
+    body = await c.req.json<{ enabled?: boolean }>();
+  } catch {
+    body = {};
+  }
+  if (typeof body.enabled !== 'boolean') {
+    return c.json(errorResponse('invalidRequest', 'enabled is required'), 400);
+  }
+  await setAgentCaptureEnabled(agent, body.enabled);
+  return c.body(null, 204);
+});
+
+boardApp.post('/api/v1/ui/import/:agent/projects', async (c) => {
+  const adapter = importAdapters[c.req.param('agent')];
+  if (!adapter) {
+    return c.json(errorResponse('invalidRequest', 'unknown import agent'), 404);
+  }
+  let body: { projects?: string[] } = {};
+  try {
+    body = await c.req.json<{ projects?: string[] }>();
+  } catch {
+    body = {};
+  }
+  const projects = Array.isArray(body.projects) ? body.projects.filter((project): project is string => typeof project === 'string' && project.length > 0) : [];
+  if (projects.length === 0) {
+    return c.json(errorResponse('invalidRequest', 'projects is required'), 400);
+  }
+  if (projects.some((project) => !isCanonicalProjectIdentity(project))) {
+    return c.json(errorResponse('invalidRequest', 'projects must be canonical project identities'), 400);
+  }
+  const response = await importProjects(adapter, projects, generateRequestId());
+  return c.json(response);
+});
+
+boardApp.delete('/api/v1/ui/import/:agent/project', async (c) => {
+  const adapter = importAdapters[c.req.param('agent')];
+  if (!adapter) {
+    return c.json(errorResponse('invalidRequest', 'unknown import agent'), 404);
+  }
+  let body: { project?: string } = {};
+  try {
+    body = await c.req.json<{ project?: string }>();
+  } catch {
+    body = {};
+  }
+  if (typeof body.project !== 'string' || !body.project) {
+    return c.json(errorResponse('invalidRequest', 'project is required'), 400);
+  }
+  invalidateSessionTreeCache();
+  const response = await deleteImportedProject(adapter, body.project, generateRequestId());
+  invalidateSessionTreeCache();
+  return c.json(response);
+});
+
+boardApp.post('/api/v1/ui/import/:agent/sessions', async (c) => {
+  const adapter = importAdapters[c.req.param('agent')];
+  if (!adapter) {
+    return c.json(errorResponse('invalidRequest', 'unknown import agent'), 404);
+  }
+  let body: { sourcePaths?: string[] } = {};
+  try {
+    body = await c.req.json<{ sourcePaths?: string[] }>();
+  } catch {
+    body = {};
+  }
+  const sourcePaths = Array.isArray(body.sourcePaths) ? body.sourcePaths.filter((path): path is string => typeof path === 'string' && path.length > 0) : [];
+  if (sourcePaths.length === 0) {
+    return c.json(errorResponse('invalidRequest', 'sourcePaths is required'), 400);
+  }
+  invalidateSessionTreeCache();
+  const response: ImportSelectedResponse = await importSelectedSessions(adapter, sourcePaths, generateRequestId());
   invalidateSessionTreeCache();
   return c.json(response);
 });

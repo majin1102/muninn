@@ -22,6 +22,7 @@ import { ArtifactList } from './ArtifactList.js';
 import { ChatView } from './ChatView.js';
 import { LocateIcon } from './icons.js';
 import { ObservationPane } from './ObservationPane.js';
+import { EmptyState } from './ui/empty-state.js';
 import { ScrollArea } from './ui/scroll-area.js';
 
 type SessionContentSplitProps = {
@@ -126,10 +127,7 @@ export function SessionContentSplit({
 
   if (!hasContext) {
     return (
-      <div className="session-context-empty">
-        <FileText />
-        <p>Choose a session to get the context</p>
-      </div>
+      <EmptyState className="content-empty-panel" icon={FileText} title="Choose a session to view its context." variant="passive" />
     );
   }
 
