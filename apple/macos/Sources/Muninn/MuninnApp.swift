@@ -9,6 +9,10 @@ struct MuninnApp: App {
         WindowGroup {
             ContentView(server: server)
                 .frame(minWidth: 960, minHeight: 640)
+                .onAppear {
+                    NSApplication.shared.setActivationPolicy(.regular)
+                    NSApplication.shared.activate(ignoringOtherApps: true)
+                }
                 .task {
                     await server.start()
                 }
