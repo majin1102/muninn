@@ -16,35 +16,46 @@ export function planCodexConfig(before: string, options: CodexConfigPlanOptions)
   const summary: string[] = [];
 
   if (options.parts.has('mcp')) {
+    const previous = after;
     const withoutMcp = removeMcpServer(after);
     if (options.action === 'install') {
       after = appendSection(withoutMcp, renderMcpServer(options.commands.mcpCommand, options.serverUrl));
-      summary.push('Configure Codex MCP server: muninn');
+      if (after !== previous) {
+        summary.push('Configure Codex MCP server: muninn');
+      }
     } else {
       after = withoutMcp;
-      summary.push('Remove Codex MCP server: muninn');
+      if (after !== previous) {
+        summary.push('Remove Codex MCP server: muninn');
+      }
     }
   }
 
   if (options.parts.has('hook')) {
+    const previous = after;
     const withoutHook = removeMuninnStopHooks(after, options.commands.hookCommand);
     if (options.action === 'install') {
       after = appendSection(withoutHook, renderStopHook(options.commands.hookCommand));
-      summary.push('Configure Codex Stop hook: muninn-codex-hook');
+      if (after !== previous) {
+        summary.push('Configure Codex Stop hook: muninn-codex-hook');
+      }
     } else {
       after = withoutHook;
-      summary.push('Remove Codex Stop hook: muninn-codex-hook');
+      if (after !== previous) {
+        summary.push('Remove Codex Stop hook: muninn-codex-hook');
+      }
     }
   }
 
   after = normalizeTrailingNewline(after);
+  const changed = before !== after;
 
   return {
-    changed: before !== after,
+    changed,
     path: options.path,
     before,
     after,
-    summary,
+    summary: changed ? summary : [],
   };
 }
 
@@ -121,8 +132,7 @@ function removeMuninnHookEntries(block: string[], hookCommand: string): string[]
         index += 1;
       }
 
-      const text = hook.join('\n');
-      if (text.includes(hookCommand) || text.includes('muninn-codex-hook')) {
+      if (isMuninnHook(hook, hookCommand)) {
         continue;
       }
 
@@ -136,6 +146,36 @@ function removeMuninnHookEntries(block: string[], hookCommand: string): string[]
   }
 
   return keptHook ? output : [];
+}
+
+function isMuninnHook(hook: string[], hookCommand: string): boolean {
+  const command = hook.map(readCommandValue).find((value): value is string => value !== null);
+  return command === hookCommand || command === 'muninn-codex-hook';
+}
+
+function readCommandValue(line: string): string | null {
+  const match = /^\s*command\s*=\s*(.+?)\s*$/.exec(line);
+  if (!match) {
+    return null;
+  }
+  return parseTomlString(match[1]);
+}
+
+function parseTomlString(value: string): string {
+  if (value.startsWith('"') && value.endsWith('"')) {
+    try {
+      const parsed: unknown = JSON.parse(value);
+      if (typeof parsed === 'string') {
+        return parsed;
+      }
+    } catch {
+      return value.slice(1, -1);
+    }
+  }
+  if (value.startsWith("'") && value.endsWith("'")) {
+    return value.slice(1, -1);
+  }
+  return value;
 }
 
 function appendSection(input: string, section: string): string {
