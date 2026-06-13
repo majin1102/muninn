@@ -18,10 +18,10 @@ Expected bundle resource layout:
 Resources/Server/
   bin/node
   web/dist/
-  packages/server/dist/
+  server/dist/
   packages/core/dist/
   packages/core/native/muninn_native.node
-  packages/types/dist/
+  common/dist/
   node_modules/
 ```
 

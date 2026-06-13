@@ -15,7 +15,7 @@ export const liveRuntimeFixturePath = path.join(
 );
 export const sidecarDistEntryPath = path.resolve(
   pluginRoot,
-  "../../packages/server/dist/index.js",
+  "../../server/dist/index.js",
 );
 
 export function resolveOpenClawRoot() {

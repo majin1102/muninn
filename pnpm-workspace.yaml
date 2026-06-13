@@ -1,6 +1,7 @@
 packages:
   - 'common'
   - 'web'
+  - 'server'
   - 'packages/*'
   - 'benchmark/*'
   - 'codex'

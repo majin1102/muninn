@@ -45,7 +45,7 @@ test('session tree uses project agent session identity instead of cwd for row ke
   const treeSource = await readFile(new URL('../src/components/SessionTree.tsx', import.meta.url), 'utf8');
   const stateSource = await readFile(new URL('../src/lib/session_content_state.ts', import.meta.url), 'utf8');
   const apiSource = await readFile(new URL('../src/lib/api.ts', import.meta.url), 'utf8');
-  const serverSource = await readFile(new URL('../../packages/server/src/ui/app.ts', import.meta.url), 'utf8');
+  const serverSource = await readFile(new URL('../../server/src/ui/app.ts', import.meta.url), 'utf8');
 
   assert.match(treeSource, /SessionIdentity\.sessionIdentityKey\(\{\s*project: session\.projectKey,\s*agent: session\.agent,\s*sessionId: session\.sessionKey,/);
   assert.doesNotMatch(treeSource, /session\.agent\}:\$\{session\.cwd \?\? ''\}:\$\{session\.sessionKey\}/);

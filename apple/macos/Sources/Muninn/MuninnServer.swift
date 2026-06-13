@@ -55,7 +55,7 @@ final class MuninnServer: ObservableObject {
         let resources = MuninnResources.url
         let serverRoot = resources.appending(path: "Server")
         let bundleNode = serverRoot.appending(path: "bin/node")
-        let bundleEntry = serverRoot.appending(path: "packages/server/dist/index.js")
+        let bundleEntry = serverRoot.appending(path: "server/dist/index.js")
         let runtime = try resolveRuntime(
             bundleRoot: serverRoot,
             bundleNode: bundleNode,
@@ -154,7 +154,7 @@ private func resolveRuntime(bundleRoot: URL, bundleNode: URL, bundleEntry: URL) 
     }
 
     let repoRoot = try findDevRepoRoot()
-    let devEntry = repoRoot.appending(path: "packages/server/dist/index.js")
+    let devEntry = repoRoot.appending(path: "server/dist/index.js")
     guard fileManager.fileExists(atPath: devEntry.path) else {
         throw MuninnServerError.missingResource(
             "Bundled server entry not found at \(bundleEntry.path). Dev server entry not found at \(devEntry.path). Run `pnpm --filter @muninn/server build` first."
@@ -193,7 +193,7 @@ private func findDevRepoRoot() throws -> URL {
     for start in starts {
         var current = start.hasDirectoryPath ? start : start.deletingLastPathComponent()
         while true {
-            let serverEntry = current.appending(path: "packages/server/dist/index.js")
+            let serverEntry = current.appending(path: "server/dist/index.js")
             let workspace = current.appending(path: "pnpm-workspace.yaml")
             if fileManager.fileExists(atPath: serverEntry.path), fileManager.fileExists(atPath: workspace.path) {
                 return current
@@ -211,7 +211,7 @@ private func findDevRepoRoot() throws -> URL {
 }
 
 private func isDevRepoRoot(_ url: URL, fileManager: FileManager) -> Bool {
-    let serverEntry = url.appending(path: "packages/server/dist/index.js")
+    let serverEntry = url.appending(path: "server/dist/index.js")
     let workspace = url.appending(path: "pnpm-workspace.yaml")
     return fileManager.fileExists(atPath: serverEntry.path) && fileManager.fileExists(atPath: workspace.path)
 }

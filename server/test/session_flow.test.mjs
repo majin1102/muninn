@@ -5,11 +5,11 @@ import path from 'node:path';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 
 import core from '@muninn/core';
-import { getNativeTables } from '../../core/dist/native.js';
-import { serializeTurn } from '../../core/dist/turn/types.js';
+import { getNativeTables } from '../../packages/core/dist/native.js';
+import { serializeTurn } from '../../packages/core/dist/turn/types.js';
 import { resetSessionTreeCacheForTests } from '../dist/ui/app.js';
 import { app } from '../dist/app.js';
-import { registerMuninnHooks } from '../../../openclaw/plugin/dist/src/hooks.js';
+import { registerMuninnHooks } from '../../openclaw/plugin/dist/src/hooks.js';
 
 const { shutdownCoreForTests } = core;
 const TEST_PROJECT = 'project-a';

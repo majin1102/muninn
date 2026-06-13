@@ -55,7 +55,7 @@ import { sessionDisplayTitle } from './session_labels.js';
 const AGENT_DEFAULT_SESSION_PREFIX = '__agent_default__:';
 const OBSERVER_DEFAULT_SESSION_PREFIX = '__observer_default__:';
 const SESSION_TREE_PAGE_LIMIT = 1_000_000;
-const packageRoot = path.resolve(__dirname, '..', '..', '..', '..');
+const packageRoot = path.resolve(__dirname, '..', '..', '..');
 
 export const appRoutes = new Hono();
 export const SESSION_SNAPSHOTS_ROUTE = '/api/v1/ui/session-snapshots';
@@ -127,7 +127,7 @@ function resolveWebDistPath(): string {
   const candidates = [
     process.env.MUNINN_WEB_DIST,
     path.join(packageRoot, 'web', 'dist'),
-    path.resolve(process.cwd(), '..', '..', 'web', 'dist'),
+    path.resolve(process.cwd(), '..', 'web', 'dist'),
     path.resolve(process.cwd(), 'web', 'dist'),
   ].filter((candidate): candidate is string => Boolean(candidate));
 

@@ -68,7 +68,7 @@ async function startSidecar(t, home) {
   const baseUrl = `http://127.0.0.1:${port}`;
   const previousBaseUrl = process.env.MUNINN_SIDECAR_BASE_URL;
   process.env.MUNINN_SIDECAR_BASE_URL = baseUrl;
-  const sidecar = spawn(process.execPath, [path.join(repoRoot, 'packages/server/dist/index.js')], {
+  const sidecar = spawn(process.execPath, [path.join(repoRoot, 'server/dist/index.js')], {
     cwd: repoRoot,
     env: {
       ...process.env,
