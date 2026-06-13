@@ -1,4 +1,4 @@
-import type { Artifact } from '@muninn/types';
+import type { Artifact } from '@muninn/common';
 import { Check, ChevronDown, ChevronRight, File, FileCode, FileText, Image as ImageIcon } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import ReactMarkdown from 'react-markdown';

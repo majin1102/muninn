@@ -1,4 +1,4 @@
-import type { Artifact } from '@muninn/types';
+import type { Artifact } from '@muninn/common';
 
 export type ArtifactPresentation = {
   href: string;

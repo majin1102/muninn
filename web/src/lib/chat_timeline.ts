@@ -1,4 +1,4 @@
-import type { Artifact, ToolCall, TurnEvent } from '@muninn/types';
+import type { Artifact, ToolCall, TurnEvent } from '@muninn/common';
 
 export type ChatRole = 'user' | 'agent';
 

@@ -9,7 +9,7 @@ import type {
   MemoryResponse,
   MemoryWatermark,
   MemoryWatermarkResponse,
-} from '@muninn/types';
+} from '@muninn/common';
 import type { RecallMode, RenderedMemory } from '@muninn/core';
 import { renderRecallHit, renderRenderedMemoryHit } from './render.js';
 import { generateRequestId } from './utils.js';

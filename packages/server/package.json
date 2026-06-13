@@ -14,7 +14,7 @@
     "@hono/node-server": "^1.0.0",
     "@muninn/codex": "workspace:*",
     "@muninn/core": "workspace:*",
-    "@muninn/types": "workspace:*",
+    "@muninn/common": "workspace:*",
     "hono": "^4.0.0"
   },
   "devDependencies": {

@@ -1,4 +1,4 @@
-import type { MemoryDocument } from '@muninn/types';
+import type { MemoryDocument } from '@muninn/common';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Bot, CircleAlert, MessageSquare } from 'lucide-react';

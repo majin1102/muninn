@@ -4,7 +4,7 @@ import {
   renderRenderedMemoryMarkdown,
   type RenderedMemory,
 } from '@muninn/core';
-import type { MemoryDocument } from '@muninn/types';
+import type { MemoryDocument } from '@muninn/common';
 
 export function renderRenderedMemoryDocument(memory: RenderedMemory): MemoryDocument {
   return {

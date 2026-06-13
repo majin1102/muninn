@@ -7,7 +7,7 @@ import type {
   ErrorResponse,
   TurnEvent,
   TurnContent,
-} from '@muninn/types';
+} from '@muninn/common';
 import { generateRequestId } from './utils.js';
 
 export const memoryWriter = new Hono();

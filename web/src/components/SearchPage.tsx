@@ -1,4 +1,4 @@
-import type { RecallProviderOption, SearchSessionResult } from '@muninn/types';
+import type { RecallProviderOption, SearchSessionResult } from '@muninn/common';
 import {
   ArrowUp,
   Bot,

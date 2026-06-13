@@ -1,4 +1,4 @@
-import type { DeleteImportedProjectResponse, ImportedProjectsResponse, ImportProjectsResponse, ImportSelectedResponse, ImportSessionsListResponse, PipelineTasksResponse } from '@muninn/types';
+import type { DeleteImportedProjectResponse, ImportedProjectsResponse, ImportProjectsResponse, ImportSelectedResponse, ImportSessionsListResponse, PipelineTasksResponse } from '@muninn/common';
 import {
   demoAgents,
   demoDocuments,
@@ -15,8 +15,8 @@ import {
   type DemoSessionTimelineItem,
 } from './data.js';
 import { shiftPipelineTaskTimes, summarizePipelineTasks } from '../lib/pipeline_model.js';
-import type { AgentRecallStreamEvent, RecallProvidersResponse, SearchSessionResult } from '@muninn/types';
-import { sessionIdentityKeyMatches } from '@muninn/types/session-identity';
+import type { AgentRecallStreamEvent, RecallProvidersResponse, SearchSessionResult } from '@muninn/common';
+import { sessionIdentityKeyMatches } from '@muninn/common/session-identity';
 
 const demoImportState = structuredClone(demoImportAgents);
 const demoRegisteredProjects: Record<string, Set<string>> = Object.fromEntries(

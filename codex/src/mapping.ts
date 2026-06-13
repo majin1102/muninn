@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createInterface } from 'node:readline';
 import { promisify } from 'node:util';
-import type { Artifact, TurnContent, TurnEvent } from '@muninn/types';
+import type { Artifact, TurnContent, TurnEvent } from '@muninn/common';
 
 const execFileAsync = promisify(execFile);
 

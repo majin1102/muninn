@@ -13,7 +13,7 @@
     "demo": "pnpm build && node dist/demo-client.js"
   },
   "dependencies": {
-    "@muninn/types": "workspace:*",
+    "@muninn/common": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.0.0",
     "zod": "^3.22.0"
   },

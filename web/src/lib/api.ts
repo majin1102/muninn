@@ -23,7 +23,7 @@ import type {
   SessionTurnsResponse,
   SettingsConfigResponse,
   TurnPreview,
-} from '@muninn/types';
+} from '@muninn/common';
 import {
   getDemoDocument,
   getDemoPipelineTasks,

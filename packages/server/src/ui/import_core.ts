@@ -16,8 +16,8 @@ import type {
   ImportSelectedResponse,
   ImportSessionsListResponse,
   SessionIdentity,
-} from '@muninn/types';
-import * as SessionIdentityKey from '@muninn/types/session-identity';
+} from '@muninn/common';
+import * as SessionIdentityKey from '@muninn/common/session-identity';
 import { getCapturePolicy, removeCapturePolicy, setCaptureEnabled } from './capture_policy.js';
 
 /**

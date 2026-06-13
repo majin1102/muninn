@@ -37,7 +37,7 @@ import { Watchdog } from './watchdog.js';
 import { TableMutationLocks, lockNativeTables } from './table-locks.js';
 import { writeMuninnLog } from './logging.js';
 import { SessionIndex } from './session-index.js';
-import type { Artifact, TurnContent, TurnEvent } from '@muninn/types';
+import type { Artifact, TurnContent, TurnEvent } from '@muninn/common';
 
 export interface Turn {
   turnId: string;
@@ -124,7 +124,7 @@ export type ListModeInput =
   | { type: 'recency'; limit: number }
   | { type: 'page'; offset: number; limit: number };
 
-export type { TurnContent } from '@muninn/types';
+export type { TurnContent } from '@muninn/common';
 
 export interface CheckpointLock {
   shared<T>(operation: () => Promise<T> | T): Promise<T>;

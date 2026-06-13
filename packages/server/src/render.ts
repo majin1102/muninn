@@ -3,7 +3,7 @@ import {
   type RecallHit,
   type RenderedMemory,
 } from '@muninn/core';
-import type { MemoryHit } from '@muninn/types';
+import type { MemoryHit } from '@muninn/common';
 
 export function renderRenderedMemoryHit(record: RenderedMemory): MemoryHit {
   return {

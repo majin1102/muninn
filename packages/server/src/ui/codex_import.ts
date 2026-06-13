@@ -20,8 +20,8 @@ import type {
   CodexImportProjectPreview,
   CodexImportRunResponse,
   CodexImportSessionPreview,
-} from '@muninn/types';
-import * as SessionIdentity from '@muninn/types/session-identity';
+} from '@muninn/common';
+import * as SessionIdentity from '@muninn/common/session-identity';
 import type { ImportAdapter } from './import_core.js';
 
 type ImportSelection = {

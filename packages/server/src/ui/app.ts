@@ -34,7 +34,7 @@ import type {
   SessionTurnsResponse,
   SettingsConfigResponse,
   TurnPreview,
-} from '@muninn/types';
+} from '@muninn/common';
 import { agentRecallEvents, ndjsonStream, recallProviderOptions } from './agent_recall.js';
 import { codexAdapter, previewCodexImport, runCodexImport } from './codex_import.js';
 import { claudeAdapter } from './claude_import.js';

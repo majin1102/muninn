@@ -10,7 +10,7 @@ import type {
   AgentRecallStreamEvent,
   RecallProviderOption,
   SearchSessionResult,
-} from '@muninn/types';
+} from '@muninn/common';
 
 export type AgentRecallParams = {
   query: string;

@@ -1,4 +1,4 @@
-import * as SessionIdentity from '@muninn/types/session-identity';
+import * as SessionIdentity from '@muninn/common/session-identity';
 import type { ProjectNode } from './api.js';
 
 export type SearchControlsState = {

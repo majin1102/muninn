@@ -1,4 +1,4 @@
-import type { ImportAgentProject, PipelineTask, SearchSessionResult, ToolCall } from '@muninn/types';
+import type { ImportAgentProject, PipelineTask, SearchSessionResult, ToolCall } from '@muninn/common';
 
 export type DemoSessionAgentItem = {
   agent: string;

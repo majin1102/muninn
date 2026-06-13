@@ -1,4 +1,4 @@
-import type { PipelineTask, PipelineTaskKind, PipelineTaskStatus, PipelineTasksResponse } from '@muninn/types';
+import type { PipelineTask, PipelineTaskKind, PipelineTaskStatus, PipelineTasksResponse } from '@muninn/common';
 
 export type PipelineTaskFilter = PipelineTaskKind | 'all';
 export type PipelineStatusFilter = PipelineTaskStatus | 'active' | 'all';

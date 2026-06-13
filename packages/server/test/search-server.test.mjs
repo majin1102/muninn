@@ -4,10 +4,10 @@ import test from 'node:test';
 import ts from 'typescript';
 
 async function loadSearchServer() {
-  const identitySource = await readFile(new URL('../../types/src/session_identity.ts', import.meta.url), 'utf8');
+  const identitySource = await readFile(new URL('../../../common/src/session_identity.ts', import.meta.url), 'utf8');
   const searchSource = await readFile(new URL('../src/ui/search.ts', import.meta.url), 'utf8');
   const source = `${identitySource}\n${searchSource
-    .replace("import * as SessionIdentity from '@muninn/types/session-identity';\n", '')
+    .replace("import * as SessionIdentity from '@muninn/common/session-identity';\n", '')
     .replaceAll('SessionIdentity.sessionIdentityKey', 'sessionIdentityKey')}`;
   const compiled = ts.transpileModule(source, {
     compilerOptions: {

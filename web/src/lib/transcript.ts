@@ -1,4 +1,4 @@
-import type { MemoryDocument } from '@muninn/types';
+import type { MemoryDocument } from '@muninn/common';
 
 export type TranscriptMessage = {
   role: 'user' | 'agent';

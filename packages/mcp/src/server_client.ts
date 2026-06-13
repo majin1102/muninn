@@ -5,7 +5,7 @@ import type {
   ListRequest,
   MemoryResponse,
   RecallRequest,
-} from '@muninn/types';
+} from '@muninn/common';
 
 export class ServerClient {
   private baseUrl: string;

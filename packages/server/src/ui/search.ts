@@ -4,8 +4,8 @@ import type {
 import type {
   SearchResultItem,
   SearchSessionResult,
-} from '@muninn/types';
-import * as SessionIdentity from '@muninn/types/session-identity';
+} from '@muninn/common';
+import * as SessionIdentity from '@muninn/common/session-identity';
 
 export type AppSearchParams = {
   query: string;

@@ -112,7 +112,7 @@ test('import project delete API is wired through client and server', async () =>
   const apiSource = await readFile(new URL('../src/lib/api.ts', import.meta.url), 'utf8');
   const serverSource = await readFile(new URL('../../packages/server/src/ui/app.ts', import.meta.url), 'utf8');
   const importSource = await readFile(new URL('../../packages/server/src/ui/import_core.ts', import.meta.url), 'utf8');
-  const typeSource = await readFile(new URL('../../packages/types/src/api.ts', import.meta.url), 'utf8');
+  const typeSource = await readFile(new URL('../../common/src/api.ts', import.meta.url), 'utf8');
 
   assert.match(typeSource, /export interface DeleteImportedProjectResponse/);
   assert.match(apiSource, /deleteImportedProject\(agent: string, project: string\): Promise<DeleteImportedProjectResponse>/);
@@ -128,7 +128,7 @@ test('imported project list is exposed as a single aggregated API', async () => 
   const apiSource = await readFile(new URL('../src/lib/api.ts', import.meta.url), 'utf8');
   const serverSource = await readFile(new URL('../../packages/server/src/ui/app.ts', import.meta.url), 'utf8');
   const demoSource = await readFile(new URL('../src/demo/provider.ts', import.meta.url), 'utf8');
-  const typeSource = await readFile(new URL('../../packages/types/src/api.ts', import.meta.url), 'utf8');
+  const typeSource = await readFile(new URL('../../common/src/api.ts', import.meta.url), 'utf8');
 
   assert.match(typeSource, /export interface ImportedProjectsResponse/);
   assert.match(apiSource, /listImportedProjects\(\): Promise<ImportedProjectsResponse>/);
@@ -145,7 +145,7 @@ test('import session identity uses shared project agent session identity', async
   const componentSource = await readFile(new URL('../src/components/ImportSettings.tsx', import.meta.url), 'utf8');
   const importSource = await readFile(new URL('../../packages/server/src/ui/import_core.ts', import.meta.url), 'utf8');
   const codexImportSource = await readFile(new URL('../../packages/server/src/ui/codex_import.ts', import.meta.url), 'utf8');
-  const identitySource = await readFile(new URL('../../packages/types/src/session_identity.ts', import.meta.url), 'utf8');
+  const identitySource = await readFile(new URL('../../common/src/session_identity.ts', import.meta.url), 'utf8');
 
   assert.match(identitySource, /export type SessionIdentity/);
   assert.match(identitySource, /project: string;/);

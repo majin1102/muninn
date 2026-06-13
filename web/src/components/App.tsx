@@ -1,4 +1,4 @@
-import type { MemoryDocument } from '@muninn/types';
+import type { MemoryDocument } from '@muninn/common';
 import { BookOpen, ChevronLeft, ChevronRight, FileText, Search, Settings } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType, type CSSProperties, type MouseEvent as ReactMouseEvent, type PointerEvent } from 'react';
 import logo from '../assets/muninn-raven-logo.png';

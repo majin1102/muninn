@@ -7,8 +7,8 @@ import type {
   ImportedProjectsResponse,
   ImportLocalProjectsResponse,
   ImportSessionsListResponse,
-} from '@muninn/types';
-import * as SessionIdentity from '@muninn/types/session-identity';
+} from '@muninn/common';
+import * as SessionIdentity from '@muninn/common/session-identity';
 import type { AppClient } from '../lib/api.js';
 import { logoForAgent, type AgentLogo } from '../lib/agent_logo.js';
 import { projectDisplayLabel, projectDisplayLabels } from '../lib/project_display.js';

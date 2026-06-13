@@ -1,4 +1,4 @@
-import type { TurnContent } from '@muninn/types';
+import type { TurnContent } from '@muninn/common';
 import type { CodexHookConfig } from './config.js';
 
 export type CaptureTurnRequest = {

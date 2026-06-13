@@ -1,6 +1,6 @@
 import type { CSSProperties, PointerEvent } from 'react';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import type { Artifact, MemoryDocument } from '@muninn/types';
+import type { Artifact, MemoryDocument } from '@muninn/common';
 import { FileText } from 'lucide-react';
 import type { ProjectSessionNode, ProjectTurnNode } from '../lib/api.js';
 import { chatTurnWindow } from '../lib/chat_window.js';
