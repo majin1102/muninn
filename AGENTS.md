@@ -17,26 +17,30 @@ Muninn is a shared memory system for agents.
 
 Current strategic direction:
 
-- Rust is expected to become the long-term implementation language for core logic.
-- TypeScript packages are the current integration and transport shell.
+- Rust is expected to become the long-term implementation language for storage/format logic.
+- TypeScript modules are the current integration, agent adapter, web, and transport shell.
 - MCP protocol evolution should happen under `docs/spec/`.
 
 ## Current Module Map
 
-- `packages/mcp`
+- `mcp/`
   - MCP adapter layer.
-  - Exposes MCP tools and forwards requests to the sidecar.
+  - Exposes MCP tools and forwards requests to the server.
   - Should remain thin and protocol-focused.
-- `packages/sidecar`
+- `server/`
   - HTTP service layer.
   - Owns request validation, response shaping, and local process-facing APIs.
-  - Reads and writes the Lance-backed turn dataset through `@muninn/core`.
-- `packages/types`
-  - Shared TypeScript contracts.
-  - Defines request, response, and record types used by TS packages.
-- `packages/core`
-  - TS binding layer for the Lance-backed core implementation.
-  - Shared entrypoint for sidecar and other TS integrations.
+  - Owns the TypeScript memory runtime under `server/src/memory`.
+  - Reads and writes the Lance-backed turn dataset through `server/native`.
+- `web/`
+  - Browser/WKWebView UI for the Muninn app.
+  - Talks to `server` through HTTP APIs.
+- `common/`
+  - Shared TypeScript contracts and pure agent hook helpers.
+- `codex/`
+  - Codex adapter and hook integration.
+- `claude/`
+  - Claude adapter and hook integration.
 - `format/`
   - Rust typed-table, format, and storage implementation.
   - Defaults to the published `lance` crate; see `format/README.md` for local override workflow.
@@ -49,13 +53,15 @@ Current strategic direction:
 
 Preferred dependency direction:
 
-- `packages/sidecar` should depend on `packages/core`.
-- `packages/core` should depend on the Rust `format/` implementation.
-- `packages/mcp` should talk to `packages/sidecar`, not directly to Rust/core by default.
+- `server` may depend on `common`, `codex`, and `claude`.
+- `server/src/memory` depends on the Rust `format/` implementation through `server/native`.
+- `web` should talk to `server` through HTTP APIs and shared contracts from `common`.
+- `mcp` should talk to `server`, not directly to Rust/native by default.
+- `codex` and `claude` should not depend on each other or on `web`.
 
 Working principle:
 
-- `sidecar` is the single backend entrypoint for normal operation.
+- `server` is the single backend entrypoint for normal operation.
 - `mcp` is an adapter, not the business backend.
 
 ## Current Truths
@@ -79,5 +85,5 @@ Important modeling note:
 ## Do
 
 - Keep `mcp` thin.
-- Keep transport concerns in `sidecar`.
+- Keep transport concerns in `server`.
 - Put MCP protocol and schema evolution in `docs/spec/`.

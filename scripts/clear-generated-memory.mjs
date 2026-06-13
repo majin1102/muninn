@@ -8,8 +8,8 @@ import {
   resolveDatabaseHome,
   resolveDatabaseName,
   resolveStorageTarget,
-} from '../packages/core/dist/config.js';
-import { createNativeTables } from '../packages/core/dist/native.js';
+} from '../server/dist/memory/config.js';
+import { createNativeTables } from '../server/dist/memory/native.js';
 
 const databaseName = resolveDatabaseName(process.env.MUNINN_DATABASE ?? null);
 const databaseHome = resolveDatabaseHome(databaseName);

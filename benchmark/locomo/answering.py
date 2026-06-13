@@ -99,16 +99,18 @@ def load_answerer_config(home: Path) -> dict[str, Any]:
     config_path = home / "muninn.json"
     config = json.loads(config_path.read_text(encoding="utf8"))
     observer = config.get("observer") if isinstance(config, dict) else None
-    if not isinstance(observer, dict) or not isinstance(observer.get("llm"), str):
-        raise ValueError("LoCoMo LLM answerer requires observer.llm in muninn.json")
-    llms = config.get("llm")
-    llm = llms.get(observer["llm"]) if isinstance(llms, dict) else None
+    if not isinstance(observer, dict) or not isinstance(observer.get("llmProvider"), str):
+        raise ValueError("LoCoMo LLM answerer requires observer.llmProvider in muninn.json")
+    providers = config.get("providers")
+    llms = providers.get("llm") if isinstance(providers, dict) else None
+    llm_provider = observer["llmProvider"]
+    llm = llms.get(llm_provider) if isinstance(llms, dict) else None
     if not isinstance(llm, dict):
-        raise ValueError(f"LoCoMo LLM answerer requires llm.{observer['llm']} in muninn.json")
-    provider = llm.get("provider")
+        raise ValueError(f"LoCoMo LLM answerer requires providers.llm.{llm_provider} in muninn.json")
+    provider = llm.get("type")
     if not isinstance(provider, str) or not provider.strip():
-        raise ValueError(f"LoCoMo LLM answerer requires llm.{observer['llm']}.provider in muninn.json")
-    return dict(llm)
+        raise ValueError(f"LoCoMo LLM answerer requires providers.llm.{llm_provider}.type in muninn.json")
+    return {**llm, "provider": provider}
 
 
 def run_llm_answerer(

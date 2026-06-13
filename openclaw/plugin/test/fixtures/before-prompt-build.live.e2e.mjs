@@ -9,7 +9,7 @@ import test from "node:test";
 import { Readable } from "node:stream";
 import { pathToFileURL } from "node:url";
 
-import { pluginRoot, resolveOpenClawRoot, sidecarDistEntryPath } from "../helpers/paths.mjs";
+import { pluginRoot, resolveOpenClawRoot, serverDistEntryPath } from "../helpers/paths.mjs";
 
 const OPENCLAW_ROOT = resolveOpenClawRoot();
 const LIVE_MODEL = process.env.MUNINN_OPENCLAW_LIVE_MODEL?.trim() || "gpt-5.4-mini";
@@ -60,26 +60,26 @@ test("live runtime e2e: recall is injected into provider system input and stored
     storageUri: toFileStoreUri(datasetDir),
   });
 
-  const sidecarPort = await getFreePort();
-  const sidecar = startSidecar({
+  const serverPort = await getFreePort();
+  const server = startServer({
     cwd: path.resolve(pluginRoot, "../.."),
-    entryPath: sidecarDistEntryPath,
+    entryPath: serverDistEntryPath,
     muninnHome,
-    port: sidecarPort,
+    port: serverPort,
   });
   t.after(async () => {
-    await stopChildProcess(sidecar.child);
+    await stopChildProcess(server.child);
   });
 
-  const sidecarBaseUrl = `http://127.0.0.1:${sidecarPort}`;
-  await waitForSidecarHealth(sidecarBaseUrl, () => sidecar.output);
+  const serverBaseUrl = `http://127.0.0.1:${serverPort}`;
+  await waitForServerHealth(serverBaseUrl, () => server.output);
 
   const seedToken = `frost-lantern-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
   const seedSubject = "Project Borealis rollback codename";
   const seedPrompt = `Important long-term memory: remember that the ${seedSubject} is ${seedToken}.`;
   const seedResponse = `Confirmed. The durable memory is that the ${seedSubject} is ${seedToken}.`;
 
-  const captureResponse = await postJson(`${sidecarBaseUrl}/api/v1/turn/capture`, {
+  const captureResponse = await postJson(`${serverBaseUrl}/api/v1/turn/capture`, {
     turn: {
       sessionId: "seed-session",
       agent: "seed-agent",
@@ -90,10 +90,10 @@ test("live runtime e2e: recall is injected into provider system input and stored
   assert.equal(captureResponse.status, 204);
 
   const seededRecall = await waitForSeedRecall({
-    baseUrl: sidecarBaseUrl,
+    baseUrl: serverBaseUrl,
     query: `What is the ${seedSubject}?`,
     expectedText: seedToken,
-    sidecarOutput: () => sidecar.output,
+    serverOutput: () => server.output,
   });
 
   const proxy = await startOpenAiProxy({
@@ -108,7 +108,7 @@ test("live runtime e2e: recall is injected into provider system input and stored
     apiKey: OPENAI_API_KEY,
     api: LIVE_MODEL_API,
     proxyBaseUrl: proxy.baseUrl,
-    sidecarBaseUrl,
+    serverBaseUrl,
   });
 
   const runPrompt = `What is the ${seedSubject}? Reply in one short sentence.`;
@@ -150,12 +150,12 @@ test("live runtime e2e: recall is injected into provider system input and stored
   assert.equal(userText.includes(seededRecall), false);
 
   const storedTurn = await waitForStoredTurn({
-    baseUrl: sidecarBaseUrl,
+    baseUrl: serverBaseUrl,
     prompt: runPrompt,
-    sidecarOutput: () => sidecar.output,
+    serverOutput: () => server.output,
   });
   const detailResponse = await getJson(
-    `${sidecarBaseUrl}/api/v1/detail?memoryId=${encodeURIComponent(storedTurn.memoryId)}`,
+    `${serverBaseUrl}/api/v1/detail?memoryId=${encodeURIComponent(storedTurn.memoryId)}`,
   );
   const detailContent = detailResponse.memoryHits?.[0]?.content;
   assert.equal(typeof detailContent, "string");
@@ -178,7 +178,7 @@ function normalizePositiveInteger(raw, fallback) {
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
-function createLiveOpenClawConfig({ modelId, apiKey, api, proxyBaseUrl, sidecarBaseUrl }) {
+function createLiveOpenClawConfig({ modelId, apiKey, api, proxyBaseUrl, serverBaseUrl }) {
   return {
     models: {
       providers: {
@@ -212,7 +212,7 @@ function createLiveOpenClawConfig({ modelId, apiKey, api, proxyBaseUrl, sidecarB
             allowPromptInjection: true,
           },
           config: {
-            baseUrl: sidecarBaseUrl,
+            baseUrl: serverBaseUrl,
             timeoutMs: LIVE_PLUGIN_TIMEOUT_MS,
             recallLimit: 3,
           },
@@ -263,7 +263,7 @@ function toFileStoreUri(dir) {
   return `file-object-store://${path.resolve(dir)}`;
 }
 
-function startSidecar({ cwd, entryPath, muninnHome, port }) {
+function startServer({ cwd, entryPath, muninnHome, port }) {
   const child = spawn(process.execPath, [entryPath], {
     cwd,
     env: {
@@ -290,8 +290,8 @@ function startSidecar({ cwd, entryPath, muninnHome, port }) {
   };
 }
 
-async function waitForSidecarHealth(baseUrl, sidecarOutput) {
-  let lastError = "sidecar never became healthy";
+async function waitForServerHealth(baseUrl, serverOutput) {
+  let lastError = "server never became healthy";
   try {
     await waitFor(async () => {
       try {
@@ -314,12 +314,12 @@ async function waitForSidecarHealth(baseUrl, sidecarOutput) {
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     throw new Error(
-      `sidecar did not become healthy: ${lastError || reason}\n${sidecarOutput()}`,
+      `server did not become healthy: ${lastError || reason}\n${serverOutput()}`,
     );
   }
 }
 
-async function waitForSeedRecall({ baseUrl, query, expectedText, sidecarOutput }) {
+async function waitForSeedRecall({ baseUrl, query, expectedText, serverOutput }) {
   let lastWatermark = null;
   let lastRecall = null;
 
@@ -341,7 +341,7 @@ async function waitForSeedRecall({ baseUrl, query, expectedText, sidecarOutput }
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     throw new Error(
-      `seed recall never became available: ${reason}.\nwatermark=${JSON.stringify(lastWatermark)}\nrecall=${JSON.stringify(lastRecall)}\nsidecar=${sidecarOutput()}`,
+      `seed recall never became available: ${reason}.\nwatermark=${JSON.stringify(lastWatermark)}\nrecall=${JSON.stringify(lastRecall)}\nserver=${serverOutput()}`,
     );
   }
 
@@ -351,13 +351,13 @@ async function waitForSeedRecall({ baseUrl, query, expectedText, sidecarOutput }
   ))?.content;
   if (typeof content !== "string" || !content.trim()) {
     throw new Error(
-      `seed recall never became available.\nwatermark=${JSON.stringify(lastWatermark)}\nrecall=${JSON.stringify(lastRecall)}\nsidecar=${sidecarOutput()}`,
+      `seed recall never became available.\nwatermark=${JSON.stringify(lastWatermark)}\nrecall=${JSON.stringify(lastRecall)}\nserver=${serverOutput()}`,
     );
   }
   return content.trim();
 }
 
-async function waitForStoredTurn({ baseUrl, prompt, sidecarOutput }) {
+async function waitForStoredTurn({ baseUrl, prompt, serverOutput }) {
   let lastList = null;
 
   await waitFor(async () => {
@@ -378,7 +378,7 @@ async function waitForStoredTurn({ baseUrl, prompt, sidecarOutput }) {
   ));
   if (!match) {
     throw new Error(
-      `failed to find stored session turn for prompt ${JSON.stringify(prompt)}.\nlist=${JSON.stringify(lastList)}\nsidecar=${sidecarOutput()}`,
+      `failed to find stored session turn for prompt ${JSON.stringify(prompt)}.\nlist=${JSON.stringify(lastList)}\nserver=${serverOutput()}`,
     );
   }
   return match;

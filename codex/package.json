@@ -10,15 +10,14 @@
     }
   },
   "bin": {
-    "muninn-codex-hook": "./dist/cli.js",
-    "muninn-claude-hook": "./dist/claude-cli.js"
+    "muninn-codex-hook": "./dist/cli.js"
   },
   "scripts": {
-    "build": "pnpm --filter @muninn/types build && tsc -p tsconfig.json",
-    "test": "pnpm build && node --test test/**/*.test.mjs"
+    "build": "pnpm --filter @muninn/common build && tsc -p tsconfig.json",
+    "test": "pnpm build && node --test test/*.test.mjs"
   },
   "dependencies": {
-    "@muninn/types": "workspace:*"
+    "@muninn/common": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

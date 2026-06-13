@@ -7,7 +7,7 @@ import test from 'node:test';
 import { promisify } from 'node:util';
 
 import { handleStop, isStopEvent } from '../dist/hook.js';
-import { readClaudeSessionSummary, readCodexSession, readCodexSessionSummary, resolveProjectIdentity } from '../dist/mapping.js';
+import { readCodexSession, readCodexSessionSummary, resolveProjectIdentity } from '../dist/mapping.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -336,42 +336,6 @@ test('readCodexSessionSummary uses the transcript latest timestamp instead of fi
 
   assert.ok(summary);
   assert.equal(summary.updatedAt, '2026-06-12T03:45:00.000Z');
-});
-
-test('readClaudeSessionSummary uses the transcript latest timestamp instead of file mtime', async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'claude-summary-updated-at-'));
-  process.env.MUNINN_HOME = path.join(root, 'muninn-home');
-  const transcript = path.join(root, 'claude-session.jsonl');
-  const lines = [
-    {
-      sessionId: 'claude-session',
-      cwd: root,
-      type: 'user',
-      timestamp: '2026-06-12T04:00:00.000Z',
-      message: { content: 'Sort Claude import sessions by transcript time' },
-    },
-    {
-      sessionId: 'claude-session',
-      cwd: root,
-      type: 'assistant',
-      timestamp: '2026-06-12T04:00:02.000Z',
-      message: { content: [{ type: 'text', text: 'Done' }] },
-    },
-    {
-      sessionId: 'claude-session',
-      cwd: root,
-      type: 'user',
-      timestamp: '2026-06-12T04:35:00.000Z',
-      message: { content: [{ type: 'tool_result', content: 'late event' }] },
-    },
-  ];
-  await writeFile(transcript, lines.map((line) => JSON.stringify(line)).join('\n'));
-  await utimes(transcript, new Date('2026-06-13T00:00:00.000Z'), new Date('2026-06-13T00:00:00.000Z'));
-
-  const summary = await readClaudeSessionSummary(transcript);
-
-  assert.ok(summary);
-  assert.equal(summary.updatedAt, '2026-06-12T04:35:00.000Z');
 });
 
 test('resolveProjectIdentity reuses the v2 local project cache before git resolution', async () => {

@@ -1,0 +1,38 @@
+name: Codex CI
+
+on:
+  pull_request:
+    paths:
+      - "codex/**"
+      - "common/**"
+      - "package.json"
+      - "pnpm-workspace.yaml"
+      - ".github/workflows/codex-ci.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "codex/**"
+      - "common/**"
+      - "package.json"
+      - "pnpm-workspace.yaml"
+      - ".github/workflows/codex-ci.yml"
+
+jobs:
+  codex:
+    name: codex-ci
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Test @muninn/codex
+        run: pnpm --filter @muninn/codex test

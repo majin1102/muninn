@@ -4,9 +4,9 @@ import {
   loadMuninnConfig,
   resolveDatabaseName,
   resolveStorageTarget,
-} from '../packages/core/dist/config.js';
-import { createNativeTables } from '../packages/core/dist/native.js';
-import { __testing as updateTesting } from '../packages/core/dist/extractor/update.js';
+} from '../server/dist/memory/config.js';
+import { createNativeTables } from '../server/dist/memory/native.js';
+import { __testing as updateTesting } from '../server/dist/memory/extractor/update.js';
 
 function usage() {
   return [

@@ -179,13 +179,42 @@ export function locomoTurns(sample: LocomoSample, sessionNo: number): Array<{
 }
 
 async function defaultPipeline(): Promise<LabPipeline> {
-  const extractingModule = await import('../../../packages/core/dist/llm/extracting.js');
+  const extractingModule = await import('../../../server/dist/memory/llm/extracting.js');
   return {
-    fit: async (input) => extractingModule.routeObservingThreads(
+    fit: async (input) => extractingModule.routeSessionMemoryThreads(
       input.observingThreads,
       toTurns(input.pendingTurns),
     ),
-    observe: async (input) => extractingModule.observeThread(input as never),
+    observe: async (input) => {
+      const result = await extractingModule.extractSessionMemory({
+        sessionMemoryContent: {
+          title: input.observingContent.title,
+          summary: input.observingContent.summary,
+          extractions: input.observingContent.extractions.map((extraction) => ({
+            id: extraction.id,
+            text: extraction.text,
+            context: extraction.category,
+            references: extraction.references,
+          })),
+          openQuestions: input.observingContent.openQuestions,
+          nextSteps: input.observingContent.nextSteps,
+        },
+        turns: input.turns,
+      });
+      return {
+        title: result.title,
+        threadMemory: result.summary,
+        extractions: result.extractions.map((extraction) => ({
+          id: extraction.id,
+          text: extraction.text,
+          category: extraction.context ?? 'Memory',
+          references: extraction.references,
+        })),
+        openQuestions: result.openQuestions,
+        nextSteps: result.nextSteps,
+        contextRefs: result.contextRefs,
+      };
+    },
   };
 }
 
@@ -242,6 +271,8 @@ function toTurns(turns: LabTurn[]) {
     updatedAt: new Date().toISOString(),
     sessionId: 'locomo-observing-lab',
     agent: 'locomo',
+    project: 'locomo-observing-lab',
+    cwd: 'locomo-observing-lab',
     observer: 'observing-lab',
     title: null,
     observingEpoch: 0,

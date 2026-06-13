@@ -30,7 +30,7 @@ lance = { path = "/absolute/path/to/your/lance/rust/lance" }
 With that override in place:
 
 - `cargo test` in `format/` will use your local Lance source
-- `packages/core` will also use that same local Lance source when it builds and loads the native addon
+- `server/native` will also use that same local Lance source when it builds and loads the native addon
 - changes made in your local Lance checkout can take effect immediately after rebuild/restart
 
 ## Why This Policy Exists
@@ -59,21 +59,21 @@ Current Rust-side boundaries are intentionally narrow:
 
 Practical rule:
 
-- `packages/core` owns session / observer / memories / LLM orchestration.
+- `server` owns session / observer / memories / LLM orchestration.
 - Rust owns typed tables, persistence, and native storage operations.
 - Table APIs expose persisted/domain structs, not Arrow types.
 - Arrow/codec conversion stays below the table boundary.
 
 ## Native Addon Workflow
 
-`packages/core/native/` is the `napi-rs` addon that loads this crate from Node.
+`server/native/` is the `napi-rs` addon that loads this crate from Node.
 
 Useful local commands:
 
 ```bash
 cargo check --manifest-path format/Cargo.toml
-cargo check --manifest-path packages/core/native/Cargo.toml
-pnpm --filter @muninn/core build
+cargo check --manifest-path server/native/Cargo.toml
+pnpm --filter @muninn/server build
 ```
 
-If you use a local `[patch.crates-io]` override for Lance, it affects both `format/` and `packages/core/native/`, because the addon links against this crate directly.
+If you use a local `[patch.crates-io]` override for Lance, it affects both `format/` and `server/native/`, because the addon links against this crate directly.

@@ -13,9 +13,9 @@ export const liveRuntimeFixturePath = path.join(
   pluginRoot,
   "test/fixtures/before-prompt-build.live.e2e.mjs",
 );
-export const sidecarDistEntryPath = path.resolve(
+export const serverDistEntryPath = path.resolve(
   pluginRoot,
-  "../../packages/sidecar/dist/index.js",
+  "../../server/dist/index.js",
 );
 
 export function resolveOpenClawRoot() {

@@ -1,0 +1,26 @@
+{
+  "name": "@muninn/web",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "build": "pnpm --filter @muninn/common build && tsc -p tsconfig.json --noEmit && vite build && mkdir -p dist/assets && cp -R src/assets/. dist/assets/",
+    "dev": "vite --host 127.0.0.1",
+    "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "@muninn/common": "workspace:*",
+    "@vitejs/plugin-react": "^5.0.0",
+    "lucide-react": "^0.468.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "react-markdown": "^10.0.0",
+    "remark-gfm": "^4.0.0",
+    "vite": "^6.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0"
+  }
+}

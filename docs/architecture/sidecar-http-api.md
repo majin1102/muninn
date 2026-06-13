@@ -8,7 +8,7 @@
 
 - 读接口与 MCP tools 对齐：`recall`、`list`、`timeline`、`detail`
 - text-first：最终返回 `MemoryHit[]`，每个 `content` 为 Markdown
-- 结构化读取在 lance core 内部分层完成，sidecar 通过 `@muninn/core` 调用并负责组合与渲染
+- 结构化读取在 lance core 内部分层完成，sidecar 通过 `/server memory runtime` 调用并负责组合与渲染
 
 ### Write Side
 
@@ -53,8 +53,8 @@ Query 参数：
 
 说明：
 
-- sidecar 通过 `@muninn/core` 的统一 rendered 读接口读取 cross-layer recall 结果
-- `@muninn/core` 返回 `RenderedMemory[]`
+- sidecar 通过 `/server memory runtime` 的统一 rendered 读接口读取 cross-layer recall 结果
+- `/server memory runtime` 返回 `RenderedMemory[]`
 - sidecar 仅负责将 `RenderedMemory` 渲染为统一 `MemoryHit[]`
 
 ### 2.2 `GET /api/v1/list`
@@ -71,7 +71,7 @@ Query 参数：
 
 说明：
 
-- sidecar 通过 `@muninn/core` 的统一 rendered `list` 接口读取 recent window
+- sidecar 通过 `/server memory runtime` 的统一 rendered `list` 接口读取 recent window
 - lance core 内部会：
   - 读取 `SESSION` 层最近 session memory points（内部来源于 session turn rows）
   - 读取 `OBSERVING` 层每条 observing line 的 latest snapshot row
@@ -93,7 +93,7 @@ Query 参数：
 
 说明：
 
-- sidecar 通过 `@muninn/core` 的统一 rendered `timeline` 接口读取同层邻近 records
+- sidecar 通过 `/server memory runtime` 的统一 rendered `timeline` 接口读取同层邻近 records
 - `session:{row_id}`
   - 返回同层 session timeline（内部来源于 session turn rows）
 - `observing:{row_id}`
@@ -111,7 +111,7 @@ Query 参数：
 
 说明：
 
-- sidecar 通过 `@muninn/core` 的统一 rendered `detail` 接口读取单个 memory row
+- sidecar 通过 `/server memory runtime` 的统一 rendered `detail` 接口读取单个 memory row
 - `detail` 约定只返回一条 `MemoryHit`
 - `observing:{row_id}` 返回的是单个 observing snapshot 的 detail 文档
 

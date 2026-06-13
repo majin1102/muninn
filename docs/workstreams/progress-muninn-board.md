@@ -8,28 +8,28 @@
 
 ## 已确认结论
 
-- Muninn Board 应单独承载在 `packages/board`，不应塞入 `mcp`
+- Muninn Web 应单独承载在 `web/`，不应塞入 `mcp`
 - 当前阶段先做只读查看器，不做编辑器
 - 当前后端只具备 session 读链路，observation 视图需要先占位再等上游接入
-- 现有 sidecar read payload 偏 LLM 注入，后续可能需要补 UI-friendly read model
+- 现有 server read payload 偏 LLM 注入，后续可能需要补 UI-friendly read model
 
 ## 已完成内容
 
 - 读取 brief 并完成当前仓库扫描
 - 确认当前仓库没有现成前端应用壳
-- 新建 `packages/board` 作为独立页面承载模块
+- 新建 `web/` 作为独立页面承载模块
 - 落一版静态页面骨架，用样例数据承载 session / observation / gaps 三栏结构
 
 ## 当前正在推进
 
-- 站稳 Muninn Board 的最小页面结构
-- 为后续接 sidecar 真实数据预留页面入口和模块边界
+- 站稳 Muninn Web 的最小页面结构
+- 为后续接 server 真实数据预留页面入口和模块边界
 
 ## 当前阻塞点
 
 - observation 目前没有正式读接口和稳定数据合同
 - session 与 observation 的关系视图还缺上游真实产物
-- 当前 sidecar 返回 `MemoryHit.content` Markdown，更适合 LLM，不够适合 UI 字段级展示
+- 当前 server 返回 `MemoryHit.content` Markdown，更适合 LLM，不够适合 UI 字段级展示
 
 ## 与其他工作线的依赖
 

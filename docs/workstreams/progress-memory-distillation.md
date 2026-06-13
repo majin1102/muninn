@@ -19,7 +19,7 @@
 - 已落地 `turn` 生成双路径：
   - 短 turn：direct summary + title-only LLM
   - 长 / 过程化 turn：full LLM title + summary
-- 相关 Rust `llm` 目录已删除；summary / title 生成逻辑现已全部收口到 TS `packages/core`
+- 相关 Rust `llm` 目录已删除；summary / title 生成逻辑现已全部收口到 TS `server/src/memory`
 - 已补齐相关 mock 兼容、单测和 fixture
 - 已构建 `turn` 评测模块，并能对真实 provider 输出跑 fixture-based live evaluation
 - 已通过多轮 live 对比，确认当前主要剩余问题不再是 User 约束丢失或 Agent next step 丢失，而是 Agent 段仍偏长

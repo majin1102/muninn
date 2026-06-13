@@ -6,7 +6,7 @@ import http from 'node:http';
 import https from 'node:https';
 import { existsSync } from 'node:fs';
 import { access, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
-import type { RecallMode } from '@muninn/core';
+import type { RecallMode } from '@muninn/server';
 
 const CONFIG_FILE_NAME = 'muninn.json';
 const WATERMARK_POLL_MS = 2_000;
@@ -396,7 +396,7 @@ export async function waitForImportWatermark(
 }
 
 async function fetchMemoryWatermark(database: string) {
-  const url = new URL(`${sidecarBaseUrl()}/api/v1/memory/watermark`);
+  const url = new URL(`${serverBaseUrl()}/api/v1/memory/watermark`);
   url.searchParams.set('database', database);
   const response = await fetch(url);
   const payload = await response.json();
@@ -404,7 +404,7 @@ async function fetchMemoryWatermark(database: string) {
 }
 
 async function fetchMemoryFinalize(database?: string) {
-  const { payload, statusCode } = await requestJson(`${sidecarBaseUrl()}/api/v1/memory/finalize`, {
+  const { payload, statusCode } = await requestJson(`${serverBaseUrl()}/api/v1/memory/finalize`, {
     method: 'POST',
     body: JSON.stringify({ database }),
   });
@@ -434,7 +434,7 @@ async function requestJson(url: string, options: { method: string; body?: string
             statusCode: response.statusCode ?? 0,
           });
         } catch (error) {
-          reject(new Error(`sidecar response was not valid JSON: ${error instanceof Error ? error.message : String(error)}`));
+          reject(new Error(`server response was not valid JSON: ${error instanceof Error ? error.message : String(error)}`));
         }
       });
     });
@@ -470,8 +470,8 @@ async function parseMemoryWatermarkPayload(
   if (!ok) {
     const detail = typeof payload?.errorMessage === 'string'
       ? payload.errorMessage
-      : `sidecar ${label} request failed with status ${status}`;
-    const message = `sidecar ${label} request failed with status ${status}: ${detail}`;
+      : `server ${label} request failed with status ${status}`;
+    const message = `server ${label} request failed with status ${status}: ${detail}`;
     throw new Error(message);
   }
   const extractorPhase = parseWatermarkPhase(payload.phases?.extractor, 'extractor');
@@ -502,7 +502,7 @@ function parseWatermarkPhase(value: unknown, component: 'extractor' | 'observer'
   if (typeof value === 'string' && allowed.includes(value)) {
     return value;
   }
-  throw new Error(`sidecar watermark response had invalid ${component} phase: ${String(value)}`);
+  throw new Error(`server watermark response had invalid ${component} phase: ${String(value)}`);
 }
 
 function memoryWatermarkResolved(watermark: Awaited<ReturnType<typeof fetchMemoryWatermark>>): boolean {
@@ -582,7 +582,7 @@ async function captureTurn(content: TurnContent, database: string): Promise<Capt
       { type: 'assistantMessage' as const, text: content.response },
     ],
   };
-  const payload = await fetchJsonObject(`${sidecarBaseUrl()}/api/v1/benchmark/locomo/turn/capture`, {
+  const payload = await fetchJsonObject(`${serverBaseUrl()}/api/v1/benchmark/locomo/turn/capture`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ database, turn: turnPayload }),
@@ -602,7 +602,7 @@ async function fetchLocomoRecall(
   budget = 0,
   queryLimit?: number,
 ): Promise<{ hits: BridgeHit[] }> {
-  const payload = await fetchJsonObject(`${sidecarBaseUrl()}/api/v1/benchmark/locomo/recall`, {
+  const payload = await fetchJsonObject(`${serverBaseUrl()}/api/v1/benchmark/locomo/recall`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -656,8 +656,8 @@ function parseBridgeHit(value: unknown): BridgeHit {
   };
 }
 
-function sidecarBaseUrl(): string {
-  return (process.env.MUNINN_SIDECAR_BASE_URL || 'http://127.0.0.1:8080').replace(/\/+$/, '');
+function serverBaseUrl(): string {
+  return (process.env.MUNINN_SERVER_BASE_URL || 'http://127.0.0.1:8080').replace(/\/+$/, '');
 }
 
 export function resolveEvidenceIdsFromGraph(
@@ -727,7 +727,6 @@ async function bootstrapHome(
     mergeJsonObjects(mergedConfig, sourceConfig);
   }
 
-  normalizeObserverConfig(mergedConfig);
   validateBenchmarkConfig(mergedConfig);
   await writeFile(targetConfigPath, `${JSON.stringify(mergedConfig, null, 2)}\n`, 'utf8');
 }
@@ -789,13 +788,22 @@ function mergeJsonObjects(
 }
 
 function validateBenchmarkConfig(config: Record<string, unknown>): void {
-  const extraction = requireObjectField(config, 'extraction', 'extraction');
-  const embedding = requireObjectField(
-    extraction,
-    'embedding',
-    'extraction.embedding',
-  );
-  requireStringField(embedding, 'provider', 'extraction.embedding.provider');
+  const extractor = requireObjectField(config, 'extractor', 'extractor');
+  const llmProvider = requireStringField(extractor, 'llmProvider', 'extractor.llmProvider');
+  const embeddingProvider = requireStringField(extractor, 'embeddingProvider', 'extractor.embeddingProvider');
+  const providers = requireObjectField(config, 'providers', 'providers');
+  const llm = requireObjectField(providers, 'llm', 'providers.llm');
+  const embedding = requireObjectField(providers, 'embedding', 'providers.embedding');
+  const llmConfig = requireObjectField(llm, llmProvider, `providers.llm.${llmProvider}`);
+  const embeddingConfig = requireObjectField(embedding, embeddingProvider, `providers.embedding.${embeddingProvider}`);
+  requireStringField(llmConfig, 'type', `providers.llm.${llmProvider}.type`);
+  requireStringField(embeddingConfig, 'type', `providers.embedding.${embeddingProvider}.type`);
+
+  if (isPlainObject(config.observer)) {
+    const observerLlmProvider = requireStringField(config.observer, 'llmProvider', 'observer.llmProvider');
+    const observerLlmConfig = requireObjectField(llm, observerLlmProvider, `providers.llm.${observerLlmProvider}`);
+    requireStringField(observerLlmConfig, 'type', `providers.llm.${observerLlmProvider}.type`);
+  }
 }
 
 function requireObjectField(
@@ -828,66 +836,6 @@ function requireStringField(
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
-}
-
-function normalizeObserverConfig(config: Record<string, unknown>): void {
-  const observer = isPlainObject(config.observer) ? config.observer : null;
-  const extractor = isPlainObject(config.extractor) ? config.extractor : {};
-  if (observer && !hasConfiguredLlm(config, extractor.llm)) {
-    if (typeof observer.llm === 'string' && observer.llm.trim().length > 0) {
-      extractor.llm = observer.llm;
-    }
-    if (typeof observer.domainPrompt === 'string' && typeof extractor.domainPrompt !== 'string') {
-      extractor.domainPrompt = observer.domainPrompt;
-    }
-    if (typeof observer.maxAttempts === 'number' && typeof extractor.maxAttempts !== 'number') {
-      extractor.maxAttempts = observer.maxAttempts;
-    }
-  }
-  if (Object.keys(extractor).length > 0) {
-    config.extractor = extractor;
-  }
-  if (observer && !hasConfiguredLlm(config, observer.llm) && hasConfiguredLlm(config, extractor.llm)) {
-    observer.llm = extractor.llm;
-  }
-  if (!hasConfiguredObserverConfig(config)) {
-    delete config.observer;
-  }
-}
-
-function hasConfiguredObserverConfig(config: Record<string, unknown>): boolean {
-  const observer = config.observer;
-  if (!isPlainObject(observer)) {
-    return false;
-  }
-  const llmName = observer.llm;
-  if (typeof llmName !== 'string' || llmName.trim().length === 0) {
-    return false;
-  }
-  const llm = config.llm;
-  if (!isPlainObject(llm)) {
-    return false;
-  }
-  const observerLlm = llm[llmName];
-  if (!isPlainObject(observerLlm)) {
-    return false;
-  }
-  const provider = observerLlm.provider;
-  return typeof provider === 'string' && provider.trim().length > 0;
-}
-
-function hasConfiguredLlm(config: Record<string, unknown>, llmName: unknown): boolean {
-  if (typeof llmName !== 'string' || llmName.trim().length === 0) {
-    return false;
-  }
-  const llm = config.llm;
-  if (!isPlainObject(llm)) {
-    return false;
-  }
-  const record = llm[llmName];
-  return isPlainObject(record)
-    && typeof record.provider === 'string'
-    && record.provider.trim().length > 0;
 }
 
 function manifestPath(home: string): string {

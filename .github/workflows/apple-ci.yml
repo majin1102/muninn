@@ -1,0 +1,29 @@
+name: Apple CI
+
+on:
+  pull_request:
+    paths:
+      - "apple/macos/**"
+      - "web/**"
+      - "server/**"
+      - "common/**"
+      - ".github/workflows/apple-ci.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "apple/macos/**"
+      - "web/**"
+      - "server/**"
+      - "common/**"
+      - ".github/workflows/apple-ci.yml"
+
+jobs:
+  apple:
+    name: apple-ci
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build macOS app
+        run: swift build --package-path apple/macos

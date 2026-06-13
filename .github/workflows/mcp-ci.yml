@@ -1,0 +1,41 @@
+name: MCP CI
+
+on:
+  pull_request:
+    paths:
+      - "mcp/**"
+      - "common/**"
+      - "package.json"
+      - "pnpm-workspace.yaml"
+      - ".github/workflows/mcp-ci.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "mcp/**"
+      - "common/**"
+      - "package.json"
+      - "pnpm-workspace.yaml"
+      - ".github/workflows/mcp-ci.yml"
+
+jobs:
+  mcp:
+    name: mcp-ci
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Build @muninn/common
+        run: pnpm --filter @muninn/common build
+
+      - name: Build @muninn/mcp
+        run: pnpm --filter @muninn/mcp build

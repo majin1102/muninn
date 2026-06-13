@@ -16,7 +16,7 @@
     "test": "sh ./scripts/test.sh"
   },
   "dependencies": {
-    "@muninn/core": "workspace:*"
+    "@muninn/server": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

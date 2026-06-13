@@ -1,4 +1,8 @@
 packages:
-  - 'packages/*'
-  - 'benchmark/*'
+  - 'common'
+  - 'web'
+  - 'server'
+  - 'mcp'
   - 'codex'
+  - 'claude'
+  - 'benchmark/*'

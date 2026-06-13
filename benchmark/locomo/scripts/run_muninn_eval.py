@@ -86,7 +86,7 @@ class CommandResult:
 
 
 @dataclass
-class SidecarProcess:
+class ServerProcess:
     process: subprocess.Popen[str]
     base_url: str
     log_path: Path
@@ -197,7 +197,7 @@ def build_run_command(
     config: BuildConfig,
     paths: RunPaths,
     data_file: Path | None = None,
-    sidecar_base_url: str | None = None,
+    server_base_url: str | None = None,
 ) -> tuple[list[str], dict[str, str]]:
     resolved_data_file = data_file or config.target.data_file
     command = [
@@ -229,13 +229,13 @@ def build_run_command(
     env = os.environ.copy()
     env["MUNINN_LOCOMO_WATERMARK_TIMEOUT_MS"] = str(config.watermark_timeout_ms)
     env["MUNINN_LOCOMO_HOME_PREPARED"] = "1"
-    if sidecar_base_url:
-        env["MUNINN_SIDECAR_BASE_URL"] = sidecar_base_url
+    if server_base_url:
+        env["MUNINN_SERVER_BASE_URL"] = server_base_url
     return command, env
 
 
-def sidecar_log_path(paths: RunPaths) -> Path:
-    return paths.home_dir / "sidecar.log"
+def server_log_path(paths: RunPaths) -> Path:
+    return paths.home_dir / "server.log"
 
 
 def reset_run_home(paths: RunPaths) -> None:
@@ -250,7 +250,7 @@ def free_tcp_port() -> int:
         return int(sock.getsockname()[1])
 
 
-def sidecar_env(base_env: dict[str, str], paths: RunPaths, port: int) -> dict[str, str]:
+def server_env(base_env: dict[str, str], paths: RunPaths, port: int) -> dict[str, str]:
     home = abs_path(paths.home_dir)
     env = base_env.copy()
     env["PORT"] = str(port)
@@ -258,12 +258,12 @@ def sidecar_env(base_env: dict[str, str], paths: RunPaths, port: int) -> dict[st
     return env
 
 
-def wait_for_sidecar(base_url: str, process: subprocess.Popen[str], timeout_s: float = 30.0) -> None:
+def wait_for_server(base_url: str, process: subprocess.Popen[str], timeout_s: float = 30.0) -> None:
     deadline = time.monotonic() + timeout_s
     last_error: Exception | None = None
     while time.monotonic() < deadline:
         if process.poll() is not None:
-            raise RuntimeError(f"sidecar exited before health check passed: returncode={process.returncode}")
+            raise RuntimeError(f"server exited before health check passed: returncode={process.returncode}")
         try:
             with urlopen(f"{base_url}/health", timeout=1.0) as response:
                 if response.status == 200:
@@ -271,26 +271,26 @@ def wait_for_sidecar(base_url: str, process: subprocess.Popen[str], timeout_s: f
         except Exception as exc:
             last_error = exc if isinstance(exc, Exception) else URLError(str(exc))
         time.sleep(0.2)
-    raise RuntimeError(f"sidecar health check timed out: {last_error}")
+    raise RuntimeError(f"server health check timed out: {last_error}")
 
 
-def start_sidecar(paths: RunPaths, env: dict[str, str]) -> SidecarProcess:
+def start_server(paths: RunPaths, env: dict[str, str]) -> ServerProcess:
     port = free_tcp_port()
     base_url = f"http://127.0.0.1:{port}"
-    log_path = abs_path(sidecar_log_path(paths))
+    log_path = abs_path(server_log_path(paths))
     log_path.parent.mkdir(parents=True, exist_ok=True)
     log_handle = log_path.open("a", encoding="utf8")
     process = subprocess.Popen(
-        [node_binary(), "packages/sidecar/dist/index.js"],
+        [node_binary(), "server/dist/index.js"],
         cwd=ROOT,
-        env=sidecar_env(env, paths, port),
+        env=server_env(env, paths, port),
         text=True,
         stdout=log_handle,
         stderr=subprocess.STDOUT,
         bufsize=1,
     )
     try:
-        wait_for_sidecar(base_url, process)
+        wait_for_server(base_url, process)
     except Exception:
         process.terminate()
         try:
@@ -301,8 +301,8 @@ def start_sidecar(paths: RunPaths, env: dict[str, str]) -> SidecarProcess:
         log_handle.close()
         raise
     log_handle.close()
-    print(f"[muninn-eval] sidecar={base_url} log={sidecar_log_path(paths)}", flush=True)
-    return SidecarProcess(process=process, base_url=base_url, log_path=sidecar_log_path(paths))
+    print(f"[muninn-eval] server={base_url} log={server_log_path(paths)}", flush=True)
+    return ServerProcess(process=process, base_url=base_url, log_path=server_log_path(paths))
 
 
 def node_binary() -> str:
@@ -496,7 +496,7 @@ def write_summary(
         },
         "paths": {
             "run_home": str(paths.home_dir),
-            "sidecar_log": str(sidecar_log_path(paths)),
+            "server_log": str(server_log_path(paths)),
             "result": str(paths.out_file),
             "progress": str(paths.progress_file),
             "openviking": str(paths.openviking_file),
@@ -719,14 +719,14 @@ def main(argv: list[str] | None = None) -> int:
         }, indent=2), flush=True)
 
         reset_run_home(paths)
-        sidecar = start_sidecar(paths, os.environ.copy())
+        server = start_server(paths, os.environ.copy())
         try:
-            command, env = build_run_command(config, paths, data_file=data_file, sidecar_base_url=sidecar.base_url)
+            command, env = build_run_command(config, paths, data_file=data_file, server_base_url=server.base_url)
             run_result = run_command(command, env=env, phase="benchmark", no_progress_timeout_s=config.no_progress_timeout_s)
             if run_result.returncode != 0:
                 progress = read_text_tail(paths.progress_file)
-                sidecar_tail = read_text_tail(sidecar.log_path)
-                output = f"{run_result.output}\n[sidecar log tail]\n{sidecar_tail}"
+                server_tail = read_text_tail(server.log_path)
+                output = f"{run_result.output}\n[server log tail]\n{server_tail}"
                 failure = classify_failure(output, progress)
                 fatal = internal_fatal_category(output)
                 if fatal:
@@ -735,7 +735,7 @@ def main(argv: list[str] | None = None) -> int:
                 write_summary(config, paths, status="failed", failure=failure, stderr=output, progress=progress)
                 return run_result.returncode
         finally:
-            sidecar.stop()
+            server.stop()
 
         for index, judge_command in enumerate(build_judge_commands(config, paths, data_file), start=1):
             judge = run_command(judge_command, phase=f"judge_{index}", no_progress_timeout_s=config.no_progress_timeout_s)
