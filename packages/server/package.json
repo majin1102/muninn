@@ -1,0 +1,24 @@
+{
+  "name": "@muninn/server",
+  "version": "0.1.0",
+  "private": true,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "pnpm --filter @muninn/app build && pnpm --filter @muninn/codex build && pnpm --filter @muninn/core build && tsc",
+    "dev": "tsc --watch",
+    "start": "node dist/index.js",
+    "test": "(cd ../../openclaw/plugin && pnpm build) && pnpm run build && node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.0.0",
+    "@muninn/codex": "workspace:*",
+    "@muninn/core": "workspace:*",
+    "@muninn/types": "workspace:*",
+    "hono": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0"
+  }
+}

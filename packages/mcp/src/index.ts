@@ -6,7 +6,7 @@ import path from 'node:path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { SidecarClient } from './sidecar_client.js';
+import { ServerClient } from './server_client.js';
 
 function safeStringify(value: unknown): string {
   try {
@@ -60,7 +60,7 @@ async function writeDebugMarkdown(toolName: string, args: unknown): Promise<stri
 }
 
 async function main() {
-  const sidecarClient = new SidecarClient();
+  const serverClient = new ServerClient();
   const server = new McpServer(
     {
       name: 'muninn-mcp',
@@ -111,7 +111,7 @@ async function main() {
       }),
     },
     async (args: any) => {
-      const result = await sidecarClient.recall(args);
+      const result = await serverClient.recall(args);
       return {
         content: [{ type: 'text', text: renderMemoryResponse(result) }],
       };
@@ -130,7 +130,7 @@ async function main() {
       }),
     },
     async (args: any) => {
-      const result = await sidecarClient.list(args);
+      const result = await serverClient.list(args);
       return {
         content: [{ type: 'text', text: renderMemoryResponse(result) }],
       };
@@ -149,7 +149,7 @@ async function main() {
       }),
     },
     async (args: any) => {
-      const result = await sidecarClient.getTimeline(args);
+      const result = await serverClient.getTimeline(args);
       return {
         content: [{ type: 'text', text: renderMemoryResponse(result) }],
       };
@@ -166,7 +166,7 @@ async function main() {
       }),
     },
     async (args: any) => {
-      const result = await sidecarClient.getDetail(args);
+      const result = await serverClient.getDetail(args);
       return {
         content: [{ type: 'text', text: renderMemoryResponse(result) }],
       };
