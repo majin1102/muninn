@@ -62,6 +62,10 @@ async function applyPlans(
     }
   }
 
+  if (changedPlans.length > 0 && !options.dryRun) {
+    await preflightPlans(changedPlans);
+  }
+
   const results: ApplyResult[] = [];
   for (const plan of plans) {
     results.push(await applyChangePlan(plan, { dryRun: options.dryRun }));
@@ -111,6 +115,15 @@ async function createHostPlans(options: InstallRunOptions): Promise<ChangePlan[]
     }));
   }
   return plans;
+}
+
+async function preflightPlans(plans: ChangePlan[]): Promise<void> {
+  for (const plan of plans) {
+    const current = await readTextFileIfExists(plan.path);
+    if (current !== plan.before) {
+      throw new Error(`Muninn config changed since this change was planned: ${plan.path}`);
+    }
+  }
 }
 
 async function defaultConfirm(summary: string[]): Promise<boolean> {

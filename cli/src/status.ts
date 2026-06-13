@@ -27,7 +27,7 @@ export async function readInstallStatus(params: {
 
   return {
     codex: {
-      mcp: hasTomlTable(codexConfig, '[mcp_servers.muninn]'),
+      mcp: hasCodexMcp(codexConfig, 'muninn-mcp'),
       hook: hasCodexStopHook(codexConfig, 'muninn-codex-hook'),
     },
     claude: {
@@ -37,8 +37,23 @@ export async function readInstallStatus(params: {
   };
 }
 
-function hasTomlTable(input: string, table: string): boolean {
-  return input.split('\n').some((line) => stripInlineComment(line).trim() === table);
+function hasCodexMcp(input: string, commandName: string): boolean {
+  const lines = input.split('\n');
+  for (let index = 0; index < lines.length;) {
+    if (stripInlineComment(lines[index]).trim() !== '[mcp_servers.muninn]') {
+      index += 1;
+      continue;
+    }
+
+    index += 1;
+    while (index < lines.length && !isTomlTableHeader(lines[index])) {
+      if (isCommandLine(lines[index], commandName)) {
+        return true;
+      }
+      index += 1;
+    }
+  }
+  return false;
 }
 
 function hasCodexStopHook(input: string, commandName: string): boolean {

@@ -191,6 +191,38 @@ test('installTargets denied all confirmation writes neither host config', async 
   });
 });
 
+test('installTargets preflights all changed plans before writing any config', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'muninn-install-all-stale-'));
+  const cwd = path.join(root, 'project');
+  await mkdir(path.join(root, '.claude'), { recursive: true });
+
+  await assert.rejects(
+    () => installTargets({
+      target: 'all',
+      action: 'install',
+      parts: new Set(['mcp', 'hook']),
+      scope: 'user',
+      serverUrl: 'http://127.0.0.1:8080',
+      dryRun: false,
+      yes: false,
+      home: root,
+      cwd,
+      commands,
+      confirm: async () => {
+        await writeFile(path.join(root, '.claude.json'), '{"outside":true}\n');
+        return true;
+      },
+    }),
+    /config changed/i,
+  );
+
+  const status = await readInstallStatus({ home: root, cwd, scope: 'user' });
+  assert.deepEqual(status, {
+    codex: { mcp: false, hook: false },
+    claude: { mcp: false, hook: false },
+  });
+});
+
 test('uninstallHost removes Codex muninn entries', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'muninn-uninstall-'));
   const cwd = path.join(root, 'project');
@@ -310,4 +342,31 @@ test('readInstallStatus ignores comments status messages wrapper names and unrel
     codex: { mcp: false, hook: false },
     claude: { mcp: false, hook: false },
   });
+});
+
+test('readInstallStatus requires Codex muninn MCP table to use managed command', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'muninn-status-codex-mcp-'));
+  const cwd = path.join(root, 'project');
+  await mkdir(path.join(root, '.codex'), { recursive: true });
+
+  await writeFile(path.join(root, '.codex', 'config.toml'), [
+    '[mcp_servers.muninn]',
+    'command = "not-muninn-mcp"',
+    '',
+    '[mcp_servers.other]',
+    'command = "muninn-mcp"',
+    '',
+  ].join('\n'));
+
+  const wrongCommand = await readInstallStatus({ home: root, cwd, scope: 'user' });
+  assert.equal(wrongCommand.codex.mcp, false);
+
+  await writeFile(path.join(root, '.codex', 'config.toml'), [
+    '[mcp_servers.muninn]',
+    'command = "/opt/homebrew/bin/muninn-mcp"',
+    '',
+  ].join('\n'));
+
+  const managedCommand = await readInstallStatus({ home: root, cwd, scope: 'user' });
+  assert.equal(managedCommand.codex.mcp, true);
 });
