@@ -169,6 +169,46 @@ test('planCodexConfig matches muninn hook command with inline TOML comment', () 
   assert.equal((install.after.match(/^command = "muninn-codex-hook"/gm) ?? []).length, 1);
 });
 
+test('planCodexConfig matches muninn hook command by absolute path basename', () => {
+  const before = [
+    '[[hooks.Stop]]',
+    '[[hooks.Stop.hooks]]',
+    'type = "command"',
+    'command = "python3 ./existing.py"',
+    'timeout = 10',
+    '',
+    '[[hooks.Stop.hooks]]',
+    'type = "command"',
+    'command = "/opt/homebrew/bin/muninn-codex-hook"',
+    'timeout = 30',
+    'statusMessage = "Syncing turn to Muninn"',
+    '',
+  ].join('\n');
+
+  const uninstall = planCodexConfig(before, {
+    path: '/home/dev/.codex/config.toml',
+    action: 'uninstall',
+    parts: new Set(['hook']),
+    serverUrl: 'http://127.0.0.1:8080',
+    commands,
+  });
+
+  assert.match(uninstall.after, /command = "python3 \.\/existing.py"/);
+  assert.doesNotMatch(uninstall.after, /muninn-codex-hook/);
+
+  const install = planCodexConfig(before, {
+    path: '/home/dev/.codex/config.toml',
+    action: 'install',
+    parts: new Set(['hook']),
+    serverUrl: 'http://127.0.0.1:8080',
+    commands,
+  });
+
+  assert.match(install.after, /command = "python3 \.\/existing.py"/);
+  assert.doesNotMatch(install.after, /\/opt\/homebrew\/bin\/muninn-codex-hook/);
+  assert.equal((install.after.match(/^command = "muninn-codex-hook"$/gm) ?? []).length, 1);
+});
+
 test('planCodexConfig preserves hook entries that only mention muninn hook outside command value', () => {
   const before = [
     '[[hooks.Stop]]',

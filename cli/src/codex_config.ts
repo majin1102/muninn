@@ -150,7 +150,10 @@ function removeMuninnHookEntries(block: string[], hookCommand: string): string[]
 
 function isMuninnHook(hook: string[], hookCommand: string): boolean {
   const command = hook.map(readCommandValue).find((value): value is string => value !== null);
-  return command === hookCommand || command === 'muninn-codex-hook';
+  if (command === undefined) {
+    return false;
+  }
+  return command === hookCommand || basename(command) === 'muninn-codex-hook';
 }
 
 function readCommandValue(line: string): string | null {
@@ -213,6 +216,10 @@ function stripInlineComment(value: string): string {
   }
 
   return value;
+}
+
+function basename(value: string): string {
+  return value.split('/').pop() ?? value;
 }
 
 function appendSection(input: string, section: string): string {
