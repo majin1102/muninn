@@ -3,6 +3,7 @@ import { serve } from '@hono/node-server';
 import { app } from './routes.js';
 
 export { app } from './routes.js';
+export { probeNativeAddon } from './memory/native.js';
 export type { RecallMode } from './memory/index.js';
 
 export type StartServerOptions = {

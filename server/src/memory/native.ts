@@ -412,6 +412,10 @@ export async function describeExtractionForStorage(
   return resolveNativeResult(native.describeExtractionForStorage(storageTarget));
 }
 
+export function probeNativeAddon(): void {
+  loadNativeModule();
+}
+
 function wrapBinding(native: NativeCoreBinding): NativeTables {
   const turnTable: TurnTableBinding = {
     getTurn: async (turnId) => normalizeOptionalRecord(

@@ -96,7 +96,17 @@ async function defaultFetchHealth(): Promise<Probe> {
 
 async function defaultLoadNative(): Promise<Probe> {
   try {
-    await import('@muninn/server');
+    const server = await import('@muninn/server') as {
+      probeNativeAddon?: unknown;
+      default?: { probeNativeAddon?: unknown };
+    };
+    const probe = typeof server.probeNativeAddon === 'function'
+      ? server.probeNativeAddon
+      : server.default?.probeNativeAddon;
+    if (typeof probe !== 'function') {
+      return { ok: false, detail: 'probeNativeAddon export not found' };
+    }
+    probe();
     return { ok: true, detail: 'ok' };
   } catch (error) {
     return {
