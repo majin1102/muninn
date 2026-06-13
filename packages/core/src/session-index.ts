@@ -1,4 +1,5 @@
 import type { NativeTables } from './native.js';
+import type { Turn } from './client.js';
 import type { SessionIndexCheckpoint, SessionIndexEntry } from './checkpoint.js';
 import type { SessionSnapshot } from './extractor/types.js';
 import { sessionIdentityKey } from '@muninn/types/session-identity';
@@ -88,15 +89,12 @@ export class SessionIndex {
   }
 
   private async rebuild(client: NativeTables): Promise<void> {
-    const [turnRows, snapshotRows, turnStats, sessionStats] = await Promise.all([
-      client.turnTable.listTurns({
-        mode: { type: 'page', offset: 0, limit: REBUILD_LIMIT },
-        ...(this.extractorName ? { observer: this.extractorName } : {}),
-      }),
+    const [snapshotRows, turnStats, sessionStats] = await Promise.all([
       client.sessionTable.listSnapshots(this.extractorName ? { observer: this.extractorName } : {}),
       client.turnTable.stats(),
       client.sessionTable.stats(),
     ]);
+    const turnRows = await this.listAllTurns(client, turnStats?.rowCount);
 
     this.entries.clear();
     for (const turn of turnRows) {
@@ -113,6 +111,30 @@ export class SessionIndex {
       session: sessionStats?.version ?? 0,
     };
     this.dirty = false;
+  }
+
+  private async listAllTurns(client: NativeTables, rowCount?: number): Promise<Turn[]> {
+    const rows: Turn[] = [];
+    let offset = 0;
+    while (true) {
+      const page = await client.turnTable.listTurns({
+        mode: { type: 'page', offset, limit: REBUILD_LIMIT },
+        ...(this.extractorName ? { observer: this.extractorName } : {}),
+      });
+      if (page.length === 0) {
+        break;
+      }
+      rows.push(...page);
+      offset += REBUILD_LIMIT;
+      if (rowCount === undefined) {
+        if (page.length < REBUILD_LIMIT) {
+          break;
+        }
+      } else if (offset >= rowCount) {
+        break;
+      }
+    }
+    return rows;
   }
 
   private upsertTurn(turn: IndexedTurn): void {

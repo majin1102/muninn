@@ -292,6 +292,61 @@ test('sessionIndex rebuild filters turns and snapshots by observer', async () =>
   assert.deepEqual(fake.calls.listSnapshotQueries, [{ observer: 'default-observer' }]);
 });
 
+test('sessionIndex rebuild reads every turn page', async () => {
+  const index = new SessionIndex(null, 'default-observer');
+  const fake = client({
+    turnVersion: 9,
+    sessionVersion: 9,
+  });
+  const pages = new Map([
+    [0, [{
+      session_id: 'first-page-session',
+      agent: 'codex',
+      project: 'github.com/example/first',
+      cwd: '/Users/Nathan/workspace/first',
+      observer: 'default-observer',
+      summary: 'first page turn',
+      updatedAt: '2026-06-02T10:00:00.000Z',
+    }]],
+    [1_000_000, [{
+      session_id: 'second-page-session',
+      agent: 'codex',
+      project: 'github.com/example/second',
+      cwd: '/Users/Nathan/workspace/second',
+      observer: 'default-observer',
+      summary: 'second page turn',
+      updatedAt: '2026-06-02T11:00:00.000Z',
+    }]],
+  ]);
+  fake.tables.turnTable.listTurns = async (query = {}) => {
+    fake.calls.listTurns += 1;
+    fake.calls.listTurnQueries.push(query);
+    return pages.get(query.mode.offset) ?? [];
+  };
+  fake.tables.turnTable.stats = async () => ({ version: 9, rowCount: 1_000_001, fragmentCount: 2 });
+
+  assert.deepEqual(await index.list(fake.tables), [
+    {
+      sessionId: 'second-page-session',
+      agent: 'codex',
+      project: 'github.com/example/second',
+      cwd: '/Users/Nathan/workspace/second',
+      latestUpdatedAt: '2026-06-02T11:00:00.000Z',
+    },
+    {
+      sessionId: 'first-page-session',
+      agent: 'codex',
+      project: 'github.com/example/first',
+      cwd: '/Users/Nathan/workspace/first',
+      latestUpdatedAt: '2026-06-02T10:00:00.000Z',
+    },
+  ]);
+  assert.deepEqual(fake.calls.listTurnQueries, [
+    { mode: { type: 'page', offset: 0, limit: 1_000_000 }, observer: 'default-observer' },
+    { mode: { type: 'page', offset: 1_000_000, limit: 1_000_000 }, observer: 'default-observer' },
+  ]);
+});
+
 test('sessionIndex groups entries by project agent and session id, not cwd', async () => {
   const index = new SessionIndex(null, 'default-observer');
   const fake = client({

@@ -173,11 +173,19 @@ async function findSessionFile(root: string, sessionId: string): Promise<string 
       if (found) {
         return found;
       }
-    } else if (entry.isFile() && entry.name.endsWith('.jsonl') && entry.name.includes(sessionId)) {
+    } else if (entry.isFile() && matchesSessionFile(entry.name, sessionId)) {
       return entryPath;
     }
   }
   return null;
+}
+
+function matchesSessionFile(fileName: string, sessionId: string): boolean {
+  if (!fileName.endsWith('.jsonl')) {
+    return false;
+  }
+  const baseName = path.basename(fileName, '.jsonl');
+  return baseName === sessionId || baseName.endsWith(`-${sessionId}`);
 }
 
 async function readLatestTurnWithCache(params: {

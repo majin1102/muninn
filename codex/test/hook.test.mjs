@@ -200,6 +200,32 @@ test('handleStop resolves and caches multiple Codex transcript files independent
   ]);
 });
 
+test('handleStop resolves transcript by exact session id suffix', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'codex-hook-overlap-'));
+  process.env.MUNINN_HOME = path.join(root, 'muninn-home');
+  const sessionsRoot = path.join(root, 'sessions');
+  const sessionDir = path.join(sessionsRoot, '2026', '06', '10');
+  await mkdir(sessionDir, { recursive: true });
+  await writeFile(path.join(sessionDir, 'rollout-2026-06-10-codex-session-extra.jsonl'), codexSessionLines(
+    'codex-session-extra',
+    '/Users/dev/workspace/wrong',
+    [{ prompt: 'wrong prompt', response: 'wrong response' }],
+  ).map((line) => JSON.stringify(line)).join('\n'));
+  await writeFile(path.join(sessionDir, 'rollout-2026-06-10-codex-session.jsonl'), codexSessionLines(
+    'codex-session',
+    '/Users/dev/workspace/right',
+    [{ prompt: 'right prompt', response: 'right response' }],
+  ).map((line) => JSON.stringify(line)).join('\n'));
+  const { captured, client } = captureClient();
+
+  const ok = await handleStop({ hook_event_name: 'Stop', session_id: 'codex-session' }, { client, sessionsRoot });
+
+  assert.equal(ok, true);
+  assert.equal(captured.length, 1);
+  assert.equal(captured[0].turn.sessionId, 'codex-session');
+  assert.equal(captured[0].turn.prompt, 'right prompt');
+});
+
 test('readCodexSession resolves linked worktrees to the GitHub project identity', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'codex-worktree-project-'));
   process.env.MUNINN_HOME = path.join(root, 'muninn-home');
