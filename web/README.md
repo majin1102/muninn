@@ -106,10 +106,16 @@ Demo 模式：
 - 也可以通过 URL `?demo=1` 进入
 - demo 数据保存在仓库内的前端 fixture 中，不会写入真实 Lance 数据集
 
-构建：
+只构建 Web：
 
 ```bash
 pnpm --filter @muninn/web build
+```
+
+构建可运行的本地 runtime：
+
+```bash
+pnpm run build:runtime
 ```
 
 运行：

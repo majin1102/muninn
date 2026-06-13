@@ -31,4 +31,4 @@ Default desktop data lives under:
 ~/Library/Application Support/Muninn
 ```
 
-The Developer ID distribution flow still needs a release-machine script that stages the Node runtime, workspace build artifacts, signs the app with hardened runtime, submits it for notarization, and builds the DMG or ZIP.
+Developer ID packaging stages `web/dist` and `server/dist`; build both with `pnpm run build:runtime` before packaging. The distribution flow still needs a release-machine script that stages the Node runtime, workspace build artifacts, signs the app with hardened runtime, submits it for notarization, and builds the DMG or ZIP.

@@ -5,6 +5,7 @@
   "packageManager": "pnpm@9.0.0",
   "scripts": {
     "build": "pnpm -r build",
+    "build:runtime": "pnpm --filter @muninn/web build && pnpm --filter @muninn/server build",
     "dev": "pnpm -r dev"
   },
   "devDependencies": {
