@@ -158,7 +158,7 @@ function readCommandValue(line: string): string | null {
   if (!match) {
     return null;
   }
-  return parseTomlString(match[1]);
+  return parseTomlString(stripInlineComment(match[1]).trimEnd());
 }
 
 function parseTomlString(value: string): string {
@@ -175,6 +175,43 @@ function parseTomlString(value: string): string {
   if (value.startsWith("'") && value.endsWith("'")) {
     return value.slice(1, -1);
   }
+  return value;
+}
+
+function stripInlineComment(value: string): string {
+  let quoted: '"' | "'" | null = null;
+  let escaping = false;
+
+  for (let index = 0; index < value.length; index += 1) {
+    const char = value[index];
+
+    if (escaping) {
+      escaping = false;
+      continue;
+    }
+
+    if (quoted === '"' && char === '\\') {
+      escaping = true;
+      continue;
+    }
+
+    if (quoted !== null) {
+      if (char === quoted) {
+        quoted = null;
+      }
+      continue;
+    }
+
+    if (char === '"' || char === "'") {
+      quoted = char;
+      continue;
+    }
+
+    if (char === '#') {
+      return value.slice(0, index);
+    }
+  }
+
   return value;
 }
 
