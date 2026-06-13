@@ -1,6 +1,6 @@
-# Muninn App
+# Muninn Web
 
-`@muninn/app` 是 Muninn 的前端应用入口。
+`@muninn/web` 是 Muninn 的 browser/WKWebView UI。
 
 当前阶段目标：
 
@@ -17,7 +17,7 @@
 - `observation` 摘要 block 列表
 - 右侧 markdown 文档详情区
 - Settings 弹窗，可查看和保存 `${MUNINN_HOME}/muninn.json`
-- `app` 自己维护人类向 UI 路由与页面静态资源
+- `web` 自己维护人类向 UI 路由与页面静态资源
 - 运行时可由 `@muninn/server` 统一挂载到 `/app/`
 
 `muninn.json` 里的配置目前支持：
@@ -92,12 +92,12 @@
 - `watchdog.compactMinFragments` 控制 `turn / observing / semanticIndex` 触发 compaction 的最小 fragment 数
 - `watchdog.semanticIndex.targetPartitionSize` 用于计算 `semantic_index` 向量索引的 IVF 分区数
 - `watchdog.semanticIndex.optimizeMergeCount` 控制每次索引优化最多合并多少个增量索引段，值越大单次维护越重，但索引碎片通常更少
-- App 在 `muninn.json` 不存在时会给出一份默认模板，其中包含 watchdog 默认配置
+- Web 在 `muninn.json` 不存在时会给出一份默认模板，其中包含 watchdog 默认配置
 - `semantic_index` 的向量索引会在 watchdog 启动检查或后续维护中自动补建；如果 dataset 还是空表，会等第一批 row 写入后再建索引
 
 当前状态：
 
-- Muninn App 的基础前端功能已经基本完成
+- Muninn Web 的基础前端功能已经基本完成
 - 当前主要未完成项是 logo / 品牌标识，以及少量视觉与交互细节收尾
 
 Demo 模式：
@@ -109,7 +109,7 @@ Demo 模式：
 构建：
 
 ```bash
-pnpm --filter @muninn/app build
+pnpm --filter @muninn/web build
 ```
 
 运行：

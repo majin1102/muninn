@@ -33,7 +33,7 @@ type SessionToolbarState = {
   customToTime: string;
 };
 
-const SESSION_TOOLBAR_STORAGE_KEY = 'muninn:app:session-toolbar-filter:v3';
+const SESSION_TOOLBAR_STORAGE_KEY = 'muninn:web:session-toolbar-filter:v3';
 const TURN_LIST_PAGE_SIZE = 20;
 
 export function SessionTree({

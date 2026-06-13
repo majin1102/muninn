@@ -17,7 +17,7 @@ Expected bundle resource layout:
 ```text
 Resources/Server/
   bin/node
-  client/dist/
+  web/dist/
   packages/server/dist/
   packages/core/dist/
   packages/core/native/muninn_native.node

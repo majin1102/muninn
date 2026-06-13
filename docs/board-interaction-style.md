@@ -313,5 +313,5 @@ Before shipping Board UI changes:
 - Run:
 
 ```sh
-source ~/.zprofile && pnpm --filter @muninn/app build
+source ~/.zprofile && pnpm --filter @muninn/web build
 ```

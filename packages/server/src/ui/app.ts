@@ -123,12 +123,12 @@ function resolveArtifactStorePath(): string {
   return path.join(home, 'default', 'artifacts');
 }
 
-function resolveAppDistPath(): string {
+function resolveWebDistPath(): string {
   const candidates = [
-    process.env.MUNINN_APP_DIST,
-    path.join(packageRoot, 'app', 'dist'),
-    path.resolve(process.cwd(), '..', '..', 'app', 'dist'),
-    path.resolve(process.cwd(), 'app', 'dist'),
+    process.env.MUNINN_WEB_DIST,
+    path.join(packageRoot, 'web', 'dist'),
+    path.resolve(process.cwd(), '..', '..', 'web', 'dist'),
+    path.resolve(process.cwd(), 'web', 'dist'),
   ].filter((candidate): candidate is string => Boolean(candidate));
 
   for (const candidate of candidates) {
@@ -723,16 +723,16 @@ async function loadSnapshotReferences(references: string[]): Promise<MemoryRefer
   return resolved.filter((item): item is MemoryReference => item !== null);
 }
 
-function getAppAssetPath(relativePath: string): string {
+function getWebAssetPath(relativePath: string): string {
   const normalized = path.posix.normalize(`/${relativePath}`).replace(/^\/+/, '');
-  return path.join(resolveAppDistPath(), normalized);
+  return path.join(resolveWebDistPath(), normalized);
 }
 
 function contentTypeFor(filePath: string): string {
   return MIME_TYPES[path.extname(filePath)] ?? 'application/octet-stream';
 }
 
-async function serveAppFile(filePath: string): Promise<Response> {
+async function serveWebFile(filePath: string): Promise<Response> {
   try {
     const content = await readFile(filePath);
     return new Response(content, {
@@ -749,7 +749,7 @@ async function serveAppFile(filePath: string): Promise<Response> {
 appRoutes.get('/app', (c) => c.redirect('/app/'));
 
 appRoutes.get('/app/', async () => {
-  return serveAppFile(getAppAssetPath('index.html'));
+  return serveWebFile(getWebAssetPath('index.html'));
 });
 
 appRoutes.get('/app/:asset{.+}', async (c) => {
@@ -757,7 +757,7 @@ appRoutes.get('/app/:asset{.+}', async (c) => {
   if (asset.includes('..')) {
     return c.text('Not Found', 404);
   }
-  return serveAppFile(getAppAssetPath(asset));
+  return serveWebFile(getWebAssetPath(asset));
 });
 
 appRoutes.get('/api/v1/ui/session/agents', async (c) => {
@@ -1322,7 +1322,7 @@ appRoutes.get('/api/v1/artifacts/*', async (c) => {
 
   try {
     await stat(resolvedFile);
-    return serveAppFile(resolvedFile);
+    return serveWebFile(resolvedFile);
   } catch {
     return c.json(errorResponse('notFound', 'artifact not found'), 404);
   }

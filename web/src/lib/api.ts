@@ -146,11 +146,11 @@ export function resolveApiBase(): string {
   const params = new URLSearchParams(window.location.search);
   const fromQuery = params.get('apiBase');
   if (fromQuery) {
-    localStorage.setItem('muninn.app.apiBase', trimTrailingSlash(fromQuery));
+    localStorage.setItem('muninn.web.apiBase', trimTrailingSlash(fromQuery));
     return trimTrailingSlash(fromQuery);
   }
 
-  const fromStorage = localStorage.getItem('muninn.app.apiBase');
+  const fromStorage = localStorage.getItem('muninn.web.apiBase');
   if (fromStorage) {
     return trimTrailingSlash(fromStorage);
   }
@@ -167,7 +167,7 @@ export function resolveApiBase(): string {
 }
 
 export function resolveUsesDemoData(): boolean {
-  localStorage.removeItem('muninn.app.dataMode');
+  localStorage.removeItem('muninn.web.dataMode');
   return /(?:[?&#])demo=1(?:[&#]|$)/.test(window.location.href);
 }
 
