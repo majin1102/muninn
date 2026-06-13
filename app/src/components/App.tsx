@@ -32,8 +32,8 @@ type RouteState = {
 
 const navItems: Array<{ view: PrimaryView; label: string; icon: ComponentType }> = [
   { view: 'recall', label: 'Recall', icon: Search },
-  { view: 'wiki', label: 'LLM Wiki', icon: BookOpen },
   { view: 'session', label: 'Session', icon: FileText },
+  { view: 'wiki', label: 'LLM Wiki', icon: BookOpen },
   { view: 'pipelines', label: 'Pipelines', icon: PipelineIcon },
   { view: 'settings', label: 'Settings', icon: Settings },
 ];

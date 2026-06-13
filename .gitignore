@@ -41,6 +41,7 @@ experiment/
 *.tsbuildinfo
 
 Cargo.lock
+/apple/macos/.build/
 /muninn.json
 /tmp/
 .muninn/

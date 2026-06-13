@@ -10,6 +10,7 @@ struct MuninnApp: App {
             ContentView(server: server)
                 .frame(minWidth: 960, minHeight: 640)
                 .onAppear {
+                    setAppIcon()
                     NSApplication.shared.setActivationPolicy(.regular)
                     NSApplication.shared.activate(ignoringOtherApps: true)
                 }
@@ -28,4 +29,14 @@ struct MuninnApp: App {
             }
         }
     }
+}
+
+private func setAppIcon() {
+    guard
+        let iconURL = Bundle.module.url(forResource: "AppIcon", withExtension: "png", subdirectory: "Resources"),
+        let icon = NSImage(contentsOf: iconURL)
+    else {
+        return
+    }
+    NSApplication.shared.applicationIconImage = icon
 }
