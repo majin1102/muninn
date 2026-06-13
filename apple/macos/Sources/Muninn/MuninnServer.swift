@@ -172,21 +172,30 @@ private func resolveRuntime(bundleRoot: URL, bundleNode: URL, bundleEntry: URL) 
 
 private func findDevRepoRoot() throws -> URL {
     let fileManager = FileManager.default
-    var current = URL(fileURLWithPath: fileManager.currentDirectoryPath)
+    let starts = [
+        URL(fileURLWithPath: fileManager.currentDirectoryPath),
+        Bundle.main.bundleURL,
+        Bundle.main.executableURL,
+    ].compactMap { $0 }
 
-    while true {
-        let serverEntry = current.appending(path: "packages/server/dist/index.js")
-        let workspace = current.appending(path: "pnpm-workspace.yaml")
-        if fileManager.fileExists(atPath: serverEntry.path), fileManager.fileExists(atPath: workspace.path) {
-            return current
-        }
+    for start in starts {
+        var current = start.hasDirectoryPath ? start : start.deletingLastPathComponent()
+        while true {
+            let serverEntry = current.appending(path: "packages/server/dist/index.js")
+            let workspace = current.appending(path: "pnpm-workspace.yaml")
+            if fileManager.fileExists(atPath: serverEntry.path), fileManager.fileExists(atPath: workspace.path) {
+                return current
+            }
 
-        let parent = current.deletingLastPathComponent()
-        if parent.path == current.path {
-            throw MuninnServerError.missingResource("Could not locate Muninn repo root from \(fileManager.currentDirectoryPath)")
+            let parent = current.deletingLastPathComponent()
+            if parent.path == current.path {
+                break
+            }
+            current = parent
         }
-        current = parent
     }
+
+    throw MuninnServerError.missingResource("Could not locate Muninn repo root from current directory or app bundle")
 }
 
 private func findNode() -> URL? {
