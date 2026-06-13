@@ -46,6 +46,12 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       process.stdout.write(`${JSON.stringify(status, null, 2)}\n`);
       return 0;
     }
+    if (parsed.command === 'doctor') {
+      const { renderDoctorChecks, runDoctorChecks } = await import('./doctor.js');
+      const checks = await runDoctorChecks();
+      process.stdout.write(renderDoctorChecks(checks));
+      return checks.every((check) => check.ok || check.name === 'server health') ? 0 : 1;
+    }
     if (parsed.command === 'serve') {
       const { runServe } = await import('./serve.js');
       await runServe({
