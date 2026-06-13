@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-import { CLAUDE_AGENT, CLAUDE_MARKER_KEY, readClaudeSession } from './mapping.js';
-import { captureFromTranscript, isStopEvent, readStdin, type CodexHookPayload } from './hook.js';
+import { captureFromTranscript, isStopEvent, readStdin, type HookPayload } from '@muninn/common/agent-hook';
+import { CLAUDE_AGENT, CLAUDE_MARKER_KEY, readClaudeSession, toTurnContent } from './claude.js';
 
 const CLAUDE_HOOK_INGEST = 'claude-hook';
 
@@ -16,9 +16,9 @@ async function main(): Promise<void> {
   if (!raw.trim()) {
     return;
   }
-  let payload: CodexHookPayload;
+  let payload: HookPayload;
   try {
-    payload = JSON.parse(raw) as CodexHookPayload;
+    payload = JSON.parse(raw) as HookPayload;
   } catch (error) {
     process.stderr.write(`[muninn-claude-hook] invalid hook JSON on stdin: ${String(error)}\n`);
     return;
@@ -33,6 +33,7 @@ async function main(): Promise<void> {
   await captureFromTranscript({
     transcriptPath,
     readSession: readClaudeSession,
+    toTurnContent,
     toTurnOptions: { agent: CLAUDE_AGENT, ingest: CLAUDE_HOOK_INGEST, markerKey: CLAUDE_MARKER_KEY },
     label: 'muninn-claude-hook',
   });

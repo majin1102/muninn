@@ -3,6 +3,7 @@ packages:
   - 'web'
   - 'server'
   - 'mcp'
+  - 'codex'
+  - 'claude'
   - 'packages/*'
   - 'benchmark/*'
-  - 'codex'

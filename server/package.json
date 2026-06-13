@@ -5,13 +5,14 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "scripts": {
-    "build": "pnpm --filter @muninn/web build && pnpm --filter @muninn/codex build && pnpm --filter @muninn/core build && tsc",
+    "build": "pnpm --filter @muninn/web build && pnpm --filter @muninn/codex build && pnpm --filter @muninn/claude build && pnpm --filter @muninn/core build && tsc",
     "dev": "tsc --watch",
     "start": "node dist/index.js",
     "test": "(cd ../openclaw/plugin && pnpm build) && pnpm run build && node --test test/*.test.mjs"
   },
   "dependencies": {
     "@hono/node-server": "^1.0.0",
+    "@muninn/claude": "workspace:*",
     "@muninn/codex": "workspace:*",
     "@muninn/core": "workspace:*",
     "@muninn/common": "workspace:*",

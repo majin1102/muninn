@@ -7,14 +7,14 @@ This package does two things:
 1. **Shared mapping** (`./` export) — parses Codex session transcripts
    (`~/.codex/sessions/**/rollout-*.jsonl`) into Muninn's `TurnContent`. This is
    the single source of truth for Codex → Muninn field mapping, reused by the
-   board batch-importer (`@muninn/board`) and the hook CLI below.
+   web/import flows and the hook CLI below.
 2. **Stop hook CLI** (`muninn-codex-hook` bin) — a runnable command you register
    on Codex's `Stop` lifecycle hook. At the end of every turn it re-parses the
    session transcript and POSTs the latest turn to the running Muninn sidecar.
 
 ## How it works
 
-Codex 0.138.0 ships Claude-Code-style lifecycle hooks. On `Stop` (turn end)
+Codex 0.138.0 ships lifecycle hooks. On `Stop` (turn end)
 Codex invokes the registered command with the hook event as JSON on **stdin**:
 
 ```json
@@ -89,27 +89,6 @@ You can also exercise the capture path directly without Codex:
 echo '{"hook_event_name":"Stop","transcript_path":"/path/to/rollout-....jsonl"}' \
   | MUNINN_SIDECAR_URL=http://localhost:8080 node dist/cli.js
 ```
-
-## Claude Code hook
-
-The same package ships a `muninn-claude-hook` bin (`dist/claude-cli.js`) for
-Claude Code, which has its own `Stop` hook. Add to `~/.claude/settings.json`:
-
-```json
-{
-  "hooks": {
-    "Stop": [
-      { "hooks": [ { "type": "command", "command": "node /ABSOLUTE/PATH/TO/muninn/codex/dist/claude-cli.js" } ] }
-    ]
-  }
-}
-```
-
-Claude pipes `{ session_id, transcript_path, cwd, hook_event_name }` on stdin; on
-`Stop` the bin parses `~/.claude/projects/<cwd>/<sessionId>.jsonl` and captures
-the latest turn (`agent: claude-code`). Only projects you've enabled for capture
-(toggled on in **Settings → Import**, or imported once) are stored — the sidecar
-drops captures for projects that aren't enabled.
 
 ## Scope / roadmap
 

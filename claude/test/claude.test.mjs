@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
-import { appendFile, mkdtemp, writeFile } from 'node:fs/promises';
+import { appendFile, mkdtemp, utimes, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import { captureFromTranscript } from '../dist/hook.js';
-import { CLAUDE_AGENT, CLAUDE_MARKER_KEY, readClaudeSession, readClaudeSessionSummary, toTurnContent } from '../dist/mapping.js';
+import { captureFromTranscript } from '@muninn/common/agent-hook';
+import { CLAUDE_AGENT, CLAUDE_MARKER_KEY, readClaudeSession, readClaudeSessionSummary, toTurnContent } from '../dist/claude.js';
 
 const PNG_1x1 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M8AAAMBAQDJ/pLvAAAAAElFTkSuQmCC';
 
@@ -113,14 +113,14 @@ test('toTurnContent for claude-code has no title and the claude marker', async (
   const turn = toTurnContent(session, session.turns[0], 0, {
     agent: 'claude-code',
     ingest: 'claude-code-import',
-    markerKey: 'claude-code.import',
+    markerKey: 'claudeImport',
   });
 
   assert.equal(turn.agent, 'claude-code');
   assert.equal(turn.title, undefined);
   assert.equal(turn.metadata.sourceTurnSequence, 0);
-  const marker = turn.artifacts.find((artifact) => artifact.key === 'claude-code.import');
-  assert.ok(marker, 'expected the claude-code.import marker artifact');
+  const marker = turn.artifacts.find((artifact) => artifact.key === 'claudeImport');
+  assert.ok(marker, 'expected the claudeImport marker artifact');
   const markerContent = JSON.parse(marker.content);
   assert.equal(markerContent.marker, '0aba-claude-session#1');
   assert.equal(markerContent.sourceTurnSequence, 0);
@@ -158,6 +158,42 @@ test('readClaudeSession and summary keep multiple transcript files independent',
   assert.equal(fullB?.turns[1].prompt, 'beta second prompt');
 });
 
+test('readClaudeSessionSummary uses the transcript latest timestamp instead of file mtime', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'claude-summary-updated-at-'));
+  process.env.MUNINN_HOME = path.join(root, 'muninn-home');
+  const transcript = path.join(root, 'claude-session.jsonl');
+  const lines = [
+    {
+      sessionId: 'claude-session',
+      cwd: root,
+      type: 'user',
+      timestamp: '2026-06-12T04:00:00.000Z',
+      message: { content: 'Sort Claude import sessions by transcript time' },
+    },
+    {
+      sessionId: 'claude-session',
+      cwd: root,
+      type: 'assistant',
+      timestamp: '2026-06-12T04:00:02.000Z',
+      message: { content: [{ type: 'text', text: 'Done' }] },
+    },
+    {
+      sessionId: 'claude-session',
+      cwd: root,
+      type: 'user',
+      timestamp: '2026-06-12T04:35:00.000Z',
+      message: { content: [{ type: 'tool_result', content: 'late event' }] },
+    },
+  ];
+  await writeFile(transcript, lines.map((line) => JSON.stringify(line)).join('\n'));
+  await utimes(transcript, new Date('2026-06-13T00:00:00.000Z'), new Date('2026-06-13T00:00:00.000Z'));
+
+  const summary = await readClaudeSessionSummary(transcript);
+
+  assert.ok(summary);
+  assert.equal(summary.updatedAt, '2026-06-12T04:35:00.000Z');
+});
+
 test('captureFromTranscript keeps separate cache entries for multiple Claude transcripts', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'claude-hook-multiple-'));
   process.env.MUNINN_HOME = path.join(root, 'muninn-home');
@@ -171,10 +207,10 @@ test('captureFromTranscript keeps separate cache entries for multiple Claude tra
   const { captured, client } = captureClient();
   const options = { agent: CLAUDE_AGENT, ingest: 'claude-hook', markerKey: CLAUDE_MARKER_KEY };
 
-  assert.equal(await captureFromTranscript({ transcriptPath: sessionB, readSession: readClaudeSession, toTurnOptions: options, label: 'test-claude-hook', client }), true);
-  assert.equal(await captureFromTranscript({ transcriptPath: sessionA, readSession: readClaudeSession, toTurnOptions: options, label: 'test-claude-hook', client }), true);
+  assert.equal(await captureFromTranscript({ transcriptPath: sessionB, readSession: readClaudeSession, toTurnContent, toTurnOptions: options, label: 'test-claude-hook', client }), true);
+  assert.equal(await captureFromTranscript({ transcriptPath: sessionA, readSession: readClaudeSession, toTurnContent, toTurnOptions: options, label: 'test-claude-hook', client }), true);
   await appendClaudeTurn(sessionA, 'claude-hook-a', '/Users/dev/workspace/alpha', 'alpha second prompt', 'alpha second response', 1);
-  assert.equal(await captureFromTranscript({ transcriptPath: sessionA, readSession: readClaudeSession, toTurnOptions: options, label: 'test-claude-hook', client }), true);
+  assert.equal(await captureFromTranscript({ transcriptPath: sessionA, readSession: readClaudeSession, toTurnContent, toTurnOptions: options, label: 'test-claude-hook', client }), true);
 
   assert.equal(captured.length, 3);
   assert.deepEqual(captured.map(({ turn }) => [turn.sessionId, turn.prompt, turn.metadata.sourceTurnSequence]), [

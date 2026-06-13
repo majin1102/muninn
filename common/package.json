@@ -12,14 +12,20 @@
     "./session-identity": {
       "types": "./dist/session_identity.d.ts",
       "default": "./dist/session_identity.js"
+    },
+    "./agent-hook": {
+      "types": "./dist/agent_hook.d.ts",
+      "default": "./dist/agent_hook.js"
     }
   },
   "files": ["dist"],
   "scripts": {
     "build": "tsc",
-    "dev": "tsc --watch"
+    "dev": "tsc --watch",
+    "test": "pnpm build && node --test test/*.test.mjs"
   },
   "devDependencies": {
+    "@types/node": "^20.0.0",
     "typescript": "^5.0.0"
   }
 }

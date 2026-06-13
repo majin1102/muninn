@@ -1,16 +1,16 @@
 {
-  "name": "@muninn/codex",
+  "name": "@muninn/claude",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "exports": {
     ".": {
-      "types": "./dist/mapping.d.ts",
-      "default": "./dist/mapping.js"
+      "types": "./dist/claude.d.ts",
+      "default": "./dist/claude.js"
     }
   },
   "bin": {
-    "muninn-codex-hook": "./dist/cli.js"
+    "muninn-claude-hook": "./dist/claude-cli.js"
   },
   "scripts": {
     "build": "pnpm --filter @muninn/common build && tsc -p tsconfig.json",
