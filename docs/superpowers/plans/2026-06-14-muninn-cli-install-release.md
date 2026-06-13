@@ -1407,6 +1407,60 @@ test('installHost writes Codex config under temporary user HOME', async () => {
   assert.match(config, /muninn-codex-hook/);
 });
 
+test('installHost asks for confirmation when not dry-run and --yes is absent', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'muninn-confirm-'));
+  let asked = 0;
+
+  await installHost({
+    host: 'codex',
+    action: 'install',
+    parts: new Set(['mcp']),
+    scope: 'user',
+    serverUrl: 'http://127.0.0.1:8080',
+    dryRun: false,
+    yes: false,
+    home: root,
+    cwd: path.join(root, 'project'),
+    commands: {
+      mcpCommand: 'muninn-mcp',
+      codexHookCommand: 'muninn-codex-hook',
+      claudeHookCommand: 'muninn-claude-hook',
+    },
+    confirm: async () => {
+      asked += 1;
+      return true;
+    },
+  });
+
+  assert.equal(asked, 1);
+  const config = await readFile(path.join(root, '.codex', 'config.toml'), 'utf8');
+  assert.match(config, /\[mcp_servers\.muninn\]/);
+});
+
+test('installHost skips writes when confirmation is denied', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'muninn-confirm-denied-'));
+
+  const result = await installHost({
+    host: 'codex',
+    action: 'install',
+    parts: new Set(['mcp']),
+    scope: 'user',
+    serverUrl: 'http://127.0.0.1:8080',
+    dryRun: false,
+    yes: false,
+    home: root,
+    cwd: path.join(root, 'project'),
+    commands: {
+      mcpCommand: 'muninn-mcp',
+      codexHookCommand: 'muninn-codex-hook',
+      claudeHookCommand: 'muninn-claude-hook',
+    },
+    confirm: async () => false,
+  });
+
+  assert.deepEqual(result, []);
+});
+
 test('uninstallHost removes Codex muninn entries', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'muninn-uninstall-'));
   const cwd = path.join(root, 'project');
@@ -1505,6 +1559,7 @@ export type InstallRunOptions = InstallOptions & {
     codexHookCommand: string;
     claudeHookCommand: string;
   };
+  confirm?: (summary: string[]) => Promise<boolean>;
 };
 
 export async function installHost(options: InstallRunOptions): Promise<ApplyResult[]> {
@@ -1554,10 +1609,25 @@ async function applyHostPlans(options: InstallRunOptions): Promise<ApplyResult[]
   }
 
   const results: ApplyResult[] = [];
+  if (!options.dryRun && !options.yes) {
+    const confirmed = await (options.confirm ?? defaultConfirm)(plans.flatMap((plan) => plan.summary));
+    if (!confirmed) {
+      return [];
+    }
+  }
   for (const plan of plans) {
     results.push(await applyChangePlan(plan, { dryRun: options.dryRun }));
   }
   return results;
+}
+
+async function defaultConfirm(summary: string[]): Promise<boolean> {
+  process.stdout.write(`${summary.join('\n')}\nProceed? [y/N] `);
+  const answer = await new Promise<string>((resolve) => {
+    process.stdin.setEncoding('utf8');
+    process.stdin.once('data', (chunk) => resolve(String(chunk)));
+  });
+  return answer.trim().toLowerCase() === 'y' || answer.trim().toLowerCase() === 'yes';
 }
 
 export function targetHosts(target: InstallHost | 'all'): InstallHost[] {
