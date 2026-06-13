@@ -46,6 +46,15 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       process.stdout.write(`${JSON.stringify(status, null, 2)}\n`);
       return 0;
     }
+    if (parsed.command === 'serve') {
+      const { runServe } = await import('./serve.js');
+      await runServe({
+        host: parsed.host,
+        port: parsed.port,
+        home: parsed.home,
+      });
+      return 0;
+    }
     process.stdout.write(`muninn ${parsed.command} is not implemented yet\n`);
     return 0;
   } catch (error) {

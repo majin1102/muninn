@@ -4,6 +4,9 @@
   "private": true,
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "bin": {
+    "muninn-server": "./dist/index.js"
+  },
   "scripts": {
     "build": "pnpm --filter @muninn/codex build && pnpm --filter @muninn/claude build && pnpm run build:native && tsc",
     "build:native": "node ./scripts/build-native.mjs",
