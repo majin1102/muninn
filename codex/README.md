@@ -10,7 +10,7 @@ This package does two things:
    web/import flows and the hook CLI below.
 2. **Stop hook CLI** (`muninn-codex-hook` bin) — a runnable command you register
    on Codex's `Stop` lifecycle hook. At the end of every turn it re-parses the
-   session transcript and POSTs the latest turn to the running Muninn sidecar.
+   session transcript and POSTs the latest turn to the running Muninn server.
 
 ## How it works
 
@@ -30,7 +30,7 @@ Codex invokes the registered command with the hook event as JSON on **stdin**:
 ```
 
 The CLI reads `transcript_path`, parses the just-completed turn with the shared
-mapping, and `POST`s it to `${MUNINN_SIDECAR_URL}/api/v1/turn/capture`. It is
+mapping, and `POST`s it to `${MUNINN_SERVER_BASE_URL}/api/v1/turn/capture`. It is
 **fail-soft**: any error is logged to stderr and the process always exits `0`,
 so a hook failure never blocks Codex.
 
@@ -44,7 +44,7 @@ This produces `dist/cli.js` (the `muninn-codex-hook` bin).
 
 ## Register the hook
 
-Make sure the Muninn sidecar is running (default `http://localhost:8080`), then
+Make sure the Muninn server is running (default `http://localhost:8080`), then
 add the hook to `~/.codex/config.toml` (or a project-level `.codex/config.toml`):
 
 ```toml
@@ -60,12 +60,12 @@ Point `command` at the built `dist/cli.js` (it has a `#!/usr/bin/env node`
 shebang and is executable), or at the `muninn-codex-hook` bin if this package is
 installed on `PATH`.
 
-If the sidecar is not on the default port, set the endpoint via env. Codex
+If the server is not on the default port, set the endpoint via env. Codex
 hooks inherit the environment of the Codex process, so export it before
 launching Codex:
 
 ```sh
-export MUNINN_SIDECAR_URL="http://localhost:8080"   # default
+export MUNINN_SERVER_BASE_URL="http://localhost:8080"   # default
 export MUNINN_HOOK_TIMEOUT_MS=1500                  # optional, default 1500
 ```
 
@@ -77,17 +77,17 @@ export MUNINN_HOOK_TIMEOUT_MS=1500                  # optional, default 1500
 
 ## Verify end-to-end
 
-1. Build this package and start the sidecar.
+1. Build this package and start the server.
 2. Register the `Stop` hook as above.
 3. Run a Codex turn (in the Codex app/TUI; lifecycle hooks fire there, not under
    `codex exec`).
-4. Confirm the turn appears in Muninn (board UI, or query the sidecar).
+4. Confirm the turn appears in Muninn (app UI, or query the server).
 
 You can also exercise the capture path directly without Codex:
 
 ```sh
 echo '{"hook_event_name":"Stop","transcript_path":"/path/to/rollout-....jsonl"}' \
-  | MUNINN_SIDECAR_URL=http://localhost:8080 node dist/cli.js
+  | MUNINN_SERVER_BASE_URL=http://localhost:8080 node dist/cli.js
 ```
 
 ## Scope / roadmap

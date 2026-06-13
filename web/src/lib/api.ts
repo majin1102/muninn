@@ -196,7 +196,7 @@ export function createAppClient(apiBase: string, usesDemoData: boolean): AppClie
   }
 
   async function fetchVoid(path: string, init?: RequestInit): Promise<void> {
-    const response = await fetch(`${apiBase}${path}`, init);
+    const response = await fetch(`${apiBase}${path}`, withDesktopAuth(init));
     if (!response.ok) {
       const body = await safeJson<ErrorResponse>(response);
       throw new Error(body?.errorMessage ?? `${response.status} ${response.statusText}`);

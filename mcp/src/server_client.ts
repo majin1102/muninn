@@ -10,8 +10,8 @@ import type {
 export class ServerClient {
   private baseUrl: string;
 
-  constructor(baseUrl: string = process.env.MUNINN_SERVER_BASE_URL || process.env.MUNINN_SIDECAR_BASE_URL || 'http://127.0.0.1:8080') {
-    this.baseUrl = baseUrl.replace(/\/$/, '');
+  constructor(baseUrl: string = process.env.MUNINN_SERVER_BASE_URL || 'http://127.0.0.1:8080') {
+    this.baseUrl = baseUrl.replace(/\/+$/, '');
   }
 
   async recall(request: RecallRequest): Promise<MemoryResponse> {

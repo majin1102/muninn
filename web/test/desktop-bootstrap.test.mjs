@@ -9,4 +9,5 @@ test('api client reads macOS desktop bootstrap and sends bearer token', async ()
   assert.match(source, /apiToken/);
   assert.match(source, /Authorization/);
   assert.match(source, /Bearer/);
+  assert.match(source, /fetch\(`\$\{apiBase\}\$\{path\}`, withDesktopAuth\(init\)\)/);
 });

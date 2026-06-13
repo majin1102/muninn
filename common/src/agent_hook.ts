@@ -120,7 +120,7 @@ type LatestTurnResult = {
 };
 
 export function resolveHookConfig(env: NodeJS.ProcessEnv = process.env): HookConfig {
-  const raw = env.MUNINN_SIDECAR_URL ?? env.MUNINN_BASE_URL ?? DEFAULT_BASE_URL;
+  const raw = env.MUNINN_SERVER_BASE_URL ?? env.MUNINN_BASE_URL ?? DEFAULT_BASE_URL;
   return {
     baseUrl: raw.trim().replace(/\/+$/, '') || DEFAULT_BASE_URL,
     timeoutMs: resolveTimeoutMs(env.MUNINN_HOOK_TIMEOUT_MS),
