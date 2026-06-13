@@ -3,6 +3,11 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "files": ["dist", "README.md"],
+  "license": "UNLICENSED",
   "exports": {
     ".": {
       "types": "./dist/claude.d.ts",

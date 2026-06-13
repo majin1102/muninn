@@ -2,6 +2,12 @@
   "name": "@muninn/mcp",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "files": ["dist", "README.md", "DEMO.md"],
+  "license": "UNLICENSED",
   "main": "./dist/index.js",
   "bin": {
     "muninn-mcp": "./dist/index.js"

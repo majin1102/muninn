@@ -15,6 +15,21 @@ Muninn is a memory layer for agents. This repository contains the Rust `format/`
 - `docs/`
   - Product notes, specs, architecture documents, comparisons, research notes, and workstream trackers.
 
+## First Installable Release Direction
+
+The first installable release is planned as a macOS/Linux npm CLI:
+
+```sh
+npm i -g @muninn/cli
+muninn doctor
+muninn serve
+muninn install all
+```
+
+`muninn install all` configures Codex and Claude Code host integrations. It registers the Muninn MCP server and Stop hooks for those hosts. `mcp/` remains a protocol adapter package; there is no `muninn install mcp` target.
+
+The first release does not install a background service, does not perform background updates, does not support Windows, and requires local native compilation with Rust and `protoc`.
+
 ## Documentation
 
 - `docs/product/`
