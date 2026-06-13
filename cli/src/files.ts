@@ -41,9 +41,7 @@ export async function applyChangePlan(plan: ChangePlan, options: {
 
   await mkdir(path.dirname(plan.path), { recursive: true });
   const backupPath = backupFilePath(plan.path, options.now?.() ?? new Date());
-  if (plan.before) {
-    await writeFile(backupPath, plan.before, 'utf8');
-  }
+  await writeFile(backupPath, plan.before, 'utf8');
 
   const tempPath = `${plan.path}.muninn-tmp-${process.pid}`;
   await writeFile(tempPath, plan.after, 'utf8');
@@ -51,7 +49,7 @@ export async function applyChangePlan(plan: ChangePlan, options: {
 
   return {
     wrote: true,
-    backupPath: plan.before ? backupPath : null,
+    backupPath,
     summary: plan.summary,
   };
 }

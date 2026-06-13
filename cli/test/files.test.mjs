@@ -53,3 +53,25 @@ test('applyChangePlan writes backup before replacing content', async () => {
   assert.equal(await readFile(result.backupPath, 'utf8'), 'before\n');
   assert.equal(await readFile(file, 'utf8'), 'after\n');
 });
+
+test('applyChangePlan writes backup for empty previous content', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'muninn-files-'));
+  const file = path.join(root, 'config.toml');
+  await writeFile(file, '');
+
+  const result = await applyChangePlan({
+    changed: true,
+    path: file,
+    before: '',
+    after: 'new\n',
+    summary: ['change file'],
+  }, {
+    dryRun: false,
+    now: () => new Date('2026-06-14T03:00:00.000Z'),
+  });
+
+  assert.equal(result.wrote, true);
+  assert.match(result.backupPath, /config\.toml\.muninn-backup-20260614-030000$/);
+  assert.equal(await readFile(result.backupPath, 'utf8'), '');
+  assert.equal(await readFile(file, 'utf8'), 'new\n');
+});
