@@ -30,6 +30,8 @@ muninn install all
 
 The first release does not install a background service, does not perform background updates, does not support Windows, and requires local native compilation with Rust and `protoc`.
 
+Maintainer note: produce release artifacts with `pnpm pack` or `pnpm publish`. pnpm rewrites `workspace:*` dependencies to concrete package versions in packed and published manifests. `npm pack` is useful for contents inspection only; it is not the release artifact path for this workspace.
+
 ## Documentation
 
 - `docs/product/`
