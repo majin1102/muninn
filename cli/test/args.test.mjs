@@ -53,3 +53,24 @@ test('parseArgs rejects conflicting install part flags', () => {
     /--mcp-only and --hook-only cannot be used together/,
   );
 });
+
+test('parseArgs rejects unknown serve flags', () => {
+  assert.throws(
+    () => parseArgs(['serve', '--porrt', '8081']),
+    /unknown flag: --porrt/,
+  );
+});
+
+test('parseArgs rejects unknown install flags', () => {
+  assert.throws(
+    () => parseArgs(['install', 'codex', '--bad']),
+    /unknown flag: --bad/,
+  );
+});
+
+test('parseArgs rejects ports outside TCP range', () => {
+  assert.throws(
+    () => parseArgs(['serve', '--port', '70000']),
+    /--port must be an integer from 1 to 65535/,
+  );
+});

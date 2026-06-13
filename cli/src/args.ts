@@ -19,6 +19,9 @@ export type ParsedArgs =
 
 const HOST_TARGETS = new Set(['codex', 'claude', 'all']);
 const SCOPES = new Set(['user', 'project']);
+const STATUS_FLAGS = new Set(['server-url', 'scope']);
+const SERVE_FLAGS = new Set(['host', 'port', 'home']);
+const INSTALL_FLAGS = new Set(['mcp-only', 'hook-only', 'scope', 'server-url', 'dry-run', 'yes']);
 
 export function parseArgs(argv: string[]): ParsedArgs {
   const [command, ...rest] = argv;
@@ -30,7 +33,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
     return { command: 'doctor' };
   }
   if (command === 'status') {
-    const flags = parseFlags(rest);
+    const flags = parseFlags(rest, STATUS_FLAGS);
     return {
       command: 'status',
       serverUrl: stringFlag(flags, 'server-url'),
@@ -38,7 +41,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
     };
   }
   if (command === 'serve') {
-    const flags = parseFlags(rest);
+    const flags = parseFlags(rest, SERVE_FLAGS);
     return {
       command: 'serve',
       host: stringFlag(flags, 'host'),
@@ -51,7 +54,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
     if (targetRaw === undefined || !HOST_TARGETS.has(targetRaw)) {
       throw new Error(`${command} target must be one of: codex, claude, all`);
     }
-    const flags = parseFlags(flagArgs);
+    const flags = parseFlags(flagArgs, INSTALL_FLAGS);
     const mcpOnly = booleanFlag(flags, 'mcp-only');
     const hookOnly = booleanFlag(flags, 'hook-only');
     if (mcpOnly && hookOnly) {
@@ -71,7 +74,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
   throw new Error(`unknown command: ${command}`);
 }
 
-function parseFlags(args: string[]): Map<string, string | true> {
+function parseFlags(args: string[], allowed: Set<string>): Map<string, string | true> {
   const flags = new Map<string, string | true>();
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
@@ -79,6 +82,9 @@ function parseFlags(args: string[]): Map<string, string | true> {
       throw new Error(`unexpected positional argument: ${arg}`);
     }
     const name = arg.slice(2);
+    if (!allowed.has(name)) {
+      throw new Error(`unknown flag: --${name}`);
+    }
     const next = args[index + 1];
     if (!next || next.startsWith('--')) {
       flags.set(name, true);
@@ -124,8 +130,8 @@ function numberFlag(flags: Map<string, string | true>, name: string): number | u
     return undefined;
   }
   const value = Number(raw);
-  if (!Number.isSafeInteger(value) || value <= 0) {
-    throw new Error(`--${name} must be a positive integer`);
+  if (!Number.isSafeInteger(value) || value <= 0 || value > 65535) {
+    throw new Error(`--${name} must be an integer from 1 to 65535`);
   }
   return value;
 }
