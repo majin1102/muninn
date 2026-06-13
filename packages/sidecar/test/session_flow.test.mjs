@@ -1030,7 +1030,7 @@ test('ui session endpoints include native rows with indexed ownership fields', a
       project: TEST_PROJECT,
       cwd: TEST_CWD,
       agent: 'agent-a',
-      observer: 'default',
+      observer: 'test-observer',
       title: 'historical default prompt',
       summary: 'historical default prompt historical default response',
       events: [
