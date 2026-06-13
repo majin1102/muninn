@@ -396,7 +396,7 @@ export async function waitForImportWatermark(
 }
 
 async function fetchMemoryWatermark(database: string) {
-  const url = new URL(`${sidecarBaseUrl()}/api/v1/memory/watermark`);
+  const url = new URL(`${serverBaseUrl()}/api/v1/memory/watermark`);
   url.searchParams.set('database', database);
   const response = await fetch(url);
   const payload = await response.json();
@@ -404,7 +404,7 @@ async function fetchMemoryWatermark(database: string) {
 }
 
 async function fetchMemoryFinalize(database?: string) {
-  const { payload, statusCode } = await requestJson(`${sidecarBaseUrl()}/api/v1/memory/finalize`, {
+  const { payload, statusCode } = await requestJson(`${serverBaseUrl()}/api/v1/memory/finalize`, {
     method: 'POST',
     body: JSON.stringify({ database }),
   });
@@ -434,7 +434,7 @@ async function requestJson(url: string, options: { method: string; body?: string
             statusCode: response.statusCode ?? 0,
           });
         } catch (error) {
-          reject(new Error(`sidecar response was not valid JSON: ${error instanceof Error ? error.message : String(error)}`));
+          reject(new Error(`server response was not valid JSON: ${error instanceof Error ? error.message : String(error)}`));
         }
       });
     });
@@ -470,8 +470,8 @@ async function parseMemoryWatermarkPayload(
   if (!ok) {
     const detail = typeof payload?.errorMessage === 'string'
       ? payload.errorMessage
-      : `sidecar ${label} request failed with status ${status}`;
-    const message = `sidecar ${label} request failed with status ${status}: ${detail}`;
+      : `server ${label} request failed with status ${status}`;
+    const message = `server ${label} request failed with status ${status}: ${detail}`;
     throw new Error(message);
   }
   const extractorPhase = parseWatermarkPhase(payload.phases?.extractor, 'extractor');
@@ -502,7 +502,7 @@ function parseWatermarkPhase(value: unknown, component: 'extractor' | 'observer'
   if (typeof value === 'string' && allowed.includes(value)) {
     return value;
   }
-  throw new Error(`sidecar watermark response had invalid ${component} phase: ${String(value)}`);
+  throw new Error(`server watermark response had invalid ${component} phase: ${String(value)}`);
 }
 
 function memoryWatermarkResolved(watermark: Awaited<ReturnType<typeof fetchMemoryWatermark>>): boolean {
@@ -582,7 +582,7 @@ async function captureTurn(content: TurnContent, database: string): Promise<Capt
       { type: 'assistantMessage' as const, text: content.response },
     ],
   };
-  const payload = await fetchJsonObject(`${sidecarBaseUrl()}/api/v1/benchmark/locomo/turn/capture`, {
+  const payload = await fetchJsonObject(`${serverBaseUrl()}/api/v1/benchmark/locomo/turn/capture`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ database, turn: turnPayload }),
@@ -602,7 +602,7 @@ async function fetchLocomoRecall(
   budget = 0,
   queryLimit?: number,
 ): Promise<{ hits: BridgeHit[] }> {
-  const payload = await fetchJsonObject(`${sidecarBaseUrl()}/api/v1/benchmark/locomo/recall`, {
+  const payload = await fetchJsonObject(`${serverBaseUrl()}/api/v1/benchmark/locomo/recall`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -656,8 +656,8 @@ function parseBridgeHit(value: unknown): BridgeHit {
   };
 }
 
-function sidecarBaseUrl(): string {
-  return (process.env.MUNINN_SIDECAR_BASE_URL || 'http://127.0.0.1:8080').replace(/\/+$/, '');
+function serverBaseUrl(): string {
+  return (process.env.MUNINN_SERVER_BASE_URL || 'http://127.0.0.1:8080').replace(/\/+$/, '');
 }
 
 export function resolveEvidenceIdsFromGraph(

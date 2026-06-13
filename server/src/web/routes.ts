@@ -41,7 +41,7 @@ import { claudeAdapter } from './claude_import.js';
 import { deleteImportedProject, importProjects, importSelectedSessions, listImportedSessions, listLocalProjects, listLocalSessions, type ImportAdapter } from './import_core.js';
 import { getCapturePolicy, isAgentCaptureEnabled, setAgentCaptureEnabled, setCaptureEnabled } from './capture_policy.js';
 
-// Re-exported so the sidecar capture endpoint can gate live hook captures.
+// Re-exported so the server capture endpoint can gate live hook captures.
 export { isCaptureEnabled } from './capture_policy.js';
 
 const importAdapters: Record<string, ImportAdapter> = {
@@ -57,7 +57,7 @@ const OBSERVER_DEFAULT_SESSION_PREFIX = '__observer_default__:';
 const SESSION_TREE_PAGE_LIMIT = 1_000_000;
 const packageRoot = path.resolve(__dirname, '..', '..', '..');
 
-export const appRoutes = new Hono();
+export const webRoutes = new Hono();
 export const SESSION_SNAPSHOTS_ROUTE = '/api/v1/ui/session-snapshots';
 
 let sessionTreeCache: Awaited<ReturnType<typeof turns.list>> | null = null;
@@ -746,13 +746,13 @@ async function serveWebFile(filePath: string): Promise<Response> {
   }
 }
 
-appRoutes.get('/app', (c) => c.redirect('/app/'));
+webRoutes.get('/app', (c) => c.redirect('/app/'));
 
-appRoutes.get('/app/', async () => {
+webRoutes.get('/app/', async () => {
   return serveWebFile(getWebAssetPath('index.html'));
 });
 
-appRoutes.get('/app/:asset{.+}', async (c) => {
+webRoutes.get('/app/:asset{.+}', async (c) => {
   const asset = c.req.param('asset');
   if (asset.includes('..')) {
     return c.text('Not Found', 404);
@@ -760,7 +760,7 @@ appRoutes.get('/app/:asset{.+}', async (c) => {
   return serveWebFile(getWebAssetPath(asset));
 });
 
-appRoutes.get('/api/v1/ui/session/agents', async (c) => {
+webRoutes.get('/api/v1/ui/session/agents', async (c) => {
   console.log('[APP_UI_SESSION_AGENTS]');
 
   const entries = await sessions.index();
@@ -792,7 +792,7 @@ appRoutes.get('/api/v1/ui/session/agents', async (c) => {
   return c.json(response);
 });
 
-appRoutes.get('/api/v1/ui/session/agents/:agent/sessions', async (c) => {
+webRoutes.get('/api/v1/ui/session/agents/:agent/sessions', async (c) => {
   const agent = c.req.param('agent');
   console.log('[APP_UI_SESSION_GROUPS] agent:', agent);
 
@@ -809,7 +809,7 @@ appRoutes.get('/api/v1/ui/session/agents/:agent/sessions', async (c) => {
   return c.json(response);
 });
 
-appRoutes.get('/api/v1/ui/session/agents/:agent/sessions/:sessionKey/turns', async (c) => {
+webRoutes.get('/api/v1/ui/session/agents/:agent/sessions/:sessionKey/turns', async (c) => {
   const agent = c.req.param('agent');
   const sessionKey = c.req.param('sessionKey');
   const project = normalizeText(c.req.query('project'));
@@ -853,7 +853,7 @@ appRoutes.get('/api/v1/ui/session/agents/:agent/sessions/:sessionKey/turns', asy
   return c.json(response);
 });
 
-appRoutes.get('/api/v1/ui/memories/:memoryId/document', async (c) => {
+webRoutes.get('/api/v1/ui/memories/:memoryId/document', async (c) => {
   const memoryId = c.req.param('memoryId');
   console.log('[APP_UI_MEMORY_DOCUMENT] memoryId:', memoryId);
 
@@ -877,7 +877,7 @@ appRoutes.get('/api/v1/ui/memories/:memoryId/document', async (c) => {
   return c.json(response);
 });
 
-appRoutes.get('/api/v1/ui/recall/providers', (c) => {
+webRoutes.get('/api/v1/ui/recall/providers', (c) => {
   const response: RecallProvidersResponse = {
     providers: recallProviderOptions(),
     requestId: generateRequestId(),
@@ -885,7 +885,7 @@ appRoutes.get('/api/v1/ui/recall/providers', (c) => {
   return c.json(response);
 });
 
-appRoutes.get('/api/v1/ui/recall/search', async (c) => {
+webRoutes.get('/api/v1/ui/recall/search', async (c) => {
   const query = normalizeText(c.req.query('query'));
   if (!query) {
     return c.json(errorResponse('invalidRequest', 'query is required'), 400);
@@ -920,7 +920,7 @@ appRoutes.get('/api/v1/ui/recall/search', async (c) => {
   return c.json(response);
 });
 
-appRoutes.post('/api/v1/ui/recall/agent', async (c) => {
+webRoutes.post('/api/v1/ui/recall/agent', async (c) => {
   const body = await c.req.json().catch(() => null) as {
     query?: unknown;
     provider?: unknown;
@@ -952,7 +952,7 @@ function normalizeTextList(values: string[] | undefined): string[] {
     .filter((value): value is string => Boolean(value) && value !== 'all'))];
 }
 
-appRoutes.get(SESSION_SNAPSHOTS_ROUTE, async (c) => {
+webRoutes.get(SESSION_SNAPSHOTS_ROUTE, async (c) => {
   console.log('[APP_UI_SESSION_SNAPSHOTS]');
 
   const rows = await sessions.list({
@@ -979,7 +979,7 @@ appRoutes.get(SESSION_SNAPSHOTS_ROUTE, async (c) => {
   return c.json(response);
 });
 
-appRoutes.get('/api/v1/ui/pipelines', async (c) => {
+webRoutes.get('/api/v1/ui/pipelines', async (c) => {
   console.log('[APP_UI_PIPELINES]');
 
   const response: PipelineTasksResponse = {
@@ -996,7 +996,7 @@ appRoutes.get('/api/v1/ui/pipelines', async (c) => {
   return c.json(response);
 });
 
-appRoutes.get('/api/v1/ui/settings/config', async (c) => {
+webRoutes.get('/api/v1/ui/settings/config', async (c) => {
   const configPath = resolveConfigPath();
   let content = defaultConfigContent();
 
@@ -1026,7 +1026,7 @@ appRoutes.get('/api/v1/ui/settings/config', async (c) => {
   return c.json(response);
 });
 
-appRoutes.put('/api/v1/ui/settings/config', async (c) => {
+webRoutes.put('/api/v1/ui/settings/config', async (c) => {
   const configPath = resolveConfigPath();
   let body: { content?: string };
 
@@ -1068,7 +1068,7 @@ appRoutes.put('/api/v1/ui/settings/config', async (c) => {
   return c.json(response);
 });
 
-appRoutes.get('/api/v1/ui/import/codex/preview', async (c) => {
+webRoutes.get('/api/v1/ui/import/codex/preview', async (c) => {
   const projectLimit = parseOptionalInteger(c.req.query('projectLimit'));
   const sourceRoot = c.req.query('sourceRoot');
   const projectKeys = c.req.queries('projectKey');
@@ -1080,7 +1080,7 @@ appRoutes.get('/api/v1/ui/import/codex/preview', async (c) => {
   return c.json(response);
 });
 
-appRoutes.post('/api/v1/ui/import/codex', async (c) => {
+webRoutes.post('/api/v1/ui/import/codex', async (c) => {
   let body: { sourceRoot?: string; projectLimit?: number; projectKeys?: string[] } = {};
   try {
     body = await c.req.json<{ sourceRoot?: string; projectLimit?: number; projectKeys?: string[] }>();
@@ -1098,7 +1098,7 @@ appRoutes.post('/api/v1/ui/import/codex', async (c) => {
   return c.json(response);
 });
 
-appRoutes.get('/api/v1/ui/import/projects', async (c) => {
+webRoutes.get('/api/v1/ui/import/projects', async (c) => {
   const requestId = generateRequestId();
   const importedByAgent = await Promise.all(Object.values(importAdapters).map(async (adapter) => ({
     adapter,
@@ -1183,7 +1183,7 @@ appRoutes.get('/api/v1/ui/import/projects', async (c) => {
   return c.json(response);
 });
 
-appRoutes.get('/api/v1/ui/import/:agent/sessions', async (c) => {
+webRoutes.get('/api/v1/ui/import/:agent/sessions', async (c) => {
   const adapter = importAdapters[c.req.param('agent')];
   if (!adapter) {
     return c.json(errorResponse('invalidRequest', 'unknown import agent'), 404);
@@ -1195,7 +1195,7 @@ appRoutes.get('/api/v1/ui/import/:agent/sessions', async (c) => {
   return c.json(response);
 });
 
-appRoutes.get('/api/v1/ui/import/:agent/local-projects', async (c) => {
+webRoutes.get('/api/v1/ui/import/:agent/local-projects', async (c) => {
   const adapter = importAdapters[c.req.param('agent')];
   if (!adapter) {
     return c.json(errorResponse('invalidRequest', 'unknown import agent'), 404);
@@ -1204,7 +1204,7 @@ appRoutes.get('/api/v1/ui/import/:agent/local-projects', async (c) => {
   return c.json(response);
 });
 
-appRoutes.put('/api/v1/ui/import/:agent/capture-policy', async (c) => {
+webRoutes.put('/api/v1/ui/import/:agent/capture-policy', async (c) => {
   const agent = c.req.param('agent');
   if (!importAdapters[agent]) {
     return c.json(errorResponse('invalidRequest', 'unknown import agent'), 404);
@@ -1225,7 +1225,7 @@ appRoutes.put('/api/v1/ui/import/:agent/capture-policy', async (c) => {
   return c.body(null, 204);
 });
 
-appRoutes.put('/api/v1/ui/import/:agent/agent-capture', async (c) => {
+webRoutes.put('/api/v1/ui/import/:agent/agent-capture', async (c) => {
   const agent = c.req.param('agent');
   if (!importAdapters[agent]) {
     return c.json(errorResponse('invalidRequest', 'unknown import agent'), 404);
@@ -1243,7 +1243,7 @@ appRoutes.put('/api/v1/ui/import/:agent/agent-capture', async (c) => {
   return c.body(null, 204);
 });
 
-appRoutes.post('/api/v1/ui/import/:agent/projects', async (c) => {
+webRoutes.post('/api/v1/ui/import/:agent/projects', async (c) => {
   const adapter = importAdapters[c.req.param('agent')];
   if (!adapter) {
     return c.json(errorResponse('invalidRequest', 'unknown import agent'), 404);
@@ -1265,7 +1265,7 @@ appRoutes.post('/api/v1/ui/import/:agent/projects', async (c) => {
   return c.json(response);
 });
 
-appRoutes.delete('/api/v1/ui/import/:agent/project', async (c) => {
+webRoutes.delete('/api/v1/ui/import/:agent/project', async (c) => {
   const adapter = importAdapters[c.req.param('agent')];
   if (!adapter) {
     return c.json(errorResponse('invalidRequest', 'unknown import agent'), 404);
@@ -1285,7 +1285,7 @@ appRoutes.delete('/api/v1/ui/import/:agent/project', async (c) => {
   return c.json(response);
 });
 
-appRoutes.post('/api/v1/ui/import/:agent/sessions', async (c) => {
+webRoutes.post('/api/v1/ui/import/:agent/sessions', async (c) => {
   const adapter = importAdapters[c.req.param('agent')];
   if (!adapter) {
     return c.json(errorResponse('invalidRequest', 'unknown import agent'), 404);
@@ -1306,7 +1306,7 @@ appRoutes.post('/api/v1/ui/import/:agent/sessions', async (c) => {
   return c.json(response);
 });
 
-appRoutes.get('/api/v1/artifacts/*', async (c) => {
+webRoutes.get('/api/v1/artifacts/*', async (c) => {
   const name = safeDecodeURIComponent(c.req.path.slice('/api/v1/artifacts/'.length));
   if (!isSafeArtifactPath(name)) {
     return c.json(errorResponse('invalidRequest', 'invalid artifact path'), 400);

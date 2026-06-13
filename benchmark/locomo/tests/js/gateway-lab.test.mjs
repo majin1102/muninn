@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const labModule = require('../dist/gateway-lab.js');
+const labModule = require('../../dist/gateway-lab.js');
 
 test('observing lab renders raw locomo turns with date and media captions', () => {
   const turns = labModule.locomoTurns({

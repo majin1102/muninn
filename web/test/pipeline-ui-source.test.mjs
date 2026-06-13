@@ -61,7 +61,7 @@ test('pipeline task titles use product labels and project session context', asyn
   assert.match(source, /return 'Observation'/);
   assert.match(source, /return 'Dreaming'/);
   assert.match(demo, /Project: muninn Session:/);
-  assert.match(demo, /Project: board-mvp Session:/);
+  assert.match(demo, /Project: app-mvp Session:/);
   assert.doesNotMatch(demo, /Project: .*· Session:/);
 });
 

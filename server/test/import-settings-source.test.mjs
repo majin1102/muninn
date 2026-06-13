@@ -37,15 +37,15 @@ test('project import picker uses project rows with right-side checks', async () 
 test('project import registers projects without importing sessions', async () => {
   const componentSource = await readFile(new URL('../../web/src/components/ImportSettings.tsx', import.meta.url), 'utf8');
   const apiSource = await readFile(new URL('../../web/src/lib/api.ts', import.meta.url), 'utf8');
-  const serverSource = await readFile(new URL('../src/ui/app.ts', import.meta.url), 'utf8');
-  const capturePolicySource = await readFile(new URL('../src/ui/capture_policy.ts', import.meta.url), 'utf8');
+  const serverSource = await readFile(new URL('../src/web/routes.ts', import.meta.url), 'utf8');
+  const capturePolicySource = await readFile(new URL('../src/web/capture_policy.ts', import.meta.url), 'utf8');
 
   const pickerStart = componentSource.indexOf('function ProjectImportPicker');
   const pickerEnd = componentSource.indexOf('function SessionImportPicker', pickerStart);
   const pickerSource = componentSource.slice(pickerStart, pickerEnd);
 
   assert.match(apiSource, /importProjects\(agent: string, projects: string\[\]\): Promise<ImportProjectsResponse>/);
-  assert.match(serverSource, /appRoutes\.post\('\/api\/v1\/ui\/import\/:agent\/projects'/);
+  assert.match(serverSource, /webRoutes\.post\('\/api\/v1\/ui\/import\/:agent\/projects'/);
   assert.match(serverSource, /importProjects\(adapter, projects, generateRequestId\(\)\)/);
   assert.match(capturePolicySource, /export async function removeCapturePolicy/);
   assert.match(pickerSource, /selectedProjectImports/);
@@ -57,7 +57,7 @@ test('project import registers projects without importing sessions', async () =>
 });
 
 test('session import flushes the imported batch into extraction without finalize', async () => {
-  const importSource = await readFile(new URL('../src/ui/import_core.ts', import.meta.url), 'utf8');
+  const importSource = await readFile(new URL('../src/web/import_core.ts', import.meta.url), 'utf8');
 
   assert.match(importSource, /import \{[^}]*captureTurn[^}]*\} from '\.\.\/memory\/index\.js'/s);
   assert.match(importSource, /await captureTurn\(toTurnContent/);
@@ -68,7 +68,7 @@ test('session import flushes the imported batch into extraction without finalize
 });
 
 test('capture settings are stored in muninn json and ignore legacy policy files', async () => {
-  const capturePolicySource = await readFile(new URL('../src/ui/capture_policy.ts', import.meta.url), 'utf8');
+  const capturePolicySource = await readFile(new URL('../src/web/capture_policy.ts', import.meta.url), 'utf8');
 
   assert.match(capturePolicySource, /resolveConfigPath/);
   assert.match(capturePolicySource, /getCaptureConfigFromConfig/);
@@ -110,14 +110,14 @@ test('project capture uses aggregated imported projects with project-level actio
 
 test('import project delete API is wired through client and server', async () => {
   const apiSource = await readFile(new URL('../../web/src/lib/api.ts', import.meta.url), 'utf8');
-  const serverSource = await readFile(new URL('../src/ui/app.ts', import.meta.url), 'utf8');
-  const importSource = await readFile(new URL('../src/ui/import_core.ts', import.meta.url), 'utf8');
+  const serverSource = await readFile(new URL('../src/web/routes.ts', import.meta.url), 'utf8');
+  const importSource = await readFile(new URL('../src/web/import_core.ts', import.meta.url), 'utf8');
   const typeSource = await readFile(new URL('../../common/src/api.ts', import.meta.url), 'utf8');
 
   assert.match(typeSource, /export interface DeleteImportedProjectResponse/);
   assert.match(apiSource, /deleteImportedProject\(agent: string, project: string\): Promise<DeleteImportedProjectResponse>/);
   assert.match(apiSource, /DELETE/);
-  assert.match(serverSource, /appRoutes\.delete\('\/api\/v1\/ui\/import\/:agent\/project'/);
+  assert.match(serverSource, /webRoutes\.delete\('\/api\/v1\/ui\/import\/:agent\/project'/);
   assert.match(serverSource, /deleteImportedProject\(adapter, body\.project, generateRequestId\(\)\)/);
   assert.match(importSource, /export async function deleteImportedProject/);
   assert.match(importSource, /sessions\.refreshIndex\(\)/);
@@ -126,14 +126,14 @@ test('import project delete API is wired through client and server', async () =>
 
 test('imported project list is exposed as a single aggregated API', async () => {
   const apiSource = await readFile(new URL('../../web/src/lib/api.ts', import.meta.url), 'utf8');
-  const serverSource = await readFile(new URL('../src/ui/app.ts', import.meta.url), 'utf8');
+  const serverSource = await readFile(new URL('../src/web/routes.ts', import.meta.url), 'utf8');
   const demoSource = await readFile(new URL('../../web/src/demo/provider.ts', import.meta.url), 'utf8');
   const typeSource = await readFile(new URL('../../common/src/api.ts', import.meta.url), 'utf8');
 
   assert.match(typeSource, /export interface ImportedProjectsResponse/);
   assert.match(apiSource, /listImportedProjects\(\): Promise<ImportedProjectsResponse>/);
   assert.match(apiSource, /fetchJson<ImportedProjectsResponse>\('\/api\/v1\/ui\/import\/projects'\)/);
-  assert.match(serverSource, /appRoutes\.get\('\/api\/v1\/ui\/import\/projects'/);
+  assert.match(serverSource, /webRoutes\.get\('\/api\/v1\/ui\/import\/projects'/);
   assert.match(serverSource, /const response: ImportedProjectsResponse/);
   assert.match(serverSource, /getCapturePolicy\(adapter\.agent\)/);
   assert.match(serverSource, /sessionCount: 0/);
@@ -143,8 +143,8 @@ test('imported project list is exposed as a single aggregated API', async () => 
 
 test('import session identity uses shared project agent session identity', async () => {
   const componentSource = await readFile(new URL('../../web/src/components/ImportSettings.tsx', import.meta.url), 'utf8');
-  const importSource = await readFile(new URL('../src/ui/import_core.ts', import.meta.url), 'utf8');
-  const codexImportSource = await readFile(new URL('../src/ui/codex_import.ts', import.meta.url), 'utf8');
+  const importSource = await readFile(new URL('../src/web/import_core.ts', import.meta.url), 'utf8');
+  const codexImportSource = await readFile(new URL('../src/web/codex_import.ts', import.meta.url), 'utf8');
   const identitySource = await readFile(new URL('../../common/src/session_identity.ts', import.meta.url), 'utf8');
 
   assert.match(identitySource, /export type SessionIdentity/);
@@ -166,9 +166,9 @@ test('import session identity uses shared project agent session identity', async
 });
 
 test('local import session scan is concurrency bounded', async () => {
-  const importSource = await readFile(new URL('../src/ui/import_core.ts', import.meta.url), 'utf8');
-  const codexImportSource = await readFile(new URL('../src/ui/codex_import.ts', import.meta.url), 'utf8');
-  const claudeImportSource = await readFile(new URL('../src/ui/claude_import.ts', import.meta.url), 'utf8');
+  const importSource = await readFile(new URL('../src/web/import_core.ts', import.meta.url), 'utf8');
+  const codexImportSource = await readFile(new URL('../src/web/codex_import.ts', import.meta.url), 'utf8');
+  const claudeImportSource = await readFile(new URL('../src/web/claude_import.ts', import.meta.url), 'utf8');
 
   assert.match(importSource, /const LOCAL_SESSION_SCAN_CONCURRENCY = \d+/);
   assert.match(importSource, /mapConcurrent\(files, LOCAL_SESSION_SCAN_CONCURRENCY/);
@@ -180,8 +180,8 @@ test('local import session scan is concurrency bounded', async () => {
 });
 
 test('import duplicate detection paginates existing turns', async () => {
-  const importSource = await readFile(new URL('../src/ui/import_core.ts', import.meta.url), 'utf8');
-  const codexImportSource = await readFile(new URL('../src/ui/codex_import.ts', import.meta.url), 'utf8');
+  const importSource = await readFile(new URL('../src/web/import_core.ts', import.meta.url), 'utf8');
+  const codexImportSource = await readFile(new URL('../src/web/codex_import.ts', import.meta.url), 'utf8');
 
   assert.match(importSource, /async function listAgentTurns/);
   assert.match(importSource, /offset \+= TURN_PAGE_SIZE/);
@@ -196,8 +196,8 @@ test('import duplicate detection paginates existing turns', async () => {
 
 test('project import uses project scan instead of session scan', async () => {
   const componentSource = await readFile(new URL('../../web/src/components/ImportSettings.tsx', import.meta.url), 'utf8');
-  const serverSource = await readFile(new URL('../src/ui/app.ts', import.meta.url), 'utf8');
-  const importSource = await readFile(new URL('../src/ui/import_core.ts', import.meta.url), 'utf8');
+  const serverSource = await readFile(new URL('../src/web/routes.ts', import.meta.url), 'utf8');
+  const importSource = await readFile(new URL('../src/web/import_core.ts', import.meta.url), 'utf8');
 
   assert.match(serverSource, /local-projects/);
   assert.match(importSource, /export async function listLocalProjects/);
@@ -205,8 +205,8 @@ test('project import uses project scan instead of session scan', async () => {
 });
 
 test('local session listing is project scoped and does not scan turns for imported state', async () => {
-  const importSource = await readFile(new URL('../src/ui/import_core.ts', import.meta.url), 'utf8');
-  const serverSource = await readFile(new URL('../src/ui/app.ts', import.meta.url), 'utf8');
+  const importSource = await readFile(new URL('../src/web/import_core.ts', import.meta.url), 'utf8');
+  const serverSource = await readFile(new URL('../src/web/routes.ts', import.meta.url), 'utf8');
 
   assert.match(serverSource, /c\.req\.query\('project'\)/);
   assert.doesNotMatch(importSource, /async function importedSessionKeys/);
@@ -214,7 +214,7 @@ test('local session listing is project scoped and does not scan turns for import
 });
 
 test('ordinary import does not delete existing turns before import', async () => {
-  const importSource = await readFile(new URL('../src/ui/import_core.ts', import.meta.url), 'utf8');
+  const importSource = await readFile(new URL('../src/web/import_core.ts', import.meta.url), 'utf8');
   const importStart = importSource.indexOf('export async function importSelectedSessions');
   const importEnd = importSource.indexOf('export async function importProjects', importStart);
   const ordinaryImportSource = importSource.slice(importStart, importEnd);

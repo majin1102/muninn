@@ -1,5 +1,5 @@
 import type { Extraction, NativeTables } from '../native.js';
-import type { RecallHit, Turn } from '../client.js';
+import type { RecallHit, Turn } from '../backend.js';
 import { embedText } from '../llm/embedding-provider.js';
 import { getRecallConfig, parseRecallMode, type RecallMode } from '../config.js';
 import { sessionKey as buildSessionKey } from '../turn/key.js';

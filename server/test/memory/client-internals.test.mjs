@@ -5,7 +5,7 @@ import path from 'node:path';
 import { access, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 
 import core from '../../dist/memory/index.js';
-import { __testing } from '../../dist/memory/client.js';
+import { __testing } from '../../dist/memory/backend.js';
 import {
   getObserverRuntimeConfigFromConfigForTests,
   getExtractorLlmConfig,
@@ -24,8 +24,8 @@ import updateModule from '../../dist/memory/extractor/update.js';
 import threadModule from '../../dist/memory/extractor/thread.js';
 import observingGatewayModule from '../../dist/memory/llm/extracting.js';
 import { applyExtractionChanges, applyExtractionTableChanges } from '../../dist/memory/extractor/memory-delta.js';
-import { recallMemories } from '../../dist/memory/memories/recall.js';
-import { validateMemoryRecallResult } from '../../dist/memory/memories/memory-recaller.js';
+import { recallMemories } from '../../dist/memory/recall/index.js';
+import { validateMemoryRecallResult } from '../../dist/memory/recall/memory-recaller.js';
 import { getNativeTables } from '../../dist/memory/native.js';
 
 const { __testing: updateTesting } = updateModule;
@@ -412,7 +412,7 @@ test('memories.get renders curated observation memories', async () => {
     sessionTable: { get: async () => null },
     turnTable: { get: async () => null },
   };
-  const { Memories } = await import('../../dist/memory/memories/memories.js');
+  const { Memories } = await import('../../dist/memory/memories.js');
   const memory = await new Memories(client).get('global_observation:obs-1');
 
   assert.equal(memory.memoryId, 'global_observation:obs-1');
@@ -429,7 +429,7 @@ test('memories.get returns null for unknown curated observation memories', async
     sessionTable: { get: async () => null },
     turnTable: { get: async () => null },
   };
-  const { Memories } = await import('../../dist/memory/memories/memories.js');
+  const { Memories } = await import('../../dist/memory/memories.js');
   assert.equal(await new Memories(client).get('global_observation:missing'), null);
 });
 
@@ -453,7 +453,7 @@ test('memories.get accepts observation paths containing colons', async () => {
     sessionTable: { get: async () => null },
     turnTable: { get: async () => null },
   };
-  const { Memories } = await import('../../dist/memory/memories/memories.js');
+  const { Memories } = await import('../../dist/memory/memories.js');
   const memory = await new Memories(client).get(`global_observation:${pathId}`);
 
   assert.equal(memory.memoryId, `global_observation:${pathId}`);
@@ -461,7 +461,7 @@ test('memories.get accepts observation paths containing colons', async () => {
 });
 
 test('observation memory id parser rejects empty and wrong prefixes', async () => {
-  const { parseGlobalObservationMemoryId } = await import('../../dist/memory/memories/global-observations.js');
+  const { parseGlobalObservationMemoryId } = await import('../../dist/memory/recall/global-observations.js');
 
   assert.throws(() => parseGlobalObservationMemoryId('global_observation:'), /invalid global observation memory id/);
   assert.throws(() => parseGlobalObservationMemoryId('extraction:Caroline / Work: schedule'), /invalid global observation memory id/);
@@ -4771,13 +4771,13 @@ test('observer validation splits adjacent metadata snapshot units without separa
 test('session extraction turn input omits turn summary when prompt and response are present', () => {
   const markdown = observingGatewayTesting.renderNewTurnsForTests([{
     turnId: 'turn:13',
-    prompt: 'User asked whether board session rows should use snapshot titles.',
+    prompt: 'User asked whether app session rows should use snapshot titles.',
     response: 'Agent confirmed the session index should cache the latest snapshot title.',
     summary: 'This old turn summary repeats the prompt and response and should not be sent.',
   }]);
 
   assert.match(markdown, /## Current Batch Turns/);
-  assert.match(markdown, /Prompt:\nUser asked whether board session rows should use snapshot titles\./);
+  assert.match(markdown, /Prompt:\nUser asked whether app session rows should use snapshot titles\./);
   assert.match(markdown, /Response:\nAgent confirmed the session index should cache the latest snapshot title\./);
   assert.doesNotMatch(markdown, /Summary:/);
   assert.doesNotMatch(markdown, /This old turn summary repeats/);

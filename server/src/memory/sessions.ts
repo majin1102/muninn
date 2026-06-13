@@ -1,6 +1,6 @@
-import type { NativeTables } from '../native.js';
-import type { ListModeInput, SessionSnapshot } from '../client.js';
-import { assertMemoryIdLayer } from './types.js';
+import type { NativeTables } from './native.js';
+import type { ListModeInput, SessionSnapshot } from './backend.js';
+import { assertMemoryIdLayer } from './memory-id.js';
 
 export async function getSessionSnapshot(
   client: NativeTables,

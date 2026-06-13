@@ -2,7 +2,7 @@ import { accessSync, constants as fsConstants } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
 
-import type { ListModeInput, SessionSnapshot, Turn } from './client.js';
+import type { ListModeInput, SessionSnapshot, Turn } from './backend.js';
 import type { SessionSnapshot as SessionSnapshotPayload } from './extractor/types.js';
 import type { RecallMode } from './config.js';
 

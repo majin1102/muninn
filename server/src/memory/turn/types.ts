@@ -1,4 +1,4 @@
-import type { Turn } from '../client.js';
+import type { Turn } from '../backend.js';
 import { normalizeSessionId } from './key.js';
 
 type TurnPayload = Turn & { session_id?: string | null };

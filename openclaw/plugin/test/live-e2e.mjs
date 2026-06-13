@@ -5,7 +5,7 @@ import { ensureOpenClawPackageLink } from "./helpers/openclaw-link.mjs";
 import { liveRuntimeFixturePath, pluginRoot, resolveOpenClawRoot, resolveTsxLoaderPath } from "./helpers/paths.mjs";
 import { runNodeTestFixture } from "./helpers/run-node-test-fixture.mjs";
 
-test("live runtime e2e: before_prompt_build recall closes the loop through sidecar, plugin loader, and provider", async (t) => {
+test("live runtime e2e: before_prompt_build recall closes the loop through server, plugin loader, and provider", async (t) => {
   const apiKey = process.env.MUNINN_OPENCLAW_LIVE_OPENAI_API_KEY?.trim();
   assert.ok(
     apiKey,

@@ -12,8 +12,8 @@ import {
   type LlmToolRequest,
   type LlmToolResult,
 } from '../llm/provider.js';
-import type { Memories } from '../memories/memories.js';
-import { renderRenderedMemoryMarkdown } from '../memories/rendered.js';
+import type { Memories } from '../memories.js';
+import { renderRenderedMemoryMarkdown } from '../rendered.js';
 import type { Extraction } from '../native.js';
 import type {
   ThreadCandidateMemory,

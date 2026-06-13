@@ -1,5 +1,5 @@
-import type { SessionSnapshot, RenderedMemory, Turn } from '../client.js';
-import type { Extraction, GlobalObservation } from '../native.js';
+import type { SessionSnapshot, RenderedMemory, Turn } from './backend.js';
+import type { Extraction, GlobalObservation } from './native.js';
 
 export function inferRenderedMemoryKind(memoryId: string): 'turn' | 'session' | 'extraction' | 'global_observation' {
   if (memoryId.startsWith('turn:')) {

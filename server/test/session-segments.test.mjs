@@ -7,7 +7,7 @@ import {
   buildSessionTurnPageForTests,
   resolveSessionTreeNextOffsetForTests,
   resolveSessionNodeFromIndexForTests,
-} from '../dist/ui/app.js';
+} from '../dist/web/routes.js';
 
 const turns = [
   {

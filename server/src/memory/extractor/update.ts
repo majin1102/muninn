@@ -1,6 +1,6 @@
-import type { Turn } from '../client.js';
+import type { Turn } from '../backend.js';
 import type { QueuedExtractionChange } from '../checkpoint.js';
-import { Memories } from '../memories/memories.js';
+import { Memories } from '../memories.js';
 import type { NativeTables } from '../native.js';
 import { extractSessionMemory } from '../llm/extracting.js';
 import { applyExtractionChanges, applyExtractionTableChanges } from './memory-delta.js';

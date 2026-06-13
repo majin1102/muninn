@@ -22,7 +22,7 @@ Muninn is a memory layer for agents. This repository contains the Rust `format/`
 - `docs/spec/`
   - Canonical protocol and format specifications.
 - `docs/architecture/`
-  - System design, sidecar API, observer design, and integration decisions.
+  - System design, server API, observer design, and integration decisions.
 - `docs/comparison/`
   - Comparison notes against related tools and workflows.
 - `docs/research/`

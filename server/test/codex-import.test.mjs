@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import sessionLabels from '../dist/ui/session_labels.js';
+import sessionLabels from '../dist/web/session_labels.js';
 
 const { __testing } = sessionLabels;
 

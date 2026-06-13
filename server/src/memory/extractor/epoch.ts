@@ -1,4 +1,4 @@
-import type { Turn, TurnContent } from '../client.js';
+import type { Turn, TurnContent } from '../backend.js';
 import type { SessionRegistry } from '../turn/registry.js';
 import path from 'node:path';
 

@@ -8,7 +8,7 @@ from tempfile import TemporaryDirectory
 from benchmark.locomo.slice import build_slice, write_slice
 
 
-FIXTURE = Path("benchmark/locomo/test/fixtures/mini-locomo.json")
+FIXTURE = Path("benchmark/locomo/tests/js/fixtures/mini-locomo.json")
 
 
 class SliceTests(unittest.TestCase):

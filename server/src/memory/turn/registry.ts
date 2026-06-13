@@ -1,4 +1,4 @@
-import type { Turn } from '../client.js';
+import type { Turn } from '../backend.js';
 import type { RecentSessionCheckpoint, RecentTurn } from '../checkpoint.js';
 import type { NativeTables } from '../native.js';
 import { Session } from './session.js';

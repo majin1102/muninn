@@ -85,5 +85,5 @@ Important modeling note:
 ## Do
 
 - Keep `mcp` thin.
-- Keep transport concerns in `sidecar`.
+- Keep transport concerns in `server`.
 - Put MCP protocol and schema evolution in `docs/spec/`.

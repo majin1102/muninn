@@ -28,7 +28,7 @@ import {
   type RecentTurn,
   type SessionIndexEntry,
 } from './checkpoint.js';
-import { Memories } from './memories/memories.js';
+import { Memories } from './memories.js';
 import { Extractor } from './extractor/extractor.js';
 import { Observer } from './observer/observer.js';
 import { SessionRegistry } from './turn/registry.js';
@@ -490,7 +490,7 @@ export class MuninnBackend {
     this.finalizeDrainPromise = this.runFinalizeDrain(extractor, observer)
       .catch(async (error) => {
         const message = error instanceof Error ? error.message : String(error);
-        await writeMuninnLog(this.database, 'error', 'sidecar', 'memory_finalize_drain_failed', { message });
+        await writeMuninnLog(this.database, 'error', 'server', 'memory_finalize_drain_failed', { message });
       })
       .finally(() => {
         this.finalizeDrainPromise = null;
@@ -626,7 +626,7 @@ export async function getBackend(database?: string | null): Promise<MuninnBacken
 
 export async function captureTurn(turnContent: TurnContent, database?: string | null): Promise<void> {
   const databaseName = resolveDatabaseName(database);
-  await writeMuninnLog(databaseName, 'info', 'sidecar', 'turn_capture', {
+  await writeMuninnLog(databaseName, 'info', 'server', 'turn_capture', {
     sessionId: turnContent.sessionId,
     agent: turnContent.agent,
   });

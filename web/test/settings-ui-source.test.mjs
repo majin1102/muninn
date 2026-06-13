@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 test('settings visual mode groups extractor and observer under pipeline tabs', async () => {
-  const source = await readFile(new URL('../src/components/SettingsDialog.tsx', import.meta.url), 'utf8');
+  const source = await readFile(new URL('../src/components/SettingsPage.tsx', import.meta.url), 'utf8');
 
   assert.match(source, /type PipelineSettingsTab = 'extractor' \| 'observer'/);
   assert.match(source, /const \[pipelineTab, setPipelineTab\] = useState<PipelineSettingsTab>\(\(\) => initialSettingsHashState\(\)\.pipelineTab\)/);
@@ -18,7 +18,7 @@ test('settings visual mode groups extractor and observer under pipeline tabs', a
 });
 
 test('settings tabs are restored from and persisted to the hash query', async () => {
-  const source = await readFile(new URL('../src/components/SettingsDialog.tsx', import.meta.url), 'utf8');
+  const source = await readFile(new URL('../src/components/SettingsPage.tsx', import.meta.url), 'utf8');
   const appSource = await readFile(new URL('../src/components/App.tsx', import.meta.url), 'utf8');
 
   assert.match(appSource, /const \[path\] = value\.split\('\?'/);
@@ -31,7 +31,7 @@ test('settings tabs are restored from and persisted to the hash query', async ()
 });
 
 test('settings pipeline tabs keep extractor and observer fields with stable paths', async () => {
-  const source = await readFile(new URL('../src/components/SettingsDialog.tsx', import.meta.url), 'utf8');
+  const source = await readFile(new URL('../src/components/SettingsPage.tsx', import.meta.url), 'utf8');
 
   assert.match(source, /tab === 'extractor'/);
   assert.match(source, /description="extractor\.name" path=\{\['extractor', 'name'\]\}/);

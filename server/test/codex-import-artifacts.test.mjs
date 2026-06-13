@@ -4,9 +4,9 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import core, { captureTurn, turns } from '../dist/memory/index.js';
-import { __testing, previewCodexImport, runCodexImport } from '../dist/ui/codex_import.js';
-import { codexAdapter } from '../dist/ui/codex_import.js';
-import { importSelectedSessions } from '../dist/ui/import_core.js';
+import { __testing, previewCodexImport, runCodexImport } from '../dist/web/codex_import.js';
+import { codexAdapter } from '../dist/web/codex_import.js';
+import { importSelectedSessions } from '../dist/web/import_core.js';
 
 const { shutdownCoreForTests } = core;
 

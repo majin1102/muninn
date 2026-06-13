@@ -1,9 +1,9 @@
 import { appendFile, mkdir } from 'node:fs/promises';
 import path from 'node:path';
 
-import type { Turn } from '../client.js';
+import type { Turn } from '../backend.js';
 import { getExtractorLlmConfig, resolveDatabaseLogPath, resolveDatabaseName } from '../config.js';
-import type { Memories } from '../memories/memories.js';
+import type { Memories } from '../memories.js';
 import type {
   GatewayResult,
   ExtractSessionMemoryRequest,

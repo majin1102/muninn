@@ -7,13 +7,13 @@ import net from 'node:net';
 import http from 'node:http';
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
-import core from '../../../server/dist/memory/index.js';
+import core from '../../../../server/dist/memory/index.js';
 
 const execFileAsync = promisify(execFile);
-const repoRoot = path.resolve(import.meta.dirname, '../../..');
+const repoRoot = path.resolve(import.meta.dirname, '../../../..');
 const bridgePath = path.join(repoRoot, 'benchmark/locomo/dist/bridge.js');
-const fixturePath = path.join(repoRoot, 'benchmark/locomo/test/fixtures/mini-locomo.json');
-let activeSidecarLogs = null;
+const fixturePath = path.join(repoRoot, 'benchmark/locomo/tests/js/fixtures/mini-locomo.json');
+let activeServerLogs = null;
 
 async function exists(filePath) {
   try {
@@ -36,8 +36,8 @@ async function runBridge(command, options) {
       env: process.env,
     }));
   } catch (error) {
-    if (activeSidecarLogs) {
-      error.stderr = `${error.stderr ?? ''}\n[sidecar]\n${activeSidecarLogs.join('')}`;
+    if (activeServerLogs) {
+      error.stderr = `${error.stderr ?? ''}\n[server]\n${activeServerLogs.join('')}`;
     }
     throw error;
   }
@@ -63,12 +63,12 @@ async function freePort() {
   });
 }
 
-async function startSidecar(t, home) {
+async function startServer(t, home) {
   const port = await freePort();
   const baseUrl = `http://127.0.0.1:${port}`;
-  const previousBaseUrl = process.env.MUNINN_SIDECAR_BASE_URL;
-  process.env.MUNINN_SIDECAR_BASE_URL = baseUrl;
-  const sidecar = spawn(process.execPath, [path.join(repoRoot, 'server/dist/index.js')], {
+  const previousBaseUrl = process.env.MUNINN_SERVER_BASE_URL;
+  process.env.MUNINN_SERVER_BASE_URL = baseUrl;
+  const server = spawn(process.execPath, [path.join(repoRoot, 'server/dist/index.js')], {
     cwd: repoRoot,
     env: {
       ...process.env,
@@ -81,26 +81,26 @@ async function startSidecar(t, home) {
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   const logs = [];
-  activeSidecarLogs = logs;
-  sidecar.stdout.on('data', (chunk) => logs.push(String(chunk)));
-  sidecar.stderr.on('data', (chunk) => logs.push(String(chunk)));
+  activeServerLogs = logs;
+  server.stdout.on('data', (chunk) => logs.push(String(chunk)));
+  server.stderr.on('data', (chunk) => logs.push(String(chunk)));
   t.after(async () => {
     if (previousBaseUrl === undefined) {
-      delete process.env.MUNINN_SIDECAR_BASE_URL;
+      delete process.env.MUNINN_SERVER_BASE_URL;
     } else {
-      process.env.MUNINN_SIDECAR_BASE_URL = previousBaseUrl;
+      process.env.MUNINN_SERVER_BASE_URL = previousBaseUrl;
     }
-    if (sidecar.exitCode === null) {
-      sidecar.kill('SIGTERM');
-      await new Promise((resolve) => sidecar.once('exit', resolve));
+    if (server.exitCode === null) {
+      server.kill('SIGTERM');
+      await new Promise((resolve) => server.once('exit', resolve));
     }
-    activeSidecarLogs = null;
+    activeServerLogs = null;
   });
 
   const deadline = Date.now() + 10_000;
   while (Date.now() < deadline) {
-    if (sidecar.exitCode !== null) {
-      throw new Error(`sidecar exited before health check: ${logs.join('')}`);
+    if (server.exitCode !== null) {
+      throw new Error(`server exited before health check: ${logs.join('')}`);
     }
     try {
       const response = await fetch(`${baseUrl}/health`);
@@ -111,14 +111,14 @@ async function startSidecar(t, home) {
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
   }
-  throw new Error(`sidecar health check timed out: ${logs.join('')}`);
+  throw new Error(`server health check timed out: ${logs.join('')}`);
 }
 
-async function mockWatermarkSidecar(t, responses) {
+async function mockWatermarkServer(t, responses) {
   const port = await freePort();
   const baseUrl = `http://127.0.0.1:${port}`;
-  const previousBaseUrl = process.env.MUNINN_SIDECAR_BASE_URL;
-  process.env.MUNINN_SIDECAR_BASE_URL = baseUrl;
+  const previousBaseUrl = process.env.MUNINN_SERVER_BASE_URL;
+  process.env.MUNINN_SERVER_BASE_URL = baseUrl;
   const calls = [];
   const server = http.createServer(async (request, response) => {
     calls.push({ url: `${baseUrl}${request.url}`, method: request.method ?? 'GET' });
@@ -139,9 +139,9 @@ async function mockWatermarkSidecar(t, responses) {
   });
   t.after(() => {
     if (previousBaseUrl === undefined) {
-      delete process.env.MUNINN_SIDECAR_BASE_URL;
+      delete process.env.MUNINN_SERVER_BASE_URL;
     } else {
-      process.env.MUNINN_SIDECAR_BASE_URL = previousBaseUrl;
+      process.env.MUNINN_SERVER_BASE_URL = previousBaseUrl;
     }
     server.close();
   });
@@ -242,7 +242,7 @@ test('import writes an external manifest aligned to locomo sessions', async (t) 
     storageUri: 'file-object-store:///tmp/muninn-shared-storage',
   });
   await runBridge('reset-home', { 'muninn-home': home });
-  await startSidecar(t, home);
+  await startServer(t, home);
   const imported = await runBridge('import-sample', {
     'data-file': fixturePath,
     'sample-id': 'sample-a',
@@ -294,7 +294,7 @@ test('recall returns body-only hits without leaking benchmark artifacts into mun
     semanticIndexProvider: 'mock',
   });
   await runBridge('reset-home', { 'muninn-home': home });
-  await startSidecar(t, home);
+  await startServer(t, home);
   process.env.MUNINN_OBSERVER_POLL_MS = '20';
   await runBridge('import-sample', {
     'data-file': fixturePath,
@@ -466,7 +466,7 @@ test('bridge emits JSON error envelope for command failures', async () => {
 });
 
 test('waitForImportWatermark times out with pending turn ids when observer does not flush in time', async (t) => {
-  await mockWatermarkSidecar(t, [
+  await mockWatermarkServer(t, [
     { pending: { turns: ['turn:1'], extractions: [] }, phases: { extractor: 'pending', observer: 'idle' } },
   ]);
   const bridgeModule = await import(bridgePath);
@@ -498,7 +498,7 @@ test('import only fails fast when extraction config is missing', async (t) => {
 });
 
 test('waitForImportWatermark emits a delayed unresolved-watermark warning', async (t) => {
-  await mockWatermarkSidecar(t, [
+  await mockWatermarkServer(t, [
     { pending: { turns: ['turn:1'], extractions: [] }, phases: { extractor: 'pending', observer: 'idle' } },
   ]);
   const bridgeModule = await import(bridgePath);
@@ -525,7 +525,7 @@ test('waitForImportWatermark emits a delayed unresolved-watermark warning', asyn
 });
 
 test('waitForImportWatermark returns after async finalize resolves immediately', async (t) => {
-  await mockWatermarkSidecar(t, [
+  await mockWatermarkServer(t, [
     { delayMs: 30, payload: { pending: { turns: [], extractions: [] }, phases: { extractor: 'idle', observer: 'idle' } } },
   ]);
   const bridgeModule = await import(`${bridgePath}?finalize-progress=${Date.now()}`);
@@ -548,7 +548,7 @@ test('waitForImportWatermark returns after async finalize resolves immediately',
 });
 
 test('waitForImportWatermark reads timeout and warning defaults from env', async (t) => {
-  await mockWatermarkSidecar(t, [
+  await mockWatermarkServer(t, [
     { pending: { turns: ['turn:1'], extractions: [] }, phases: { extractor: 'pending', observer: 'idle' } },
   ]);
   t.after(() => {
@@ -571,13 +571,13 @@ test('waitForImportWatermark default timeout is thirty minutes', async () => {
   assert.equal(bridgeModule.__testing.WATERMARK_TIMEOUT_MS, 30 * 60 * 1000);
 });
 
-test('waitForImportWatermark calls the configured persistent sidecar', async (t) => {
-  const calls = await mockWatermarkSidecar(t, [{
+test('waitForImportWatermark calls the configured persistent server', async (t) => {
+  const calls = await mockWatermarkServer(t, [{
     pending: { turns: [], extractions: [] },
     phases: { extractor: 'idle', observer: 'idle' },
   }]);
 
-  const bridgeModule = await import(`${bridgePath}?persistent-sidecar=${Date.now()}`);
+  const bridgeModule = await import(`${bridgePath}?persistent-server=${Date.now()}`);
   await bridgeModule.waitForImportWatermark({
     sample_id: 'sample-a',
     turns: [{
@@ -600,7 +600,7 @@ test('waitForImportWatermark does not depend on repo-root cwd', async (t) => {
   t.after(() => {
     process.chdir(originalCwd);
   });
-  await mockWatermarkSidecar(t, [
+  await mockWatermarkServer(t, [
     { pending: { turns: ['turn:1'], extractions: [] }, phases: { extractor: 'pending', observer: 'idle' } },
   ]);
   process.chdir(path.join(repoRoot, 'benchmark/locomo'));

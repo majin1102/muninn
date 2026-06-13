@@ -7,10 +7,11 @@ from tempfile import TemporaryDirectory
 
 from benchmark.locomo.scripts.run_muninn_eval import (
     BuildConfig,
+    Target,
     build_badcases_report,
     build_paths,
     build_run_command,
-    sidecar_log_path,
+    server_log_path,
     classify_failure,
     extract_stats,
     prepare_data_file,
@@ -18,6 +19,39 @@ from benchmark.locomo.scripts.run_muninn_eval import (
     resolve_target,
     write_diagnostic,
 )
+
+
+def write_sample_data(root: Path) -> Path:
+    def sample(sample_id: str, qa_count: int) -> dict:
+        return {
+            "sample_id": sample_id,
+            "conversation": {
+                "speaker_a": "Caroline",
+                "speaker_b": "Melanie",
+                "session_1_date_time": "1:56 pm on 8 May, 2023",
+                "session_1": [{"speaker": "Caroline", "dia_id": "D1:1", "text": f"{sample_id} first session"}],
+                "session_2_date_time": "1:14 pm on 25 May, 2023",
+                "session_2": [{"speaker": "Melanie", "dia_id": "D2:1", "text": f"{sample_id} second session"}],
+                "session_3_date_time": "4:40 pm on 2 Jun, 2023",
+                "session_3": [{"speaker": "Caroline", "dia_id": "D3:1", "text": f"{sample_id} third session"}],
+            },
+            "qa": [
+                {
+                    "question": f"{sample_id} question {index}",
+                    "answer": f"{sample_id} answer {index}",
+                    "evidence": ["D1:1" if index % 2 == 0 else "D2:1"],
+                    "category": 4,
+                }
+                for index in range(qa_count)
+            ],
+        }
+
+    data_file = root / "locomo.json"
+    data_file.write_text(
+        json.dumps([sample("conv-26", 20), sample("conv-30", 22)], indent=2) + "\n",
+        encoding="utf8",
+    )
+    return data_file
 
 
 class RunMuninnEvalTests(unittest.TestCase):
@@ -171,7 +205,7 @@ class RunMuninnEvalTests(unittest.TestCase):
         self.assertIn("--budget 0", joined)
         self.assertEqual(env["MUNINN_LOCOMO_WATERMARK_TIMEOUT_MS"], "7200000")
 
-    def test_build_run_command_injects_persistent_sidecar_base_url(self) -> None:
+    def test_build_run_command_injects_persistent_server_base_url(self) -> None:
         config = BuildConfig(
             target=resolve_target("conv-26"),
             top_k=8,
@@ -185,11 +219,11 @@ class RunMuninnEvalTests(unittest.TestCase):
         )
         paths = build_paths(config)
 
-        _, env = build_run_command(config, paths, sidecar_base_url="http://127.0.0.1:9817")
+        _, env = build_run_command(config, paths, server_base_url="http://127.0.0.1:9817")
 
-        self.assertEqual(env["MUNINN_SIDECAR_BASE_URL"], "http://127.0.0.1:9817")
+        self.assertEqual(env["MUNINN_SERVER_BASE_URL"], "http://127.0.0.1:9817")
 
-    def test_sidecar_log_path_lives_next_to_run_home(self) -> None:
+    def test_server_log_path_lives_next_to_run_home(self) -> None:
         config = BuildConfig(
             target=resolve_target("three-small"),
             top_k=8,
@@ -199,48 +233,51 @@ class RunMuninnEvalTests(unittest.TestCase):
             watermark_timeout_ms=7200000,
             answerer="llm",
             keep_home=True,
-            run_name="sidecar-log-test",
+            run_name="server-log-test",
         )
         paths = build_paths(config)
 
-        self.assertEqual(sidecar_log_path(paths), Path("benchmark/locomo/.runs/sidecar-log-test.real/sidecar.log"))
+        self.assertEqual(server_log_path(paths), Path("benchmark/locomo/.runs/server-log-test.real/server.log"))
 
     def test_prepare_data_file_writes_multi_sample_subset(self) -> None:
-        target = resolve_target("sample:conv-26,conv-30")
-        config = BuildConfig(
-            target=target,
-            top_k=8,
-            budget=0,
-            query_limit=8,
-            recall_mode="hybrid",
-            watermark_timeout_ms=7200000,
-            answerer="llm",
-            keep_home=True,
-            run_name="test-subset",
-        )
-        paths = build_paths(config)
+        with TemporaryDirectory() as tmpdir:
+            source = write_sample_data(Path(tmpdir))
+            config = BuildConfig(
+                target=Target("sample:conv-26,conv-30", source, ["conv-26", "conv-30"]),
+                top_k=8,
+                budget=0,
+                query_limit=8,
+                recall_mode="hybrid",
+                watermark_timeout_ms=7200000,
+                answerer="llm",
+                keep_home=True,
+                run_name="test-subset",
+            )
+            paths = build_paths(config)
 
-        data_file = prepare_data_file(config, paths)
-        data = json.loads((Path.cwd() / data_file).read_text(encoding="utf8"))
+            data_file = prepare_data_file(config, paths)
+            data = json.loads((Path.cwd() / data_file).read_text(encoding="utf8"))
 
         self.assertEqual([sample["sample_id"] for sample in data], ["conv-26", "conv-30"])
 
     def test_prepare_data_file_writes_single_sample_subset(self) -> None:
-        config = BuildConfig(
-            target=resolve_target("conv-26"),
-            top_k=8,
-            budget=0,
-            query_limit=8,
-            recall_mode="hybrid",
-            watermark_timeout_ms=7200000,
-            answerer="llm",
-            keep_home=True,
-            run_name="test-single-subset",
-        )
-        paths = build_paths(config)
+        with TemporaryDirectory() as tmpdir:
+            source = write_sample_data(Path(tmpdir))
+            config = BuildConfig(
+                target=Target("conv-26", source, ["conv-26"]),
+                top_k=8,
+                budget=0,
+                query_limit=8,
+                recall_mode="hybrid",
+                watermark_timeout_ms=7200000,
+                answerer="llm",
+                keep_home=True,
+                run_name="test-single-subset",
+            )
+            paths = build_paths(config)
 
-        data_file = prepare_data_file(config, paths)
-        data = json.loads((Path.cwd() / data_file).read_text(encoding="utf8"))
+            data_file = prepare_data_file(config, paths)
+            data = json.loads((Path.cwd() / data_file).read_text(encoding="utf8"))
 
         self.assertEqual([sample["sample_id"] for sample in data], ["conv-26"])
 
@@ -263,21 +300,23 @@ class RunMuninnEvalTests(unittest.TestCase):
         self.assertEqual(data_file, config.target.data_file)
 
     def test_prepare_data_file_builds_three_small_session_slices(self) -> None:
-        config = BuildConfig(
-            target=resolve_target("three-small"),
-            top_k=8,
-            budget=0,
-            query_limit=8,
-            recall_mode="hybrid",
-            watermark_timeout_ms=7200000,
-            answerer="llm",
-            keep_home=True,
-            run_name="test-three-small",
-        )
-        paths = build_paths(config)
+        with TemporaryDirectory() as tmpdir:
+            source = write_sample_data(Path(tmpdir))
+            config = BuildConfig(
+                target=Target("three-small", source, []),
+                top_k=8,
+                budget=0,
+                query_limit=8,
+                recall_mode="hybrid",
+                watermark_timeout_ms=7200000,
+                answerer="llm",
+                keep_home=True,
+                run_name="test-three-small",
+            )
+            paths = build_paths(config)
 
-        data_file = prepare_data_file(config, paths)
-        data = json.loads((Path.cwd() / data_file).read_text(encoding="utf8"))
+            data_file = prepare_data_file(config, paths)
+            data = json.loads((Path.cwd() / data_file).read_text(encoding="utf8"))
 
         self.assertEqual([sample["sample_id"] for sample in data], ["conv-26", "conv-30"])
         self.assertEqual([len(sample["qa"]) for sample in data], [20, 22])

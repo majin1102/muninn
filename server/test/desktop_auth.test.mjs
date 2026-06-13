@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { app } from '../dist/app.js';
+import { app } from '../dist/routes.js';
 
 test.afterEach(() => {
   delete process.env.MUNINN_DESKTOP_TOKEN;

@@ -6,7 +6,7 @@ import {
 } from '../checkpoint.js';
 import type { CheckpointLock } from '../backend.js';
 import type { NativeTables } from '../native.js';
-import type { MemoryWatermark, Turn, TurnContent } from '../client.js';
+import type { MemoryWatermark, Turn, TurnContent } from '../backend.js';
 import { getExtractorLlmConfig } from '../config.js';
 import type { SessionRegistry } from '../turn/registry.js';
 import { readTurn } from '../turn/types.js';

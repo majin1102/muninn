@@ -1,6 +1,6 @@
 import type { RecentSessionCheckpoint, RecentTurn } from '../checkpoint.js';
 import type { NativeTables } from '../native.js';
-import type { Turn, TurnContent } from '../client.js';
+import type { Turn, TurnContent } from '../backend.js';
 import path from 'node:path';
 import { resolveTurnSummary } from '../llm/turn-generator.js';
 import { readTurn, serializeTurn } from './types.js';

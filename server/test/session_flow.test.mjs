@@ -7,8 +7,8 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import core from '../dist/memory/index.js';
 import { getNativeTables } from '../dist/memory/native.js';
 import { serializeTurn } from '../dist/memory/turn/types.js';
-import { resetSessionTreeCacheForTests } from '../dist/ui/app.js';
-import { app } from '../dist/app.js';
+import { resetSessionTreeCacheForTests } from '../dist/web/routes.js';
+import { app } from '../dist/routes.js';
 import { registerMuninnHooks } from '../../openclaw/plugin/dist/src/hooks.js';
 
 const { shutdownCoreForTests } = core;
@@ -971,7 +971,7 @@ test('app search groups recalled extraction results by session and validates sco
   await waitForWatermarkResolved();
 
   const scopedSessionKey = ['muninn', 'codex_cli', 'muninn/search-alpha'].join('\u001f');
-  const response = await app.request('/api/v1/ui/recall/search?query=board%20search&projectKey=muninn&sessionTopN=1&topN=10');
+  const response = await app.request('/api/v1/ui/recall/search?query=app%20search&projectKey=muninn&sessionTopN=1&topN=10');
   assert.equal(response.status, 200);
   const body = await json(response);
   assert.equal('answer' in body, false);
@@ -1000,7 +1000,7 @@ test('app search groups recalled extraction results by session and validates sco
   assert.equal(streamEvents.at(-1).type, 'done');
 
   const scopedParams = new URLSearchParams({
-    query: 'board',
+    query: 'app',
     sessionKey: scopedSessionKey,
   });
   const sessionScope = await app.request(`/api/v1/ui/recall/search?${scopedParams.toString()}`);

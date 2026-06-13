@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import type { Turn } from '../client.js';
+import type { Turn } from '../backend.js';
 import { getExtractorLlmConfig } from '../config.js';
 import { loadDomainPrompt } from '../llm/domain-prompt.js';
 import { embedText } from '../llm/embedding-provider.js';

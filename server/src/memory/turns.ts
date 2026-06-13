@@ -1,8 +1,8 @@
-import type { NativeTables } from '../native.js';
-import type { ListModeInput, Turn } from '../client.js';
-import { normalizeSessionId } from '../turn/key.js';
-import { readTurn } from '../turn/types.js';
-import { assertMemoryIdLayer } from './types.js';
+import type { NativeTables } from './native.js';
+import type { ListModeInput, Turn } from './backend.js';
+import { normalizeSessionId } from './turn/key.js';
+import { readTurn } from './turn/types.js';
+import { assertMemoryIdLayer } from './memory-id.js';
 
 export async function getTurn(
   client: NativeTables,

@@ -1,7 +1,7 @@
 import { serve } from '@hono/node-server';
-import { app } from './app.js';
+import { app } from './routes.js';
 
-export { app } from './app.js';
+export { app } from './routes.js';
 export type { RecallMode } from './memory/index.js';
 
 if (require.main === module) {

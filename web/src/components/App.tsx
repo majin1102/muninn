@@ -21,7 +21,7 @@ import { PipelinesPage } from './PipelinesPage.js';
 import { RecallPage } from './SearchPage.js';
 import { SessionContentSplit } from './SessionContentSplit.js';
 import { SessionTree } from './SessionTree.js';
-import { SettingsPage } from './SettingsDialog.js';
+import { SettingsPage } from './SettingsPage.js';
 import { EmptyState } from './ui/empty-state.js';
 
 type RouteState = {

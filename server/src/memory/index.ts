@@ -23,4 +23,4 @@ export {
   fallbackRenderedMemoryTitle,
   inferRenderedMemoryKind,
   renderRenderedMemoryMarkdown,
-} from './memories/rendered.js';
+} from './rendered.js';
