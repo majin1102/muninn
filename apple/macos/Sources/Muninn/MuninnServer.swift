@@ -56,15 +56,14 @@ final class MuninnServer: ObservableObject {
             ?? Bundle.main.resourceURL
             ?? URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
         let serverRoot = resources.appending(path: "Resources/Server")
-        let node = serverRoot.appending(path: "bin/node")
-        let entry = serverRoot.appending(path: "packages/server/dist/index.js")
+        let bundleNode = serverRoot.appending(path: "bin/node")
+        let bundleEntry = serverRoot.appending(path: "packages/server/dist/index.js")
+        let runtime = try resolveRuntime(
+            bundleRoot: serverRoot,
+            bundleNode: bundleNode,
+            bundleEntry: bundleEntry
+        )
 
-        guard FileManager.default.isExecutableFile(atPath: node.path) else {
-            throw MuninnServerError.missingResource("Bundled Node runtime not found at \(node.path)")
-        }
-        guard FileManager.default.fileExists(atPath: entry.path) else {
-            throw MuninnServerError.missingResource("Bundled server entry not found at \(entry.path)")
-        }
 
         let port = try reservePort()
         let token = UUID().uuidString
@@ -72,9 +71,9 @@ final class MuninnServer: ObservableObject {
         let muninnHome = try defaultMuninnHome()
 
         let process = Process()
-        process.executableURL = node
-        process.arguments = [entry.path]
-        process.currentDirectoryURL = serverRoot
+        process.executableURL = runtime.node
+        process.arguments = [runtime.entry.path]
+        process.currentDirectoryURL = runtime.root
         var environment = ProcessInfo.processInfo.environment
         environment["HOST"] = "127.0.0.1"
         environment["PORT"] = String(port)
@@ -118,6 +117,12 @@ final class MuninnServer: ObservableObject {
     }
 }
 
+private struct ServerRuntime {
+    let root: URL
+    let node: URL
+    let entry: URL
+}
+
 private struct ServerLaunch {
     let process: Process
     let baseURL: URL
@@ -136,6 +141,68 @@ private enum MuninnServerError: LocalizedError {
             return "Muninn server health check timed out: \(message)"
         }
     }
+}
+
+private func resolveRuntime(bundleRoot: URL, bundleNode: URL, bundleEntry: URL) throws -> ServerRuntime {
+    let fileManager = FileManager.default
+    if fileManager.isExecutableFile(atPath: bundleNode.path), fileManager.fileExists(atPath: bundleEntry.path) {
+        return ServerRuntime(root: bundleRoot, node: bundleNode, entry: bundleEntry)
+    }
+
+    let repoRoot = try findDevRepoRoot()
+    let devEntry = repoRoot.appending(path: "packages/server/dist/index.js")
+    guard fileManager.fileExists(atPath: devEntry.path) else {
+        throw MuninnServerError.missingResource(
+            "Bundled server entry not found at \(bundleEntry.path). Dev server entry not found at \(devEntry.path). Run `pnpm --filter @muninn/server build` first."
+        )
+    }
+    guard let devNode = findNode() else {
+        throw MuninnServerError.missingResource(
+            "Bundled Node runtime not found at \(bundleNode.path), and node was not found in PATH. Run from a shell with Node in PATH."
+        )
+    }
+    return ServerRuntime(root: repoRoot, node: devNode, entry: devEntry)
+}
+
+private func findDevRepoRoot() throws -> URL {
+    let fileManager = FileManager.default
+    var current = URL(fileURLWithPath: fileManager.currentDirectoryPath)
+
+    while true {
+        let serverEntry = current.appending(path: "packages/server/dist/index.js")
+        let workspace = current.appending(path: "pnpm-workspace.yaml")
+        if fileManager.fileExists(atPath: serverEntry.path), fileManager.fileExists(atPath: workspace.path) {
+            return current
+        }
+
+        let parent = current.deletingLastPathComponent()
+        if parent.path == current.path {
+            throw MuninnServerError.missingResource("Could not locate Muninn repo root from \(fileManager.currentDirectoryPath)")
+        }
+        current = parent
+    }
+}
+
+private func findNode() -> URL? {
+    let environment = ProcessInfo.processInfo.environment
+    if let node = environment["NODE_BINARY"], FileManager.default.isExecutableFile(atPath: node) {
+        return URL(fileURLWithPath: node)
+    }
+
+    for directory in (environment["PATH"] ?? "").split(separator: ":") {
+        let candidate = URL(fileURLWithPath: String(directory)).appending(path: "node")
+        if FileManager.default.isExecutableFile(atPath: candidate.path) {
+            return candidate
+        }
+    }
+
+    for path in ["/opt/homebrew/bin/node", "/usr/local/bin/node", "/usr/bin/node"] {
+        if FileManager.default.isExecutableFile(atPath: path) {
+            return URL(fileURLWithPath: path)
+        }
+    }
+
+    return nil
 }
 
 private func reservePort() throws -> Int {
