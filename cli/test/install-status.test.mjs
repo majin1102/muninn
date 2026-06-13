@@ -1,10 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
-import { installHost, uninstallHost } from '../dist/install.js';
+import { installHost, installTargets, uninstallHost } from '../dist/install.js';
 import { readInstallStatus } from '../dist/status.js';
 
 const commands = {
@@ -119,6 +119,78 @@ test('installHost does not ask for confirmation when every plan is unchanged', a
   assert.equal(result[0].wrote, false);
 });
 
+test('installTargets confirms all hosts once before writing any config', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'muninn-install-all-'));
+  const cwd = path.join(root, 'project');
+  let asked = 0;
+  let summary = [];
+
+  const result = await installTargets({
+    target: 'all',
+    action: 'install',
+    parts: new Set(['mcp', 'hook']),
+    scope: 'user',
+    serverUrl: 'http://127.0.0.1:8080',
+    dryRun: false,
+    yes: false,
+    home: root,
+    cwd,
+    commands,
+    confirm: async (lines) => {
+      asked += 1;
+      summary = lines;
+      return true;
+    },
+  });
+
+  assert.equal(asked, 1);
+  assert.deepEqual(summary, [
+    'Configure Codex MCP server: muninn',
+    'Configure Codex Stop hook: muninn-codex-hook',
+    'Configure Claude Code MCP server: muninn',
+    'Configure Claude Code Stop hook: muninn-claude-hook',
+  ]);
+  assert.equal(result.length, 3);
+
+  const status = await readInstallStatus({ home: root, cwd, scope: 'user' });
+  assert.deepEqual(status, {
+    codex: { mcp: true, hook: true },
+    claude: { mcp: true, hook: true },
+  });
+});
+
+test('installTargets denied all confirmation writes neither host config', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'muninn-install-all-denied-'));
+  const cwd = path.join(root, 'project');
+  let asked = 0;
+
+  const result = await installTargets({
+    target: 'all',
+    action: 'install',
+    parts: new Set(['mcp', 'hook']),
+    scope: 'user',
+    serverUrl: 'http://127.0.0.1:8080',
+    dryRun: false,
+    yes: false,
+    home: root,
+    cwd,
+    commands,
+    confirm: async () => {
+      asked += 1;
+      return false;
+    },
+  });
+
+  assert.equal(asked, 1);
+  assert.deepEqual(result, []);
+
+  const status = await readInstallStatus({ home: root, cwd, scope: 'user' });
+  assert.deepEqual(status, {
+    codex: { mcp: false, hook: false },
+    claude: { mcp: false, hook: false },
+  });
+});
+
 test('uninstallHost removes Codex muninn entries', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'muninn-uninstall-'));
   const cwd = path.join(root, 'project');
@@ -185,4 +257,57 @@ test('readInstallStatus detects installed Codex and Claude entries', async () =>
   assert.equal(status.codex.hook, true);
   assert.equal(status.claude.mcp, true);
   assert.equal(status.claude.hook, true);
+});
+
+test('readInstallStatus ignores comments status messages wrapper names and unrelated JSON fields', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'muninn-status-false-positive-'));
+  const cwd = path.join(root, 'project');
+
+  await mkdir(path.join(root, '.codex'), { recursive: true });
+  await mkdir(path.join(root, '.claude'), { recursive: true });
+  await writeFile(path.join(root, '.codex', 'config.toml'), [
+    '# [mcp_servers.muninn]',
+    '[[hooks.Stop]]',
+    '[[hooks.Stop.hooks]]',
+    'type = "command"',
+    'command = "muninn-codex-hook-wrapper"',
+    'timeout = 30',
+    'statusMessage = "mentions muninn-codex-hook"',
+    '# command = "muninn-codex-hook"',
+    '',
+  ].join('\n'));
+  await writeFile(path.join(root, '.claude.json'), JSON.stringify({
+    mcpServers: {
+      muninn: {
+        type: 'stdio',
+        command: 'muninn-mcp-wrapper',
+      },
+      other: {
+        note: 'muninn-mcp',
+      },
+    },
+    note: '"muninn"',
+  }, null, 2));
+  await writeFile(path.join(root, '.claude', 'settings.json'), JSON.stringify({
+    hooks: {
+      Stop: [
+        {
+          hooks: [
+            {
+              type: 'command',
+              command: '/usr/local/bin/muninn-claude-hook-wrapper',
+              statusMessage: 'mentions muninn-claude-hook',
+            },
+          ],
+        },
+      ],
+    },
+    note: 'muninn-claude-hook',
+  }, null, 2));
+
+  const status = await readInstallStatus({ home: root, cwd, scope: 'user' });
+  assert.deepEqual(status, {
+    codex: { mcp: false, hook: false },
+    claude: { mcp: false, hook: false },
+  });
 });

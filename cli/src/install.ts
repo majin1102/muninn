@@ -15,20 +15,42 @@ export type InstallRunOptions = InstallOptions & {
   confirm?: (summary: string[]) => Promise<boolean>;
 };
 
+export type InstallTargetsRunOptions = Omit<InstallRunOptions, 'host'> & {
+  target: InstallHost | 'all';
+};
+
 export async function installHost(options: InstallRunOptions): Promise<ApplyResult[]> {
-  return applyHostPlans(options);
+  return applyPlans(await createHostPlans(options), options);
 }
 
 export async function uninstallHost(options: InstallRunOptions): Promise<ApplyResult[]> {
-  return applyHostPlans(options);
+  return applyPlans(await createHostPlans(options), options);
+}
+
+export async function installTargets(options: InstallTargetsRunOptions): Promise<ApplyResult[]> {
+  return applyTargetPlans(options);
+}
+
+export async function uninstallTargets(options: InstallTargetsRunOptions): Promise<ApplyResult[]> {
+  return applyTargetPlans(options);
 }
 
 export function targetHosts(target: InstallHost | 'all'): InstallHost[] {
   return target === 'all' ? ['codex', 'claude'] : [target];
 }
 
-async function applyHostPlans(options: InstallRunOptions): Promise<ApplyResult[]> {
-  const plans = await createHostPlans(options);
+async function applyTargetPlans(options: InstallTargetsRunOptions): Promise<ApplyResult[]> {
+  const plans: ChangePlan[] = [];
+  for (const host of targetHosts(options.target)) {
+    plans.push(...await createHostPlans({ ...options, host }));
+  }
+  return applyPlans(plans, options);
+}
+
+async function applyPlans(
+  plans: ChangePlan[],
+  options: Pick<InstallRunOptions, 'dryRun' | 'yes' | 'confirm'>,
+): Promise<ApplyResult[]> {
   const changedPlans = plans.filter((plan) => plan.changed);
 
   if (changedPlans.length > 0 && !options.dryRun && !options.yes) {

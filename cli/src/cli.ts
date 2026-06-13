@@ -2,7 +2,7 @@
 import os from 'node:os';
 import { parseArgs } from './args.js';
 import type { InstallPart } from './model.js';
-import { installHost, targetHosts, uninstallHost } from './install.js';
+import { installTargets, uninstallTargets } from './install.js';
 import { readInstallStatus } from './status.js';
 
 export async function main(argv = process.argv.slice(2)): Promise<number> {
@@ -14,27 +14,25 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     }
     if (parsed.command === 'install' || parsed.command === 'uninstall') {
       const parts = installParts(parsed);
-      for (const host of targetHosts(parsed.target)) {
-        const results = await (parsed.command === 'install' ? installHost : uninstallHost)({
-          action: parsed.command,
-          host,
-          parts,
-          scope: parsed.scope,
-          serverUrl: parsed.serverUrl,
-          dryRun: parsed.dryRun,
-          yes: parsed.yes,
-          home: os.homedir(),
-          cwd: process.cwd(),
-          commands: {
-            mcpCommand: 'muninn-mcp',
-            codexHookCommand: 'muninn-codex-hook',
-            claudeHookCommand: 'muninn-claude-hook',
-          },
-        });
-        for (const result of results) {
-          for (const line of result.summary) {
-            process.stdout.write(`${parsed.dryRun ? 'Would ' : ''}${line}\n`);
-          }
+      const results = await (parsed.command === 'install' ? installTargets : uninstallTargets)({
+        action: parsed.command,
+        target: parsed.target,
+        parts,
+        scope: parsed.scope,
+        serverUrl: parsed.serverUrl,
+        dryRun: parsed.dryRun,
+        yes: parsed.yes,
+        home: os.homedir(),
+        cwd: process.cwd(),
+        commands: {
+          mcpCommand: 'muninn-mcp',
+          codexHookCommand: 'muninn-codex-hook',
+          claudeHookCommand: 'muninn-claude-hook',
+        },
+      });
+      for (const result of results) {
+        for (const line of result.summary) {
+          process.stdout.write(`${parsed.dryRun ? 'Would ' : ''}${line}\n`);
         }
       }
       return 0;
