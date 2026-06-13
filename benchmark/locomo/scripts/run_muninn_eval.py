@@ -281,7 +281,7 @@ def start_sidecar(paths: RunPaths, env: dict[str, str]) -> SidecarProcess:
     log_path.parent.mkdir(parents=True, exist_ok=True)
     log_handle = log_path.open("a", encoding="utf8")
     process = subprocess.Popen(
-        [node_binary(), "packages/sidecar/dist/index.js"],
+        [node_binary(), "server/dist/index.js"],
         cwd=ROOT,
         env=sidecar_env(env, paths, port),
         text=True,

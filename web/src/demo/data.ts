@@ -653,7 +653,7 @@ export const demoSessionTurns: Record<string, DemoSessionTimelineItem[]> = {
       memoryId: 'turn:1010',
       createdAt: '2026-03-20T11:05:00.000Z',
       updatedAt: '2026-03-20T11:05:00.000Z',
-      summary: '为 Muninn Board 单独创建 packages/board 模块，明确它是独立的页面承载位，而不是继续把只读查看器能力散落在 sidecar、mcp 或其他说明文档里',
+      summary: '为 Muninn Board 单独创建 web 模块，明确它是独立的页面承载位，而不是继续把只读查看器能力散落在 sidecar、mcp 或其他说明文档里',
     },
   ],
   'claude_code::auth-refactor': [
@@ -1048,7 +1048,7 @@ Demo 模式会默认预加载 session turns，并展开 session 内容。
   'turn:1010': {
     memoryId: 'turn:1010',
     kind: 'turn',
-    title: '为 Muninn Board 单独创建 packages/board 模块',
+    title: '为 Muninn Board 单独创建 web 模块',
     agent: 'openclaw',
     sessionId: 'board-mvp',
     updatedAt: '2026-03-20T11:05:00.000Z',
@@ -1063,7 +1063,7 @@ Demo 模式会默认预加载 session turns，并展开 session 内容。
 
 ## Summary
 
-为 Muninn Board 单独创建 packages/board 模块`,
+为 Muninn Board 单独创建 web 模块`,
   },
   'turn:1020': {
     memoryId: 'turn:1020',
@@ -1193,7 +1193,7 @@ Demo 模式会默认预加载 session turns，并展开 session 内容。
 ### 列表
 
 - 支持普通无序列表
-- 支持 \`inline code\`、路径和配置项，比如 \`packages/board/src/components/ChatView.tsx\`
+- 支持 \`inline code\`、路径和配置项，比如 \`web/src/components/ChatView.tsx\`
 - 长文本会在气泡内部换行，不应该跳出容器
 
 1. 先从 session tree 选择一个 turn

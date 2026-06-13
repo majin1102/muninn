@@ -5,5 +5,4 @@ packages:
   - 'mcp'
   - 'codex'
   - 'claude'
-  - 'packages/*'
   - 'benchmark/*'
