@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 test('session tree defaults time range to all sessions', async () => {
-  const source = await readFile(new URL('../src/components/SessionTree.tsx', import.meta.url), 'utf8');
+  const source = await readFile(new URL('../../web/src/components/SessionTree.tsx', import.meta.url), 'utf8');
 
   assert.match(source, /timePreset: 'all'/);
   assert.match(source, /session-toolbar-filter:v3/);
@@ -13,7 +13,7 @@ test('session tree defaults time range to all sessions', async () => {
 });
 
 test('session tree displays and filters sessions by latestUpdatedAt', async () => {
-  const source = await readFile(new URL('../src/components/SessionTree.tsx', import.meta.url), 'utf8');
+  const source = await readFile(new URL('../../web/src/components/SessionTree.tsx', import.meta.url), 'utf8');
 
   assert.match(source, /title=\{formatTimestamp\(session\.latestUpdatedAt\)\}/);
   assert.match(source, /\{formatRelativeTime\(session\.latestUpdatedAt\)\}/);
@@ -21,7 +21,7 @@ test('session tree displays and filters sessions by latestUpdatedAt', async () =
 });
 
 test('session tree filters child items by activity time', async () => {
-  const source = await readFile(new URL('../src/components/SessionTree.tsx', import.meta.url), 'utf8');
+  const source = await readFile(new URL('../../web/src/components/SessionTree.tsx', import.meta.url), 'utf8');
 
   assert.match(source, /function itemActivityAt\(item: ProjectSegmentNode \| ProjectTurnNode\): string/);
   assert.match(source, /return item\.updatedAt \?\? item\.createdAt;/);
@@ -31,7 +31,7 @@ test('session tree filters child items by activity time', async () => {
 });
 
 test('session tree empty import guide is actionable', async () => {
-  const source = await readFile(new URL('../src/components/SessionTree.tsx', import.meta.url), 'utf8');
+  const source = await readFile(new URL('../../web/src/components/SessionTree.tsx', import.meta.url), 'utf8');
 
   assert.match(source, /onImportSessions\?: \(\) => void/);
   assert.match(source, /className="empty-action-row session-import-empty-action"/);
@@ -42,9 +42,10 @@ test('session tree empty import guide is actionable', async () => {
 });
 
 test('session tree uses project agent session identity instead of cwd for row keys', async () => {
-  const treeSource = await readFile(new URL('../src/components/SessionTree.tsx', import.meta.url), 'utf8');
-  const stateSource = await readFile(new URL('../src/lib/session_content_state.ts', import.meta.url), 'utf8');
-  const apiSource = await readFile(new URL('../src/lib/api.ts', import.meta.url), 'utf8');
+  const treeSource = await readFile(new URL('../../web/src/components/SessionTree.tsx', import.meta.url), 'utf8');
+  const stateSource = await readFile(new URL('../../web/src/lib/session_content_state.ts', import.meta.url), 'utf8');
+  const apiSource = await readFile(new URL('../../web/src/lib/api.ts', import.meta.url), 'utf8');
+  const serverSource = await readFile(new URL('../src/ui/app.ts', import.meta.url), 'utf8');
 
   assert.match(treeSource, /SessionIdentity\.sessionIdentityKey\(\{\s*project: session\.projectKey,\s*agent: session\.agent,\s*sessionId: session\.sessionKey,/);
   assert.doesNotMatch(treeSource, /session\.agent\}:\$\{session\.cwd \?\? ''\}:\$\{session\.sessionKey\}/);
@@ -52,4 +53,6 @@ test('session tree uses project agent session identity instead of cwd for row ke
   assert.match(stateSource, /SessionIdentity\.sessionIdentityKey\(\{\s*project: session\.projectKey,\s*agent: session\.agent,\s*sessionId: session\.sessionKey,/);
   assert.match(apiSource, /params\.set\('project', session\.projectKey\)/);
   assert.doesNotMatch(apiSource, /params\.set\('cwd', session\.cwd\)/);
+  assert.match(serverSource, /const project = normalizeText\(c\.req\.query\('project'\)\)/);
+  assert.doesNotMatch(serverSource, /cwd is required/);
 });
