@@ -33,7 +33,7 @@ struct MuninnApp: App {
 
 private func setAppIcon() {
     guard
-        let iconURL = Bundle.module.url(forResource: "AppIcon", withExtension: "png", subdirectory: "Resources"),
+        let iconURL = MuninnResources.bundle.url(forResource: "AppIcon", withExtension: "png"),
         let icon = NSImage(contentsOf: iconURL)
     else {
         return

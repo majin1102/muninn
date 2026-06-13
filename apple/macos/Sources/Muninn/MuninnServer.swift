@@ -52,10 +52,8 @@ final class MuninnServer: ObservableObject {
     }
 
     private func makeLaunch() throws -> ServerLaunch {
-        let resources = Bundle.module.resourceURL
-            ?? Bundle.main.resourceURL
-            ?? URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-        let serverRoot = resources.appending(path: "Resources/Server")
+        let resources = MuninnResources.url
+        let serverRoot = resources.appending(path: "Server")
         let bundleNode = serverRoot.appending(path: "bin/node")
         let bundleEntry = serverRoot.appending(path: "packages/server/dist/index.js")
         let runtime = try resolveRuntime(
@@ -172,6 +170,20 @@ private func resolveRuntime(bundleRoot: URL, bundleNode: URL, bundleEntry: URL) 
 
 private func findDevRepoRoot() throws -> URL {
     let fileManager = FileManager.default
+    if let repoRoot = ProcessInfo.processInfo.environment["MUNINN_DEV_REPO_ROOT"] {
+        let root = URL(fileURLWithPath: repoRoot)
+        if isDevRepoRoot(root, fileManager: fileManager) {
+            return root
+        }
+    }
+
+    if let repoRoot = Bundle.main.object(forInfoDictionaryKey: "MuninnDevRepoRoot") as? String {
+        let root = URL(fileURLWithPath: repoRoot)
+        if isDevRepoRoot(root, fileManager: fileManager) {
+            return root
+        }
+    }
+
     let starts = [
         URL(fileURLWithPath: fileManager.currentDirectoryPath),
         Bundle.main.bundleURL,
@@ -196,6 +208,12 @@ private func findDevRepoRoot() throws -> URL {
     }
 
     throw MuninnServerError.missingResource("Could not locate Muninn repo root from current directory or app bundle")
+}
+
+private func isDevRepoRoot(_ url: URL, fileManager: FileManager) -> Bool {
+    let serverEntry = url.appending(path: "packages/server/dist/index.js")
+    let workspace = url.appending(path: "pnpm-workspace.yaml")
+    return fileManager.fileExists(atPath: serverEntry.path) && fileManager.fileExists(atPath: workspace.path)
 }
 
 private func findNode() -> URL? {

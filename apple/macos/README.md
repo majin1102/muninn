@@ -2,12 +2,22 @@
 
 This is the first macOS host for Muninn. It is a SwiftUI shell that starts a bundled `@muninn/server` process, waits for `/health`, injects the desktop bootstrap token into WKWebView, and loads `http://127.0.0.1:<port>/app/`.
 
+## Local Development
+
+Open `Muninn.xcodeproj` in Xcode and run the `Muninn` scheme. The Xcode target builds a native `Muninn.app` bundle with `Info.plist` and `Assets.xcassets`, so Dock, Finder, and Cmd-Tab use the real app icon.
+
+The Swift package remains useful as a lightweight compile check:
+
+```sh
+swift build --package-path apple/macos
+```
+
 Expected bundle resource layout:
 
 ```text
 Resources/Server/
   bin/node
-  app/dist/
+  client/dist/
   packages/server/dist/
   packages/core/dist/
   packages/core/native/muninn_native.node
