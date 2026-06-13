@@ -96,17 +96,46 @@ function removeMuninnStopHooks(input: string, hookCommand: string): string {
         block.push(lines[index]);
         index += 1;
       }
-      const text = block.join('\n');
-      if (text.includes(hookCommand) || text.includes('muninn-codex-hook')) {
-        continue;
+      const keptBlock = removeMuninnHookEntries(block, hookCommand);
+      if (keptBlock.length > 0) {
+        output.push(...keptBlock);
       }
-      output.push(...block);
       continue;
     }
     output.push(lines[index]);
     index += 1;
   }
   return compactBlankLines(output.join('\n'));
+}
+
+function removeMuninnHookEntries(block: string[], hookCommand: string): string[] {
+  const output: string[] = [];
+  let keptHook = false;
+
+  for (let index = 0; index < block.length;) {
+    if (block[index].trim() === '[[hooks.Stop.hooks]]') {
+      const hook: string[] = [block[index]];
+      index += 1;
+      while (index < block.length && block[index].trim() !== '[[hooks.Stop.hooks]]') {
+        hook.push(block[index]);
+        index += 1;
+      }
+
+      const text = hook.join('\n');
+      if (text.includes(hookCommand) || text.includes('muninn-codex-hook')) {
+        continue;
+      }
+
+      output.push(...hook);
+      keptHook = true;
+      continue;
+    }
+
+    output.push(block[index]);
+    index += 1;
+  }
+
+  return keptHook ? output : [];
 }
 
 function appendSection(input: string, section: string): string {

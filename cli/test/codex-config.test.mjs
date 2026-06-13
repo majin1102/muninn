@@ -73,6 +73,63 @@ test('planCodexConfig does not remove unrelated Stop hooks', () => {
   assert.equal((plan.after.match(/muninn-codex-hook/g) ?? []).length, 1);
 });
 
+test('planCodexConfig install dedupes muninn hook inside mixed Stop block', () => {
+  const before = [
+    '[[hooks.Stop]]',
+    '[[hooks.Stop.hooks]]',
+    'type = "command"',
+    'command = "python3 ./existing.py"',
+    'timeout = 10',
+    '',
+    '[[hooks.Stop.hooks]]',
+    'type = "command"',
+    'command = "muninn-codex-hook"',
+    'timeout = 30',
+    'statusMessage = "Syncing turn to Muninn"',
+    '',
+  ].join('\n');
+
+  const plan = planCodexConfig(before, {
+    path: '/home/dev/.codex/config.toml',
+    action: 'install',
+    parts: new Set(['hook']),
+    serverUrl: 'http://127.0.0.1:8080',
+    commands,
+  });
+
+  assert.match(plan.after, /command = "python3 \.\/existing.py"/);
+  assert.equal((plan.after.match(/muninn-codex-hook/g) ?? []).length, 1);
+});
+
+test('planCodexConfig uninstall removes muninn hook inside mixed Stop block only', () => {
+  const before = [
+    '[[hooks.Stop]]',
+    '[[hooks.Stop.hooks]]',
+    'type = "command"',
+    'command = "python3 ./existing.py"',
+    'timeout = 10',
+    '',
+    '[[hooks.Stop.hooks]]',
+    'type = "command"',
+    'command = "muninn-codex-hook"',
+    'timeout = 30',
+    'statusMessage = "Syncing turn to Muninn"',
+    '',
+  ].join('\n');
+
+  const plan = planCodexConfig(before, {
+    path: '/home/dev/.codex/config.toml',
+    action: 'uninstall',
+    parts: new Set(['hook']),
+    serverUrl: 'http://127.0.0.1:8080',
+    commands,
+  });
+
+  assert.match(plan.after, /command = "python3 \.\/existing.py"/);
+  assert.doesNotMatch(plan.after, /muninn-codex-hook/);
+  assert.match(plan.after, /\[\[hooks\.Stop\]\]/);
+});
+
 test('planCodexConfig uninstall removes only muninn entries', () => {
   const installed = planCodexConfig('', {
     path: '/home/dev/.codex/config.toml',
