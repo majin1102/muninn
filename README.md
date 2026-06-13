@@ -6,9 +6,10 @@ Muninn is a memory layer for agents. This repository contains the Rust `format/`
 
 - `format/`
   - Rust typed-table, format, and storage implementation.
-  - Also powers the Node native binding used by `@muninn/core`.
-- `packages/`
-  - TypeScript workspace for the sidecar, MCP adapter, shared types, board UI, and the main Muninn runtime.
+- `server/`
+  - TypeScript HTTP runtime and memory implementation, including the Node native binding.
+- `web/`, `mcp/`, `codex/`, `claude/`, `common/`
+  - Product UI, protocol adapters, agent integrations, and shared contracts/helpers.
 - `openclaw/`
   - OpenClaw integration and plugin code.
 - `docs/`
@@ -33,7 +34,7 @@ Start with [docs/README.md](docs/README.md) for the simplified documentation map
 
 ## Native Development
 
-`@muninn/core` now talks to Rust through a `napi-rs` native addon.
+`@muninn/server` now talks to Rust through a `napi-rs` native addon.
 
 Local prerequisites:
 
@@ -43,14 +44,14 @@ Local prerequisites:
 
 Runtime prerequisites:
 
-- `@muninn/core` bootstraps the observer and validates semantic index dimensions on first use.
-- `muninn.json` therefore needs a complete runtime config for normal startup: `observer`, `llm`, and `semanticIndex`.
+- `@muninn/server` bootstraps the observer and validates semantic index dimensions on first use.
+- `muninn.json` therefore needs a complete runtime config for normal startup: `observer`, `extractor`, and `providers`.
 - The current runtime does not support a turn/session-only startup path without observer config.
 
 Main local build entrypoint:
 
 ```bash
-pnpm --filter @muninn/core build
+pnpm --filter @muninn/server build
 ```
 
 That command builds the native addon first and then compiles the TypeScript package.

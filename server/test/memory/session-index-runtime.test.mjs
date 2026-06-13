@@ -4,9 +4,9 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import { MuninnBackend } from '../dist/backend.js';
-import { readCheckpointFile, resolveCheckpointPath, serializeCheckpointFile } from '../dist/checkpoint.js';
-import { SessionIndex } from '../dist/session-index.js';
+import { MuninnBackend } from '../../dist/memory/backend.js';
+import { readCheckpointFile, resolveCheckpointPath, serializeCheckpointFile } from '../../dist/memory/checkpoint.js';
+import { SessionIndex } from '../../dist/memory/session-index.js';
 
 function client({
   turns = [],

@@ -4,29 +4,29 @@ import os from 'node:os';
 import path from 'node:path';
 import { access, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 
-import core from '../dist/index.js';
-import { __testing } from '../dist/client.js';
+import core from '../../dist/memory/index.js';
+import { __testing } from '../../dist/memory/client.js';
 import {
   getObserverRuntimeConfigFromConfigForTests,
   getExtractorLlmConfig,
   getObserverLlmConfig,
   validateMuninnConfigInput,
-} from '../dist/config.js';
-import { MuninnBackend } from '../dist/backend.js';
-import { Extractor as Observer } from '../dist/extractor/extractor.js';
-import { EpochQueue, OpenEpoch } from '../dist/extractor/epoch.js';
-import { parseCheckpointFile, readCheckpointFile, resolveCheckpointPath } from '../dist/checkpoint.js';
-import { SessionRegistry } from '../dist/turn/registry.js';
-import { normalizeSessionId, sessionKey } from '../dist/turn/key.js';
-import { Session } from '../dist/turn/session.js';
-import { Watchdog } from '../dist/watchdog.js';
-import updateModule from '../dist/extractor/update.js';
-import threadModule from '../dist/extractor/thread.js';
-import observingGatewayModule from '../dist/llm/extracting.js';
-import { applyExtractionChanges, applyExtractionTableChanges } from '../dist/extractor/memory-delta.js';
-import { recallMemories } from '../dist/memories/recall.js';
-import { validateMemoryRecallResult } from '../dist/memories/memory-recaller.js';
-import { getNativeTables } from '../dist/native.js';
+} from '../../dist/memory/config.js';
+import { MuninnBackend } from '../../dist/memory/backend.js';
+import { Extractor as Observer } from '../../dist/memory/extractor/extractor.js';
+import { EpochQueue, OpenEpoch } from '../../dist/memory/extractor/epoch.js';
+import { parseCheckpointFile, readCheckpointFile, resolveCheckpointPath } from '../../dist/memory/checkpoint.js';
+import { SessionRegistry } from '../../dist/memory/turn/registry.js';
+import { normalizeSessionId, sessionKey } from '../../dist/memory/turn/key.js';
+import { Session } from '../../dist/memory/turn/session.js';
+import { Watchdog } from '../../dist/memory/watchdog.js';
+import updateModule from '../../dist/memory/extractor/update.js';
+import threadModule from '../../dist/memory/extractor/thread.js';
+import observingGatewayModule from '../../dist/memory/llm/extracting.js';
+import { applyExtractionChanges, applyExtractionTableChanges } from '../../dist/memory/extractor/memory-delta.js';
+import { recallMemories } from '../../dist/memory/memories/recall.js';
+import { validateMemoryRecallResult } from '../../dist/memory/memories/memory-recaller.js';
+import { getNativeTables } from '../../dist/memory/native.js';
 
 const { __testing: updateTesting } = updateModule;
 const { __testing: threadTesting } = threadModule;
@@ -301,7 +301,7 @@ test('native bindings expose observation context and observation tables', async 
 });
 
 test('table mutation locks serialize writes on the same table', async () => {
-  const { TableMutationLocks } = await import('../dist/table-locks.js');
+  const { TableMutationLocks } = await import('../../dist/memory/table-locks.js');
   const locks = new TableMutationLocks();
   const firstEntered = deferred();
   const releaseFirst = deferred();
@@ -331,7 +331,7 @@ test('table mutation locks serialize writes on the same table', async () => {
 });
 
 test('table mutation locks allow writes on different tables to overlap', async () => {
-  const { TableMutationLocks } = await import('../dist/table-locks.js');
+  const { TableMutationLocks } = await import('../../dist/memory/table-locks.js');
   const locks = new TableMutationLocks();
   const extractionEntered = deferred();
   const observationEntered = deferred();
@@ -353,7 +353,7 @@ test('table mutation locks allow writes on different tables to overlap', async (
 });
 
 test('lockNativeTables serializes same-table mutations without locking reads', async () => {
-  const { TableMutationLocks, lockNativeTables } = await import('../dist/table-locks.js');
+  const { TableMutationLocks, lockNativeTables } = await import('../../dist/memory/table-locks.js');
   const locks = new TableMutationLocks();
   const upsertEntered = deferred();
   const releaseUpsert = deferred();
@@ -412,7 +412,7 @@ test('memories.get renders curated observation memories', async () => {
     sessionTable: { get: async () => null },
     turnTable: { get: async () => null },
   };
-  const { Memories } = await import('../dist/memories/memories.js');
+  const { Memories } = await import('../../dist/memory/memories/memories.js');
   const memory = await new Memories(client).get('global_observation:obs-1');
 
   assert.equal(memory.memoryId, 'global_observation:obs-1');
@@ -429,7 +429,7 @@ test('memories.get returns null for unknown curated observation memories', async
     sessionTable: { get: async () => null },
     turnTable: { get: async () => null },
   };
-  const { Memories } = await import('../dist/memories/memories.js');
+  const { Memories } = await import('../../dist/memory/memories/memories.js');
   assert.equal(await new Memories(client).get('global_observation:missing'), null);
 });
 
@@ -453,7 +453,7 @@ test('memories.get accepts observation paths containing colons', async () => {
     sessionTable: { get: async () => null },
     turnTable: { get: async () => null },
   };
-  const { Memories } = await import('../dist/memories/memories.js');
+  const { Memories } = await import('../../dist/memory/memories/memories.js');
   const memory = await new Memories(client).get(`global_observation:${pathId}`);
 
   assert.equal(memory.memoryId, `global_observation:${pathId}`);
@@ -461,14 +461,14 @@ test('memories.get accepts observation paths containing colons', async () => {
 });
 
 test('observation memory id parser rejects empty and wrong prefixes', async () => {
-  const { parseGlobalObservationMemoryId } = await import('../dist/memories/global-observations.js');
+  const { parseGlobalObservationMemoryId } = await import('../../dist/memory/memories/global-observations.js');
 
   assert.throws(() => parseGlobalObservationMemoryId('global_observation:'), /invalid global observation memory id/);
   assert.throws(() => parseGlobalObservationMemoryId('extraction:Caroline / Work: schedule'), /invalid global observation memory id/);
 });
 
 test('observer markdown parser derives parent and child observations', async () => {
-  const { parseObserverDocument } = await import('../dist/observer/markdown.js');
+  const { parseObserverDocument } = await import('../../dist/memory/observer/markdown.js');
   const parsed = parseObserverDocument([
     '# Alex',
     '',
@@ -492,7 +492,7 @@ test('observer markdown parser derives parent and child observations', async () 
 });
 
 test('observer markdown parser normalizes unique extraction id prefixes', async () => {
-  const { parseObserverDocument } = await import('../dist/observer/markdown.js');
+  const { parseObserverDocument } = await import('../../dist/memory/observer/markdown.js');
   const parsed = parseObserverDocument([
     '# Alex',
     '',
@@ -508,7 +508,7 @@ test('observer markdown parser normalizes unique extraction id prefixes', async 
 });
 
 test('observer markdown parser rejects invalid refs and missing refs', async () => {
-  const { parseObserverDocument } = await import('../dist/observer/markdown.js');
+  const { parseObserverDocument } = await import('../../dist/memory/observer/markdown.js');
   assert.throws(() => parseObserverDocument([
     '# Alex',
     '',
@@ -541,7 +541,7 @@ test('observer markdown parser rejects invalid refs and missing refs', async () 
 });
 
 test('observer prompt renders status and extraction inputs', async () => {
-  const { __testing: observingTesting } = await import('../dist/llm/observing.js');
+  const { __testing: observingTesting } = await import('../../dist/memory/llm/observing.js');
   const rendered = observingTesting.renderExtractions([{
     id: 'abc',
     status: 'new',
@@ -560,7 +560,7 @@ test('observer prompt renders status and extraction inputs', async () => {
 });
 
 test('observer runner groups extractions by cwd', async () => {
-  const { __testing: observerTesting } = await import('../dist/observer/runner.js');
+  const { __testing: observerTesting } = await import('../../dist/memory/observer/runner.js');
   const groups = observerTesting.groupByCwd([
     {
       id: 'a',
@@ -1690,7 +1690,7 @@ test('resolveCheckpointPath is scoped by observer name', async (t) => {
 });
 
 test('checkpoint preserves session runs', async () => {
-  const { parseCheckpointFile, serializeCheckpointFile } = await import('../dist/checkpoint.js');
+  const { parseCheckpointFile, serializeCheckpointFile } = await import('../../dist/memory/checkpoint.js');
   const file = {
     schemaVersion: CHECKPOINT_SCHEMA_VERSION,
     writtenAt: new Date().toISOString(),
@@ -4150,7 +4150,7 @@ test('extraction state rewrite rejects unknown and duplicate ids', () => {
 });
 
 test('extraction extraction validation rejects empty text', async () => {
-  const { __testing: extractionTesting } = await import('../dist/extractor/extraction-extraction.js');
+  const { __testing: extractionTesting } = await import('../../dist/memory/extractor/extraction-extraction.js');
   assert.throws(
     () => extractionTesting.validateExtraction({
       extractions: [{ text: ' ', category: 'Fact', references: ['turn:1'] }],
@@ -4160,7 +4160,7 @@ test('extraction extraction validation rejects empty text', async () => {
 });
 
 test('extraction extraction validation rejects missing references', async () => {
-  const { __testing: extractionTesting } = await import('../dist/extractor/extraction-extraction.js');
+  const { __testing: extractionTesting } = await import('../../dist/memory/extractor/extraction-extraction.js');
   assert.throws(
     () => extractionTesting.validateExtraction({
       extractions: [{ text: 'Caroline joined a support group.', category: 'Fact', references: [] }],
@@ -4170,7 +4170,7 @@ test('extraction extraction validation rejects missing references', async () => 
 });
 
 test('extraction extraction prompt can include a domain prompt supplement', async () => {
-  const { __testing: extractionTesting } = await import('../dist/extractor/extraction-extraction.js');
+  const { __testing: extractionTesting } = await import('../../dist/memory/extractor/extraction-extraction.js');
   const rendered = extractionTesting.renderExtractionPrompt({
     inputJson: JSON.stringify({ turns: [] }),
     domainPrompt: 'Category guide:\n- `Fact`: concrete answerable detail.',
@@ -4183,7 +4183,7 @@ test('extraction extraction prompt can include a domain prompt supplement', asyn
 });
 
 test('extraction extraction input includes recent context turns', async () => {
-  const { __testing: extractionTesting } = await import('../dist/extractor/extraction-extraction.js');
+  const { __testing: extractionTesting } = await import('../../dist/memory/extractor/extraction-extraction.js');
   const turn = extractionTesting.toExtractionTurn({
     turnId: 'turn:4',
     createdAt: '2026-01-01T00:00:04.000Z',
@@ -4229,7 +4229,7 @@ test('session extraction batch input uses turn headings without horizontal rules
 });
 
 test('extraction review validation requires every new extraction to be reviewed', async () => {
-  const { __testing: reviewTesting } = await import('../dist/extractor/extraction-review.js');
+  const { __testing: reviewTesting } = await import('../../dist/memory/extractor/extraction-review.js');
   assert.throws(
     () => reviewTesting.validateReview({
       newExtractions: [storedExtraction('obs-1')],
@@ -4243,7 +4243,7 @@ test('extraction review validation requires every new extraction to be reviewed'
 });
 
 test('extraction review validation rejects unknown removals', async () => {
-  const { __testing: reviewTesting } = await import('../dist/extractor/extraction-review.js');
+  const { __testing: reviewTesting } = await import('../../dist/memory/extractor/extraction-review.js');
   assert.throws(
     () => reviewTesting.validateReview({
       newExtractions: [storedExtraction('obs-1')],
@@ -4257,7 +4257,7 @@ test('extraction review validation rejects unknown removals', async () => {
 });
 
 test('thread preparation validation rejects duplicate extraction coverage', async () => {
-  const { __testing: preparationTesting } = await import('../dist/extractor/thread-preparation.js');
+  const { __testing: preparationTesting } = await import('../../dist/memory/extractor/thread-preparation.js');
   const input = {
     reviewedExtractions: [storedExtraction('obs-1'), storedExtraction('obs-2')],
     activeThreads: [{ threadId: 'thread-1', title: 'Thread one' }],
@@ -4276,7 +4276,7 @@ test('thread preparation validation rejects duplicate extraction coverage', asyn
 });
 
 test('thread preparation validation rejects single-extraction new threads', async () => {
-  const { __testing: preparationTesting } = await import('../dist/extractor/thread-preparation.js');
+  const { __testing: preparationTesting } = await import('../../dist/memory/extractor/thread-preparation.js');
   const input = {
     reviewedExtractions: [storedExtraction('obs-1')],
     activeThreads: [],
@@ -4295,7 +4295,7 @@ test('thread preparation validation rejects single-extraction new threads', asyn
 });
 
 test('thread preparation validation rejects unknown target threads', async () => {
-  const { __testing: preparationTesting } = await import('../dist/extractor/thread-preparation.js');
+  const { __testing: preparationTesting } = await import('../../dist/memory/extractor/thread-preparation.js');
   const input = {
     reviewedExtractions: [storedExtraction('obs-1')],
     activeThreads: [{ threadId: 'thread-1', title: 'Thread one' }],
@@ -4320,7 +4320,7 @@ test('thread preparation model validation failure falls back to unthreaded extra
   process.env.MUNINN_HOME = homeDir;
   await writeOpenAiObserverConfig(configPath);
 
-  const { __testing: preparationTesting } = await import('../dist/extractor/thread-preparation.js');
+  const { __testing: preparationTesting } = await import('../../dist/memory/extractor/thread-preparation.js');
   const input = {
     reviewedExtractions: [storedExtraction('obs-1'), storedExtraction('obs-2')],
     activeThreads: [],

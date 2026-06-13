@@ -5,7 +5,7 @@ import {
   getTurnLlmProviderName,
   listLlmProviderNames,
   type TextProviderConfig,
-} from '@muninn/core';
+} from '../memory/index.js';
 import type {
   AgentRecallStreamEvent,
   RecallProviderOption,

@@ -8,7 +8,7 @@ import {
   sessions,
   turns,
   isCanonicalProjectIdentity,
-} from '@muninn/core';
+} from '../memory/index.js';
 import { Hono } from 'hono';
 import type {
   AgentNode,

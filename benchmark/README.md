@@ -34,7 +34,7 @@ All benchmark modules under this directory should follow these rules:
 
 1. Use isolated `MUNINN_HOME` directories so benchmark runs do not pollute
    normal local data.
-2. Talk to Muninn directly through `@muninn/core` unless there is a strong
+2. Talk to Muninn directly through `@muninn/server` unless there is a strong
    reason to insert sidecar or MCP in the loop.
 3. Keep the benchmark loop deterministic when possible. If a benchmark needs
    answer generation, prefer non-LLM baselines first.

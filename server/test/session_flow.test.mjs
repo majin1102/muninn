@@ -4,9 +4,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 
-import core from '@muninn/core';
-import { getNativeTables } from '../../packages/core/dist/native.js';
-import { serializeTurn } from '../../packages/core/dist/turn/types.js';
+import core from '../dist/memory/index.js';
+import { getNativeTables } from '../dist/memory/native.js';
+import { serializeTurn } from '../dist/memory/turn/types.js';
 import { resetSessionTreeCacheForTests } from '../dist/ui/app.js';
 import { app } from '../dist/app.js';
 import { registerMuninnHooks } from '../../openclaw/plugin/dist/src/hooks.js';

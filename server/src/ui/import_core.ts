@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { captureTurn, isCanonicalProjectIdentity, observer, sessions, turns } from '@muninn/core';
+import { captureTurn, isCanonicalProjectIdentity, observer, sessions, turns } from '../memory/index.js';
 import {
   defaultArtifactStore,
   importMarker,

@@ -4,14 +4,14 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
-import { hasPendingObserverWork, __testing } from '../dist/observer/runner.js';
-import { observeCwdScope } from '../dist/llm/observing.js';
+import { hasPendingObserverWork, __testing } from '../../dist/memory/observer/runner.js';
+import { observeCwdScope } from '../../dist/memory/llm/observing.js';
 
 const { getObserverWorkStatus, runObserver } = __testing;
 const CWD = '/Users/Nathan/workspace/muninn';
 
 test('observe queue groups by cwd and replaces duplicate extraction rows', async () => {
-  const { enqueueChanges } = await import('../dist/observer/queue.js');
+  const { enqueueChanges } = await import('../../dist/memory/observer/queue.js');
   const first = extractionRow('so-1', { summary: 'old text' });
   const latest = extractionRow('so-1', { summary: 'latest text' });
   const queue = enqueueChanges({ cwdBuckets: [] }, [{ type: 'upsert', extraction: first }]);
@@ -24,7 +24,7 @@ test('observe queue groups by cwd and replaces duplicate extraction rows', async
 });
 
 test('observe queue keeps old cwd bucket when a extraction moves cwd', async () => {
-  const { enqueueChanges } = await import('../dist/observer/queue.js');
+  const { enqueueChanges } = await import('../../dist/memory/observer/queue.js');
   const oldRow = extractionRow('so-1', { cwd: '/repo/old', summary: 'old' });
   const newRow = extractionRow('so-1', { cwd: '/repo/new', summary: 'new' });
   const queue = enqueueChanges({ cwdBuckets: [] }, [{ type: 'upsert', extraction: oldRow }]);
@@ -36,7 +36,7 @@ test('observe queue keeps old cwd bucket when a extraction moves cwd', async () 
 });
 
 test('observe queue batches and acks one cwd bucket', async () => {
-  const { enqueueChanges, readyBucket, ackBucket } = await import('../dist/observer/queue.js');
+  const { enqueueChanges, readyBucket, ackBucket } = await import('../../dist/memory/observer/queue.js');
   let queue = { cwdBuckets: [] };
   for (let index = 0; index < 9; index += 1) {
     queue = enqueueChanges(queue, [{

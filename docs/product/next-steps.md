@@ -15,7 +15,7 @@
 - ✅ Lance 存储持久化
 
 **代码位置：**
-- Rust observer/LLM runtime 已删除；相关运行时逻辑现在只保留在 TS `packages/core` 中
+- Rust observer/LLM runtime 已删除；相关运行时逻辑现在只保留在 TS `server/src/memory` 中
 
 ### 1.2 OpenClaw 对接（高优先级）
 **状态：** 基础 hook 写入链路已完成，当前进入文档与质量收口阶段
@@ -81,7 +81,7 @@
 ## 3. 技术债务
 
 ### 3.1 Native 构建与分发（低优先级）
-**问题：** `@muninn/core` 已切到 native addon，本地构建和分发策略还可以继续收敛
+**问题：** `/server memory runtime` 已切到 native addon，本地构建和分发策略还可以继续收敛
 
 **需要做的：**
 - [ ] 明确 native addon 的 CI 构建与缓存策略

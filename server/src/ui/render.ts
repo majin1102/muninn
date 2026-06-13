@@ -3,7 +3,7 @@ import {
   inferRenderedMemoryKind,
   renderRenderedMemoryMarkdown,
   type RenderedMemory,
-} from '@muninn/core';
+} from '../memory/index.js';
 import type { MemoryDocument } from '@muninn/common';
 
 export function renderRenderedMemoryDocument(memory: RenderedMemory): MemoryDocument {

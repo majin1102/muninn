@@ -2,7 +2,7 @@ import type { Dirent } from 'node:fs';
 import { readdir } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { captureTurn, turns } from '@muninn/core';
+import { captureTurn, turns } from '../memory/index.js';
 import {
   CODEX_IMPORT_AGENT,
   IMPORT_ARTIFACT_KEY,

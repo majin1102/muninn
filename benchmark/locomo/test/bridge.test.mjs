@@ -7,7 +7,7 @@ import net from 'node:net';
 import http from 'node:http';
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
-import core from '@muninn/core';
+import core from '../../../server/dist/memory/index.js';
 
 const execFileAsync = promisify(execFile);
 const repoRoot = path.resolve(import.meta.dirname, '../../..');
@@ -175,19 +175,36 @@ async function writeMuninnConfig(
   if (observerProvider) {
     root.observer = {
       name: 'test-observer',
-      llm: 'test_observer_llm',
+      llmProvider: 'test_observer_llm',
     };
-    root.llm = {
-      test_observer_llm: { provider: observerProvider },
+    root.extractor = {
+      name: 'test-extractor',
+      llmProvider: 'test_observer_llm',
+      embeddingProvider: 'test_embedding',
+    };
+    root.providers = {
+      ...(root.providers ?? {}),
+      llm: {
+        test_observer_llm: { type: observerProvider },
+      },
     };
   }
   if (semanticIndexProvider) {
-    root.extraction = {
+    root.extractor = {
+      ...(root.extractor ?? {
+        name: 'test-extractor',
+        llmProvider: 'test_observer_llm',
+      }),
+      embeddingProvider: 'test_embedding',
+    };
+    root.providers = {
+      ...(root.providers ?? {}),
       embedding: {
-        provider: semanticIndexProvider,
-        dimensions: 4,
+        test_embedding: {
+          type: semanticIndexProvider,
+          dimensions: 4,
+        },
       },
-      defaultImportance: 0.7,
     };
   }
   await writeFile(
@@ -244,7 +261,7 @@ test('import writes an external manifest aligned to locomo sessions', async (t) 
   assert.equal(manifest.turns[1].source_id, 'D1:2');
   assert.equal(manifest.turns[0].session_id, 'locomo:sample-a:session_1');
   assert.equal(manifest.turns[2].session_id, 'locomo:sample-a:session_2');
-  assert.equal(copiedConfig.observer.llm, 'test_observer_llm');
+  assert.equal(copiedConfig.observer.llmProvider, 'test_observer_llm');
   assert.equal(copiedConfig.storage, undefined);
 
   process.env.MUNINN_HOME = home;
@@ -476,7 +493,7 @@ test('import only fails fast when extraction config is missing', async (t) => {
       'sample-id': 'sample-a',
       'muninn-home': home,
     }),
-    /LoCoMo benchmark requires extraction\.embedding(?:\.provider)?/i,
+    /LoCoMo benchmark requires providers\.(?:llm|embedding)\./i,
   );
 });
 

@@ -124,17 +124,19 @@ class AnsweringTests(unittest.TestCase):
         self.assertEqual(trace["f1"], round(scored.f1, 4))
         self.assertNotIn("recall", trace)
 
-    def test_load_answerer_config_uses_observer_llm_and_redacts_nothing_in_memory(self) -> None:
+    def test_load_answerer_config_uses_observer_llm_provider_and_redacts_nothing_in_memory(self) -> None:
         with TemporaryDirectory() as tmpdir:
             home = Path(tmpdir)
             config = {
-                "observer": {"name": "locomo-observer", "llm": "seed"},
-                "llm": {
-                    "seed": {
-                        "provider": "mock",
-                        "model": "doubao-seed",
-                        "apiKey": "secret",
-                    }
+                "observer": {"name": "locomo-observer", "llmProvider": "seed"},
+                "providers": {
+                    "llm": {
+                        "seed": {
+                            "type": "mock",
+                            "model": "doubao-seed",
+                            "apiKey": "secret",
+                        }
+                    },
                 },
             }
             (home / "muninn.json").write_text(json.dumps(config), encoding="utf8")
@@ -337,12 +339,12 @@ class AnsweringTests(unittest.TestCase):
         self.assertIsNone(result["memory_clarity_score"])
         self.assertEqual(result["memory_clarity_reason"], "")
 
-    def test_load_answerer_config_fails_without_observer_llm(self) -> None:
+    def test_load_answerer_config_fails_without_observer_llm_provider(self) -> None:
         with TemporaryDirectory() as tmpdir:
             home = Path(tmpdir)
-            (home / "muninn.json").write_text('{"observer":{"name":"locomo-observer"},"llm":{}}', encoding="utf8")
+            (home / "muninn.json").write_text('{"observer":{"name":"locomo-observer"},"providers":{"llm":{}}}', encoding="utf8")
 
-            with self.assertRaisesRegex(ValueError, "observer.llm"):
+            with self.assertRaisesRegex(ValueError, "observer.llmProvider"):
                 load_answerer_config(home)
 
 

@@ -19,8 +19,7 @@ Resources/Server/
   bin/node
   web/dist/
   server/dist/
-  packages/core/dist/
-  packages/core/native/muninn_native.node
+  server/native/muninn_native.node
   common/dist/
   node_modules/
 ```

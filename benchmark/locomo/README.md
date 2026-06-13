@@ -16,7 +16,7 @@ Muninn entrypoint.
 ## Module Layout
 
 - `src/bridge.ts`
-  - thin Node bridge into `@muninn/core`
+  - thin Node bridge into `@muninn/server`
   - imports raw conversation turns into Muninn
   - maintains an external manifest for hidden recall scoring
   - resolves recalled memories back to LoCoMo evidence ids
@@ -60,7 +60,7 @@ Run everything from the repository root.
 Required:
 
 - `pnpm install`
-- a working Rust toolchain, because `@muninn/core` starts the Rust daemon
+- a working Rust toolchain, because `@muninn/server` builds the native runtime
 - `python3`
 ## Build
 

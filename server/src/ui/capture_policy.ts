@@ -7,7 +7,7 @@ import {
   resolveMuninnConfigPath,
   type CaptureConfig,
   type MuninnConfigRecord,
-} from '@muninn/core';
+} from '../memory/index.js';
 
 type JsonObject = Record<string, unknown>;
 

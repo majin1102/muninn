@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import core, { captureTurn, turns } from '@muninn/core';
+import core, { captureTurn, turns } from '../dist/memory/index.js';
 import { __testing, previewCodexImport, runCodexImport } from '../dist/ui/codex_import.js';
 import { codexAdapter } from '../dist/ui/codex_import.js';
 import { importSelectedSessions } from '../dist/ui/import_core.js';

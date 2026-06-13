@@ -25,17 +25,15 @@ def build_run_metadata(
     config = read_json_object(config_path)
     extractor = config.get("extractor", {}) if isinstance(config.get("extractor"), dict) else {}
     observer = config.get("observer", {}) if isinstance(config.get("observer"), dict) else {}
-    extractor_ref = extractor.get("llm")
-    observer_ref = observer.get("llm")
-    extractor_llm = {}
-    observer_llm = {}
-    if isinstance(config.get("llm"), dict):
-        if isinstance(extractor_ref, str):
-            extractor_llm = config["llm"].get(extractor_ref, {}) or {}
-        if isinstance(observer_ref, str):
-            observer_llm = config["llm"].get(observer_ref, {}) or {}
-    extraction = config.get("extraction", {})
-    embedding = extraction.get("embedding", {}) if isinstance(extraction, dict) else {}
+    providers = config.get("providers", {}) if isinstance(config.get("providers"), dict) else {}
+    llms = providers.get("llm", {}) if isinstance(providers.get("llm"), dict) else {}
+    embeddings = providers.get("embedding", {}) if isinstance(providers.get("embedding"), dict) else {}
+    extractor_ref = extractor.get("llmProvider")
+    observer_ref = observer.get("llmProvider")
+    embedding_ref = extractor.get("embeddingProvider")
+    extractor_llm = llms.get(extractor_ref, {}) if isinstance(extractor_ref, str) else {}
+    observer_llm = llms.get(observer_ref, {}) if isinstance(observer_ref, str) else {}
+    embedding = embeddings.get(embedding_ref, {}) if isinstance(embedding_ref, str) else {}
     return {
         "run_name": run_name,
         "data_file": str(data_file),
@@ -49,16 +47,16 @@ def build_run_metadata(
         "config_path": str(config_path),
         "extractor": {
             "name": extractor.get("name"),
-            "provider": extractor_llm.get("provider") if isinstance(extractor_llm, dict) else None,
+            "provider": extractor_llm.get("type") if isinstance(extractor_llm, dict) else None,
             "model": extractor_llm.get("model") if isinstance(extractor_llm, dict) else None,
         },
         "observer": {
             "name": observer.get("name"),
-            "provider": observer_llm.get("provider") if isinstance(observer_llm, dict) else None,
+            "provider": observer_llm.get("type") if isinstance(observer_llm, dict) else None,
             "model": observer_llm.get("model") if isinstance(observer_llm, dict) else None,
         },
         "embedding": {
-            "provider": embedding.get("provider") if isinstance(embedding, dict) else None,
+            "provider": embedding.get("type") if isinstance(embedding, dict) else None,
             "model": embedding.get("model") if isinstance(embedding, dict) else None,
             "dimensions": embedding.get("dimensions") if isinstance(embedding, dict) else None,
         },

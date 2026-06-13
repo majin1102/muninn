@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 
-import { generateWithTools } from '../dist/llm/provider.js';
+import { generateWithTools } from '../../dist/memory/llm/provider.js';
 
 test('generateWithTools sends OpenAI-compatible tools and parses tool calls', async (t) => {
   const { dir, homeDir, configPath } = await makeConfigHome();

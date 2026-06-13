@@ -1,6 +1,6 @@
 import type {
   RecallHit,
-} from '@muninn/core';
+} from '../memory/index.js';
 import type {
   SearchResultItem,
   SearchSessionResult,

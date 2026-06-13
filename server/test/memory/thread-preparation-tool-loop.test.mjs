@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 
-import * as threadPreparationModule from '../dist/extractor/thread-preparation.js';
+import * as threadPreparationModule from '../../dist/memory/extractor/thread-preparation.js';
 
 const { __testing } = threadPreparationModule;
 

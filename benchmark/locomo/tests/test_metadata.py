@@ -14,23 +14,29 @@ class MetadataTests(unittest.TestCase):
         with TemporaryDirectory() as tmpdir:
             home = Path(tmpdir)
             config = {
-                "extractor": {"name": "default-extractor", "llm": "default"},
-                "observer": {"name": "default-observer", "llm": "default"},
-                "llm": {
-                    "default": {
-                        "provider": "openai",
-                        "model": "doubao-seed",
-                        "apiKey": "secret",
-                        "baseUrl": "https://example.test",
-                    }
+                "extractor": {
+                    "name": "default-extractor",
+                    "llmProvider": "default",
+                    "embeddingProvider": "default_embedding",
                 },
-                "extraction": {
+                "observer": {"name": "default-observer", "llmProvider": "default"},
+                "providers": {
+                    "llm": {
+                        "default": {
+                            "type": "openai",
+                            "model": "doubao-seed",
+                            "apiKey": "secret",
+                            "baseUrl": "https://example.test",
+                        }
+                    },
                     "embedding": {
-                        "provider": "openai",
-                        "model": "embedding-model",
-                        "apiKey": "embedding-secret",
-                        "dimensions": 2048,
-                    }
+                        "default_embedding": {
+                            "type": "openai",
+                            "model": "embedding-model",
+                            "apiKey": "embedding-secret",
+                            "dimensions": 2048,
+                        }
+                    },
                 },
             }
             (home / "muninn.json").write_text(json.dumps(config), encoding="utf8")
@@ -56,7 +62,8 @@ class MetadataTests(unittest.TestCase):
             self.assertEqual(metadata["observer"]["provider"], "openai")
             self.assertEqual(metadata["observer"]["model"], "doubao-seed")
             self.assertEqual(metadata["embedding"]["dimensions"], 2048)
-            self.assertEqual(metadata["config"]["llm"]["default"]["apiKey"], "<redacted>")
+            self.assertEqual(metadata["config"]["providers"]["llm"]["default"]["apiKey"], "<redacted>")
+            self.assertEqual(metadata["config"]["providers"]["embedding"]["default_embedding"]["apiKey"], "<redacted>")
 
     def test_write_run_metadata_uses_real_suffix(self) -> None:
         with TemporaryDirectory() as tmpdir:

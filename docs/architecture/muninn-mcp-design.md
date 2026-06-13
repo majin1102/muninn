@@ -17,7 +17,7 @@ Muninn Sidecar
   │
   │  TypeScript binding
   ▼
-@muninn/core
+/server memory runtime
   │
   │  native binding
   ▼
@@ -32,7 +32,7 @@ Rust format subsystem in `format/` (typed session / observing / semantic table o
 - Sidecar
   - 提供 HTTP 读写接口
   - 将 `RenderedMemory` 渲染为 `MemoryHit[]`
-- `@muninn/core`
+- `/server memory runtime`
   - 作为 TS 业务编排层连接 sidecar 和 Rust native binding
   - 持有 session / observer / memories / llm 的主逻辑
 - Rust format subsystem in `format/`
@@ -56,7 +56,7 @@ export interface MemoryHit {
 - MCP 直接拼接 `MemoryHit.content`
 - sidecar 是当前的 `RenderedMemory -> MemoryHit` 渲染边界
 
-`@muninn/core` 当前对 sidecar 暴露的是 `RenderedMemory` 等 TS contract，但 MCP 并不直接消费它；MCP 仍通过 sidecar 的 `MemoryHit[]` 获得最终文本。
+`/server memory runtime` 当前对 sidecar 暴露的是 `RenderedMemory` 等 TS contract，但 MCP 并不直接消费它；MCP 仍通过 sidecar 的 `MemoryHit[]` 获得最终文本。
 
 ## 3. Memory Navigation
 
@@ -104,4 +104,4 @@ MCP 暴露的结构化读能力对应 core 内部的统一读语义：
 - 文本渲染策略
 - semantic index / observer 业务逻辑
 
-这些职责都留在 sidecar 和 `@muninn/core`；Rust `format/` 只负责 typed table / storage 能力。
+这些职责都留在 sidecar 和 `/server memory runtime`；Rust `format/` 只负责 typed table / storage 能力。

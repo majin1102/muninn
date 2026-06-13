@@ -59,10 +59,10 @@ test('project import registers projects without importing sessions', async () =>
 test('session import flushes the imported batch into extraction without finalize', async () => {
   const importSource = await readFile(new URL('../src/ui/import_core.ts', import.meta.url), 'utf8');
 
-  assert.match(importSource, /import \{[^}]*captureTurn[^}]*\} from '@muninn\/core'/s);
+  assert.match(importSource, /import \{[^}]*captureTurn[^}]*\} from '\.\.\/memory\/index\.js'/s);
   assert.match(importSource, /await captureTurn\(toTurnContent/);
   assert.doesNotMatch(importSource, /addMessage/);
-  assert.match(importSource, /import \{[^}]*observer[^}]*\} from '@muninn\/core'/s);
+  assert.match(importSource, /import \{[^}]*observer[^}]*\} from '\.\.\/memory\/index\.js'/s);
   assert.match(importSource, /if \(importedTurns > 0\) \{\s*await observer\.flushPending\(\);\s*\}/s);
   assert.doesNotMatch(importSource, /observer\.finalize\(\)/);
 });

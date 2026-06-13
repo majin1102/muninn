@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { loadDomainPrompt, loadGatewayDomainPrompt } from '../dist/llm/domain-prompt.js';
-import { loadPromptTemplate } from '../dist/llm/prompt-loader.js';
+import { loadDomainPrompt, loadGatewayDomainPrompt } from '../../dist/memory/llm/domain-prompt.js';
+import { loadPromptTemplate } from '../../dist/memory/llm/prompt-loader.js';
 
 test('extraction extraction prompt exists and describes grounded observations', () => {
   const prompt = loadPromptTemplate('extraction_extraction');

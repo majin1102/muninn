@@ -492,7 +492,7 @@ function loadNativeModule(): NativeModule {
 }
 
 export function resolveNativeBindingPath(): string {
-  return path.resolve(__dirname, '..', 'native', 'muninn_native.node');
+  return path.resolve(__dirname, '..', '..', 'native', 'muninn_native.node');
 }
 
 export const __testing = {

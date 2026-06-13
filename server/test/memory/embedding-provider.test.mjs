@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 
-import { embedText } from '../dist/llm/embedding-provider.js';
+import { embedText } from '../../dist/memory/llm/embedding-provider.js';
 
 async function withConfig(t, config) {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'muninn-embedding-provider-'));

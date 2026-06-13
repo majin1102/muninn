@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { sessionKey } from '../dist/turn/key.js';
+import { sessionKey } from '../../dist/memory/turn/key.js';
 
 test('session identity ignores project label when cwd and raw session id match', () => {
   assert.equal(

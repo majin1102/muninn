@@ -2,6 +2,7 @@ import { serve } from '@hono/node-server';
 import { app } from './app.js';
 
 export { app } from './app.js';
+export type { RecallMode } from './memory/index.js';
 
 if (require.main === module) {
   const host = process.env.HOST || '127.0.0.1';

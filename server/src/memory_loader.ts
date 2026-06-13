@@ -1,7 +1,7 @@
 import {
   memories,
   observer,
-} from '@muninn/core';
+} from './memory/index.js';
 import { Hono } from 'hono';
 import type {
   ErrorResponse,
@@ -10,7 +10,7 @@ import type {
   MemoryWatermark,
   MemoryWatermarkResponse,
 } from '@muninn/common';
-import type { RecallMode, RenderedMemory } from '@muninn/core';
+import type { RecallMode, RenderedMemory } from './memory/index.js';
 import { renderRecallHit, renderRenderedMemoryHit } from './render.js';
 import { generateRequestId } from './utils.js';
 

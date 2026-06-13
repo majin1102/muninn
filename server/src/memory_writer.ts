@@ -1,4 +1,4 @@
-import { captureTurn, turns } from '@muninn/core';
+import { captureTurn, turns } from './memory/index.js';
 import { invalidateSessionTreeCache, isCaptureEnabled } from './ui/app.js';
 import { Hono } from 'hono';
 import type {

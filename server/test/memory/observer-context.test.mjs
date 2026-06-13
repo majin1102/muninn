@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { parseObserverDocument } from '../dist/observer/markdown.js';
+import { parseObserverDocument } from '../../dist/memory/observer/markdown.js';
 
 test('observer document parser derives observing paths and leaf source refs', () => {
   const parsed = parseObserverDocument(`# Caroline

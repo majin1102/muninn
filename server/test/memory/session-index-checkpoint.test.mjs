@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { parseCheckpointFile, serializeCheckpointFile } from '../dist/checkpoint.js';
+import { parseCheckpointFile, serializeCheckpointFile } from '../../dist/memory/checkpoint.js';
 
 function checkpoint(overrides = {}) {
   return {

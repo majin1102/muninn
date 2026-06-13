@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { __testing } from '../dist/llm/observing.js';
+import { __testing } from '../../dist/memory/llm/observing.js';
 
 const { trimContent } = __testing;
 

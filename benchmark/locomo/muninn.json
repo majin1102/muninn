@@ -1,16 +1,19 @@
 {
   "extractor": {
     "name": "locomo-extractor",
+    "llmProvider": "locomo_llm",
+    "embeddingProvider": "locomo_embedding",
     "domainPrompt": "chat",
     "maxAttempts": 3
   },
   "observer": {
     "name": "locomo-observer",
+    "llmProvider": "locomo_llm",
     "maxAttempts": 3,
-    "anchorThreshold": 5
+    "cwdThreshold": 5
   },
-  "llm": {},
-  "extraction": {
-    "defaultImportance": 0.7
+  "providers": {
+    "llm": {},
+    "embedding": {}
   }
 }

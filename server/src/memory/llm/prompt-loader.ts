@@ -25,7 +25,7 @@ export function loadPromptTemplate(name: keyof typeof PROMPT_FILE_NAMES): Prompt
     return cached;
   }
 
-  const filePath = path.resolve(__dirname, '..', '..', 'prompts', `${PROMPT_FILE_NAMES[name]}.yaml`);
+  const filePath = path.resolve(__dirname, '..', '..', '..', 'prompts', `${PROMPT_FILE_NAMES[name]}.yaml`);
   const raw = fs.readFileSync(filePath, 'utf8');
   const template = {
     system: readYamlBlock(raw, 'system'),

@@ -4,11 +4,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 
-import core from '../dist/index.js';
-import native from '../dist/native.js';
-import { getExtractorLlmConfig } from '../dist/config.js';
-import { MuninnBackend } from '../dist/backend.js';
-import { resolveCheckpointPath } from '../dist/checkpoint.js';
+import core from '../../dist/memory/index.js';
+import native from '../../dist/memory/native.js';
+import { getExtractorLlmConfig } from '../../dist/memory/config.js';
+import { MuninnBackend } from '../../dist/memory/backend.js';
+import { resolveCheckpointPath } from '../../dist/memory/checkpoint.js';
 
 const { createNativeTables, getNativeTables } = native;
 
