@@ -7,6 +7,8 @@ edition = "2024"
 crate-type = ["cdylib"]
 
 [dependencies]
+alloc-stdlib = "=0.2.2"
+brotli-decompressor = "=5.0.1"
 lance = { version = "4.0.1", default-features = false }
 muninn-format = { path = "../../format" }
 napi = { version = "2.16.13", default-features = false, features = ["napi8", "serde-json", "async"] }
