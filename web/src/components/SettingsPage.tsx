@@ -424,7 +424,7 @@ type SettingsHashState = {
 function initialSettingsHashState(): SettingsHashState {
   const params = settingsHashParams();
   const rawMode = params.get('mode');
-  const mode: SettingsMode = rawMode === 'json' || rawMode === 'import' ? rawMode : 'visual';
+  const mode: SettingsMode = rawMode === 'visual' || rawMode === 'json' || rawMode === 'import' ? rawMode : 'import';
   const provider = params.get('provider');
   const pipeline = params.get('pipeline');
   return {
