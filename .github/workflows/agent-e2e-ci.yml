@@ -1,4 +1,4 @@
-name: Agent E2E CI
+name: Agent E2E
 
 on:
   pull_request:

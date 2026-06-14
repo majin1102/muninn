@@ -1,4 +1,4 @@
-name: MCP CI
+name: MCP
 
 on:
   pull_request:

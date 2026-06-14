@@ -1,4 +1,4 @@
-name: Codex CI
+name: Codex
 
 on:
   pull_request:

@@ -1,4 +1,4 @@
-name: Common CI
+name: Common
 
 on:
   pull_request:

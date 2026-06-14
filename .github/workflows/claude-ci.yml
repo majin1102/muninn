@@ -1,4 +1,4 @@
-name: Claude CI
+name: Claude
 
 on:
   pull_request:
