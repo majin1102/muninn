@@ -489,12 +489,12 @@ export async function resolveProjectIdentity(cwd: string): Promise<ProjectIdenti
       return { project: fallback };
     }
     const topLevel = await realpathOrResolved(topLevelRaw);
-    const { stdout: commonDirStdout } = await execFileAsync('git', ['-C', fallback, 'rev-parse', '--path-format=absolute', '--git-common-dir']);
+    const { stdout: commonDirStdout } = await execFileAsync('git', ['-C', fallback, 'rev-parse', '--git-common-dir']);
     const commonDirRaw = commonDirStdout.trim();
     if (!commonDirRaw) {
       return { project: await resolveGithubProjectIdentity(topLevel) ?? topLevel };
     }
-    const commonDir = await realpathOrResolved(commonDirRaw);
+    const commonDir = await realpathOrResolved(resolveGitPath(fallback, commonDirRaw));
     const canonical = commonDir.endsWith(`${path.sep}.git`) ? path.dirname(commonDir) : topLevel;
     return { project: await resolveGithubProjectIdentity(canonical) ?? canonical };
   } catch {
@@ -550,6 +550,10 @@ function githubProjectIdentity(owner: string, repo: string): string | null {
     return null;
   }
   return `github.com/${normalizedOwner}/${normalizedRepo}`;
+}
+
+function resolveGitPath(baseDir: string, gitPath: string): string {
+  return path.isAbsolute(gitPath) ? gitPath : path.resolve(baseDir, gitPath);
 }
 
 async function realpathOrResolved(value: string): Promise<string> {

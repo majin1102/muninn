@@ -1,12 +1,15 @@
 import assert from 'node:assert/strict';
-import { appendFile, mkdtemp, utimes, writeFile } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { appendFile, mkdir, mkdtemp, utimes, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { promisify } from 'node:util';
 
 import { captureFromTranscript } from '@muninn/common/agent-hook';
 import { CLAUDE_AGENT, CLAUDE_MARKER_KEY, readClaudeSession, readClaudeSessionSummary, toTurnContent } from '../dist/claude.js';
 
+const execFileAsync = promisify(execFile);
 const PNG_1x1 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M8AAAMBAQDJ/pLvAAAAAElFTkSuQmCC';
 
 const META = { cwd: '/Users/dev/workspace/muninn', sessionId: '0aba-claude-session' };
@@ -156,6 +159,30 @@ test('readClaudeSession and summary keep multiple transcript files independent',
   assert.equal(fullA?.turns[0].prompt, 'alpha first prompt');
   assert.equal(fullB?.turns.length, 2);
   assert.equal(fullB?.turns[1].prompt, 'beta second prompt');
+});
+
+test('readClaudeSession resolves repo subdirectories to the GitHub project identity', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'claude-subdir-project-'));
+  process.env.MUNINN_HOME = path.join(root, 'muninn-home');
+  const repo = path.join(root, 'muninn');
+  const nestedDir = path.join(repo, 'server');
+  await mkdir(nestedDir, { recursive: true });
+  await execFileAsync('git', ['-C', repo, 'init']);
+  await execFileAsync('git', ['-C', repo, 'config', 'user.email', 'test@example.com']);
+  await execFileAsync('git', ['-C', repo, 'config', 'user.name', 'Test User']);
+  await writeFile(path.join(repo, 'README.md'), 'muninn\n');
+  await execFileAsync('git', ['-C', repo, 'add', 'README.md']);
+  await execFileAsync('git', ['-C', repo, 'commit', '-m', 'init']);
+  await execFileAsync('git', ['-C', repo, 'remote', 'add', 'origin', 'https://github.com/majin1102/muninn.git']);
+  const transcript = await writeClaudeTranscript(root, 'claude-subdir-session', nestedDir, [
+    { prompt: 'check subdir', response: 'ok' },
+  ]);
+
+  const session = await readClaudeSession(transcript, { artifactStore: path.join(root, 'artifacts'), artifactMode: 'preview' });
+
+  assert.ok(session);
+  assert.equal(session.cwd, nestedDir);
+  assert.equal(session.project, 'github.com/majin1102/muninn');
 });
 
 test('readClaudeSessionSummary uses the transcript latest timestamp instead of file mtime', async () => {

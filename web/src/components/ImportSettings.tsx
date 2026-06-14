@@ -659,6 +659,7 @@ function ProjectImportPicker({
               setImportError(null);
               try {
                 await onImport(selectedProjectImports);
+                onCancel();
               } catch (importFailure) {
                 setImportError(asErrorMessage(importFailure));
               } finally {
@@ -815,6 +816,7 @@ function SessionImportPicker({
               setImportError(null);
               try {
                 await onImport(selectedSessionImports);
+                onCancel();
               } catch (importFailure) {
                 setImportError(asErrorMessage(importFailure));
               } finally {
