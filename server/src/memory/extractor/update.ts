@@ -20,8 +20,7 @@ type ExtractSessionMemoryImpl = typeof extractSessionMemory;
 const DEFAULT_SESSION_ID = '__muninn_default_session__';
 
 type ExtractSessionThreadParams = {
-  threads: SessionMemoryThread[];
-  extractorName: string;
+  thread: SessionMemoryThread;
   pendingTurns: Turn[];
   extractionEpoch: number;
   signal?: AbortSignal;
@@ -48,15 +47,14 @@ export async function extractEpoch(params: {
   const memories = new Memories(params.client);
   const touchedIds = new Set<string>();
   for (const turns of groupTurnsBySession(params.sealedEpoch.turns)) {
-    ensureSessionThread(
+    const thread = getOrCreateSessionThread(
       params.threads,
       params.extractorName,
       turns,
       params.sealedEpoch.epoch,
     );
     const groupTouchedIds = await extractSessionThread({
-      threads: params.threads,
-      extractorName: params.extractorName,
+      thread,
       pendingTurns: turns,
       extractionEpoch: params.sealedEpoch.epoch,
       signal: params.signal,
@@ -143,22 +141,6 @@ function ownershipForTurns(turns: Turn[]): { agent: string; project: string; cwd
   };
 }
 
-function activeThreadInputs(
-  threads: SessionMemoryThread[],
-  extractorName: string,
-  activeWindowDays: number,
-) {
-  return threads
-    .filter((thread) => thread.observer === extractorName)
-    .filter((thread) => isActiveThread(thread.updatedAt, activeWindowDays))
-    .map((thread) => ({
-      threadId: thread.threadId,
-      ...(thread.snapshotId ? { memoryId: thread.snapshotId } : {}),
-      title: thread.title,
-      summary: thread.summary,
-    }));
-}
-
 function ensureActiveThreads(
   threads: SessionMemoryThread[],
   activeWindowDays: number,
@@ -167,12 +149,12 @@ function ensureActiveThreads(
   threads.splice(0, threads.length, ...activeThreads);
 }
 
-function ensureSessionThread(
+function getOrCreateSessionThread(
   threads: SessionMemoryThread[],
   extractorName: string,
   pendingTurns: Turn[],
   extractionEpoch: number,
-): SessionMemoryThread | null {
+): SessionMemoryThread {
   const sessionId = sessionIdForTurns(pendingTurns);
   const ownership = ownershipForTurns(pendingTurns);
   const existing = threads.find((thread) => (
@@ -180,6 +162,7 @@ function ensureSessionThread(
     && thread.kind === 'session'
     && (thread.sessionId ?? null) === sessionId
     && thread.agent === ownership.agent
+    && thread.project === ownership.project
     && thread.cwd === ownership.cwd
   ));
   if (existing) {
@@ -206,8 +189,7 @@ function ensureSessionThread(
 
 async function extractSessionThread(params: ExtractSessionThreadParams): Promise<Set<string>> {
   const {
-    threads,
-    extractorName,
+    thread,
     pendingTurns,
     extractionEpoch,
     signal,
@@ -216,21 +198,13 @@ async function extractSessionThread(params: ExtractSessionThreadParams): Promise
   } = params;
   throwIfAborted(signal);
   const touchedIds = new Set<string>();
-  const now = new Date().toISOString();
-  const sessionId = sessionIdForTurns(pendingTurns);
-  const ownership = ownershipForTurns(pendingTurns);
-  const thread = threads.find((candidate) => (
-    candidate.observer === extractorName
-    && candidate.kind === 'session'
-    && (candidate.sessionId ?? null) === sessionId
-    && candidate.agent === ownership.agent
-    && candidate.project === ownership.project
-    && candidate.cwd === ownership.cwd
-  ));
-  if (!thread || pendingTurns.length === 0) {
+  sessionIdForTurns(pendingTurns);
+  ownershipForTurns(pendingTurns);
+  if (pendingTurns.length === 0) {
     return touchedIds;
   }
 
+  const now = new Date().toISOString();
   const turns: FragmentTurnInput[] = pendingTurns.map((turn) => ({
     turnId: turn.turnId,
     prompt: turn.prompt,
@@ -391,7 +365,6 @@ export const __testing = {
   buildTouchedIndex,
   buildExtraction,
   extractEpoch,
-  activeThreadInputsForTests: activeThreadInputs,
   extractSessionThreadForTests: extractSessionThread,
 };
 

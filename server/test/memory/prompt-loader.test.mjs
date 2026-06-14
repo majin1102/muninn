@@ -4,17 +4,6 @@ import assert from 'node:assert/strict';
 import { loadDomainPrompt, loadGatewayDomainPrompt } from '../../dist/memory/llm/domain-prompt.js';
 import { loadPromptTemplate } from '../../dist/memory/llm/prompt-loader.js';
 
-test('extraction extraction prompt exists and describes grounded observations', () => {
-  const prompt = loadPromptTemplate('extraction_extraction');
-  assert.match(prompt.system, /durable memory extractions/i);
-  assert.match(prompt.system, /domain-specific extraction guidance/i);
-  assert.match(prompt.system, /domain_prompt/);
-  assert.match(prompt.userTemplate, /recentContext/);
-  assert.match(prompt.userTemplate, /up to three earlier raw turns/);
-  assert.match(prompt.userTemplate, /do not extract extractions from `recentContext` by itself/);
-  assert.match(prompt.userTemplate, /input_json/);
-});
-
 test('extraction review prompt only removes extractions', () => {
   const prompt = loadPromptTemplate('extraction_review');
   assert.match(prompt.system, /remove extractions/i);

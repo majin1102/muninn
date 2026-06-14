@@ -5,7 +5,7 @@ export function loadDomainPrompt(name?: string): string | undefined {
     return undefined;
   }
   if (name !== 'chat') {
-    throw new Error(`unsupported observer.domainPrompt: ${name}`);
+    throw new Error(`unsupported extractor.domainPrompt: ${name}`);
   }
   return extractSection(loadPromptTemplate('chat').system, 'Chat memory categories');
 }
@@ -15,7 +15,7 @@ export function loadGatewayDomainPrompt(name?: string): string | undefined {
     return undefined;
   }
   if (name !== 'chat') {
-    throw new Error(`unsupported observer.domainPrompt: ${name}`);
+    throw new Error(`unsupported extractor.domainPrompt: ${name}`);
   }
   return extractSection(loadPromptTemplate('chat').system, 'Session memory thread definition', [
     'Chat memory categories',

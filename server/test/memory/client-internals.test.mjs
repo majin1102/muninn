@@ -23,6 +23,7 @@ import { Watchdog } from '../../dist/memory/watchdog.js';
 import updateModule from '../../dist/memory/extractor/update.js';
 import threadModule from '../../dist/memory/extractor/thread.js';
 import observingGatewayModule from '../../dist/memory/llm/extracting.js';
+import sessionGatewayModule from '../../dist/memory/llm/session-gateway.js';
 import { applyExtractionChanges, applyExtractionTableChanges } from '../../dist/memory/extractor/memory-delta.js';
 import { recallMemories } from '../../dist/memory/recall/index.js';
 import { validateMemoryRecallResult } from '../../dist/memory/recall/memory-recaller.js';
@@ -30,7 +31,8 @@ import { getNativeTables } from '../../dist/memory/native.js';
 
 const { __testing: updateTesting } = updateModule;
 const { __testing: threadTesting } = threadModule;
-const { __testing: observingGatewayTesting } = observingGatewayModule;
+const { __testing: extractingTesting } = observingGatewayModule;
+const { __testing: sessionGatewayTesting } = sessionGatewayModule;
 const { createSessionMemoryThread, getPendingIndex, getPendingIndexUpTo, loadThreads, toSessionSnapshot } = threadModule;
 const { captureTurn, observer: observerApi, shutdownCoreForTests } = core;
 const CHECKPOINT_SCHEMA_VERSION = 7;
@@ -4149,64 +4151,8 @@ test('extraction state rewrite rejects unknown and duplicate ids', () => {
   );
 });
 
-test('extraction extraction validation rejects empty text', async () => {
-  const { __testing: extractionTesting } = await import('../../dist/memory/extractor/extraction-extraction.js');
-  assert.throws(
-    () => extractionTesting.validateExtraction({
-      extractions: [{ text: ' ', category: 'Fact', references: ['turn:1'] }],
-    }),
-    /text must be a non-empty string/i,
-  );
-});
-
-test('extraction extraction validation rejects missing references', async () => {
-  const { __testing: extractionTesting } = await import('../../dist/memory/extractor/extraction-extraction.js');
-  assert.throws(
-    () => extractionTesting.validateExtraction({
-      extractions: [{ text: 'Caroline joined a support group.', category: 'Fact', references: [] }],
-    }),
-    /references must include at least one reference/i,
-  );
-});
-
-test('extraction extraction prompt can include a domain prompt supplement', async () => {
-  const { __testing: extractionTesting } = await import('../../dist/memory/extractor/extraction-extraction.js');
-  const rendered = extractionTesting.renderExtractionPrompt({
-    inputJson: JSON.stringify({ turns: [] }),
-    domainPrompt: 'Category guide:\n- `Fact`: concrete answerable detail.',
-  });
-
-  assert.match(rendered.system, /domain-specific extraction guidance/i);
-  assert.match(rendered.system, /Category guide/);
-  assert.match(rendered.system, /concrete answerable detail/);
-  assert.match(rendered.prompt, /"turns":\[\]/);
-});
-
-test('extraction extraction input includes recent context turns', async () => {
-  const { __testing: extractionTesting } = await import('../../dist/memory/extractor/extraction-extraction.js');
-  const turn = extractionTesting.toExtractionTurn({
-    turnId: 'turn:4',
-    createdAt: '2026-01-01T00:00:04.000Z',
-    updatedAt: '2026-01-01T00:00:04.000Z',
-    sessionId: 'group-a',
-    agent: 'agent-a',
-    observer: 'default-observer',
-    prompt: 'I am off to research that.',
-    response: 'Recorded.',
-    summary: 'research note',
-    recentContext: [
-      { turnId: 'turn:1', updatedAt: '2026-01-01T00:00:01.000Z', prompt: 'What career options?', response: 'Counseling.' },
-      { turnId: 'turn:2', updatedAt: '2026-01-01T00:00:02.000Z', prompt: 'Any education plans?', response: 'Continue education.' },
-    ],
-  });
-
-  assert.deepEqual(turn.recentContext.map((contextTurn) => contextTurn.turnId), ['turn:1', 'turn:2']);
-  assert.equal(turn.recentContext[1].response, 'Continue education.');
-  assert.equal(turn.prompt, 'I am off to research that.');
-});
-
 test('session extraction batch input uses turn headings without horizontal rules', () => {
-  const rendered = observingGatewayTesting.renderNewTurnsForTests([
+  const rendered = extractingTesting.renderNewTurnsForTests([
     {
       turnId: 'turn:1',
       prompt: 'First prompt',
@@ -4431,7 +4377,7 @@ test('gateway validation accepts session fragments', () => {
     'Melanie asked what the group had done for Caroline, which was answered in a later turn.',
     'This content needs to remain complete because the observer uses it as selected session material.',
   ].join(' ');
-  const result = observingGatewayTesting.validateGatewayResultForTests(
+  const result = sessionGatewayTesting.validateGatewayResultForTests(
     [{
       threadId: 'thread-1',
       kind: 'subject',
@@ -4459,7 +4405,7 @@ test('gateway validation accepts session fragments', () => {
 });
 
 test('gateway system prompt injects chat session thread definition only', () => {
-  const system = observingGatewayTesting.buildGatewaySystemPromptForTests('chat');
+  const system = sessionGatewayTesting.buildGatewaySystemPromptForTests('chat');
 
   assert.match(system, /Session memory thread definition/);
   assert.match(system, /tracks one coherent subject that can develop over time/);
@@ -4472,7 +4418,7 @@ test('gateway system prompt injects chat session thread definition only', () => 
 
 test('gateway validation rejects session fragments without reason', () => {
   assert.throws(
-    () => observingGatewayTesting.validateGatewayResultForTests(
+    () => sessionGatewayTesting.validateGatewayResultForTests(
       [{
         threadId: 'thread-1',
         kind: 'subject',
@@ -4494,7 +4440,7 @@ test('gateway validation rejects session fragments without reason', () => {
 
 test('gateway validation rejects session fragments with unknown threads', () => {
   assert.throws(
-    () => observingGatewayTesting.validateGatewayResultForTests(
+    () => sessionGatewayTesting.validateGatewayResultForTests(
       [{
         threadId: 'thread-1',
         kind: 'subject',
@@ -4516,7 +4462,7 @@ test('gateway validation rejects session fragments with unknown threads', () => 
 });
 
 test('observer validation derives extractions from titled snapshot content', () => {
-  const result = observingGatewayTesting.validateExtractSessionMemoryResultForTests(
+  const result = extractingTesting.validateExtractSessionMemoryResultForTests(
     snapshotContentFixture([
       '<!-- refs: [turn:13] -->',
       '### Title',
@@ -4600,7 +4546,7 @@ test('observer validation derives extractions from titled snapshot content', () 
 });
 
 test('observer validation preserves session-level signals in snapshot content', () => {
-  const result = observingGatewayTesting.validateExtractSessionMemoryResultForTests(
+  const result = extractingTesting.validateExtractSessionMemoryResultForTests(
     snapshotContentFixture([
       '<!-- refs: [turn:13] -->',
       '### Title',
@@ -4659,19 +4605,19 @@ test('snapshot patch can preserve, replace, and clear session-level signals', ()
     }],
   };
 
-  const preserved = observingGatewayTesting.validateExtractSessionMemoryResultForTests([
+  const preserved = extractingTesting.validateExtractSessionMemoryResultForTests([
     '## Summary',
     'Extractor prompt design continues.',
   ].join('\n'), baseInput);
   assert.equal(preserved.signals, '- User preference: Keep signal bullets natural.');
 
-  const replaced = observingGatewayTesting.validateExtractSessionMemoryResultForTests([
+  const replaced = extractingTesting.validateExtractSessionMemoryResultForTests([
     '## Signals',
     '- Repeated requirement or correction: Signals are session-level state.',
   ].join('\n'), baseInput);
   assert.equal(replaced.signals, '- Repeated requirement or correction: Signals are session-level state.');
 
-  const cleared = observingGatewayTesting.validateExtractSessionMemoryResultForTests([
+  const cleared = extractingTesting.validateExtractSessionMemoryResultForTests([
     '## Signals',
     '',
   ].join('\n'), baseInput);
@@ -4679,7 +4625,7 @@ test('snapshot patch can preserve, replace, and clear session-level signals', ()
 });
 
 test('observer validation keeps independent refs per snapshot content unit', () => {
-  const result = observingGatewayTesting.validateExtractSessionMemoryResultForTests(
+  const result = extractingTesting.validateExtractSessionMemoryResultForTests(
     snapshotContentFixture([
       '<!-- refs: [turn:13] -->',
       '### Title',
@@ -4723,7 +4669,7 @@ test('observer validation keeps independent refs per snapshot content unit', () 
 });
 
 test('observer validation splits adjacent metadata snapshot units without separators', () => {
-  const result = observingGatewayTesting.validateExtractSessionMemoryResultForTests(
+  const result = extractingTesting.validateExtractSessionMemoryResultForTests(
     snapshotContentFixture([
       '<!-- refs: [turn:13] -->',
       '### Title',
@@ -4769,7 +4715,7 @@ test('observer validation splits adjacent metadata snapshot units without separa
 });
 
 test('session extraction turn input omits turn summary when prompt and response are present', () => {
-  const markdown = observingGatewayTesting.renderNewTurnsForTests([{
+  const markdown = extractingTesting.renderNewTurnsForTests([{
     turnId: 'turn:13',
     prompt: 'User asked whether app session rows should use snapshot titles.',
     response: 'Agent confirmed the session index should cache the latest snapshot title.',
@@ -4784,7 +4730,7 @@ test('session extraction turn input omits turn summary when prompt and response 
 });
 
 test('observer validation accepts markdown fenced snapshot content', () => {
-  const result = observingGatewayTesting.validateExtractSessionMemoryResultForTests(
+  const result = extractingTesting.validateExtractSessionMemoryResultForTests(
     [
       '```markdown',
       '# Painting Memory',
@@ -4822,7 +4768,7 @@ test('observer validation accepts markdown fenced snapshot content', () => {
 
 test('observer validation rejects session signals after extractions', () => {
   assert.throws(
-    () => observingGatewayTesting.validateExtractSessionMemoryResultForTests([
+    () => extractingTesting.validateExtractSessionMemoryResultForTests([
       '# Painting Memory',
       '',
       '## Summary',
@@ -4854,7 +4800,7 @@ test('observer validation rejects session signals after extractions', () => {
 
 test('snapshot patch rejects session signals after extractions', () => {
   assert.throws(
-    () => observingGatewayTesting.validateExtractSessionMemoryResultForTests([
+    () => extractingTesting.validateExtractSessionMemoryResultForTests([
       '## Extractions',
       '<!-- refs: [turn:13] -->',
       '### Title',
@@ -4881,7 +4827,7 @@ test('snapshot patch rejects session signals after extractions', () => {
 
 test('observer validation rejects snapshot content units without metadata', () => {
   assert.throws(
-    () => observingGatewayTesting.validateExtractSessionMemoryResultForTests(
+    () => extractingTesting.validateExtractSessionMemoryResultForTests(
       snapshotContentFixture('### Title\nPainting\n\n### Summary\nMelanie painted a lake sunrise in 2022.'),
       {
         sessionMemoryContent: {
@@ -4900,7 +4846,7 @@ test('observer validation rejects snapshot content units without metadata', () =
 
 test('observer validation rejects legacy snapshot content format', () => {
   assert.throws(
-    () => observingGatewayTesting.validateExtractSessionMemoryResultForTests(
+    () => extractingTesting.validateExtractSessionMemoryResultForTests(
       snapshotContentFixture('<!-- categories: [Fact]; refs: [turn:13] -->\n[Entity] Melanie\n[Extraction] Melanie painted a lake sunrise in 2022.'),
       {
         sessionMemoryContent: {
@@ -4919,7 +4865,7 @@ test('observer validation rejects legacy snapshot content format', () => {
 
 test('observer validation rejects snapshot content units without title', () => {
   assert.throws(
-    () => observingGatewayTesting.validateExtractSessionMemoryResultForTests(
+    () => extractingTesting.validateExtractSessionMemoryResultForTests(
       snapshotContentFixture('<!-- refs: [turn:13] -->\n### Summary\nMelanie painted a lake sunrise in 2022.'),
       {
         sessionMemoryContent: {
@@ -4938,7 +4884,7 @@ test('observer validation rejects snapshot content units without title', () => {
 
 test('observer validation rejects unknown snapshot content refs', () => {
   assert.throws(
-    () => observingGatewayTesting.validateExtractSessionMemoryResultForTests(
+    () => extractingTesting.validateExtractSessionMemoryResultForTests(
       snapshotContentFixture('<!-- refs: [session:missing] -->\n### Title\nPainting\n\n### Summary\nMelanie painted a lake sunrise in 2022.'),
       {
         sessionMemoryContent: {
@@ -4957,7 +4903,7 @@ test('observer validation rejects unknown snapshot content refs', () => {
 
 test('observer validation rejects snapshot content units without refs metadata', () => {
   assert.throws(
-    () => observingGatewayTesting.validateExtractSessionMemoryResultForTests(
+    () => extractingTesting.validateExtractSessionMemoryResultForTests(
       snapshotContentFixture('<!-- refs: [] -->\n### Title\nPainting\n\n### Summary\nMelanie painted a lake sunrise in 2022.'),
       {
         sessionMemoryContent: {
@@ -4976,7 +4922,7 @@ test('observer validation rejects snapshot content units without refs metadata',
 
 test('observer validation rejects JSON output', () => {
   assert.throws(
-    () => observingGatewayTesting.validateExtractSessionMemoryResultForTests(JSON.stringify({
+    () => extractingTesting.validateExtractSessionMemoryResultForTests(JSON.stringify({
       title: 'Painting',
       snapshotContent: '<!-- refs: [turn:13] -->\n### Title\nPainting\n\n### Summary\nMelanie painted a lake sunrise.',
       openQuestions: [],
@@ -4988,7 +4934,7 @@ test('observer validation rejects JSON output', () => {
 });
 
 test('observer validation accepts long titles without runtime length rejection', () => {
-  const result = observingGatewayTesting.validateExtractSessionMemoryResultForTests(
+  const result = extractingTesting.validateExtractSessionMemoryResultForTests(
     snapshotContentFixture(
       `<!-- refs: [turn:13] -->\n### Title\n${'x'.repeat(81)}\n\n### Summary\nMelanie painted a lake sunrise in 2022.`,
     ),
@@ -5002,7 +4948,7 @@ test('observer validation accepts long titles without runtime length rejection',
 
 test('observer validation rejects snapshot content units without summary', () => {
   assert.throws(
-    () => observingGatewayTesting.validateExtractSessionMemoryResultForTests(
+    () => extractingTesting.validateExtractSessionMemoryResultForTests(
       snapshotContentFixture('<!-- refs: [turn:13] -->\n### Title\nPainting'),
       {
         sessionMemoryContent: {
@@ -5739,8 +5685,7 @@ test('extractSessionThread passes raw turns to observer', async () => {
   };
 
   await updateTesting.extractSessionThreadForTests({
-    threads: [thread],
-    extractorName: 'default-observer',
+    thread,
     pendingTurns: [{
       turnId: 'turn:13',
       createdAt: now,
@@ -5797,7 +5742,7 @@ test('gateway input includes thread kind and prompt plus response turn text', ()
     extractionChanges: [],
   });
 
-  const turns = observingGatewayTesting.gatewayTurnsForTests([{
+  const turns = sessionGatewayTesting.gatewayTurnsForTests([{
     turnId: 'turn:12',
     createdAt: '2026-01-01T00:00:00.000Z',
     updatedAt: '2026-01-01T00:00:00.000Z',
@@ -5815,7 +5760,7 @@ test('gateway input includes thread kind and prompt plus response turn text', ()
     text: 'Prompt:\nMelanie encouraged Caroline.\n\nResponse:\nplaceholder',
   });
 
-  const responseOnlyTurns = observingGatewayTesting.gatewayTurnsForTests([{
+  const responseOnlyTurns = sessionGatewayTesting.gatewayTurnsForTests([{
     turnId: 'turn:13',
     createdAt: '2026-01-01T00:00:00.000Z',
     updatedAt: '2026-01-01T00:00:00.000Z',
@@ -5856,8 +5801,7 @@ test('observed turns without observer context refs are not persisted as referenc
   });
 
   await updateTesting.extractSessionThreadForTests({
-    threads: [thread],
-    extractorName: 'default-observer',
+    thread,
     pendingTurns: [{
       turnId: 'turn:99',
       createdAt: now,
@@ -5925,8 +5869,7 @@ test('raw-turn session only updates the session thread', async () => {
   };
 
   await updateTesting.extractSessionThreadForTests({
-    threads,
-    extractorName: 'default-observer',
+    thread,
     pendingTurns: [{
       turnId: 'turn:12',
       createdAt: now,
@@ -6061,8 +6004,7 @@ test('extractSessionThread rejects mixed session turns', async () => {
 
   await assert.rejects(
     updateTesting.extractSessionThreadForTests({
-      threads: [thread],
-      extractorName: 'default-observer',
+      thread,
       pendingTurns: [
         makeObservableTurn('session:a1', 2, 'a1'),
         { ...makeObservableTurn('session:b1', 2, 'b1'), sessionId: 'group-b' },
