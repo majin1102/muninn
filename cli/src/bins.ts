@@ -5,11 +5,16 @@ import type { ResolvedCommand } from './model.js';
 export function resolveCommand(name: string, options: {
   preferAbsolute?: boolean;
   envPath?: string;
+  extraBinDirs?: string[];
   access?: (candidate: string) => boolean;
 } = {}): ResolvedCommand {
   const envPath = options.envPath ?? process.env.PATH ?? '';
   const access = options.access ?? canExecute;
-  const resolvedPath = findOnPath(name, envPath, access);
+  const resolvedPath = findExecutable(name, {
+    envPath,
+    extraBinDirs: options.extraBinDirs ?? [],
+    access,
+  });
   if (!resolvedPath) {
     return {
       command: name,
@@ -38,16 +43,23 @@ export function renderCommand(command: string): string {
   return command;
 }
 
-function findOnPath(name: string, envPath: string, access: (candidate: string) => boolean): string | null {
+function findExecutable(name: string, options: {
+  envPath: string;
+  extraBinDirs: string[];
+  access: (candidate: string) => boolean;
+}): string | null {
   if (path.isAbsolute(name)) {
-    return access(name) ? name : null;
+    return options.access(name) ? name : null;
   }
-  for (const segment of envPath.split(path.delimiter)) {
+  for (const segment of [
+    ...options.extraBinDirs,
+    ...options.envPath.split(path.delimiter),
+  ]) {
     if (!segment) {
       continue;
     }
     const candidate = path.join(segment, name);
-    if (access(candidate)) {
+    if (options.access(candidate)) {
       return candidate;
     }
   }

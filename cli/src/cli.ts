@@ -1,9 +1,19 @@
 #!/usr/bin/env node
+import { realpathSync } from 'node:fs';
 import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { parseArgs } from './args.js';
 import type { InstallPart } from './model.js';
 import { installTargets, uninstallTargets } from './install.js';
 import { readInstallStatus } from './status.js';
+import { resolveCommand } from './bins.js';
+
+const BIN_NAMES = {
+  mcpCommand: 'muninn-mcp',
+  codexHookCommand: 'muninn-codex-hook',
+  claudeHookCommand: 'muninn-claude-hook',
+} as const;
 
 export async function main(argv = process.argv.slice(2)): Promise<number> {
   try {
@@ -24,11 +34,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
         yes: parsed.yes,
         home: os.homedir(),
         cwd: process.cwd(),
-        commands: {
-          mcpCommand: 'muninn-mcp',
-          codexHookCommand: 'muninn-codex-hook',
-          claudeHookCommand: 'muninn-claude-hook',
-        },
+        commands: resolveInstallCommands({ requireExecutable: parsed.command === 'install' }),
       });
       for (const result of results) {
         for (const line of result.summary) {
@@ -95,7 +101,56 @@ function installParts(parsed: {
   return new Set(['mcp', 'hook']);
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+export function resolveInstallCommands(options: {
+  requireExecutable?: boolean;
+} = {}): {
+  mcpCommand: string;
+  codexHookCommand: string;
+  claudeHookCommand: string;
+} {
+  const extraBinDirs = packageBinDirs();
+  return {
+    mcpCommand: resolveBin(BIN_NAMES.mcpCommand, extraBinDirs, options),
+    codexHookCommand: resolveBin(BIN_NAMES.codexHookCommand, extraBinDirs, options),
+    claudeHookCommand: resolveBin(BIN_NAMES.claudeHookCommand, extraBinDirs, options),
+  };
+}
+
+function resolveBin(
+  name: string,
+  extraBinDirs: string[],
+  options: { requireExecutable?: boolean },
+): string {
+  const resolved = resolveCommand(name, {
+    preferAbsolute: true,
+    extraBinDirs,
+  });
+  if (!resolved.resolvedPath && options.requireExecutable) {
+    throw new Error(`Unable to locate ${name}. Reinstall @muninn/cli and retry.`);
+  }
+  return resolved.command;
+}
+
+function packageBinDirs(): string[] {
+  const entryDir = path.dirname(fileURLToPath(import.meta.url));
+  const packageRoot = path.basename(entryDir) === 'dist' || path.basename(entryDir) === 'src'
+    ? path.dirname(entryDir)
+    : entryDir;
+  return [path.join(packageRoot, 'node_modules', '.bin')];
+}
+
+function isMainModule(): boolean {
+  if (!process.argv[1]) {
+    return false;
+  }
+  try {
+    return realpathSync(fileURLToPath(import.meta.url)) === realpathSync(process.argv[1]);
+  } catch {
+    return fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
+  }
+}
+
+if (isMainModule()) {
   main().then((code) => {
     process.exitCode = code;
   });

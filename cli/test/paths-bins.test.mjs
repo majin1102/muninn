@@ -56,6 +56,21 @@ test('resolveCommand falls back to absolute path when requested', () => {
   });
 });
 
+test('resolveCommand checks package-local dependency bins before PATH', () => {
+  const resolved = resolveCommand('muninn-mcp', {
+    preferAbsolute: true,
+    envPath: '/usr/local/bin',
+    extraBinDirs: ['/opt/muninn/node_modules/.bin'],
+    access: (candidate) => candidate === '/opt/muninn/node_modules/.bin/muninn-mcp',
+  });
+
+  assert.deepEqual(resolved, {
+    command: '/opt/muninn/node_modules/.bin/muninn-mcp',
+    resolvedPath: '/opt/muninn/node_modules/.bin/muninn-mcp',
+    isAbsolute: true,
+  });
+});
+
 test('renderCommand quotes commands with spaces', () => {
   assert.equal(renderCommand('/Applications/Muninn Tools/muninn-mcp'), '"/Applications/Muninn Tools/muninn-mcp"');
   assert.equal(renderCommand('muninn-mcp'), 'muninn-mcp');
