@@ -1,13 +1,13 @@
-# Board Interaction Style
+# Muninn Web Interaction Style
 
-This document defines the interaction and visual style for Muninn Board. It is the reference for Settings, Session, and future Board surfaces.
+This document defines the interaction and visual style for Muninn Web. It is the reference for Settings, Session, and future Muninn Web surfaces.
 
 The goal is a quiet, work-focused interface: dense enough for repeated use, but stable and readable. Prefer Codex app style principles over decorative UI.
 
 Rendered reference:
 
-- Component sheet: [assets/board-component-sheet.html](assets/board-component-sheet.html)
-- Screenshot target: [assets/board-component-sheet.png](assets/board-component-sheet.png)
+- Component sheet: [assets/muninn-web-component-sheet.html](assets/muninn-web-component-sheet.html)
+- Screenshot target: [assets/muninn-web-component-sheet.png](assets/muninn-web-component-sheet.png)
 
 When component standards change, update the component sheet first, then refresh the screenshot so design review can compare a rendered target instead of only reading tokens.
 
@@ -33,7 +33,7 @@ Codex app source uses these base tokens:
 - `text-lg`: `16px`
 - weights: `400`, `500`, `600`, `700`
 
-Muninn Board should follow Codex's hierarchy, not copy every absolute size. The current Board baseline is `13px`, so the Board typography system is:
+Muninn Web should follow Codex's hierarchy, not copy every absolute size. The current Muninn Web baseline is `13px`, so the Muninn Web typography system is:
 
 | Use | Size | Weight | Notes |
 | --- | --- | --- | --- |
@@ -49,7 +49,7 @@ Muninn Board should follow Codex's hierarchy, not copy every absolute size. The 
 
 Rules:
 
-- Do not use `14px` as the normal Settings or Board UI size.
+- Do not use `14px` as the normal Settings or Muninn Web UI size.
 - Do not use `700` for normal interface labels.
 - Do not scale font size with viewport width.
 - Keep `letter-spacing: 0`.
@@ -57,7 +57,7 @@ Rules:
 
 ## Color Tokens
 
-Use these as the Board baseline until extracted into CSS variables.
+Use these as the Muninn Web baseline until extracted into CSS variables.
 
 | Token | Value | Use |
 | --- | --- | --- |
@@ -148,11 +148,11 @@ Codex app implementation reference:
 - Default radius: `rounded-full`.
 - Default size: `px-2 py-0.5 text-sm leading-[18px]`.
 
-Board style:
+Muninn Web style:
 
 - Height: about `30-34px`, depending on local density.
 - Padding: `0 10-12px`.
-- Radius: `6px`. Codex app's shared button primitive often uses pill primary buttons, but Muninn Board keeps rounded-rectangle buttons so actions align with its Settings rows, tables, and compact control surfaces.
+- Radius: `6px`. Codex app's shared button primitive often uses pill primary buttons, but Muninn Web keeps rounded-rectangle buttons so actions align with its Settings rows, tables, and compact control surfaces.
 - Background: foreground token, with static fallback `#111111`.
 - Hover background: foreground token at `80%`, with static fallback around `#333333`.
 - Active background: foreground token at full strength, with static fallback `#000000`.
@@ -246,7 +246,7 @@ Rules:
 
 ## Settings Layout
 
-Settings uses the Board baseline layout:
+Settings uses the Muninn Web baseline layout:
 
 - Content max width: about `900px`.
 - Page padding: about `38px 32px 56px`.
@@ -302,7 +302,7 @@ Use weak scrollbars until interaction:
 
 ## Implementation Checklist
 
-Before shipping Board UI changes:
+Before shipping Muninn Web UI changes:
 
 - Confirm control semantics: tab, button, switch, or filter.
 - Confirm text sizes follow the `13px` baseline, with `12px` only for helper or compact sidebar controls.

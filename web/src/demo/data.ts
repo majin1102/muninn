@@ -263,7 +263,7 @@ export const demoSearchResults: SearchSessionResult[] = [
         content: [
           '## Summary',
           '',
-          'The provider menu is intentionally product-facing only in this version. Search still uses the Board search API and does not send provider-specific model parameters.',
+          'The provider menu is intentionally product-facing only in this version. Search still uses the Muninn Web search API and does not send provider-specific model parameters.',
           '',
           '## Content',
           '',
@@ -336,7 +336,7 @@ export const demoSearchResults: SearchSessionResult[] = [
       {
         id: 'demo-search-auth-conversation-1',
         source: 'conversation',
-        title: 'Board Search contract',
+        title: 'Muninn Web Search contract',
         content: 'The team decided the Search page should behave like a search engine and group results by session, with Project and Session controls shaping the request scope.',
         createdAt: '2026-06-01T12:01:00.000Z',
         memoryId: 'turn:1005',
@@ -403,7 +403,7 @@ export const demoSearchResults: SearchSessionResult[] = [
         id: 'demo-search-contract-1',
         source: 'extraction',
         title: 'Stable result contract',
-        content: 'The Board client receives one stable result contract: session result, metadata line, and hit items. The UI should not branch on storage-specific shapes.',
+        content: 'The Muninn Web client receives one stable result contract: session result, metadata line, and hit items. The UI should not branch on storage-specific shapes.',
         createdAt: '2026-05-18T12:10:00.000Z',
         memoryId: 'extraction:demo-stable-result-contract',
       },
@@ -525,7 +525,7 @@ export const demoPipelineTasks: DemoPipelineTask[] = [
       { name: 'validate_entity', count: 1 },
       { name: 'retry_commit', count: 1 },
     ],
-    inputDetails: ['8 session-level observations', 'Entity key: Board settings', 'Retry retained'],
+    inputDetails: ['8 session-level observations', 'Entity key: Muninn Web settings', 'Retry retained'],
     outputDetails: ['Draft failed parser validation', 'No committed observation'],
     trace: [
       'selected input: done',
@@ -609,8 +609,8 @@ export const demoSessionTurns: Record<string, DemoSessionTimelineItem[]> = {
       memoryId: 'turn:1008',
       createdAt: '2026-03-20T12:48:00.000Z',
       updatedAt: '2026-03-20T12:48:00.000Z',
-      title: '把 Snapshots 从 Board 第一版移除',
-      summary: '确认第一版 Board 只围绕 Search、LLM Wiki、Session、Settings 展开，Snapshots 不再作为一级页面或下拉选项存在',
+      title: '把 Snapshots 从 Muninn Web 第一版移除',
+      summary: '确认第一版 Muninn Web 只围绕 Search、LLM Wiki、Session、Settings 展开，Snapshots 不再作为一级页面或下拉选项存在',
     },
     {
       memoryId: 'turn:1009',
@@ -915,7 +915,7 @@ export const demoDocuments: Record<string, DemoMemoryDocument> = {
   'turn:1008': {
     memoryId: 'turn:1008',
     kind: 'turn',
-    title: '把 Snapshots 从 Board 第一版移除',
+    title: '把 Snapshots 从 Muninn Web 第一版移除',
     agent: 'openclaw',
     sessionId: 'auth-refactor',
     updatedAt: '2026-03-20T12:48:00.000Z',
@@ -1043,7 +1043,7 @@ Settings 现在是一个普通内容页：
 
 Demo 模式会默认预加载 session turns，并展开 session 内容。
 
-同时补充了一组围绕 Board UI 迭代的聊天轮次，让左侧列表和右侧 chat view 都有更接近真实产品使用的样例内容。`,
+同时补充了一组围绕 Muninn Web UI 迭代的聊天轮次，让左侧列表和右侧 chat view 都有更接近真实产品使用的样例内容。`,
   },
   'turn:1010': {
     memoryId: 'turn:1010',

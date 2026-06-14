@@ -49,7 +49,7 @@
 
 **产品价值：** 这是 MVP1 的主召回路径，证明 Muninn 产出的记忆可以被 OpenClaw 直接使用
 
-### 1.4 Muninn Board 前端收尾（中优先级）
+### 1.4 Muninn Web 前端收尾（中优先级）
 **状态：** 基础功能已完成，缺少品牌元素
 
 **需要做的：**
@@ -112,7 +112,7 @@
 **需要做的：**
 - [ ] 编写 Muninn Sidecar 的启动文档
 - [ ] 编写 OpenClaw 对接指南
-- [ ] 编写 Muninn Board 的访问说明
+- [ ] 编写 Muninn Web 的访问说明
 
 ### 5.2 API 示例（低优先级）
 **需要做的：**
@@ -127,8 +127,8 @@
 - [x] Muninn 能把这些上下文整理成 session 记忆（已实现）
 - [x] Muninn 能从 session 中蒸馏出 observation 记忆（Observer 已实现）
 - [ ] Muninn 能产出可被 OpenClaw 直接召回的精炼记忆（需要实现输出到 OpenClaw LanceDB）
-- [x] 人可以通过 Muninn Board 查看 session 和 observation（基础功能已完成）
-- [ ] Muninn Board 的基础前端已经足够支撑上述查看与人工校验流程（缺 logo 和视觉收尾）
+- [x] 人可以通过 Muninn Web 查看 session 和 observation（基础功能已完成）
+- [ ] Muninn Web 的基础前端已经足够支撑上述查看与人工校验流程（缺 logo 和视觉收尾）
 - [ ] 相比 OpenClaw 自带的 LanceDB plugin，Muninn 产出的记忆在 benchmark 中具备更高的召回准确性
 - [ ] 相比 OpenClaw 自带的 LanceDB plugin，Muninn 在达到相近或更好效果时具备更优的 token 消耗表现
 
@@ -141,7 +141,7 @@
 
 **下周：**
 4. 端到端测试和 benchmark
-5. Muninn Board logo 和视觉收尾
+5. Muninn Web logo 和视觉收尾
 
 **后续：**
 6. 文档完善
