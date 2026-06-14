@@ -7,10 +7,13 @@ Muninn needs repeatable E2E coverage for Codex and Claude integrations that veri
 The E2E suite must verify, for each supported agent:
 
 - baseline session import
+- recall of imported baseline facts
 - hook-driven live capture
+- recall of hook-captured live facts
 - session deletion
 - project deletion
 - no live capture after the project capture policy is removed
+- no recall of facts removed by session/project cleanup
 
 The suite must support both CI-safe mock drivers and opt-in real local clients.
 
@@ -82,18 +85,20 @@ Each agent E2E run performs the same round:
 5. Import the baseline session through `POST /api/v1/ui/import/:agent/sessions`.
 6. Verify the imported session appears in imported sessions/projects.
 7. Verify baseline turns are readable from Muninn.
-8. Verify import enabled capture policy for the project.
-9. Generate one live transcript session through the selected driver.
-10. Trigger the real hook.
-11. Wait until the live session appears in Muninn.
-12. Verify live capture fields: agent, ingest, project, session id, prompt, response, source turn sequence.
-13. Delete the live session.
-14. Verify the live session and its turns are gone.
-15. Delete the project.
-16. Verify the project, sessions, turns, and capture policy are gone.
-17. Trigger another hook event for the deleted project.
-18. Verify no new session or turn is captured after project deletion.
-19. Stop the server and clean temporary directories.
+8. Verify baseline facts are recallable through `GET /api/v1/recall`.
+9. Verify import enabled capture policy for the project.
+10. Generate one live transcript session through the selected driver.
+11. Trigger the real hook.
+12. Wait until the live session appears in Muninn.
+13. Finalize memory processing and verify the live hook fact is recallable.
+14. Verify live capture fields: agent, ingest, project, session id, prompt, response, source turn sequence.
+15. Delete the live session.
+16. Verify the live session, its turns, and its recall hits are gone.
+17. Delete the project.
+18. Verify the project, sessions, turns, capture policy, and baseline recall hits are gone.
+19. Trigger another hook event for the deleted project.
+20. Verify no new session, turn, or recall hit is captured after project deletion.
+21. Stop the server and clean temporary directories.
 
 ## Required API Changes
 
@@ -123,6 +128,7 @@ Expected behavior:
 - Validate known import agent.
 - Require `project` and `sessionId`.
 - Delete turns for that agent/project/session identity.
+- Delete extraction and global observation rows derived from those turns.
 - Refresh the session index.
 - Invalidate session tree cache.
 - Return deleted session and turn counts.
@@ -130,13 +136,15 @@ Expected behavior:
 
 Project deletion keeps the existing behavior and removes project capture policy.
 
+Both session and project deletion must remove recall-visible memory rows derived from deleted turns. The E2E round verifies this by querying for known fixture facts after deletion.
+
 ## Capture Disabled Assertion
 
 After `DELETE /api/v1/ui/import/:agent/project`, the E2E run must trigger one more Stop hook for the same project.
 
 The hook should still exit successfully because hooks are fail-soft. The server should ignore the live capture because `metadata.ingest` ends in `-hook`, the turn has a project, and the project is no longer enabled in capture policy.
 
-The test passes only if session and turn counts do not increase.
+The test passes only if session and turn counts do not increase and the disabled fact is not recallable.
 
 ## Logging
 
@@ -223,7 +231,7 @@ pnpm codex:e2e:host
 pnpm claude:e2e:host
 ```
 
-The E2E suite should fail if import, capture, deletion, or capture-disabled assertions fail. Host mode may skip when the external real client is unavailable or unsupported.
+The E2E suite should fail if import, recall, capture, deletion, or capture-disabled assertions fail. Host mode may skip when the external real client is unavailable or unsupported.
 
 ## Open Decisions Resolved
 

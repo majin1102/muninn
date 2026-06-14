@@ -3,10 +3,12 @@ import { spawn } from 'node:child_process';
 import { rm } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { requestJson } from './http.mjs';
+import { requestJson, waitFor } from './http.mjs';
 import {
   assertCaptureEnabled,
+  assertNoRecallHit,
   assertProjectAbsent,
+  assertRecallHit,
   assertSessionTurn,
   assertSessionAbsent,
   waitForSession,
@@ -74,28 +76,71 @@ async function deleteProject({ baseUrl, agent }) {
   });
 }
 
+async function finalizeMemory(baseUrl) {
+  await requestJson(baseUrl, '/api/v1/memory/finalize', {
+    method: 'POST',
+    body: JSON.stringify({}),
+  });
+  await waitFor(async () => {
+    const watermark = await requestJson(baseUrl, '/api/v1/memory/watermark');
+    return watermark.pending.turns.length === 0
+      && watermark.pending.extractions.length === 0
+      && watermark.phases.extractor === 'idle'
+      && watermark.phases.observer === 'idle'
+      && !watermark.error;
+  }, { timeoutMs: 10000, intervalMs: 100, label: 'memory finalize' });
+}
+
 async function runMockRound(config, workspace, server) {
   const baselineSessionId = `e2e-${config.shortName}-baseline`;
   const liveSessionId = `e2e-${config.shortName}-live`;
   const afterDeleteSessionId = `e2e-${config.shortName}-after-delete`;
+  const baselineRelease = {
+    prompt: `Record the Muninn E2E release policy for ${config.shortName}: npm packages must use dist-tag next until MVP1 exits beta.`,
+    response: `Remembered for ${config.shortName}: Muninn E2E package releases use npm dist-tag next before MVP1 exits beta.`,
+  };
+  const baselineCapture = {
+    prompt: `Record the Muninn E2E capture policy for ${config.shortName}: after project deletion, Stop hooks should exit successfully and write zero turns.`,
+    response: `Remembered for ${config.shortName}: deleted project capture policy makes Stop hooks write zero turns while still exiting successfully.`,
+  };
+  const liveFact = {
+    prompt: `Record the Muninn E2E live hook fact for ${config.shortName}: live capture is produced by the real ${config.hookIngest} hook binary.`,
+    response: `Remembered for ${config.shortName}: live capture came through the real ${config.hookIngest} hook binary.`,
+  };
+  const disabledFact = {
+    prompt: `Record the Muninn E2E disabled fact for ${config.shortName}: this turn must not be captured after project deletion.`,
+    response: `This disabled ${config.shortName} fact should never appear in Muninn after project deletion.`,
+  };
 
   const baselinePath = await config.writeTranscript(workspace.home, baselineSessionId, workspace.project, [
-    { prompt: `${config.shortName} baseline prompt`, response: `${config.shortName} baseline response` },
-    { prompt: `${config.shortName} baseline second prompt`, response: `${config.shortName} baseline second response` },
+    baselineRelease,
+    baselineCapture,
   ]);
   const importResult = await importSession({ baseUrl: server.baseUrl, agent: config.agent, sourcePath: baselinePath });
   assert.equal(importResult.importedSessions, 1);
   assert.equal(importResult.importedTurns, 2);
   await waitForSession(server.baseUrl, baselineSessionId);
   await assertSessionTurn(server.baseUrl, config.agent, PROJECT_ID, baselineSessionId, {
-    prompt: `${config.shortName} baseline prompt`,
-    response: `${config.shortName} baseline response`,
+    prompt: baselineRelease.prompt,
+    response: baselineRelease.response,
+  });
+  await assertRecallHit(server.baseUrl, `${config.shortName} dist-tag next MVP1 beta`, {
+    agent: config.agent,
+    project: PROJECT_ID,
+    sessionId: baselineSessionId,
+    includes: ['dist-tag next', 'MVP1 exits beta'],
+  });
+  await assertRecallHit(server.baseUrl, `${config.shortName} Stop hooks zero turns project deletion`, {
+    agent: config.agent,
+    project: PROJECT_ID,
+    sessionId: baselineSessionId,
+    includes: ['Stop hooks', 'zero turns'],
   });
   await assertCaptureEnabled(server.baseUrl, config.agent, PROJECT_ID, true);
-  log({ run: config.runId, agent: config.agent, driver: 'mock', phase: 'import', status: 'ok', sessions: 1, turns: 2, project: PROJECT_ID });
+  log({ run: config.runId, agent: config.agent, driver: 'mock', phase: 'import', status: 'ok', sessions: 1, turns: 2, recall: 'ok', project: PROJECT_ID });
 
   const livePath = await config.writeTranscript(workspace.home, liveSessionId, workspace.project, [
-    { prompt: `${config.shortName} live prompt`, response: `${config.shortName} live response` },
+    liveFact,
   ]);
   await runHook({
     hookPath: config.hookPath,
@@ -104,27 +149,41 @@ async function runMockRound(config, workspace, server) {
     env: { HOME: workspace.home, MUNINN_HOME: workspace.muninnHome },
   });
   await waitForSession(server.baseUrl, liveSessionId);
+  await finalizeMemory(server.baseUrl);
   await assertSessionTurn(server.baseUrl, config.agent, PROJECT_ID, liveSessionId, {
-    prompt: `${config.shortName} live prompt`,
-    response: `${config.shortName} live response`,
+    prompt: liveFact.prompt,
+    response: liveFact.response,
   });
-  log({ run: config.runId, agent: config.agent, driver: 'mock', phase: 'capture', status: 'ok', session: liveSessionId, ingest: config.hookIngest });
+  await assertRecallHit(server.baseUrl, `${config.shortName} real ${config.hookIngest} hook binary`, {
+    agent: config.agent,
+    project: PROJECT_ID,
+    sessionId: liveSessionId,
+    includes: [config.hookIngest, 'hook binary'],
+    allowUnscoped: true,
+  });
+  log({ run: config.runId, agent: config.agent, driver: 'mock', phase: 'capture', status: 'ok', session: liveSessionId, ingest: config.hookIngest, recall: 'ok' });
 
   const deletedSession = await deleteSession({ baseUrl: server.baseUrl, agent: config.agent, sessionId: liveSessionId });
   assert.equal(deletedSession.deletedSessions, 1);
   assert.equal(deletedSession.deletedTurns, 1);
   await assertSessionAbsent(server.baseUrl, liveSessionId);
+  await assertNoRecallHit(server.baseUrl, `${config.shortName} real ${config.hookIngest} hook binary`, {
+    includes: [config.hookIngest, 'hook binary'],
+  });
   await assertCaptureEnabled(server.baseUrl, config.agent, PROJECT_ID, true);
-  log({ run: config.runId, agent: config.agent, driver: 'mock', phase: 'delete-session', status: 'ok', deletedSessions: 1, deletedTurns: 1 });
+  log({ run: config.runId, agent: config.agent, driver: 'mock', phase: 'delete-session', status: 'ok', deletedSessions: 1, deletedTurns: 1, recall: 'absent' });
 
   const deletedProject = await deleteProject({ baseUrl: server.baseUrl, agent: config.agent });
   assert.ok(deletedProject.deletedSessions >= 1);
   assert.ok(deletedProject.deletedTurns >= 2);
   await assertProjectAbsent(server.baseUrl, PROJECT_ID);
-  log({ run: config.runId, agent: config.agent, driver: 'mock', phase: 'delete-project', status: 'ok', deletedSessions: deletedProject.deletedSessions, deletedTurns: deletedProject.deletedTurns, captureEnabled: false });
+  await assertNoRecallHit(server.baseUrl, `${config.shortName} dist-tag next MVP1 beta`, {
+    includes: ['dist-tag next', 'MVP1 exits beta'],
+  });
+  log({ run: config.runId, agent: config.agent, driver: 'mock', phase: 'delete-project', status: 'ok', deletedSessions: deletedProject.deletedSessions, deletedTurns: deletedProject.deletedTurns, captureEnabled: false, recall: 'absent' });
 
   const afterDeletePath = await config.writeTranscript(workspace.home, afterDeleteSessionId, workspace.project, [
-    { prompt: `${config.shortName} disabled prompt`, response: `${config.shortName} disabled response` },
+    disabledFact,
   ]);
   await runHook({
     hookPath: config.hookPath,
@@ -133,7 +192,10 @@ async function runMockRound(config, workspace, server) {
     env: { HOME: workspace.home, MUNINN_HOME: workspace.muninnHome },
   });
   await assertSessionAbsent(server.baseUrl, afterDeleteSessionId);
-  log({ run: config.runId, agent: config.agent, driver: 'mock', phase: 'capture-after-delete', status: 'ok', captured: 0 });
+  await assertNoRecallHit(server.baseUrl, `${config.shortName} disabled fact after project deletion`, {
+    includes: ['disabled fact', 'must not be captured'],
+  });
+  log({ run: config.runId, agent: config.agent, driver: 'mock', phase: 'capture-after-delete', status: 'ok', captured: 0, recall: 'absent' });
 }
 
 async function runRealRound(config) {

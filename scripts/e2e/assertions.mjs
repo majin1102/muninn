@@ -18,6 +18,17 @@ export async function sessionTurns(baseUrl, agent, project, sessionId) {
   return requestJson(baseUrl, `/api/v1/ui/session/agents/${encodeURIComponent(agent)}/sessions/${encodeURIComponent(sessionId)}/turns?${params.toString()}`);
 }
 
+export async function recall(baseUrl, query, { limit = 5, mode } = {}) {
+  const params = new URLSearchParams({
+    query,
+    limit: String(limit),
+  });
+  if (mode) {
+    params.set('recallMode', mode);
+  }
+  return requestJson(baseUrl, `/api/v1/recall?${params.toString()}`);
+}
+
 export function projectGroup(projectsResponse, project) {
   return projectsResponse.projects.find((entry) => entry.project === project);
 }
@@ -57,4 +68,25 @@ export async function assertSessionTurn(baseUrl, agent, project, sessionId, { pr
   assert.equal(turn.response, response);
   assert.ok(turn.events.some((event) => event.type === 'userMessage'));
   assert.ok(turn.events.some((event) => event.type === 'assistantMessage'));
+}
+
+export async function assertRecallHit(baseUrl, query, { agent, project, sessionId, includes, allowUnscoped = false }) {
+  const body = await recall(baseUrl, query);
+  const hit = body.memoryHits.find((entry) => (
+    (allowUnscoped || (
+      entry.agent === agent
+      && entry.project === project
+      && entry.sessionId === sessionId
+    ))
+    && includes.every((fragment) => entry.content.toLowerCase().includes(fragment.toLowerCase()))
+  ));
+  assert.ok(hit, `expected recall hit for ${query}`);
+}
+
+export async function assertNoRecallHit(baseUrl, query, { includes }) {
+  const body = await recall(baseUrl, query);
+  const hit = body.memoryHits.find((entry) => (
+    includes.every((fragment) => entry.content.toLowerCase().includes(fragment.toLowerCase()))
+  ));
+  assert.equal(hit, undefined, `expected no recall hit for ${query}`);
 }
