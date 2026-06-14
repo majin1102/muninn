@@ -23,6 +23,7 @@ test('settings tabs are restored from and persisted to the hash query', async ()
 
   assert.match(appSource, /const \[path\] = value\.split\('\?'/);
   assert.match(source, /initialSettingsHashState\(\)/);
+  assert.match(source, /rawMode === 'visual' \|\| rawMode === 'json' \|\| rawMode === 'import' \? rawMode : 'import'/);
   assert.match(source, /writeSettingsHash\(\{ mode: nextMode \}\)/);
   assert.match(source, /writeSettingsHash\(\{ providerCapability: capability \}\)/);
   assert.match(source, /writeSettingsHash\(\{ pipelineTab: tab \}\)/);

@@ -1143,7 +1143,7 @@ export type ProjectIdentity = {
   project: string;
 };
 
-const PROJECT_CACHE_VERSION = 2;
+const PROJECT_CACHE_VERSION = 3;
 const projectIdentityCache = new Map<string, ProjectIdentity>();
 const projectIdentityInflight = new Map<string, Promise<ProjectIdentity>>();
 
@@ -1207,12 +1207,12 @@ async function resolveProjectIdentityUncached(cwd: string): Promise<ProjectIdent
     }
     const topLevel = await realpathOrResolved(topLevelRaw);
 
-    const { stdout: commonDirStdout } = await execFileAsync('git', ['-C', cwd, 'rev-parse', '--path-format=absolute', '--git-common-dir']);
+    const { stdout: commonDirStdout } = await execFileAsync('git', ['-C', cwd, 'rev-parse', '--git-common-dir']);
     const commonDirRaw = commonDirStdout.trim();
     if (!commonDirRaw) {
       return { project: await resolveGithubProjectIdentity(topLevel) ?? topLevel };
     }
-    const commonDir = await realpathOrResolved(commonDirRaw);
+    const commonDir = await realpathOrResolved(resolveGitPath(cwd, commonDirRaw));
     const canonical = commonDir.endsWith(`${path.sep}.git`) ? path.dirname(commonDir) : topLevel;
     return { project: await resolveGithubProjectIdentity(canonical) ?? canonical };
   } catch {
@@ -1310,6 +1310,10 @@ async function realpathOrResolved(value: string): Promise<string> {
   }
 }
 
+function resolveGitPath(baseDir: string, gitPath: string): string {
+  return path.isAbsolute(gitPath) ? gitPath : path.resolve(baseDir, gitPath);
+}
+
 async function* readJsonlLines(sourcePath: string): AsyncGenerator<string> {
   const input = createReadStream(sourcePath, { encoding: 'utf8' });
   const lines = createInterface({ input, crlfDelay: Infinity });
@@ -1394,7 +1398,7 @@ function textFromCodexContent(content: unknown): string | null {
 }
 
 type ProjectCacheFile = {
-  version: 2;
+  version: 3;
   projectsByCwd: Record<string, { project: string; resolvedAt: string }>;
 };
 

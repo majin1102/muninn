@@ -240,10 +240,12 @@ test('readCodexSession resolves linked worktrees to the GitHub project identity'
   await execFileAsync('git', ['-C', mainRepo, 'commit', '-m', 'init']);
   await execFileAsync('git', ['-C', mainRepo, 'remote', 'add', 'origin', 'git@github.com:majin1102/muninn.git']);
   await execFileAsync('git', ['-C', mainRepo, 'worktree', 'add', linkedWorktree]);
+  const nestedWorktreeDir = path.join(linkedWorktree, 'src');
+  await mkdir(nestedWorktreeDir);
 
   const transcript = path.join(root, 'worktree-session.jsonl');
   const lines = [
-    { type: 'session_meta', payload: { id: 'worktree-session', cwd: linkedWorktree, timestamp: '2026-06-10T03:00:00.000Z' } },
+    { type: 'session_meta', payload: { id: 'worktree-session', cwd: nestedWorktreeDir, timestamp: '2026-06-10T03:00:00.000Z' } },
     { type: 'response_item', timestamp: '2026-06-10T03:00:01.000Z', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'check worktree' }] } },
     { type: 'response_item', timestamp: '2026-06-10T03:00:02.000Z', payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'ok' }] } },
   ];
@@ -252,7 +254,36 @@ test('readCodexSession resolves linked worktrees to the GitHub project identity'
   const session = await readCodexSession(transcript, { artifactStore: path.join(root, 'artifacts'), artifactMode: 'preview' });
 
   assert.ok(session);
-  assert.equal(session.cwd, linkedWorktree);
+  assert.equal(session.cwd, nestedWorktreeDir);
+  assert.equal(session.project, 'github.com/majin1102/muninn');
+});
+
+test('readCodexSession resolves repo subdirectories to the GitHub project identity', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'codex-subdir-project-'));
+  process.env.MUNINN_HOME = path.join(root, 'muninn-home');
+  const repo = path.join(root, 'muninn');
+  const nestedDir = path.join(repo, 'server');
+  await mkdir(nestedDir, { recursive: true });
+  await execFileAsync('git', ['-C', repo, 'init']);
+  await execFileAsync('git', ['-C', repo, 'config', 'user.email', 'test@example.com']);
+  await execFileAsync('git', ['-C', repo, 'config', 'user.name', 'Test User']);
+  await writeFile(path.join(repo, 'README.md'), 'muninn\n');
+  await execFileAsync('git', ['-C', repo, 'add', 'README.md']);
+  await execFileAsync('git', ['-C', repo, 'commit', '-m', 'init']);
+  await execFileAsync('git', ['-C', repo, 'remote', 'add', 'origin', 'https://github.com/majin1102/muninn.git']);
+
+  const transcript = path.join(root, 'subdir-session.jsonl');
+  const lines = [
+    { type: 'session_meta', payload: { id: 'subdir-session', cwd: nestedDir, timestamp: '2026-06-10T03:00:00.000Z' } },
+    { type: 'response_item', timestamp: '2026-06-10T03:00:01.000Z', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'check subdir' }] } },
+    { type: 'response_item', timestamp: '2026-06-10T03:00:02.000Z', payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'ok' }] } },
+  ];
+  await writeFile(transcript, lines.map((line) => JSON.stringify(line)).join('\n'));
+
+  const session = await readCodexSession(transcript, { artifactStore: path.join(root, 'artifacts'), artifactMode: 'preview' });
+
+  assert.ok(session);
+  assert.equal(session.cwd, nestedDir);
   assert.equal(session.project, 'github.com/majin1102/muninn');
 });
 
@@ -338,7 +369,7 @@ test('readCodexSessionSummary uses the transcript latest timestamp instead of fi
   assert.equal(summary.updatedAt, '2026-06-12T03:45:00.000Z');
 });
 
-test('resolveProjectIdentity reuses the v2 local project cache before git resolution', async () => {
+test('resolveProjectIdentity reuses the v3 local project cache before git resolution', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'codex-project-cache-'));
   const cwd = path.join(root, 'worktree');
   const muninnHome = path.join(root, 'muninn-home');
@@ -349,7 +380,7 @@ test('resolveProjectIdentity reuses the v2 local project cache before git resolu
   const cwdRealpath = await realpath(cwd);
   const cachedProject = '/cached/main/project';
   await writeFile(path.join(muninnHome, 'project-cache.json'), `${JSON.stringify({
-    version: 2,
+    version: 3,
     projectsByCwd: {
       [cwdRealpath]: {
         project: cachedProject,
@@ -372,8 +403,8 @@ test('resolveProjectIdentity uses an in-process cache and in-flight de-duplicati
   assert.match(source, /projectIdentityCache\.set\(fallback, identity\)/);
 });
 
-test('resolveProjectIdentity ignores v1 project cache and resolves GitHub remote identity', async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'codex-project-cache-v2-'));
+test('resolveProjectIdentity ignores stale v2 project cache and resolves GitHub remote identity', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'codex-project-cache-v3-'));
   const repo = path.join(root, 'lance');
   const muninnHome = path.join(root, 'muninn-home');
   await mkdir(repo, { recursive: true });
@@ -383,7 +414,7 @@ test('resolveProjectIdentity ignores v1 project cache and resolves GitHub remote
   await execFileAsync('git', ['-C', repo, 'remote', 'add', 'origin', 'https://github.com/lance-format/lance.git']);
   const repoRealpath = await realpath(repo);
   await writeFile(path.join(muninnHome, 'project-cache.json'), `${JSON.stringify({
-    version: 1,
+    version: 2,
     projectsByCwd: {
       [repoRealpath]: {
         project: repoRealpath,
@@ -396,7 +427,7 @@ test('resolveProjectIdentity ignores v1 project cache and resolves GitHub remote
 
   assert.equal(identity.project, 'github.com/lance-format/lance');
   const cache = JSON.parse(await readFile(path.join(muninnHome, 'project-cache.json'), 'utf8'));
-  assert.equal(cache.version, 2);
+  assert.equal(cache.version, 3);
   assert.equal(cache.projectsByCwd[repoRealpath].project, 'github.com/lance-format/lance');
 });
 
@@ -483,7 +514,7 @@ test('resolveProjectIdentity refreshes fallback cache entries for deleted Codex 
   await execFileAsync('git', ['-C', repo, 'init']);
   await execFileAsync('git', ['-C', repo, 'remote', 'add', 'origin', 'git@github.com:majin1102/openclaw.git']);
   await writeFile(path.join(process.env.MUNINN_HOME, 'project-cache.json'), `${JSON.stringify({
-    version: 2,
+    version: 3,
     projectsByCwd: {
       [path.resolve(cwd)]: {
         project: path.resolve(cwd),

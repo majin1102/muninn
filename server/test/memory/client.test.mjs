@@ -69,6 +69,23 @@ async function waitForFile(filePath, { timeoutMs = 2_000, intervalMs = 20 } = {}
   throw lastError ?? new Error(`timed out waiting for ${filePath}`);
 }
 
+async function waitForFileContent(filePath, predicate, { timeoutMs = 2_000, intervalMs = 20 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  let content = '';
+  while (Date.now() < deadline) {
+    try {
+      content = await readFile(filePath, 'utf8');
+      if (predicate(content)) {
+        return content;
+      }
+    } catch {
+      // Keep polling until the file exists and its content matches.
+    }
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  throw new Error(`timed out waiting for matching content in ${filePath}: ${content}`);
+}
+
 function memoryWatermarkResolved(watermark) {
   return watermark.pending.turns.length === 0
     && watermark.pending.extractions.length === 0
@@ -677,8 +694,7 @@ test('cold start does not wait for the first watchdog interval before serving wr
     /ENOENT/,
   );
 
-  const logContent = await waitForFile(watchdogLogPath);
-  assert.match(logContent, /"dataset":"turn"/);
+  await waitForFileContent(watchdogLogPath, (content) => content.includes('"dataset":"turn"'));
 });
 
 test('captureTurn rejects empty turn payloads through the native binding', async (t) => {

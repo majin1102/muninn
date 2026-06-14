@@ -8,9 +8,11 @@ name = "muninn_format"
 path = "src/lib.rs"
 
 [dependencies]
+alloc-stdlib = "=0.2.2"
 arrow-array = "57.0.0"
 arrow-schema = "57.0.0"
 async-trait = "0.1"
+brotli-decompressor = "=5.0.1"
 chrono = { version = "0.4", features = ["serde"] }
 dashmap = "6.1.0"
 futures-util = "0.3"
