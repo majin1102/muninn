@@ -477,3 +477,9 @@ export interface DeleteImportedProjectResponse {
   deletedTurns: number;
   requestId: string;
 }
+
+export interface DeleteImportedSessionResponse {
+  deletedSessions: number;
+  deletedTurns: number;
+  requestId: string;
+}

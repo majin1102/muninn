@@ -6,7 +6,13 @@
   "scripts": {
     "build": "pnpm -r build",
     "build:runtime": "pnpm --filter @muninn/web build && pnpm --filter @muninn/server build",
-    "dev": "pnpm -r dev"
+    "dev": "pnpm -r dev",
+    "codex:e2e": "pnpm --filter @muninn/codex test:e2e",
+    "claude:e2e": "pnpm --filter @muninn/claude test:e2e",
+    "test:e2e": "pnpm codex:e2e && pnpm claude:e2e",
+    "codex:e2e:host": "pnpm --filter @muninn/codex test:e2e:host",
+    "claude:e2e:host": "pnpm --filter @muninn/claude test:e2e:host",
+    "test:e2e:host": "pnpm codex:e2e:host && pnpm claude:e2e:host"
   },
   "devDependencies": {
     "typescript": "^5.0.0"

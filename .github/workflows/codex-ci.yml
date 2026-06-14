@@ -5,6 +5,9 @@ on:
     paths:
       - "codex/**"
       - "common/**"
+      - "server/**"
+      - "format/**"
+      - "scripts/e2e/**"
       - "package.json"
       - "pnpm-workspace.yaml"
       - ".github/workflows/codex-ci.yml"
@@ -14,6 +17,9 @@ on:
     paths:
       - "codex/**"
       - "common/**"
+      - "server/**"
+      - "format/**"
+      - "scripts/e2e/**"
       - "package.json"
       - "pnpm-workspace.yaml"
       - ".github/workflows/codex-ci.yml"
@@ -31,6 +37,17 @@ jobs:
         with:
           node-version: 20
 
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+            server/native -> server/native/target
+
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
       - name: Install dependencies
         env:
           MUNINN_SKIP_NATIVE_POSTINSTALL: "1"
@@ -38,3 +55,6 @@ jobs:
 
       - name: Test @muninn/codex
         run: pnpm --filter @muninn/codex test
+
+      - name: Run Codex E2E
+        run: pnpm codex:e2e

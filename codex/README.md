@@ -90,6 +90,28 @@ echo '{"hook_event_name":"Stop","transcript_path":"/path/to/rollout-....jsonl"}'
   | MUNINN_SERVER_BASE_URL=http://localhost:8080 node dist/cli.js
 ```
 
+## E2E test command
+
+Run the CI-safe E2E with a mock Codex client and the real Muninn hook:
+
+```sh
+pnpm --filter @muninn/codex test:e2e
+```
+
+The mock client creates Codex transcript fixtures and invokes the built
+`muninn-codex-hook` through a real Stop payload. It verifies baseline import,
+hook capture, session deletion, project deletion, and that capture stops after
+the project policy is removed.
+
+Run host mode manually:
+
+```sh
+pnpm --filter @muninn/codex test:e2e:host
+```
+
+Host mode is opt-in and may skip when the available Codex invocation path cannot
+trigger lifecycle hooks non-interactively.
+
 ## Scope / roadmap
 
 - **Now:** `Stop` → capture. The transcript already contains the full turn

@@ -10,6 +10,7 @@ import {
 } from '@muninn/codex';
 import type {
   DeleteImportedProjectResponse,
+  DeleteImportedSessionResponse,
   ImportAgentProject,
   ImportLocalProjectsResponse,
   ImportProjectsResponse,
@@ -234,6 +235,26 @@ export async function deleteImportedProject(adapter: ImportAdapter, project: str
   await removeCapturePolicy(adapter.agent, project);
   return {
     deletedSessions: sessionKeys.size,
+    deletedTurns,
+    requestId,
+  };
+}
+
+export async function deleteImportedSession(
+  adapter: ImportAdapter,
+  project: string,
+  sessionId: string,
+  requestId: string,
+): Promise<DeleteImportedSessionResponse> {
+  const key = identityKey(adapter, { project, sessionId });
+  const exists = (await sessions.index()).some((entry) => (
+    entry.agent === adapter.agent
+    && SessionIdentityKey.sessionIdentityKey(entry) === key
+  ));
+  const deletedTurns = await deleteProjectTurns(adapter, exists ? new Set([key]) : new Set());
+  await sessions.refreshIndex();
+  return {
+    deletedSessions: exists ? 1 : 0,
     deletedTurns,
     requestId,
   };
