@@ -1,5 +1,7 @@
 import path from 'node:path';
 import { captureTurn, isCanonicalProjectIdentity, observer, sessions, turns } from '../memory/index.js';
+import { loadMuninnConfig, resolveStorageTarget } from '../memory/config.js';
+import { getNativeTables } from '../memory/native.js';
 import {
   defaultArtifactStore,
   importMarker,
@@ -10,6 +12,7 @@ import {
 } from '@muninn/codex';
 import type {
   DeleteImportedProjectResponse,
+  DeleteImportedSessionResponse,
   ImportAgentProject,
   ImportLocalProjectsResponse,
   ImportProjectsResponse,
@@ -229,7 +232,8 @@ export async function deleteImportedProject(adapter: ImportAdapter, project: str
       .filter((entry) => entry.agent === adapter.agent && entry.project === project)
       .map(SessionIdentityKey.sessionIdentityKey),
   );
-  const deletedTurns = await deleteProjectTurns(adapter, sessionKeys);
+  const { deleted: deletedTurns, turnIds } = await deleteProjectTurns(adapter, sessionKeys);
+  await deleteRelatedMemories(turnIds);
   await sessions.refreshIndex();
   await removeCapturePolicy(adapter.agent, project);
   return {
@@ -239,9 +243,30 @@ export async function deleteImportedProject(adapter: ImportAdapter, project: str
   };
 }
 
-async function deleteProjectTurns(adapter: ImportAdapter, sessionKeys: Set<string>): Promise<number> {
+export async function deleteImportedSession(
+  adapter: ImportAdapter,
+  project: string,
+  sessionId: string,
+  requestId: string,
+): Promise<DeleteImportedSessionResponse> {
+  const key = identityKey(adapter, { project, sessionId });
+  const exists = (await sessions.index()).some((entry) => (
+    entry.agent === adapter.agent
+    && SessionIdentityKey.sessionIdentityKey(entry) === key
+  ));
+  const { deleted: deletedTurns, turnIds } = await deleteProjectTurns(adapter, exists ? new Set([key]) : new Set());
+  await deleteRelatedMemories(turnIds);
+  await sessions.refreshIndex();
+  return {
+    deletedSessions: exists ? 1 : 0,
+    deletedTurns,
+    requestId,
+  };
+}
+
+async function deleteProjectTurns(adapter: ImportAdapter, sessionKeys: Set<string>): Promise<{ deleted: number; turnIds: string[] }> {
   if (sessionKeys.size === 0) {
-    return 0;
+    return { deleted: 0, turnIds: [] };
   }
   const turnIds: string[] = [];
   for (const turn of await listAgentTurns(adapter.agent)) {
@@ -254,7 +279,26 @@ async function deleteProjectTurns(adapter: ImportAdapter, sessionKeys: Set<strin
   for (let index = 0; index < turnIds.length; index += DELETE_BATCH_SIZE) {
     deleted += (await turns.delete({ turnIds: turnIds.slice(index, index + DELETE_BATCH_SIZE) })).deleted;
   }
-  return deleted;
+  return { deleted, turnIds };
+}
+
+async function deleteRelatedMemories(turnIds: string[]): Promise<void> {
+  if (turnIds.length === 0) {
+    return;
+  }
+  const turnIdSet = new Set(turnIds);
+  const tables = await getNativeTables(resolveStorageTarget(loadMuninnConfig() ?? {}, 'main'));
+  const extractions = (await tables.extractionTable.list({}))
+    .filter((row) => row.turnRefs.some((ref) => turnIdSet.has(ref)));
+  const extractionIds = [...new Set(extractions.map((row) => row.id))];
+  const globalPaths = [...new Set(extractions.flatMap((row) => row.globalObservationPaths))];
+  if (extractionIds.length > 0) {
+    await tables.extractionTable.delete({ ids: extractionIds });
+  }
+  if (globalPaths.length > 0) {
+    await tables.globalObservationContextTable.delete({ ids: globalPaths });
+    await tables.globalObservationTable.delete({ ids: globalPaths });
+  }
 }
 
 async function listAgentTurns(agent: string): Promise<ImportTurn[]> {

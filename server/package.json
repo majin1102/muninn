@@ -2,13 +2,31 @@
   "name": "@muninn/server",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": ">=20"
+  },
+  "files": [
+    "dist",
+    "native/Cargo.toml",
+    "native/build.rs",
+    "native/src",
+    "native/muninn_native.node",
+    "prompts",
+    "scripts/build-native.mjs",
+    "README.md"
+  ],
+  "license": "UNLICENSED",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "bin": {
+    "muninn-server": "./dist/index.js"
+  },
   "scripts": {
     "build": "pnpm --filter @muninn/codex build && pnpm --filter @muninn/claude build && pnpm run build:native && tsc",
     "build:native": "node ./scripts/build-native.mjs",
     "check:native": "cargo check --manifest-path native/Cargo.toml",
     "dev": "tsc --watch",
+    "postinstall": "node ./scripts/build-native.mjs",
     "start": "node dist/index.js",
     "test": "(cd ../openclaw/plugin && pnpm build) && pnpm run build && node --test test/*.test.mjs test/memory/*.test.mjs"
   },
@@ -17,6 +35,7 @@
     "@muninn/claude": "workspace:*",
     "@muninn/codex": "workspace:*",
     "@muninn/common": "workspace:*",
+    "@muninn/format": "workspace:*",
     "hono": "^4.0.0"
   },
   "devDependencies": {

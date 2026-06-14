@@ -38,7 +38,16 @@ import type {
 import { agentRecallEvents, ndjsonStream, recallProviderOptions } from './agent_recall.js';
 import { codexAdapter, previewCodexImport, runCodexImport } from './codex_import.js';
 import { claudeAdapter } from './claude_import.js';
-import { deleteImportedProject, importProjects, importSelectedSessions, listImportedSessions, listLocalProjects, listLocalSessions, type ImportAdapter } from './import_core.js';
+import {
+  deleteImportedProject,
+  deleteImportedSession,
+  importProjects,
+  importSelectedSessions,
+  listImportedSessions,
+  listLocalProjects,
+  listLocalSessions,
+  type ImportAdapter,
+} from './import_core.js';
 import { getCapturePolicy, isAgentCaptureEnabled, setAgentCaptureEnabled, setCaptureEnabled } from './capture_policy.js';
 
 // Re-exported so the server capture endpoint can gate live hook captures.
@@ -1262,6 +1271,26 @@ webRoutes.post('/api/v1/ui/import/:agent/projects', async (c) => {
     return c.json(errorResponse('invalidRequest', 'projects must be canonical project identities'), 400);
   }
   const response = await importProjects(adapter, projects, generateRequestId());
+  return c.json(response);
+});
+
+webRoutes.delete('/api/v1/ui/import/:agent/session', async (c) => {
+  const adapter = importAdapters[c.req.param('agent')];
+  if (!adapter) {
+    return c.json(errorResponse('invalidRequest', 'unknown import agent'), 404);
+  }
+  let body: { project?: string; sessionId?: string } = {};
+  try {
+    body = await c.req.json<{ project?: string; sessionId?: string }>();
+  } catch {
+    body = {};
+  }
+  if (typeof body.project !== 'string' || !body.project || typeof body.sessionId !== 'string' || !body.sessionId) {
+    return c.json(errorResponse('invalidRequest', 'project and sessionId are required'), 400);
+  }
+  invalidateSessionTreeCache();
+  const response = await deleteImportedSession(adapter, body.project, body.sessionId, generateRequestId());
+  invalidateSessionTreeCache();
   return c.json(response);
 });
 

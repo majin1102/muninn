@@ -16,6 +16,8 @@ This directory contains the non-code reference material for the repository.
   - Audits, naming studies, and exploratory notes.
 - `workstreams/`
   - Briefs and progress notes for active implementation threads.
+- `release/`
+  - Local package testing and npm release runbooks.
 
 ## Suggested Reading Order
 
@@ -24,3 +26,4 @@ This directory contains the non-code reference material for the repository.
 3. `spec/muninn-mcp-api.md`
 4. `spec/muninn-format-schema.md`
 5. `architecture/muninn-mcp-design.md`
+6. `release/npm-release-and-local-testing.md`

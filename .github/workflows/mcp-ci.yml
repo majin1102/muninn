@@ -1,4 +1,4 @@
-name: MCP CI
+name: MCP
 
 on:
   pull_request:
@@ -32,6 +32,8 @@ jobs:
           node-version: 20
 
       - name: Install dependencies
+        env:
+          MUNINN_SKIP_NATIVE_POSTINSTALL: "1"
         run: pnpm install --no-frozen-lockfile
 
       - name: Build @muninn/common

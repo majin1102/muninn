@@ -10,6 +10,11 @@ const manifestPath = path.join(packageDir, 'native', 'Cargo.toml');
 const nativeDir = path.join(packageDir, 'native');
 const profile = process.env.MUNINN_NATIVE_PROFILE === 'debug' ? 'debug' : 'release';
 
+if (process.env.MUNINN_SKIP_NATIVE_POSTINSTALL === '1') {
+  console.log('Skipping Muninn native addon build because MUNINN_SKIP_NATIVE_POSTINSTALL=1');
+  process.exit(0);
+}
+
 try {
   execFileSync(
     'cargo',

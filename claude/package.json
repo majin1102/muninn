@@ -3,6 +3,11 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "files": ["dist", "README.md"],
+  "license": "UNLICENSED",
   "exports": {
     ".": {
       "types": "./dist/claude.d.ts",
@@ -14,7 +19,10 @@
   },
   "scripts": {
     "build": "pnpm --filter @muninn/common build && tsc -p tsconfig.json",
-    "test": "pnpm build && node --test test/*.test.mjs"
+    "test": "pnpm build && node --test test/*.test.mjs",
+    "test:e2e": "pnpm --filter @muninn/server build && node test/e2e/run.mjs --driver mock",
+    "test:e2e:run": "node test/e2e/run.mjs --driver mock",
+    "test:e2e:host": "pnpm --filter @muninn/server build && node test/e2e/run.mjs --driver real"
   },
   "dependencies": {
     "@muninn/common": "workspace:*"

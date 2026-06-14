@@ -27,8 +27,8 @@ MVP 1 需要验证以下能力：
 - OpenClaw 的执行过程可以被自动记录，而不是人工录入
 - Muninn 不只是保存原始过程，还能对记忆进行整理和精炼
 - 精炼后的记忆可以直接进入 OpenClaw 自己的记忆召回链路
-- 人可以通过 Muninn Board 查看 session 和记忆 observation 的结果
-- Muninn Board 的基础前端能力已经可用于人工检查 session / observation，当前主要剩 logo 与少量视觉收尾
+- 人可以通过 Muninn Web 查看 session 和记忆 observation 的结果
+- Muninn Web 的基础前端能力已经可用于人工检查 session / observation，当前主要剩 logo 与少量视觉收尾
 
 ## MVP 1 包含什么
 
@@ -89,9 +89,9 @@ MVP 1 需要产出一套与 OpenClaw LanceDB memory schema 对齐的记忆索引
 
 MVP 1 暂时不要求 Muninn 自己通过 MCP 暴露同样的召回能力。
 
-### 5. Muninn Board
+### 5. Muninn Web
 
-MVP 1 需要一个只读的 Web 界面：`Muninn Board`。
+MVP 1 需要一个只读的 Web 界面：`Muninn Web`。
 
 它的职责是：
 
@@ -99,7 +99,7 @@ MVP 1 需要一个只读的 Web 界面：`Muninn Board`。
 - 查看 observation 记忆
 - 验证 Muninn 生成出来的记忆是否可读、是否有价值
 
-MVP 1 里的 Muninn Board 不是编辑器，也不是完整笔记产品，它首先是一个记忆查看器。
+MVP 1 里的 Muninn Web 不是编辑器，也不是完整笔记产品，它首先是一个记忆查看器。
 
 当前前端进展：
 
@@ -132,8 +132,8 @@ MVP 1 暂时不包含：
 - Muninn 能把这些上下文整理成 session 记忆
 - Muninn 能从 session 中蒸馏出 observation 记忆
 - Muninn 能产出可被 OpenClaw 直接召回的精炼记忆
-- 人可以通过 Muninn Board 查看 session 和 observation
-- Muninn Board 的基础前端已经足够支撑上述查看与人工校验流程
+- 人可以通过 Muninn Web 查看 session 和 observation
+- Muninn Web 的基础前端已经足够支撑上述查看与人工校验流程
 - 相比 OpenClaw 自带的 LanceDB plugin，Muninn 产出的记忆在 benchmark 中具备更高的召回准确性
 - 相比 OpenClaw 自带的 LanceDB plugin，Muninn 在达到相近或更好效果时具备更优的 token 消耗表现
 
@@ -145,6 +145,6 @@ MVP 1 的判断标准应该基于下面这个产品闭环：
 2. 执行过程中的上下文被持续追加到 Muninn
 3. Muninn 对这些内容进行整理、蒸馏和精炼
 4. OpenClaw 在后续对话中直接召回这些记忆
-5. 人可以在 Muninn Board 中检查这些记忆是否合理
+5. 人可以在 Muninn Web 中检查这些记忆是否合理
 
 如果这个闭环在真实使用中是有价值的，那么 MVP 1 就成立了。

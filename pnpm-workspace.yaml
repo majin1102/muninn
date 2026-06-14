@@ -1,8 +1,10 @@
 packages:
   - 'common'
+  - 'format'
   - 'web'
   - 'server'
   - 'mcp'
   - 'codex'
   - 'claude'
+  - 'cli'
   - 'benchmark/*'
