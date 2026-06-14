@@ -5,9 +5,6 @@ on:
     paths:
       - "claude/**"
       - "common/**"
-      - "server/**"
-      - "format/**"
-      - "scripts/e2e/**"
       - "package.json"
       - "pnpm-workspace.yaml"
       - ".github/workflows/claude-ci.yml"
@@ -17,9 +14,6 @@ on:
     paths:
       - "claude/**"
       - "common/**"
-      - "server/**"
-      - "format/**"
-      - "scripts/e2e/**"
       - "package.json"
       - "pnpm-workspace.yaml"
       - ".github/workflows/claude-ci.yml"
@@ -37,17 +31,6 @@ jobs:
         with:
           node-version: 20
 
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: |
-            . -> target
-            server/native -> server/native/target
-
-      - name: Install protoc
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-
       - name: Install dependencies
         env:
           MUNINN_SKIP_NATIVE_POSTINSTALL: "1"
@@ -55,6 +38,3 @@ jobs:
 
       - name: Test @muninn/claude
         run: pnpm --filter @muninn/claude test
-
-      - name: Run Claude E2E
-        run: pnpm claude:e2e

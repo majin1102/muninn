@@ -1,0 +1,62 @@
+name: Agent E2E CI
+
+on:
+  pull_request:
+    paths:
+      - "codex/**"
+      - "claude/**"
+      - "common/**"
+      - "server/**"
+      - "format/**"
+      - "scripts/e2e/**"
+      - "package.json"
+      - "pnpm-workspace.yaml"
+      - ".github/workflows/agent-e2e-ci.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "codex/**"
+      - "claude/**"
+      - "common/**"
+      - "server/**"
+      - "format/**"
+      - "scripts/e2e/**"
+      - "package.json"
+      - "pnpm-workspace.yaml"
+      - ".github/workflows/agent-e2e-ci.yml"
+
+jobs:
+  agent-e2e:
+    name: agent-e2e-ci
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+            server/native -> server/native/target
+
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: Install dependencies
+        env:
+          MUNINN_SKIP_NATIVE_POSTINSTALL: "1"
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Build server runtime once
+        run: pnpm --filter @muninn/server build
+
+      - name: Run agent E2E
+        run: pnpm test:e2e:run
