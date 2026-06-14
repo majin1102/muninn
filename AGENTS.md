@@ -13,56 +13,81 @@ This file is the fast-path context for coding agents working in this repository.
 
 ## What This Repo Is
 
-Muninn is a shared memory system for agents.
+Muninn is a memory format and framework for agent-generated context.
+
+Product positioning:
+
+- Muninn automatically captures real-time context from Codex, Claude Code, and other agents.
+- Muninn turns conversations, documents, images, and webpages into provenance-aware, multi-modal context lakes.
+- Muninn pipelines curate raw context into grounded, source-linked layered memory for human-and-agent browsing, inspection, recall, and LLM-Wiki generation.
+- Shared across agents and sessions, those memories compound experience and knowledge so agents can continuously learn, evolve, and grow with the user and their projects over time.
+- Muninn is not a raw transcript archive, a generic vector database wrapper, a note-taking app, a cloud collaboration service, or a hosted knowledge base.
 
 Current strategic direction:
 
-- Rust is expected to become the long-term implementation language for storage/format logic.
-- TypeScript modules are the current integration, agent adapter, web, and transport shell.
-- MCP protocol evolution should happen under `docs/spec/`.
+- Rust owns the long-term storage and format logic.
+- TypeScript owns the current CLI, server shell, integration adapters, web UI, and transport surfaces.
+- MCP protocol evolution belongs under `docs/spec/`.
 
 ## Current Module Map
 
+- `cli/`
+  - `@muninn/cli`.
+  - Owns `doctor`, `serve`, host install/uninstall, and status commands.
+  - Normal users should enter through this package instead of invoking subpackages directly.
+- `server/`
+  - Single backend entrypoint for normal operation.
+  - Owns HTTP routes, request validation, response shaping, local process-facing APIs, and the TypeScript memory runtime under `server/src/memory`.
+  - Reads and writes Lance-backed tables through `server/native`.
+  - Serves the built web app at `/app/`.
+- `format/`
+  - Rust typed-table, format, and storage implementation.
+  - Defaults to the published `lance` crate; see `format/README.md` for local override workflow.
+- `web/`
+  - Browser/WKWebView UI for the Muninn app.
+  - Talks to `server` through HTTP APIs and shared contracts from `common`.
 - `mcp/`
   - MCP adapter layer.
   - Exposes MCP tools and forwards requests to the server.
   - Should remain thin and protocol-focused.
-- `server/`
-  - HTTP service layer.
-  - Owns request validation, response shaping, and local process-facing APIs.
-  - Owns the TypeScript memory runtime under `server/src/memory`.
-  - Reads and writes the Lance-backed turn dataset through `server/native`.
-- `web/`
-  - Browser/WKWebView UI for the Muninn app.
-  - Talks to `server` through HTTP APIs.
 - `common/`
   - Shared TypeScript contracts and pure agent hook helpers.
 - `codex/`
   - Codex adapter and hook integration.
 - `claude/`
-  - Claude adapter and hook integration.
-- `format/`
-  - Rust typed-table, format, and storage implementation.
-  - Defaults to the published `lance` crate; see `format/README.md` for local override workflow.
+  - Claude Code adapter and hook integration.
+- `openclaw/plugin/`
+  - OpenClaw plugin integration code.
+  - It is not listed in `pnpm-workspace.yaml`, but server tests build it directly when needed.
+- `apple/macos/`
+  - SwiftUI macOS host that starts the bundled server runtime, waits for `/health`, and loads `/app/` in WKWebView.
+- `benchmark/`
+  - Evaluation modules that run directly against Muninn.
+  - `benchmark/locomo/` is the active LoCoMo adapter and scoring path.
 - `docs/`
-  - Design notes, product plans, specs, architecture notes, comparisons, research documents, and workstream trackers.
-- `examples/`
-  - Example code and runnable demos when needed.
+  - Design notes, product plans, specs, architecture notes, comparisons, release runbooks, research documents, and workstream trackers.
+- `scripts/`
+  - Repository-level helper scripts and E2E fixtures.
 
 ## Architecture
 
 Preferred dependency direction:
 
-- `server` may depend on `common`, `codex`, and `claude`.
-- `server/src/memory` depends on the Rust `format/` implementation through `server/native`.
+- `server` may depend on `common`, `codex`, `claude`, and the Rust storage implementation through `server/native`.
+- `server/src/memory` owns extractor, observer, recall, watchdog, session, and turn orchestration.
+- `format` owns typed tables, persistence, table maintenance, and Arrow/Lance conversion below the table API boundary.
 - `web` should talk to `server` through HTTP APIs and shared contracts from `common`.
 - `mcp` should talk to `server`, not directly to Rust/native by default.
 - `codex` and `claude` should not depend on each other or on `web`.
+- `cli` should orchestrate installed package commands and host config; it should not become a second backend.
+- `apple/macos` should bundle and supervise the server/UI runtime; it should not duplicate memory business logic.
 
 Working principle:
 
-- `server` is the single backend entrypoint for normal operation.
+- `server` is the backend entrypoint.
 - `mcp` is an adapter, not the business backend.
+- Runtime configuration lives in `$MUNINN_HOME/muninn.json`.
+- Saving config through the UI updates the file on disk; current runtime changes apply after restart.
 
 ## Current Truths
 
@@ -71,19 +96,91 @@ Current persisted record terminology:
 - The persisted row unit is `turn`.
 - The public memory layer for those rows is `SESSION`.
 - `session_id` is only an optional grouping key.
+- TypeScript interfaces are API/storage contracts, not the final relational schema.
 
 Current write path:
 
 - HTTP path: `POST /api/v1/turn/capture`
 - Request type: `CaptureTurnRequest`
+- Hook captures whose `metadata.ingest` ends in `-hook` are gated by the per-project capture allowlist.
 
-Important modeling note:
+Current runtime config requirements:
 
-- Current TypeScript interfaces are API/storage contracts.
-- They are not the final relational schema.
+- `extractor` is required for core memory runtime.
+- `observer` is required unless `observer.enabled` is `false`.
+- `providers.llm` and `providers.embedding` are required.
+- Supported LLM provider types are `mock`, `openai`, and `openai-codex`.
+- Supported embedding provider types are `mock` and `openai`.
+
+Current installable surface:
+
+- `@muninn/cli` is the user-facing package.
+- `muninn serve` runs the server in the foreground.
+- `muninn install codex|claude|all` installs MCP and hook config for hosts.
+- There is no `muninn install mcp` target.
+- The first release path supports macOS and Linux, not Windows.
+- Muninn does not install a background service or background updater.
+
+## Useful Commands
+
+Install:
+
+```bash
+pnpm install
+```
+
+Build:
+
+```bash
+pnpm --filter @muninn/server build
+pnpm --filter @muninn/web build
+pnpm run build:runtime
+```
+
+Run locally:
+
+```bash
+MUNINN_HOME=/tmp/muninn pnpm --filter @muninn/server start
+pnpm --filter @muninn/cli build
+node cli/dist/cli.js serve
+```
+
+Targeted checks:
+
+```bash
+pnpm --filter @muninn/common test
+pnpm --filter @muninn/codex test
+pnpm --filter @muninn/claude test
+pnpm --filter @muninn/web build
+pnpm --filter @muninn/web test
+pnpm --filter @muninn/server test
+pnpm --filter @muninn/benchmark-locomo test
+cargo check --manifest-path format/Cargo.toml
+cargo check --manifest-path server/native/Cargo.toml
+swift build --package-path apple/macos
+```
+
+Agent E2E:
+
+```bash
+pnpm test:e2e
+pnpm test:e2e:run
+pnpm test:e2e:host
+```
 
 ## Do
 
 - Keep `mcp` thin.
 - Keep transport concerns in `server`.
 - Put MCP protocol and schema evolution in `docs/spec/`.
+- Use current schema/interface shapes only; remove obsolete compatibility handling when shapes change.
+- Keep Rust table APIs expressed in persisted/domain structs, not Arrow types.
+- Keep Arrow/codec conversion below the Rust table boundary.
+- Prefer focused module-local tests for narrow changes and broaden checks when touching shared contracts, native storage, or cross-agent behavior.
+
+## Avoid
+
+- Do not add backend business logic to `mcp`, `web`, `cli`, or `apple/macos`.
+- Do not make Codex and Claude adapters depend on each other.
+- Do not commit repository-external `path` dependencies for `lance`; use the local Cargo patch workflow from `format/README.md`.
+- Do not preserve deprecated request/config shapes for compatibility unless the user explicitly asks for a migration layer.
