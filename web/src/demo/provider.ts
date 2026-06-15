@@ -14,7 +14,7 @@ import {
   type DemoSessionGroupItem,
   type DemoSessionTimelineItem,
 } from './data.js';
-import { shiftPipelineTaskTimes, summarizePipelineTasks } from '../lib/pipeline_model.js';
+import { shiftPipelineTaskTimes, summarizePipelineTasks } from '../lib/pipeline-model.js';
 import type { AgentRecallStreamEvent, RecallProvidersResponse, SearchSessionResult } from '@muninn/common';
 import { sessionIdentityKeyMatches } from '@muninn/common/session-identity';
 
@@ -239,7 +239,7 @@ export async function getDemoSessionTurns(
       title: 'Summary',
       createdAt: firstTurn.createdAt,
       updatedAt: firstTurn.updatedAt,
-      markdown: firstTurn.summary,
+      markdown: firstTurn.preview,
       refs: [],
     }, {
       memoryId: `${firstTurn.memoryId}~timeline:signals`,
@@ -254,12 +254,12 @@ export async function getDemoSessionTurns(
   timeline.push(...turns.map((turn) => ({
     memoryId: `${turn.memoryId}~timeline`,
     kind: 'extraction' as const,
-    title: turn.title ?? turn.summary,
+    title: turn.prompt ?? turn.preview,
     createdAt: turn.createdAt,
     updatedAt: turn.updatedAt,
     markdown: [
       '### Summary',
-      turn.summary,
+      turn.preview,
       '',
       '### Content',
       turn.prompt ? `- Prompt: ${turn.prompt}` : undefined,
@@ -271,7 +271,7 @@ export async function getDemoSessionTurns(
     turns: page,
     segments: turns.map((turn) => ({
       memoryId: `${turn.memoryId}~timeline`,
-      title: turn.title ?? turn.summary,
+      title: turn.prompt ?? turn.preview,
       createdAt: turn.createdAt,
       updatedAt: turn.updatedAt,
     })),
@@ -288,7 +288,7 @@ function enrichDemoTurn(turn: DemoSessionTimelineItem): DemoSessionTimelineItem 
   return {
     ...turn,
     prompt: sectionText(document.markdown, 'Prompt') ?? turn.prompt,
-    response: sectionText(document.markdown, 'Response') ?? turn.response ?? turn.summary,
+    response: sectionText(document.markdown, 'Response') ?? turn.response ?? turn.preview,
     toolCalls: toolCallsFromMarkdown(document.markdown) ?? turn.toolCalls,
   };
 }

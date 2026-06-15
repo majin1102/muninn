@@ -2,11 +2,11 @@ import assert from 'node:assert/strict';
 import { requestJson, waitFor } from './http.mjs';
 
 export async function importedProjects(baseUrl) {
-  return requestJson(baseUrl, '/api/v1/ui/import/projects');
+  return requestJson(baseUrl, '/app/api/import/projects');
 }
 
 export async function importedSessions(baseUrl, agent) {
-  return requestJson(baseUrl, `/api/v1/ui/import/${agent}/sessions?scope=imported`);
+  return requestJson(baseUrl, `/app/api/import/${agent}/sessions?scope=imported`);
 }
 
 export async function sessionTurns(baseUrl, agent, project, sessionId) {
@@ -15,7 +15,7 @@ export async function sessionTurns(baseUrl, agent, project, sessionId) {
     offset: '0',
     limit: '20',
   });
-  return requestJson(baseUrl, `/api/v1/ui/session/agents/${encodeURIComponent(agent)}/sessions/${encodeURIComponent(sessionId)}/turns?${params.toString()}`);
+  return requestJson(baseUrl, `/app/api/session/agents/${encodeURIComponent(agent)}/sessions/${encodeURIComponent(sessionId)}/turns?${params.toString()}`);
 }
 
 export async function recall(baseUrl, query, { limit = 5, mode } = {}) {

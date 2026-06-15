@@ -15,7 +15,7 @@ import {
   selectedSessionKey,
   sessionTreeCanExpand,
   type SessionContentMode,
-} from '../lib/session_content_state.js';
+} from '../lib/session-content-state.js';
 import { asErrorMessage } from '../lib/utils.js';
 import { PipelinesPage } from './PipelinesPage.js';
 import { RecallPage } from './SearchPage.js';

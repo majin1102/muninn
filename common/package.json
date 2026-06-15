@@ -14,12 +14,12 @@
       "default": "./dist/index.js"
     },
     "./session-identity": {
-      "types": "./dist/session_identity.d.ts",
-      "default": "./dist/session_identity.js"
+      "types": "./dist/session-identity.d.ts",
+      "default": "./dist/session-identity.js"
     },
     "./agent-hook": {
-      "types": "./dist/agent_hook.d.ts",
-      "default": "./dist/agent_hook.js"
+      "types": "./dist/agent-hook.d.ts",
+      "default": "./dist/agent-hook.js"
     }
   },
   "files": ["dist"],

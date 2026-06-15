@@ -2,10 +2,10 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import ts from 'typescript';
-import { __testing } from '../src/lib/chat_timeline.ts';
+import { __testing } from '../src/lib/chat-timeline.ts';
 
 async function loadSourceChatTimeline() {
-  const source = await readFile(new URL('../src/lib/chat_timeline.ts', import.meta.url), 'utf8');
+  const source = await readFile(new URL('../src/lib/chat-timeline.ts', import.meta.url), 'utf8');
   const compiled = ts.transpileModule(source, {
     compilerOptions: {
       module: ts.ModuleKind.ES2022,

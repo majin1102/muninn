@@ -1,6 +1,8 @@
 # Muninn
 
-Muninn is a memory format and framework for agent-generated context. It automatically captures real-time context from Codex, Claude Code, and other agents, turning conversations, documents, images, and webpages into provenance-aware, multi-modal context lakes. Muninn pipelines curate raw context into grounded, source-linked layered memory for human-and-agent browsing, inspection, recall, and LLM-Wiki generation. Shared across agents and sessions, these memories compound experience and knowledge, helping agents continuously learn, evolve, and better understand you and your projects over time.
+Muninn is a memory format and framework for agent-generated context. It automatically captures real-time context from Codex, Claude Code, and other agents, turning conversations, documents, images, and other artifacts into provenance-aware, multi-modal context lakes.
+
+Muninn pipelines curate raw context into grounded, source-linked, layered memory for human-and-agent browsing, inspection, recall, and LLM-Wiki generation. Shared across agents, sessions, and projects, these memories compound into long-lived context, experience, and knowledge, helping agents continuously learn, evolve, and better understand you and your projects over time.
 
 ## Quick Start
 
@@ -21,25 +23,26 @@ pnpm install
 Build the main runtime:
 
 ```bash
-pnpm --filter @muninn/web build
-pnpm --filter @muninn/server build
+pnpm run build:runtime
 ```
 
 Run the server directly from the workspace:
 
 ```bash
-MUNINN_HOME=/tmp/muninn pnpm --filter @muninn/server start
+MUNINN_HOME=/tmp/muninn pnpm muninn run
 ```
 
 The server defaults to `http://127.0.0.1:8080` and serves the app at `/app/` when `web/dist` is available. Runtime data defaults to `~/.muninn` unless `MUNINN_HOME` is set.
 
-For the CLI path, build the CLI and run it from `dist`:
+During local development, run the CLI through the root workspace script:
 
 ```bash
-pnpm --filter @muninn/cli build
-node cli/dist/cli.js doctor
-node cli/dist/cli.js serve
-node cli/dist/cli.js install all --dry-run
+pnpm muninn doctor
+pnpm muninn run
+pnpm muninn start
+pnpm muninn stop
+pnpm muninn restart --force
+pnpm muninn install all --dry-run
 ```
 
 The installable CLI surface is centered on `@muninn/cli`:
@@ -47,11 +50,14 @@ The installable CLI surface is centered on `@muninn/cli`:
 ```sh
 npm i -g @muninn/cli
 muninn doctor
-muninn serve
+muninn run
+muninn start
+muninn stop
+muninn restart --force
 muninn install all
 ```
 
-`muninn serve` runs the server in the foreground. The first release path supports macOS and Linux, does not install a background service or updater, and requires local native compilation with Rust and `protoc`.
+`muninn run` runs the server in the foreground. `muninn start` starts a CLI-managed background process and returns; `muninn stop` stops that process; `muninn restart --force` force-restarts it. The first release path supports macOS and Linux, does not install a system background service or updater, and requires local native compilation with Rust and `protoc`.
 
 ## Configuration
 
@@ -73,7 +79,7 @@ The web settings API exposes a default mock-provider config for local setup. Sav
 ## Repository Layout
 
 - `cli/`
-  - `@muninn/cli`; runs `doctor`, `serve`, host install/uninstall, and status commands.
+  - `@muninn/cli`; runs `doctor`, `run`, `start`, `stop`, `restart`, host install/uninstall, and status commands.
 - `server/`
   - HTTP service, request validation, response shaping, local process-facing APIs, and the TypeScript memory runtime.
   - Loads the `napi-rs` native addon from `server/native`.

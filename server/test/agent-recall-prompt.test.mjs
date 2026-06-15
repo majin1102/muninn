@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 async function loadAgentRecallServer() {
-  return import(new URL('../dist/web/agent_recall.js', import.meta.url));
+  return import(new URL('../dist/web/recall.js', import.meta.url));
 }
 
 test('agent recall prompt handles synthesis, uncertainty, contradictions, and timestamps', async () => {

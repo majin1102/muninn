@@ -62,7 +62,7 @@ test('recall search request is abortable and stale responses are ignored', async
   const uiSource = await readFile(new URL('../src/components/SearchPage.tsx', import.meta.url), 'utf8');
 
   assert.match(apiSource, /searchRecall\(params: \{[\s\S]*signal\?: AbortSignal/);
-  assert.match(apiSource, /fetchJson<SearchResponse>\(`\/api\/v1\/ui\/recall\/search\?\$\{searchParams\.toString\(\)\}`,\s*\{ signal: params\.signal \}\)/);
+  assert.match(apiSource, /fetchJson<SearchResponse>\(`\/app\/api\/recall\/search\?\$\{searchParams\.toString\(\)\}`,\s*\{ signal: params\.signal \}\)/);
   assert.match(uiSource, /signal: agentAbort\.signal/);
   assert.match(uiSource, /if \(agentAbort\.signal\.aborted\) \{[\s\S]*return;[\s\S]*\}[\s\S]*setResults\(response\.results\)/);
 });

@@ -21,8 +21,6 @@ pub fn turn_schema() -> Schema {
         Field::new("cwd", DataType::Utf8, false),
         Field::new("agent", DataType::Utf8, false),
         Field::new("observer", DataType::Utf8, false),
-        Field::new("title", DataType::Utf8, true),
-        Field::new("summary", DataType::Utf8, true),
         Field::new("events_json", DataType::Utf8, false),
         Field::new("artifacts_json", DataType::Utf8, true),
         Field::new("metadata_json", DataType::Utf8, true),
@@ -266,7 +264,8 @@ mod tests {
         assert!(schema.field_with_name("artifacts_json").is_ok());
         assert!(schema.field_with_name("prompt").is_ok());
         assert!(schema.field_with_name("response").is_ok());
-        assert!(schema.field_with_name("summary").is_ok());
+        assert!(schema.field_with_name("title").is_err());
+        assert!(schema.field_with_name("summary").is_err());
     }
 
     #[test]

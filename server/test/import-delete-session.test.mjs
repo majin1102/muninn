@@ -4,9 +4,9 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import core, { sessions, turns } from '../dist/memory/index.js';
-import { app } from '../dist/routes.js';
-import { getCapturePolicy, setCaptureEnabled } from '../dist/web/capture_policy.js';
+import core, { sessions, turns } from '../dist/backend.js';
+import { app } from '../dist/http.js';
+import { getCapturePolicy, setCaptureEnabled } from '../dist/api/capture.js';
 
 const { shutdownCoreForTests } = core;
 const PROJECT = 'github.com/muninn/e2e-fixture';
@@ -86,7 +86,7 @@ test('delete imported session removes only one session and keeps project capture
   await capture(makeTurn('e2e-delete-session-b', 0, 'delete this session'));
   await setCaptureEnabled('codex', PROJECT, true);
 
-  const response = await app.request('/api/v1/ui/import/codex/session', {
+  const response = await app.request('/app/api/import/codex/session', {
     method: 'DELETE',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ project: PROJECT, sessionId: 'e2e-delete-session-b' }),

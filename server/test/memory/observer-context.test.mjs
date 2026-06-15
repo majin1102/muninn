@@ -1,10 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { parseObserverDocument } from '../../dist/memory/observer/markdown.js';
+import { parseObservationDocument } from '../../dist/pipeline/observation.js';
 
 test('observer document parser derives observing paths and leaf source refs', () => {
-  const parsed = parseObserverDocument(`# Caroline
+  const parsed = parseObservationDocument(`# Caroline
 
 ## Plans
 ### Summer plans
@@ -25,7 +25,7 @@ Source extractions:
 });
 
 test('observer document parser accepts placeholder source refs as expandable refs', () => {
-  const parsed = parseObserverDocument(`# Caroline
+  const parsed = parseObservationDocument(`# Caroline
 
 ## Plans
 ### Summer plans
@@ -40,7 +40,7 @@ Source extractions:
 });
 
 test('observer document parser accepts heading-only keep markers', () => {
-  const parsed = parseObserverDocument(`# Caroline
+  const parsed = parseObservationDocument(`# Caroline
 
 ## Support
 ### Family
@@ -54,7 +54,7 @@ test('observer document parser accepts heading-only keep markers', () => {
 
 test('observer document parser normalizes a unique near-match extraction ref typo', () => {
   const validRef = '8ef63e6640c91a206097e95a';
-  const parsed = parseObserverDocument(`# Caroline
+  const parsed = parseObservationDocument(`# Caroline
 
 ## Plans
 ### Summer plans
@@ -68,7 +68,7 @@ Source extractions:
 });
 
 test('observer document parser rejects source refs on non-leaf sections', () => {
-  assert.throws(() => parseObserverDocument(`# Caroline
+  assert.throws(() => parseObservationDocument(`# Caroline
 
 ## Plans
 Parent body.
@@ -84,7 +84,7 @@ Source extractions:
 });
 
 test('observer document parser rejects leaf sections without source extractions', () => {
-  assert.throws(() => parseObserverDocument(`# Caroline
+  assert.throws(() => parseObservationDocument(`# Caroline
 
 ## Plans
 Caroline researched adoption agencies.
@@ -92,7 +92,7 @@ Caroline researched adoption agencies.
 });
 
 test('observer document parser rejects source extractions without observation body', () => {
-  assert.throws(() => parseObserverDocument(`# Caroline
+  assert.throws(() => parseObservationDocument(`# Caroline
 
 ## Plans
 Source extractions:
@@ -101,7 +101,7 @@ Source extractions:
 });
 
 test('observer document parser accepts leaf sections without ids', () => {
-  const parsed = parseObserverDocument(`# Caroline
+  const parsed = parseObservationDocument(`# Caroline
 
 ## Plans
 Caroline researched adoption agencies.
@@ -115,25 +115,25 @@ Source extractions:
 });
 
 test('observer document parser rejects id, delete, refs, and path hints', () => {
-  assert.throws(() => parseObserverDocument(`# Caroline
+  assert.throws(() => parseObservationDocument(`# Caroline
 
 ## Old plan <!-- id: 11111111-1111-4111-8111-111111111111 -->
 Old plan.
 `, new Set(['ext-1'])), /unknown observer heading hint: id/i);
 
-  assert.throws(() => parseObserverDocument(`# Caroline
+  assert.throws(() => parseObservationDocument(`# Caroline
 
 ## Old plan <!-- delete: true -->
 Old plan.
 `, new Set(['ext-1'])), /unknown observer heading hint: delete/i);
 
-  assert.throws(() => parseObserverDocument(`# Caroline
+  assert.throws(() => parseObservationDocument(`# Caroline
 
 ## Old plan <!-- refs: [ext-1] -->
 Old plan.
 `, new Set(['ext-1'])), /unknown observer heading hint: refs/i);
 
-  assert.throws(() => parseObserverDocument(`# Caroline
+  assert.throws(() => parseObservationDocument(`# Caroline
 
 ## Old plan <!-- path: Caroline / Old plan -->
 Old plan.
@@ -141,7 +141,7 @@ Old plan.
 });
 
 test('observer document parser supports four heading levels and rejects slash headings', () => {
-  const parsed = parseObserverDocument(`# Caroline
+  const parsed = parseObservationDocument(`# Caroline
 
 ## Support
 ### Friends
@@ -158,7 +158,7 @@ Source extractions:
     'Caroline / Support / Friends / Long-term friends',
   );
 
-  assert.throws(() => parseObserverDocument(`# Caroline
+  assert.throws(() => parseObservationDocument(`# Caroline
 
 ## Support / friends
 Caroline has support.
@@ -169,7 +169,7 @@ Source extractions:
 });
 
 test('observer document parser accepts cwd-like slash root titles', () => {
-  const parsed = parseObserverDocument(`# /workspace/AC/DC
+  const parsed = parseObservationDocument(`# /workspace/AC/DC
 
 ## Preferences
 AC/DC prefers concise notes.
@@ -183,7 +183,7 @@ Source extractions:
 });
 
 test('observer document parser rejects duplicate observing paths', () => {
-  assert.throws(() => parseObserverDocument(`# Caroline
+  assert.throws(() => parseObservationDocument(`# Caroline
 
 ## Support
 ### Friends
@@ -200,7 +200,7 @@ Source extractions:
 });
 
 test('observer document parser rejects rewritten single source extraction bullets', () => {
-  assert.throws(() => parseObserverDocument(`# Caroline
+  assert.throws(() => parseObservationDocument(`# Caroline
 
 ## Plans
 Caroline researched adoption agencies.

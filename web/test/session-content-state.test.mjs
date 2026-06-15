@@ -13,7 +13,7 @@ import {
   selectedSessionKey,
   timelineItemForConversationWindow,
   toggleSessionTreeLayoutMode,
-} from '../src/lib/session_content_state.ts';
+} from '../src/lib/session-content-state.ts';
 
 test('clamps timeline split width to keep both panes usable', () => {
   assert.equal(clampTimelineWidth(120, 1200), TIMELINE_MIN_WIDTH);

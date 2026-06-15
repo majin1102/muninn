@@ -16,4 +16,4 @@ if [ -z "$NODE_BIN" ]; then
     NODE_BIN=node
   fi
 fi
-"$NODE_BIN" --test benchmark/locomo/tests/js/bridge.test.mjs benchmark/locomo/tests/js/gateway-lab.test.mjs
+"$NODE_BIN" --test benchmark/locomo/tests/js/bridge.test.mjs

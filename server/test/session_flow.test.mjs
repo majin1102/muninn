@@ -4,11 +4,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 
-import core, { turns } from '../dist/memory/index.js';
-import { getNativeTables } from '../dist/memory/native.js';
-import { serializeTurn } from '../dist/memory/turn/types.js';
+import core, { turns } from '../dist/backend.js';
+import { getNativeTables } from '../dist/native.js';
+import { serializeTurnRow } from '../dist/pipeline/ingest.js';
 import { resetSessionTreeCacheForTests } from '../dist/web/routes.js';
-import { app } from '../dist/routes.js';
+import { app } from '../dist/http.js';
 import { registerMuninnHooks } from '../../openclaw/plugin/dist/src/hooks.js';
 
 const { shutdownCoreForTests } = core;
@@ -102,7 +102,7 @@ function sessionTurnsPath(agent, sessionKey, { project = TEST_PROJECT, offset = 
     offset: String(offset),
     limit: String(limit),
   });
-  return `/api/v1/ui/session/agents/${encodeURIComponent(agent)}/sessions/${encodeURIComponent(sessionKey)}/turns?${params.toString()}`;
+  return `/app/api/session/agents/${encodeURIComponent(agent)}/sessions/${encodeURIComponent(sessionKey)}/turns?${params.toString()}`;
 }
 
 async function captureTurnAndGetTurn(turn) {
@@ -130,7 +130,6 @@ async function benchmarkCaptureTurn(turn) {
 }
 
 async function writeMuninnConfig(configPath, {
-  turnProvider,
   observerProvider = 'mock',
   semanticDimensions = 4,
   storageUri,
@@ -145,11 +144,6 @@ async function writeMuninnConfig(configPath, {
     if (storageOptions) {
       root.storage.storageOptions = storageOptions;
     }
-  }
-
-  if (turnProvider) {
-    root.turn = { llmProvider: 'test_turn_llm' };
-    providers.llm.test_turn_llm = { type: turnProvider };
   }
 
   if (observerProvider) {
@@ -184,7 +178,6 @@ async function writeMuninnConfig(configPath, {
 }
 
 function createValidSettings({
-  turnProvider,
   observerProvider = 'mock',
   semanticDimensions = 8,
   includeWatchdog = false,
@@ -223,11 +216,6 @@ function createValidSettings({
     },
   };
 
-  if (turnProvider) {
-    config.turn = { llmProvider: 'default_turn_llm' };
-    config.providers.llm.default_turn_llm = { type: turnProvider };
-  }
-
   if (includeWatchdog) {
     config.watchdog = {
       enabled: true,
@@ -255,7 +243,7 @@ test('turn/capture writes a complete turn and detail reads it back', async (t) =
   t.after(async () => rm(dir, { recursive: true, force: true }));
 
   process.env.MUNINN_HOME = homeDir;
-  await writeMuninnConfig(configPath, { turnProvider: 'mock' });
+  await writeMuninnConfig(configPath, {});
 
   const addedTurn = await captureTurnAndGetTurn(makeTurnContent({
     events: [
@@ -273,10 +261,10 @@ test('turn/capture writes a complete turn and detail reads it back', async (t) =
   const detail = await json(detailResponse);
   assert.equal(detail.memoryHits.length, 1);
   assert.equal(detail.memoryHits[0].memoryId, addedTurn.turnId);
-  assert.match(detail.memoryHits[0].content, /## Title/);
+  assert.doesNotMatch(detail.memoryHits[0].content, /## Title/);
   assert.match(detail.memoryHits[0].content, /alpha prompt/);
   assert.match(detail.memoryHits[0].content, /## Created At/);
-  assert.match(detail.memoryHits[0].content, /## Summary/);
+  assert.doesNotMatch(detail.memoryHits[0].content, /## Summary/);
   assert.match(detail.memoryHits[0].content, /## Detail/);
   assert.match(detail.memoryHits[0].content, /alpha prompt/);
   assert.match(detail.memoryHits[0].content, /alpha response/);
@@ -287,7 +275,7 @@ test('turn/capture/batch writes multiple turns and updates session UI immediatel
   t.after(async () => rm(dir, { recursive: true, force: true }));
 
   process.env.MUNINN_HOME = homeDir;
-  await writeMuninnConfig(configPath, { turnProvider: 'mock' });
+  await writeMuninnConfig(configPath, {});
   resetSessionTreeCacheForTests();
 
   const response = await captureTurnsBatch([
@@ -296,7 +284,6 @@ test('turn/capture/batch writes multiple turns and updates session UI immediatel
       turnSequence: 0,
       prompt: 'batch prompt 1',
       response: 'batch response 1',
-      summary: 'batch source summary 1',
       createdAt: '2026-06-14T11:00:00.000Z',
       updatedAt: '2026-06-14T11:01:00.000Z',
     }),
@@ -305,7 +292,6 @@ test('turn/capture/batch writes multiple turns and updates session UI immediatel
       turnSequence: 1,
       prompt: 'batch prompt 2',
       response: 'batch response 2',
-      summary: 'batch source summary 2',
       createdAt: '2026-06-14T11:02:00.000Z',
       updatedAt: '2026-06-14T11:03:00.000Z',
     }),
@@ -317,7 +303,7 @@ test('turn/capture/batch writes multiple turns and updates session UI immediatel
   assert.equal(body.skippedTurns, 0);
   assert.match(body.requestId, /^req_/);
 
-  const sessionsResponse = await app.request('/api/v1/ui/session/agents/agent-a/sessions');
+  const sessionsResponse = await app.request('/app/api/session/agents/agent-a/sessions');
   assert.equal(sessionsResponse.status, 200);
   const sessionsBody = await json(sessionsResponse);
   assert.equal(sessionsBody.sessions.length, 1);
@@ -341,7 +327,7 @@ test('turn/capture/batch reuses recent-turn duplicate detection', async (t) => {
   t.after(async () => rm(dir, { recursive: true, force: true }));
 
   process.env.MUNINN_HOME = homeDir;
-  await writeMuninnConfig(configPath, { turnProvider: 'mock' });
+  await writeMuninnConfig(configPath, {});
 
   const batch = [
     makeTurnContent({
@@ -349,7 +335,6 @@ test('turn/capture/batch reuses recent-turn duplicate detection', async (t) => {
       turnSequence: 0,
       prompt: 'dedupe prompt 1',
       response: 'dedupe response 1',
-      summary: 'dedupe summary 1',
       createdAt: '2026-06-14T12:00:00.000Z',
       updatedAt: '2026-06-14T12:01:00.000Z',
     }),
@@ -358,7 +343,6 @@ test('turn/capture/batch reuses recent-turn duplicate detection', async (t) => {
       turnSequence: 0,
       prompt: 'dedupe prompt 1 changed',
       response: 'dedupe response 1 changed',
-      summary: 'dedupe summary 1 duplicate',
       createdAt: '2026-06-14T12:02:00.000Z',
       updatedAt: '2026-06-14T12:03:00.000Z',
     }),
@@ -367,7 +351,6 @@ test('turn/capture/batch reuses recent-turn duplicate detection', async (t) => {
       turnSequence: 1,
       prompt: 'dedupe prompt 2',
       response: 'dedupe response 2',
-      summary: 'dedupe summary 2',
       createdAt: '2026-06-14T12:04:00.000Z',
       updatedAt: '2026-06-14T12:05:00.000Z',
     }),
@@ -406,20 +389,18 @@ test('turn/capture/batch does not dedupe identical content without turnSequence'
   t.after(async () => rm(dir, { recursive: true, force: true }));
 
   process.env.MUNINN_HOME = homeDir;
-  await writeMuninnConfig(configPath, { turnProvider: 'mock' });
+  await writeMuninnConfig(configPath, {});
 
   const response = await captureTurnsBatch([
     makeTurnContent({
       sessionId: 'batch-fallback-dedupe-session',
       prompt: 'fallback dedupe prompt',
       response: 'fallback dedupe response',
-      summary: 'fallback dedupe summary',
     }),
     makeTurnContent({
       sessionId: 'batch-fallback-dedupe-session',
       prompt: 'fallback dedupe prompt',
       response: 'fallback dedupe response',
-      summary: 'fallback duplicate summary',
     }),
   ]);
 
@@ -429,12 +410,12 @@ test('turn/capture/batch does not dedupe identical content without turnSequence'
   assert.equal(body.skippedTurns, 0);
 });
 
-test('turn/capture/batch does not generate missing title or summary', async (t) => {
+test('turn/capture/batch persists raw prompt and response without title or summary', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(async () => rm(dir, { recursive: true, force: true }));
 
   process.env.MUNINN_HOME = homeDir;
-  await writeMuninnConfig(configPath, { turnProvider: 'mock' });
+  await writeMuninnConfig(configPath, {});
 
   const response = await captureTurnsBatch([
     makeTurnContent({
@@ -453,8 +434,8 @@ test('turn/capture/batch does not generate missing title or summary', async (t) 
     sessionId: 'batch-raw-session',
   });
   assert.equal(persisted.length, 1);
-  assert.equal(persisted[0].title, null);
-  assert.equal(persisted[0].summary, null);
+  assert.equal('title' in persisted[0], false);
+  assert.equal('summary' in persisted[0], false);
   assert.equal(persisted[0].prompt, 'raw batch prompt');
   assert.equal(persisted[0].response, 'raw batch response');
 });
@@ -464,21 +445,19 @@ test('turn/capture/batch skips disallowed hook turns and captures import turns',
   t.after(async () => rm(dir, { recursive: true, force: true }));
 
   process.env.MUNINN_HOME = homeDir;
-  await writeMuninnConfig(configPath, { turnProvider: 'mock' });
+  await writeMuninnConfig(configPath, {});
 
   const response = await captureTurnsBatch([
     makeTurnContent({
       sessionId: 'batch-policy-session',
       prompt: 'blocked hook prompt',
       response: 'blocked hook response',
-      summary: 'blocked hook summary',
       metadata: { ingest: 'agent-hook' },
     }),
     makeTurnContent({
       sessionId: 'batch-policy-session',
       prompt: 'allowed import prompt',
       response: 'allowed import response',
-      summary: 'allowed import summary',
       metadata: { ingest: 'agent-import' },
     }),
   ]);
@@ -500,7 +479,7 @@ test('openclaw hook capture persists artifacts through server and native readbac
   t.after(async () => rm(dir, { recursive: true, force: true }));
 
   process.env.MUNINN_HOME = homeDir;
-  await writeMuninnConfig(configPath, { turnProvider: 'mock' });
+  await writeMuninnConfig(configPath, {});
   await writeFile(path.join(dir, 'note.txt'), 'artifact body', 'utf8');
 
   const handlers = new Map();
@@ -610,7 +589,7 @@ test('turn/capture accepts typed image and file artifacts', async (t) => {
   t.after(async () => rm(dir, { recursive: true, force: true }));
 
   process.env.MUNINN_HOME = homeDir;
-  await writeMuninnConfig(configPath, { turnProvider: 'mock' });
+  await writeMuninnConfig(configPath, {});
 
   const addResponse = await captureTurn({
     ...makeTurnContent(),
@@ -639,7 +618,7 @@ test('turn/capture accepts typed image and file artifacts', async (t) => {
   const list = await json(listResponse);
   assert.equal(list.turns.length, 1);
 
-  const detailResponse = await app.request(`/api/v1/ui/memories/${encodeURIComponent(list.turns[0].memoryId)}/document`);
+  const detailResponse = await app.request(`/app/api/memories/${encodeURIComponent(list.turns[0].memoryId)}/document`);
   assert.equal(detailResponse.status, 200);
   const detail = await json(detailResponse);
   assert.match(detail.document.markdown, /prompt-image/);
@@ -658,23 +637,23 @@ test('artifact endpoint serves safe artifact store relative paths only', async (
   await writeFile(path.join(artifactDir, artifactName), Buffer.from('89504e470d0a1a0a', 'hex'));
   await writeFile(path.join(artifactDir, sessionArtifactName), Buffer.from('89504e470d0a1a0b', 'hex'));
 
-  const good = await app.request(`/api/v1/artifacts/${artifactName}`);
+  const good = await app.request(`/app/artifacts/${artifactName}`);
   assert.equal(good.status, 200);
   assert.equal(good.headers.get('content-type'), 'image/png');
   assert.deepEqual(Buffer.from(await good.arrayBuffer()), Buffer.from('89504e470d0a1a0a', 'hex'));
 
-  const nested = await app.request(`/api/v1/artifacts/${encodeURIComponent(sessionArtifactName)}`);
+  const nested = await app.request(`/app/artifacts/${encodeURIComponent(sessionArtifactName)}`);
   assert.equal(nested.status, 200);
   assert.equal(nested.headers.get('content-type'), 'image/png');
   assert.deepEqual(Buffer.from(await nested.arrayBuffer()), Buffer.from('89504e470d0a1a0b', 'hex'));
 
-  const missing = await app.request('/api/v1/artifacts/not-safe.png');
+  const missing = await app.request('/app/artifacts/not-safe.png');
   assert.equal(missing.status, 404);
 
-  const traversal = await app.request(`/api/v1/artifacts/${encodeURIComponent('../muninn.json')}`);
+  const traversal = await app.request(`/app/artifacts/${encodeURIComponent('../muninn.json')}`);
   assert.equal(traversal.status, 400);
 
-  const malformed = await app.request('/api/v1/artifacts/%E0%A4%A');
+  const malformed = await app.request('/app/artifacts/%E0%A4%A');
   assert.equal(malformed.status, 400);
 });
 
@@ -683,7 +662,7 @@ test('turn/capture rejects legacy snake_case turn fields', async (t) => {
   t.after(async () => rm(dir, { recursive: true, force: true }));
 
   process.env.MUNINN_HOME = homeDir;
-  await writeMuninnConfig(configPath, { turnProvider: 'mock' });
+  await writeMuninnConfig(configPath, {});
 
   const addResponse = await captureTurn({
     session_id: 'group-a',
@@ -739,14 +718,13 @@ test('turn/capture/batch rejects invalid turns before writing any row', async (t
   t.after(async () => rm(dir, { recursive: true, force: true }));
 
   process.env.MUNINN_HOME = homeDir;
-  await writeMuninnConfig(configPath, { turnProvider: 'mock' });
+  await writeMuninnConfig(configPath, {});
 
   const response = await captureTurnsBatch([
     makeTurnContent({
       sessionId: 'batch-invalid-session',
       prompt: 'valid batch prompt',
       response: 'valid batch response',
-      summary: 'valid batch summary',
     }),
     makeTurnContent({
       sessionId: 'batch-invalid-session',
@@ -773,7 +751,7 @@ test('turn/capture rejects incomplete turns', async (t) => {
   t.after(async () => rm(dir, { recursive: true, force: true }));
 
   process.env.MUNINN_HOME = homeDir;
-  await writeMuninnConfig(configPath, { turnProvider: 'mock' });
+  await writeMuninnConfig(configPath, {});
 
   for (const turn of [
     { ...makeTurnContent(), response: undefined },
@@ -791,7 +769,7 @@ test('turn/capture requires sessionId and does not accept omitted default sessio
   t.after(async () => rm(dir, { recursive: true, force: true }));
 
   process.env.MUNINN_HOME = homeDir;
-  await writeMuninnConfig(configPath, { turnProvider: 'mock' });
+  await writeMuninnConfig(configPath, {});
 
   const first = await captureTurn({
     agent: 'agent-a',
@@ -1069,7 +1047,7 @@ test('detail returns notFound for missing memoryId', async () => {
   }
 });
 
-test('turn/capture accepts complete turns when turn summarization is not configured', async (t) => {
+test('turn/capture accepts complete turns without local summary generation', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(async () => rm(dir, { recursive: true, force: true }));
 
@@ -1086,7 +1064,7 @@ test('turn/capture accepts complete turns when turn summarization is not configu
   assert.equal(detailResponse.status, 200);
   const detail = await json(detailResponse);
   assert.equal(detail.memoryHits.length, 1);
-  assert.match(detail.memoryHits[0].content, /## Summary/);
+  assert.doesNotMatch(detail.memoryHits[0].content, /## Summary/);
   assert.match(detail.memoryHits[0].content, /## Detail/);
   assert.match(detail.memoryHits[0].content, /response prompt/);
   assert.match(detail.memoryHits[0].content, /response only/);
@@ -1097,7 +1075,7 @@ test('ui session endpoints group by agent/session and return rendered turn docum
   t.after(async () => rm(dir, { recursive: true, force: true }));
 
   process.env.MUNINN_HOME = homeDir;
-  await writeMuninnConfig(configPath, { turnProvider: 'mock' });
+  await writeMuninnConfig(configPath, {});
 
   const payloads = [
     makeTurnContent({
@@ -1137,7 +1115,7 @@ test('ui session endpoints group by agent/session and return rendered turn docum
     assert.equal(response.status, 204);
   }
 
-  const agentsResponse = await app.request('/api/v1/ui/session/agents');
+  const agentsResponse = await app.request('/app/api/session/agents');
   assert.equal(agentsResponse.status, 200);
   const agentsBody = await json(agentsResponse);
   assert.equal(agentsBody.agents.length, 2);
@@ -1146,13 +1124,13 @@ test('ui session endpoints group by agent/session and return rendered turn docum
     ['codex_cli', 'openclaw'],
   );
 
-  const sessionsResponse = await app.request('/api/v1/ui/session/agents/openclaw/sessions');
+  const sessionsResponse = await app.request('/app/api/session/agents/openclaw/sessions');
   assert.equal(sessionsResponse.status, 200);
   const sessionsBody = await json(sessionsResponse);
   assert.equal(sessionsBody.sessions.length, 1);
   assert.equal(sessionsBody.sessions[0].displaySessionId, 'group-a');
 
-  const ungroupedResponse = await app.request('/api/v1/ui/session/agents/codex_cli/sessions');
+  const ungroupedResponse = await app.request('/app/api/session/agents/codex_cli/sessions');
   assert.equal(ungroupedResponse.status, 200);
   const ungroupedBody = await json(ungroupedResponse);
   assert.equal(ungroupedBody.sessions.length, 1);
@@ -1162,15 +1140,17 @@ test('ui session endpoints group by agent/session and return rendered turn docum
   assert.equal(turnsResponse.status, 200);
   const turnsBody = await json(turnsResponse);
   assert.equal(turnsBody.turns.length, 2);
-  assert.equal(turnsBody.turns[0].title, 'first alpha prompt');
-  assert.match(turnsBody.turns[0].summary, /alpha/);
+  assert.equal('title' in turnsBody.turns[0], false);
+  assert.equal('summary' in turnsBody.turns[0], false);
+  assert.match(turnsBody.turns[0].preview, /Prompt: first alpha prompt/);
+  assert.match(turnsBody.turns[0].preview, /Response: first alpha response/);
   assert.equal(
     sessionsBody.sessions[0].latestUpdatedAt,
     turnsBody.turns.reduce((latest, turn) => turn.updatedAt > latest ? turn.updatedAt : latest, turnsBody.turns[0].updatedAt),
   );
 
   const documentResponse = await app.request(
-    `/api/v1/ui/memories/${encodeURIComponent(turnsBody.turns[0].memoryId)}/document`
+    `/app/api/memories/${encodeURIComponent(turnsBody.turns[0].memoryId)}/document`
   );
   assert.equal(documentResponse.status, 200);
   const documentBody = await json(documentResponse);
@@ -1183,7 +1163,7 @@ test('ui session endpoints group by agent/session and return rendered turn docum
   const codexTurnsBody = await json(codexTurnsResponse);
   assert.equal(codexTurnsBody.turns.length, 1);
   const codexDocumentResponse = await app.request(
-    `/api/v1/ui/memories/${encodeURIComponent(codexTurnsBody.turns[0].memoryId)}/document`
+    `/app/api/memories/${encodeURIComponent(codexTurnsBody.turns[0].memoryId)}/document`
   );
   assert.equal(codexDocumentResponse.status, 200);
   const codexDocumentBody = await json(codexDocumentResponse);
@@ -1204,7 +1184,6 @@ test('app search groups recalled extraction results by session and validates sco
   process.env.MUNINN_HOME = homeDir;
   await writeMuninnConfig(configPath, {
     storageUri: defaultStorageTarget(homeDir).uri,
-    turnProvider: 'mock',
     observerProvider: undefined,
   });
 
@@ -1214,7 +1193,7 @@ test('app search groups recalled extraction results by session and validates sco
     cwd: '/workspace/muninn',
     agent: 'codex_cli',
     prompt: 'app search should group by session',
-    response: 'Search uses Session Top N and Top N controls.',
+    response: 'Search uses IngestSession Top N and Top N controls.',
   }));
   await captureTurn(makeTurnContent({
     sessionId: 'lance/search-beta',
@@ -1229,7 +1208,7 @@ test('app search groups recalled extraction results by session and validates sco
   await waitForWatermarkResolved();
 
   const scopedSessionKey = ['muninn', 'codex_cli', 'muninn/search-alpha'].join('\u001f');
-  const response = await app.request('/api/v1/ui/recall/search?query=app%20search&projectKey=muninn&sessionTopN=1&topN=10');
+  const response = await app.request('/app/api/recall/search?query=app%20search&projectKey=muninn&sessionTopN=1&topN=10');
   assert.equal(response.status, 200);
   const body = await json(response);
   assert.equal('answer' in body, false);
@@ -1239,7 +1218,7 @@ test('app search groups recalled extraction results by session and validates sco
   assert.equal(body.results[0].items.length, 1);
   assert.equal(body.results[0].items[0].source, 'extraction');
 
-  const agentResponse = await app.request('/api/v1/ui/recall/agent', {
+  const agentResponse = await app.request('/app/api/recall/agent', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -1261,7 +1240,7 @@ test('app search groups recalled extraction results by session and validates sco
     query: 'app',
     sessionKey: scopedSessionKey,
   });
-  const sessionScope = await app.request(`/api/v1/ui/recall/search?${scopedParams.toString()}`);
+  const sessionScope = await app.request(`/app/api/recall/search?${scopedParams.toString()}`);
   assert.equal(sessionScope.status, 200);
   const sessionScopeBody = await json(sessionScope);
   assert.equal(sessionScopeBody.results.length, 1);
@@ -1277,12 +1256,12 @@ test('ui session endpoints include native rows with indexed ownership fields', a
   });
 
   process.env.MUNINN_HOME = homeDir;
-  await writeMuninnConfig(configPath, { turnProvider: 'mock' });
+  await writeMuninnConfig(configPath, {});
   resetSessionTreeCacheForTests();
 
   const tables = await getNativeTables(defaultStorageTarget(homeDir));
   await tables.turnTable.insert({
-    turns: [serializeTurn({
+    turns: [serializeTurnRow({
       turnId: 'turn:18446744073709551615',
       createdAt: '2026-06-03T01:00:00.000Z',
       updatedAt: '2026-06-03T01:01:00.000Z',
@@ -1291,8 +1270,6 @@ test('ui session endpoints include native rows with indexed ownership fields', a
       cwd: TEST_CWD,
       agent: 'agent-a',
       observer: 'test-observer',
-      title: 'historical default prompt',
-      summary: 'historical default prompt historical default response',
       events: [
         { type: 'userMessage', text: 'historical default prompt' },
         { type: 'assistantMessage', text: 'historical default response' },
@@ -1303,7 +1280,7 @@ test('ui session endpoints include native rows with indexed ownership fields', a
     })],
   });
 
-  const sessionsResponse = await app.request('/api/v1/ui/session/agents/agent-a/sessions');
+  const sessionsResponse = await app.request('/app/api/session/agents/agent-a/sessions');
   assert.equal(sessionsResponse.status, 200);
   const sessionsBody = await json(sessionsResponse);
   assert.equal(sessionsBody.sessions.length, 1);
@@ -1325,20 +1302,20 @@ test('ui session endpoints expose session index writes immediately', async (t) =
   t.after(async () => rm(dir, { recursive: true, force: true }));
 
   process.env.MUNINN_HOME = homeDir;
-  await writeMuninnConfig(configPath, { turnProvider: 'mock' });
+  await writeMuninnConfig(configPath, {});
   resetSessionTreeCacheForTests();
 
-  const first = await app.request('/api/v1/ui/session/agents');
+  const first = await app.request('/app/api/session/agents');
   assert.equal(first.status, 200);
   const firstBody = await json(first);
   assert.equal(firstBody.agents.length, 0);
 
-  const second = await app.request('/api/v1/ui/session/agents');
+  const second = await app.request('/app/api/session/agents');
   assert.equal(second.status, 200);
   const secondBody = await json(second);
   assert.equal(secondBody.agents.length, 0);
 
-  const groups = await app.request('/api/v1/ui/session/agents/openclaw/sessions');
+  const groups = await app.request('/app/api/session/agents/openclaw/sessions');
   assert.equal(groups.status, 200);
   const groupsBody = await json(groups);
   assert.equal(groupsBody.sessions.length, 0);
@@ -1351,12 +1328,12 @@ test('ui session endpoints expose session index writes immediately', async (t) =
   }));
   assert.equal(addResponse.status, 204);
 
-  const third = await app.request('/api/v1/ui/session/agents');
+  const third = await app.request('/app/api/session/agents');
   assert.equal(third.status, 200);
   const thirdBody = await json(third);
   assert.deepEqual(thirdBody.agents.map((agent) => agent.agent), ['openclaw']);
 
-  const updatedGroups = await app.request('/api/v1/ui/session/agents/openclaw/sessions');
+  const updatedGroups = await app.request('/app/api/session/agents/openclaw/sessions');
   assert.equal(updatedGroups.status, 200);
   const updatedGroupsBody = await json(updatedGroups);
   assert.equal(updatedGroupsBody.sessions.length, 1);
@@ -1369,7 +1346,7 @@ test('session snapshots are readable through list/detail/timeline', async (t) =>
   t.after(async () => rm(dir, { recursive: true, force: true }));
 
   process.env.MUNINN_HOME = homeDir;
-  await writeMuninnConfig(configPath, { turnProvider: 'mock', observerProvider: 'mock' });
+  await writeMuninnConfig(configPath, { observerProvider: 'mock' });
 
   const addResponse = await captureTurn(makeTurnContent({
     prompt: 'observe this prompt',
@@ -1411,7 +1388,7 @@ test('ui session snapshots endpoint returns live session snapshots and documents
   t.after(async () => rm(dir, { recursive: true, force: true }));
 
   process.env.MUNINN_HOME = homeDir;
-  await writeMuninnConfig(configPath, { turnProvider: 'mock', observerProvider: 'mock' });
+  await writeMuninnConfig(configPath, { observerProvider: 'mock' });
 
   const addResponse = await captureTurn(makeTurnContent({
     sessionId: 'group-ui',
@@ -1423,7 +1400,7 @@ test('ui session snapshots endpoint returns live session snapshots and documents
 
   await new Promise((resolve) => setTimeout(resolve, 50));
 
-  const snapshotsResponse = await app.request('/api/v1/ui/session-snapshots');
+  const snapshotsResponse = await app.request('/app/api/session/snapshots');
   assert.equal(snapshotsResponse.status, 200);
   const snapshots = await json(snapshotsResponse);
   assert.ok(snapshots.sessionSnapshots.length >= 1);
@@ -1433,7 +1410,7 @@ test('ui session snapshots endpoint returns live session snapshots and documents
   assert.match(snapshot.summary, /Default session memory thread for session group-ui/);
 
   const documentResponse = await app.request(
-    `/api/v1/ui/memories/${encodeURIComponent(snapshot.memoryId)}/document`
+    `/app/api/memories/${encodeURIComponent(snapshot.memoryId)}/document`
   );
   assert.equal(documentResponse.status, 200);
   const document = await json(documentResponse);
@@ -1453,7 +1430,7 @@ test('ui settings config reads and writes muninn.json through server', async (t)
   await mkdir(path.dirname(configPath), { recursive: true });
   await writeFile(configPath, `${JSON.stringify(initialConfig, null, 2)}\n`, 'utf8');
 
-  const readResponse = await app.request('/api/v1/ui/settings/config');
+  const readResponse = await app.request('/app/api/settings/config');
   assert.equal(readResponse.status, 200);
   const readBody = await json(readResponse);
   assert.equal(readBody.pathLabel, configPath);
@@ -1463,7 +1440,7 @@ test('ui settings config reads and writes muninn.json through server', async (t)
   const updatedConfig = createValidSettings({ includeWatchdog: true });
   updatedConfig.observer.name = 'live-observer';
   updatedConfig.extractor.recallMode = 'fts';
-  const writeResponse = await app.request('/api/v1/ui/settings/config', {
+  const writeResponse = await app.request('/app/api/settings/config', {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -1484,7 +1461,7 @@ test('ui settings config creates the parent directory on first save', async (t) 
   process.env.MUNINN_HOME = homeDir;
 
   const content = JSON.stringify(createValidSettings({ includeWatchdog: true }), null, 2);
-  const writeResponse = await app.request('/api/v1/ui/settings/config', {
+  const writeResponse = await app.request('/app/api/settings/config', {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -1507,7 +1484,7 @@ test('ui settings config returns a saveable default template when muninn.json is
 
   await mkdir(path.dirname(configPath), { recursive: true });
 
-  const readResponse = await app.request('/api/v1/ui/settings/config');
+  const readResponse = await app.request('/app/api/settings/config');
   assert.equal(readResponse.status, 200);
   const readBody = await json(readResponse);
   assert.equal(readBody.pathLabel, configPath);
@@ -1524,7 +1501,7 @@ test('ui settings config returns a saveable default template when muninn.json is
   assert.match(readBody.content, /"intervalMs": 60000/);
   assert.match(readBody.content, /"optimizeMergeCount": 4/);
 
-  const writeResponse = await app.request('/api/v1/ui/settings/config', {
+  const writeResponse = await app.request('/app/api/settings/config', {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -1549,7 +1526,7 @@ test('ui settings config reports validation errors on read without replacing con
   await mkdir(path.dirname(configPath), { recursive: true });
   await writeFile(configPath, `${JSON.stringify(invalidConfig, null, 2)}\n`, 'utf8');
 
-  const readResponse = await app.request('/api/v1/ui/settings/config');
+  const readResponse = await app.request('/app/api/settings/config');
   assert.equal(readResponse.status, 200);
   const readBody = await json(readResponse);
   assert.equal(readBody.pathLabel, configPath);
@@ -1567,7 +1544,7 @@ test('ui settings config rejects invalid watchdog values server-side', async (t)
   const config = createValidSettings({ includeWatchdog: true });
   config.watchdog.intervalMs = 0;
 
-  const writeResponse = await app.request('/api/v1/ui/settings/config', {
+  const writeResponse = await app.request('/app/api/settings/config', {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -1589,7 +1566,7 @@ test('ui settings config rejects invalid extractor.activeWindowDays server-side'
   const config = createValidSettings({ includeWatchdog: true });
   config.extractor.activeWindowDays = 0;
 
-  const writeResponse = await app.request('/api/v1/ui/settings/config', {
+  const writeResponse = await app.request('/app/api/settings/config', {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -1610,7 +1587,7 @@ test('ui settings config reports invalid JSON before native storage initializati
   await mkdir(path.dirname(configPath), { recursive: true });
   await writeFile(configPath, '{\n  "storage": {\n    "uri": ""\n  }\n}\n', 'utf8');
 
-  const writeResponse = await app.request('/api/v1/ui/settings/config', {
+  const writeResponse = await app.request('/app/api/settings/config', {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -1632,7 +1609,7 @@ test('ui settings config rejects missing observer config', async (t) => {
   const config = createValidSettings();
   delete config.observer;
 
-  const writeResponse = await app.request('/api/v1/ui/settings/config', {
+  const writeResponse = await app.request('/app/api/settings/config', {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -1654,7 +1631,7 @@ test('ui settings config rejects missing providers config', async (t) => {
   const config = createValidSettings();
   delete config.providers;
 
-  const writeResponse = await app.request('/api/v1/ui/settings/config', {
+  const writeResponse = await app.request('/app/api/settings/config', {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -1676,7 +1653,7 @@ test('ui settings config rejects top-level extraction config', async (t) => {
   const config = createValidSettings();
   config.extraction = { embeddingProvider: 'default' };
 
-  const writeResponse = await app.request('/api/v1/ui/settings/config', {
+  const writeResponse = await app.request('/app/api/settings/config', {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -1698,7 +1675,7 @@ test('ui settings config rejects missing extractor.embeddingProvider config', as
   const config = createValidSettings();
   delete config.extractor.embeddingProvider;
 
-  const writeResponse = await app.request('/api/v1/ui/settings/config', {
+  const writeResponse = await app.request('/app/api/settings/config', {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -1720,7 +1697,7 @@ test('ui settings config accepts omitted providers.embedding dimensions when the
   const config = createValidSettings();
   delete config.providers.embedding.default.dimensions;
 
-  const writeResponse = await app.request('/api/v1/ui/settings/config', {
+  const writeResponse = await app.request('/app/api/settings/config', {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -1747,7 +1724,7 @@ test('ui settings config rejects omitted semantic dimensions for an existing non
   assert.equal(addResponse.status, 204);
   await new Promise((resolve) => setTimeout(resolve, 50));
 
-  const writeResponse = await app.request('/api/v1/ui/settings/config', {
+  const writeResponse = await app.request('/app/api/settings/config', {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -1777,7 +1754,7 @@ test('ui settings config rejects providers.embedding type when it is empty', asy
 
   await mkdir(path.dirname(configPath), { recursive: true });
 
-  const writeResponse = await app.request('/api/v1/ui/settings/config', {
+  const writeResponse = await app.request('/app/api/settings/config', {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -1810,7 +1787,7 @@ test('ui settings config rejects openai observer llm without apiKey', async (t) 
   config.providers.llm.default_extractor_llm.type = 'mock';
   delete config.providers.llm.default_observer_llm.apiKey;
 
-  const writeResponse = await app.request('/api/v1/ui/settings/config', {
+  const writeResponse = await app.request('/app/api/settings/config', {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -1833,7 +1810,7 @@ test('ui settings config rejects openai semantic embeddings without apiKey', asy
   config.providers.embedding.default.type = 'openai';
   delete config.providers.embedding.default.apiKey;
 
-  const writeResponse = await app.request('/api/v1/ui/settings/config', {
+  const writeResponse = await app.request('/app/api/settings/config', {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -1853,7 +1830,7 @@ test('ui settings config rejects observer config without observer.llmProvider', 
 
   await mkdir(path.dirname(configPath), { recursive: true });
 
-  const writeResponse = await app.request('/api/v1/ui/settings/config', {
+  const writeResponse = await app.request('/app/api/settings/config', {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -1878,7 +1855,7 @@ test('ui settings config rejects referenced llm entries without type', async (t)
 
   await mkdir(path.dirname(configPath), { recursive: true });
 
-  const writeResponse = await app.request('/api/v1/ui/settings/config', {
+  const writeResponse = await app.request('/app/api/settings/config', {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -1951,7 +1928,7 @@ test('ui settings config rejects semantic index dimension changes that mismatch 
   assert.equal(addResponse.status, 204);
   await new Promise((resolve) => setTimeout(resolve, 50));
 
-  const writeResponse = await app.request('/api/v1/ui/settings/config', {
+  const writeResponse = await app.request('/app/api/settings/config', {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -2007,7 +1984,7 @@ test('ui settings config validates semantic dimensions against the pending stora
     storageUri: toFileStoreUri(storageA),
   });
 
-  const writeResponse = await app.request('/api/v1/ui/settings/config', {
+  const writeResponse = await app.request('/app/api/settings/config', {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({

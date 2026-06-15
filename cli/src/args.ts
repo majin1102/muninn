@@ -4,7 +4,9 @@ export type HostTarget = 'codex' | 'claude' | 'all';
 export type ParsedArgs =
   | { command: 'doctor' }
   | { command: 'status'; serverUrl?: string; scope?: Scope }
-  | { command: 'serve'; host?: string; port?: number; home?: string }
+  | { command: 'run'; host?: string; port?: number; home?: string }
+  | { command: 'start' | 'restart'; host?: string; port?: number; home?: string; force: boolean }
+  | { command: 'stop'; home?: string; force: boolean }
   | {
       command: 'install' | 'uninstall';
       target: HostTarget;
@@ -20,7 +22,9 @@ export type ParsedArgs =
 const HOST_TARGETS = new Set(['codex', 'claude', 'all']);
 const SCOPES = new Set(['user', 'project']);
 const STATUS_FLAGS = new Set(['server-url', 'scope']);
-const SERVE_FLAGS = new Set(['host', 'port', 'home']);
+const RUN_FLAGS = new Set(['host', 'port', 'home']);
+const START_FLAGS = new Set(['host', 'port', 'home', 'force']);
+const STOP_FLAGS = new Set(['home', 'force']);
 const INSTALL_FLAGS = new Set(['mcp-only', 'hook-only', 'scope', 'server-url', 'dry-run', 'yes']);
 
 export function parseArgs(argv: string[]): ParsedArgs {
@@ -40,13 +44,31 @@ export function parseArgs(argv: string[]): ParsedArgs {
       scope: scopeFlag(flags),
     };
   }
-  if (command === 'serve') {
-    const flags = parseFlags(rest, SERVE_FLAGS);
+  if (command === 'run') {
+    const flags = parseFlags(rest, RUN_FLAGS);
     return {
-      command: 'serve',
+      command: 'run',
       host: stringFlag(flags, 'host'),
       port: numberFlag(flags, 'port'),
       home: stringFlag(flags, 'home'),
+    };
+  }
+  if (command === 'start' || command === 'restart') {
+    const flags = parseFlags(rest, START_FLAGS);
+    return {
+      command,
+      host: stringFlag(flags, 'host'),
+      port: numberFlag(flags, 'port'),
+      home: stringFlag(flags, 'home'),
+      force: booleanFlag(flags, 'force'),
+    };
+  }
+  if (command === 'stop') {
+    const flags = parseFlags(rest, STOP_FLAGS);
+    return {
+      command,
+      home: stringFlag(flags, 'home'),
+      force: booleanFlag(flags, 'force'),
     };
   }
   if (command === 'install' || command === 'uninstall') {

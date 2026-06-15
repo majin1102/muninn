@@ -1,8 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { loadDomainPrompt, loadGatewayDomainPrompt } from '../../dist/memory/llm/domain-prompt.js';
-import { loadPromptTemplate } from '../../dist/memory/llm/prompt-loader.js';
+import { loadPromptTemplate } from '../../dist/llm/prompts.js';
 
 test('memory recaller prompt composes recall context with a soft budget', () => {
   const prompt = loadPromptTemplate('memory_recaller');
@@ -121,27 +120,6 @@ test('chat domain prompt provides category guidance without session memory workf
   assert.doesNotMatch(system, /extractionChanges/);
   assert.doesNotMatch(system, /extractionDelta/);
   assert.doesNotMatch(system, /Return exactly one JSON object/);
-});
-
-test('chat domain prompt sections are loaded by session memory stage', () => {
-  const gateway = loadGatewayDomainPrompt('chat');
-  const observing = loadDomainPrompt('chat');
-
-  assert.match(gateway, /Session memory thread definition/);
-  assert.match(gateway, /Same vs separate routing/);
-  assert.match(gateway, /Route spans to the session thread when they introduce a different subject/);
-  assert.doesNotMatch(gateway, /Chat memory categories/);
-  assert.doesNotMatch(gateway, /`Fact`/);
-  assert.doesNotMatch(gateway, /`Preference`/);
-  assert.doesNotMatch(gateway, /Extraction granularity/);
-
-  assert.match(observing, /Chat memory categories/);
-  assert.match(observing, /`Fact`/);
-  assert.match(observing, /`Preference`/);
-  assert.doesNotMatch(observing, /Same vs separate routing/);
-  assert.doesNotMatch(observing, /Extraction granularity/);
-  assert.doesNotMatch(observing, /Chat filtering/);
-  assert.doesNotMatch(observing, /memory-get/);
 });
 
 test('thread session memory prompt uses generic recall-ready memory guidance', () => {
@@ -272,79 +250,18 @@ test('session memory prompt preserves the current extraction schema', () => {
   assert.doesNotMatch(system, /session snapshot details/);
   assert.doesNotMatch(system, /existing extraction details/);
   assert.doesNotMatch(system, /Id usage/);
-  assert.doesNotMatch(system, /sessionMemoryContent\.extractions/);
+  assert.doesNotMatch(system, /sessionMemory\.extractions/);
   assert.doesNotMatch(system, /extraction rows, or extraction ids/);
   assert.doesNotMatch(system, /"extractions": \[/);
   assert.doesNotMatch(system, /Keep unresolved conflicts in `openQuestions`/);
   assert.doesNotMatch(system, /extractionConsolidation/);
   assert.doesNotMatch(system, /extractionDelta/);
-  assert.doesNotMatch(system, /sessionMemoryContentUpdate/);
+  assert.doesNotMatch(system, /sessionMemoryUpdate/);
   assert.doesNotMatch(system, /whyRelated/);
   assert.doesNotMatch(system, /memoryDelta\.before/);
   assert.doesNotMatch(system, /sourceRefs/);
   assert.doesNotMatch(system, /excerpt/);
   assert.doesNotMatch(system, /fragments/);
-});
-
-test('session memory gateway prompt uses session and subject threads', () => {
-  const template = loadPromptTemplate('extracting_gateway');
-  const system = template.system;
-
-  assert.match(system, /Domain session memory thread guidance/);
-  assert.match(system, /{{domain_prompt}}/);
-  assert.match(system, /Session memory thread: the default session memory thread/);
-  assert.match(system, /Subject session memory thread: a derived session memory thread/);
-  assert.match(system, /kind: "session" \| "subject"/);
-  assert.match(system, /Use the session thread when the fragment does not clearly fit any subject thread/);
-  assert.match(system, /Do not create new threads or titles/);
-  assert.doesNotMatch(system, /continuityHints/);
-  assert.doesNotMatch(system, /previousTurn/);
-  assert.doesNotMatch(system, /newThreadTitle/);
-  assert.doesNotMatch(system, /ignoredTurnIds/);
-});
-
-test('session memory gateway prompt is routing-only', () => {
-  const template = loadPromptTemplate('extracting_gateway');
-  const system = template.system;
-
-  assert.match(system, /Concepts/);
-  assert.match(system, /Gateway: the routing stage that splits session turns and routes them to session memory threads/);
-  assert.match(system, /It does not write memories or create threads/);
-  assert.match(system, /SessionFragment: source information from one or more turns/);
-  assert.match(system, /`threadId`: target session memory thread id/);
-  assert.match(system, /`turnIds`: source turn ids covered by this fragment/);
-  assert.match(system, /`content`: faithful thread-scoped narrative/);
-  assert.match(system, /`reason`: short trace-only routing explanation/);
-  assert.match(system, /Domain session memory thread guidance/);
-  assert.match(system, /domain_prompt/);
-  assert.match(system, /Routing principles/);
-  assert.match(system, /Lossless routing is more important than concise output/);
-  assert.match(system, /Route all meaningful session information/);
-  assert.match(system, /First split the pending turns into thread-scoped session fragments/);
-  assert.match(system, /Prefer a subject thread only when the fragment clearly updates, answers, clarifies, corrects, supports, or continues/);
-  assert.match(system, /A fragment may cover multiple turns/);
-  assert.match(system, /The same turn may appear in multiple fragments/);
-  assert.match(system, /Do not drop meaningful information just to keep output short/);
-  assert.match(system, /Do not force content into a subject thread only because it shares dialogue context/);
-  assert.match(system, /Do not include unrelated information in a subject thread fragment as background/);
-  assert.match(system, /faithful, source-scoped narrative/);
-  assert.match(system, /Preserve meaningful details/);
-  assert.match(system, /do not drop people, objects, time, actions, questions, answers, uncertainty, or relationships/);
-  assert.match(system, /do not add facts, infer final memory conclusions, or generalize beyond the source/);
-  assert.match(system, /reason/);
-  assert.match(system, /trace\/debug only/);
-  assert.match(system, /sessionFragments/);
-  assert.match(system, /"turnIds": \["string"\]/);
-  assert.match(system, /"content": "string"/);
-  assert.match(system, /Wow, love that painting/);
-  assert.match(system, /What's it done for you/);
-  assert.doesNotMatch(system, /You'd be a great counselor/);
-  assert.doesNotMatch(system, /"updates"/);
-  assert.doesNotMatch(system, /"action"/);
-  assert.doesNotMatch(system, /"why": "string"/);
-  assert.doesNotMatch(system, /targetThreadId/);
-  assert.doesNotMatch(system, /refs\[\]\.excerpt/);
-  assert.doesNotMatch(system, /Incidental media source-only rule/i);
 });
 
 test('chat domain prompt defines subject routing boundaries', () => {

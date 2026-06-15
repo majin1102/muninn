@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 
-import { generateWithTools } from '../../dist/memory/llm/provider.js';
+import { generateWithTools } from '../../dist/llm/provider.js';
 
 test('generateWithTools sends OpenAI-compatible tools and parses tool calls', async (t) => {
   const { dir, homeDir, configPath } = await makeConfigHome();
@@ -83,7 +83,7 @@ test('generateWithTools sends tool result messages and parses final text', async
       json: async () => ({
         choices: [{
           message: {
-              content: '{"sessionFragments":[]}',
+              content: '{"ok":true}',
           },
         }],
       }),
@@ -123,7 +123,7 @@ test('generateWithTools sends tool result messages and parses final text', async
   assert.equal(capturedBody.messages[3].tool_call_id, 'call-1');
   assert.deepEqual(result, {
     type: 'final',
-    text: '{"sessionFragments":[]}',
+    text: '{"ok":true}',
   });
 });
 

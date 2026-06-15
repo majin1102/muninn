@@ -34,7 +34,7 @@ test('artifactPresentation renders images and markdown inline but opens html sep
     mimeType: 'text/plain',
     content: '# Research\n\nDetails',
   }), {
-    href: '/api/v1/artifacts/sessions%2Fcodex-demo%2Fresearch.md',
+    href: '/app/artifacts/sessions%2Fcodex-demo%2Fresearch.md',
     icon: 'document',
     label: 'research.md',
     meta: 'text/plain',

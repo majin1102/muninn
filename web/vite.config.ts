@@ -7,7 +7,7 @@ export default defineConfig({
   plugins: [react()],
   resolve: {
     alias: {
-      '@muninn/common/session-identity': resolve(__dirname, '../common/src/session_identity.ts'),
+      '@muninn/common/session-identity': resolve(__dirname, '../common/src/session-identity.ts'),
     },
   },
   root: 'src',

@@ -7,19 +7,22 @@ Muninn CLI installs and runs Muninn for local agent memory.
 ```sh
 npm i -g @muninn/cli
 muninn doctor
-muninn serve
+muninn run
 muninn install all
 ```
 
 The first release supports macOS and Linux. Windows is not supported.
 
-`muninn serve` runs the server in the foreground. Keep it running while using Codex or Claude Code MCP tools and Stop hooks.
+`muninn run` runs the server in the foreground. `muninn start` starts a CLI-managed background process and returns; `muninn stop` stops that process; `muninn restart --force` force-restarts it. Keep Muninn running while using Codex or Claude Code MCP tools and Stop hooks.
 
 ## Commands
 
 ```sh
 muninn doctor
-muninn serve
+muninn run
+muninn start
+muninn stop
+muninn restart --force
 muninn install codex
 muninn install claude
 muninn install all
@@ -29,7 +32,7 @@ muninn uninstall all
 muninn status
 ```
 
-Muninn does not install a background service or background updater in the first release.
+Muninn does not install a system background service or background updater in the first release.
 
 ## Native Requirements
 

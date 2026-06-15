@@ -1,0 +1,1076 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { getExtractorLlmConfig, getObserverLlmConfig, type TextProviderConfig } from '../config.js';
+
+export type LlmTask = 'extractor' | 'observer';
+
+export type LlmTextRequest = {
+  system: string;
+  prompt: string;
+  signal?: AbortSignal;
+};
+
+export type LlmTool = {
+  name: string;
+  description: string;
+  parameters: Record<string, unknown>;
+};
+
+export type LlmToolCall = {
+  id: string;
+  name: string;
+  arguments: Record<string, unknown>;
+};
+
+export type LlmToolMessage =
+  | { role: 'system'; content: string }
+  | { role: 'user'; content: string }
+  | { role: 'assistant'; content?: string; toolCalls?: LlmToolCall[] }
+  | { role: 'tool'; toolCallId: string; name: string; content: string };
+
+export type LlmToolRequest = {
+  messages: LlmToolMessage[];
+  tools: LlmTool[];
+  signal?: AbortSignal;
+};
+
+export type LlmToolResult =
+  | { type: 'final'; text: string }
+  | { type: 'tool_calls'; toolCalls: LlmToolCall[] };
+
+export async function generateText(
+  task: LlmTask,
+  request: LlmTextRequest,
+): Promise<string | null> {
+  const config = task === 'extractor'
+    ? getExtractorLlmConfig()
+    : getObserverLlmConfig();
+  if (!config) {
+    return null;
+  }
+  if (config.provider === 'mock') {
+    return generateMockText(request);
+  }
+  try {
+    if (config.provider === 'openai-codex') {
+      return await generateOpenAiCodexText(config, request);
+    }
+    return await generateOpenAiText(config, request);
+  } catch (error) {
+    throw wrapProviderError(`${task} llm request`, config, error);
+  }
+}
+
+export async function* generateTextStream(
+  task: LlmTask,
+  request: LlmTextRequest,
+): AsyncIterable<string> {
+  const config = task === 'extractor'
+    ? getExtractorLlmConfig()
+    : getObserverLlmConfig();
+  if (!config) {
+    return;
+  }
+  yield* generateTextStreamWithConfig(config, request);
+}
+
+export async function* generateTextStreamWithConfig(
+  config: TextProviderConfig,
+  request: LlmTextRequest,
+): AsyncIterable<string> {
+  if (config.provider === 'mock') {
+    yield* streamMockText(request);
+    return;
+  }
+  try {
+    if (config.provider === 'openai-codex') {
+      yield* streamOpenAiCodexText(config, request);
+      return;
+    }
+    yield* streamOpenAiText(config, request);
+  } catch (error) {
+    throw wrapProviderError('llm stream request', config, error);
+  }
+}
+
+export async function generateWithTools(
+  task: LlmTask,
+  request: LlmToolRequest,
+): Promise<LlmToolResult | null> {
+  const config = task === 'extractor'
+    ? getExtractorLlmConfig()
+    : getObserverLlmConfig();
+  if (!config) {
+    return null;
+  }
+  if (config.provider === 'mock') {
+    return {
+      type: 'final',
+      text: generateMockText({
+        system: systemMessages(request.messages),
+        prompt: lastUserMessage(request.messages),
+      }),
+    };
+  }
+  try {
+    if (config.provider === 'openai-codex') {
+      return await generateOpenAiCodexWithTools(config, request);
+    }
+    return await generateOpenAiWithTools(config, request);
+  } catch (error) {
+    throw wrapProviderError(`${task} llm tool request`, config, error);
+  }
+}
+
+function wrapProviderError(operation: string, config: TextProviderConfig, cause: unknown): Error {
+  const message = cause instanceof Error ? cause.message : String(cause);
+  const details = [
+    `provider=${config.provider}`,
+    config.model ? `model=${config.model}` : null,
+    config.baseUrl ? `baseUrl=${config.baseUrl}` : null,
+  ].filter(Boolean).join(' ');
+  const error = new Error(`${operation} failed (${details}): ${message}`);
+  (error as Error & { cause?: unknown }).cause = cause;
+  return error;
+}
+
+function generateMockText(request: LlmTextRequest): string {
+  const seed = extractBlock(request.prompt, 'User request:', 'Final response:')
+    || extractLabeledValue(request.prompt, 'Final response:')
+    || request.prompt.trim();
+
+  if (request.system.includes('memory recall agent')) {
+    const candidate = extractBlock(request.prompt, '[1]', '\n\n[2]')
+      || extractBlock(request.prompt, 'Candidate memories:', 'Task:')
+      || request.prompt;
+    const content = extractLabeledValue(candidate, 'Content:') || excerpt(candidate);
+    const refs = (extractLabeledValue(candidate, 'Refs:') || '')
+      .split(',')
+      .map((ref) => ref.trim())
+      .filter(Boolean);
+    return JSON.stringify({
+      content: excerpt(content),
+      refs,
+    });
+  }
+  if (
+    request.system.includes('observer that rewrites an observing document')
+    || request.system.includes('observer that rewrites a cross-session curated observation document')
+    || request.system.includes('observer that rewrites part of a cross-extraction document')
+    || request.system.includes('observer that maintains parts of a cross-extraction document')
+    || request.system.includes('observer that rewrites a subtree of a cross-extraction document')
+    || request.system.includes('observer that maintains parts of a cross-extraction tree')
+  ) {
+    const ref = request.prompt.match(/^\s*-\s+([A-Za-z0-9:_-]+)/m)?.[1] ?? 'mock-extraction';
+    const scope = request.prompt.match(/^\s*#\s+(.+)$/m)?.[1]?.trim() || 'Mock cwd scope';
+    return [
+      `# ${scope}`,
+      '',
+      `## What is remembered in this scope?`,
+      '',
+      `This cwd scope has curated memory from the provided extraction.`,
+      '',
+      `### What evidence supports this scope?`,
+      `This cwd scope has curated memory from the provided extraction.`,
+      '',
+      'Source extractions:',
+      `- [${ref}]`,
+    ].join('\n');
+  }
+  if (request.system.includes('extractor that rewrites one session memory document')) {
+    const ref = request.prompt.match(/(?:session|turn):[A-Za-z0-9:_-]+/)?.[0] ?? 'turn:mock';
+    return [
+      '# Mock Session Memory',
+      '',
+      '## Summary',
+      'Mock session extraction summary.',
+      '',
+      '## Extractions',
+      `<!-- refs: [${ref}] -->`,
+      '### Title',
+      'Mock memory unit',
+      '',
+      '### Summary',
+      `${excerpt(seed)}`,
+    ].join('\n');
+  }
+  if (request.system.includes('"memory_delta"')) {
+    return JSON.stringify({
+      observing_content_update: {
+        title: 'Mock session memory thread',
+        summary: `Mock session memory summary: ${excerpt(seed)}`,
+        open_questions: [],
+        next_steps: [],
+      },
+      memory_delta: { before: [], after: [] },
+    });
+  }
+  return JSON.stringify({
+    title: `Mock title: ${excerpt(seed)}`,
+    summary: `Mock summary: ${excerpt(seed)}`,
+  });
+}
+
+async function* streamMockText(request: LlmTextRequest): AsyncIterable<string> {
+  for (const chunk of chunkText(generateMockText(request), 24)) {
+    yield chunk;
+  }
+}
+
+function chunkText(text: string, size: number): string[] {
+  const chunks: string[] = [];
+  for (let index = 0; index < text.length; index += size) {
+    chunks.push(text.slice(index, index + size));
+  }
+  return chunks;
+}
+
+async function generateOpenAiWithTools(
+  config: TextProviderConfig,
+  request: LlmToolRequest,
+): Promise<LlmToolResult> {
+  throwIfAborted(request.signal);
+  if (!config.apiKey?.trim()) {
+    throw new Error('llm.apiKey is required for openai llm provider');
+  }
+
+  const apiStyle = normalizeApiStyle(config.api);
+  if (apiStyle !== 'chatCompletions') {
+    throw new Error('native tool calls require openai-completions/chat_completions api style');
+  }
+
+  const baseUrl = config.baseUrl ?? 'https://api.openai.com/v1/chat/completions';
+  const timeout = withProviderTimeout(request.signal, 'openai tool request');
+  try {
+    const response = await fetch(normalizeChatCompletionsUrl(baseUrl), {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${config.apiKey}`,
+        'content-type': 'application/json',
+      },
+      signal: timeout.signal,
+      body: JSON.stringify({
+        model: config.model ?? 'gpt-5.4-mini',
+        messages: request.messages.map(toOpenAiToolMessage),
+        tools: request.tools.map((tool) => ({
+          type: 'function',
+          function: {
+            name: tool.name,
+            description: tool.description,
+            parameters: tool.parameters,
+          },
+        })),
+        tool_choice: 'auto',
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`openai request failed with status ${response.status}: ${await response.text()}`);
+    }
+
+    const payload = await response.json() as Record<string, unknown>;
+    const choices = Array.isArray(payload.choices) ? payload.choices as Array<{ message?: Record<string, unknown> }> : [];
+    const message = choices[0]?.message;
+    if (!message) {
+      throw new Error('openai-compatible response did not contain a message');
+    }
+    const toolCalls = parseOpenAiToolCalls(message.tool_calls);
+    if (toolCalls.length > 0) {
+      return { type: 'tool_calls', toolCalls };
+    }
+    const content = typeof message.content === 'string' ? message.content.trim() : '';
+    if (!content) {
+      throw new Error('openai-compatible response did not contain text content or tool calls');
+    }
+    return { type: 'final', text: content };
+  } finally {
+    timeout.cleanup();
+  }
+}
+
+function toOpenAiToolMessage(message: LlmToolMessage): Record<string, unknown> {
+  if (message.role === 'assistant') {
+    return {
+      role: 'assistant',
+      content: message.content ?? null,
+      ...(message.toolCalls?.length
+        ? {
+            tool_calls: message.toolCalls.map((call) => ({
+              id: call.id,
+              type: 'function',
+              function: {
+                name: call.name,
+                arguments: JSON.stringify(call.arguments),
+              },
+            })),
+          }
+        : {}),
+    };
+  }
+  if (message.role === 'tool') {
+    return {
+      role: 'tool',
+      tool_call_id: message.toolCallId,
+      name: message.name,
+      content: message.content,
+    };
+  }
+  return {
+    role: message.role,
+    content: message.content,
+  };
+}
+
+function parseOpenAiToolCalls(value: unknown): LlmToolCall[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.map((item, index) => {
+    if (!item || typeof item !== 'object') {
+      throw new Error('openai-compatible tool_calls entries must be objects');
+    }
+    const record = item as Record<string, unknown>;
+    const fn = record.function;
+    if (!fn || typeof fn !== 'object') {
+      throw new Error('openai-compatible tool call is missing function');
+    }
+    const functionRecord = fn as Record<string, unknown>;
+    const name = typeof functionRecord.name === 'string' ? functionRecord.name.trim() : '';
+    if (!name) {
+      throw new Error('openai-compatible tool call function.name is required');
+    }
+    const id = typeof record.id === 'string' && record.id.trim()
+      ? record.id.trim()
+      : `call-${index + 1}`;
+    const rawArguments = typeof functionRecord.arguments === 'string' ? functionRecord.arguments : '{}';
+    return {
+      id,
+      name,
+      arguments: parseToolArguments(rawArguments),
+    };
+  });
+}
+
+function parseToolArguments(raw: string): Record<string, unknown> {
+  if (!raw.trim()) {
+    return {};
+  }
+  const parsed = JSON.parse(raw) as unknown;
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('tool call arguments must be a JSON object');
+  }
+  return parsed as Record<string, unknown>;
+}
+
+async function generateOpenAiText(
+  config: TextProviderConfig,
+  request: LlmTextRequest,
+): Promise<string> {
+  throwIfAborted(request.signal);
+  if (!config.apiKey?.trim()) {
+    throw new Error('llm.apiKey is required for openai llm provider');
+  }
+
+  const apiStyle = normalizeApiStyle(config.api);
+  const baseUrl = config.baseUrl ?? (
+    apiStyle === 'chatCompletions'
+      ? 'https://api.openai.com/v1/chat/completions'
+      : 'https://api.openai.com/v1/responses'
+  );
+  const timeout = withProviderTimeout(request.signal, 'openai text request');
+  try {
+    const response = await fetch(
+      apiStyle === 'chatCompletions' ? normalizeChatCompletionsUrl(baseUrl) : baseUrl,
+      {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${config.apiKey}`,
+          'content-type': 'application/json',
+        },
+        signal: timeout.signal,
+        body: JSON.stringify(
+          apiStyle === 'chatCompletions'
+            ? {
+                model: config.model ?? 'gpt-5.4-mini',
+                messages: [
+                  { role: 'system', content: request.system },
+                  { role: 'user', content: request.prompt },
+                ],
+              }
+            : {
+                model: config.model ?? 'gpt-5.4-mini',
+                input: [
+                  {
+                    role: 'system',
+                    content: [{ type: 'input_text', text: request.system }],
+                  },
+                  {
+                    role: 'user',
+                    content: [{ type: 'input_text', text: request.prompt }],
+                  },
+                ],
+              },
+        ),
+      },
+    );
+
+    if (!response.ok) {
+      throw new Error(`openai request failed with status ${response.status}: ${await response.text()}`);
+    }
+
+    const payload = await response.json() as Record<string, unknown>;
+    if (apiStyle === 'chatCompletions') {
+      const choices = Array.isArray(payload.choices) ? payload.choices as Array<{ message?: { content?: string } }> : [];
+      const content = choices[0]?.message?.content?.trim();
+      if (!content) {
+        throw new Error('openai-compatible response did not contain text content');
+      }
+      return content;
+    }
+
+    const text = extractResponsesText(payload);
+    if (!text) {
+      throw new Error('openai response did not contain text output');
+    }
+    return text;
+  } finally {
+    timeout.cleanup();
+  }
+}
+
+async function* streamOpenAiText(
+  config: TextProviderConfig,
+  request: LlmTextRequest,
+): AsyncIterable<string> {
+  throwIfAborted(request.signal);
+  if (!config.apiKey?.trim()) {
+    throw new Error('llm.apiKey is required for openai llm provider');
+  }
+
+  const apiStyle = normalizeApiStyle(config.api);
+  const baseUrl = config.baseUrl ?? (
+    apiStyle === 'chatCompletions'
+      ? 'https://api.openai.com/v1/chat/completions'
+      : 'https://api.openai.com/v1/responses'
+  );
+  const timeout = withProviderTimeout(request.signal, 'openai text stream request');
+  try {
+    const response = await fetch(
+      apiStyle === 'chatCompletions' ? normalizeChatCompletionsUrl(baseUrl) : baseUrl,
+      {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${config.apiKey}`,
+          'content-type': 'application/json',
+        },
+        signal: timeout.signal,
+        body: JSON.stringify(
+          apiStyle === 'chatCompletions'
+            ? {
+                model: config.model ?? 'gpt-5.4-mini',
+                stream: true,
+                messages: [
+                  { role: 'system', content: request.system },
+                  { role: 'user', content: request.prompt },
+                ],
+              }
+            : {
+                model: config.model ?? 'gpt-5.4-mini',
+                stream: true,
+                input: [
+                  {
+                    role: 'system',
+                    content: [{ type: 'input_text', text: request.system }],
+                  },
+                  {
+                    role: 'user',
+                    content: [{ type: 'input_text', text: request.prompt }],
+                  },
+                ],
+              },
+        ),
+      },
+    );
+
+    if (!response.ok) {
+      throw new Error(`openai request failed with status ${response.status}: ${await response.text()}`);
+    }
+
+    yield* streamResponseText(response);
+  } finally {
+    timeout.cleanup();
+  }
+}
+
+async function* streamOpenAiCodexText(
+  config: TextProviderConfig,
+  request: LlmTextRequest,
+): AsyncIterable<string> {
+  throwIfAborted(request.signal);
+  const auth = loadCodexCliAuth();
+  const timeout = withProviderTimeout(request.signal, 'openai-codex text stream request');
+  try {
+    const response = await fetch(normalizeCodexResponsesUrl(config.baseUrl), {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${auth.accessToken}`,
+        'content-type': 'application/json',
+      },
+      signal: timeout.signal,
+      body: JSON.stringify({
+        model: config.model ?? 'gpt-5.4',
+        instructions: request.system,
+        store: false,
+        stream: true,
+        input: [
+          {
+            role: 'user',
+            content: [{ type: 'input_text', text: request.prompt }],
+          },
+        ],
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`openai-codex request failed with status ${response.status}: ${await response.text()}`);
+    }
+
+    yield* streamResponseText(response);
+  } finally {
+    timeout.cleanup();
+  }
+}
+
+async function generateOpenAiCodexText(
+  config: TextProviderConfig,
+  request: LlmTextRequest,
+): Promise<string> {
+  throwIfAborted(request.signal);
+  const auth = loadCodexCliAuth();
+  const timeout = withProviderTimeout(request.signal, 'openai-codex text request');
+  try {
+    const response = await fetch(normalizeCodexResponsesUrl(config.baseUrl), {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${auth.accessToken}`,
+        'content-type': 'application/json',
+      },
+      signal: timeout.signal,
+      body: JSON.stringify({
+        model: config.model ?? 'gpt-5.4',
+        instructions: request.system,
+        store: false,
+        stream: true,
+        input: [
+          {
+            role: 'user',
+            content: [{ type: 'input_text', text: request.prompt }],
+          },
+        ],
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`openai-codex request failed with status ${response.status}: ${await response.text()}`);
+    }
+
+    const text = extractCodexStreamText(await response.text());
+    if (!text) {
+      throw new Error('openai-codex response did not contain text output');
+    }
+    return text;
+  } finally {
+    timeout.cleanup();
+  }
+}
+
+async function generateOpenAiCodexWithTools(
+  config: TextProviderConfig,
+  request: LlmToolRequest,
+): Promise<LlmToolResult> {
+  throwIfAborted(request.signal);
+  const auth = loadCodexCliAuth();
+  const timeout = withProviderTimeout(request.signal, 'openai-codex tool request');
+  try {
+    const response = await fetch(normalizeCodexResponsesUrl(config.baseUrl), {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${auth.accessToken}`,
+        'content-type': 'application/json',
+      },
+      signal: timeout.signal,
+      body: JSON.stringify({
+        model: config.model ?? 'gpt-5.4',
+        instructions: codexInstructions(request.messages),
+        store: false,
+        stream: true,
+        input: request.messages.flatMap(toCodexInputItems),
+        tools: request.tools.map((tool) => ({
+          type: 'function',
+          name: tool.name,
+          description: tool.description,
+          parameters: tool.parameters,
+        })),
+        tool_choice: 'auto',
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`openai-codex request failed with status ${response.status}: ${await response.text()}`);
+    }
+
+    const stream = parseCodexStream(await response.text());
+    const toolCalls = stream.toolCalls;
+    if (toolCalls.length > 0) {
+      return { type: 'tool_calls', toolCalls };
+    }
+
+    const text = stream.text;
+    if (!text) {
+      throw new Error('openai-codex response did not contain text output or tool calls');
+    }
+    return { type: 'final', text };
+  } finally {
+    timeout.cleanup();
+  }
+}
+
+function extractCodexStreamText(raw: string): string | null {
+  return parseCodexStream(raw).text;
+}
+
+function parseCodexStream(raw: string): { text: string | null; toolCalls: LlmToolCall[] } {
+  const events = parseSseEvents(raw);
+  const deltas: string[] = [];
+  let completed: Record<string, unknown> | null = null;
+  const directCalls: LlmToolCall[] = [];
+
+  for (const event of events) {
+    const type = typeof event.type === 'string' ? event.type : '';
+    if (type.endsWith('output_text.delta') && typeof event.delta === 'string') {
+      deltas.push(event.delta);
+    }
+    if (type === 'response.completed' && event.response && typeof event.response === 'object') {
+      completed = event.response as Record<string, unknown>;
+    }
+    const item = event.item;
+    if (item && typeof item === 'object') {
+      directCalls.push(...parseCodexToolCalls([item]));
+    }
+  }
+
+  const completedToolCalls = completed ? dedupeToolCalls(parseCodexToolCalls(completed.output)) : [];
+  if (completedToolCalls.length > 0) {
+    return { text: null, toolCalls: completedToolCalls };
+  }
+  const dedupedDirectCalls = dedupeToolCalls(directCalls);
+  if (dedupedDirectCalls.length > 0) {
+    return { text: null, toolCalls: dedupedDirectCalls };
+  }
+
+  const completedText = completed ? extractResponsesText(completed) : null;
+  const text = completedText || deltas.join('').trim();
+  return { text: text || null, toolCalls: [] };
+}
+
+function parseSseEvents(raw: string): Array<Record<string, unknown>> {
+  const events: Array<Record<string, unknown>> = [];
+  const chunks = raw.split(/\n\n+/);
+  for (const chunk of chunks) {
+    const data = chunk
+      .split(/\n/)
+      .filter((line) => line.startsWith('data:'))
+      .map((line) => line.slice('data:'.length).trim())
+      .join('\n')
+      .trim();
+    if (!data || data === '[DONE]') {
+      continue;
+    }
+    const parsed = JSON.parse(data) as unknown;
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      events.push(parsed as Record<string, unknown>);
+    }
+  }
+  return events;
+}
+
+async function* streamResponseText(response: Response): AsyncIterable<string> {
+  if (!response.body) {
+    for (const event of parseSseEvents(await response.text())) {
+      const delta = eventTextDelta(event);
+      if (delta) {
+        yield delta;
+      }
+    }
+    return;
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      buffer += decoder.decode(value, { stream: true });
+      const chunks = buffer.split(/\n\n+/);
+      buffer = chunks.pop() ?? '';
+      for (const chunk of chunks) {
+        for (const event of parseSseEvents(chunk)) {
+          const delta = eventTextDelta(event);
+          if (delta) {
+            yield delta;
+          }
+        }
+      }
+    }
+    buffer += decoder.decode();
+    if (buffer.trim()) {
+      for (const event of parseSseEvents(buffer)) {
+        const delta = eventTextDelta(event);
+        if (delta) {
+          yield delta;
+        }
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+function eventTextDelta(event: Record<string, unknown>): string | null {
+  const type = typeof event.type === 'string' ? event.type : '';
+  if (type.endsWith('output_text.delta') && typeof event.delta === 'string') {
+    return event.delta;
+  }
+
+  const choices = Array.isArray(event.choices)
+    ? event.choices as Array<{ delta?: { content?: unknown } }>
+    : [];
+  const chatDelta = choices
+    .map((choice) => typeof choice.delta?.content === 'string' ? choice.delta.content : '')
+    .join('');
+  return chatDelta || null;
+}
+
+function codexInstructions(messages: LlmToolMessage[]): string {
+  return messages
+    .filter((message): message is Extract<LlmToolMessage, { role: 'system' }> => message.role === 'system')
+    .map((message) => message.content.trim())
+    .filter(Boolean)
+    .join('\n\n');
+}
+
+function toCodexInputItems(message: LlmToolMessage): Array<Record<string, unknown>> {
+  if (message.role === 'system') {
+    return [];
+  }
+  if (message.role === 'assistant') {
+    const items: Array<Record<string, unknown>> = [];
+    if (message.content?.trim()) {
+      items.push({
+        role: 'assistant',
+        content: [{ type: 'output_text', text: message.content }],
+      });
+    }
+    for (const call of message.toolCalls ?? []) {
+      items.push({
+        type: 'function_call',
+        call_id: call.id,
+        name: call.name,
+        arguments: JSON.stringify(call.arguments),
+      });
+    }
+    return items;
+  }
+  if (message.role === 'tool') {
+    return [{
+      type: 'function_call_output',
+      call_id: message.toolCallId,
+      output: message.content,
+    }];
+  }
+  return [{
+    role: 'user',
+    content: [{ type: 'input_text', text: message.content }],
+  }];
+}
+
+function parseCodexToolCalls(value: unknown): LlmToolCall[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const calls: LlmToolCall[] = [];
+  for (const [index, item] of value.entries()) {
+    if (!item || typeof item !== 'object') {
+      continue;
+    }
+    const record = item as Record<string, unknown>;
+    if (record.type !== 'function_call') {
+      continue;
+    }
+    const name = typeof record.name === 'string' ? record.name.trim() : '';
+    if (!name) {
+      throw new Error('openai-codex function_call name is required');
+    }
+    const id = typeof record.call_id === 'string' && record.call_id.trim()
+      ? record.call_id.trim()
+      : typeof record.id === 'string' && record.id.trim()
+        ? record.id.trim()
+        : `call-${index + 1}`;
+    calls.push({
+      id,
+      name,
+      arguments: parseToolArguments(typeof record.arguments === 'string' ? record.arguments : '{}'),
+    });
+  }
+  return calls;
+}
+
+function dedupeToolCalls(calls: LlmToolCall[]): LlmToolCall[] {
+  const byId = new Map<string, LlmToolCall>();
+  for (const call of calls) {
+    const existing = byId.get(call.id);
+    byId.set(call.id, preferToolCall(existing, call));
+  }
+  return [...byId.values()];
+}
+
+function preferToolCall(existing: LlmToolCall | undefined, candidate: LlmToolCall): LlmToolCall {
+  if (!existing) {
+    return candidate;
+  }
+  const existingEmpty = Object.keys(existing.arguments).length === 0;
+  const candidateEmpty = Object.keys(candidate.arguments).length === 0;
+  if (!candidateEmpty || existingEmpty) {
+    return candidate;
+  }
+  return existing;
+}
+
+function normalizeApiStyle(api?: string): 'responses' | 'chatCompletions' {
+  if (api === 'openai-completions' || api === 'chat_completions' || api === 'chat-completions') {
+    return 'chatCompletions';
+  }
+  return 'responses';
+}
+
+function normalizeChatCompletionsUrl(baseUrl: string): string {
+  return baseUrl.endsWith('/chat/completions')
+    ? baseUrl
+    : `${baseUrl.replace(/\/+$/, '')}/chat/completions`;
+}
+
+function normalizeCodexResponsesUrl(baseUrl?: string): string {
+  const resolved = (baseUrl ?? 'https://chatgpt.com/backend-api').replace(/\/+$/, '');
+  if (resolved === 'https://chatgpt.com/backend-api' || resolved === 'https://chatgpt.com/backend-api/responses') {
+    return 'https://chatgpt.com/backend-api/codex/responses';
+  }
+  return resolved.endsWith('/responses')
+    ? resolved
+    : `${resolved}/responses`;
+}
+
+function extractResponsesText(payload: Record<string, unknown>): string | null {
+  const outputText = typeof payload.output_text === 'string' ? payload.output_text.trim() : '';
+  if (outputText) {
+    return outputText;
+  }
+
+  const output = Array.isArray(payload.output) ? payload.output : [];
+  const fragments: string[] = [];
+  for (const item of output as Array<{ content?: Array<{ type?: string; text?: string }> }>) {
+    for (const content of item.content ?? []) {
+      if (content.type === 'output_text' && typeof content.text === 'string' && content.text.trim()) {
+        fragments.push(content.text);
+      }
+    }
+  }
+  return fragments.length > 0 ? fragments.join('\n\n') : null;
+}
+
+function extractLabeledValue(input: string, label: string): string | null {
+  for (const line of input.split('\n')) {
+    if (line.startsWith(label)) {
+      return line.slice(label.length).trim();
+    }
+  }
+  return null;
+}
+
+function extractBlock(input: string, startLabel: string, endLabel: string): string | null {
+  const start = input.indexOf(startLabel);
+  if (start < 0) {
+    return null;
+  }
+  const afterStart = input.slice(start + startLabel.length);
+  const end = afterStart.indexOf(endLabel);
+  return (end >= 0 ? afterStart.slice(0, end) : afterStart).trim();
+}
+
+function excerpt(value: string): string {
+  const collapsed = value.split(/\s+/).join(' ').trim();
+  return collapsed.length > 80 ? `${collapsed.slice(0, 77)}...` : collapsed;
+}
+
+function lastUserMessage(messages: LlmToolMessage[]): string {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message.role === 'user') {
+      return message.content;
+    }
+  }
+  return '';
+}
+
+function systemMessages(messages: LlmToolMessage[]): string {
+  return messages
+    .filter((message) => message.role === 'system')
+    .map((message) => message.content)
+    .join('\n\n');
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (!signal?.aborted) {
+    return;
+  }
+  const reason = signal.reason;
+  if (reason instanceof Error) {
+    throw reason;
+  }
+  const error = new Error('operation aborted');
+  error.name = 'AbortError';
+  throw error;
+}
+
+
+const PROVIDER_TIMEOUT_MS = 180_000;
+
+export function withProviderTimeout(parentSignal: AbortSignal | undefined, operation: string): {
+  signal: AbortSignal;
+  cleanup: () => void;
+} {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => {
+    const error = new Error(`${operation} timed out after ${PROVIDER_TIMEOUT_MS}ms`);
+    error.name = 'TimeoutError';
+    controller.abort(error);
+  }, PROVIDER_TIMEOUT_MS);
+
+  const abort = (): void => {
+    controller.abort(parentSignal?.reason ?? abortError());
+  };
+
+  if (parentSignal?.aborted) {
+    abort();
+  } else {
+    parentSignal?.addEventListener('abort', abort, { once: true });
+  }
+
+  return {
+    signal: controller.signal,
+    cleanup: () => {
+      clearTimeout(timeout);
+      parentSignal?.removeEventListener('abort', abort);
+    },
+  };
+}
+
+function abortError(): Error {
+  const error = new Error('operation aborted');
+  error.name = 'AbortError';
+  return error;
+}
+
+
+
+const MIN_TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
+
+type CodexAuthFile = {
+  auth_mode?: unknown;
+  tokens?: {
+    access_token?: unknown;
+  };
+};
+
+type CodexCliAuth = {
+  accessToken: string;
+  expiresAt: number;
+};
+
+function loadCodexCliAuth(now = Date.now()): CodexCliAuth {
+  const authPath = path.join(resolveCodexHome(), 'auth.json');
+  const auth = readAuthFile(authPath);
+  if (auth.auth_mode !== 'chatgpt') {
+    throw new Error('Codex CLI auth must use ChatGPT login. Run `codex login` and sign in with ChatGPT.');
+  }
+
+  const accessToken = trimString(auth.tokens?.access_token);
+  if (!accessToken) {
+    throw new Error('Codex CLI auth is missing tokens.access_token. Run `codex login` again.');
+  }
+
+  const expiresAt = resolveJwtExpiry(accessToken);
+  if (!expiresAt) {
+    throw new Error('Codex CLI auth token is not a JWT with an exp claim. Run `codex login` again.');
+  }
+  if (expiresAt - now < MIN_TOKEN_TTL_MS) {
+    throw new Error('Codex CLI auth token expires within 24 hours. Run `codex login` again before starting the benchmark.');
+  }
+
+  return { accessToken, expiresAt };
+}
+
+function resolveCodexHome(): string {
+  const configured = trimString(process.env.CODEX_HOME);
+  if (!configured) {
+    return path.join(os.homedir(), '.codex');
+  }
+  if (configured === '~') {
+    return os.homedir();
+  }
+  if (configured.startsWith('~/')) {
+    return path.join(os.homedir(), configured.slice(2));
+  }
+  return path.resolve(configured);
+}
+
+function readAuthFile(authPath: string): CodexAuthFile {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(fs.readFileSync(authPath, 'utf8'));
+  } catch (error) {
+    throw new Error(
+      `Could not read Codex CLI auth at ${authPath}. Run \`codex login\` and sign in with ChatGPT. ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error(`Codex CLI auth at ${authPath} must be a JSON object.`);
+  }
+  return parsed as CodexAuthFile;
+}
+
+function resolveJwtExpiry(token: string): number | null {
+  const parts = token.split('.');
+  if (parts.length !== 3 || !parts[1]) {
+    return null;
+  }
+  let payload: unknown;
+  try {
+    payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8'));
+  } catch {
+    return null;
+  }
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    return null;
+  }
+  const exp = (payload as { exp?: unknown }).exp;
+  return typeof exp === 'number' && Number.isFinite(exp) ? exp * 1000 : null;
+}
+
+function trimString(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}

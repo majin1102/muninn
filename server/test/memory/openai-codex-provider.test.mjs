@@ -4,8 +4,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 
-import { validateMuninnConfigInput } from '../../dist/memory/config.js';
-import { generateText, generateWithTools } from '../../dist/memory/llm/provider.js';
+import { validateMuninnConfigInput } from '../../dist/config.js';
+import { generateText, generateWithTools } from '../../dist/llm/provider.js';
 
 function base64UrlJson(value) {
   return Buffer.from(JSON.stringify(value), 'utf8')

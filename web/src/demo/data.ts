@@ -16,8 +16,7 @@ export type DemoSessionTimelineItem = {
   memoryId: string;
   createdAt: string;
   updatedAt: string;
-  title?: string;
-  summary: string;
+  preview: string;
   prompt?: string;
   response?: string;
   toolCalls?: ToolCall[];
@@ -566,86 +565,79 @@ export const demoSessionTurns: Record<string, DemoSessionTimelineItem[]> = {
       memoryId: 'turn:1001',
       createdAt: '2026-03-20T10:12:00.000Z',
       updatedAt: '2026-03-20T10:12:00.000Z',
-      summary: '完成 server 写入口从历史的 message/add 收敛到 turn/capture，并同步校正文档、类型命名和测试描述，让对外语义明确变成一次提交一条完整 turn',
+      preview: '完成 server 写入口从历史的 message/add 收敛到 turn/capture，并同步校正文档、类型命名和测试描述，让对外语义明确变成一次提交一条完整 turn',
     },
     {
       memoryId: 'turn:1002',
       createdAt: '2026-03-20T10:27:00.000Z',
       updatedAt: '2026-03-20T10:27:00.000Z',
-      summary: '确认 extra 只保留在接口传输层，由 server 适配逻辑按需消费，不进入 Rust format、Lance schema、recall 和 detail 渲染，避免污染稳定持久化协议',
+      preview: '确认 extra 只保留在接口传输层，由 server 适配逻辑按需消费，不进入 Rust format、Lance schema、recall 和 detail 渲染，避免污染稳定持久化协议',
     },
     {
       memoryId: 'turn:1003',
       createdAt: '2026-03-20T10:41:00.000Z',
       updatedAt: '2026-03-20T10:41:00.000Z',
-      summary: '补 server 写接口和读链路回归测试，覆盖 prompt-only、response-only、tool-only、extra 校验以及写后通过 detail、timeline、recall 回读的主流程行为',
+      preview: '补 server 写接口和读链路回归测试，覆盖 prompt-only、response-only、tool-only、extra 校验以及写后通过 detail、timeline、recall 回读的主流程行为',
     },
     {
       memoryId: 'turn:1004',
       createdAt: '2026-03-20T11:05:00.000Z',
       updatedAt: '2026-03-20T11:05:00.000Z',
-      summary: '开始搭建 Muninn App 的页面承载位与最小信息架构，先把顶栏、左右分栏、详情文档区和模式切换稳定下来，再逐步接入真实 server UI API',
+      preview: '开始搭建 Muninn App 的页面承载位与最小信息架构，先把顶栏、左右分栏、详情文档区和模式切换稳定下来，再逐步接入真实 server UI API',
     },
     {
       memoryId: 'turn:1005',
       createdAt: '2026-03-20T11:26:00.000Z',
       updatedAt: '2026-03-20T11:26:00.000Z',
-      summary: '确定 session 左栏采用 agent -> sessionId -> timeline 的树状组织，并要求 agent 与 session 节点统一显示最后更新时间，而不是无助于浏览路径判断的数量统计',
+      preview: '确定 session 左栏采用 agent -> sessionId -> timeline 的树状组织，并要求 agent 与 session 节点统一显示最后更新时间，而不是无助于浏览路径判断的数量统计',
     },
     {
       memoryId: 'turn:1006',
       createdAt: '2026-03-20T12:18:00.000Z',
       updatedAt: '2026-03-20T12:18:00.000Z',
-      summary: '将 Muninn App 的视觉方向收敛为白灰中性控制台，弱化大卡片和风格化包装，让界面更像一个稳定、克制、可扩展的 memory explorer 工作台',
+      preview: '将 Muninn App 的视觉方向收敛为白灰中性控制台，弱化大卡片和风格化包装，让界面更像一个稳定、克制、可扩展的 memory explorer 工作台',
     },
     {
       memoryId: 'turn:1007',
       createdAt: '2026-03-20T12:35:00.000Z',
       updatedAt: '2026-03-20T12:35:00.000Z',
-      title: '重新评估 sidebar 与 topbar 的职责边界',
-      summary: '讨论 sidebar 应该承担主导航和项目树入口，topbar 只保留全局动作，避免两个区域都在抢主导航语义',
+      preview: '讨论 sidebar 应该承担主导航和项目树入口，topbar 只保留全局动作，避免两个区域都在抢主导航语义',
     },
     {
       memoryId: 'turn:1008',
       createdAt: '2026-03-20T12:48:00.000Z',
       updatedAt: '2026-03-20T12:48:00.000Z',
-      title: '把 Snapshots 从 Muninn Web 第一版移除',
-      summary: '确认第一版 Muninn Web 只围绕 Search、LLM Wiki、Session、Settings 展开，Snapshots 不再作为一级页面或下拉选项存在',
+      preview: '确认第一版 Muninn Web 只围绕 Search、LLM Wiki、Session、Settings 展开，Snapshots 不再作为一级页面或下拉选项存在',
     },
     {
       memoryId: 'turn:1009',
       createdAt: '2026-03-20T13:02:00.000Z',
       updatedAt: '2026-03-20T13:02:00.000Z',
-      title: '将 Session 详情改成聊天框',
-      summary: '右侧详情不再展示文档标题和面包屑，而是直接渲染 User 与 Agent 的对话气泡，保留 Markdown 能力',
+      preview: '右侧详情不再展示文档标题和面包屑，而是直接渲染 User 与 Agent 的对话气泡，保留 Markdown 能力',
     },
     {
       memoryId: 'turn:1011',
       createdAt: '2026-03-20T13:18:00.000Z',
       updatedAt: '2026-03-20T13:18:00.000Z',
-      title: '收敛品牌区 logo 与 Muninn 字标',
-      summary: '移除 slogan，只保留乌鸦 logo 与 Muninn 字标，调整字体、字号和间距，让品牌区更像开源项目的简洁 lockup',
+      preview: '移除 slogan，只保留乌鸦 logo 与 Muninn 字标，调整字体、字号和间距，让品牌区更像开源项目的简洁 lockup',
     },
     {
       memoryId: 'turn:1012',
       createdAt: '2026-03-20T13:32:00.000Z',
       updatedAt: '2026-03-20T13:32:00.000Z',
-      title: '把 Settings 改成内嵌页面',
-      summary: 'Settings 从弹窗改为侧边栏页面，配置文件编辑器直接嵌在内容区，顶部栏不再出现重复入口',
+      preview: 'Settings 从弹窗改为侧边栏页面，配置文件编辑器直接嵌在内容区，顶部栏不再出现重复入口',
     },
     {
       memoryId: 'turn:1013',
       createdAt: '2026-03-20T13:46:00.000Z',
       updatedAt: '2026-03-20T13:46:00.000Z',
-      title: '减少页面级色块',
-      summary: '将整体界面调整为白底工作台，不再使用灰底套白卡片的页面级色块，只在局部 hover、active 和聊天气泡中使用浅灰',
+      preview: '将整体界面调整为白底工作台，不再使用灰底套白卡片的页面级色块，只在局部 hover、active 和聊天气泡中使用浅灰',
     },
     {
       memoryId: 'turn:1014',
       createdAt: '2026-03-20T14:00:00.000Z',
       updatedAt: '2026-03-20T14:00:00.000Z',
-      title: '恢复 demo 可见性',
-      summary: '让 demo 模式默认预加载并展开 session turns，避免进入页面后看不到任何样例聊天轮次',
+      preview: '让 demo 模式默认预加载并展开 session turns，避免进入页面后看不到任何样例聊天轮次',
     },
   ],
   'openclaw::app-mvp': [
@@ -653,7 +645,7 @@ export const demoSessionTurns: Record<string, DemoSessionTimelineItem[]> = {
       memoryId: 'turn:1010',
       createdAt: '2026-03-20T11:05:00.000Z',
       updatedAt: '2026-03-20T11:05:00.000Z',
-      summary: '为 Muninn App 单独创建 web 模块，明确它是独立的页面承载位，而不是继续把只读查看器能力散落在 server、mcp 或其他说明文档里',
+      preview: '为 Muninn App 单独创建 web 模块，明确它是独立的页面承载位，而不是继续把只读查看器能力散落在 server、mcp 或其他说明文档里',
     },
   ],
   'claude_code::auth-refactor': [
@@ -661,8 +653,7 @@ export const demoSessionTurns: Record<string, DemoSessionTimelineItem[]> = {
       memoryId: 'turn:1301',
       createdAt: '2026-03-20T13:42:00.000Z',
       updatedAt: '2026-03-20T13:42:00.000Z',
-      title: '确认 auth-refactor 的接口命名',
-      summary: '从 Claude Code 会话里补充确认 capture endpoint 的命名，避免 server 和 app 在 session 视角上继续混用 message 与 turn 两套词。',
+      preview: '从 Claude Code 会话里补充确认 capture endpoint 的命名，避免 server 和 app 在 session 视角上继续混用 message 与 turn 两套词。',
     },
   ],
   'claude_code::release-check': [
@@ -670,7 +661,7 @@ export const demoSessionTurns: Record<string, DemoSessionTimelineItem[]> = {
       memoryId: 'turn:1020',
       createdAt: '2026-03-20T11:32:00.000Z',
       updatedAt: '2026-03-20T11:32:00.000Z',
-      summary: '检查 MCP 命名调整对 demo 文档、说明页和演示入口的影响，确认 turn/capture、UI API 和 session snapshot read model 的表述在对外展示层面保持一致',
+      preview: '检查 MCP 命名调整对 demo 文档、说明页和演示入口的影响，确认 turn/capture、UI API 和 session snapshot read model 的表述在对外展示层面保持一致',
     },
   ],
   'codex_cli::auth-refactor': [
@@ -678,8 +669,7 @@ export const demoSessionTurns: Record<string, DemoSessionTimelineItem[]> = {
       memoryId: 'turn:1401',
       createdAt: '2026-03-20T13:18:00.000Z',
       updatedAt: '2026-03-20T13:18:00.000Z',
-      title: '补 auth-refactor 的 UI 回归点',
-      summary: 'Codex 会话补充 app demo 模式下的 session tree 验证点，确保 auth-refactor 项目在多 agent 聚合后仍能稳定展开。',
+      preview: 'Codex 会话补充 app demo 模式下的 session tree 验证点，确保 auth-refactor 项目在多 agent 聚合后仍能稳定展开。',
     },
   ],
   'codex_cli::sdk-cleanup': [
@@ -687,7 +677,7 @@ export const demoSessionTurns: Record<string, DemoSessionTimelineItem[]> = {
       memoryId: 'turn:1030',
       createdAt: '2026-03-20T10:41:00.000Z',
       updatedAt: '2026-03-20T10:41:00.000Z',
-      summary: '清理旧 sdk 残留并确认 workspace 构建链完整，避免历史 package 和演进中的 core、server、app 模块在命名和构建路径上互相干扰',
+      preview: '清理旧 sdk 残留并确认 workspace 构建链完整，避免历史 package 和演进中的 core、server、app 模块在命名和构建路径上互相干扰',
     },
   ],
   'memory_agent::auth-refactor': [
@@ -695,8 +685,7 @@ export const demoSessionTurns: Record<string, DemoSessionTimelineItem[]> = {
       memoryId: 'turn:1501',
       createdAt: '2026-03-20T12:56:00.000Z',
       updatedAt: '2026-03-20T12:56:00.000Z',
-      title: '整理 auth-refactor 的迁移备注',
-      summary: 'Cursor 会话记录了 auth-refactor 中旧字段迁移的备注，用来让 demo 覆盖超过三个 agent 的 project 顶层展示。',
+      preview: 'Cursor 会话记录了 auth-refactor 中旧字段迁移的备注，用来让 demo 覆盖超过三个 agent 的 project 顶层展示。',
     },
   ],
   'memory_agent::memory-inbox/daily-recall': [
@@ -704,36 +693,31 @@ export const demoSessionTurns: Record<string, DemoSessionTimelineItem[]> = {
       memoryId: 'turn:1601',
       createdAt: '2026-06-01T12:50:15.000Z',
       updatedAt: '2026-06-01T12:50:15.000Z',
-      title: '整理今日可召回事项',
-      summary: '通用 memory agent 汇总最近 24 小时内的 auth-refactor、app UI 和 agent icon 相关会话，准备作为 recall 入口的样例数据。',
+      preview: '通用 memory agent 汇总最近 24 小时内的 auth-refactor、app UI 和 agent icon 相关会话，准备作为 recall 入口的样例数据。',
     },
     {
       memoryId: 'turn:1602',
       createdAt: '2026-06-01T13:05:44.000Z',
       updatedAt: '2026-06-01T13:05:44.000Z',
-      title: '抽取 session tree 的 UI 偏好',
-      summary: '记录用户偏好：左栏应接近 Codex 风格，项目行更像分组，session 行像可打开文档，agent 图标适配应封装在 asset 内部。',
+      preview: '记录用户偏好：左栏应接近 Codex 风格，项目行更像分组，session 行像可打开文档，agent 图标适配应封装在 asset 内部。',
     },
     {
       memoryId: 'turn:1603',
       createdAt: '2026-06-01T13:18:27.000Z',
       updatedAt: '2026-06-01T13:18:27.000Z',
-      title: '生成 fallback agent 展示数据',
-      summary: '补充未适配 agent 的演示会话，使用通用 Bot 图标展示未知 agent，避免只有 Claude、Codex、OpenClaw 三类品牌图标。',
+      preview: '补充未适配 agent 的演示会话，使用通用 Bot 图标展示未知 agent，避免只有 Claude、Codex、OpenClaw 三类品牌图标。',
     },
     {
       memoryId: 'turn:1604',
       createdAt: '2026-06-01T13:25:02.000Z',
       updatedAt: '2026-06-01T13:25:02.000Z',
-      title: '校正 turn 时间显示规则',
-      summary: '将 24 小时内的 turn 时间显示为时分秒，超过 24 小时的 turn 继续使用短相对时间，让 session tree 更接近 Codex 左栏的信息密度。',
+      preview: '将 24 小时内的 turn 时间显示为时分秒，超过 24 小时的 turn 继续使用短相对时间，让 session tree 更接近 Codex 左栏的信息密度。',
     },
     {
       memoryId: 'turn:1605',
       createdAt: '2026-06-01T13:32:00.000Z',
       updatedAt: '2026-06-01T13:32:00.000Z',
-      title: 'Markdown 渲染样例',
-      summary: '补充一条专门覆盖 Markdown 渲染的 demo turn，包含代码块、表格、列表、引用和 inline code，用来检查聊天气泡内的排版与溢出控制。',
+      preview: '补充一条专门覆盖 Markdown 渲染的 demo turn，包含代码块、表格、列表、引用和 inline code，用来检查聊天气泡内的排版与溢出控制。',
     },
   ],
 };
@@ -1206,11 +1190,11 @@ Demo 模式会默认预加载 session turns，并展开 session 内容。
 type MemoryTurn = {
   memoryId: string;
   agent: 'openclaw' | 'claude_code' | 'codex_cli' | 'memory_agent';
-  summary: string;
+  preview: string;
 };
 
 export function renderTurn(turn: MemoryTurn) {
-  return \`\${turn.agent}: \${turn.summary}\`;
+  return \`\${turn.agent}: \${turn.preview}\`;
 }
 \`\`\`
 

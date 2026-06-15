@@ -1,6 +1,6 @@
 import type {
   RecallHit,
-} from '../memory/index.js';
+} from '../api/memory.js';
 import type {
   SearchResultItem,
   SearchSessionResult,

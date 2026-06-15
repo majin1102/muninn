@@ -4,40 +4,37 @@ import os from 'node:os';
 import path from 'node:path';
 import { access, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 
-import core from '../../dist/memory/index.js';
-import { __testing } from '../../dist/memory/backend.js';
+import core from '../../dist/backend.js';
+import { __testing } from '../../dist/backend.js';
 import {
   getObserverRuntimeConfigFromConfigForTests,
   getExtractorLlmConfig,
   getObserverLlmConfig,
   validateMuninnConfigInput,
-} from '../../dist/memory/config.js';
-import { MuninnBackend } from '../../dist/memory/backend.js';
-import { Extractor as Observer } from '../../dist/memory/extractor/runtime.js';
-import { EpochQueue, OpenEpoch } from '../../dist/memory/extractor/epoch.js';
-import { parseCheckpointFile, readCheckpointFile, resolveCheckpointPath } from '../../dist/memory/checkpoint.js';
-import { SessionRegistry } from '../../dist/memory/turn/registry.js';
-import { normalizeSessionId, sessionKey } from '../../dist/memory/turn/key.js';
-import { Session } from '../../dist/memory/turn/session.js';
-import { Watchdog } from '../../dist/memory/watchdog.js';
-import extractionIndexModule from '../../dist/memory/extractor/extraction-index.js';
-import sessionModule from '../../dist/memory/extractor/session.js';
-import threadModule from '../../dist/memory/extractor/snapshot.js';
-import extractingModule from '../../dist/memory/llm/extracting.js';
-import sessionGatewayModule from '../../dist/memory/llm/session-gateway.js';
-import { applyExtractionChanges, applyExtractionTableChanges } from '../../dist/memory/extractor/extraction-index.js';
-import { recallMemories } from '../../dist/memory/recall/index.js';
-import { validateMemoryRecallResult } from '../../dist/memory/recall/memory-recaller.js';
-import { getNativeTables } from '../../dist/memory/native.js';
+} from '../../dist/config.js';
+import { MuninnBackend } from '../../dist/backend.js';
+import { Extractor as Observer } from '../../dist/pipeline/extractor.js';
+import { EpochQueue, OpenEpoch } from '../../dist/pipeline/epoch.js';
+import { parseCheckpointFile, readCheckpointFile, resolveCheckpointPath } from '../../dist/checkpoint.js';
+import { IngestSessionRegistry } from '../../dist/pipeline/ingest.js';
+import { normalizeSessionId, sessionKey } from '../../dist/pipeline/ingest.js';
+import { IngestSession } from '../../dist/pipeline/ingest.js';
+import { Watchdog } from '../../dist/watchdog.js';
+import extractionIndexModule from '../../dist/pipeline/extraction.js';
+import sessionModule from '../../dist/pipeline/session.js';
+import extractorLlmModule from '../../dist/llm/extractor.js';
+import { applyExtractionChanges, applyExtractionTableChanges } from '../../dist/pipeline/extraction.js';
+import { recallMemories } from '../../dist/api/memory.js';
+import { validateMemoryRecallResult } from '../../dist/api/memory.js';
+import { getNativeTables } from '../../dist/native.js';
 
 const { __testing: indexTesting } = extractionIndexModule;
 const { __testing: sessionTesting } = sessionModule;
-const { __testing: threadTesting } = threadModule;
-const { __testing: extractingTesting } = extractingModule;
-const { __testing: sessionGatewayTesting } = sessionGatewayModule;
-const { createSessionMemoryThread, getPendingIndex, getPendingIndexUpTo, loadThreads, toSessionSnapshot } = threadModule;
+const { __testing: threadTesting } = sessionModule;
+const { __testing: extractorLlmTesting } = extractorLlmModule;
+const { createSessionThread, getPendingIndex, getPendingIndexUpTo, loadThreads, toSessionSnapshot } = sessionModule;
 const { captureTurn, observer: observerApi, shutdownCoreForTests } = core;
-const CHECKPOINT_SCHEMA_VERSION = 9;
+const CHECKPOINT_SCHEMA_VERSION = 10;
 let defaultConfigDir = null;
 
 function createCheckpointBackend(exported = null) {
@@ -76,7 +73,6 @@ function makeObserverCheckpoint(overrides = {}) {
   return {
     baseline,
     observeQueue: { cwdBuckets: [] },
-    runs: [],
     ...overrides,
     baseline,
   };
@@ -158,9 +154,6 @@ async function writeObserverConfig(configPath, {
 async function writeOpenAiObserverConfig(configPath) {
   await mkdir(path.dirname(configPath), { recursive: true });
   await writeFile(configPath, `${JSON.stringify({
-    turn: {
-      llmProvider: 'turn_llm',
-    },
     extractor: {
       name: 'default-observer',
       llmProvider: 'extractor_llm',
@@ -176,9 +169,6 @@ async function writeOpenAiObserverConfig(configPath) {
     },
     providers: {
       llm: {
-        turn_llm: {
-          type: 'mock',
-        },
         extractor_llm: {
           type: 'openai',
           apiKey: 'test-key',
@@ -252,39 +242,6 @@ test('observer cwd threshold defaults to eight and validates positive integer', 
   })), /observer\.cwdThreshold must be a positive integer/);
 });
 
-test('checkpoint preserves observer runs', () => {
-  const checkpoint = parseCheckpointFile(JSON.stringify({
-    schemaVersion: CHECKPOINT_SCHEMA_VERSION,
-    writtenAt: new Date(0).toISOString(),
-    writerPid: 1,
-    extractor: {
-      baseline: { turn: 0, session: 0, extraction: 0, observation: 0 },
-      nextEpoch: 1,
-      recentSessions: [],
-      threads: [],
-      runs: [],
-      pendingExtractionChanges: [],
-    },
-    observer: {
-      baseline: { observationContext: 0, observation: 0 },
-      observeQueue: { cwdBuckets: [] },
-      runs: [{
-        runId: 'run-1',
-        observeId: 'entity:caroline',
-        cwd: '/workspace/project-a',
-        anchor: 'Caroline',
-        stage: 'generatingObservation',
-        pendingExtractionIds: ['abc'],
-        errors: [],
-      }],
-      pendingExtractionChanges: [],
-    },
-    sessionIndex: { baseline: { turn: 0, session: 0 }, entries: [] },
-  }));
-  assert.equal(checkpoint.observer.runs[0].observeId, 'entity:caroline');
-  assert.equal(checkpoint.observer.runs[0].cwd, '/workspace/project-a');
-});
-
 test('native bindings expose observation context and observation tables', async () => {
   const tables = await getNativeTables();
   assert.equal(typeof tables.extractionTable.list, 'function');
@@ -305,7 +262,7 @@ test('native bindings expose observation context and observation tables', async 
 });
 
 test('table mutation locks serialize writes on the same table', async () => {
-  const { TableMutationLocks } = await import('../../dist/memory/table-locks.js');
+  const { TableMutationLocks } = await import('../../dist/native.js');
   const locks = new TableMutationLocks();
   const firstEntered = deferred();
   const releaseFirst = deferred();
@@ -335,7 +292,7 @@ test('table mutation locks serialize writes on the same table', async () => {
 });
 
 test('table mutation locks allow writes on different tables to overlap', async () => {
-  const { TableMutationLocks } = await import('../../dist/memory/table-locks.js');
+  const { TableMutationLocks } = await import('../../dist/native.js');
   const locks = new TableMutationLocks();
   const extractionEntered = deferred();
   const observationEntered = deferred();
@@ -357,7 +314,7 @@ test('table mutation locks allow writes on different tables to overlap', async (
 });
 
 test('lockNativeTables serializes same-table mutations without locking reads', async () => {
-  const { TableMutationLocks, lockNativeTables } = await import('../../dist/memory/table-locks.js');
+  const { TableMutationLocks, lockNativeTables } = await import('../../dist/native.js');
   const locks = new TableMutationLocks();
   const upsertEntered = deferred();
   const releaseUpsert = deferred();
@@ -416,7 +373,7 @@ test('memories.get renders curated observation memories', async () => {
     sessionTable: { get: async () => null },
     turnTable: { get: async () => null },
   };
-  const { Memories } = await import('../../dist/memory/memories.js');
+  const { Memories } = await import('../../dist/api/memory.js');
   const memory = await new Memories(client).get('observation:obs-1');
 
   assert.equal(memory.memoryId, 'observation:obs-1');
@@ -433,7 +390,7 @@ test('memories.get returns null for unknown curated observation memories', async
     sessionTable: { get: async () => null },
     turnTable: { get: async () => null },
   };
-  const { Memories } = await import('../../dist/memory/memories.js');
+  const { Memories } = await import('../../dist/api/memory.js');
   assert.equal(await new Memories(client).get('observation:missing'), null);
 });
 
@@ -457,7 +414,7 @@ test('memories.get accepts observation paths containing colons', async () => {
     sessionTable: { get: async () => null },
     turnTable: { get: async () => null },
   };
-  const { Memories } = await import('../../dist/memory/memories.js');
+  const { Memories } = await import('../../dist/api/memory.js');
   const memory = await new Memories(client).get(`observation:${pathId}`);
 
   assert.equal(memory.memoryId, `observation:${pathId}`);
@@ -465,15 +422,15 @@ test('memories.get accepts observation paths containing colons', async () => {
 });
 
 test('observation memory id parser rejects empty and wrong prefixes', async () => {
-  const { parseObservationMemoryId } = await import('../../dist/memory/recall/observations.js');
+  const { parseObservationMemoryId } = await import('../../dist/api/memory.js');
 
   assert.throws(() => parseObservationMemoryId('observation:'), /invalid observation memory id/);
   assert.throws(() => parseObservationMemoryId('extraction:Caroline / Work: schedule'), /invalid observation memory id/);
 });
 
 test('observer markdown parser derives parent and child observations', async () => {
-  const { parseObserverDocument } = await import('../../dist/memory/observer/markdown.js');
-  const parsed = parseObserverDocument([
+  const { parseObservationDocument } = await import('../../dist/pipeline/observation.js');
+  const parsed = parseObservationDocument([
     '# Alex',
     '',
     '## Who is Alex?',
@@ -496,8 +453,8 @@ test('observer markdown parser derives parent and child observations', async () 
 });
 
 test('observer markdown parser normalizes unique extraction id prefixes', async () => {
-  const { parseObserverDocument } = await import('../../dist/memory/observer/markdown.js');
-  const parsed = parseObserverDocument([
+  const { parseObservationDocument } = await import('../../dist/pipeline/observation.js');
+  const parsed = parseObservationDocument([
     '# Alex',
     '',
     '## Who is Alex?',
@@ -512,8 +469,8 @@ test('observer markdown parser normalizes unique extraction id prefixes', async 
 });
 
 test('observer markdown parser rejects invalid refs and missing refs', async () => {
-  const { parseObserverDocument } = await import('../../dist/memory/observer/markdown.js');
-  assert.throws(() => parseObserverDocument([
+  const { parseObservationDocument } = await import('../../dist/pipeline/observation.js');
+  assert.throws(() => parseObservationDocument([
     '# Alex',
     '',
     '## Who is Alex?',
@@ -524,7 +481,7 @@ test('observer markdown parser rejects invalid refs and missing refs', async () 
     '- [session:a]',
   ].join('\n'), new Set(['extraction:a'])), /unknown extraction id|unknown extraction/i);
 
-  assert.throws(() => parseObserverDocument([
+  assert.throws(() => parseObservationDocument([
     '# Alex',
     '',
     '## Who is Alex?',
@@ -532,7 +489,7 @@ test('observer markdown parser rejects invalid refs and missing refs', async () 
     'Alex is a product lead.',
   ].join('\n'), new Set(['extraction:a'])), /leaf observer section must include Source extractions/i);
 
-  assert.throws(() => parseObserverDocument([
+  assert.throws(() => parseObservationDocument([
     '# Alex',
     '',
     '## Who is Alex?',
@@ -545,8 +502,8 @@ test('observer markdown parser rejects invalid refs and missing refs', async () 
 });
 
 test('observer prompt renders status and extraction inputs', async () => {
-  const { __testing: observingTesting } = await import('../../dist/memory/llm/observing.js');
-  const rendered = observingTesting.renderExtractions([{
+  const { __testing: observerLlmTesting } = await import('../../dist/llm/observer.js');
+  const rendered = observerLlmTesting.renderExtractions([{
     id: 'abc',
     status: 'new',
     text: 'Alex moved onboarding review to Thursday.',
@@ -561,54 +518,6 @@ test('observer prompt renders status and extraction inputs', async () => {
   assert.match(rendered, /Context: The team compared review days\./);
   assert.match(rendered, /Extraction: Alex moved onboarding review to Thursday\./);
   assert.match(rendered, /Source refs: session:1/);
-});
-
-test('observer runner groups extractions by cwd', async () => {
-  const { __testing: observerTesting } = await import('../../dist/memory/observer/runner.js');
-  const groups = observerTesting.groupByCwd([
-    {
-      id: 'a',
-      title: 'Review day',
-      summary: 'Alex chose Thursday.',
-      content: 'Alex chose Thursday.',
-      cwd: '/workspace/project-a',
-      vector: [1, 0],
-      turnRefs: ['session:1'],
-      observationPaths: [],
-      createdAt: '2024-01-01T00:00:00Z',
-      updatedAt: '2024-01-01T00:00:00Z',
-    },
-    {
-      id: 'b',
-      title: 'Onboarding owner',
-      summary: 'Alex owns onboarding.',
-      content: 'Alex owns onboarding.',
-      cwd: '/workspace/project-a',
-      vector: [1, 0],
-      turnRefs: ['session:2'],
-      observationPaths: [],
-      createdAt: '2024-01-01T00:00:00Z',
-      updatedAt: '2024-01-01T00:00:00Z',
-    },
-    {
-      id: 'c',
-      title: 'Other project',
-      summary: 'No entity.',
-      content: 'No entity.',
-      cwd: '/workspace/project-b',
-      vector: [1, 0],
-      turnRefs: ['session:3'],
-      observationPaths: [],
-      createdAt: '2024-01-01T00:00:00Z',
-      updatedAt: '2024-01-01T00:00:00Z',
-    },
-  ]);
-
-  assert.equal(groups.length, 2);
-  assert.equal(groups[0].cwd, '/workspace/project-a');
-  assert.deepEqual(groups[0].extractions.map((extraction) => extraction.id), ['a', 'b']);
-  assert.equal(groups[1].cwd, '/workspace/project-b');
-  assert.deepEqual(groups[1].extractions.map((extraction) => extraction.id), ['c']);
 });
 
 function deferred() {
@@ -726,7 +635,7 @@ function makeTurnContent(prompt, response, overrides = {}) {
   };
 }
 
-test('createSessionMemoryThread preserves complete readable title and summary text', () => {
+test('createSessionThread preserves complete readable title and summary text', () => {
   const title = 'Caroline LGBTQ support group impact and counseling career direction';
   const summary = [
     'Caroline attended an LGBTQ support group on 7 May 2023.',
@@ -735,7 +644,7 @@ test('createSessionMemoryThread preserves complete readable title and summary te
     'Melanie believes Caroline would be a strong counselor because of Caroline\'s empathy and understanding.',
   ].join(' ');
 
-  const thread = createSessionMemoryThread(
+  const thread = createSessionThread(
     'default-observer',
     title,
     summary,
@@ -1695,7 +1604,7 @@ test('resolveCheckpointPath is scoped by observer name', async (t) => {
 });
 
 test('checkpoint preserves session runs', async () => {
-  const { parseCheckpointFile, serializeCheckpointFile } = await import('../../dist/memory/checkpoint.js');
+  const { parseCheckpointFile, serializeCheckpointFile } = await import('../../dist/checkpoint.js');
   const file = {
     schemaVersion: CHECKPOINT_SCHEMA_VERSION,
     writtenAt: new Date().toISOString(),
@@ -1712,12 +1621,7 @@ test('checkpoint preserves session runs', async () => {
         stage: 'fittingThreads',
         inputTurnIds: ['turn:1'],
         pending: {
-          sessionFragments: [{
-            threadId: 'thread-1',
-            turnIds: ['turn:1'],
-            content: 'source content',
-            reason: 'The source continues the thread.',
-          }],
+          snapshotResults: [],
         },
         committed: { extractionIds: ['obs-1'], snapshotIds: [] },
         traceRefs: [],
@@ -1731,7 +1635,7 @@ test('checkpoint preserves session runs', async () => {
 
   const parsed = parseCheckpointFile(serializeCheckpointFile(file));
   assert.equal(parsed.extractor.runs[0].stage, 'fittingThreads');
-  assert.equal(parsed.extractor.runs[0].pending.sessionFragments[0].content, 'source content');
+  assert.deepEqual(parsed.extractor.runs[0].pending.snapshotResults, []);
   assert.deepEqual(parsed.extractor.runs[0].committed.extractionIds, ['obs-1']);
 });
 
@@ -3686,7 +3590,7 @@ test('backend exportCheckpoint returns null before observer creation', async () 
 });
 
 test('session registry reuses one in-flight session load per key', async () => {
-  const registry = new SessionRegistry({
+  const registry = new IngestSessionRegistry({
     turnTable: {},
   }, 'default-observer');
 
@@ -3708,7 +3612,7 @@ test('session key normalizes sessionId whitespace', async () => {
 });
 
 test('session registry reuses the same load for trimmed session ids', async () => {
-  const registry = new SessionRegistry({
+  const registry = new IngestSessionRegistry({
     turnTable: {},
   }, 'default-observer');
 
@@ -3720,7 +3624,7 @@ test('session registry reuses the same load for trimmed session ids', async () =
 });
 
 test('session registry separates same raw session id across cwd ownership', async () => {
-  const registry = new SessionRegistry({
+  const registry = new IngestSessionRegistry({
     turnTable: {},
   }, 'default-observer');
 
@@ -3732,7 +3636,7 @@ test('session registry separates same raw session id across cwd ownership', asyn
 });
 
 test('session registry treats project as display metadata for the same cwd identity', async () => {
-  const registry = new SessionRegistry({
+  const registry = new IngestSessionRegistry({
     turnTable: {},
   }, 'default-observer');
 
@@ -3744,7 +3648,7 @@ test('session registry treats project as display metadata for the same cwd ident
 });
 
 test('session registry restores live sessions for checkpoint recent turns', async () => {
-  const registry = new SessionRegistry({
+  const registry = new IngestSessionRegistry({
     turnTable: {},
   }, 'default-observer');
 
@@ -3761,7 +3665,7 @@ test('session registry restores live sessions for checkpoint recent turns', asyn
 });
 
 test('session registry replays persisted turns into recent windows', async () => {
-  const registry = new SessionRegistry({
+  const registry = new IngestSessionRegistry({
     turnTable: {},
   }, 'default-observer');
 
@@ -3780,7 +3684,7 @@ test('session.accept serializes concurrent inserts for the same session', async 
   let maxConcurrentInserts = 0;
   let nextTurnId = 1;
 
-  const session = new Session({
+  const session = new IngestSession({
     turnTable: {
       insert: async ({ turns }) => {
         concurrentInserts += 1;
@@ -3817,7 +3721,7 @@ test('session.accept dedupes turnSequence against the recent three turns', async
   let nextTurnId = 1;
   const insertedTurns = new Map();
 
-  const session = new Session({
+  const session = new IngestSession({
     turnTable: {
       insert: async ({ turns }) => turns.map((turn) => {
         const persisted = {
@@ -3858,7 +3762,7 @@ test('session.accept prefers turnSequence for recent duplicate detection', async
   let nextTurnId = 1;
   const insertedTurns = new Map();
 
-  const session = new Session({
+  const session = new IngestSession({
     turnTable: {
       insert: async ({ turns }) => turns.map((turn) => {
         const persisted = {
@@ -3890,7 +3794,7 @@ test('session.accept prefers turnSequence for recent duplicate detection', async
 
 test('session.accept attaches recent three turns as transient extraction context', async () => {
   let nextTurnId = 1;
-  const session = new Session({
+  const session = new IngestSession({
     turnTable: {
       insert: async ({ turns }) => turns.map((turn) => ({
         ...turn,
@@ -3925,7 +3829,7 @@ test('session.accept drops stale recent turns before inserting a new turn', asyn
   let nextTurnId = 1;
   const insertedTurns = new Map();
 
-  const session = new Session({
+  const session = new IngestSession({
     turnTable: {
       insert: async ({ turns }) => turns.map((turn) => {
         const persisted = {
@@ -4189,7 +4093,7 @@ test('extraction state rewrite rejects unknown and duplicate ids', () => {
 });
 
 test('session extraction batch input uses turn headings without horizontal rules', () => {
-  const rendered = extractingTesting.renderNewTurnsForTests([
+  const rendered = extractorLlmTesting.renderNewTurnsForTests([
     {
       turnId: 'turn:1',
       prompt: 'First prompt',
@@ -4211,7 +4115,7 @@ test('session extraction batch input uses turn headings without horizontal rules
   assert.doesNotMatch(rendered, /Summary:/);
 });
 
-test('buildExtraction surfaces extraction write failures and leaves work pending', async (t) => {
+test('indexPendingExtractions surfaces extraction write failures and leaves work pending', async (t) => {
   const { dir, homeDir, configPath } = await makeConfigHome();
   t.after(async () => rm(dir, { recursive: true, force: true }));
 
@@ -4268,7 +4172,7 @@ test('buildExtraction surfaces extraction write failures and leaves work pending
   let semanticUpserts = 0;
 
   await assert.rejects(
-    () => indexTesting.buildExtraction({
+    () => indexTesting.indexPendingExtractions({
       sessionTable: {
         update: async ({ snapshots }) => snapshots,
       },
@@ -4288,99 +4192,8 @@ test('buildExtraction surfaces extraction write failures and leaves work pending
   assert.deepEqual(getPendingIndex(threads[0]), { start: 1, end: 1 });
 });
 
-test('gateway validation accepts session fragments', () => {
-  const longContent = [
-    'Caroline described attending the LGBTQ support group yesterday and finding it powerful.',
-    'She said the transgender stories were inspiring and that she felt happy and thankful for the support.',
-    'Melanie asked what the group had done for Caroline, which was answered in a later turn.',
-    'This content needs to remain complete because the observer uses it as selected session material.',
-  ].join(' ');
-  const result = sessionGatewayTesting.validateGatewayResultForTests(
-    [{
-      threadId: 'thread-1',
-      kind: 'subject',
-      title: 'Caroline counseling and mental-health career plans',
-      summary: 'Caroline is exploring counseling and mental-health work.',
-    }],
-    [{ turnId: 'turn:1', text: 'Caroline mentions career plans.' }],
-    {
-      sessionFragments: [{
-        threadId: 'thread-1',
-        turnIds: ['turn:1'],
-        content: longContent,
-        reason: 'This content fits the existing career planning thread.',
-      }],
-    },
-  );
-
-  assert.deepEqual(result.sessionFragments, [{
-    threadId: 'thread-1',
-    turnIds: ['turn:1'],
-    content: longContent,
-    reason: 'This content fits the existing career planning thread.',
-  }]);
-  assert.ok(result.sessionFragments[0].content.length > 220);
-});
-
-test('gateway system prompt injects chat session thread definition only', () => {
-  const system = sessionGatewayTesting.buildGatewaySystemPromptForTests('chat');
-
-  assert.match(system, /Session memory thread definition/);
-  assert.match(system, /tracks one coherent subject that can develop over time/);
-  assert.match(system, /narrower than the whole conversation and more stable than a single message/);
-  assert.match(system, /updates, answers, clarifies, corrects, supports, or directly continues/);
-  assert.doesNotMatch(system, /Chat category guide/);
-  assert.doesNotMatch(system, /Category selection/);
-  assert.doesNotMatch(system, /Chat filtering/);
-});
-
-test('gateway validation rejects session fragments without reason', () => {
-  assert.throws(
-    () => sessionGatewayTesting.validateGatewayResultForTests(
-      [{
-        threadId: 'thread-1',
-        kind: 'subject',
-        title: 'Caroline counseling and mental-health career plans',
-        summary: 'Caroline is exploring counseling and mental-health work.',
-      }],
-      [{ turnId: 'turn:1', text: 'Caroline mentions career plans.' }],
-      {
-        sessionFragments: [{
-          threadId: 'thread-1',
-          turnIds: ['turn:1'],
-          content: 'Caroline mentions career plans.',
-        }],
-      },
-    ),
-    /empty reason/i,
-  );
-});
-
-test('gateway validation rejects session fragments with unknown threads', () => {
-  assert.throws(
-    () => sessionGatewayTesting.validateGatewayResultForTests(
-      [{
-        threadId: 'thread-1',
-        kind: 'subject',
-        title: 'Caroline counseling and mental-health career plans',
-        summary: 'Caroline is exploring counseling and mental-health work.',
-      }],
-      [{ turnId: 'turn:1', text: 'Caroline mentions career plans.' }],
-      {
-        sessionFragments: [{
-          threadId: 'missing-thread',
-          turnIds: ['turn:1'],
-          content: 'Caroline mentions career plans.',
-          reason: 'This content fits a missing thread.',
-        }],
-      },
-    ),
-    /unknown threadId/i,
-  );
-});
-
 test('observer validation derives extractions from titled snapshot content', () => {
-  const result = extractingTesting.validateExtractSessionMemoryResultForTests(
+  const result = extractorLlmTesting.validateSessionExtractionResultForTests(
     snapshotContentFixture([
       '<!-- refs: [turn:13] -->',
       '### Title',
@@ -4405,7 +4218,7 @@ test('observer validation derives extractions from titled snapshot content', () 
       summary: 'Melanie painted a lake sunrise in 2022.',
     }),
     {
-      sessionMemoryContent: {
+      sessionMemory: {
         title: 'Painting',
         summary: '',
         extractions: [],
@@ -4464,7 +4277,7 @@ test('observer validation derives extractions from titled snapshot content', () 
 });
 
 test('observer validation preserves session-level signals in snapshot content', () => {
-  const result = extractingTesting.validateExtractSessionMemoryResultForTests(
+  const result = extractorLlmTesting.validateSessionExtractionResultForTests(
     snapshotContentFixture([
       '<!-- refs: [turn:13] -->',
       '### Title',
@@ -4484,7 +4297,7 @@ test('observer validation preserves session-level signals in snapshot content', 
       ].join('\n'),
     }),
     {
-      sessionMemoryContent: {
+      sessionMemory: {
         title: 'Extractor Signals',
         summary: '',
         extractions: [],
@@ -4509,7 +4322,7 @@ test('observer validation preserves session-level signals in snapshot content', 
 
 test('snapshot patch can preserve, replace, and clear session-level signals', () => {
   const baseInput = {
-    sessionMemoryContent: {
+    sessionMemory: {
       title: 'Extractor Signals',
       summary: 'Extractor prompt design.',
       signals: '- User preference: Keep signal bullets natural.',
@@ -4523,19 +4336,19 @@ test('snapshot patch can preserve, replace, and clear session-level signals', ()
     }],
   };
 
-  const preserved = extractingTesting.validateExtractSessionMemoryResultForTests([
+  const preserved = extractorLlmTesting.validateSessionExtractionResultForTests([
     '## Summary',
     'Extractor prompt design continues.',
   ].join('\n'), baseInput);
   assert.equal(preserved.signals, '- User preference: Keep signal bullets natural.');
 
-  const replaced = extractingTesting.validateExtractSessionMemoryResultForTests([
+  const replaced = extractorLlmTesting.validateSessionExtractionResultForTests([
     '## Signals',
     '- Repeated requirement or correction: Signals are session-level state.',
   ].join('\n'), baseInput);
   assert.equal(replaced.signals, '- Repeated requirement or correction: Signals are session-level state.');
 
-  const cleared = extractingTesting.validateExtractSessionMemoryResultForTests([
+  const cleared = extractorLlmTesting.validateSessionExtractionResultForTests([
     '## Signals',
     '',
   ].join('\n'), baseInput);
@@ -4543,7 +4356,7 @@ test('snapshot patch can preserve, replace, and clear session-level signals', ()
 });
 
 test('observer validation keeps independent refs per snapshot content unit', () => {
-  const result = extractingTesting.validateExtractSessionMemoryResultForTests(
+  const result = extractorLlmTesting.validateSessionExtractionResultForTests(
     snapshotContentFixture([
       '<!-- refs: [turn:13] -->',
       '### Title',
@@ -4561,12 +4374,12 @@ test('observer validation keeps independent refs per snapshot content unit', () 
       '### Summary',
       'Caroline plans to explore counseling work.',
     ].join('\n'), {
-      title: 'Session',
+      title: 'IngestSession',
       summary: 'Session memory.',
     }),
     {
-      sessionMemoryContent: {
-        title: 'Session',
+      sessionMemory: {
+        title: 'IngestSession',
         summary: '',
         extractions: [],
         openQuestions: [],
@@ -4587,7 +4400,7 @@ test('observer validation keeps independent refs per snapshot content unit', () 
 });
 
 test('observer validation splits adjacent metadata snapshot units without separators', () => {
-  const result = extractingTesting.validateExtractSessionMemoryResultForTests(
+  const result = extractorLlmTesting.validateSessionExtractionResultForTests(
     snapshotContentFixture([
       '<!-- refs: [turn:13] -->',
       '### Title',
@@ -4603,12 +4416,12 @@ test('observer validation splits adjacent metadata snapshot units without separa
       '### Summary',
       'Caroline plans to explore counseling work.',
     ].join('\n'), {
-      title: 'Session',
+      title: 'IngestSession',
       summary: 'Session memory.',
     }),
     {
-      sessionMemoryContent: {
-        title: 'Session',
+      sessionMemory: {
+        title: 'IngestSession',
         summary: '',
         extractions: [],
         openQuestions: [],
@@ -4633,7 +4446,7 @@ test('observer validation splits adjacent metadata snapshot units without separa
 });
 
 test('session extraction turn input omits turn summary when prompt and response are present', () => {
-  const markdown = extractingTesting.renderNewTurnsForTests([{
+  const markdown = extractorLlmTesting.renderNewTurnsForTests([{
     turnId: 'turn:13',
     prompt: 'User asked whether app session rows should use snapshot titles.',
     response: 'Agent confirmed the session index should cache the latest snapshot title.',
@@ -4648,7 +4461,7 @@ test('session extraction turn input omits turn summary when prompt and response 
 });
 
 test('observer validation accepts markdown fenced snapshot content', () => {
-  const result = extractingTesting.validateExtractSessionMemoryResultForTests(
+  const result = extractorLlmTesting.validateSessionExtractionResultForTests(
     [
       '```markdown',
       '# Painting Memory',
@@ -4666,7 +4479,7 @@ test('observer validation accepts markdown fenced snapshot content', () => {
       '```',
     ].join('\n'),
     {
-      sessionMemoryContent: {
+      sessionMemory: {
         title: 'Painting',
         summary: '',
         extractions: [],
@@ -4686,7 +4499,7 @@ test('observer validation accepts markdown fenced snapshot content', () => {
 
 test('observer validation rejects session signals after extractions', () => {
   assert.throws(
-    () => extractingTesting.validateExtractSessionMemoryResultForTests([
+    () => extractorLlmTesting.validateSessionExtractionResultForTests([
       '# Painting Memory',
       '',
       '## Summary',
@@ -4703,7 +4516,7 @@ test('observer validation rejects session signals after extractions', () => {
       '## Signals',
       '- User preference: Keep signals top-level.',
     ].join('\n'), {
-      sessionMemoryContent: {
+      sessionMemory: {
         title: 'Painting',
         summary: '',
         extractions: [],
@@ -4718,7 +4531,7 @@ test('observer validation rejects session signals after extractions', () => {
 
 test('snapshot patch rejects session signals after extractions', () => {
   assert.throws(
-    () => extractingTesting.validateExtractSessionMemoryResultForTests([
+    () => extractorLlmTesting.validateSessionExtractionResultForTests([
       '## Extractions',
       '<!-- refs: [turn:13] -->',
       '### Title',
@@ -4730,7 +4543,7 @@ test('snapshot patch rejects session signals after extractions', () => {
       '## Signals',
       '- User preference: Keep signals top-level.',
     ].join('\n'), {
-      sessionMemoryContent: {
+      sessionMemory: {
         title: 'Painting',
         summary: '',
         extractions: [],
@@ -4745,10 +4558,10 @@ test('snapshot patch rejects session signals after extractions', () => {
 
 test('observer validation rejects snapshot content units without metadata', () => {
   assert.throws(
-    () => extractingTesting.validateExtractSessionMemoryResultForTests(
+    () => extractorLlmTesting.validateSessionExtractionResultForTests(
       snapshotContentFixture('### Title\nPainting\n\n### Summary\nMelanie painted a lake sunrise in 2022.'),
       {
-        sessionMemoryContent: {
+        sessionMemory: {
           title: 'Painting',
           summary: '',
           extractions: [],
@@ -4764,10 +4577,10 @@ test('observer validation rejects snapshot content units without metadata', () =
 
 test('observer validation rejects legacy snapshot content format', () => {
   assert.throws(
-    () => extractingTesting.validateExtractSessionMemoryResultForTests(
+    () => extractorLlmTesting.validateSessionExtractionResultForTests(
       snapshotContentFixture('<!-- categories: [Fact]; refs: [turn:13] -->\n[Entity] Melanie\n[Extraction] Melanie painted a lake sunrise in 2022.'),
       {
-        sessionMemoryContent: {
+        sessionMemory: {
           title: 'Painting',
           summary: '',
           extractions: [],
@@ -4783,10 +4596,10 @@ test('observer validation rejects legacy snapshot content format', () => {
 
 test('observer validation rejects snapshot content units without title', () => {
   assert.throws(
-    () => extractingTesting.validateExtractSessionMemoryResultForTests(
+    () => extractorLlmTesting.validateSessionExtractionResultForTests(
       snapshotContentFixture('<!-- refs: [turn:13] -->\n### Summary\nMelanie painted a lake sunrise in 2022.'),
       {
-        sessionMemoryContent: {
+        sessionMemory: {
           title: 'Painting',
           summary: '',
           extractions: [],
@@ -4802,10 +4615,10 @@ test('observer validation rejects snapshot content units without title', () => {
 
 test('observer validation rejects unknown snapshot content refs', () => {
   assert.throws(
-    () => extractingTesting.validateExtractSessionMemoryResultForTests(
+    () => extractorLlmTesting.validateSessionExtractionResultForTests(
       snapshotContentFixture('<!-- refs: [session:missing] -->\n### Title\nPainting\n\n### Summary\nMelanie painted a lake sunrise in 2022.'),
       {
-        sessionMemoryContent: {
+        sessionMemory: {
           title: 'Painting',
           summary: '',
           extractions: [],
@@ -4821,10 +4634,10 @@ test('observer validation rejects unknown snapshot content refs', () => {
 
 test('observer validation rejects snapshot content units without refs metadata', () => {
   assert.throws(
-    () => extractingTesting.validateExtractSessionMemoryResultForTests(
+    () => extractorLlmTesting.validateSessionExtractionResultForTests(
       snapshotContentFixture('<!-- refs: [] -->\n### Title\nPainting\n\n### Summary\nMelanie painted a lake sunrise in 2022.'),
       {
-        sessionMemoryContent: {
+        sessionMemory: {
           title: 'Painting',
           summary: '',
           extractions: [],
@@ -4840,7 +4653,7 @@ test('observer validation rejects snapshot content units without refs metadata',
 
 test('observer validation rejects JSON output', () => {
   assert.throws(
-    () => extractingTesting.validateExtractSessionMemoryResultForTests(JSON.stringify({
+    () => extractorLlmTesting.validateSessionExtractionResultForTests(JSON.stringify({
       title: 'Painting',
       snapshotContent: '<!-- refs: [turn:13] -->\n### Title\nPainting\n\n### Summary\nMelanie painted a lake sunrise.',
       openQuestions: [],
@@ -4852,12 +4665,12 @@ test('observer validation rejects JSON output', () => {
 });
 
 test('observer validation accepts long titles without runtime length rejection', () => {
-  const result = extractingTesting.validateExtractSessionMemoryResultForTests(
+  const result = extractorLlmTesting.validateSessionExtractionResultForTests(
     snapshotContentFixture(
       `<!-- refs: [turn:13] -->\n### Title\n${'x'.repeat(81)}\n\n### Summary\nMelanie painted a lake sunrise in 2022.`,
     ),
     {
-      sessionMemoryContent: { title: 'Painting', summary: '', extractions: [], openQuestions: [], nextSteps: [] },
+      sessionMemory: { title: 'Painting', summary: '', extractions: [], openQuestions: [], nextSteps: [] },
       turns: [{ turnId: 'turn:13', summary: 'Melanie discussed painting.' }],
     },
   );
@@ -4866,10 +4679,10 @@ test('observer validation accepts long titles without runtime length rejection',
 
 test('observer validation rejects snapshot content units without summary', () => {
   assert.throws(
-    () => extractingTesting.validateExtractSessionMemoryResultForTests(
+    () => extractorLlmTesting.validateSessionExtractionResultForTests(
       snapshotContentFixture('<!-- refs: [turn:13] -->\n### Title\nPainting'),
       {
-        sessionMemoryContent: {
+        sessionMemory: {
           title: 'Painting',
           summary: '',
           extractions: [],
@@ -4896,8 +4709,8 @@ test('thread session get_extraction expands visible extraction sequences only', 
   });
 
   const requests = [];
-  const result = await extractingModule.extractSessionMemory({
-    sessionMemoryContent: {
+  const result = await extractorLlmModule.extractSessionMemory({
+    sessionMemory: {
       title: 'Caroline support group',
       summary: 'Caroline discussed a support group.',
       snapshotContent: [
@@ -5015,8 +4828,8 @@ test('thread session can create unrelated extraction without get_extraction', as
   await writeOpenAiObserverConfig(configPath);
 
   const requests = [];
-  const result = await extractingModule.extractSessionMemory({
-    sessionMemoryContent: {
+  const result = await extractorLlmModule.extractSessionMemory({
+    sessionMemory: {
       title: 'Caroline support group',
       summary: 'Caroline discussed a support group.',
       snapshotContent: [
@@ -5085,8 +4898,8 @@ test('thread session requires get_extraction before updating an existing sequenc
   });
 
   const requests = [];
-  const result = await extractingModule.extractSessionMemory({
-    sessionMemoryContent: {
+  const result = await extractorLlmModule.extractSessionMemory({
+    sessionMemory: {
       title: 'Caroline support group',
       summary: 'Caroline discussed a support group.',
       snapshotContent: '',
@@ -5163,8 +4976,8 @@ test('thread session allows at most five get_extraction calls', async (t) => {
 
   let calls = 0;
   await assert.rejects(
-    extractingModule.extractSessionMemory({
-      sessionMemoryContent: {
+    extractorLlmModule.extractSessionMemory({
+      sessionMemory: {
         title: 'Caroline support group',
         summary: 'Caroline discussed a support group.',
         extractions: [{
@@ -5209,8 +5022,8 @@ test('thread session omits generated default session title from memory input', a
   await writeOpenAiObserverConfig(configPath);
 
   const requests = [];
-  await extractingModule.extractSessionMemory({
-    sessionMemoryContent: {
+  await extractorLlmModule.extractSessionMemory({
+    sessionMemory: {
       title: 'Session group-a',
       summary: 'Default session memory thread for session group-a.',
       snapshotContent: '',
@@ -5258,8 +5071,8 @@ test('thread session traces invalid markdown attempts without JSON retry instruc
   });
 
   const requests = [];
-  const result = await extractingModule.extractSessionMemory({
-    sessionMemoryContent: {
+  const result = await extractorLlmModule.extractSessionMemory({
+    sessionMemory: {
       title: 'Caroline support group',
       summary: '',
       extractions: [],
@@ -5322,8 +5135,8 @@ test('thread session omits default session summary from memory input', async (t)
   await writeOpenAiObserverConfig(configPath);
 
   const requests = [];
-  await extractingModule.extractSessionMemory({
-    sessionMemoryContent: {
+  await extractorLlmModule.extractSessionMemory({
+    sessionMemory: {
       title: 'Session locomo',
       summary: 'Default session thread for session locomo:conv-26:session_1.',
       extractions: [],
@@ -5370,8 +5183,8 @@ test('thread session inlines chat memory categories', async (t) => {
   await writeOpenAiObserverConfig(configPath);
 
   const requests = [];
-  await extractingModule.extractSessionMemory({
-    sessionMemoryContent: {
+  await extractorLlmModule.extractSessionMemory({
+    sessionMemory: {
       title: 'Caroline support group',
       summary: 'Caroline discussed a support group.',
       extractions: [],
@@ -5414,7 +5227,7 @@ test('thread session inlines chat memory categories', async (t) => {
 });
 
 test('session snapshots keep complete cumulative context refs', () => {
-  const thread = createSessionMemoryThread(
+  const thread = createSessionThread(
     'default-observer',
     'Career',
     'Career thread',
@@ -5470,7 +5283,7 @@ test('session snapshots keep complete cumulative context refs', () => {
 });
 
 test('session context refs update duplicate turn summaries without duplicates', () => {
-  const thread = createSessionMemoryThread(
+  const thread = createSessionThread(
     'default-observer',
     'Career',
     'Career thread',
@@ -5510,7 +5323,7 @@ test('session context refs update duplicate turn summaries without duplicates', 
 });
 
 test('session snapshot persists markdown content with parsed title and summary', () => {
-  const thread = createSessionMemoryThread(
+  const thread = createSessionThread(
     'default-observer',
     'Draft title',
     'Draft summary',
@@ -5562,7 +5375,7 @@ test('session snapshot persists markdown content with parsed title and summary',
 
 test('extractSessionThread passes raw turns to observer', async () => {
   const now = '2026-01-01T00:00:00.000Z';
-  const thread = createSessionMemoryThread(
+  const thread = createSessionThread(
     'default-observer',
     'Session locomo',
     'Default session thread for session locomo.',
@@ -5574,7 +5387,7 @@ test('extractSessionThread passes raw turns to observer', async () => {
     { agent: 'Melanie', project: 'locomo', cwd: '/workspace/locomo' },
   );
   const extractionInputs = [];
-  const extractSessionMemoryImpl = async (input) => {
+  const sessionExtractionImpl = async (input) => {
     extractionInputs.push(input);
     return {
       title: 'Painting',
@@ -5613,21 +5426,18 @@ test('extractSessionThread passes raw turns to observer', async () => {
       cwd: '/workspace/locomo',
       agent: 'Melanie',
       observer: 'default-observer',
-      title: null,
-      summary: 'DATE: 1:56 pm on 8 May, 2023\nDIALOGUE:\nMelanie said: "Yeah, I painted that lake sunrise last year!"',
       prompt: 'DATE: 1:56 pm on 8 May, 2023\nDIALOGUE:\nMelanie said: "Yeah, I painted that lake sunrise last year!"',
       response: '[imported dialogue event; no assistant response]',
       extractionEpoch: 2,
     }],
     extractionEpoch: 2,
-    extractSessionMemoryImpl,
+    sessionExtractionImpl,
   });
 
   assert.deepEqual(extractionInputs[0].turns, [{
     turnId: 'turn:13',
     prompt: 'DATE: 1:56 pm on 8 May, 2023\nDIALOGUE:\nMelanie said: "Yeah, I painted that lake sunrise last year!"',
     response: '[imported dialogue event; no assistant response]',
-    summary: 'DATE: 1:56 pm on 8 May, 2023\nDIALOGUE:\nMelanie said: "Yeah, I painted that lake sunrise last year!"',
   }]);
   assert.deepEqual(thread.snapshots.at(-1).contextRefs, [{
     turnId: 'turn:13',
@@ -5635,70 +5445,9 @@ test('extractSessionThread passes raw turns to observer', async () => {
   }]);
 });
 
-test('gateway input includes thread kind and prompt plus response turn text', () => {
-  const thread = createSessionMemoryThread(
-    'default-observer',
-    'Career',
-    'Career thread',
-    [],
-    1,
-    '2026-01-01T00:00:00.000Z',
-  );
-  thread.snapshots.push({
-    project: 'locomo',
-    cwd: '/workspace/locomo',
-    agent: 'Melanie',
-    snapshotContent: '',
-    extractions: [],
-    contextRefs: [
-      { turnId: 'turn:10', summary: 'Caroline attended a LGBTQ support group.' },
-      { turnId: 'turn:11', summary: 'Caroline is considering counseling work.' },
-      { turnId: 'turn:12', summary: 'Melanie encouraged Caroline to pursue counseling.' },
-    ],
-    openQuestions: [],
-    nextSteps: [],
-    extractionChanges: [],
-  });
-
-  const turns = sessionGatewayTesting.gatewayTurnsForTests([{
-    turnId: 'turn:12',
-    createdAt: '2026-01-01T00:00:00.000Z',
-    updatedAt: '2026-01-01T00:00:00.000Z',
-    sessionId: 'locomo',
-    agent: 'Melanie',
-    observer: 'default-observer',
-    summary: 'Melanie encouraged Caroline.',
-    prompt: 'Melanie encouraged Caroline.',
-    response: 'placeholder',
-    extractionEpoch: 2,
-    previousTurnSummary: 'Caroline said she is keen on counseling or mental health.',
-  }]);
-  assert.deepEqual(turns[0], {
-    turnId: 'turn:12',
-    text: 'Prompt:\nMelanie encouraged Caroline.\n\nResponse:\nplaceholder',
-  });
-
-  const responseOnlyTurns = sessionGatewayTesting.gatewayTurnsForTests([{
-    turnId: 'turn:13',
-    createdAt: '2026-01-01T00:00:00.000Z',
-    updatedAt: '2026-01-01T00:00:00.000Z',
-    sessionId: 'locomo',
-    agent: 'Melanie',
-    observer: 'default-observer',
-    summary: 'Melanie talked about camping.',
-    prompt: 'Melanie talked about camping.',
-    response: 'Caroline researched adoption agencies.',
-    extractionEpoch: 2,
-  }]);
-  assert.equal(
-    responseOnlyTurns[0].text,
-    'Prompt:\nMelanie talked about camping.\n\nResponse:\nCaroline researched adoption agencies.',
-  );
-});
-
 test('extracted turns without extractor context refs are not persisted as references', async () => {
   const now = '2026-01-01T00:00:00.000Z';
-  const thread = createSessionMemoryThread(
+  const thread = createSessionThread(
     'default-observer',
     'Session locomo',
     'Default session thread for session locomo.',
@@ -5709,7 +5458,7 @@ test('extracted turns without extractor context refs are not persisted as refere
     'locomo',
     { agent: 'Melanie', project: 'locomo', cwd: '/workspace/locomo' },
   );
-  const extractSessionMemoryImpl = async () => ({
+  const sessionExtractionImpl = async () => ({
     title: 'Career',
     snapshotContent: '',
     extractions: [],
@@ -5736,7 +5485,7 @@ test('extracted turns without extractor context refs are not persisted as refere
       extractionEpoch: 2,
     }],
     extractionEpoch: 2,
-    extractSessionMemoryImpl,
+    sessionExtractionImpl,
   });
 
   assert.deepEqual(thread.snapshots.at(-1).contextRefs, []);
@@ -5745,7 +5494,7 @@ test('extracted turns without extractor context refs are not persisted as refere
 
 test('raw-turn session only updates the session thread', async () => {
   const now = '2026-01-01T00:00:00.000Z';
-  const thread = createSessionMemoryThread(
+  const thread = createSessionThread(
     'default-observer',
     'Session locomo',
     'Default session thread for session locomo.',
@@ -5758,7 +5507,7 @@ test('raw-turn session only updates the session thread', async () => {
   );
   const threads = [thread];
   const extractionInputs = [];
-  const extractSessionMemoryImpl = async (input) => {
+  const sessionExtractionImpl = async (input) => {
     extractionInputs.push(input);
     return {
       title: 'Melanie lake sunrise painting and creative outlet',
@@ -5804,7 +5553,7 @@ test('raw-turn session only updates the session thread', async () => {
       extractionEpoch: 2,
     }],
     extractionEpoch: 2,
-    extractSessionMemoryImpl,
+    sessionExtractionImpl,
   });
 
   assert.equal(threads.length, 1);
@@ -5827,10 +5576,10 @@ test('extractEpoch groups mixed session turns before session', async () => {
       },
     },
   };
-  const extractSessionMemoryImpl = async (input) => {
+  const sessionExtractionImpl = async (input) => {
     extractionInputs.push(input);
     return {
-      title: input.sessionMemoryContent.title,
+      title: input.sessionMemory.title,
       snapshotContent: '',
       extractions: [],
       openQuestions: [],
@@ -5855,7 +5604,7 @@ test('extractEpoch groups mixed session turns before session', async () => {
       epoch: 2,
       turns: [groupA1, groupB1, groupA2],
     },
-    extractSessionMemoryImpl,
+    sessionExtractionImpl,
   });
 
   assert.equal(extractionInputs.length, 2);
@@ -5877,10 +5626,10 @@ test('extractEpoch routes missing sessionId turns to default session thread', as
       })),
     },
   };
-  const extractSessionMemoryImpl = async (input) => {
+  const sessionExtractionImpl = async (input) => {
     extractionInputs.push(input);
     return {
-      title: input.sessionMemoryContent.title,
+      title: input.sessionMemory.title,
       snapshotContent: '',
       extractions: [],
       openQuestions: [],
@@ -5904,7 +5653,7 @@ test('extractEpoch routes missing sessionId turns to default session thread', as
         { ...makeExtractableTurn('turn:blank-1', 2, 'blank-1'), sessionId: '   ' },
       ],
     },
-    extractSessionMemoryImpl,
+    sessionExtractionImpl,
   });
 
   assert.equal(extractionInputs.length, 1);
@@ -5915,9 +5664,9 @@ test('extractEpoch routes missing sessionId turns to default session thread', as
 
 test('extractSessionThread rejects mixed session turns', async () => {
   const now = '2026-01-01T00:00:00.000Z';
-  const thread = createSessionMemoryThread('default-observer', 'Session group-a', 'Default session thread for session group-a.', [], 1, now, 'session', 'group-a');
-  const extractSessionMemoryImpl = async () => {
-    throw new Error('extractSessionMemoryImpl should not be called for mixed session turns');
+  const thread = createSessionThread('default-observer', 'Session group-a', 'Default session thread for session group-a.', [], 1, now, 'session', 'group-a');
+  const sessionExtractionImpl = async () => {
+    throw new Error('sessionExtractionImpl should not be called for mixed session turns');
   };
 
   await assert.rejects(
@@ -5928,13 +5677,13 @@ test('extractSessionThread rejects mixed session turns', async () => {
         { ...makeExtractableTurn('session:b1', 2, 'b1'), sessionId: 'group-b' },
       ],
       extractionEpoch: 2,
-      extractSessionMemoryImpl,
+      sessionExtractionImpl,
     }),
     /single session/i,
   );
 });
 
-test('buildTouchedIndex immediately advances extraction index for touched threads', async (t) => {
+test('indexTouchedExtractions immediately advances extraction index for touched threads', async (t) => {
   const { dir, homeDir, configPath } = await makeConfigHome();
   t.after(async () => rm(dir, { recursive: true, force: true }));
 
@@ -5989,7 +5738,7 @@ test('buildTouchedIndex immediately advances extraction index for touched thread
     updatedAt: '2024-01-01T00:00:00Z',
   }];
 
-  await indexTesting.buildTouchedIndex({
+  await indexTesting.indexTouchedExtractions({
     sessionTable: {
       update: async ({ snapshots }) => snapshots,
     },

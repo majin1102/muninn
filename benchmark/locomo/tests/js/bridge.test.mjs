@@ -7,7 +7,7 @@ import net from 'node:net';
 import http from 'node:http';
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
-import core from '../../../../server/dist/memory/index.js';
+import core from '../../../../server/dist/backend.js';
 
 const execFileAsync = promisify(execFile);
 const repoRoot = path.resolve(import.meta.dirname, '../../../..');

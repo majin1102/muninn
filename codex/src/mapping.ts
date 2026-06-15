@@ -1058,8 +1058,6 @@ export function toTurnContent(session: CodexSession, turn: CodexTurn, index: num
     turnSequence: index,
     createdAt: turn.promptTimestamp,
     updatedAt: turn.responseTimestamp,
-    // No title on imported turns — leave it empty for the observer/extractor to own.
-    summary: turnSummary(turn),
     prompt: turn.prompt,
     response: turn.response,
     events: turn.events,
@@ -1131,10 +1129,6 @@ export function displayTitleFromPrompt(prompt: string): string {
   const cleaned = prompt.replace(WRAPPER_TAGS, '');
   const line = cleaned.split(/\n/).map((value) => value.trim()).find((value) => value.length > 0) ?? cleaned.trim();
   return truncate(line, 80);
-}
-
-function turnSummary(turn: CodexTurn): string {
-  return truncate(`${turn.prompt.trim()}\n\n${turn.response.trim()}`, 1_000);
 }
 
 export type ProjectIdentity = {
