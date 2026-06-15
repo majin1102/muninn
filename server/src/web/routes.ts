@@ -340,6 +340,7 @@ function toTurnPreview(turn: AppSessionTurn): TurnPreview {
     memoryId: turn.turnId,
     createdAt: turn.createdAt,
     updatedAt: turn.updatedAt,
+    turnSequence: turn.turnSequence ?? undefined,
     title: turn.title ?? undefined,
     summary: turn.summary!,
     prompt: turn.prompt ?? undefined,

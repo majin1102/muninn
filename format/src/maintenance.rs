@@ -404,6 +404,7 @@ mod tests {
             created_at: now,
             updated_at: now,
             session_id: Some("group-a".to_string()),
+            turn_sequence: None,
             project: "test-project".to_string(),
             cwd: "/repo/test-project".to_string(),
             agent: "agent-a".to_string(),

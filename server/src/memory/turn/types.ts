@@ -1,7 +1,7 @@
 import type { Turn } from '../backend.js';
 import { normalizeSessionId } from './key.js';
 
-type TurnPayload = Turn & { session_id?: string | null };
+type TurnPayload = Turn & { session_id?: string | null; turn_sequence?: number | null };
 
 export function readTurn(turn: Turn): Turn {
   const payload = turn as TurnPayload;
@@ -11,6 +11,7 @@ export function readTurn(turn: Turn): Turn {
     createdAt: turn.createdAt,
     updatedAt: turn.updatedAt,
     sessionId: sessionId ?? null,
+    turnSequence: turn.turnSequence ?? payload.turn_sequence ?? null,
     project: turn.project,
     cwd: turn.cwd,
     agent: turn.agent,
@@ -34,6 +35,7 @@ export function serializeTurn(turn: Turn): Record<string, unknown> {
     createdAt: turn.createdAt,
     updatedAt: turn.updatedAt,
     session_id: sessionId ?? null,
+    turn_sequence: turn.turnSequence ?? null,
     project: turn.project,
     cwd: turn.cwd,
     agent: turn.agent,

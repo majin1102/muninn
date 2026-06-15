@@ -39,6 +39,12 @@ pub(crate) fn turns_to_record_batch(
             .map(|turn| turn.session_id.as_deref())
             .collect::<Vec<_>>(),
     );
+    let turn_sequence = Int64Array::from(
+        turns
+            .iter()
+            .map(|turn| turn.turn_sequence)
+            .collect::<Vec<_>>(),
+    );
     let agent = StringArray::from_iter_values(turns.iter().map(|turn| turn.agent.as_str()));
     let project = StringArray::from_iter_values(turns.iter().map(|turn| turn.project.as_str()));
     let cwd = StringArray::from_iter_values(turns.iter().map(|turn| turn.cwd.as_str()));
@@ -98,6 +104,7 @@ pub(crate) fn turns_to_record_batch(
             Arc::new(created_at),
             Arc::new(updated_at),
             Arc::new(session_ids),
+            Arc::new(turn_sequence),
             Arc::new(project),
             Arc::new(cwd),
             Arc::new(agent),
@@ -147,64 +154,69 @@ pub(crate) fn record_batch_to_turns_with_row_ids(
         .downcast_ref::<StringArray>()
         .unwrap();
     let project = batch
-        .column(3)
-        .as_any()
-        .downcast_ref::<StringArray>()
-        .unwrap();
-    let cwd = batch
         .column(4)
         .as_any()
         .downcast_ref::<StringArray>()
         .unwrap();
-    let agent = batch
+    let cwd = batch
         .column(5)
         .as_any()
         .downcast_ref::<StringArray>()
         .unwrap();
-    let observer = batch
+    let agent = batch
         .column(6)
         .as_any()
         .downcast_ref::<StringArray>()
         .unwrap();
-    let title = batch
+    let observer = batch
         .column(7)
         .as_any()
         .downcast_ref::<StringArray>()
         .unwrap();
-    let summary = batch
+    let title = batch
         .column(8)
         .as_any()
         .downcast_ref::<StringArray>()
         .unwrap();
-    let events_json = batch
+    let summary = batch
         .column(9)
         .as_any()
         .downcast_ref::<StringArray>()
         .unwrap();
-    let artifacts_json = batch
+    let events_json = batch
         .column(10)
         .as_any()
         .downcast_ref::<StringArray>()
         .unwrap();
-    let metadata_json = batch
+    let artifacts_json = batch
         .column(11)
         .as_any()
         .downcast_ref::<StringArray>()
         .unwrap();
-    let prompt = batch
+    let metadata_json = batch
         .column(12)
         .as_any()
         .downcast_ref::<StringArray>()
         .unwrap();
-    let response = batch
+    let prompt = batch
         .column(13)
         .as_any()
         .downcast_ref::<StringArray>()
         .unwrap();
-    let observing_epoch = batch
+    let response = batch
         .column(14)
         .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap();
+    let observing_epoch = batch
+        .column(15)
+        .as_any()
         .downcast_ref::<UInt64Array>()
+        .unwrap();
+    let turn_sequence = batch
+        .column(3)
+        .as_any()
+        .downcast_ref::<Int64Array>()
         .unwrap();
 
     let mut turns = Vec::with_capacity(batch.num_rows());
@@ -220,6 +232,7 @@ pub(crate) fn record_batch_to_turns_with_row_ids(
                 .single()
                 .unwrap(),
             session_id: optional_string(session_ids, index),
+            turn_sequence: optional_i64(turn_sequence, index),
             project: project.value(index).to_string(),
             cwd: cwd.value(index).to_string(),
             agent: agent.value(index).to_string(),
@@ -259,6 +272,10 @@ pub(crate) fn optional_string(array: &StringArray, index: usize) -> Option<Strin
 }
 
 pub(crate) fn optional_u64(array: &UInt64Array, index: usize) -> Option<u64> {
+    (!array.is_null(index)).then(|| array.value(index))
+}
+
+pub(crate) fn optional_i64(array: &Int64Array, index: usize) -> Option<i64> {
     (!array.is_null(index)).then(|| array.value(index))
 }
 
@@ -958,6 +975,7 @@ mod tests {
             created_at: Utc.timestamp_micros(1_000_000).single().unwrap(),
             updated_at: Utc.timestamp_micros(2_000_000).single().unwrap(),
             session_id: Some("session-1".to_string()),
+            turn_sequence: Some(7),
             project: "muninn".to_string(),
             cwd: "/repo/muninn".to_string(),
             agent: "agent".to_string(),
@@ -1021,6 +1039,17 @@ mod tests {
     }
 
     #[test]
+    fn turn_codec_roundtrips_turn_sequence() {
+        let batch = turns_to_record_batch(&[sample_turn()]).unwrap();
+        assert!(batch.schema().field_with_name("turn_sequence").is_ok());
+
+        let rows = record_batch_to_turns_with_row_ids(&batch, &[1]).unwrap();
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].turn_sequence, Some(7));
+    }
+
+    #[test]
     fn invalid_turn_events_json_returns_error() {
         let batch = turns_to_record_batch(&[sample_turn()]).unwrap();
         let columns = batch
@@ -1028,7 +1057,7 @@ mod tests {
             .iter()
             .enumerate()
             .map(|(index, column)| {
-                if index == 9 {
+                if index == 10 {
                     Arc::new(StringArray::from_iter_values(["not json"])) as Arc<dyn Array>
                 } else {
                     Arc::clone(column)

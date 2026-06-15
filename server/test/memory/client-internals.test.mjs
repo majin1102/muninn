@@ -37,7 +37,7 @@ const { __testing: extractingTesting } = extractingModule;
 const { __testing: sessionGatewayTesting } = sessionGatewayModule;
 const { createSessionMemoryThread, getPendingIndex, getPendingIndexUpTo, loadThreads, toSessionSnapshot } = threadModule;
 const { captureTurn, observer: observerApi, shutdownCoreForTests } = core;
-const CHECKPOINT_SCHEMA_VERSION = 8;
+const CHECKPOINT_SCHEMA_VERSION = 9;
 let defaultConfigDir = null;
 
 function createCheckpointBackend(exported = null) {
@@ -642,12 +642,13 @@ function makeExtractableTurn(turnId, extractionEpoch, text) {
   };
 }
 
-function makeRecentTurn(turnId, text = turnId) {
+function makeRecentTurn(turnId, text = turnId, overrides = {}) {
   return {
     turnId,
     updatedAt: '2024-01-01T00:00:00Z',
     prompt: `${text} prompt`,
     response: `${text} response`,
+    ...overrides,
   };
 }
 
@@ -3812,7 +3813,7 @@ test('session.accept serializes concurrent inserts for the same session', async 
   assert.equal(secondTurn.deduped, false);
 });
 
-test('session.accept dedupes against the recent three turns', async () => {
+test('session.accept dedupes turnSequence against the recent three turns', async () => {
   let nextTurnId = 1;
   const insertedTurns = new Map();
 
@@ -3837,20 +3838,54 @@ test('session.accept dedupes against the recent three turns', async () => {
   });
 
   const accepted = [];
-  for (const prompt of ['A', 'B', 'C']) {
-    accepted.push(await session.accept(makeTurnContent(prompt, `${prompt}-response`), 1));
+  for (const [index, prompt] of ['A', 'B', 'C'].entries()) {
+    accepted.push(await session.accept(makeTurnContent(prompt, `${prompt}-response`, { turnSequence: index }), 1));
   }
 
-  const duplicate = await session.accept(makeTurnContent('A', 'A-response'), 1);
+  const duplicate = await session.accept(makeTurnContent('changed A', 'changed A-response', { turnSequence: 0 }), 1);
   assert.equal(duplicate.deduped, true);
   assert.equal(duplicate.turn, null);
 
-  const fourth = await session.accept(makeTurnContent('D', 'D-response'), 1);
+  const fourth = await session.accept(makeTurnContent('D', 'D-response', { turnSequence: 3 }), 1);
   assert.equal(fourth.deduped, false);
 
-  const expiredDuplicate = await session.accept(makeTurnContent('A', 'A-response'), 1);
+  const expiredDuplicate = await session.accept(makeTurnContent('A', 'A-response', { turnSequence: 0 }), 1);
   assert.equal(expiredDuplicate.deduped, false);
   assert.notEqual(expiredDuplicate.turn.turnId, accepted[0].turn.turnId);
+});
+
+test('session.accept prefers turnSequence for recent duplicate detection', async () => {
+  let nextTurnId = 1;
+  const insertedTurns = new Map();
+
+  const session = new Session({
+    turnTable: {
+      insert: async ({ turns }) => turns.map((turn) => {
+        const persisted = {
+          ...turn,
+          turnId: `session:${nextTurnId++}`,
+        };
+        insertedTurns.set(persisted.turnId, persisted);
+        return persisted;
+      }),
+      getTurn: async (turnId) => insertedTurns.get(turnId) ?? null,
+    },
+  }, {
+    sessionId: 'group-a',
+    agent: 'agent-a',
+    observer: 'default-observer',
+    project: 'project-a',
+    cwd: '/workspace/project-a',
+  });
+
+  const first = await session.accept(makeTurnContent('A', 'A-response', { turnSequence: 1 }), 1);
+  const sequenceDuplicate = await session.accept(makeTurnContent('changed prompt', 'changed response', { turnSequence: 1 }), 1);
+  const sameTextDifferentSequence = await session.accept(makeTurnContent('A', 'A-response', { turnSequence: 2 }), 1);
+
+  assert.equal(first.deduped, false);
+  assert.equal(sequenceDuplicate.deduped, true);
+  assert.equal(sequenceDuplicate.turn, null);
+  assert.equal(sameTextDifferentSequence.deduped, false);
 });
 
 test('session.accept attaches recent three turns as transient extraction context', async () => {
@@ -3909,12 +3944,12 @@ test('session.accept drops stale recent turns before inserting a new turn', asyn
     project: 'project-a',
     cwd: '/workspace/project-a',
     recentTurns: [
-      makeRecentTurn('turn:stale-1', 'stale'),
-      makeRecentTurn('turn:stale-2', 'stale'),
+      makeRecentTurn('turn:stale-1', 'stale', { turnSequence: 7 }),
+      makeRecentTurn('turn:stale-2', 'stale', { turnSequence: 7 }),
     ],
   });
 
-  const accepted = await session.accept(makeTurnContent('stale prompt', 'stale response'), 1);
+  const accepted = await session.accept(makeTurnContent('stale prompt', 'stale response', { turnSequence: 7 }), 1);
 
   assert.equal(accepted.deduped, false);
   assert.equal(accepted.turn.turnId, 'turn:1');

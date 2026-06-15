@@ -120,6 +120,8 @@ pub struct Turn {
     pub updated_at: DateTime<Utc>,
     #[serde(rename = "session_id")]
     pub session_id: Option<String>,
+    #[serde(alias = "turn_sequence")]
+    pub turn_sequence: Option<i64>,
     pub project: String,
     pub cwd: String,
     pub agent: String,

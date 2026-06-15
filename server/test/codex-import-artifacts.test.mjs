@@ -423,7 +423,7 @@ test('session import fails when firstTurnSequence is zero', async () => {
       project,
       cwd,
       agent: 'codex',
-      metadata: { sourceTurnSequence: 0 },
+      turnSequence: 0,
       createdAt: '2026-06-13T01:01:00.000Z',
       updatedAt: '2026-06-13T01:02:00.000Z',
       prompt: 'already imported prompt',
@@ -556,7 +556,7 @@ test('session import allows later hook coverage and skips duplicate source turn'
       project,
       cwd,
       agent: 'codex',
-      metadata: { sourceTurnSequence: 2 },
+      turnSequence: 2,
       createdAt: '2026-06-13T02:05:00.000Z',
       updatedAt: '2026-06-13T02:06:00.000Z',
       prompt: 'third late prompt',
@@ -585,11 +585,11 @@ test('session import allows later hook coverage and skips duplicate source turn'
     assert.deepEqual(
       persisted
         .filter((turn) => turn.project === project)
-        .map((turn) => turn.metadata?.sourceTurnSequence)
+        .map((turn) => turn.turnSequence)
         .sort((left, right) => left - right),
       [0, 1, 2],
     );
-    assert.equal(persisted.filter((turn) => turn.project === project && turn.metadata?.sourceTurnSequence === 2).length, 1);
+    assert.equal(persisted.filter((turn) => turn.project === project && turn.turnSequence === 2).length, 1);
   } finally {
     await shutdownCoreForTests();
     if (previousHome === undefined) {

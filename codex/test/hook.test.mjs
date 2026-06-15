@@ -10,6 +10,7 @@ import { handleStop, isStopEvent } from '../dist/hook.js';
 import { readCodexSession, readCodexSessionSummary, resolveProjectIdentity } from '../dist/mapping.js';
 
 const execFileAsync = promisify(execFile);
+const LEGACY_SEQUENCE_KEY = 'source' + 'TurnSequence';
 
 // Minimal Codex rollout transcript: one turn with a tool call.
 const TRANSCRIPT_LINES = [
@@ -109,7 +110,8 @@ test('handleStop maps the latest transcript turn to TurnContent and captures it'
   assert.equal(turn.prompt, 'list the files');
   assert.equal(turn.response, 'There is one file: README.md');
   assert.equal(turn.metadata.ingest, 'codex-hook');
-  assert.equal(turn.metadata.sourceTurnSequence, 0);
+  assert.equal(turn.turnSequence, 0);
+  assert.equal(turn.metadata[LEGACY_SEQUENCE_KEY], undefined);
 
   assert.deepEqual(turn.events.map((event) => event.type), [
     'userMessage',
@@ -122,10 +124,10 @@ test('handleStop maps the latest transcript turn to TurnContent and captures it'
   assert.ok(marker, 'expected codex.import marker artifact');
   const markerContent = JSON.parse(marker.content);
   assert.equal(markerContent.marker, '019eabcd-codex-session#1');
-  assert.equal(markerContent.sourceTurnSequence, 0);
+  assert.equal(markerContent[LEGACY_SEQUENCE_KEY], undefined);
 });
 
-test('handleStop full parses once but captures only latest turn with source sequence', async () => {
+test('handleStop full parses once but captures only latest turn with turn sequence', async () => {
   const transcriptPath = await writeFixtureTranscriptWithTwoTurns();
   const { captured, client } = captureClient();
 
@@ -137,7 +139,7 @@ test('handleStop full parses once but captures only latest turn with source sequ
   assert.equal(ok, true);
   assert.equal(captured.length, 1);
   assert.equal(captured[0].turn.prompt, 'read the file');
-  assert.equal(captured[0].turn.metadata.sourceTurnSequence, 1);
+  assert.equal(captured[0].turn.turnSequence, 1);
 });
 
 test('handleStop uses transcript cache for appended turns', async () => {
@@ -155,9 +157,9 @@ test('handleStop uses transcript cache for appended turns', async () => {
   );
 
   assert.equal(captured.length, 2);
-  assert.equal(captured[0].turn.metadata.sourceTurnSequence, 1);
+  assert.equal(captured[0].turn.turnSequence, 1);
   assert.equal(captured[1].turn.prompt, 'summarize it');
-  assert.equal(captured[1].turn.metadata.sourceTurnSequence, 2);
+  assert.equal(captured[1].turn.turnSequence, 2);
 });
 
 test('handleStop returns false when transcript is missing', async () => {
@@ -193,7 +195,7 @@ test('handleStop resolves and caches multiple Codex transcript files independent
   assert.equal(await handleStop({ hook_event_name: 'Stop', session_id: 'codex-session-a' }, { client, sessionsRoot }), true);
 
   assert.equal(captured.length, 3);
-  assert.deepEqual(captured.map(({ turn }) => [turn.sessionId, turn.prompt, turn.metadata.sourceTurnSequence]), [
+  assert.deepEqual(captured.map(({ turn }) => [turn.sessionId, turn.prompt, turn.turnSequence]), [
     ['codex-session-b', 'beta second prompt', 1],
     ['codex-session-a', 'alpha first prompt', 0],
     ['codex-session-a', 'alpha second prompt', 1],

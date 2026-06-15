@@ -562,6 +562,7 @@ const TURN_CONTENT_FIELDS = new Set([
   'metadata',
   'createdAt',
   'updatedAt',
+  'turnSequence',
   'title',
   'summary',
   'events',
@@ -689,6 +690,13 @@ function validateTurn(turn: TurnContent | undefined): string | null {
     && (typeof turn.metadata !== 'object' || Array.isArray(turn.metadata))
   ) {
     return 'turn.metadata must be an object or null';
+  }
+
+  if (
+    turn.turnSequence !== undefined
+    && (!Number.isSafeInteger(turn.turnSequence) || turn.turnSequence < 0)
+  ) {
+    return 'turn.turnSequence must be a non-negative safe integer';
   }
 
   if (!hasTextContent(turn.prompt)) {
@@ -836,9 +844,10 @@ app.post('/api/v1/turn/capture/batch', async (c) => {
   if (capturedTurns > 0) {
     invalidateSessionTreeCache();
   }
+  const dedupedTurns = allowed.turns.length - capturedTurns;
   const response: CaptureTurnsResponse = {
     capturedTurns,
-    skippedTurns: allowed.skippedTurns,
+    skippedTurns: allowed.skippedTurns + dedupedTurns,
     requestId: generateRequestId(),
   };
   return c.json(response, 200);

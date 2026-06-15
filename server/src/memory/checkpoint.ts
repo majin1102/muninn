@@ -12,6 +12,7 @@ import type { Extraction } from './native.js';
 export type RecentTurn = {
   turnId: string;
   updatedAt: string;
+  turnSequence?: number;
   prompt: string;
   response: string;
 };
@@ -71,7 +72,7 @@ export type QueuedExtractionChange =
   | { type: 'delete'; extraction: Extraction };
 
 export type CheckpointContent = {
-  schemaVersion: 8;
+  schemaVersion: 9;
   extractor: ExtractorCheckpoint;
   observer: ObserverCheckpoint;
   sessionIndex: SessionIndexCheckpoint;
@@ -164,7 +165,7 @@ export function parseCheckpointFile(raw: string): CheckpointFile {
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
     throw new Error('checkpoint must be a JSON object');
   }
-  if (parsed.schemaVersion !== 8) {
+  if (parsed.schemaVersion !== 9) {
     throw new Error(`unsupported checkpoint schemaVersion: ${String(parsed.schemaVersion)}`);
   }
   const extractor = parseExtractorSection(parsed.extractor);
@@ -180,7 +181,7 @@ export function parseCheckpointFile(raw: string): CheckpointFile {
     throw new Error('checkpoint sessionIndex section is invalid');
   }
   return {
-    schemaVersion: 8,
+    schemaVersion: 9,
     writtenAt: typeof parsed.writtenAt === 'string' ? parsed.writtenAt : new Date(0).toISOString(),
     writerPid: typeof parsed.writerPid === 'number' ? parsed.writerPid : 0,
     extractor,
@@ -475,6 +476,7 @@ function parseRecentTurn(value: unknown): RecentTurn | null {
   if (
     typeof value.turnId !== 'string'
     || typeof value.updatedAt !== 'string'
+    || (value.turnSequence !== undefined && !isTurnSequence(value.turnSequence))
     || typeof value.prompt !== 'string'
     || typeof value.response !== 'string'
   ) {
@@ -483,9 +485,14 @@ function parseRecentTurn(value: unknown): RecentTurn | null {
   return {
     turnId: value.turnId,
     updatedAt: value.updatedAt,
+    ...(isTurnSequence(value.turnSequence) ? { turnSequence: value.turnSequence } : {}),
     prompt: value.prompt,
     response: value.response,
   };
+}
+
+function isTurnSequence(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
 }
 
 function parseThreads(value: unknown): ThreadRef[] | null {

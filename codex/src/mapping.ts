@@ -1043,12 +1043,10 @@ function stringFromUnknown(value: unknown): string | null {
 
 export function toTurnContent(session: CodexSession, turn: CodexTurn, index: number, options: ToTurnContentOptions = {}): TurnContent {
   const markerKey = options.markerKey ?? IMPORT_ARTIFACT_KEY;
-  const sourceTurnSequence = index;
   const metadata = {
     ingest: options.ingest ?? DEFAULT_INGEST,
     sourcePath: session.sourcePath,
     sourceSessionId: session.sessionId,
-    sourceTurnSequence,
     importedAt: new Date().toISOString(),
   };
   return {
@@ -1057,6 +1055,7 @@ export function toTurnContent(session: CodexSession, turn: CodexTurn, index: num
     cwd: session.cwd,
     agent: options.agent ?? CODEX_IMPORT_AGENT,
     metadata,
+    turnSequence: index,
     createdAt: turn.promptTimestamp,
     updatedAt: turn.responseTimestamp,
     // No title on imported turns — leave it empty for the observer/extractor to own.
@@ -1076,7 +1075,6 @@ export function toTurnContent(session: CodexSession, turn: CodexTurn, index: num
         source: session.sourcePath,
         sourcePath: session.sourcePath,
         sourceSessionId: session.sessionId,
-        sourceTurnSequence,
         importedAt: metadata.importedAt,
         cwd: session.cwd,
         timestamp: turn.responseTimestamp,

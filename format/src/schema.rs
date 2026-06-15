@@ -16,6 +16,7 @@ pub fn turn_schema() -> Schema {
             false,
         ),
         Field::new("session_id", DataType::Utf8, true),
+        Field::new("turn_sequence", DataType::Int64, true),
         Field::new("project", DataType::Utf8, false),
         Field::new("cwd", DataType::Utf8, false),
         Field::new("agent", DataType::Utf8, false),
@@ -258,6 +259,7 @@ mod tests {
         let schema = turn_schema();
         assert!(schema.field_with_name("project").is_ok());
         assert!(schema.field_with_name("cwd").is_ok());
+        assert!(schema.field_with_name("turn_sequence").is_ok());
         assert!(schema.field_with_name("metadata_json").is_ok());
         assert!(schema.field_with_name("events_json").is_ok());
         assert!(schema.field_with_name("tool_calls_json").is_err());

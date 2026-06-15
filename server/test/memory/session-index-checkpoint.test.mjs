@@ -5,7 +5,7 @@ import { parseCheckpointFile, serializeCheckpointFile } from '../../dist/memory/
 
 function checkpoint(overrides = {}) {
   return {
-    schemaVersion: 8,
+    schemaVersion: 9,
     writtenAt: '2026-06-02T00:00:00.000Z',
     writerPid: 123,
     extractor: {
@@ -43,7 +43,7 @@ function checkpoint(overrides = {}) {
 test('checkpoint parses and serializes sessionIndex entries', () => {
   const parsed = parseCheckpointFile(JSON.stringify(checkpoint()));
 
-  assert.equal(parsed.schemaVersion, 8);
+  assert.equal(parsed.schemaVersion, 9);
   assert.deepEqual(parsed.sessionIndex, {
     baseline: { turn: 10, session: 5 },
     entries: [

@@ -157,31 +157,32 @@ export async function importSelectedSessions(adapter: ImportAdapter, sourcePaths
   }
 
   const indexByIdentity = new Map((await sessions.index()).map((entry) => [SessionIdentityKey.sessionIdentityKey(entry), entry]));
-  const importablePaths: string[] = [];
+  const importablePaths: Array<{ sourcePath: string; firstTurnSequence?: number }> = [];
   for (const summary of selectedSummaries) {
     const entry = indexByIdentity.get(identityKey(adapter, summary));
     if (entry?.firstTurnSequence === 0) {
       failedSessions.push({ sourcePath: summary.sourcePath, errorMessage: 'session already imported' });
       continue;
     }
-    importablePaths.push(summary.sourcePath);
+    importablePaths.push({
+      sourcePath: summary.sourcePath,
+      firstTurnSequence: entry?.firstTurnSequence,
+    });
   }
 
   let importedSessions = 0;
   let importedTurns = 0;
   const enabledProjects = new Set<string>();
-  for (const sourcePath of importablePaths) {
+  for (const { sourcePath, firstTurnSequence } of importablePaths) {
     try {
       const session = await adapter.readSession(sourcePath, { artifactStore, artifactMode: 'copy' });
       if (!session || adapter.isExcluded?.(session)) {
         continue;
       }
-      let turnsForSession = 0;
       const seen = new Set<string>();
-      const existingSequences = await existingSourceSequences(adapter, session);
       const turnContents: TurnContent[] = [];
       for (const [index, turn] of session.turns.entries()) {
-        if (existingSequences.has(index)) {
+        if (firstTurnSequence !== undefined && index >= firstTurnSequence) {
           continue;
         }
         const marker = importMarker(session, index);
@@ -190,15 +191,14 @@ export async function importSelectedSessions(adapter: ImportAdapter, sourcePaths
         }
         turnContents.push(toTurnContent(session, turn, index, { agent: adapter.agent, ingest: adapter.ingest, markerKey: adapter.markerKey }));
         seen.add(marker);
-        existingSequences.add(index);
-        turnsForSession += 1;
       }
+      let capturedTurns = 0;
       if (turnContents.length > 0) {
-        await captureTurns(turnContents);
+        capturedTurns = await captureTurns(turnContents);
       }
-      if (turnsForSession > 0) {
+      if (capturedTurns > 0) {
         importedSessions += 1;
-        importedTurns += turnsForSession;
+        importedTurns += capturedTurns;
         enabledProjects.add(session.project);
       }
     } catch (error) {
@@ -314,30 +314,6 @@ async function listAgentTurns(agent: string): Promise<ImportTurn[]> {
       return allTurns;
     }
   }
-}
-
-async function existingSourceSequences(adapter: ImportAdapter, session: Pick<SessionIdentity, 'project' | 'sessionId'>): Promise<Set<number>> {
-  const sequences = new Set<number>();
-  for (let offset = 0; ; offset += TURN_PAGE_SIZE) {
-    const page = await turns.list({
-      mode: { type: 'page', offset, limit: TURN_PAGE_SIZE },
-      agent: adapter.agent,
-      sessionId: session.sessionId,
-    });
-    for (const turn of page) {
-      if (turn.project !== session.project) {
-        continue;
-      }
-      const value = turn.metadata?.sourceTurnSequence;
-      if (typeof value === 'number' && Number.isInteger(value) && value >= 0) {
-        sequences.add(value);
-      }
-    }
-    if (page.length < TURN_PAGE_SIZE) {
-      break;
-    }
-  }
-  return sequences;
 }
 
 async function sessionsIndexForAgent(agent: string): Promise<Array<Awaited<ReturnType<typeof sessions.index>>[number]>> {

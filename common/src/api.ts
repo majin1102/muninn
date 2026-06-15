@@ -127,6 +127,7 @@ export interface TurnContent {
   metadata?: Record<string, unknown> | null;
   createdAt?: string;
   updatedAt?: string;
+  turnSequence?: number;
   title?: string;
   summary?: string;
   events: TurnEvent[];
@@ -178,6 +179,7 @@ export interface TurnPreview {
   memoryId: string;
   createdAt: string;
   updatedAt: string;
+  turnSequence?: number | null;
   title?: string;
   summary: string;
   prompt?: string;

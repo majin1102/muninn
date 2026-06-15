@@ -265,12 +265,10 @@ export async function readClaudeSession(
 
 export function toTurnContent(session: ClaudeSession, turn: ClaudeTurn, index: number, options: ToTurnContentOptions = {}): TurnContent {
   const markerKey = options.markerKey ?? CLAUDE_MARKER_KEY;
-  const sourceTurnSequence = index;
   const metadata = {
     ingest: options.ingest ?? 'claude-code-import',
     sourcePath: session.sourcePath,
     sourceSessionId: session.sessionId,
-    sourceTurnSequence,
     importedAt: new Date().toISOString(),
   };
   return {
@@ -279,6 +277,7 @@ export function toTurnContent(session: ClaudeSession, turn: ClaudeTurn, index: n
     cwd: session.cwd,
     agent: options.agent ?? CLAUDE_AGENT,
     metadata,
+    turnSequence: index,
     createdAt: turn.promptTimestamp,
     updatedAt: turn.responseTimestamp,
     summary: turnSummary(turn),
@@ -297,7 +296,6 @@ export function toTurnContent(session: ClaudeSession, turn: ClaudeTurn, index: n
         source: session.sourcePath,
         sourcePath: session.sourcePath,
         sourceSessionId: session.sessionId,
-        sourceTurnSequence,
         importedAt: metadata.importedAt,
         cwd: session.cwd,
         timestamp: turn.responseTimestamp,

@@ -44,6 +44,7 @@ export interface Turn {
   createdAt: string;
   updatedAt: string;
   sessionId?: string | null;
+  turnSequence?: number | null;
   project: string;
   cwd: string;
   agent: string;
@@ -468,7 +469,7 @@ export class MuninnBackend {
         runs: [],
       };
       return {
-        schemaVersion: 8,
+        schemaVersion: 9,
         extractor: extractorSection,
         observer: observerSection,
         sessionIndex: await this.sessionIndex.exportCheckpoint(this.client),
