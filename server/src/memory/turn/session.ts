@@ -177,7 +177,7 @@ async function buildTurn(
     prompt: content.prompt,
     response: content.response,
   };
-  if (isObservable(turn)) {
+  if (isExtractable(turn)) {
     turn.observingEpoch = observingEpoch;
   }
   return turn;
@@ -286,6 +286,6 @@ function decorateAcceptedTurn(
   };
 }
 
-export function isObservable(turn: Turn): boolean {
+function isExtractable(turn: Turn): boolean {
   return hasText(turn.response) && hasText(turn.summary);
 }
