@@ -12,7 +12,6 @@ const PROMPT_FILE_NAMES = {
   chat: 'chat',
   thread_observing: 'observer',
   thread_extracting: 'extractor',
-  extracting_gateway: 'extracting-gateway',
   memory_recaller: 'memory-recaller',
 } as const;
 

@@ -12,7 +12,7 @@ import type { SessionRegistry } from '../turn/registry.js';
 import { readTurn } from '../turn/types.js';
 import { EpochQueue, EpochSealedError, OpenEpoch, type SealedEpoch } from './epoch.js';
 import {
-  cloneSessionMemoryThreads,
+  cloneSessionThreads,
   getPendingIndex,
   getPendingIndexUpTo,
   isActiveThread,
@@ -20,7 +20,7 @@ import {
   replaySnapshots,
   threadFromSnapshots,
 } from './snapshot.js';
-import type { SessionMemoryThread } from './types.js';
+import type { SessionThread } from './snapshot.js';
 import { extractEpoch } from './session.js';
 import { buildExtraction, buildTouchedIndex } from './extraction-index.js';
 import { resolveDatabaseName } from '../config.js';
@@ -52,7 +52,7 @@ export class Extractor {
   private openEpoch!: OpenEpoch;
   private currentEpoch: SealedEpoch | null = null;
   private publishingEpochs: OpenEpoch[] = [];
-  private threads: SessionMemoryThread[] = [];
+  private threads: SessionThread[] = [];
   private nextIndexRetryAt?: number;
   private lastIndexError?: string;
   private pendingExtractionChanges: QueuedExtractionChange[] = [];
@@ -380,7 +380,7 @@ export class Extractor {
     }
 
     await this.checkpointLock.shared(async () => {
-      const threads = cloneSessionMemoryThreads(this.threads);
+      const threads = cloneSessionThreads(this.threads);
       const result = await extractEpoch({
         client: this.client,
         extractorName: this.name,
@@ -586,7 +586,7 @@ export class Extractor {
   }
 
   private async restore(): Promise<{
-    threads: SessionMemoryThread[];
+    threads: SessionThread[];
     committedEpoch?: number;
     pendingTurns: Turn[];
   } | null> {
@@ -623,20 +623,20 @@ export class Extractor {
 
   private async replayCheckpoint(
     section: ExtractorCheckpoint,
-    deltaRows: Array<import('./types.js').SessionSnapshot>,
+    deltaRows: Array<import('./snapshot.js').SessionSnapshot>,
     turnById: Map<string, Turn>,
   ): Promise<{
-    threads: SessionMemoryThread[];
+    threads: SessionThread[];
     observedTurnIds: Set<string>;
     committedEpoch?: number;
   } | null> {
-    const rowsById = new Map<string, Array<import('./types.js').SessionSnapshot>>();
+    const rowsById = new Map<string, Array<import('./snapshot.js').SessionSnapshot>>();
     for (const row of deltaRows) {
       const rows = rowsById.get(row.sessionId) ?? [];
       rows.push(row);
       rowsById.set(row.sessionId, rows);
     }
-    const restored: SessionMemoryThread[] = [];
+    const restored: SessionThread[] = [];
     const observedTurnIds = new Set<string>();
     let committedEpoch = section.committedEpoch;
     const turnCache = new Map(turnById);
@@ -726,7 +726,7 @@ export class Extractor {
         }
       }
       let previousRefs = new Set<string>();
-      let thread: SessionMemoryThread | null = null;
+      let thread: SessionThread | null = null;
       for (const row of prefixRows) {
         const newRefs = row.references.filter((reference) => !previousRefs.has(reference));
         if (newRefs.length === 0) {

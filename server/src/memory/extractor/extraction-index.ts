@@ -4,12 +4,12 @@ import { embedText } from '../llm/embedding-provider.js';
 import type { NativeTables, Extraction as StoredExtraction } from '../native.js';
 import type { QueuedExtractionChange } from '../checkpoint.js';
 import type {
-  Extraction,
+  ExtractionUnit,
   ExtractionChange,
-  ExtractSessionMemoryResult,
+  SessionExtractionResult,
   SnapshotContent,
-  SessionMemoryThread,
-} from './types.js';
+  SessionThread,
+} from './snapshot.js';
 import {
   getPendingIndex,
   snapshotRef,
@@ -17,14 +17,14 @@ import {
 } from './snapshot.js';
 
 export function applyExtractionChanges(
-  currentExtractions: Extraction[],
-  result: ExtractSessionMemoryResult,
+  currentExtractions: ExtractionUnit[],
+  result: SessionExtractionResult,
 ): {
   extractionChanges: ExtractionChange[];
-  extractions: Extraction[];
+  extractions: ExtractionUnit[];
 } {
-  const currentById = new Map<string, Extraction>();
-  const currentByUnitKey = new Map<string, Extraction>();
+  const currentById = new Map<string, ExtractionUnit>();
+  const currentByUnitKey = new Map<string, ExtractionUnit>();
   for (const row of currentExtractions) {
     const normalized = cloneExtraction(row, { requireReferences: false });
     if (!normalized.id) {
@@ -34,7 +34,7 @@ export function applyExtractionChanges(
     currentByUnitKey.set(extractionUnitKey(normalized), normalized);
   }
 
-  const nextExtractions: Extraction[] = [];
+  const nextExtractions: ExtractionUnit[] = [];
   const changes: ExtractionChange[] = [];
   const seenIds = new Set<string>();
 
@@ -176,7 +176,7 @@ export async function applyExtractionTableChanges(
   const storedById = new Map(storedUpserts.map((row) => [row.id, row]));
   const observationsById = new Map(
     snapshot.extractions
-      .filter((row): row is Extraction & { id: string } => Boolean(row.id))
+      .filter((row): row is ExtractionUnit & { id: string } => Boolean(row.id))
       .map((row) => [row.id, row]),
   );
   const rows: StoredExtraction[] = [];
@@ -228,7 +228,7 @@ export async function applyExtractionTableChanges(
 
 async function catchUpIndex(
   client: NativeTables,
-  thread: SessionMemoryThread,
+  thread: SessionThread,
   signal?: AbortSignal,
 ): Promise<QueuedExtractionChange[]> {
   const pending = getPendingIndex(thread);
@@ -280,7 +280,7 @@ async function catchUpIndex(
 
 export async function buildExtraction(
   client: NativeTables,
-  threads: SessionMemoryThread[],
+  threads: SessionThread[],
   signal?: AbortSignal,
 ): Promise<QueuedExtractionChange[]> {
   let firstError: unknown = null;
@@ -304,7 +304,7 @@ export async function buildExtraction(
 
 export async function buildTouchedIndex(
   client: NativeTables,
-  threads: SessionMemoryThread[],
+  threads: SessionThread[],
   touchedIds: Set<string>,
   signal?: AbortSignal,
 ): Promise<QueuedExtractionChange[]> {
@@ -375,9 +375,9 @@ function stableExtractionId(value: unknown): string {
 }
 
 function cloneExtraction(
-  row: Extraction,
+  row: ExtractionUnit,
   options: { requireReferences: boolean } = { requireReferences: true },
-): Extraction {
+): ExtractionUnit {
   const text = normalizeText(row.text);
   if (!text) {
     throw new Error('extraction text is required');
@@ -417,7 +417,7 @@ function normalizeContext(value: string | null): string | null {
   return trimmed || null;
 }
 
-function extractionUnitKey(row: Extraction): string {
+function extractionUnitKey(row: ExtractionUnit): string {
   return [
     normalizeText(row.title ?? ''),
     normalizeText(row.text),
@@ -425,18 +425,18 @@ function extractionUnitKey(row: Extraction): string {
   ].join('\u0002');
 }
 
-function extractionTitle(row: Extraction): string {
+function extractionTitle(row: ExtractionUnit): string {
   return normalizeText(row.title ?? '') || normalizeText(row.text).slice(0, 80);
 }
 
-function extractionSummary(title: string, row: Extraction): string {
+function extractionSummary(title: string, row: ExtractionUnit): string {
   return [
     title,
     row.text,
   ].filter(Boolean).join('\n\n');
 }
 
-function extractionContent(title: string, row: Extraction): string {
+function extractionContent(title: string, row: ExtractionUnit): string {
   return [
     '## Title',
     '',

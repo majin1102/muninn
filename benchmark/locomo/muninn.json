@@ -3,7 +3,6 @@
     "name": "locomo-extractor",
     "llmProvider": "locomo_llm",
     "embeddingProvider": "locomo_embedding",
-    "domainPrompt": "chat",
     "maxAttempts": 3
   },
   "observer": {

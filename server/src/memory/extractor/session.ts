@@ -6,37 +6,37 @@ import { applyExtractionChanges } from './extraction-index.js';
 import type { SealedEpoch } from './epoch.js';
 import {
   applyExtraction,
-  createSessionMemoryThread,
-  currentSessionMemoryContent,
+  createSessionThread,
+  currentSessionMemory,
   DEFAULT_SESSION_ID,
   isActiveThread,
   threadIdentityKey,
   toSessionSnapshot,
 } from './snapshot.js';
-import type { FragmentTurnInput, SessionMemoryThread, SessionSnapshot } from './types.js';
+import type { TurnInput, SessionThread, SessionSnapshot } from './snapshot.js';
 
-type ExtractSessionMemoryImpl = typeof extractSessionMemory;
+type SessionExtractionImpl = typeof extractSessionMemory;
 
 type ExtractSessionThreadParams = {
-  thread: SessionMemoryThread;
+  thread: SessionThread;
   pendingTurns: Turn[];
   extractionEpoch: number;
   signal?: AbortSignal;
   database?: string;
   memories?: Pick<Memories, 'get'>;
-  extractSessionMemoryImpl?: ExtractSessionMemoryImpl;
+  sessionExtractionImpl?: SessionExtractionImpl;
 };
 
 export async function extractEpoch(params: {
   client: NativeTables;
   extractorName: string;
   activeWindowDays: number;
-  threads: SessionMemoryThread[];
+  threads: SessionThread[];
   sealedEpoch: SealedEpoch;
   signal?: AbortSignal;
   database?: string;
-  extractSessionMemoryImpl?: ExtractSessionMemoryImpl;
-}): Promise<{ threads: SessionMemoryThread[]; touchedIds: Set<string> }> {
+  sessionExtractionImpl?: SessionExtractionImpl;
+}): Promise<{ threads: SessionThread[]; touchedIds: Set<string> }> {
   throwIfAborted(params.signal);
   ensureActiveThreads(
     params.threads,
@@ -58,7 +58,7 @@ export async function extractEpoch(params: {
       signal: params.signal,
       database: params.database,
       memories,
-      extractSessionMemoryImpl: params.extractSessionMemoryImpl,
+      sessionExtractionImpl: params.sessionExtractionImpl,
     });
     for (const touchedId of groupTouchedIds) {
       touchedIds.add(touchedId);
@@ -130,7 +130,7 @@ function ownershipForTurns(turns: Turn[]): { agent: string; project: string; cwd
 }
 
 function ensureActiveThreads(
-  threads: SessionMemoryThread[],
+  threads: SessionThread[],
   activeWindowDays: number,
 ): void {
   const activeThreads = threads.filter((thread) => isActiveThread(thread.updatedAt, activeWindowDays));
@@ -138,11 +138,11 @@ function ensureActiveThreads(
 }
 
 function getOrCreateSessionThread(
-  threads: SessionMemoryThread[],
+  threads: SessionThread[],
   extractorName: string,
   pendingTurns: Turn[],
   extractionEpoch: number,
-): SessionMemoryThread {
+): SessionThread {
   const sessionId = sessionIdForTurns(pendingTurns);
   const ownership = ownershipForTurns(pendingTurns);
   const existing = threads.find((thread) => (
@@ -160,7 +160,7 @@ function getOrCreateSessionThread(
   const summary = sessionId
     ? `Default session memory thread for session ${sessionId}.`
     : 'Default session memory thread for this session.';
-  const thread = createSessionMemoryThread(
+  const thread = createSessionThread(
     extractorName,
     title,
     summary,
@@ -182,7 +182,7 @@ async function extractSessionThread(params: ExtractSessionThreadParams): Promise
     extractionEpoch,
     signal,
     memories,
-    extractSessionMemoryImpl = extractSessionMemory,
+    sessionExtractionImpl = extractSessionMemory,
   } = params;
   throwIfAborted(signal);
   const touchedIds = new Set<string>();
@@ -193,7 +193,7 @@ async function extractSessionThread(params: ExtractSessionThreadParams): Promise
   }
 
   const now = new Date().toISOString();
-  const turns: FragmentTurnInput[] = pendingTurns.map((turn) => ({
+  const turns: TurnInput[] = pendingTurns.map((turn) => ({
     turnId: turn.turnId,
     prompt: turn.prompt,
     response: turn.response,
@@ -201,8 +201,8 @@ async function extractSessionThread(params: ExtractSessionThreadParams): Promise
   }));
   thread.updatedAt = now;
   thread.extractionEpoch = extractionEpoch;
-  const result = await extractSessionMemoryImpl({
-    sessionMemoryContent: currentSessionMemoryContent(thread),
+  const result = await sessionExtractionImpl({
+    sessionMemory: currentSessionMemory(thread),
     turns,
   }, signal, { memories, database: params.database });
   applyExtraction(thread, result, extractionEpoch, applyExtractionChanges);
@@ -212,7 +212,7 @@ async function extractSessionThread(params: ExtractSessionThreadParams): Promise
 
 async function flushThreads(
   client: NativeTables,
-  threads: SessionMemoryThread[],
+  threads: SessionThread[],
   touchedIds: Set<string>,
 ): Promise<void> {
   const touched = threads
@@ -229,7 +229,7 @@ async function flushThreads(
 }
 
 function updateThreadsFromRows(
-  threads: SessionMemoryThread[],
+  threads: SessionThread[],
   rows: SessionSnapshot[],
 ): void {
   const rowsById = new Map(rows.map((row) => [threadIdentityKey(row), row]));

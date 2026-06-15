@@ -3,7 +3,7 @@ import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
 
 import type { ListModeInput, SessionSnapshot, Turn } from './backend.js';
-import type { SessionSnapshot as SessionSnapshotPayload } from './extractor/types.js';
+import type { SessionSnapshot as SessionSnapshotPayload } from './extractor/snapshot.js';
 import type { RecallMode } from './config.js';
 
 type MaybePromise<T> = Promise<T> | T;

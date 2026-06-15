@@ -1,14 +1,137 @@
-import type {
-  ExtractSessionMemoryResult,
-  Extraction,
-  SessionMemoryContent,
-  SessionSnapshot,
-  SessionMemoryThread,
-  SessionMemoryThreadKind,
-  PendingIndex,
-  ContextRef,
-  SnapshotContent,
-} from './types.js';
+export type ExtractionUnit = {
+  id?: string | null;
+  title?: string | null;
+  text: string;
+  context?: string | null;
+  references: string[];
+  updatedMemory?: string | null;
+};
+
+export type ContextRef = {
+  turnId: string;
+  summary: string;
+};
+
+export type ExtractionChange =
+  | {
+    type: 'add';
+    text: string;
+    context?: string | null;
+    references: string[];
+    reason: string;
+  }
+  | {
+    type: 'merge';
+    extractionIds: string[];
+    text: string;
+    context?: string | null;
+    reason: string;
+  }
+  | {
+    type: 'update';
+    extractionId: string;
+    text: string;
+    context?: string | null;
+    references?: string[];
+    reason: string;
+  }
+  | {
+    type: 'delete';
+    extractionId: string;
+    reason: string;
+  };
+
+export type SnapshotContent = {
+  threadKind?: SessionThreadKind;
+  sessionId?: string | null;
+  project?: string;
+  cwd?: string;
+  agent?: string;
+  snapshotContent: string;
+  signals?: string;
+  extractions: ExtractionUnit[];
+  contextRefs: ContextRef[];
+  openQuestions?: string[];
+  nextSteps?: string[];
+  extractionChanges: ExtractionChange[];
+};
+
+export type SessionThreadKind = 'session' | 'subject';
+
+export type SessionThread = {
+  threadId: string;
+  kind: SessionThreadKind;
+  sessionId?: string | null;
+  project: string;
+  cwd: string;
+  agent: string;
+  snapshotId?: string;
+  snapshotIds: string[];
+  snapshotEpochs?: number[];
+  extractionEpoch: number;
+  title: string;
+  summary: string;
+  snapshots: SnapshotContent[];
+  references: string[];
+  indexedSnapshotSequence?: number | null;
+  observer: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type SessionSnapshot = {
+  snapshotId: string;
+  sessionId: string;
+  project: string;
+  cwd: string;
+  agent: string;
+  snapshotSequence: number;
+  createdAt: string;
+  updatedAt: string;
+  extractor: string;
+  title: string;
+  summary: string;
+  content: string;
+  references: string[];
+};
+
+export type PendingIndex = {
+  start: number;
+  end: number;
+};
+
+export type TurnInput = {
+  turnId: string;
+  prompt?: string | null;
+  response?: string | null;
+  summary?: string | null;
+};
+
+export type SessionMemory = {
+  title: string;
+  summary: string;
+  signals?: string;
+  snapshotContent?: string;
+  extractions: ExtractionUnit[];
+  openQuestions: string[];
+  nextSteps: string[];
+};
+
+export type SessionExtractionInput = {
+  sessionMemory: SessionMemory;
+  turns: TurnInput[];
+};
+
+export type SessionExtractionResult = {
+  title: string;
+  summary: string;
+  signals: string;
+  snapshotContent: string;
+  extractions: ExtractionUnit[];
+  openQuestions: string[];
+  nextSteps: string[];
+  contextRefs: ContextRef[];
+};
 
 const PENDING_SNAPSHOT_ID = 'session:18446744073709551615';
 export const DEFAULT_SESSION_ID = '__muninn_default_session__';
@@ -35,21 +158,21 @@ function threadKey(value: {
   return `${value.agent}\0${value.project}\0${value.cwd}\0${value.sessionId}`;
 }
 
-export function createSessionMemoryThread(
+export function createSessionThread(
   observer: string,
   title: string,
   summary: string,
   references: string[],
   extractionEpoch: number,
   now = new Date().toISOString(),
-  kind: SessionMemoryThreadKind = 'subject',
+  kind: SessionThreadKind = 'subject',
   sessionId: string | null = null,
   ownership: { agent: string; project: string; cwd: string } = {
     agent: 'unknown',
     project: 'default',
     cwd: process.cwd(),
   },
-): SessionMemoryThread {
+): SessionThread {
   const threadSessionId = sessionId ?? 'default';
   return {
     threadId: threadSessionId,
@@ -71,7 +194,7 @@ export function createSessionMemoryThread(
   };
 }
 
-export function cloneSessionMemoryThread(thread: SessionMemoryThread): SessionMemoryThread {
+export function cloneSessionThread(thread: SessionThread): SessionThread {
   return {
     ...thread,
     kind: thread.kind,
@@ -104,8 +227,8 @@ export function cloneSessionMemoryThread(thread: SessionMemoryThread): SessionMe
   };
 }
 
-export function cloneSessionMemoryThreads(threads: SessionMemoryThread[]): SessionMemoryThread[] {
-  return threads.map(cloneSessionMemoryThread);
+export function cloneSessionThreads(threads: SessionThread[]): SessionThread[] {
+  return threads.map(cloneSessionThread);
 }
 
 export function loadThreads(
@@ -113,7 +236,7 @@ export function loadThreads(
   observer: string,
   activeWindowDays: number,
   extractionEpoch = 0,
-): SessionMemoryThread[] {
+): SessionThread[] {
   const grouped = new Map<string, SessionSnapshot[]>();
   for (const snapshot of snapshots) {
     if (snapshot.extractor !== observer) {
@@ -134,7 +257,7 @@ export function threadFromSnapshots(
   rows: SessionSnapshot[],
   extractionEpoch = 0,
   indexedSnapshotSequence: number | null = null,
-): SessionMemoryThread {
+): SessionThread {
   const ordered = [...rows].sort((left, right) => (
     left.snapshotSequence - right.snapshotSequence
     || left.updatedAt.localeCompare(right.updatedAt)
@@ -167,7 +290,7 @@ export function threadFromSnapshots(
 }
 
 export function replaySnapshots(
-  thread: SessionMemoryThread,
+  thread: SessionThread,
   rows: SessionSnapshot[],
   extractionEpoch = thread.extractionEpoch,
 ): void {
@@ -200,7 +323,7 @@ export function replaySnapshots(
   }
 }
 
-export function currentSessionMemoryContent(thread: SessionMemoryThread): SessionMemoryContent {
+export function currentSessionMemory(thread: SessionThread): SessionMemory {
   const snapshot = latestSnapshot(thread) ?? emptySnapshot();
   return {
     title: thread.title,
@@ -214,13 +337,13 @@ export function currentSessionMemoryContent(thread: SessionMemoryThread): Sessio
 }
 
 export function applyExtraction(
-  thread: SessionMemoryThread,
-  result: ExtractSessionMemoryResult,
+  thread: SessionThread,
+  result: SessionExtractionResult,
   extractionEpoch: number,
   applyExtractionChanges: (
-    extractions: Extraction[],
-    result: ExtractSessionMemoryResult,
-  ) => { extractionChanges: SnapshotContent['extractionChanges']; extractions: Extraction[] },
+    extractions: ExtractionUnit[],
+    result: SessionExtractionResult,
+  ) => { extractionChanges: SnapshotContent['extractionChanges']; extractions: ExtractionUnit[] },
   now = new Date().toISOString(),
 ): void {
   const current = latestSnapshot(thread) ?? emptySnapshot();
@@ -251,14 +374,14 @@ export function applyExtraction(
   thread.updatedAt = now;
 }
 
-export function pushReference(thread: SessionMemoryThread, reference: string): void {
+export function pushReference(thread: SessionThread, reference: string): void {
   if (!thread.references.includes(reference)) {
     thread.references.push(reference);
     trimReferences(thread.references);
   }
 }
 
-export function toSessionSnapshot(thread: SessionMemoryThread): SessionSnapshot {
+export function toSessionSnapshot(thread: SessionThread): SessionSnapshot {
   if (thread.snapshots.length === 0) {
     throw new Error(`missing snapshots for session memory thread ${thread.threadId}`);
   }
@@ -280,11 +403,11 @@ export function toSessionSnapshot(thread: SessionMemoryThread): SessionSnapshot 
   };
 }
 
-export function latestSnapshot(thread: SessionMemoryThread): SnapshotContent | undefined {
+export function latestSnapshot(thread: SessionThread): SnapshotContent | undefined {
   return thread.snapshots[thread.snapshots.length - 1];
 }
 
-export function snapshotRef(thread: SessionMemoryThread, snapshotIndex: number): string {
+export function snapshotRef(thread: SessionThread, snapshotIndex: number): string {
   const snapshotId = thread.snapshotIds[snapshotIndex];
   if (!snapshotId) {
     throw new Error(`missing snapshot id for session memory thread ${thread.threadId} at sequence ${snapshotIndex}`);
@@ -302,7 +425,7 @@ export function threadIdentityKey(value: {
   return `${value.agent}\0${value.cwd}\0${value.sessionId ?? value.threadId ?? DEFAULT_SESSION_ID}`;
 }
 
-export function getPendingIndex(thread: SessionMemoryThread): PendingIndex | null {
+export function getPendingIndex(thread: SessionThread): PendingIndex | null {
   const latestSnapshotSequence = thread.snapshots.length - 1;
   if (latestSnapshotSequence < 0) {
     return null;
@@ -318,7 +441,7 @@ export function getPendingIndex(thread: SessionMemoryThread): PendingIndex | nul
 }
 
 export function getPendingIndexUpTo(
-  thread: SessionMemoryThread,
+  thread: SessionThread,
   maxEpoch: number,
 ): PendingIndex | null {
   const snapshotEpochs = thread.snapshotEpochs ?? [];
@@ -441,7 +564,7 @@ export type ParsedSnapshotContent = {
   signals: string;
   snapshotContent: string;
   extractionMarkdown: string;
-  extractions: Extraction[];
+  extractions: ExtractionUnit[];
 };
 
 export type ParsedSnapshotPatch = {
@@ -575,7 +698,7 @@ export function parseSnapshotPatch(
 export function parseSnapshotContentUnits(
   snapshotContent: string,
   validReferences: Set<string>,
-): Extraction[] {
+): ExtractionUnit[] {
   if (!snapshotContent.trim()) {
     return [];
   }
@@ -601,7 +724,7 @@ export function renderSnapshotContent(
   title: string,
   summary: string,
   signals: string,
-  extractions: Extraction[],
+  extractions: ExtractionUnit[],
 ): string {
   return [
     `# ${normalizeRequiredTitle(title)}`,
@@ -618,7 +741,7 @@ export function renderSnapshotContent(
 }
 
 export function renderExtractionBlock(
-  extraction: Extraction,
+  extraction: ExtractionUnit,
   options: { sequence?: number; includeRefs?: boolean } = {},
 ): string {
   const metadata = renderMetadata({

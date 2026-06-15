@@ -145,9 +145,6 @@ function generateMockText(request: LlmTextRequest): string {
     || extractLabeledValue(request.prompt, 'Final response:')
     || request.prompt.trim();
 
-  if (request.system.includes('routing gateway for a session memory extraction system')) {
-    return JSON.stringify({ sessionFragments: [] });
-  }
   if (request.system.includes('memory recall agent')) {
     const candidate = extractBlock(request.prompt, '[1]', '\n\n[2]')
       || extractBlock(request.prompt, 'Candidate memories:', 'Task:')
