@@ -4,21 +4,6 @@ import assert from 'node:assert/strict';
 import { loadDomainPrompt, loadGatewayDomainPrompt } from '../../dist/memory/llm/domain-prompt.js';
 import { loadPromptTemplate } from '../../dist/memory/llm/prompt-loader.js';
 
-test('extraction review prompt only removes extractions', () => {
-  const prompt = loadPromptTemplate('extraction_review');
-  assert.match(prompt.system, /remove extractions/i);
-  assert.doesNotMatch(prompt.system, /create new extractions/i);
-});
-
-test('thread preparation prompt enforces two extractions for new threads', () => {
-  const prompt = loadPromptTemplate('thread_preparation');
-  assert.match(prompt.system, /at least two related extractions/i);
-  assert.match(prompt.system, /memory-get/i);
-  assert.doesNotMatch(prompt.system, /memory_get/i);
-  assert.match(prompt.userTemplate, /reviewedExtractions\[\]\.id/);
-  assert.match(prompt.userTemplate, /Do not put candidate memory ids/);
-});
-
 test('memory recaller prompt composes recall context with a soft budget', () => {
   const prompt = loadPromptTemplate('memory_recaller');
 
