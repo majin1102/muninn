@@ -308,7 +308,7 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: s
 
 function setGatewayTraceFile(home: string, database: string): string {
   const logsDir = path.join(home, database, 'logs');
-  const gatewayTracePath = path.join(logsDir, 'locomo-session-gateway.jsonl');
+  const gatewayTracePath = path.join(logsDir, 'locomo-gateway-trace.jsonl');
   const observingTracePath = path.join(logsDir, 'locomo-thread-observing-trace.jsonl');
   const observerTracePath = path.join(logsDir, 'locomo-observer-trace.jsonl');
   process.env.MUNINN_OBSERVER_GATEWAY_TRACE_FILE = gatewayTracePath;
