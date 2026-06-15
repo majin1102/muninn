@@ -35,9 +35,10 @@ MUNINN_HOME=/tmp/muninn pnpm --filter @muninn/server start
 
 The server defaults to `http://127.0.0.1:8080` and serves the app at `/app/` when `web/dist` is available. Runtime data defaults to `~/.muninn` unless `MUNINN_HOME` is set.
 
-For the CLI path, build the CLI and run it from `dist`:
+For the CLI path, build the CLI install bins and run the CLI from `dist`:
 
 ```bash
+pnpm --filter @muninn/mcp build
 pnpm --filter @muninn/cli build
 node cli/dist/cli.js doctor
 node cli/dist/cli.js serve
