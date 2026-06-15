@@ -11,6 +11,7 @@ import type {
 } from './types.js';
 
 const PENDING_SNAPSHOT_ID = 'session:18446744073709551615';
+export const DEFAULT_SESSION_ID = '__muninn_default_session__';
 const MAX_REFERENCES = 1000;
 
 export function activeWindowMs(activeWindowDays: number): number {
@@ -289,6 +290,16 @@ export function snapshotRef(thread: SessionMemoryThread, snapshotIndex: number):
     throw new Error(`missing snapshot id for session memory thread ${thread.threadId} at sequence ${snapshotIndex}`);
   }
   return snapshotId;
+}
+
+export function threadIdentityKey(value: {
+  agent: string;
+  project: string;
+  cwd: string;
+  sessionId?: string | null;
+  threadId?: string;
+}): string {
+  return `${value.agent}\0${value.cwd}\0${value.sessionId ?? value.threadId ?? DEFAULT_SESSION_ID}`;
 }
 
 export function getPendingIndex(thread: SessionMemoryThread): PendingIndex | null {

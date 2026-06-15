@@ -13,8 +13,8 @@ import type {
 import {
   getPendingIndex,
   snapshotRef,
+  threadIdentityKey,
 } from './snapshot.js';
-import { threadIdentityKey } from './session.js';
 
 export function applyExtractionChanges(
   currentExtractions: Extraction[],

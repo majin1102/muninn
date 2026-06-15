@@ -8,13 +8,14 @@ import {
   applyExtraction,
   createSessionMemoryThread,
   currentSessionMemoryContent,
+  DEFAULT_SESSION_ID,
   isActiveThread,
+  threadIdentityKey,
   toSessionSnapshot,
 } from './snapshot.js';
 import type { FragmentTurnInput, SessionMemoryThread, SessionSnapshot } from './types.js';
 
 type ExtractSessionMemoryImpl = typeof extractSessionMemory;
-const DEFAULT_SESSION_ID = '__muninn_default_session__';
 
 type ExtractSessionThreadParams = {
   thread: SessionMemoryThread;
@@ -109,16 +110,6 @@ function sessionIdForTurns(turns: Turn[]): string {
 
 function turnGroupKey(turn: Turn, sessionId: string): string {
   return `${turn.agent}\0${turn.cwd}\0${sessionId}`;
-}
-
-export function threadIdentityKey(value: {
-  agent: string;
-  project: string;
-  cwd: string;
-  sessionId?: string | null;
-  threadId?: string;
-}): string {
-  return `${value.agent}\0${value.cwd}\0${value.sessionId ?? value.threadId ?? DEFAULT_SESSION_ID}`;
 }
 
 function ownershipForTurns(turns: Turn[]): { agent: string; project: string; cwd: string } {
