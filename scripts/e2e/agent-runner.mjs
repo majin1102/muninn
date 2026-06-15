@@ -56,21 +56,21 @@ async function runHook({ hookPath, payload, baseUrl, env }) {
 }
 
 async function importSession({ baseUrl, agent, sourcePath }) {
-  return requestJson(baseUrl, `/api/v1/ui/import/${agent}/sessions`, {
+  return requestJson(baseUrl, `/app/api/import/${agent}/sessions`, {
     method: 'POST',
     body: JSON.stringify({ sourcePaths: [sourcePath] }),
   });
 }
 
 async function deleteSession({ baseUrl, agent, sessionId }) {
-  return requestJson(baseUrl, `/api/v1/ui/import/${agent}/session`, {
+  return requestJson(baseUrl, `/app/api/import/${agent}/session`, {
     method: 'DELETE',
     body: JSON.stringify({ project: PROJECT_ID, sessionId }),
   });
 }
 
 async function deleteProject({ baseUrl, agent }) {
-  return requestJson(baseUrl, `/api/v1/ui/import/${agent}/project`, {
+  return requestJson(baseUrl, `/app/api/import/${agent}/project`, {
     method: 'DELETE',
     body: JSON.stringify({ project: PROJECT_ID }),
   });

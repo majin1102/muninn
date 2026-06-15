@@ -1,5 +1,5 @@
-import { planClaudeMcpJson, planClaudeSettings } from './claude_config.js';
-import { planCodexConfig } from './codex_config.js';
+import { planClaudeMcpJson, planClaudeSettings } from './claude-config.js';
+import { planCodexConfig } from './codex-config.js';
 import { applyChangePlan, readTextFileIfExists, type ApplyResult } from './files.js';
 import type { ChangePlan, InstallHost, InstallOptions } from './model.js';
 import { resolveHostPaths } from './paths.js';

@@ -128,8 +128,6 @@ export interface TurnContent {
   createdAt?: string;
   updatedAt?: string;
   turnSequence?: number;
-  title?: string;
-  summary?: string;
   events: TurnEvent[];
   artifacts?: Artifact[];
   prompt: string;
@@ -180,8 +178,7 @@ export interface TurnPreview {
   createdAt: string;
   updatedAt: string;
   turnSequence?: number | null;
-  title?: string;
-  summary: string;
+  preview: string;
   prompt?: string;
   response?: string;
   events?: TurnEvent[];

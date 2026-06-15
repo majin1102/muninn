@@ -7,7 +7,7 @@ import {
   type PipelineStatusFilter,
   type PipelineTaskFilter,
   type PipelineTimeFilter,
-} from '../lib/pipeline_model.js';
+} from '../lib/pipeline-model.js';
 import { asErrorMessage } from '../lib/utils.js';
 
 type PipelinesPageProps = {

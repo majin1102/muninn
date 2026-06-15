@@ -4,7 +4,7 @@ import test from 'node:test';
 import ts from 'typescript';
 
 test('right chat view opens around the selected turn and expands by direction', async () => {
-  const source = await readFile(new URL('../src/lib/chat_window.ts', import.meta.url), 'utf8');
+  const source = await readFile(new URL('../src/lib/chat-window.ts', import.meta.url), 'utf8');
   const compiled = ts.transpileModule(source, {
     compilerOptions: {
       module: ts.ModuleKind.ES2022,

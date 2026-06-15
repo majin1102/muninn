@@ -3,10 +3,10 @@ import { mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import core, { captureTurn, observer, turns } from '../dist/memory/index.js';
-import { __testing, previewCodexImport, runCodexImport } from '../dist/web/codex_import.js';
-import { codexAdapter } from '../dist/web/codex_import.js';
-import { importSelectedSessions } from '../dist/web/import_core.js';
+import core, { captureTurn, observer, turns } from '../dist/backend.js';
+import { __testing, previewCodexImport, runCodexImport } from '../dist/web/import.js';
+import { codexAdapter } from '../dist/web/import.js';
+import { importSelectedSessions } from '../dist/web/import.js';
 
 const { shutdownCoreForTests } = core;
 
@@ -1435,7 +1435,6 @@ test('run import replaces matching project agent session identity when raw sessi
       agent: 'codex',
       createdAt: '2026-06-12T01:00:00.000Z',
       updatedAt: '2026-06-12T01:01:00.000Z',
-      summary: 'old target',
       prompt: 'old target',
       response: 'old target',
       events: [
@@ -1451,7 +1450,6 @@ test('run import replaces matching project agent session identity when raw sessi
       agent: 'codex',
       createdAt: '2026-06-12T01:10:00.000Z',
       updatedAt: '2026-06-12T01:11:00.000Z',
-      summary: 'old target worktree',
       prompt: 'old target worktree',
       response: 'old target worktree',
       events: [
@@ -1467,7 +1465,6 @@ test('run import replaces matching project agent session identity when raw sessi
       agent: 'codex',
       createdAt: '2026-06-12T01:00:00.000Z',
       updatedAt: '2026-06-12T01:01:00.000Z',
-      summary: 'other project',
       prompt: 'other project',
       response: 'other project',
       events: [

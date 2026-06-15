@@ -4,9 +4,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { mkdtemp, mkdir, realpath, rm, writeFile } from 'node:fs/promises';
 
-import { resolveConfigPath } from '../dist/utils.js';
+import { resolveMuninnConfigPath } from '../dist/config.js';
 
-test('resolveConfigPath uses MUNINN_HOME/muninn.json when set', async (t) => {
+test('resolveMuninnConfigPath uses MUNINN_HOME/muninn.json when set', async (t) => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'muninn-config-home-'));
   const originalCwd = process.cwd();
   const originalHome = process.env.HOME;
@@ -30,10 +30,10 @@ test('resolveConfigPath uses MUNINN_HOME/muninn.json when set', async (t) => {
   process.env.MUNINN_HOME = muninnHome;
   process.env.HOME = path.join(dir, 'ignored-home');
 
-  assert.equal(await realpath(resolveConfigPath()), await realpath(configPath));
+  assert.equal(await realpath(resolveMuninnConfigPath()), await realpath(configPath));
 });
 
-test('resolveConfigPath falls back to HOME/.muninn/muninn.json when MUNINN_HOME is missing', async (t) => {
+test('resolveMuninnConfigPath falls back to HOME/.muninn/muninn.json when MUNINN_HOME is missing', async (t) => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'muninn-config-user-'));
   const originalCwd = process.cwd();
   const originalHome = process.env.HOME;
@@ -59,5 +59,5 @@ test('resolveConfigPath falls back to HOME/.muninn/muninn.json when MUNINN_HOME 
   process.env.HOME = path.join(dir, 'home');
   process.chdir(cwd);
 
-  assert.equal(await realpath(resolveConfigPath()), await realpath(userConfig));
+  assert.equal(await realpath(resolveMuninnConfigPath()), await realpath(userConfig));
 });

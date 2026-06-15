@@ -126,8 +126,6 @@ pub struct Turn {
     pub cwd: String,
     pub agent: String,
     pub observer: String,
-    pub title: Option<String>,
-    pub summary: Option<String>,
     pub events: Vec<TurnEvent>,
     pub artifacts: Option<Vec<Artifact>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -139,7 +137,7 @@ pub struct Turn {
 
 impl Turn {
     pub fn observable(&self) -> bool {
-        has_text_content(self.response.as_deref()) && has_text_content(self.summary.as_deref())
+        has_text_content(self.response.as_deref())
     }
 
     pub fn memory_id(&self) -> Result<MemoryId> {

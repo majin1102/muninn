@@ -1,8 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import sessionLabels from '../dist/web/session_labels.js';
-
-const { __testing } = sessionLabels;
+import { __testing } from '../dist/web/routes.js';
 
 test('uses a short display title instead of the internal project-prefixed session id', () => {
   assert.equal(__testing.sessionDisplayTitle('lance/https-github-com-lance-format-lance--019e5e34'), 'https-github-com-lance-format-lance');

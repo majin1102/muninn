@@ -30,7 +30,7 @@ export function artifactHref(artifact: Artifact): string {
     return '#';
   }
   if (artifact.uri.startsWith('artifact://')) {
-    return `/api/v1/artifacts/${encodeURIComponent(artifact.uri.slice('artifact://'.length))}`;
+    return `/app/artifacts/${encodeURIComponent(artifact.uri.slice('artifact://'.length))}`;
   }
   return artifact.uri;
 }

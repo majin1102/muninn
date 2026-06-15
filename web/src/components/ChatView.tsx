@@ -4,10 +4,10 @@ import remarkGfm from 'remark-gfm';
 import { Bot, CircleAlert, MessageSquare } from 'lucide-react';
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import userAvatarUrl from '../assets/user-avatar.png';
-import { logoForAgent, type AgentLogo } from '../lib/agent_logo.js';
+import { logoForAgent, type AgentLogo } from '../lib/agent-logo.js';
 import type { ProjectTurnNode } from '../lib/api.js';
-import { chatTimelineItems, type ChatTimelineItem } from '../lib/chat_timeline_items.js';
-import { CHAT_CONTEXT_STEP, INITIAL_CHAT_CONTEXT_RADIUS, chatTurnWindow } from '../lib/chat_window.js';
+import { chatTimelineItems, type ChatTimelineItem } from '../lib/chat-timeline-items.js';
+import { CHAT_CONTEXT_STEP, INITIAL_CHAT_CONTEXT_RADIUS, chatTurnWindow } from '../lib/chat-window.js';
 import { transcriptMessages, type TranscriptMessage } from '../lib/transcript.js';
 import { cn } from '../lib/utils.js';
 import {
@@ -16,7 +16,7 @@ import {
   type ChatMessage,
   type ChatTimelineEntry,
   type ChatToolCall,
-} from '../lib/chat_timeline.js';
+} from '../lib/chat-timeline.js';
 import { ArtifactList } from './ArtifactList.js';
 import { Avatar } from './ui/avatar.js';
 import { Button } from './ui/button.js';
@@ -345,8 +345,7 @@ function entriesFromTurns(turns: ProjectTurnNode[]): ChatTimelineEntry[] {
       updatedAt: turn.updatedAt,
       prompt: turn.prompt,
       response: turn.response,
-      title: turn.title,
-      summary: turn.summary,
+      preview: turn.preview,
       artifacts: turn.artifacts,
       toolCalls: turn.toolCalls,
     });

@@ -4,8 +4,8 @@ import test from 'node:test';
 import ts from 'typescript';
 
 async function loadSearchState() {
-  const identitySource = await readFile(new URL('../../common/src/session_identity.ts', import.meta.url), 'utf8');
-  const stateSource = await readFile(new URL('../src/lib/search_state.ts', import.meta.url), 'utf8');
+  const identitySource = await readFile(new URL('../../common/src/session-identity.ts', import.meta.url), 'utf8');
+  const stateSource = await readFile(new URL('../src/lib/search-state.ts', import.meta.url), 'utf8');
   const source = `${identitySource}\n${stateSource
     .replace("import * as SessionIdentity from '@muninn/common/session-identity';\n", '')
     .replaceAll('SessionIdentity.sessionIdentityKey', 'sessionIdentityKey')}`;

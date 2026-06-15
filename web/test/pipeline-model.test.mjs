@@ -4,7 +4,7 @@ import test from 'node:test';
 import ts from 'typescript';
 
 async function loadPipelineModel() {
-  const source = await readFile(new URL('../src/lib/pipeline_model.ts', import.meta.url), 'utf8');
+  const source = await readFile(new URL('../src/lib/pipeline-model.ts', import.meta.url), 'utf8');
   const compiled = ts.transpileModule(source, {
     compilerOptions: {
       module: ts.ModuleKind.ES2022,

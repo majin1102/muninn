@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 import { serve } from '@hono/node-server';
-import { app } from './routes.js';
+import { app } from './http.js';
 
-export { app } from './routes.js';
-export { probeNativeAddon } from './memory/native.js';
-export type { RecallMode } from './memory/index.js';
+export { app } from './http.js';
+export { probeNativeAddon } from './native.js';
+export type { RecallMode } from './backend.js';
 
 export type StartServerOptions = {
   host?: string;

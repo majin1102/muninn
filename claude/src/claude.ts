@@ -280,7 +280,6 @@ export function toTurnContent(session: ClaudeSession, turn: ClaudeTurn, index: n
     turnSequence: index,
     createdAt: turn.promptTimestamp,
     updatedAt: turn.responseTimestamp,
-    summary: turnSummary(turn),
     prompt: turn.prompt,
     response: turn.response,
     events: turn.events,
@@ -447,10 +446,6 @@ function displayTitleFromPrompt(prompt: string): string {
   const cleaned = prompt.replace(WRAPPER_TAGS, '');
   const line = cleaned.split(/\n/).map((value) => value.trim()).find((value) => value.length > 0) ?? cleaned.trim();
   return truncate(line, 80);
-}
-
-function turnSummary(turn: ClaudeTurn): string {
-  return truncate(`${turn.prompt.trim()}\n\n${turn.response.trim()}`, 1_000);
 }
 
 function isContextMessage(text: string): boolean {

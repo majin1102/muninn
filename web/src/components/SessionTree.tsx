@@ -1,7 +1,7 @@
 import { Bot, Check, ChevronDown, ChevronRight, Folder, MessageSquare, Plus, Search, X } from 'lucide-react';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { RefObject } from 'react';
-import { logoForAgent, type AgentLogo } from '../lib/agent_logo.js';
+import { logoForAgent, type AgentLogo } from '../lib/agent-logo.js';
 import type { ProjectNode, ProjectSegmentNode, ProjectSessionNode, ProjectTurnNode } from '../lib/api.js';
 import * as SessionIdentity from '@muninn/common/session-identity';
 import { formatRelativeTime, formatTimestamp } from '../lib/utils.js';
@@ -582,8 +582,8 @@ function SessionTurnList({
 }
 
 function segmentTitle(item: ProjectSegmentNode | ProjectTurnNode): string {
-  return 'prompt' in item
-    ? item.prompt ?? item.title ?? item.summary ?? ''
+  return 'preview' in item
+    ? item.prompt ?? item.preview ?? ''
     : item.title ?? '';
 }
 

@@ -5,7 +5,7 @@ import {
   getCaptureConfigFromConfigForTests,
   isCanonicalProjectIdentity,
   validateMuninnConfigInput,
-} from '../../dist/memory/config.js';
+} from '../../dist/config.js';
 
 function makeConfig() {
   return {

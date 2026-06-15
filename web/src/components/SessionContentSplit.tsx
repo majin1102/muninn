@@ -3,7 +3,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { Artifact, MemoryDocument } from '@muninn/common';
 import { FileText } from 'lucide-react';
 import type { ProjectSessionNode, ProjectTurnNode } from '../lib/api.js';
-import { chatTurnWindow } from '../lib/chat_window.js';
+import { chatTurnWindow } from '../lib/chat-window.js';
 import {
   clampTimelineWidth,
   conversationLocatorTurnIds,
@@ -16,7 +16,7 @@ import {
   timelineItemForConversationWindow,
   toggleSessionTreeLayoutMode,
   type SessionContentMode,
-} from '../lib/session_content_state.js';
+} from '../lib/session-content-state.js';
 import { cn } from '../lib/utils.js';
 import { ArtifactList } from './ArtifactList.js';
 import { ChatView } from './ChatView.js';

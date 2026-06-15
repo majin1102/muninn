@@ -4,9 +4,9 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import { MuninnBackend } from '../../dist/memory/backend.js';
-import { readCheckpointFile, resolveCheckpointPath, serializeCheckpointFile } from '../../dist/memory/checkpoint.js';
-import { SessionIndex } from '../../dist/memory/session-index.js';
+import { MuninnBackend } from '../../dist/backend.js';
+import { readCheckpointFile, resolveCheckpointPath, serializeCheckpointFile } from '../../dist/checkpoint.js';
+import { SessionIndex } from '../../dist/session-index.js';
 
 function client({
   turns = [],
@@ -75,7 +75,7 @@ async function withTempMuninnHome(t) {
 
 function checkpoint(overrides = {}) {
   return {
-    schemaVersion: 9,
+    schemaVersion: 10,
     writtenAt: '2026-06-02T00:00:00.000Z',
     writerPid: 123,
     extractor: {
@@ -90,7 +90,6 @@ function checkpoint(overrides = {}) {
     observer: {
       baseline: { observationContext: 4, observation: 3 },
       observeQueue: { cwdBuckets: [] },
-      runs: [],
     },
     sessionIndex: {
       baseline: { turn: 10, session: 10 },
@@ -124,7 +123,7 @@ test('sessionIndex restores checkpoint and applies table deltas without full tur
       project: 'muninn',
       cwd: '/Users/Nathan/workspace/muninn',
       observer: 'default-observer',
-      summary: 'newer turn',
+      response: 'newer turn',
       updatedAt: '2026-06-02T11:00:00.000Z',
     }],
     sessionDelta: [{
@@ -182,7 +181,7 @@ test('sessionIndex rebuilds after dirty mark and drops removed sessions', async 
       project: 'muninn',
       cwd: '/Users/Nathan/workspace/muninn',
       observer: 'default-observer',
-      summary: 'live turn',
+      response: 'live turn',
       updatedAt: '2026-06-02T12:00:00.000Z',
     }],
     snapshots: [{
@@ -227,7 +226,7 @@ test('sessionIndex rebuild filters turns and snapshots by observer', async () =>
         project: 'muninn',
         cwd: '/Users/Nathan/workspace/muninn',
         observer: 'other-observer',
-        summary: 'wrong observer turn',
+        response: 'wrong observer turn',
         updatedAt: '2026-06-02T13:00:00.000Z',
       },
       {
@@ -236,7 +235,7 @@ test('sessionIndex rebuild filters turns and snapshots by observer', async () =>
         project: 'muninn',
         cwd: '/Users/Nathan/workspace/muninn',
         observer: 'default-observer',
-        summary: 'right observer turn',
+        response: 'right observer turn',
         updatedAt: '2026-06-02T12:00:00.000Z',
       },
     ],
@@ -305,7 +304,7 @@ test('sessionIndex rebuild reads every turn page', async () => {
       project: 'github.com/example/first',
       cwd: '/Users/Nathan/workspace/first',
       observer: 'default-observer',
-      summary: 'first page turn',
+      response: 'first page turn',
       updatedAt: '2026-06-02T10:00:00.000Z',
     }]],
     [1_000_000, [{
@@ -314,7 +313,7 @@ test('sessionIndex rebuild reads every turn page', async () => {
       project: 'github.com/example/second',
       cwd: '/Users/Nathan/workspace/second',
       observer: 'default-observer',
-      summary: 'second page turn',
+      response: 'second page turn',
       updatedAt: '2026-06-02T11:00:00.000Z',
     }]],
   ]);
@@ -357,7 +356,7 @@ test('sessionIndex groups entries by project agent and session id, not cwd', asy
         project: '/workspace/muninn',
         cwd: '/Users/Nathan/.codex/worktrees/aaaa/muninn',
         observer: 'default-observer',
-        summary: 'older worktree turn',
+        response: 'older worktree turn',
         updatedAt: '2026-06-02T10:00:00.000Z',
       },
       {
@@ -366,7 +365,7 @@ test('sessionIndex groups entries by project agent and session id, not cwd', asy
         project: '/workspace/muninn',
         cwd: '/Users/Nathan/.codex/worktrees/bbbb/muninn',
         observer: 'default-observer',
-        summary: 'newer worktree turn',
+        response: 'newer worktree turn',
         updatedAt: '2026-06-02T11:00:00.000Z',
       },
       {
@@ -375,7 +374,7 @@ test('sessionIndex groups entries by project agent and session id, not cwd', asy
         project: '/workspace/lance',
         cwd: '/Users/Nathan/workspace/lance',
         observer: 'default-observer',
-        summary: 'different project turn',
+        response: 'different project turn',
         updatedAt: '2026-06-02T12:00:00.000Z',
       },
     ],
@@ -427,7 +426,7 @@ test('sessionIndex records firstTurnSequence from turnSequence', async () => {
       project: 'github.com/example/repo',
       cwd: '/Users/Nathan/workspace/repo',
       observer: 'default-observer',
-      summary: 'late summary',
+      response: 'late summary',
       turnSequence: 17,
       updatedAt: '2026-06-02T10:00:00.000Z',
     }],
@@ -464,7 +463,7 @@ test('sessionIndex lowers firstTurnSequence when import fills history from zero'
       project: 'github.com/example/repo',
       cwd: '/Users/Nathan/workspace/repo',
       observer: 'default-observer',
-      summary: 'first summary',
+      response: 'first summary',
       turnSequence: 0,
       updatedAt: '2026-06-02T11:00:00.000Z',
     }],
@@ -505,7 +504,7 @@ test('backend refreshSessionIndex rebuilds stale checkpoint entries from current
     sessionVersion: 12,
   });
   const backend = MuninnBackend.createForTests(fake.tables, {
-    schemaVersion: 9,
+    schemaVersion: 10,
     writtenAt: '2026-06-02T00:00:00.000Z',
     writerPid: 123,
     extractor: {
@@ -520,7 +519,6 @@ test('backend refreshSessionIndex rebuilds stale checkpoint entries from current
     observer: {
       baseline: { observationContext: 0, observation: 0 },
       observeQueue: { cwdBuckets: [] },
-      runs: [],
     },
     sessionIndex: {
       baseline: { turn: 10, session: 10 },

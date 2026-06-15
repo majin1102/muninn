@@ -111,7 +111,7 @@ test('readClaudeSession parses one turn with tool events and an image artifact',
   assert.match(image.uri, /^artifact:\/\//);
 });
 
-test('toTurnContent for claude-code has no title and the claude marker', async () => {
+test('toTurnContent for claude-code includes the claude marker', async () => {
   const { file, artifactStore } = await writeFixture();
   const session = await readClaudeSession(file, { artifactStore, artifactMode: 'copy' });
   const turn = toTurnContent(session, session.turns[0], 0, {
@@ -121,7 +121,6 @@ test('toTurnContent for claude-code has no title and the claude marker', async (
   });
 
   assert.equal(turn.agent, 'claude-code');
-  assert.equal(turn.title, undefined);
   assert.equal(turn.turnSequence, 0);
   assert.equal(turn.metadata[LEGACY_SEQUENCE_KEY], undefined);
   const marker = turn.artifacts.find((artifact) => artifact.key === 'claudeImport');

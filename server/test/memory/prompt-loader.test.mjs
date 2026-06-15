@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { loadPromptTemplate } from '../../dist/memory/llm/prompt-loader.js';
+import { loadPromptTemplate } from '../../dist/llm/prompts.js';
 
 test('memory recaller prompt composes recall context with a soft budget', () => {
   const prompt = loadPromptTemplate('memory_recaller');

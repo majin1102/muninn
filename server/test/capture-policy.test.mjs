@@ -11,7 +11,7 @@ import {
   removeCapturePolicy,
   setAgentCaptureEnabled,
   setCaptureEnabled,
-} from '../dist/web/capture_policy.js';
+} from '../dist/api/capture.js';
 
 function baseConfig() {
   return {

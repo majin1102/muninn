@@ -409,8 +409,6 @@ mod tests {
             cwd: "/repo/test-project".to_string(),
             agent: "agent-a".to_string(),
             observer: "default-observer".to_string(),
-            title: None,
-            summary: Some("summary".to_string()),
             events: vec![],
             artifacts: None,
             metadata: None,

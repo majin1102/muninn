@@ -4,10 +4,10 @@ import {
   loadMuninnConfig,
   resolveDatabaseName,
   resolveStorageTarget,
-} from '../server/dist/memory/config.js';
-import { createNativeTables } from '../server/dist/memory/native.js';
-import { __testing as indexTesting } from '../server/dist/memory/extractor/extraction-index.js';
-import { __testing as sessionTesting } from '../server/dist/memory/extractor/session.js';
+} from '../server/dist/config.js';
+import { createNativeTables } from '../server/dist/native.js';
+import { __testing as indexTesting } from '../server/dist/pipeline/extraction.js';
+import { __testing as sessionTesting } from '../server/dist/pipeline/session.js';
 
 function usage() {
   return [
@@ -143,7 +143,7 @@ async function main() {
     }
     log(`touchedThreads=${touchedIds.size}`);
 
-    const extractionChanges = await indexTesting.buildTouchedIndex(tables, threads, touchedIds);
+    const extractionChanges = await indexTesting.indexTouchedExtractions(tables, threads, touchedIds);
     log(`extractionChanges=${extractionChanges.length}`);
 
     const sessionSnapshots = await tables.sessionTable.threadSnapshots(options.sessionId);

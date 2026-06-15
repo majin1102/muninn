@@ -41,7 +41,7 @@ import {
   getDemoSessionGroups,
   getDemoSessionTurns,
 } from '../demo/provider.js';
-import { projectDisplayLabel, projectDisplayLabels } from './project_display.js';
+import { projectDisplayLabel, projectDisplayLabels } from './project-display.js';
 import { sampleSettingsDraft, settingsDraftToJson } from './settings-model.js';
 import { trimTrailingSlash } from './utils.js';
 
@@ -215,12 +215,12 @@ export function createAppClient(apiBase: string, usesDemoData: boolean): AppClie
     async getProjects() {
       const agents = usesDemoData
         ? await getDemoSessionAgents()
-        : (await fetchJson<SessionAgentsResponse>('/api/v1/ui/session/agents')).agents;
+        : (await fetchJson<SessionAgentsResponse>('/app/api/session/agents')).agents;
       const projects = await projectTreeFromAgents(agents, async (agent) => {
         return usesDemoData
           ? await getDemoSessionGroups(agent)
           : (await fetchJson<SessionGroupsResponse>(
-            `/api/v1/ui/session/agents/${encodeURIComponent(agent)}/sessions`,
+            `/app/api/session/agents/${encodeURIComponent(agent)}/sessions`,
           )).sessions;
       });
       if (!usesDemoData) {
@@ -266,7 +266,7 @@ export function createAppClient(apiBase: string, usesDemoData: boolean): AppClie
       const response = usesDemoData
         ? await getDemoSessionTurns(session.agent, session.sessionKey, offset, 100)
         : await fetchJson<SessionTurnsResponse>(
-          `/api/v1/ui/session/agents/${encodeURIComponent(session.agent)}/sessions/${encodeURIComponent(session.sessionKey)}/turns?${params.toString()}`,
+          `/app/api/session/agents/${encodeURIComponent(session.agent)}/sessions/${encodeURIComponent(session.sessionKey)}/turns?${params.toString()}`,
         );
       return {
         turns: response.turns.map((turn) => ({
@@ -295,7 +295,7 @@ export function createAppClient(apiBase: string, usesDemoData: boolean): AppClie
         return getDemoDocument(memoryId);
       }
       const response = await fetchJson<MemoryDocumentResponse>(
-        `/api/v1/ui/memories/${encodeURIComponent(memoryId)}/document`,
+        `/app/api/memories/${encodeURIComponent(memoryId)}/document`,
       );
       return response.document;
     },
@@ -321,13 +321,13 @@ export function createAppClient(apiBase: string, usesDemoData: boolean): AppClie
           requestId: 'demo-search',
         };
       }
-      return fetchJson<SearchResponse>(`/api/v1/ui/recall/search?${searchParams.toString()}`, { signal: params.signal });
+      return fetchJson<SearchResponse>(`/app/api/recall/search?${searchParams.toString()}`, { signal: params.signal });
     },
     async getRecallProviders() {
       if (usesDemoData) {
         return getDemoRecallProviders();
       }
-      return fetchJson<RecallProvidersResponse>('/api/v1/ui/recall/providers');
+      return fetchJson<RecallProvidersResponse>('/app/api/recall/providers');
     },
     async streamAgentRecall(params) {
       if (usesDemoData) {
@@ -339,7 +339,7 @@ export function createAppClient(apiBase: string, usesDemoData: boolean): AppClie
         }
         return;
       }
-      const response = await fetch(`${apiBase}/api/v1/ui/recall/agent`, withDesktopAuth({
+      const response = await fetch(`${apiBase}/app/api/recall/agent`, withDesktopAuth({
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         signal: params.signal,
@@ -359,7 +359,7 @@ export function createAppClient(apiBase: string, usesDemoData: boolean): AppClie
       if (usesDemoData) {
         return demoSettingsConfig();
       }
-      return fetchJson<SettingsConfigResponse>('/api/v1/ui/settings/config');
+      return fetchJson<SettingsConfigResponse>('/app/api/settings/config');
     },
     getPipelineTasks() {
       return getDemoPipelineTasks();
@@ -372,7 +372,7 @@ export function createAppClient(apiBase: string, usesDemoData: boolean): AppClie
           requestId: 'demo-settings-save',
         });
       }
-      return fetchJson<SettingsConfigResponse>('/api/v1/ui/settings/config', {
+      return fetchJson<SettingsConfigResponse>('/app/api/settings/config', {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ content }),
@@ -386,13 +386,13 @@ export function createAppClient(apiBase: string, usesDemoData: boolean): AppClie
       for (const projectKey of projectKeys) {
         params.append('projectKey', projectKey);
       }
-      return fetchJson<CodexImportPreviewResponse>(`/api/v1/ui/import/codex/preview?${params.toString()}`);
+      return fetchJson<CodexImportPreviewResponse>(`/app/api/import/codex/preview?${params.toString()}`);
     },
     importCodexSessions(projectLimit = 5, projectKeys = []) {
       if (usesDemoData) {
         return demoRunCodexImport(projectLimit, projectKeys);
       }
-      return fetchJson<CodexImportRunResponse>('/api/v1/ui/import/codex', {
+      return fetchJson<CodexImportRunResponse>('/app/api/import/codex', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ projectLimit, projectKeys }),
@@ -402,7 +402,7 @@ export function createAppClient(apiBase: string, usesDemoData: boolean): AppClie
       if (usesDemoData) {
         return getDemoImportedProjects();
       }
-      return fetchJson<ImportedProjectsResponse>('/api/v1/ui/import/projects');
+      return fetchJson<ImportedProjectsResponse>('/app/api/import/projects');
     },
     async listLocalProjects(agent) {
       if (usesDemoData) {
@@ -418,7 +418,7 @@ export function createAppClient(apiBase: string, usesDemoData: boolean): AppClie
           requestId: response.requestId,
         };
       }
-      return fetchJson<ImportLocalProjectsResponse>(`/api/v1/ui/import/${agent}/local-projects`);
+      return fetchJson<ImportLocalProjectsResponse>(`/app/api/import/${agent}/local-projects`);
     },
     listImportSessions(agent, scope, project) {
       if (usesDemoData) {
@@ -432,13 +432,13 @@ export function createAppClient(apiBase: string, usesDemoData: boolean): AppClie
         params.set('project', project);
       }
       const suffix = params.size > 0 ? `?${params.toString()}` : '';
-      return fetchJson<ImportSessionsListResponse>(`/api/v1/ui/import/${agent}/sessions${suffix}`);
+      return fetchJson<ImportSessionsListResponse>(`/app/api/import/${agent}/sessions${suffix}`);
     },
     importProjects(agent, projects) {
       if (usesDemoData) {
         return importDemoProjects(agent, projects);
       }
-      return fetchJson<ImportProjectsResponse>(`/api/v1/ui/import/${agent}/projects`, {
+      return fetchJson<ImportProjectsResponse>(`/app/api/import/${agent}/projects`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ projects }),
@@ -448,7 +448,7 @@ export function createAppClient(apiBase: string, usesDemoData: boolean): AppClie
       if (usesDemoData) {
         return importDemoSessionsByPaths(agent, sourcePaths);
       }
-      return fetchJson<ImportSelectedResponse>(`/api/v1/ui/import/${agent}/sessions`, {
+      return fetchJson<ImportSelectedResponse>(`/app/api/import/${agent}/sessions`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ sourcePaths }),
@@ -458,7 +458,7 @@ export function createAppClient(apiBase: string, usesDemoData: boolean): AppClie
       if (usesDemoData) {
         return deleteDemoImportedProject(agent, project);
       }
-      return fetchJson<DeleteImportedProjectResponse>(`/api/v1/ui/import/${agent}/project`, {
+      return fetchJson<DeleteImportedProjectResponse>(`/app/api/import/${agent}/project`, {
         method: 'DELETE',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ project }),
@@ -469,7 +469,7 @@ export function createAppClient(apiBase: string, usesDemoData: boolean): AppClie
         await setDemoAgentCapturePolicy(agent, enabled);
         return;
       }
-      await fetchVoid(`/api/v1/ui/import/${agent}/agent-capture`, {
+      await fetchVoid(`/app/api/import/${agent}/agent-capture`, {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ enabled }),
@@ -480,7 +480,7 @@ export function createAppClient(apiBase: string, usesDemoData: boolean): AppClie
         await setDemoCapturePolicy(agent, project, enabled);
         return;
       }
-      await fetchVoid(`/api/v1/ui/import/${agent}/capture-policy`, {
+      await fetchVoid(`/app/api/import/${agent}/capture-policy`, {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ project, enabled }),

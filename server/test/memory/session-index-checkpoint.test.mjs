@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { parseCheckpointFile, serializeCheckpointFile } from '../../dist/memory/checkpoint.js';
+import { parseCheckpointFile, serializeCheckpointFile } from '../../dist/checkpoint.js';
 
 function checkpoint(overrides = {}) {
   return {
-    schemaVersion: 9,
+    schemaVersion: 10,
     writtenAt: '2026-06-02T00:00:00.000Z',
     writerPid: 123,
     extractor: {
@@ -20,7 +20,6 @@ function checkpoint(overrides = {}) {
     observer: {
       baseline: { observationContext: 4, observation: 2 },
       observeQueue: { cwdBuckets: [] },
-      runs: [],
     },
     sessionIndex: {
       baseline: { turn: 10, session: 5 },
@@ -43,7 +42,7 @@ function checkpoint(overrides = {}) {
 test('checkpoint parses and serializes sessionIndex entries', () => {
   const parsed = parseCheckpointFile(JSON.stringify(checkpoint()));
 
-  assert.equal(parsed.schemaVersion, 9);
+  assert.equal(parsed.schemaVersion, 10);
   assert.deepEqual(parsed.sessionIndex, {
     baseline: { turn: 10, session: 5 },
     entries: [

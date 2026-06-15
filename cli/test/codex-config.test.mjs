@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { planCodexConfig } from '../dist/codex_config.js';
+import { planCodexConfig } from '../dist/codex-config.js';
 
 const commands = {
   mcpCommand: 'muninn-mcp',

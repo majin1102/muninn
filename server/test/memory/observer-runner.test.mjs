@@ -4,14 +4,14 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
-import { hasPendingObserverWork, __testing } from '../../dist/memory/observer/runner.js';
-import { observeCwdScope } from '../../dist/memory/llm/observing.js';
+import { __testing } from '../../dist/pipeline/observation.js';
+import { generateObservationPatch } from '../../dist/llm/observer.js';
 
-const { getObserverWorkStatus, runObserver } = __testing;
+const { applyObservationBatch } = __testing;
 const CWD = '/Users/Nathan/workspace/muninn';
 
 test('observe queue groups by cwd and replaces duplicate extraction rows', async () => {
-  const { enqueueChanges } = await import('../../dist/memory/observer/queue.js');
+  const { enqueueChanges } = await import('../../dist/pipeline/observer.js');
   const first = extractionRow('so-1', { summary: 'old text' });
   const latest = extractionRow('so-1', { summary: 'latest text' });
   const queue = enqueueChanges({ cwdBuckets: [] }, [{ type: 'upsert', extraction: first }]);
@@ -24,7 +24,7 @@ test('observe queue groups by cwd and replaces duplicate extraction rows', async
 });
 
 test('observe queue keeps old cwd bucket when a extraction moves cwd', async () => {
-  const { enqueueChanges } = await import('../../dist/memory/observer/queue.js');
+  const { enqueueChanges } = await import('../../dist/pipeline/observer.js');
   const oldRow = extractionRow('so-1', { cwd: '/repo/old', summary: 'old' });
   const newRow = extractionRow('so-1', { cwd: '/repo/new', summary: 'new' });
   const queue = enqueueChanges({ cwdBuckets: [] }, [{ type: 'upsert', extraction: oldRow }]);
@@ -36,7 +36,7 @@ test('observe queue keeps old cwd bucket when a extraction moves cwd', async () 
 });
 
 test('observe queue batches and acks one cwd bucket', async () => {
-  const { enqueueChanges, readyBucket, ackBucket } = await import('../../dist/memory/observer/queue.js');
+  const { enqueueChanges, readyBucket, ackBucket } = await import('../../dist/pipeline/observer.js');
   let queue = { cwdBuckets: [] };
   for (let index = 0; index < 9; index += 1) {
     queue = enqueueChanges(queue, [{
@@ -53,51 +53,23 @@ test('observe queue batches and acks one cwd bucket', async () => {
   assert.equal(acked.cwdBuckets[0].extractionChanges.length, 5);
 });
 
-test('hasPendingObserverWork waits for cwd threshold without advancing baseline', async () => {
-  const client = makeClient({ extractions: makeExtractions(4) });
-
-  assert.equal(await hasPendingObserverWork({ client, baselineVersion: 0, cwdThreshold: 5 }), false);
-  assert.deepEqual(
-    await getObserverWorkStatus({ client, baselineVersion: 0, cwdThreshold: 5 }),
-    { changed: true, pending: false, groupCount: 1, baselineVersion: 1 },
-  );
-});
-
-test('hasPendingObserverWork reports pending when cwd threshold is reached', async () => {
-  const client = makeClient({ extractions: makeExtractions(5) });
-
-  assert.equal(await hasPendingObserverWork({ client, baselineVersion: 0, cwdThreshold: 5 }), true);
-});
-
-test('getObserverWorkStatus ignores extractions without cwd', async () => {
-  const client = makeClient({
-    extractions: makeExtractions(2).map((row) => ({ ...row, cwd: '' })),
-  });
-
-  assert.deepEqual(
-    await getObserverWorkStatus({ client, baselineVersion: 0, cwdThreshold: 5 }),
-    { changed: true, pending: false, groupCount: 0, baselineVersion: 1 },
-  );
-});
-
-test('runObserver finalizes pending extractions below threshold', async (t) => {
+test('applyObservationBatch writes queued cwd extractions', async (t) => {
   await useMockHome(t, 'muninn-observer-runner-finalize-');
   let observedInput = null;
   const client = makeClient({ extractions: makeExtractions(2) });
 
-  const result = await runObserver({
+  const result = await applyObservationBatch({
     client,
     observerName: 'test-observer',
-    baselineVersion: 0,
-    cwdThreshold: 5,
-    finalize: true,
-    observeCwdScopeImpl: async (input) => {
+    cwd: CWD,
+    extractionChanges: makeExtractions(2).map((extraction) => ({ type: 'upsert', extraction })),
+    generateObservationPatchImpl: async (input) => {
       observedInput = input;
       return observerResult(input.cwdScope, input.extractions.map((extraction) => extraction.id));
     },
   });
 
-  assert.deepEqual(result, { observed: 1, skipped: 0, baselineVersion: 1 });
+  assert.deepEqual(result, { observed: 1, skipped: 0 });
   assert.equal(observedInput.cwdScope, CWD);
   assert.deepEqual(observedInput.extractions.map((extraction) => extraction.id), ['so-1', 'so-2']);
   assert.equal(client.writes.observationContexts.length, 2);
@@ -108,23 +80,7 @@ test('runObserver finalizes pending extractions below threshold', async (t) => {
   );
 });
 
-test('runObserver skips until cwd threshold is reached', async () => {
-  const client = makeClient({ extractions: makeExtractions(4) });
-
-  const result = await runObserver({
-    client,
-    observerName: 'test-observer',
-    baselineVersion: 0,
-    cwdThreshold: 5,
-    observeCwdScopeImpl: async () => {
-      throw new Error('observeCwdScopeImpl should not be called before threshold');
-    },
-  });
-
-  assert.deepEqual(result, { observed: 0, skipped: 1, baselineVersion: 0 });
-});
-
-test('runObserver preserves unrelated cwd observation branches', async (t) => {
+test('applyObservationBatch preserves unrelated cwd observation branches', async (t) => {
   await useMockHome(t, 'muninn-observer-runner-cwd-scope-');
   const oldPath = `${CWD} / Existing / Leaf`;
   const otherPath = '/Users/Nathan/workspace/lance / Existing / Leaf';
@@ -144,23 +100,22 @@ test('runObserver preserves unrelated cwd observation branches', async (t) => {
     ],
   });
 
-  await runObserver({
+  await applyObservationBatch({
     client,
     observerName: 'test-observer',
-    baselineVersion: 0,
-    cwdThreshold: 5,
-    finalize: true,
-    observeCwdScopeImpl: async (input) => observerResult(input.cwdScope, [input.extractions[0].id]),
+    cwd: CWD,
+    extractionChanges: [{ type: 'upsert', extraction: extractionRow('so-1', { observationPaths: [oldPath] }) }],
+    generateObservationPatchImpl: async (input) => observerResult(input.cwdScope, [input.extractions[0].id]),
   });
 
   assert.equal(client.writes.deletedObservationIds.includes(otherPath), false);
   assert.equal(client.writes.deletedContextIds.includes(otherPath), false);
 });
 
-test('observeCwdScope accepts slash-containing cwd as root title', async (t) => {
+test('generateObservationPatch accepts slash-containing cwd as root title', async (t) => {
   await useMockHome(t, 'muninn-observer-cwd-title-');
 
-  const result = await observeCwdScope({
+  const result = await generateObservationPatch({
     cwdScope: CWD,
     outline: `# ${CWD}\n\n(empty)`,
     observedDocument: '',
@@ -191,12 +146,12 @@ Source extractions:
   assert.equal(result.sections[0].children[0].path, `${CWD} / Work / Decision`);
 });
 
-test('observeCwdScope exposes get_observation tool without memory-get', async (t) => {
+test('generateObservationPatch exposes get_observation tool without memory-get', async (t) => {
   await useMockHome(t, 'muninn-observer-tool-');
 
   const toolNames = [];
   let calls = 0;
-  const result = await observeCwdScope({
+  const result = await generateObservationPatch({
     cwdScope: CWD,
     outline: `# ${CWD}\n- leaf: ${CWD} / Work / Decision`,
     observedDocument: '',
@@ -250,11 +205,11 @@ Source extractions:
   assert.equal(result.sections[0].children[0].sourceRefs.includes('so-1'), true);
 });
 
-test('observeCwdScope rejects more than three get_observation calls', async (t) => {
+test('generateObservationPatch rejects more than three get_observation calls', async (t) => {
   await useMockHome(t, 'muninn-observer-tool-steps-');
 
   let calls = 0;
-  await assert.rejects(() => observeCwdScope({
+  await assert.rejects(() => generateObservationPatch({
     cwdScope: CWD,
     outline: `# ${CWD}\n- leaf: ${CWD} / Work / Decision`,
     observedDocument: '',
@@ -297,10 +252,10 @@ Source extractions:
   assert.equal(calls, 4);
 });
 
-test('observeCwdScope writes observer trace with cwd input', async (t) => {
+test('generateObservationPatch writes observer trace with cwd input', async (t) => {
   const { tracePath } = await useMockHome(t, 'muninn-observer-trace-', true);
 
-  const result = await observeCwdScope({
+  const result = await generateObservationPatch({
     cwdScope: CWD,
     outline: `# ${CWD}\n\n(empty)`,
     observedDocument: '',

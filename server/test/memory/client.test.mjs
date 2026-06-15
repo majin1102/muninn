@@ -4,11 +4,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 
-import core from '../../dist/memory/index.js';
-import native from '../../dist/memory/native.js';
-import { getExtractorLlmConfig } from '../../dist/memory/config.js';
-import { MuninnBackend } from '../../dist/memory/backend.js';
-import { resolveCheckpointPath } from '../../dist/memory/checkpoint.js';
+import core from '../../dist/backend.js';
+import native from '../../dist/native.js';
+import { getExtractorLlmConfig } from '../../dist/config.js';
+import { MuninnBackend } from '../../dist/backend.js';
+import { resolveCheckpointPath } from '../../dist/checkpoint.js';
 
 const { createNativeTables, getNativeTables } = native;
 
@@ -109,8 +109,6 @@ function makePendingTurn({
     session_id: sessionId ?? null,
     agent,
     observer,
-    title: null,
-    summary: null,
     events,
     artifacts: null,
     prompt,
@@ -188,7 +186,6 @@ function firstExtractionRef(hits) {
 }
 
 async function writeMuninnConfig(configPath, {
-  turnProvider,
   observerProvider = 'mock',
   semanticDimensions = 4,
   storageUri,
@@ -207,10 +204,6 @@ async function writeMuninnConfig(configPath, {
     if (storageOptions) {
       root.storage.storageOptions = storageOptions;
     }
-  }
-  if (turnProvider) {
-    root.turn = { llmProvider: 'test_turn_llm' };
-    providers.llm.test_turn_llm = { type: turnProvider };
   }
   if (observerProvider) {
     root.extractor = {
@@ -714,7 +707,6 @@ test('cold start does not wait for the first watchdog interval before serving wr
     agent: 'agent-a',
     prompt: 'cold-start prompt',
     response: 'cold-start response',
-    summary: 'cold-start summary',
   }));
   const watchdogLogPath = path.join(homeDir, 'main', 'logs', 'watchdog.jsonl');
   await assert.rejects(
@@ -750,7 +742,6 @@ test('validateSettings rejects extraction index dimension changes that mismatch 
     agent: 'agent-a',
     prompt: 'extraction prompt',
     response: 'extraction response',
-    summary: 'extraction summary',
   }));
   await new Promise((resolve) => setTimeout(resolve, 50));
 
@@ -897,9 +888,6 @@ test('validateSettings accepts provider registry references', async (t) => {
           },
         },
       },
-      turn: {
-        llmProvider: 'default',
-      },
       extractor: {
         name: 'test-extractor',
         llmProvider: 'default',
@@ -1022,7 +1010,6 @@ test('validateSettings rejects omitted extraction dimensions for an existing non
     agent: 'agent-a',
     prompt: 'extraction prompt',
     response: 'extraction response',
-    summary: 'extraction summary',
   }));
   await new Promise((resolve) => setTimeout(resolve, 50));
 
@@ -1081,20 +1068,18 @@ test('validateSettings rejects referenced llm entries without type', async (t) =
 
   await assert.rejects(
     () => validateSettings(JSON.stringify(validSettings({
-      turn: { llmProvider: 'test_turn_llm' },
       providers: {
         llm: {
-          test_turn_llm: {},
-          test_extractor_llm: {},
-          test_observer_llm: {},
+          test_extractor_llm: { type: undefined },
+          test_observer_llm: { type: undefined },
         },
       },
     }), null, 2)),
-    /providers\.llm\.(test_turn_llm|test_extractor_llm|test_observer_llm)\.type must be a non-empty string/i,
+    /providers\.llm\.(test_extractor_llm|test_observer_llm)\.type must be a non-empty string/i,
   );
 });
 
-test('validateSettings rejects openai turn llm without apiKey', async (t) => {
+test('validateSettings rejects top-level turn config', async (t) => {
   const { dir, homeDir } = await makeDatasetUri();
   t.after(cleanupDataset(dir));
 
@@ -1102,14 +1087,9 @@ test('validateSettings rejects openai turn llm without apiKey', async (t) => {
 
   await assert.rejects(
     () => validateSettings(JSON.stringify(validSettings({
-      turn: { llmProvider: 'test_turn_llm' },
-      providers: {
-        llm: {
-          test_turn_llm: { type: 'openai' },
-        },
-      },
+      turn: { llmProvider: 'removed_provider' },
     }), null, 2)),
-    /providers\.llm\.test_turn_llm\.apiKey must be a non-empty string/i,
+    /turn is no longer supported/i,
   );
 });
 
@@ -1357,12 +1337,12 @@ test('observer.flushPending drains the current extraction batch without finalize
   assert.equal(resolved.phases.extractor, 'idle');
 });
 
-test('captureTurn summarizes response turns when a summary provider is configured', async (t) => {
+test('captureTurn persists raw prompt and response without title or summary', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(cleanupDataset(dir));
 
   process.env.MUNINN_HOME = homeDir;
-  await writeMuninnConfig(configPath, { turnProvider: 'mock' });
+  await writeMuninnConfig(configPath);
 
   const created = await writeTurnAndGet({
     sessionId: 'group-a',
@@ -1373,8 +1353,9 @@ test('captureTurn summarizes response turns when a summary provider is configure
 
   const detail = await turns.get(created.turnId);
   assert.ok(detail);
-  assert.equal(detail.title, 'summarize this');
-  assert.equal(detail.summary, 'summarize this\n\nresponse body');
+  assert.equal('title' in detail, false);
+  assert.equal('summary' in detail, false);
+  assert.equal(detail.prompt, 'summarize this');
   assert.equal(detail.response, 'response body');
 });
 
@@ -1393,7 +1374,7 @@ test('captureTurn persists response turns when the summarizer is not configured'
   const detail = await turns.get(created.turnId);
   assert.ok(detail);
   assert.equal(detail.response, 'response body');
-  assert.equal(detail.summary, 'response prompt\n\nresponse body');
+  assert.equal('summary' in detail, false);
 });
 
 test('observer writes atomic extractions before observing snapshots', async (t) => {
@@ -1401,7 +1382,7 @@ test('observer writes atomic extractions before observing snapshots', async (t) 
   t.after(cleanupDataset(dir));
 
   process.env.MUNINN_HOME = homeDir;
-  await writeMuninnConfig(configPath, { turnProvider: 'mock', observerProvider: 'mock' });
+  await writeMuninnConfig(configPath, { observerProvider: 'mock' });
 
   await writeTurnAndGet({
     sessionId: 'group-a',
@@ -1425,7 +1406,7 @@ test('rendered memory binding returns unified turn and extraction reads', async 
   t.after(cleanupDataset(dir));
 
   process.env.MUNINN_HOME = homeDir;
-  await writeMuninnConfig(configPath, { turnProvider: 'mock', observerProvider: 'mock' });
+  await writeMuninnConfig(configPath, { observerProvider: 'mock' });
 
   const turn = await writeTurnAndGet({
     sessionId: 'group-a',
@@ -1491,7 +1472,7 @@ test('rendered memory page mode paginates after combining session and observing 
   t.after(cleanupDataset(dir));
 
   process.env.MUNINN_HOME = homeDir;
-  await writeMuninnConfig(configPath, { turnProvider: 'mock', observerProvider: 'mock' });
+  await writeMuninnConfig(configPath, { observerProvider: 'mock' });
 
   for (let index = 0; index < 3; index += 1) {
     await captureTurn(makeTurnContent({

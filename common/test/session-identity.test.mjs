@@ -4,7 +4,7 @@ import test from 'node:test';
 import ts from 'typescript';
 
 async function loadTypes() {
-  const identitySource = await readFile(new URL('../src/session_identity.ts', import.meta.url), 'utf8');
+  const identitySource = await readFile(new URL('../src/session-identity.ts', import.meta.url), 'utf8');
   const source = identitySource;
   const compiled = ts.transpileModule(source, {
     compilerOptions: {

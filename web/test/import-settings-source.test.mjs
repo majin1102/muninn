@@ -98,13 +98,13 @@ test('imported project list is exposed as a single aggregated API', async () => 
 
   assert.match(typeSource, /export interface ImportedProjectsResponse/);
   assert.match(apiSource, /listImportedProjects\(\): Promise<ImportedProjectsResponse>/);
-  assert.match(apiSource, /fetchJson<ImportedProjectsResponse>\('\/api\/v1\/ui\/import\/projects'\)/);
+  assert.match(apiSource, /fetchJson<ImportedProjectsResponse>\('\/app\/api\/import\/projects'\)/);
   assert.match(demoSource, /export async function getDemoImportedProjects/);
 });
 
 test('import session identity uses shared project agent session identity', async () => {
   const componentSource = await readFile(new URL('../src/components/ImportSettings.tsx', import.meta.url), 'utf8');
-  const identitySource = await readFile(new URL('../../common/src/session_identity.ts', import.meta.url), 'utf8');
+  const identitySource = await readFile(new URL('../../common/src/session-identity.ts', import.meta.url), 'utf8');
 
   assert.match(identitySource, /export type SessionIdentity/);
   assert.match(identitySource, /project: string;/);

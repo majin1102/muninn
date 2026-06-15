@@ -4,7 +4,7 @@ import test from 'node:test';
 import ts from 'typescript';
 
 async function loadTimelineItems() {
-  const source = await readFile(new URL('../src/lib/chat_timeline_items.ts', import.meta.url), 'utf8');
+  const source = await readFile(new URL('../src/lib/chat-timeline-items.ts', import.meta.url), 'utf8');
   const compiled = ts.transpileModule(source, {
     compilerOptions: {
       module: ts.ModuleKind.ES2022,

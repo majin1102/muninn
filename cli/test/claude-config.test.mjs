@@ -5,7 +5,7 @@ import {
   planClaudeMcpJson,
   planClaudeSettings,
   renderClaudeMcpAddCommand,
-} from '../dist/claude_config.js';
+} from '../dist/claude-config.js';
 
 test('planClaudeSettings installs Stop hook into empty settings', () => {
   const plan = planClaudeSettings('', {

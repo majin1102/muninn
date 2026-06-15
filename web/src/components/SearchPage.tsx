@@ -27,7 +27,7 @@ import {
 } from 'react';
 import ReactMarkdown from 'react-markdown';
 import muninnLogo from '../assets/muninn-raven-logo.png';
-import { logoForAgent, type AgentLogo } from '../lib/agent_logo.js';
+import { logoForAgent, type AgentLogo } from '../lib/agent-logo.js';
 import type { AppClient, ProjectNode } from '../lib/api.js';
 import {
   DEFAULT_SESSION_TOP_N,
@@ -37,7 +37,7 @@ import {
   sessionKeysForRequest,
   sessionOptionsForProjects,
   type SearchControlsState,
-} from '../lib/search_state.js';
+} from '../lib/search-state.js';
 import { asErrorMessage } from '../lib/utils.js';
 
 type RecallPageProps = {

@@ -43,7 +43,7 @@ test('session tree empty import guide is actionable', async () => {
 
 test('session tree uses project agent session identity instead of cwd for row keys', async () => {
   const treeSource = await readFile(new URL('../src/components/SessionTree.tsx', import.meta.url), 'utf8');
-  const stateSource = await readFile(new URL('../src/lib/session_content_state.ts', import.meta.url), 'utf8');
+  const stateSource = await readFile(new URL('../src/lib/session-content-state.ts', import.meta.url), 'utf8');
   const apiSource = await readFile(new URL('../src/lib/api.ts', import.meta.url), 'utf8');
 
   assert.match(treeSource, /SessionIdentity\.sessionIdentityKey\(\{\s*project: session\.projectKey,\s*agent: session\.agent,\s*sessionId: session\.sessionKey,/);

@@ -6,7 +6,7 @@ import path from 'node:path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { ServerClient } from './server_client.js';
+import { ServerClient } from './server-client.js';
 
 function safeStringify(value: unknown): string {
   try {
