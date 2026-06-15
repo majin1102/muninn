@@ -1,429 +1,276 @@
-import type { Extraction } from './types.js';
+import type { Turn } from '../backend.js';
+import { Memories } from '../memories.js';
+import type { NativeTables } from '../native.js';
+import { extractSessionMemory } from '../llm/extracting.js';
+import { applyExtractionChanges } from './extraction-index.js';
+import type { SealedEpoch } from './epoch.js';
+import {
+  applyExtractionResult,
+  createSessionMemoryThread,
+  currentSessionMemoryContent,
+  isActiveThread,
+  toSessionSnapshot,
+} from './snapshot.js';
+import type { FragmentTurnInput, SessionMemoryThread, SessionSnapshot } from './types.js';
 
-export type ParsedSnapshotContent = {
-  title: string;
-  summary: string;
-  signals: string;
-  snapshotContent: string;
-  extractionMarkdown: string;
-  extractions: Extraction[];
+type ExtractSessionMemoryImpl = typeof extractSessionMemory;
+const DEFAULT_SESSION_ID = '__muninn_default_session__';
+
+type ExtractSessionThreadParams = {
+  thread: SessionMemoryThread;
+  pendingTurns: Turn[];
+  extractionEpoch: number;
+  signal?: AbortSignal;
+  database?: string;
+  memories?: Pick<Memories, 'get'>;
+  extractSessionMemoryImpl?: ExtractSessionMemoryImpl;
 };
 
-export type ParsedSnapshotPatch = {
-  title?: string;
-  summary?: string;
-  signals?: string;
-  updates: Array<{
-    sequence: number;
-    refs: string[];
-    title: string;
-    summary: string;
-    content?: string | null;
-  }>;
-  additions: Array<{
-    refs: string[];
-    title: string;
-    summary: string;
-    content?: string | null;
-  }>;
-};
-
-type UnitMetadata = {
-  sequence?: number;
-  references: string[];
-};
-
-export function parseSnapshotContent(
-  raw: string,
-  validReferences: Set<string>,
-): ParsedSnapshotContent {
-  const snapshotContent = stripMarkdownFence(typeof raw === 'string' ? raw.trim() : '');
-  if (!snapshotContent) {
-    throw new Error('extraction update returned empty snapshot content');
-  }
-  rejectJson(snapshotContent);
-
-  const lines = snapshotContent.split(/\r?\n/);
-  const title = parseRequiredTitle(lines);
-  const summaryIndex = headingIndex(lines, 2, 'Summary');
-  if (summaryIndex === undefined) {
-    throw new Error('snapshot content document must include ## Summary');
-  }
-  const signalsIndex = headingIndex(lines, 2, 'Signals');
-  if (signalsIndex !== undefined && summaryIndex > signalsIndex) {
-    throw new Error('snapshot content document headings must order ## Summary before ## Signals');
-  }
-  const extractionsIndex = headingIndex(lines, 2, 'Extractions');
-  if (extractionsIndex !== undefined && summaryIndex > extractionsIndex) {
-    throw new Error('snapshot content document headings must order ## Summary before ## Extractions');
-  }
-  if (signalsIndex !== undefined && extractionsIndex !== undefined && signalsIndex > extractionsIndex) {
-    throw new Error('snapshot content document headings must order ## Signals before ## Extractions');
-  }
-
-  const summaryEnd = Math.min(
-    signalsIndex ?? lines.length,
-    extractionsIndex ?? lines.length,
+export async function extractEpoch(params: {
+  client: NativeTables;
+  extractorName: string;
+  activeWindowDays: number;
+  threads: SessionMemoryThread[];
+  sealedEpoch: SealedEpoch;
+  signal?: AbortSignal;
+  database?: string;
+  extractSessionMemoryImpl?: ExtractSessionMemoryImpl;
+}): Promise<{ threads: SessionMemoryThread[]; touchedIds: Set<string> }> {
+  throwIfAborted(params.signal);
+  ensureActiveThreads(
+    params.threads,
+    params.activeWindowDays,
   );
-  const summary = lines.slice(summaryIndex + 1, summaryEnd).join('\n').trim();
-  if (!normalizeText(summary)) {
-    throw new Error('snapshot content document summary cannot be empty');
+  const memories = new Memories(params.client);
+  const touchedIds = new Set<string>();
+  for (const turns of groupTurnsBySession(params.sealedEpoch.turns)) {
+    const thread = getOrCreateSessionThread(
+      params.threads,
+      params.extractorName,
+      turns,
+      params.sealedEpoch.epoch,
+    );
+    const groupTouchedIds = await extractSessionThread({
+      thread,
+      pendingTurns: turns,
+      extractionEpoch: params.sealedEpoch.epoch,
+      signal: params.signal,
+      database: params.database,
+      memories,
+      extractSessionMemoryImpl: params.extractSessionMemoryImpl,
+    });
+    for (const touchedId of groupTouchedIds) {
+      touchedIds.add(touchedId);
+    }
   }
-  const signals = signalsIndex === undefined
-    ? ''
-    : lines.slice(signalsIndex + 1, extractionsIndex ?? lines.length).join('\n').trim();
-
-  const extractionMarkdown = extractionsIndex === undefined
-    ? ''
-    : lines.slice(extractionsIndex + 1).join('\n').trim();
-
+  await flushThreads(params.client, params.threads, touchedIds);
   return {
+    threads: params.threads,
+    touchedIds,
+  };
+}
+
+function normalizedSessionId(turn: Pick<Turn, 'sessionId'>): string | null {
+  const sessionId = turn.sessionId?.trim();
+  return sessionId && sessionId.length > 0 ? sessionId : null;
+}
+
+function groupTurnsBySession(turns: Turn[]): Turn[][] {
+  const groups = new Map<string, Turn[]>();
+  const order: string[] = [];
+  for (const turn of turns) {
+    const sessionId = normalizedSessionId(turn);
+    const key = turnGroupKey(turn, sessionId ?? DEFAULT_SESSION_ID);
+    let group = groups.get(key);
+    if (!group) {
+      group = [];
+      groups.set(key, group);
+      order.push(key);
+    }
+    group.push(turn);
+  }
+  return order.map((key) => groups.get(key)!);
+}
+
+function sessionIdForTurns(turns: Turn[]): string {
+  let expected: string | null | undefined;
+  for (const turn of turns) {
+    const sessionId = normalizedSessionId(turn);
+    if (expected === undefined) {
+      expected = sessionId;
+      continue;
+    }
+    if (sessionId !== expected) {
+      throw new Error('extractSessionThread requires pendingTurns from a single session');
+    }
+  }
+  return expected ?? DEFAULT_SESSION_ID;
+}
+
+function turnGroupKey(turn: Turn, sessionId: string): string {
+  return `${turn.agent}\0${turn.cwd}\0${sessionId}`;
+}
+
+export function threadIdentityKey(value: {
+  agent: string;
+  project: string;
+  cwd: string;
+  sessionId?: string | null;
+  threadId?: string;
+}): string {
+  return `${value.agent}\0${value.cwd}\0${value.sessionId ?? value.threadId ?? DEFAULT_SESSION_ID}`;
+}
+
+function ownershipForTurns(turns: Turn[]): { agent: string; project: string; cwd: string } {
+  const first = turns[0];
+  if (!first) {
+    throw new Error('missing turns for session ownership');
+  }
+  for (const turn of turns) {
+    if (turn.agent !== first.agent || turn.cwd !== first.cwd) {
+      throw new Error('extractSessionThread requires pendingTurns from a single cwd/agent');
+    }
+  }
+  return {
+    agent: first.agent,
+    project: first.project,
+    cwd: first.cwd,
+  };
+}
+
+function ensureActiveThreads(
+  threads: SessionMemoryThread[],
+  activeWindowDays: number,
+): void {
+  const activeThreads = threads.filter((thread) => isActiveThread(thread.updatedAt, activeWindowDays));
+  threads.splice(0, threads.length, ...activeThreads);
+}
+
+function getOrCreateSessionThread(
+  threads: SessionMemoryThread[],
+  extractorName: string,
+  pendingTurns: Turn[],
+  extractionEpoch: number,
+): SessionMemoryThread {
+  const sessionId = sessionIdForTurns(pendingTurns);
+  const ownership = ownershipForTurns(pendingTurns);
+  const existing = threads.find((thread) => (
+    thread.observer === extractorName
+    && thread.kind === 'session'
+    && (thread.sessionId ?? null) === sessionId
+    && thread.agent === ownership.agent
+    && thread.project === ownership.project
+    && thread.cwd === ownership.cwd
+  ));
+  if (existing) {
+    return existing;
+  }
+  const title = sessionId ? `Session ${sessionId}` : 'Session memory thread';
+  const summary = sessionId
+    ? `Default session memory thread for session ${sessionId}.`
+    : 'Default session memory thread for this session.';
+  const thread = createSessionMemoryThread(
+    extractorName,
     title,
     summary,
-    signals,
-    snapshotContent,
-    extractionMarkdown,
-    extractions: parseSnapshotContentUnits(extractionMarkdown, validReferences),
-  };
+    [],
+    extractionEpoch,
+    new Date().toISOString(),
+    'session',
+    sessionId,
+    ownership,
+  );
+  threads.push(thread);
+  return thread;
 }
 
-export function parseSnapshotPatch(
-  raw: string,
-  validNewReferences: Set<string>,
-): ParsedSnapshotPatch {
-  const patch = stripMarkdownFence(typeof raw === 'string' ? raw.trim() : '');
-  if (!patch) {
-    return { updates: [], additions: [] };
+async function extractSessionThread(params: ExtractSessionThreadParams): Promise<Set<string>> {
+  const {
+    thread,
+    pendingTurns,
+    extractionEpoch,
+    signal,
+    memories,
+    extractSessionMemoryImpl = extractSessionMemory,
+  } = params;
+  throwIfAborted(signal);
+  const touchedIds = new Set<string>();
+  sessionIdForTurns(pendingTurns);
+  ownershipForTurns(pendingTurns);
+  if (pendingTurns.length === 0) {
+    return touchedIds;
   }
-  rejectJson(patch);
 
-  const lines = patch.split(/\r?\n/);
-  const title = parseOptionalTitle(lines);
-  const summaryIndex = headingIndex(lines, 2, 'Summary');
-  const signalsIndex = headingIndex(lines, 2, 'Signals');
-  const extractionsIndex = headingIndex(lines, 2, 'Extractions');
-  if (summaryIndex !== undefined && signalsIndex !== undefined && summaryIndex > signalsIndex) {
-    throw new Error('snapshot patch headings must order ## Summary before ## Signals');
-  }
-  if (summaryIndex !== undefined && extractionsIndex !== undefined && summaryIndex > extractionsIndex) {
-    throw new Error('snapshot patch headings must order ## Summary before ## Extractions');
-  }
-  if (signalsIndex !== undefined && extractionsIndex !== undefined && signalsIndex > extractionsIndex) {
-    throw new Error('snapshot patch headings must order ## Signals before ## Extractions');
-  }
-  const summary = summaryIndex === undefined
-    ? undefined
-    : lines
-      .slice(summaryIndex + 1, Math.min(signalsIndex ?? lines.length, extractionsIndex ?? lines.length))
-      .join('\n')
-      .trim();
-  if (summaryIndex !== undefined && !normalizeText(summary ?? '')) {
-    throw new Error('snapshot patch summary cannot be empty');
-  }
-  const signals = signalsIndex === undefined
-    ? undefined
-    : lines.slice(signalsIndex + 1, extractionsIndex ?? lines.length).join('\n').trim();
-
-  const extractionMarkdown = extractionsIndex === undefined
-    ? ''
-    : lines.slice(extractionsIndex + 1).join('\n').trim();
-  const units = parsePatchUnits(extractionMarkdown, validNewReferences);
-  return {
-    ...(title === undefined ? {} : { title }),
-    ...(summary === undefined ? {} : { summary }),
-    ...(signals === undefined ? {} : { signals }),
-    updates: units.updates,
-    additions: units.additions,
-  };
+  const now = new Date().toISOString();
+  const turns: FragmentTurnInput[] = pendingTurns.map((turn) => ({
+    turnId: turn.turnId,
+    prompt: turn.prompt,
+    response: turn.response,
+    summary: turn.summary,
+  }));
+  thread.updatedAt = now;
+  thread.extractionEpoch = extractionEpoch;
+  const result = await extractSessionMemoryImpl({
+    sessionMemoryContent: currentSessionMemoryContent(thread),
+    turns,
+  }, signal, { memories, database: params.database });
+  applyExtractionResult(thread, result, extractionEpoch, applyExtractionChanges);
+  touchedIds.add(threadIdentityKey(thread));
+  return touchedIds;
 }
 
-export function parseSnapshotContentUnits(
-  snapshotContent: string,
-  validReferences: Set<string>,
-): Extraction[] {
-  if (!snapshotContent.trim()) {
-    return [];
+async function flushThreads(
+  client: NativeTables,
+  threads: SessionMemoryThread[],
+  touchedIds: Set<string>,
+): Promise<void> {
+  const touched = threads
+    .filter((thread) => touchedIds.has(threadIdentityKey(thread)))
+    .filter((thread) => thread.snapshots.length > 0);
+  if (touched.length === 0) {
+    return;
   }
 
-  return splitUnits(snapshotContent).map((unit) => {
-    const lines = unit.split(/\r?\n/);
-    const metadata = parseSnapshotContentMetadata(lines[0] ?? '');
-    if (!metadata || metadata.sequence !== undefined) {
-      throw new Error('snapshot unit must start with refs metadata comment');
-    }
-    validateSnapshotContentReferences(metadata.references, validReferences);
-    const body = parseTitleSummaryContent(lines.slice(1));
-    return {
-      title: body.title,
-      text: normalizeText(body.summary),
-      context: normalizeContext(body.content ?? ''),
-      references: metadata.references,
-    };
+  const persistedRows = await client.sessionTable.insert({
+    snapshots: touched.map(toSessionSnapshot),
   });
+  updateThreadsFromRows(threads, persistedRows);
 }
 
-export function renderSnapshotContent(
-  title: string,
-  summary: string,
-  signals: string,
-  extractions: Extraction[],
-): string {
-  return [
-    `# ${normalizeTitle(title)}`,
-    '',
-    '## Summary',
-    summary.trim(),
-    '',
-    '## Signals',
-    signals.trim(),
-    '',
-    '## Extractions',
-    extractions.map((extraction) => renderExtractionBlock(extraction)).join('\n\n----\n\n'),
-  ].join('\n').trimEnd();
-}
-
-export function renderExtractionBlock(
-  extraction: Extraction,
-  options: { sequence?: number; includeRefs?: boolean } = {},
-): string {
-  const metadata = renderMetadata({
-    sequence: options.sequence,
-    references: options.includeRefs === false ? [] : extraction.references,
-  });
-  return [
-    metadata,
-    '### Title',
-    normalizeTitle(extraction.title ?? extraction.text),
-    '',
-    '### Summary',
-    extraction.text.trim(),
-    ...(normalizeContext(extraction.context ?? '')
-      ? ['', '### Content', extraction.context!.trim()]
-      : []),
-  ].join('\n');
-}
-
-export function stripMarkdownFence(value: string): string {
-  const match = value.match(/^```(?:markdown|md)?\s*\n([\s\S]*?)\n```\s*$/i);
-  return (match?.[1] ?? value).trim();
-}
-
-function parsePatchUnits(
-  extractionMarkdown: string,
-  validReferences: Set<string>,
-): {
-  updates: ParsedSnapshotPatch['updates'];
-  additions: ParsedSnapshotPatch['additions'];
-} {
-  const updates: ParsedSnapshotPatch['updates'] = [];
-  const additions: ParsedSnapshotPatch['additions'] = [];
-  if (!extractionMarkdown.trim()) {
-    return { updates, additions };
-  }
-
-  for (const unit of splitUnits(extractionMarkdown)) {
-    const lines = unit.split(/\r?\n/);
-    const metadata = parseSnapshotContentMetadata(lines[0] ?? '');
-    if (!metadata) {
-      throw new Error('snapshot patch extraction must start with metadata comment');
-    }
-    validateSnapshotContentReferences(metadata.references, validReferences);
-    const body = parseTitleSummaryContent(lines.slice(1));
-    const record = {
-      refs: metadata.references,
-      title: body.title,
-      summary: normalizeText(body.summary),
-      content: normalizeContext(body.content ?? ''),
-    };
-    if (metadata.sequence === undefined) {
-      additions.push(record);
-    } else {
-      updates.push({
-        sequence: metadata.sequence,
-        ...record,
-      });
-    }
-  }
-  return { updates, additions };
-}
-
-function parseTitleSummaryContent(lines: string[]): { title: string; summary: string; content?: string | null } {
-  const titleIndex = headingIndex(lines, 3, 'Title');
-  if (titleIndex === undefined) {
-    throw new Error('snapshot unit must include ### Title');
-  }
-  const summaryIndex = headingIndex(lines, 3, 'Summary');
-  if (summaryIndex === undefined) {
-    throw new Error('snapshot unit must include ### Summary');
-  }
-  if (titleIndex > summaryIndex) {
-    throw new Error('snapshot unit headings must order ### Title before ### Summary');
-  }
-  const contentIndex = headingIndex(lines, 3, 'Content');
-  if (contentIndex !== undefined && contentIndex < summaryIndex) {
-    throw new Error('snapshot unit headings must order ### Summary before ### Content');
-  }
-  const nextUnexpectedHeading = lines.find((line) => /^###\s+(.+?)\s*$/.test(line)
-    && !/^###\s+(Title|Summary|Content)\s*$/i.test(line));
-  if (nextUnexpectedHeading) {
-    throw new Error(`unsupported snapshot unit heading: ${nextUnexpectedHeading.trim()}`);
-  }
-
-  const titleEnd = summaryIndex;
-  const title = normalizeTitle(lines.slice(titleIndex + 1, titleEnd).join('\n'));
-  const summaryEnd = contentIndex ?? lines.length;
-  const summary = lines.slice(summaryIndex + 1, summaryEnd).join('\n').trim();
-  if (!normalizeText(summary)) {
-    throw new Error('snapshot unit summary cannot be empty');
-  }
-  const content = contentIndex === undefined
-    ? null
-    : lines.slice(contentIndex + 1).join('\n').trim() || null;
-  return { title, summary, content };
-}
-
-function parseSnapshotContentMetadata(value: string): UnitMetadata | null {
-  const match = value.match(/^\s*<!--\s*(.*?)\s*-->\s*$/);
-  if (!match) {
-    return null;
-  }
-  const body = match[1] ?? '';
-  const refsMatch = body.match(/(?:^|;)\s*refs:\s*\[([^\]]*)\]\s*(?:;|$)/i);
-  if (!refsMatch) {
-    return null;
-  }
-  const sequenceMatch = body.match(/(?:^|;)\s*sequence:\s*([^;]+?)\s*(?:;|$)/i);
-  const sequence = sequenceMatch ? Number(sequenceMatch[1]!.trim()) : undefined;
-  if (sequence !== undefined && (!Number.isInteger(sequence) || sequence < 0)) {
-    throw new Error(`invalid extraction sequence: ${sequenceMatch?.[1] ?? ''}`);
-  }
-  return {
-    ...(sequence === undefined ? {} : { sequence }),
-    references: parseSnapshotContentRefs(refsMatch[1]),
-  };
-}
-
-function renderMetadata(value: UnitMetadata): string {
-  const parts = [];
-  if (value.sequence !== undefined) {
-    parts.push(`sequence: ${value.sequence}`);
-  }
-  if (value.references.length > 0) {
-    parts.push(`refs: [${value.references.join(', ')}]`);
-  }
-  return `<!-- ${parts.join('; ')} -->`;
-}
-
-function splitUnits(value: string): string[] {
-  const units: string[] = [];
-  let current: string[] = [];
-
-  for (const line of value.split(/\r?\n/)) {
-    if (/^\s*----\s*$/.test(line)) {
-      pushCurrentUnit(units, current);
-      current = [];
+function updateThreadsFromRows(
+  threads: SessionMemoryThread[],
+  rows: SessionSnapshot[],
+): void {
+  const rowsById = new Map(rows.map((row) => [threadIdentityKey(row), row]));
+  for (const thread of threads) {
+    const row = rowsById.get(threadIdentityKey(thread));
+    if (!row) {
       continue;
     }
-
-    if (current.length > 0 && isUnitMetadataLine(line)) {
-      pushCurrentUnit(units, current);
-      current = [line];
-      continue;
+    thread.snapshotId = row.snapshotId;
+    if (thread.snapshotIds[thread.snapshotIds.length - 1] !== row.snapshotId) {
+      thread.snapshotIds.push(row.snapshotId);
     }
-
-    current.push(line);
-  }
-
-  pushCurrentUnit(units, current);
-  return units;
-}
-
-function pushCurrentUnit(units: string[], lines: string[]): void {
-  const unit = lines.join('\n').trim();
-  if (unit) {
-    units.push(unit);
+    thread.references = [...row.references];
+    thread.updatedAt = row.updatedAt;
   }
 }
 
-function isUnitMetadataLine(line: string): boolean {
-  try {
-    return parseSnapshotContentMetadata(line) !== null;
-  } catch {
-    return false;
+export const __testing = {
+  flushThreads,
+  extractEpoch,
+  extractSessionThreadForTests: extractSessionThread,
+};
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (!signal?.aborted) {
+    return;
   }
-}
-
-function parseSnapshotContentRefs(value: string): string[] {
-  const references = value
-    .split(',')
-    .map((reference) => reference.trim().replace(/^['"]|['"]$/g, ''))
-    .filter(Boolean);
-  if (references.length === 0) {
-    throw new Error('snapshot content metadata refs must include at least one reference');
+  const reason = signal.reason;
+  if (reason instanceof Error) {
+    throw reason;
   }
-  return [...new Set(references)];
-}
-
-function validateSnapshotContentReferences(references: string[], validReferences: Set<string>): void {
-  if (references.length === 0) {
-    throw new Error('snapshot content metadata must include refs');
-  }
-  for (const reference of references) {
-    if (!validReferences.has(reference)) {
-      throw new Error(`snapshot content referenced unknown ref: ${reference}`);
-    }
-  }
-}
-
-function headingIndex(lines: string[], level: number, label: string): number | undefined {
-  const hashes = '#'.repeat(level);
-  const regex = new RegExp(`^${hashes}\\s+${escapeRegExp(label)}\\s*$`, 'i');
-  const index = lines.findIndex((line) => regex.test(line));
-  return index >= 0 ? index : undefined;
-}
-
-function parseRequiredTitle(lines: string[]): string {
-  const title = parseOptionalTitle(lines);
-  if (title === undefined) {
-    throw new Error('snapshot content document must include # title');
-  }
-  return title;
-}
-
-function parseOptionalTitle(lines: string[]): string | undefined {
-  const index = lines.findIndex((line) => /^#\s+(.+?)\s*$/.test(line));
-  if (index < 0) {
-    return undefined;
-  }
-  return normalizeTitle(lines[index]!.replace(/^#\s+/, ''));
-}
-
-function rejectJson(value: string): void {
-  if (/^\s*\{/.test(value)) {
-    throw new Error('extraction result must return snapshot content Markdown, not JSON');
-  }
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-function normalizeText(value: string): string {
-  return value.split(/\s+/).join(' ').trim();
-}
-
-function normalizeTitle(value: string): string {
-  const title = normalizeText(value);
-  if (!title) {
-    throw new Error('snapshot title cannot be empty');
-  }
-  return title;
-}
-
-function normalizeContext(value: string): string | null {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return null;
-  }
-  return trimmed;
+  const error = new Error('operation aborted');
+  error.name = 'AbortError';
+  throw error;
 }

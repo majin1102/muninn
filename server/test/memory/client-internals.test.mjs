@@ -21,6 +21,7 @@ import { normalizeSessionId, sessionKey } from '../../dist/memory/turn/key.js';
 import { Session } from '../../dist/memory/turn/session.js';
 import { Watchdog } from '../../dist/memory/watchdog.js';
 import updateModule from '../../dist/memory/extractor/update.js';
+import sessionModule from '../../dist/memory/extractor/session.js';
 import threadModule from '../../dist/memory/extractor/snapshot.js';
 import observingGatewayModule from '../../dist/memory/llm/extracting.js';
 import sessionGatewayModule from '../../dist/memory/llm/session-gateway.js';
@@ -30,6 +31,7 @@ import { validateMemoryRecallResult } from '../../dist/memory/recall/memory-reca
 import { getNativeTables } from '../../dist/memory/native.js';
 
 const { __testing: updateTesting } = updateModule;
+const { __testing: sessionTesting } = sessionModule;
 const { __testing: threadTesting } = threadModule;
 const { __testing: extractingTesting } = observingGatewayModule;
 const { __testing: sessionGatewayTesting } = sessionGatewayModule;
@@ -5565,7 +5567,7 @@ test('extractSessionThread passes raw turns to observer', async () => {
     };
   };
 
-  await updateTesting.extractSessionThreadForTests({
+  await sessionTesting.extractSessionThreadForTests({
     thread,
     pendingTurns: [{
       turnId: 'turn:13',
@@ -5681,7 +5683,7 @@ test('observed turns without observer context refs are not persisted as referenc
     contextRefs: [],
   });
 
-  await updateTesting.extractSessionThreadForTests({
+  await sessionTesting.extractSessionThreadForTests({
     thread,
     pendingTurns: [{
       turnId: 'turn:99',
@@ -5749,7 +5751,7 @@ test('raw-turn session only updates the session thread', async () => {
     };
   };
 
-  await updateTesting.extractSessionThreadForTests({
+  await sessionTesting.extractSessionThreadForTests({
     thread,
     pendingTurns: [{
       turnId: 'turn:12',
@@ -5809,7 +5811,7 @@ test('extractEpoch groups mixed session turns before session', async () => {
   const groupB1 = { ...makeObservableTurn('session:b1', 2, 'b1'), sessionId: 'group-b' };
   const groupA2 = makeObservableTurn('session:a2', 2, 'a2');
 
-  const result = await updateTesting.extractEpoch({
+  const result = await sessionTesting.extractEpoch({
     client,
     extractorName: 'default-observer',
     activeWindowDays: 3650,
@@ -5855,7 +5857,7 @@ test('extractEpoch routes missing sessionId turns to default session thread', as
     };
   };
 
-  await updateTesting.extractEpoch({
+  await sessionTesting.extractEpoch({
     client,
     extractorName: 'default-observer',
     activeWindowDays: 3650,
@@ -5884,7 +5886,7 @@ test('extractSessionThread rejects mixed session turns', async () => {
   };
 
   await assert.rejects(
-    updateTesting.extractSessionThreadForTests({
+    sessionTesting.extractSessionThreadForTests({
       thread,
       pendingTurns: [
         makeObservableTurn('session:a1', 2, 'a1'),
@@ -6687,7 +6689,7 @@ test('flushThreads persists session state without inline ref or index builders',
     },
   ];
 
-  await updateTesting.flushThreads({
+  await sessionTesting.flushThreads({
     sessionTable: {
       insert: async ({ snapshots }) => {
         return snapshots.map((snapshot) => ({
@@ -6747,7 +6749,7 @@ test('flushThreads keeps same raw session id isolated by cwd', async (t) => {
     makeThread('beta', '/workspace/beta'),
   ];
 
-  await updateTesting.flushThreads({
+  await sessionTesting.flushThreads({
     sessionTable: {
       insert: async ({ snapshots }) => snapshots.map((snapshot) => ({
         ...snapshot,

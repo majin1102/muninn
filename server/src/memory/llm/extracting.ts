@@ -14,7 +14,7 @@ import {
   parseSnapshotPatch,
   renderExtractionBlock,
   renderSnapshotContent,
-} from '../extractor/session.js';
+} from '../extractor/snapshot.js';
 import {
   generateWithTools,
   type LlmTask,
