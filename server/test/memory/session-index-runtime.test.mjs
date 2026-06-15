@@ -75,11 +75,11 @@ async function withTempMuninnHome(t) {
 
 function checkpoint(overrides = {}) {
   return {
-    schemaVersion: 7,
+    schemaVersion: 8,
     writtenAt: '2026-06-02T00:00:00.000Z',
     writerPid: 123,
     extractor: {
-      baseline: { turn: 10, session: 10, extraction: 2, global_observation: 3 },
+      baseline: { turn: 10, session: 10, extraction: 2, observation: 3 },
       committedEpoch: 5,
       nextEpoch: 6,
       recentSessions: [],
@@ -88,7 +88,7 @@ function checkpoint(overrides = {}) {
       pendingExtractionChanges: [],
     },
     observer: {
-      baseline: { globalObservationContext: 4, global_observation: 3 },
+      baseline: { observationContext: 4, observation: 3 },
       observeQueue: { cwdBuckets: [] },
       runs: [],
     },
@@ -505,11 +505,11 @@ test('backend refreshSessionIndex rebuilds stale checkpoint entries from current
     sessionVersion: 12,
   });
   const backend = MuninnBackend.createForTests(fake.tables, {
-    schemaVersion: 7,
+    schemaVersion: 8,
     writtenAt: '2026-06-02T00:00:00.000Z',
     writerPid: 123,
     extractor: {
-      baseline: { turn: 10, session: 10, extraction: 0, global_observation: 0 },
+      baseline: { turn: 10, session: 10, extraction: 0, observation: 0 },
       committedEpoch: 0,
       nextEpoch: 1,
       recentSessions: [],
@@ -518,7 +518,7 @@ test('backend refreshSessionIndex rebuilds stale checkpoint entries from current
       pendingExtractionChanges: [],
     },
     observer: {
-      baseline: { globalObservationContext: 0, global_observation: 0 },
+      baseline: { observationContext: 0, observation: 0 },
       observeQueue: { cwdBuckets: [] },
       runs: [],
     },

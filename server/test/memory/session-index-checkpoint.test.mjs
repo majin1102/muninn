@@ -5,11 +5,11 @@ import { parseCheckpointFile, serializeCheckpointFile } from '../../dist/memory/
 
 function checkpoint(overrides = {}) {
   return {
-    schemaVersion: 7,
+    schemaVersion: 8,
     writtenAt: '2026-06-02T00:00:00.000Z',
     writerPid: 123,
     extractor: {
-      baseline: { turn: 10, session: 5, extraction: 3, global_observation: 2 },
+      baseline: { turn: 10, session: 5, extraction: 3, observation: 2 },
       committedEpoch: 1,
       nextEpoch: 2,
       recentSessions: [],
@@ -18,7 +18,7 @@ function checkpoint(overrides = {}) {
       pendingExtractionChanges: [],
     },
     observer: {
-      baseline: { globalObservationContext: 4, global_observation: 2 },
+      baseline: { observationContext: 4, observation: 2 },
       observeQueue: { cwdBuckets: [] },
       runs: [],
     },
@@ -43,7 +43,7 @@ function checkpoint(overrides = {}) {
 test('checkpoint parses and serializes sessionIndex entries', () => {
   const parsed = parseCheckpointFile(JSON.stringify(checkpoint()));
 
-  assert.equal(parsed.schemaVersion, 7);
+  assert.equal(parsed.schemaVersion, 8);
   assert.deepEqual(parsed.sessionIndex, {
     baseline: { turn: 10, session: 5 },
     entries: [

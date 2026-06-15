@@ -179,7 +179,7 @@ function firstExtractionRef(hits) {
       ref
       && !ref.startsWith('turn:')
       && !ref.startsWith('session:')
-      && !ref.startsWith('global_observation:')
+      && !ref.startsWith('observation:')
     ) {
       return ref;
     }
@@ -1171,7 +1171,7 @@ test('validateSettings rejects extraction dimension changes when the table exist
       content: '## Title\n\nextraction text\n\n## Summary\n\nextraction text\n\n## Content\n\n',
       cwd: '/workspace/project-a',
       turnRefs: ['turn:1'],
-      globalObservationPaths: [],
+      observationPaths: [],
       vector: [0.1, 0.2, 0.3, 0.4],
       createdAt: '2024-01-01T00:00:00Z',
       updatedAt: '2024-01-01T00:00:00Z',
@@ -1274,7 +1274,7 @@ test('createNativeTables returns an independent native table binding', async (t)
   assert.notStrictEqual(standalone, singleton);
   assert.notStrictEqual(standalone.turnTable, singleton.turnTable);
   assert.notStrictEqual(standalone.extractionTable, singleton.extractionTable);
-  assert.notStrictEqual(standalone.globalObservationTable, singleton.globalObservationTable);
+  assert.notStrictEqual(standalone.observationTable, singleton.observationTable);
 });
 
 test('observer.watermark reports pending turns until the observer flush completes', async (t) => {
@@ -1459,7 +1459,7 @@ test('recall returns extraction memory ids and detail renders references', async
       content: '## Title\n\nCaroline support group\n\n## Summary\n\nCaroline joined an LGBTQ support group in May 2023.\n\n## Content\n\n',
       cwd: '/workspace/project-a',
       turnRefs: ['turn:1'],
-      globalObservationPaths: [],
+      observationPaths: [],
       vector: [1, 0, 0, 0],
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),

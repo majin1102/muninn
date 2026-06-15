@@ -56,14 +56,16 @@ test('project import registers projects without importing sessions', async () =>
   assert.doesNotMatch(pickerSource, /sourcePath/);
 });
 
-test('session import flushes the imported batch into extraction without finalize', async () => {
+test('session import writes turns in batch without synchronously flushing extraction', async () => {
   const importSource = await readFile(new URL('../src/web/import_core.ts', import.meta.url), 'utf8');
 
-  assert.match(importSource, /import \{[^}]*captureTurn[^}]*\} from '\.\.\/memory\/index\.js'/s);
-  assert.match(importSource, /await captureTurn\(toTurnContent/);
+  assert.match(importSource, /import \{[^}]*captureTurns[^}]*\} from '\.\.\/memory\/index\.js'/s);
+  assert.match(importSource, /const turnContents: TurnContent\[\] = \[\];/);
+  assert.match(importSource, /turnContents\.push\(toTurnContent/);
+  assert.match(importSource, /await captureTurns\(turnContents\);/);
   assert.doesNotMatch(importSource, /addMessage/);
-  assert.match(importSource, /import \{[^}]*observer[^}]*\} from '\.\.\/memory\/index\.js'/s);
-  assert.match(importSource, /if \(importedTurns > 0\) \{\s*await observer\.flushPending\(\);\s*\}/s);
+  assert.doesNotMatch(importSource, /import \{[^}]*observer[^}]*\} from '\.\.\/memory\/index\.js'/s);
+  assert.doesNotMatch(importSource, /observer\.flushPending\(\)/);
   assert.doesNotMatch(importSource, /observer\.finalize\(\)/);
 });
 

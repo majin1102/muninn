@@ -146,7 +146,7 @@ function cloneChange(change: QueuedExtractionChange): QueuedExtractionChange {
       ...change.extraction,
       vector: [...change.extraction.vector],
       turnRefs: [...change.extraction.turnRefs],
-      globalObservationPaths: [...change.extraction.globalObservationPaths],
+      observationPaths: [...change.extraction.observationPaths],
     },
   };
 }

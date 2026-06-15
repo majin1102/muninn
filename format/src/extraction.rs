@@ -17,8 +17,8 @@ use super::access::{
 };
 use super::codec::{extractions_to_reader, record_batch_to_extractions};
 use crate::maintenance::{
-    cleanup_dataset, compact_dataset, ensure_extraction_fts_index, ensure_extraction_id_index,
-    ensure_semantic_vector_index, optimize_extraction, EXTRACTION_CONTENT_COLUMN,
+    EXTRACTION_CONTENT_COLUMN, cleanup_dataset, compact_dataset, ensure_extraction_fts_index,
+    ensure_extraction_id_index, ensure_semantic_vector_index, optimize_extraction,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -31,7 +31,7 @@ pub struct Extraction {
     pub cwd: String,
     pub vector: Vec<f32>,
     pub turn_refs: Vec<String>,
-    pub global_observation_paths: Vec<String>,
+    pub observation_paths: Vec<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -102,7 +102,8 @@ impl ExtractionTable {
         let Some(mut dataset) = self.access.try_open().await? else {
             return Ok(false);
         };
-        let vector_created = ensure_semantic_vector_index(&mut dataset, target_partition_size).await?;
+        let vector_created =
+            ensure_semantic_vector_index(&mut dataset, target_partition_size).await?;
         let fts_created = ensure_extraction_fts_index(&mut dataset).await?;
         let id_created = ensure_extraction_id_index(&mut dataset).await?;
         Ok(vector_created || fts_created || id_created)
@@ -412,7 +413,10 @@ async fn fallback_full_text(
 
 fn lexical_score(row: &Extraction, tokens: &[String]) -> usize {
     let haystack = normalize_search_text(&row.content);
-    tokens.iter().filter(|token| haystack.contains(token.as_str())).count()
+    tokens
+        .iter()
+        .filter(|token| haystack.contains(token.as_str()))
+        .count()
 }
 
 fn query_tokens(query: &str) -> Vec<String> {
@@ -531,8 +535,8 @@ mod tests {
     use serde_json::json;
 
     use super::{Extraction, ExtractionTable, RecallMode};
-    use crate::config::{CONFIG_FILE_NAME, llm_test_env_guard};
     use crate::TableOptions;
+    use crate::config::{CONFIG_FILE_NAME, llm_test_env_guard};
 
     fn write_config(dir: &tempfile::TempDir) {
         let home = dir.path().join("muninn");
@@ -578,7 +582,7 @@ mod tests {
             cwd: "/repo/muninn".to_string(),
             vector,
             turn_refs: vec!["turn:1".to_string()],
-            global_observation_paths: vec![],
+            observation_paths: vec![],
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
         }
@@ -590,7 +594,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         write_config(&dir);
 
-        let table = ExtractionTable::new(TableOptions::local(crate::config::data_root().unwrap()).unwrap());
+        let table =
+            ExtractionTable::new(TableOptions::local(crate::config::data_root().unwrap()).unwrap());
         table
             .upsert(vec![
                 row(
@@ -617,7 +622,12 @@ mod tests {
         assert_eq!(fts[0].id, "career");
 
         let hybrid = table
-            .search("adoption agencies", &[0.0, 1.0, 0.0, 0.0], 2, RecallMode::Hybrid)
+            .search(
+                "adoption agencies",
+                &[0.0, 1.0, 0.0, 0.0],
+                2,
+                RecallMode::Hybrid,
+            )
             .await
             .unwrap();
         assert!(hybrid.iter().any(|item| item.id == "career"));
@@ -629,7 +639,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         write_config(&dir);
 
-        let table = ExtractionTable::new(TableOptions::local(crate::config::data_root().unwrap()).unwrap());
+        let table =
+            ExtractionTable::new(TableOptions::local(crate::config::data_root().unwrap()).unwrap());
         table
             .upsert(vec![
                 row("first", "First memory.", None, vec![1.0, 0.0, 0.0, 0.0]),
@@ -639,7 +650,11 @@ mod tests {
             .unwrap();
 
         let rows = table
-            .get(&["second".to_string(), "missing".to_string(), "first".to_string()])
+            .get(&[
+                "second".to_string(),
+                "missing".to_string(),
+                "first".to_string(),
+            ])
             .await
             .unwrap();
 
@@ -655,7 +670,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         write_config(&dir);
 
-        let table = ExtractionTable::new(TableOptions::local(crate::config::data_root().unwrap()).unwrap());
+        let table =
+            ExtractionTable::new(TableOptions::local(crate::config::data_root().unwrap()).unwrap());
         table
             .upsert(vec![
                 row(
@@ -690,7 +706,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         write_config(&dir);
 
-        let table = ExtractionTable::new(TableOptions::local(crate::config::data_root().unwrap()).unwrap());
+        let table =
+            ExtractionTable::new(TableOptions::local(crate::config::data_root().unwrap()).unwrap());
         table
             .upsert(vec![
                 row("stable", "Stable memory.", None, vec![1.0, 0.0, 0.0, 0.0]),
@@ -703,7 +720,12 @@ mod tests {
         table
             .upsert(vec![
                 row("updated", "Updated memory.", None, vec![0.0, 1.0, 0.0, 0.0]),
-                row("inserted", "Inserted memory.", None, vec![0.0, 0.0, 1.0, 0.0]),
+                row(
+                    "inserted",
+                    "Inserted memory.",
+                    None,
+                    vec![0.0, 0.0, 1.0, 0.0],
+                ),
             ])
             .await
             .unwrap();
@@ -716,7 +738,11 @@ mod tests {
             vec!["inserted", "updated"],
         );
         assert_eq!(
-            delta.iter().find(|row| row.id == "updated").unwrap().summary,
+            delta
+                .iter()
+                .find(|row| row.id == "updated")
+                .unwrap()
+                .summary,
             "Updated memory.",
         );
     }

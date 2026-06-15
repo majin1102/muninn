@@ -51,7 +51,7 @@ export type PipelineTaskStatus = 'running' | 'queued' | 'failed' | 'done';
 
 export type PipelineTaskKind =
   | 'session-observing'
-  | 'global-observing'
+  | 'observation'
   | 'wiki-compiling';
 
 export interface PipelineTask {
@@ -186,22 +186,22 @@ Append this export near the other demo exports:
 ```ts
 export const demoPipelineTasks: DemoPipelineTask[] = [
   {
-    id: 'pipeline:global:lance-row-id',
-    kind: 'global-observing',
-    title: 'Global observing',
+    id: 'pipeline:observation:lance-row-id',
+    kind: 'observation',
+    title: 'Observation',
     target: 'Entity: Lance row id',
     status: 'running',
     statusText: 'generating draft from 16 session observations',
     updatedAt: '2026-06-04T08:38:12.000Z',
     inputSummary: '16 session observations from 3 turns',
-    outputSummary: 'Global observation draft in progress',
+    outputSummary: 'Observation draft in progress',
     inputDetails: [
       '16 session observations',
       '3 source turns',
       'Batch: 16 / threshold 8',
     ],
     outputDetails: [
-      'Draft global observation markdown is being generated.',
+      'Draft observation markdown is being generated.',
       'Committed ids will appear after validation.',
     ],
     trace: [
@@ -218,16 +218,16 @@ export const demoPipelineTasks: DemoPipelineTask[] = [
     title: 'Session observing',
     target: 'codex session import timeline',
     status: 'done',
-    statusText: 'produced 12 session observations and queued global work',
+    statusText: 'produced 12 session observations and queued observation work',
     updatedAt: '2026-06-04T08:36:12.000Z',
     inputSummary: '100 turn window',
     outputSummary: '12 session observations',
     inputDetails: ['100 turn window', 'agent: codex'],
-    outputDetails: ['12 session observations', 'queued global work'],
+    outputDetails: ['12 session observations', 'queued observation work'],
     trace: [
       'read turns: done',
       'extracted observations: done',
-      'queued global work: done',
+      'queued observation work: done',
     ],
     errors: ['No errors for this task.'],
   },
@@ -237,34 +237,34 @@ export const demoPipelineTasks: DemoPipelineTask[] = [
     title: 'Wiki compiling',
     target: 'LLM Wiki: Memory architecture',
     status: 'queued',
-    statusText: 'waiting for global observations before compiling wiki draft',
+    statusText: 'waiting for observations before compiling wiki draft',
     updatedAt: '2026-06-04T08:35:12.000Z',
-    inputSummary: 'Global observation tree',
+    inputSummary: 'Observation tree',
     outputSummary: 'Wiki document draft',
-    inputDetails: ['Global observation tree'],
+    inputDetails: ['Observation tree'],
     outputDetails: ['Wiki document draft will be generated after input is ready.'],
-    trace: ['waiting for global observations'],
+    trace: ['waiting for observations'],
     errors: ['No errors for this task.'],
   },
   {
-    id: 'pipeline:global:prompt-design',
-    kind: 'global-observing',
-    title: 'Global observing',
+    id: 'pipeline:observation:prompt-design',
+    kind: 'observation',
+    title: 'Observation',
     target: 'Entity: Muninn prompt design',
     status: 'queued',
-    statusText: 'waiting for session observations before global rewrite',
+    statusText: 'waiting for session observations before observation rewrite',
     updatedAt: '2026-06-04T08:34:12.000Z',
     inputSummary: '5 session observations',
-    outputSummary: 'Global observation draft',
+    outputSummary: 'Observation draft',
     inputDetails: ['5 session observations', 'below observer threshold'],
-    outputDetails: ['Global observation draft will start after threshold is reached.'],
+    outputDetails: ['Observation draft will start after threshold is reached.'],
     trace: ['waiting for more session observations'],
     errors: ['No errors for this task.'],
   },
   {
-    id: 'pipeline:global:board-settings',
-    kind: 'global-observing',
-    title: 'Global observing',
+    id: 'pipeline:observation:board-settings',
+    kind: 'observation',
+    title: 'Observation',
     target: 'Entity: Board settings',
     status: 'failed',
     statusText: 'parser validation failed after 8 session observations · retry retained',
@@ -404,9 +404,9 @@ async function loadPipelineTasks(): Promise<PipelineTask[]> {
   const now = new Date().toISOString();
   return [
     {
-      id: 'pipeline:global:runtime',
-      kind: 'global-observing',
-      title: 'Global observing',
+      id: 'pipeline:observation:runtime',
+      kind: 'observation',
+      title: 'Observation',
       target: 'Runtime observer queue',
       status: 'queued',
       statusText: 'waiting for queued observations',
@@ -618,7 +618,7 @@ function PipelineToolbar({
       <select value={taskFilter} onChange={(event) => onTaskFilterChange(event.target.value as PipelineTaskFilter)}>
         <option value="all">Task: All</option>
         <option value="session-observing">Session observing</option>
-        <option value="global-observing">Global observing</option>
+        <option value="observation">Observation</option>
         <option value="wiki-compiling">Wiki compiling</option>
       </select>
       <select value={statusFilter} onChange={(event) => onStatusFilterChange(event.target.value as PipelineStatusFilter)}>
@@ -1218,8 +1218,8 @@ const tasks = [
   },
   {
     id: 'failed',
-    kind: 'global-observing',
-    title: 'Global observing',
+    kind: 'observation',
+    title: 'Observation',
     target: 'entity',
     status: 'failed',
     statusText: 'failed',
@@ -1233,8 +1233,8 @@ const tasks = [
   },
   {
     id: 'running',
-    kind: 'global-observing',
-    title: 'Global observing',
+    kind: 'observation',
+    title: 'Observation',
     target: 'entity',
     status: 'running',
     statusText: 'running',
@@ -1264,7 +1264,7 @@ test('defaultSelectedPipelineTaskId prefers newest running task', () => {
 test('filterPipelineTasks applies active status and task filters', () => {
   const filtered = filterPipelineTasks(
     tasks,
-    'global-observing',
+    'observation',
     'active',
     'last_24h',
     new Date('2026-06-04T09:00:00.000Z').getTime(),

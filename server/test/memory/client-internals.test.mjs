@@ -37,7 +37,7 @@ const { __testing: extractingTesting } = extractingModule;
 const { __testing: sessionGatewayTesting } = sessionGatewayModule;
 const { createSessionMemoryThread, getPendingIndex, getPendingIndexUpTo, loadThreads, toSessionSnapshot } = threadModule;
 const { captureTurn, observer: observerApi, shutdownCoreForTests } = core;
-const CHECKPOINT_SCHEMA_VERSION = 7;
+const CHECKPOINT_SCHEMA_VERSION = 8;
 let defaultConfigDir = null;
 
 function createCheckpointBackend(exported = null) {
@@ -51,7 +51,7 @@ function makeExtractorCheckpoint(overrides = {}) {
     turn: 10,
     session: 21,
     extraction: 8,
-    global_observation: 0,
+    observation: 0,
     ...(overrides.baseline ?? {}),
   };
   return {
@@ -69,8 +69,8 @@ function makeExtractorCheckpoint(overrides = {}) {
 
 function makeObserverCheckpoint(overrides = {}) {
   const baseline = {
-    globalObservationContext: 0,
-    global_observation: 0,
+    observationContext: 0,
+    observation: 0,
     ...(overrides.baseline ?? {}),
   };
   return {
@@ -258,7 +258,7 @@ test('checkpoint preserves observer runs', () => {
     writtenAt: new Date(0).toISOString(),
     writerPid: 1,
     extractor: {
-      baseline: { turn: 0, session: 0, extraction: 0, global_observation: 0 },
+      baseline: { turn: 0, session: 0, extraction: 0, observation: 0 },
       nextEpoch: 1,
       recentSessions: [],
       threads: [],
@@ -266,14 +266,14 @@ test('checkpoint preserves observer runs', () => {
       pendingExtractionChanges: [],
     },
     observer: {
-      baseline: { globalObservationContext: 0, global_observation: 0 },
+      baseline: { observationContext: 0, observation: 0 },
       observeQueue: { cwdBuckets: [] },
       runs: [{
         runId: 'run-1',
         observeId: 'entity:caroline',
         cwd: '/workspace/project-a',
         anchor: 'Caroline',
-        stage: 'generatingGlobalObservation',
+        stage: 'generatingObservation',
         pendingExtractionIds: ['abc'],
         errors: [],
       }],
@@ -289,19 +289,19 @@ test('native bindings expose observation context and observation tables', async 
   const tables = await getNativeTables();
   assert.equal(typeof tables.extractionTable.list, 'function');
   assert.equal(typeof tables.extractionTable.delta, 'function');
-  assert.equal(typeof tables.globalObservationContextTable.upsert, 'function');
-  assert.equal(typeof tables.globalObservationContextTable.list, 'function');
-  assert.equal(typeof tables.globalObservationContextTable.stats, 'function');
-  assert.equal(typeof tables.globalObservationContextTable.ensureIdIndex, 'function');
-  assert.equal(typeof tables.globalObservationContextTable.optimize, 'function');
-  assert.equal(typeof tables.globalObservationTable.upsert, 'function');
-  assert.equal(typeof tables.globalObservationTable.delete, 'function');
-  assert.equal(typeof tables.globalObservationTable.search, 'function');
-  assert.equal(typeof tables.globalObservationTable.stats, 'function');
-  assert.equal(typeof tables.globalObservationTable.ensureVectorIndex, 'function');
-  assert.equal(typeof tables.globalObservationTable.compact, 'function');
-  assert.equal(typeof tables.globalObservationTable.cleanup, 'function');
-  assert.equal(typeof tables.globalObservationTable.optimize, 'function');
+  assert.equal(typeof tables.observationContextTable.upsert, 'function');
+  assert.equal(typeof tables.observationContextTable.list, 'function');
+  assert.equal(typeof tables.observationContextTable.stats, 'function');
+  assert.equal(typeof tables.observationContextTable.ensureIdIndex, 'function');
+  assert.equal(typeof tables.observationContextTable.optimize, 'function');
+  assert.equal(typeof tables.observationTable.upsert, 'function');
+  assert.equal(typeof tables.observationTable.delete, 'function');
+  assert.equal(typeof tables.observationTable.search, 'function');
+  assert.equal(typeof tables.observationTable.stats, 'function');
+  assert.equal(typeof tables.observationTable.ensureVectorIndex, 'function');
+  assert.equal(typeof tables.observationTable.compact, 'function');
+  assert.equal(typeof tables.observationTable.cleanup, 'function');
+  assert.equal(typeof tables.observationTable.optimize, 'function');
 });
 
 test('table mutation locks serialize writes on the same table', async () => {
@@ -364,7 +364,7 @@ test('lockNativeTables serializes same-table mutations without locking reads', a
   const optimizeEntered = deferred();
   let searchCalls = 0;
   const tables = lockNativeTables({
-    globalObservationTable: {
+    observationTable: {
       upsert: async () => {
         upsertEntered.resolve();
         await releaseUpsert.promise;
@@ -380,10 +380,10 @@ test('lockNativeTables serializes same-table mutations without locking reads', a
     },
   }, locks);
 
-  const upsert = tables.globalObservationTable.upsert({ rows: [] });
+  const upsert = tables.observationTable.upsert({ rows: [] });
   await upsertEntered.promise;
-  const optimize = tables.globalObservationTable.optimize({ mergeCount: 1 });
-  await tables.globalObservationTable.search({ query: 'q', vector: [], limit: 1, mode: 'hybrid' });
+  const optimize = tables.observationTable.optimize({ mergeCount: 1 });
+  await tables.observationTable.search({ query: 'q', vector: [], limit: 1, mode: 'hybrid' });
   assert.equal(searchCalls, 1);
 
   const optimizeStartedEarly = await Promise.race([
@@ -399,11 +399,11 @@ test('lockNativeTables serializes same-table mutations without locking reads', a
 
 test('memories.get renders curated observation memories', async () => {
   const client = {
-    globalObservationTable: {
+    observationTable: {
       get: async ({ ids }) => ids.includes('obs-1')
         ? [{
             id: 'obs-1',
-            globalPath: 'Caroline / Research',
+            path: 'Caroline / Research',
             text: 'Caroline researched adoption agencies.',
             vector: [],
             extractionRefs: ['ext-1'],
@@ -417,9 +417,9 @@ test('memories.get renders curated observation memories', async () => {
     turnTable: { get: async () => null },
   };
   const { Memories } = await import('../../dist/memory/memories.js');
-  const memory = await new Memories(client).get('global_observation:obs-1');
+  const memory = await new Memories(client).get('observation:obs-1');
 
-  assert.equal(memory.memoryId, 'global_observation:obs-1');
+  assert.equal(memory.memoryId, 'observation:obs-1');
   assert.equal(memory.title, 'Caroline researched adoption agencies.');
   assert.equal(memory.summary, 'Caroline researched adoption agencies.');
   assert.match(memory.detail, /References:/);
@@ -428,23 +428,23 @@ test('memories.get renders curated observation memories', async () => {
 
 test('memories.get returns null for unknown curated observation memories', async () => {
   const client = {
-    globalObservationTable: { get: async () => [] },
+    observationTable: { get: async () => [] },
     extractionTable: { get: async () => [] },
     sessionTable: { get: async () => null },
     turnTable: { get: async () => null },
   };
   const { Memories } = await import('../../dist/memory/memories.js');
-  assert.equal(await new Memories(client).get('global_observation:missing'), null);
+  assert.equal(await new Memories(client).get('observation:missing'), null);
 });
 
 test('memories.get accepts observation paths containing colons', async () => {
   const pathId = 'Caroline / Work: schedule';
   const client = {
-    globalObservationTable: {
+    observationTable: {
       get: async ({ ids }) => ids.includes(pathId)
         ? [{
             id: pathId,
-            globalPath: pathId,
+            path: pathId,
             text: 'Caroline adjusted her work schedule.',
             vector: [],
             extractionRefs: [],
@@ -458,17 +458,17 @@ test('memories.get accepts observation paths containing colons', async () => {
     turnTable: { get: async () => null },
   };
   const { Memories } = await import('../../dist/memory/memories.js');
-  const memory = await new Memories(client).get(`global_observation:${pathId}`);
+  const memory = await new Memories(client).get(`observation:${pathId}`);
 
-  assert.equal(memory.memoryId, `global_observation:${pathId}`);
+  assert.equal(memory.memoryId, `observation:${pathId}`);
   assert.equal(memory.title, 'Caroline adjusted her work schedule.');
 });
 
 test('observation memory id parser rejects empty and wrong prefixes', async () => {
-  const { parseGlobalObservationMemoryId } = await import('../../dist/memory/recall/global-observations.js');
+  const { parseObservationMemoryId } = await import('../../dist/memory/recall/observations.js');
 
-  assert.throws(() => parseGlobalObservationMemoryId('global_observation:'), /invalid global observation memory id/);
-  assert.throws(() => parseGlobalObservationMemoryId('extraction:Caroline / Work: schedule'), /invalid global observation memory id/);
+  assert.throws(() => parseObservationMemoryId('observation:'), /invalid observation memory id/);
+  assert.throws(() => parseObservationMemoryId('extraction:Caroline / Work: schedule'), /invalid observation memory id/);
 });
 
 test('observer markdown parser derives parent and child observations', async () => {
@@ -574,7 +574,7 @@ test('observer runner groups extractions by cwd', async () => {
       cwd: '/workspace/project-a',
       vector: [1, 0],
       turnRefs: ['session:1'],
-      globalObservationPaths: [],
+      observationPaths: [],
       createdAt: '2024-01-01T00:00:00Z',
       updatedAt: '2024-01-01T00:00:00Z',
     },
@@ -586,7 +586,7 @@ test('observer runner groups extractions by cwd', async () => {
       cwd: '/workspace/project-a',
       vector: [1, 0],
       turnRefs: ['session:2'],
-      globalObservationPaths: [],
+      observationPaths: [],
       createdAt: '2024-01-01T00:00:00Z',
       updatedAt: '2024-01-01T00:00:00Z',
     },
@@ -598,7 +598,7 @@ test('observer runner groups extractions by cwd', async () => {
       cwd: '/workspace/project-b',
       vector: [1, 0],
       turnRefs: ['session:3'],
-      globalObservationPaths: [],
+      observationPaths: [],
       createdAt: '2024-01-01T00:00:00Z',
       updatedAt: '2024-01-01T00:00:00Z',
     },
@@ -1061,7 +1061,7 @@ test('watchdog creates and optimizes observation index only once for an unchange
       compact: async () => ({ changed: false }),
       optimize: async () => ({ changed: false }),
     },
-    globalObservationTable: {
+    observationTable: {
       ensureVectorIndex: async () => {
         ensureCalls += 1;
         return { created: ensureCalls === 1 };
@@ -1087,12 +1087,12 @@ test('watchdog creates and optimizes observation index only once for an unchange
   assert.equal(optimizeCalls, 1);
   const records = await readWatchdogLog(homeDir);
   assert.ok(records.some((record) => (
-    record.dataset === 'global_observation'
+    record.dataset === 'observation'
     && record.event === 'index_created'
     && record.version === 17
   )));
   assert.ok(records.some((record) => (
-    record.dataset === 'global_observation'
+    record.dataset === 'observation'
     && record.event === 'optimized'
     && record.details?.indexCreated === true
   )));
@@ -1121,7 +1121,7 @@ test('watchdog creates and optimizes observation context id index only once for 
       compact: async () => ({ changed: false }),
       optimize: async () => ({ changed: false }),
     },
-    globalObservationContextTable: {
+    observationContextTable: {
       ensureIdIndex: async () => {
         ensureCalls += 1;
         return { created: ensureCalls === 1 };
@@ -1146,12 +1146,12 @@ test('watchdog creates and optimizes observation context id index only once for 
   assert.equal(optimizeCalls, 1);
   const records = await readWatchdogLog(homeDir);
   assert.ok(records.some((record) => (
-    record.dataset === 'globalObservationContext'
+    record.dataset === 'observationContext'
     && record.event === 'index_created'
     && record.version === 19
   )));
   assert.ok(records.some((record) => (
-    record.dataset === 'globalObservationContext'
+    record.dataset === 'observationContext'
     && record.event === 'optimized'
     && record.details?.indexCreated === true
   )));
@@ -1401,7 +1401,7 @@ test('watchdog writes observer checkpoint files', async (t) => {
       turn: 10,
       session: 21,
       extraction: 8,
-      global_observation: 0,
+      observation: 0,
     },
     committedEpoch: 12,
     nextEpoch: 13,
@@ -1700,7 +1700,7 @@ test('checkpoint preserves session runs', async () => {
     writtenAt: new Date().toISOString(),
     writerPid: 1,
     extractor: {
-      baseline: { turn: 1, session: 1, extraction: 1, global_observation: 0 },
+      baseline: { turn: 1, session: 1, extraction: 1, observation: 0 },
       nextEpoch: 2,
       recentSessions: [],
       threads: [],
@@ -1724,7 +1724,7 @@ test('checkpoint preserves session runs', async () => {
       }],
       pendingExtractionChanges: [],
     },
-    observer: makeObserverCheckpoint({ baseline: { globalObservationContext: 0, global_observation: 0 } }),
+    observer: makeObserverCheckpoint({ baseline: { observationContext: 0, observation: 0 } }),
     sessionIndex: { baseline: { turn: 1, session: 1 }, entries: [] },
   };
 
@@ -3027,12 +3027,12 @@ test('recallMemories searches curated and raw routes then returns curated-first 
           : []
       ),
     },
-    globalObservationTable: {
+    observationTable: {
       search: async (params) => {
         calls.push(['observation', params]);
         return [{
           id: 'curated-1',
-          globalPath: 'Caroline / Plans',
+          path: 'Caroline / Plans',
           text: 'Caroline plans to research adoption agencies.',
           vector: [],
           extractionRefs: ['extraction:raw-1'],
@@ -3068,7 +3068,7 @@ test('recallMemories searches curated and raw routes then returns curated-first 
 
   assert.deepEqual(hits, [
     {
-      memoryId: 'global_observation:curated-1',
+      memoryId: 'observation:curated-1',
       title: 'Caroline plans to research adoption agencies.',
       summary: 'Caroline plans to research adoption agencies.',
       content: 'OBSERVATION: Caroline plans to research adoption agencies.',
@@ -3147,7 +3147,7 @@ test('recallMemories enriches extraction hits from raw turn session_id', async (
         }];
       },
     },
-    globalObservationTable: {
+    observationTable: {
       search: async () => [],
     },
     extractionTable: {
@@ -3170,7 +3170,7 @@ test('recallMemories enriches extraction hits from raw turn session_id', async (
 
   const hits = await recallMemories(client, 'native session', 1, {
     embed: async () => [1, 0],
-    includeGlobalObservations: false,
+    includeObservations: false,
   });
 
   assert.equal(hits[0]?.memoryId, 'extraction:raw-native');
@@ -3184,11 +3184,11 @@ test('recallMemories enriches extraction hits from raw turn session_id', async (
 
 test('recallMemories filters raw hits source by selected curated hits', async () => {
   const client = {
-    globalObservationTable: {
+    observationTable: {
       search: async () => [
         {
           id: 'curated-1',
-          globalPath: 'Caroline / Research',
+          path: 'Caroline / Research',
           text: 'Caroline researched adoption agencies.',
           vector: [],
           extractionRefs: [],
@@ -3197,11 +3197,11 @@ test('recallMemories filters raw hits source by selected curated hits', async ()
         },
       ],
     },
-    globalObservationContextTable: {
+    observationContextTable: {
       get: async ({ ids }) => ids.includes('curated-1')
         ? [{
             id: 'curated-1',
-            globalPath: 'Caroline / Research',
+            path: 'Caroline / Research',
             parentId: null,
             position: 0,
             content: 'Caroline researched adoption agencies.',
@@ -3246,17 +3246,17 @@ test('recallMemories filters raw hits source by selected curated hits', async ()
   };
 
   const hits = await recallMemories(client, 'Caroline research', 2, { embed: async () => [1, 0] });
-  assert.deepEqual(hits.map((hit) => hit.memoryId), ['global_observation:curated-1', 'extraction:raw-2']);
+  assert.deepEqual(hits.map((hit) => hit.memoryId), ['observation:curated-1', 'extraction:raw-2']);
 });
 
 test('recallMemories includes referenced extraction text for observation hits', async () => {
   const calls = [];
   const client = {
-    globalObservationTable: {
+    observationTable: {
       search: async () => [
         {
           id: 'curated-1',
-          globalPath: 'Caroline / Summer plans',
+          path: 'Caroline / Summer plans',
           text: [
             'Caroline is working on summer plans.',
             '- [priority] adoption research',
@@ -3337,7 +3337,7 @@ test('recallMemories includes referenced extraction text for observation hits', 
 
   const hits = await recallMemories(client, 'Caroline summer plans', 1, { embed: async () => [1, 0] });
 
-  assert.equal(hits[0].memoryId, 'global_observation:curated-1');
+  assert.equal(hits[0].memoryId, 'observation:curated-1');
   assert.match(hits[0].content, /OBSERVATION: Caroline is working on summer plans/);
   assert.match(hits[0].content, /- \[priority\] adoption research/);
   assert.match(hits[0].content, /- extraction: ## Title/);
@@ -3368,11 +3368,11 @@ test('recallMemories includes referenced extraction text for observation hits', 
 test('recallMemories filters parent observation contexts from curated hits', async () => {
   const calls = [];
   const client = {
-    globalObservationContextTable: {
+    observationContextTable: {
       list: async () => [
         {
           id: 'parent-1',
-          globalPath: 'Caroline / Family plans',
+          path: 'Caroline / Family plans',
           parentId: null,
           position: 0,
           content: 'Caroline is pursuing adoption.',
@@ -3382,7 +3382,7 @@ test('recallMemories filters parent observation contexts from curated hits', asy
         },
         {
           id: 'leaf-1',
-          globalPath: 'Caroline / Family plans / Summer plans',
+          path: 'Caroline / Family plans / Summer plans',
           parentId: 'parent-1',
           position: 0,
           content: 'Caroline researched adoption agencies.',
@@ -3392,7 +3392,7 @@ test('recallMemories filters parent observation contexts from curated hits', asy
         },
         {
           id: 'leaf-2',
-          globalPath: 'Caroline / Family plans / Agency choice',
+          path: 'Caroline / Family plans / Agency choice',
           parentId: 'parent-1',
           position: 1,
           content: 'Caroline chose an LGBTQ-supportive adoption agency.',
@@ -3402,13 +3402,13 @@ test('recallMemories filters parent observation contexts from curated hits', asy
         },
       ],
     },
-    globalObservationTable: {
+    observationTable: {
       search: async (params) => {
         calls.push(params);
         return [
           {
             id: 'parent-1',
-            globalPath: 'Caroline / Family plans',
+            path: 'Caroline / Family plans',
             text: 'Caroline is pursuing adoption.',
             vector: [],
             extractionRefs: ['extraction:raw-parent'],
@@ -3417,7 +3417,7 @@ test('recallMemories filters parent observation contexts from curated hits', asy
           },
           {
             id: 'leaf-1',
-            globalPath: 'Caroline / Family plans / Summer plans',
+            path: 'Caroline / Family plans / Summer plans',
             text: 'Caroline researched adoption agencies.',
             vector: [],
             extractionRefs: ['extraction:raw-1'],
@@ -3426,7 +3426,7 @@ test('recallMemories filters parent observation contexts from curated hits', asy
           },
           {
             id: 'leaf-2',
-            globalPath: 'Caroline / Family plans / Agency choice',
+            path: 'Caroline / Family plans / Agency choice',
             text: 'Caroline chose an LGBTQ-supportive adoption agency.',
             vector: [],
             extractionRefs: ['extraction:raw-2'],
@@ -3443,14 +3443,14 @@ test('recallMemories filters parent observation contexts from curated hits', asy
 
   const hits = await recallMemories(client, 'Caroline summer plans', 2, { embed: async () => [1, 0] });
 
-  assert.deepEqual(hits.map((hit) => hit.memoryId), ['global_observation:leaf-1', 'global_observation:leaf-2']);
+  assert.deepEqual(hits.map((hit) => hit.memoryId), ['observation:leaf-1', 'observation:leaf-2']);
   assert.equal(calls[0].limit, 8);
 });
 
 test('recallMemories does not filter raw hits source only by unselected curated candidates', async () => {
   const curated = Array.from({ length: 5 }, (_, index) => ({
     id: `curated-${index + 1}`,
-    globalPath: `Entity ${index + 1}`,
+    path: `Entity ${index + 1}`,
     text: `Curated memory ${index + 1}.`,
     vector: [],
     extractionRefs: [`extraction:raw-${index + 1}`],
@@ -3458,7 +3458,7 @@ test('recallMemories does not filter raw hits source only by unselected curated 
     updatedAt: '2024-01-01T00:00:00Z',
   }));
   const client = {
-    globalObservationTable: {
+    observationTable: {
       search: async () => curated,
     },
     extractionTable: {
@@ -3482,10 +3482,10 @@ test('recallMemories does not filter raw hits source only by unselected curated 
 
   const hits = await recallMemories(client, 'query', 5, { embed: async () => [1, 0] });
   assert.deepEqual(hits.map((hit) => hit.memoryId), [
-    'global_observation:curated-1',
-    'global_observation:curated-2',
-    'global_observation:curated-3',
-    'global_observation:curated-4',
+    'observation:curated-1',
+    'observation:curated-2',
+    'observation:curated-3',
+    'observation:curated-4',
     'extraction:raw-5',
   ]);
 });
@@ -3494,7 +3494,7 @@ test('recallMemories supports fts mode without embedding the query', async () =>
   let embedCalls = 0;
   const calls = [];
   const client = {
-    globalObservationTable: {
+    observationTable: {
       search: async (params) => {
         calls.push(['observation', params]);
         return [];
@@ -3530,10 +3530,10 @@ test('recallMemories returns recalled memory when budget is positive', async () 
   const calls = [];
   let seenCandidates = [];
   const client = {
-    globalObservationTable: {
+    observationTable: {
       search: async () => [{
         id: 'curated-1',
-        globalPath: 'Caroline / Research',
+        path: 'Caroline / Research',
         text: 'Caroline plans to research adoption agencies.',
         vector: [],
         extractionRefs: ['extraction:obs-2'],
@@ -3598,17 +3598,17 @@ test('recallMemories returns recalled memory when budget is positive', async () 
   }]);
   assert.equal(calls[0].limit, 20);
   assert.deepEqual(seenCandidates.map((candidate) => candidate.memoryId), [
-    'global_observation:curated-1',
+    'observation:curated-1',
     'extraction:obs-1',
   ]);
 });
 
 test('recallMemories uses candidate refs for recalled memory', async () => {
   const client = {
-    globalObservationTable: {
+    observationTable: {
       search: async () => [{
         id: 'curated-1',
-        globalPath: 'Caroline / Research',
+        path: 'Caroline / Research',
         text: 'Caroline plans to research adoption agencies.',
         vector: [],
         extractionRefs: ['extraction:curated-source'],
@@ -4086,14 +4086,14 @@ test('snapshot extraction state rewrite updates and deletes extraction rows', as
   assert.equal(updatedRow.category, undefined);
   assert.equal(updatedRow.anchors, undefined);
   assert.deepEqual(updatedRow.turnRefs, ['turn:2']);
-  assert.deepEqual(updatedRow.globalObservationPaths, []);
+  assert.deepEqual(updatedRow.observationPaths, []);
   assert.equal(addedRow.title, 'Painting preference');
   assert.equal(addedRow.summary, 'Painting preference\n\nnew painting memory');
   assert.equal(addedRow.content, '## Title\n\nPainting preference\n\n## Summary\n\nnew painting memory\n\n## Content\n\nnew context');
   assert.equal(addedRow.category, undefined);
   assert.equal(addedRow.anchors, undefined);
   assert.deepEqual(addedRow.turnRefs, ['turn:3']);
-  assert.deepEqual(addedRow.globalObservationPaths, []);
+  assert.deepEqual(addedRow.observationPaths, []);
 });
 
 test('extraction state rewrite computes update add and delete changes', () => {

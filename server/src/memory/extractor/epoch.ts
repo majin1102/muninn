@@ -67,6 +67,62 @@ export class OpenEpoch {
     return turnResult;
   }
 
+  acceptBatch(
+    turnContents: TurnContent[],
+    sessionRegistry: SessionRegistry,
+  ): Promise<Turn[]> {
+    if (this.sealed) {
+      throw new EpochSealedError(this.epoch);
+    }
+    if (turnContents.length === 0) {
+      return Promise.resolve([]);
+    }
+
+    let resolveTurns: (turns: Turn[]) => void;
+    let rejectTurns: (error: unknown) => void;
+    const turnsResult = new Promise<Turn[]>((resolve, reject) => {
+      resolveTurns = resolve;
+      rejectTurns = reject;
+    });
+
+    // Writes entering the same open epoch are serialized so seal() can close over a complete epoch.
+    const task = this.acceptChain.then(async () => {
+      try {
+        const acceptedTurns: Turn[] = [];
+        for (const group of groupBySession(turnContents)) {
+          const first = group[0];
+          if (!first) {
+            continue;
+          }
+          const session = await sessionRegistry.load(
+            first.sessionId,
+            first.agent,
+            turnOwnership(first),
+          );
+          const accepted = await session.acceptBatch(group, this.epoch);
+          for (const acceptedTurn of accepted) {
+            if (acceptedTurn.turn && !acceptedTurn.deduped) {
+              acceptedTurns.push(acceptedTurn.turn);
+              if (isObservable(acceptedTurn.turn)) {
+                this.stagedObservableTurns.push(acceptedTurn.turn);
+              }
+            }
+          }
+        }
+        resolveTurns!(acceptedTurns);
+      } catch (error) {
+        rejectTurns!(error);
+      }
+    });
+
+    this.acceptChain = task.then(
+      () => undefined,
+      () => undefined,
+    );
+
+    return turnsResult;
+  }
+
   hasStagedTurns(): boolean {
     return this.stagedExtractableTurns.length > 0;
   }
@@ -95,6 +151,23 @@ function turnOwnership(turn: TurnContent): { project: string; cwd: string } {
     project: turn.project?.trim() || path.basename(cwd) || 'default',
     cwd,
   };
+}
+
+function groupBySession(turns: TurnContent[]): TurnContent[][] {
+  const groups = new Map<string, TurnContent[]>();
+  const order: string[] = [];
+  for (const turn of turns) {
+    const ownership = turnOwnership(turn);
+    const key = `${turn.sessionId}\0${turn.agent}\0${ownership.project}\0${ownership.cwd}`;
+    const existing = groups.get(key);
+    if (existing) {
+      existing.push(turn);
+      continue;
+    }
+    groups.set(key, [turn]);
+    order.push(key);
+  }
+  return order.map((key) => groups.get(key)!);
 }
 
 export class EpochQueue {

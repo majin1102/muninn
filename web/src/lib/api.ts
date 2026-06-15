@@ -18,8 +18,8 @@ import type {
   SessionAgentsResponse,
   SessionGroupsResponse,
   SessionNode,
-  ExtractionPreview,
   SessionSegmentPreview,
+  SessionTimelineItem,
   SessionTurnsResponse,
   SettingsConfigResponse,
   TurnPreview,
@@ -59,7 +59,7 @@ export type ProjectSegmentNode = SessionSegmentPreview & {
   sessionLabel: string;
 };
 
-export type ProjectObservationNode = ExtractionPreview & {
+export type ProjectTimelineNode = SessionTimelineItem & {
   agent: string;
   sessionKey: string;
   sessionLabel: string;
@@ -69,8 +69,7 @@ export type ProjectSessionNode = SessionNode & {
   agent: string;
   turns: ProjectTurnNode[];
   segments: ProjectSegmentNode[];
-  observations: ProjectObservationNode[];
-  sessionSummary?: string;
+  timeline: ProjectTimelineNode[];
   nextOffset: number | null;
   loading: boolean;
   loaded: boolean;
@@ -91,8 +90,7 @@ export type AppClient = {
   loadSessionTurns(session: ProjectSessionNode, offset?: number): Promise<{
     turns: ProjectTurnNode[];
     segments: ProjectSegmentNode[];
-    observations: ProjectObservationNode[];
-    sessionSummary?: string;
+    timeline: ProjectTimelineNode[];
     nextOffset: number | null;
   }>;
   getDocument(memoryId: string): Promise<MemoryDocument>;
@@ -247,13 +245,12 @@ export function createAppClient(apiBase: string, usesDemoData: boolean): AppClie
               sessionKey: session.sessionKey,
               sessionLabel: session.displaySessionId,
             })),
-            observations: (response.observations ?? []).map((observation) => ({
-              ...observation,
+            timeline: response.timeline.map((item) => ({
+              ...item,
               agent: session.agent,
               sessionKey: session.sessionKey,
               sessionLabel: session.displaySessionId,
             })),
-            sessionSummary: response.sessionSummary,
             nextOffset: response.nextOffset,
             loaded: true,
           };
@@ -284,13 +281,12 @@ export function createAppClient(apiBase: string, usesDemoData: boolean): AppClie
           sessionKey: session.sessionKey,
           sessionLabel: session.displaySessionId,
         })),
-        observations: (response.observations ?? []).map((observation) => ({
-          ...observation,
+        timeline: response.timeline.map((item) => ({
+          ...item,
           agent: session.agent,
           sessionKey: session.sessionKey,
           sessionLabel: session.displaySessionId,
         })),
-        sessionSummary: response.sessionSummary,
         nextOffset: response.nextOffset,
       };
     },
@@ -620,7 +616,7 @@ async function projectTreeFromAgents(
         agent: agent.agent,
         turns: [],
         segments: [],
-        observations: [],
+        timeline: [],
         nextOffset: null,
         loading: false,
         loaded: false,

@@ -31,7 +31,7 @@ export type ObserveCwdScopeInput = {
   observedDocument: string;
   extractions: ObserverExtractionInput[];
   validRefs?: string[];
-  getGlobalObservation?: (paths: string[]) => Promise<string> | string;
+  getObservation?: (paths: string[]) => Promise<string> | string;
   maxAttempts?: number;
   database?: string;
   signal?: AbortSignal;
@@ -89,7 +89,7 @@ export async function observeCwdScope(input: ObserveCwdScopeInput): Promise<Pars
       signal: input.signal,
       cwdScope: input.cwdScope,
       extractionCount: input.extractions.length,
-      getGlobalObservation: input.getGlobalObservation,
+      getObservation: input.getObservation,
       model: input.model,
       onToolResults: (event) => {
         for (const result of event.toolResults) {
@@ -138,7 +138,7 @@ async function generateObserverText(params: {
   signal?: AbortSignal;
   cwdScope: string;
   extractionCount: number;
-  getGlobalObservation?: (paths: string[]) => Promise<string> | string;
+  getObservation?: (paths: string[]) => Promise<string> | string;
   model?: ToolModel;
   onToolResults?: (event: {
     toolCalls: LlmToolCall[];
@@ -151,26 +151,26 @@ async function generateObserverText(params: {
   }) => Promise<void> | void;
 }): Promise<string | null> {
   try {
-    if (!params.getGlobalObservation) {
+    if (!params.getObservation) {
       return await generateText('observer', {
         system: params.system,
         prompt: params.prompt,
         signal: params.signal,
       });
     }
-    let getGlobalObservationCalls = 0;
-    const maxGetGlobalObservationCalls = 3;
+    let getObservationCalls = 0;
+    const maxGetObservationCalls = 3;
     return await runToolLoop({
       messages: [
         { role: 'system', content: params.system },
         { role: 'user', content: params.prompt },
       ],
-      tools: [getGlobalObservationSpec()],
+      tools: [getObservationSpec()],
       toolHandlers: {
         get_observation: async (args) => {
-          getGlobalObservationCalls += 1;
-          if (getGlobalObservationCalls > maxGetGlobalObservationCalls) {
-            const error = new Error(`get_observation exceeded max calls=${maxGetGlobalObservationCalls}`);
+          getObservationCalls += 1;
+          if (getObservationCalls > maxGetObservationCalls) {
+            const error = new Error(`get_observation exceeded max calls=${maxGetObservationCalls}`);
             (error as Error & { fatalToolError?: boolean }).fatalToolError = true;
             throw error;
           }
@@ -180,7 +180,7 @@ async function generateObserverText(params: {
           if (paths.length === 0) {
             throw new Error('get_observation requires paths');
           }
-          return { paths, content: await params.getGlobalObservation!(paths) };
+          return { paths, content: await params.getObservation!(paths) };
         },
       },
       model: params.model ?? generateWithTools,
@@ -282,7 +282,7 @@ async function runToolLoop(params: {
   throw new Error(`tool loop exceeded maxSteps=${maxSteps}`);
 }
 
-function getGlobalObservationSpec(): LlmTool {
+function getObservationSpec(): LlmTool {
   return {
     name: 'get_observation',
     description: 'Get root-to-node paths and complete subtrees for observation paths visible in the outline.',
@@ -293,7 +293,7 @@ function getGlobalObservationSpec(): LlmTool {
         paths: {
           type: 'array',
           items: { type: 'string' },
-          description: 'GlobalObservation paths visible in the observation outline.',
+          description: 'Observation paths visible in the observation outline.',
         },
       },
       required: ['paths'],
@@ -360,5 +360,5 @@ async function writeObserverTrace(event: {
 export const __testing = {
   renderExtractions,
   trimContent,
-  getGlobalObservationSpec,
+  getObservationSpec,
 };

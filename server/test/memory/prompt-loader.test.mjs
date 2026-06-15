@@ -78,7 +78,7 @@ test('thread session memory prompt organizes entity extractions by questions', (
   assert.doesNotMatch(prompt.system, /memory-get/);
   assert.doesNotMatch(prompt.userTemplate, /Root anchor:/);
   assert.doesNotMatch(prompt.userTemplate, /Rewrite content:/);
-  assert.doesNotMatch(prompt.userTemplate, /GlobalObservation outline:/);
+  assert.doesNotMatch(prompt.userTemplate, /Observation outline:/);
   assert.match(prompt.userTemplate, /Observed document:/);
   assert.match(prompt.userTemplate, /Extraction units:/);
 });

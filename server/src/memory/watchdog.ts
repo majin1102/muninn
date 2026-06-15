@@ -13,7 +13,7 @@ import { writeMuninnLog } from './logging.js';
 import type { CheckpointLock, MuninnBackend } from './backend.js';
 import type { NativeTables, TableStats } from './native.js';
 
-type DatasetName = 'turn' | 'session' | 'extraction' | 'globalObservationContext' | 'global_observation';
+type DatasetName = 'turn' | 'session' | 'extraction' | 'observationContext' | 'observation';
 type WatchdogLevel = 'info' | 'error';
 type WatchdogEvent =
   | 'failed'
@@ -41,7 +41,7 @@ type DatasetState = {
 };
 
 const WATCHDOG_LOG_FILE_NAME = 'watchdog.jsonl';
-const DATASETS: DatasetName[] = ['turn', 'session', 'extraction', 'globalObservationContext', 'global_observation'];
+const DATASETS: DatasetName[] = ['turn', 'session', 'extraction', 'observationContext', 'observation'];
 const noopCheckpointLock: CheckpointLock = {
   shared: async (operation) => operation(),
   exclusive: async (operation) => operation(),
@@ -130,8 +130,8 @@ export class Watchdog {
         this.maintainTurns(),
         this.maintainSessions(),
         this.maintainExtraction(),
-        this.maintainGlobalObservationContext(),
-        this.maintainGlobalObservation(),
+        this.maintainObservationContext(),
+        this.maintainObservation(),
       ]);
       await this.flushCheckpoint();
     })()
@@ -317,23 +317,23 @@ export class Watchdog {
     }));
   }
 
-  private async maintainGlobalObservation(): Promise<void> {
-    if (!this.binding.globalObservationTable?.ensureVectorIndex) {
+  private async maintainObservation(): Promise<void> {
+    if (!this.binding.observationTable?.ensureVectorIndex) {
       return;
     }
-    await this.checkpointLock.shared(() => this.runDatasetMaintenance('global_observation', async (setVersion) => {
-      const ensured = await this.binding.globalObservationTable.ensureVectorIndex({
+    await this.checkpointLock.shared(() => this.runDatasetMaintenance('observation', async (setVersion) => {
+      const ensured = await this.binding.observationTable.ensureVectorIndex({
         targetPartitionSize: this.config.extraction.targetPartitionSize,
       });
-      const stats = await this.binding.globalObservationTable.stats();
+      const stats = await this.binding.observationTable.stats();
       if (!stats) {
-        this.resetState('global_observation');
+        this.resetState('observation');
         return;
       }
 
       setVersion(stats.version);
-      const unchanged = this.versionUnchanged('global_observation', stats);
-      this.updateSeenState('global_observation', stats);
+      const unchanged = this.versionUnchanged('observation', stats);
+      this.updateSeenState('observation', stats);
 
       if (!ensured.created && unchanged) {
         return;
@@ -341,29 +341,29 @@ export class Watchdog {
 
       let compactResult: { changed: boolean } | null = null;
       if (stats.fragmentCount >= this.config.compactMinFragments) {
-        compactResult = await this.binding.globalObservationTable.compact();
+        compactResult = await this.binding.observationTable.compact();
       }
-      const optimizeResult = await this.binding.globalObservationTable.optimize({
+      const optimizeResult = await this.binding.observationTable.optimize({
         mergeCount: this.config.extraction.optimizeMergeCount,
       });
-      const finalStats = await this.binding.globalObservationTable.stats() ?? stats;
-      this.updateMaintainedState('global_observation', finalStats);
+      const finalStats = await this.binding.observationTable.stats() ?? stats;
+      this.updateMaintainedState('observation', finalStats);
 
       if (ensured.created) {
-        await this.logInfo('global_observation', 'index_created', finalStats.version, {
+        await this.logInfo('observation', 'index_created', finalStats.version, {
           targetPartitionSize: this.config.extraction.targetPartitionSize,
           fragmentCount: finalStats.fragmentCount,
           rowCount: finalStats.rowCount,
         });
       }
       if (compactResult) {
-        await this.logInfo('global_observation', 'compacted', finalStats.version, {
+        await this.logInfo('observation', 'compacted', finalStats.version, {
           changed: compactResult.changed,
           fragmentCount: finalStats.fragmentCount,
           rowCount: finalStats.rowCount,
         });
       }
-      await this.logInfo('global_observation', 'optimized', finalStats.version, {
+      await this.logInfo('observation', 'optimized', finalStats.version, {
         changed: optimizeResult.changed,
         mergeCount: this.config.extraction.optimizeMergeCount,
         fragmentCount: finalStats.fragmentCount,
@@ -373,39 +373,39 @@ export class Watchdog {
     }));
   }
 
-  private async maintainGlobalObservationContext(): Promise<void> {
-    if (!this.binding.globalObservationContextTable?.ensureIdIndex) {
+  private async maintainObservationContext(): Promise<void> {
+    if (!this.binding.observationContextTable?.ensureIdIndex) {
       return;
     }
-    await this.checkpointLock.shared(() => this.runDatasetMaintenance('globalObservationContext', async (setVersion) => {
-      const ensured = await this.binding.globalObservationContextTable.ensureIdIndex();
-      const stats = await this.binding.globalObservationContextTable.stats();
+    await this.checkpointLock.shared(() => this.runDatasetMaintenance('observationContext', async (setVersion) => {
+      const ensured = await this.binding.observationContextTable.ensureIdIndex();
+      const stats = await this.binding.observationContextTable.stats();
       if (!stats) {
-        this.resetState('globalObservationContext');
+        this.resetState('observationContext');
         return;
       }
 
       setVersion(stats.version);
-      const unchanged = this.versionUnchanged('globalObservationContext', stats);
-      this.updateSeenState('globalObservationContext', stats);
+      const unchanged = this.versionUnchanged('observationContext', stats);
+      this.updateSeenState('observationContext', stats);
 
       if (!ensured.created && unchanged) {
         return;
       }
 
-      const optimizeResult = await this.binding.globalObservationContextTable.optimize({
+      const optimizeResult = await this.binding.observationContextTable.optimize({
         mergeCount: this.config.extraction.optimizeMergeCount,
       });
-      const finalStats = await this.binding.globalObservationContextTable.stats() ?? stats;
-      this.updateMaintainedState('globalObservationContext', finalStats);
+      const finalStats = await this.binding.observationContextTable.stats() ?? stats;
+      this.updateMaintainedState('observationContext', finalStats);
 
       if (ensured.created) {
-        await this.logInfo('globalObservationContext', 'index_created', finalStats.version, {
+        await this.logInfo('observationContext', 'index_created', finalStats.version, {
           fragmentCount: finalStats.fragmentCount,
           rowCount: finalStats.rowCount,
         });
       }
-      await this.logInfo('globalObservationContext', 'optimized', finalStats.version, {
+      await this.logInfo('observationContext', 'optimized', finalStats.version, {
         changed: optimizeResult.changed,
         mergeCount: this.config.extraction.optimizeMergeCount,
         fragmentCount: finalStats.fragmentCount,
@@ -549,10 +549,10 @@ export class Watchdog {
         return this.binding.sessionTable.cleanup?.({ floorVersion }) ?? Promise.resolve({ changed: false });
       case 'extraction':
         return this.binding.extractionTable.cleanup?.({ floorVersion }) ?? Promise.resolve({ changed: false });
-      case 'globalObservationContext':
+      case 'observationContext':
         return Promise.resolve({ changed: false });
-      case 'global_observation':
-        return this.binding.globalObservationTable?.cleanup?.({ floorVersion }) ?? Promise.resolve({ changed: false });
+      case 'observation':
+        return this.binding.observationTable?.cleanup?.({ floorVersion }) ?? Promise.resolve({ changed: false });
     }
   }
 
@@ -607,7 +607,7 @@ function checkpointFloors(checkpoint: CheckpointContent | CheckpointFile): Recor
     turn: checkpoint.extractor.baseline.turn,
     session: checkpoint.extractor.baseline.session,
     extraction: checkpoint.extractor.baseline.extraction,
-    globalObservationContext: checkpoint.observer.baseline.globalObservationContext,
-    global_observation: checkpoint.extractor.baseline.global_observation,
+    observationContext: checkpoint.observer.baseline.observationContext,
+    observation: checkpoint.extractor.baseline.observation,
   };
 }

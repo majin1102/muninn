@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { captureTurn, isCanonicalProjectIdentity, observer, sessions, turns } from '../memory/index.js';
+import { captureTurns, isCanonicalProjectIdentity, sessions, turns } from '../memory/index.js';
 import { loadMuninnConfig, resolveStorageTarget } from '../memory/config.js';
 import { getNativeTables } from '../memory/native.js';
 import {
@@ -19,6 +19,7 @@ import type {
   ImportSelectedResponse,
   ImportSessionsListResponse,
   SessionIdentity,
+  TurnContent,
 } from '@muninn/common';
 import * as SessionIdentityKey from '@muninn/common/session-identity';
 import { getCapturePolicy, removeCapturePolicy, setCaptureEnabled } from './capture_policy.js';
@@ -178,6 +179,7 @@ export async function importSelectedSessions(adapter: ImportAdapter, sourcePaths
       let turnsForSession = 0;
       const seen = new Set<string>();
       const existingSequences = await existingSourceSequences(adapter, session);
+      const turnContents: TurnContent[] = [];
       for (const [index, turn] of session.turns.entries()) {
         if (existingSequences.has(index)) {
           continue;
@@ -186,10 +188,13 @@ export async function importSelectedSessions(adapter: ImportAdapter, sourcePaths
         if (seen.has(marker)) {
           continue;
         }
-        await captureTurn(toTurnContent(session, turn, index, { agent: adapter.agent, ingest: adapter.ingest, markerKey: adapter.markerKey }));
+        turnContents.push(toTurnContent(session, turn, index, { agent: adapter.agent, ingest: adapter.ingest, markerKey: adapter.markerKey }));
         seen.add(marker);
         existingSequences.add(index);
         turnsForSession += 1;
+      }
+      if (turnContents.length > 0) {
+        await captureTurns(turnContents);
       }
       if (turnsForSession > 0) {
         importedSessions += 1;
@@ -199,10 +204,6 @@ export async function importSelectedSessions(adapter: ImportAdapter, sourcePaths
     } catch (error) {
       failedSessions.push({ sourcePath, errorMessage: error instanceof Error ? error.message : String(error) });
     }
-  }
-
-  if (importedTurns > 0) {
-    await observer.flushPending();
   }
 
   // Importing a project opts it into live auto-capture going forward.
@@ -291,13 +292,13 @@ async function deleteRelatedMemories(turnIds: string[]): Promise<void> {
   const extractions = (await tables.extractionTable.list({}))
     .filter((row) => row.turnRefs.some((ref) => turnIdSet.has(ref)));
   const extractionIds = [...new Set(extractions.map((row) => row.id))];
-  const globalPaths = [...new Set(extractions.flatMap((row) => row.globalObservationPaths))];
+  const observationPaths = [...new Set(extractions.flatMap((row) => row.observationPaths))];
   if (extractionIds.length > 0) {
     await tables.extractionTable.delete({ ids: extractionIds });
   }
-  if (globalPaths.length > 0) {
-    await tables.globalObservationContextTable.delete({ ids: globalPaths });
-    await tables.globalObservationTable.delete({ ids: globalPaths });
+  if (observationPaths.length > 0) {
+    await tables.observationContextTable.delete({ ids: observationPaths });
+    await tables.observationTable.delete({ ids: observationPaths });
   }
 }
 

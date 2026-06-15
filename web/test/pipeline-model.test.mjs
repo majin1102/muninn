@@ -17,8 +17,8 @@ async function loadPipelineModel() {
 function task(patch) {
   return {
     id: patch.id,
-    kind: patch.kind ?? 'global-observing',
-    title: patch.title ?? 'Global observing',
+    kind: patch.kind ?? 'observation',
+    title: patch.title ?? 'Observation',
     target: patch.target ?? 'Entity: Memory',
     status: patch.status,
     statusText: patch.statusText ?? 'processing memory work',
@@ -57,15 +57,15 @@ test('filters pipeline tasks by kind, status, and time', async () => {
   const { filterPipelineTasks } = await loadPipelineModel();
   const nowMs = new Date('2026-06-04T12:00:00.000Z').getTime();
   const tasks = [
-    task({ id: 'running-global', kind: 'global-observing', status: 'running', updatedAt: '2026-06-04T11:00:00.000Z' }),
-    task({ id: 'queued-global', kind: 'global-observing', status: 'queued', updatedAt: '2026-06-04T10:00:00.000Z' }),
-    task({ id: 'done-global', kind: 'global-observing', status: 'done', updatedAt: '2026-06-04T09:00:00.000Z' }),
+    task({ id: 'running-observation', kind: 'observation', status: 'running', updatedAt: '2026-06-04T11:00:00.000Z' }),
+    task({ id: 'queued-observation', kind: 'observation', status: 'queued', updatedAt: '2026-06-04T10:00:00.000Z' }),
+    task({ id: 'done-observation', kind: 'observation', status: 'done', updatedAt: '2026-06-04T09:00:00.000Z' }),
     task({ id: 'old-session', kind: 'session-observing', status: 'running', updatedAt: '2026-06-02T09:00:00.000Z' }),
   ];
 
   assert.deepEqual(
-    filterPipelineTasks(tasks, 'global-observing', 'active', 'last_24h', { from: null, to: null }, nowMs).map((item) => item.id),
-    ['running-global', 'queued-global'],
+    filterPipelineTasks(tasks, 'observation', 'active', 'last_24h', { from: null, to: null }, nowMs).map((item) => item.id),
+    ['running-observation', 'queued-observation'],
   );
 });
 

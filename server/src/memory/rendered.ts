@@ -1,15 +1,15 @@
 import type { SessionSnapshot, RenderedMemory, Turn } from './backend.js';
-import type { Extraction, GlobalObservation } from './native.js';
+import type { Extraction, Observation } from './native.js';
 
-export function inferRenderedMemoryKind(memoryId: string): 'turn' | 'session' | 'extraction' | 'global_observation' {
+export function inferRenderedMemoryKind(memoryId: string): 'turn' | 'session' | 'extraction' | 'observation' {
   if (memoryId.startsWith('turn:')) {
     return 'turn';
   }
   if (memoryId.startsWith('extraction:')) {
     return 'extraction';
   }
-  if (memoryId.startsWith('global_observation:')) {
-    return 'global_observation';
+  if (memoryId.startsWith('observation:')) {
+    return 'observation';
   }
   return 'session';
 }
@@ -86,12 +86,12 @@ export function renderExtraction(memory: Extraction): RenderedMemory {
   };
 }
 
-export function renderGlobalObservation(memory: GlobalObservation): RenderedMemory {
+export function renderObservation(memory: Observation): RenderedMemory {
   const references = memory.extractionRefs.length > 0
     ? `References:\n${memory.extractionRefs.map((ref) => `- ${renderExtractionRef(ref)}`).join('\n')}`
     : undefined;
   return {
-    memoryId: `global_observation:${memory.id}`,
+    memoryId: `observation:${memory.id}`,
     title: memory.text,
     summary: memory.text,
     detail: references,

@@ -77,6 +77,40 @@ export class Session {
     });
   }
 
+  async acceptBatch(contents: TurnContent[], observingEpoch: number): Promise<AcceptedTurn[]> {
+    if (contents.length === 0) {
+      return [];
+    }
+    return this.runAcceptExclusive(async () => {
+      this.touch();
+      const turns = contents.map((content) => {
+        const sessionId = normalizeSessionId(content.sessionId);
+        validateTurnContent(this.config, content, sessionId);
+        return buildRawTurn(
+          this.config,
+          content,
+          sessionId,
+          resolveTurnOwnership(content),
+          observingEpoch,
+        );
+      });
+      const rows = await this.client.turnTable.insert({
+        turns: turns.map(serializeTurn),
+      });
+      const accepted = rows.map((row) => ({
+        turn: readTurn(row),
+        deduped: false,
+      }));
+      for (const acceptedTurn of accepted) {
+        if (acceptedTurn.turn) {
+          this.rememberTurn(acceptedTurn.turn);
+        }
+      }
+      this.touch();
+      return accepted;
+    });
+  }
+
   touch(): void {
     this.lastUsedAt = Date.now();
   }
@@ -157,6 +191,30 @@ async function buildTurn(
     summary: content.summary,
     response: content.response,
   });
+  return buildStoredTurn(config, content, sessionId, ownership, observingEpoch, summary);
+}
+
+function buildRawTurn(
+  config: { sessionId?: string; agent: string; observer: string },
+  content: TurnContent,
+  sessionId: string | undefined,
+  ownership: { project: string; cwd: string },
+  observingEpoch: number,
+): Turn {
+  return buildStoredTurn(config, content, sessionId, ownership, observingEpoch, {
+    title: content.title ?? null,
+    summary: content.summary ?? null,
+  });
+}
+
+function buildStoredTurn(
+  config: { sessionId?: string; agent: string; observer: string },
+  content: TurnContent,
+  sessionId: string | undefined,
+  ownership: { project: string; cwd: string },
+  observingEpoch: number,
+  summary: { title?: string | null; summary?: string | null },
+): Turn {
   const now = new Date().toISOString();
   const createdAt = content.createdAt ?? content.updatedAt ?? now;
   const updatedAt = content.updatedAt ?? createdAt;

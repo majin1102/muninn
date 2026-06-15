@@ -2,8 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
-  buildExtractionsForTests,
   buildSessionSegmentsForTests,
+  buildSessionTimelineForTests,
   buildSessionTurnPageForTests,
   resolveSessionTreeNextOffsetForTests,
   resolveSessionNodeFromIndexForTests,
@@ -26,7 +26,21 @@ const turns = [
   },
 ];
 
-test('builds snapshot extraction segments ordered by first turn createdAt', () => {
+function snapshotDoc(content) {
+  return {
+    snapshotId: 'session:snapshot',
+    content,
+    createdAt: '2026-06-02T09:00:00.000Z',
+    updatedAt: '2026-06-02T11:00:00.000Z',
+  };
+}
+
+function extractionTimeline(content) {
+  return buildSessionTimelineForTests(snapshotDoc(content), turns)
+    .filter((item) => item.kind === 'extraction');
+}
+
+test('builds snapshot extraction segments in snapshot order', () => {
   const snapshot = [
     '# muninn',
     '',
@@ -41,18 +55,18 @@ test('builds snapshot extraction segments ordered by first turn createdAt', () =
     '更早的问题段落',
   ].join('\n');
 
-  assert.deepEqual(buildSessionSegmentsForTests(snapshot, turns), [
+  assert.deepEqual(buildSessionSegmentsForTests(snapshotDoc(snapshot), turns), [
     {
-      memoryId: 'turn:1~observation:1',
-      title: '更早的问题段落',
-      createdAt: '2026-06-02T10:00:00.000Z',
-      updatedAt: '2026-06-02T10:00:00.000Z',
-    },
-    {
-      memoryId: 'turn:2~observation:0',
+      memoryId: 'turn:2~timeline:0',
       title: '晚一点的问题段落',
       createdAt: '2026-06-02T10:10:00.000Z',
       updatedAt: '2026-06-02T10:10:00.000Z',
+    },
+    {
+      memoryId: 'turn:1~timeline:1',
+      title: '更早的问题段落',
+      createdAt: '2026-06-02T10:00:00.000Z',
+      updatedAt: '2026-06-02T10:00:00.000Z',
     },
   ]);
 });
@@ -71,9 +85,9 @@ test('uses extraction title heading for segment titles', () => {
     '- Keep title and summary required.',
   ].join('\n');
 
-  assert.deepEqual(buildSessionSegmentsForTests(snapshot, turns), [
+  assert.deepEqual(buildSessionSegmentsForTests(snapshotDoc(snapshot), turns), [
     {
-      memoryId: 'turn:1~observation:0',
+      memoryId: 'turn:1~timeline:0',
       title: 'Discussion segment navigation',
       createdAt: '2026-06-02T10:00:00.000Z',
       updatedAt: '2026-06-02T10:00:00.000Z',
@@ -94,9 +108,10 @@ test('parses extraction headings when Markdown leaves blank lines after headings
     'The parser should read the summary instead of treating the blank line as the end of the section.',
   ].join('\n');
 
-  assert.deepEqual(buildExtractionsForTests(snapshot, turns), [
+  assert.deepEqual(extractionTimeline(snapshot), [
     {
-      memoryId: 'turn:1~observation:0',
+      memoryId: 'turn:1~timeline:0',
+      kind: 'extraction',
       title: 'Markdown heading spacing',
       createdAt: '2026-06-02T10:00:00.000Z',
       updatedAt: '2026-06-02T10:00:00.000Z',
@@ -110,12 +125,15 @@ test('parses extraction headings when Markdown leaves blank lines after headings
   ]);
 });
 
-test('builds snapshot observations with markdown and refs', () => {
+test('builds snapshot timeline with summary, signals, markdown, and refs', () => {
   const snapshot = [
     '# Session title',
     '',
     '## Summary',
     'Session summary text',
+    '',
+    '## Signals',
+    '- User preference: Write in the session language.',
     '',
     '## Extractions',
     '<!-- sequence: 1; refs: [turn:1, turn:2] -->',
@@ -136,9 +154,28 @@ test('builds snapshot observations with markdown and refs', () => {
     'Write in the session language.',
   ].join('\n');
 
-  assert.deepEqual(buildExtractionsForTests(snapshot, turns), [
+  assert.deepEqual(buildSessionTimelineForTests(snapshotDoc(snapshot), turns), [
     {
-      memoryId: 'turn:1~observation:0',
+      memoryId: 'session:snapshot~timeline:summary',
+      kind: 'summary',
+      title: 'Summary',
+      createdAt: '2026-06-02T09:00:00.000Z',
+      updatedAt: '2026-06-02T11:00:00.000Z',
+      markdown: 'Session summary text',
+      refs: [],
+    },
+    {
+      memoryId: 'session:snapshot~timeline:signals',
+      kind: 'signals',
+      title: 'Signals',
+      createdAt: '2026-06-02T09:00:00.000Z',
+      updatedAt: '2026-06-02T11:00:00.000Z',
+      markdown: '- User preference: Write in the session language.',
+      refs: [],
+    },
+    {
+      memoryId: 'turn:1~timeline:0',
+      kind: 'extraction',
       title: 'Prompt budget rules',
       createdAt: '2026-06-02T10:00:00.000Z',
       updatedAt: '2026-06-02T10:00:00.000Z',
@@ -146,7 +183,8 @@ test('builds snapshot observations with markdown and refs', () => {
       refs: ['turn:1', 'turn:2'],
     },
     {
-      memoryId: 'turn:2~observation:1',
+      memoryId: 'turn:2~timeline:1',
+      kind: 'extraction',
       title: 'Title language',
       createdAt: '2026-06-02T10:10:00.000Z',
       updatedAt: '2026-06-02T10:10:00.000Z',
@@ -157,7 +195,7 @@ test('builds snapshot observations with markdown and refs', () => {
 });
 
 test('falls back to user prompt list when snapshot has no usable extraction refs', () => {
-  assert.deepEqual(buildSessionSegmentsForTests('## Extractions\n没有 refs', turns), [
+  assert.deepEqual(buildSessionSegmentsForTests(snapshotDoc('## Extractions\n没有 refs'), turns), [
     {
       memoryId: 'turn:2',
       title: 'fallback prompt b',
@@ -186,28 +224,28 @@ test('session turn page segments use snapshot content when available', async () 
   ].join('\n');
   const page = await buildSessionTurnPageForTests({
     turns,
-    snapshotContent: snapshot,
+    snapshot: snapshotDoc(snapshot),
     offset: 0,
     limit: 1,
   });
 
   assert.deepEqual(page.segments, [
     {
-      memoryId: 'turn:1~observation:1',
-      title: 'snapshot segment a',
-      createdAt: '2026-06-02T10:00:00.000Z',
-      updatedAt: '2026-06-02T10:00:00.000Z',
-    },
-    {
-      memoryId: 'turn:2~observation:0',
+      memoryId: 'turn:2~timeline:0',
       title: 'snapshot segment b',
       createdAt: '2026-06-02T10:10:00.000Z',
       updatedAt: '2026-06-02T10:10:00.000Z',
     },
+    {
+      memoryId: 'turn:1~timeline:1',
+      title: 'snapshot segment a',
+      createdAt: '2026-06-02T10:00:00.000Z',
+      updatedAt: '2026-06-02T10:00:00.000Z',
+    },
   ]);
-  assert.deepEqual(page.observations.map((observation) => observation.title), [
-    'snapshot segment a',
+  assert.deepEqual(page.timeline.map((item) => item.title), [
     'snapshot segment b',
+    'snapshot segment a',
   ]);
   assert.equal(page.turns.length, 1);
   assert.equal(page.nextOffset, 1);

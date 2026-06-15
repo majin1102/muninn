@@ -7,7 +7,7 @@ Add a `Pipelines` view to Muninn Board for monitoring memory-processing work. Th
 This view replaces implementation-centric labels in the UI. The user-facing task names are:
 
 - `Session observing`
-- `Global observing`
+- `Observation`
 - `Wiki compiling`
 
 The current backend may still use extractor and observer terminology. The UI maps those internal concepts into the task names above.
@@ -19,7 +19,7 @@ In scope:
 - Add `Pipelines` as a first-level Board navigation item.
 - Use a custom `Pipelines` icon: two vertical rails plus a right-side flow mark, matching lucide-style `24` viewBox, `2px` stroke, round caps and joins.
 - Render a Pipelines page with a constrained main content width.
-- Show task cards for session observing, global observing, and wiki compiling work.
+- Show task cards for session observing, observation, and wiki compiling work.
 - Show card-level `Input` and `Output` summaries.
 - Show a right-side inspector with `Input`, `Output`, `Trace`, and `Errors` tabs.
 - Add search/filter controls as visual affordances even if search behavior is initially inert.
@@ -109,11 +109,11 @@ Each card contains:
 Example:
 
 ```text
-green dot  Global observing   Entity: Lance row id                    inspect icon
+green dot  Observation   Entity: Lance row id                    inspect icon
 running · generating draft from 16 extractions · updated 4s ago
 
 Input                                      Output
-16 extractions from 3 turns       Global observation draft in progress
+16 extractions from 3 turns       Observation draft in progress
 ```
 
 Status text appears inline in the second line. Do not render `running`, `done`, `queued`, or `failed` as bordered pills inside cards. Use plain colored text:
@@ -185,7 +185,7 @@ The first implementation exposes a compact toolbar:
 
 Filter semantics:
 
-- `Task`: All, Session observing, Global observing, Wiki compiling
+- `Task`: All, Session observing, Observation, Wiki compiling
 - `Status`: Active, Running, Queued, Failed, Done, All
 - `Time`: Last 24h, Last 7d, All
 
@@ -200,7 +200,7 @@ export type PipelineTaskStatus = 'running' | 'queued' | 'failed' | 'done';
 
 export type PipelineTaskKind =
   | 'session-observing'
-  | 'global-observing'
+  | 'observation'
   | 'wiki-compiling';
 
 export type PipelineTask = {
@@ -223,7 +223,7 @@ export type PipelineTask = {
 Initial mapping:
 
 - Current extractor work maps to `Session observing`.
-- Current observer work maps to `Global observing`.
+- Current observer work maps to `Observation`.
 - Future wiki compiler work maps to `Wiki compiling`.
 
 Use existing watermark, checkpoint, run, and queue state to populate what is currently available. Missing future fields should render stable placeholders such as `Not started`, `Draft in progress`, or `No errors for this task`, not `undefined`.

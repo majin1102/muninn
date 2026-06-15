@@ -1,7 +1,7 @@
 export type ParsedObserverSection = {
   level: 2 | 3 | 4;
   heading: string;
-  globalPath: string;
+  path: string;
   sourceRefs: string[];
   expandRefs: string[];
   body: string;

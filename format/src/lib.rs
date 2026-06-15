@@ -1,20 +1,20 @@
 pub mod access;
 pub mod codec;
 pub(crate) mod config;
+pub mod extraction;
 pub(crate) mod maintenance;
 pub mod memory_id;
-pub mod extraction;
-pub mod global_observation_context;
-pub mod global_observation;
-pub mod turn;
+pub mod observation;
+pub mod observation_context;
 pub mod schema;
 pub mod session;
+pub mod turn;
 
 pub use access::{TableDescription, TableOptions, TableStats};
 pub use config::data_root;
-pub use memory_id::{MemoryId, MemoryLayer, deserialize_memory_id, serialize_memory_id};
 pub use extraction::{Extraction, ExtractionTable, RecallMode};
-pub use global_observation_context::{GlobalObservationContext, GlobalObservationContextTable};
-pub use global_observation::{GlobalObservation, GlobalObservationTable};
+pub use memory_id::{MemoryId, MemoryLayer, deserialize_memory_id, serialize_memory_id};
+pub use observation::{Observation, ObservationTable};
+pub use observation_context::{ObservationContext, ObservationContextTable};
 pub use session::{ObservedMemory, SessionSnapshot, SessionTable};
 pub use turn::{Artifact, Turn, TurnEvent, TurnTable};

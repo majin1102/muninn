@@ -132,6 +132,35 @@ export class Extractor {
     }
   }
 
+  async acceptBatch(
+    turnContents: TurnContent[],
+    sessionRegistry: SessionRegistry,
+  ): Promise<number> {
+    if (this.shuttingDown) {
+      throw new Error('extractor is shutting down');
+    }
+    if (turnContents.length === 0) {
+      return 0;
+    }
+    await this.ensureBootstrapped();
+    if (this.shuttingDown) {
+      throw new Error('extractor is shutting down');
+    }
+    while (true) {
+      const openEpoch = this.openEpoch;
+      try {
+        const acceptedTurns = await openEpoch.acceptBatch(turnContents, sessionRegistry);
+        this.scheduleOpenEpochSeal(openEpoch);
+        return acceptedTurns.length;
+      } catch (error) {
+        if (error instanceof EpochSealedError && openEpoch !== this.openEpoch) {
+          continue;
+        }
+        throw error;
+      }
+    }
+  }
+
   async watermark(): Promise<MemoryWatermark> {
     await this.ensureBootstrapped();
     const pendingById = new Map<string, Turn>();
@@ -260,7 +289,7 @@ export class Extractor {
           turn: 0,
           session: 0,
           extraction: 0,
-          global_observation: 0,
+          observation: 0,
         },
         nextEpoch: 0,
         recentSessions: [],
@@ -866,7 +895,7 @@ function cloneQueuedExtractionChange(change: QueuedExtractionChange): QueuedExtr
       ...change.extraction,
       vector: [...change.extraction.vector],
       turnRefs: [...change.extraction.turnRefs],
-      globalObservationPaths: [...change.extraction.globalObservationPaths],
+      observationPaths: [...change.extraction.observationPaths],
     },
   };
 }

@@ -28,9 +28,9 @@ import type {
   SessionAgentsResponse,
   SessionGroupsResponse,
   SessionNode,
-  ExtractionPreview,
   SessionSegmentPreview,
   SessionSnapshotListResponse,
+  SessionTimelineItem,
   SessionTurnsResponse,
   SettingsConfigResponse,
   TurnPreview,
@@ -431,8 +431,7 @@ async function loadSessionTurnPreviewsPage(params: {
 }): Promise<{
   turns: TurnPreview[];
   segments: SessionSegmentPreview[];
-  observations: ExtractionPreview[];
-  sessionSummary?: string;
+  timeline: SessionTimelineItem[];
   nextOffset: number | null;
 }> {
   const allTurns = (await turns.list({
@@ -449,16 +448,23 @@ async function loadSessionTurnPreviewsPage(params: {
       || left.turnId.localeCompare(right.turnId)
     ));
   const previews = allTurns.map(toTurnPreview);
-  const snapshotContent = await loadSessionSnapshotContent(params.project, params.agent, params.sessionKey);
+  const snapshot = await loadSessionSnapshotContent(params.project, params.agent, params.sessionKey);
   return buildSessionTurnPage({
     turns: previews,
-    snapshotContent,
+    snapshot,
     offset: params.offset,
     limit: params.limit,
   });
 }
 
-async function loadSessionSnapshotContent(project: string, agent: string, sessionKey: string): Promise<string | null> {
+type SessionSnapshotContent = {
+  snapshotId: string;
+  content: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+async function loadSessionSnapshotContent(project: string, agent: string, sessionKey: string): Promise<SessionSnapshotContent | null> {
   const sessionIndex = await sessions.index();
   const session = sessionIndex.find((entry) => (
     entry.project === project
@@ -470,34 +476,37 @@ async function loadSessionSnapshotContent(project: string, agent: string, sessio
     return null;
   }
 
-  const snapshot = await memories.get(session.snapshotId);
+  const snapshot = await sessions.get(session.snapshotId);
   if (!snapshot) {
     return null;
   }
 
-  return renderRenderedMemoryDocument(snapshot).markdown;
+  return {
+    snapshotId: snapshot.snapshotId,
+    content: snapshot.content,
+    createdAt: snapshot.createdAt,
+    updatedAt: snapshot.updatedAt,
+  };
 }
 
 function buildSessionTurnPage(params: {
   turns: TurnPreview[];
-  snapshotContent?: string | null;
+  snapshot?: SessionSnapshotContent | null;
   offset: number;
   limit: number;
 }): {
   turns: TurnPreview[];
   segments: SessionSegmentPreview[];
-  observations: ExtractionPreview[];
-  sessionSummary?: string;
+  timeline: SessionTimelineItem[];
   nextOffset: number | null;
 } {
   const pageTurns = params.turns.slice(params.offset, params.offset + params.limit);
-  const observations = buildExtractions(params.snapshotContent, params.turns);
-  const segments = buildSessionSegments(params.snapshotContent, params.turns);
+  const timeline = buildSessionTimeline(params.snapshot, params.turns);
+  const segments = buildSessionSegments(timeline, params.turns);
   return {
     turns: pageTurns,
     segments,
-    observations,
-    sessionSummary: parseSnapshotSummary(params.snapshotContent),
+    timeline,
     nextOffset: resolveSessionTreeNextOffset({
       offset: params.offset,
       limit: params.limit,
@@ -523,40 +532,82 @@ export function resolveSessionTreeNextOffsetForTests(params: {
 }
 
 function buildSessionSegments(
-  snapshotContent: string | null | undefined,
+  timeline: SessionTimelineItem[],
   turnPreviews: TurnPreview[],
 ): SessionSegmentPreview[] {
-  const fromSnapshot = buildExtractions(snapshotContent, turnPreviews).map((observation) => ({
-    memoryId: observation.memoryId,
-    title: observation.title,
-    createdAt: observation.createdAt,
-    updatedAt: observation.updatedAt,
+  const fromTimeline = timeline.filter((item) => item.kind === 'extraction').map((item) => ({
+    memoryId: item.memoryId,
+    title: item.title,
+    createdAt: item.createdAt,
+    updatedAt: item.updatedAt,
   }));
-  return fromSnapshot.length > 0 ? fromSnapshot : fallbackTurnSegments(turnPreviews);
+  return fromTimeline.length > 0 ? fromTimeline : fallbackTurnSegments(turnPreviews);
 }
 
-function buildExtractions(
-  snapshotContent: string | null | undefined,
+function buildSessionTimeline(
+  snapshot: SessionSnapshotContent | null | undefined,
   turnPreviews: TurnPreview[],
-): ExtractionPreview[] {
-  if (!snapshotContent) {
+): SessionTimelineItem[] {
+  if (!snapshot?.content) {
     return [];
   }
-  const extractionStart = snapshotContent.search(/^##\s+Extractions\s*$/im);
-  if (extractionStart < 0) {
+  const sections = snapshotSections(snapshot.content);
+  const items: SessionTimelineItem[] = [];
+  const summary = sections.get('summary')?.trim();
+  if (summary) {
+    items.push({
+      memoryId: `${snapshot.snapshotId}~timeline:summary`,
+      kind: 'summary',
+      title: 'Summary',
+      createdAt: snapshot.createdAt,
+      updatedAt: snapshot.updatedAt,
+      markdown: summary,
+      refs: [],
+    });
+  }
+  const signals = sections.get('signals')?.trim();
+  if (signals) {
+    items.push({
+      memoryId: `${snapshot.snapshotId}~timeline:signals`,
+      kind: 'signals',
+      title: 'Signals',
+      createdAt: snapshot.createdAt,
+      updatedAt: snapshot.updatedAt,
+      markdown: signals,
+      refs: [],
+    });
+  }
+  const extractions = buildTimelineExtractions(sections.get('extractions'), snapshot, turnPreviews);
+  return [...items, ...extractions];
+}
+
+function snapshotSections(snapshotContent: string): Map<string, string> {
+  const sections = new Map<string, string>();
+  const headingPattern = /^##\s+(.+?)\s*$/gim;
+  const matches = [...snapshotContent.matchAll(headingPattern)];
+  for (let index = 0; index < matches.length; index += 1) {
+    const match = matches[index]!;
+    const next = matches[index + 1];
+    const lineEnd = snapshotContent.indexOf('\n', match.index!);
+    const bodyStart = lineEnd >= 0 ? lineEnd + 1 : snapshotContent.length;
+    const bodyEnd = next?.index ?? snapshotContent.length;
+    sections.set(match[1]!.trim().toLowerCase(), snapshotContent.slice(bodyStart, bodyEnd));
+  }
+  return sections;
+}
+
+function buildTimelineExtractions(
+  section: string | undefined,
+  snapshot: SessionSnapshotContent,
+  turnPreviews: TurnPreview[],
+): SessionTimelineItem[] {
+  if (!section?.trim()) {
     return [];
   }
-  const sectionStart = snapshotContent.indexOf('\n', extractionStart);
-  if (sectionStart < 0) {
-    return [];
-  }
-  const rest = snapshotContent.slice(sectionStart + 1);
-  const nextSection = rest.search(/^##\s+/m);
-  const section = nextSection >= 0 ? rest.slice(0, nextSection) : rest;
   const turnById = new Map(turnPreviews.map((turn, index) => [turn.memoryId, { turn, index }]));
   const refsPattern = /<!--\s*(?:sequence:\s*\d+\s*;\s*)?refs:\s*\[([^\]]*)\]\s*-->/g;
   const matches = [...section.matchAll(refsPattern)];
-  const observations: Array<ExtractionPreview & { index: number }> = [];
+  const timeline: SessionTimelineItem[] = [];
 
   for (let i = 0; i < matches.length; i += 1) {
     const match = matches[i]!;
@@ -570,38 +621,21 @@ function buildExtractions(
     const firstTurn = refs
       .map((ref) => turnById.get(ref))
       .find((entry) => entry !== undefined);
-    if (!firstTurn) {
-      continue;
-    }
-    observations.push({
-      memoryId: `${firstTurn.turn.memoryId}~observation:${i}`,
+    timeline.push({
+      memoryId: firstTurn ? `${firstTurn.turn.memoryId}~timeline:${i}` : `${snapshot.snapshotId}~timeline:extraction:${i}`,
+      kind: 'extraction',
       title,
-      createdAt: firstTurn.turn.createdAt,
-      updatedAt: firstTurn.turn.updatedAt,
-      markdown: normalizeObservationMarkdown(block),
+      createdAt: firstTurn?.turn.createdAt ?? snapshot.createdAt,
+      updatedAt: firstTurn?.turn.updatedAt ?? snapshot.updatedAt,
+      markdown: normalizeTimelineExtractionMarkdown(block),
       refs,
-      index: firstTurn.index,
     });
   }
 
-  return observations
-    .sort((left, right) => (
-      left.createdAt.localeCompare(right.createdAt)
-      || left.index - right.index
-    ))
-    .map(({ index: _index, ...observation }) => observation);
+  return timeline;
 }
 
-function parseSnapshotSummary(snapshotContent: string | null | undefined): string | undefined {
-  if (!snapshotContent) {
-    return undefined;
-  }
-  const match = snapshotContent.match(/^##\s+Summary\s*\n([\s\S]*?)(?=\n##\s+|$)/im);
-  const summary = match?.[1]?.trim();
-  return summary ? summary : undefined;
-}
-
-function normalizeObservationMarkdown(raw: string): string {
+function normalizeTimelineExtractionMarkdown(raw: string): string {
   const withoutTitle = stripMarkdownHeadingSection(raw, 'Title')
     .replace(/^\s*----\s*$/gm, '')
     .trim();
@@ -670,29 +704,28 @@ function fallbackTurnSegments(turnPreviews: TurnPreview[]): SessionSegmentPrevie
 }
 
 export function buildSessionSegmentsForTests(
-  snapshotContent: string | null | undefined,
+  snapshot: SessionSnapshotContent | null | undefined,
   turnPreviews: TurnPreview[],
 ): SessionSegmentPreview[] {
-  return buildSessionSegments(snapshotContent, turnPreviews);
+  return buildSessionSegments(buildSessionTimeline(snapshot, turnPreviews), turnPreviews);
 }
 
-export function buildExtractionsForTests(
-  snapshotContent: string | null | undefined,
+export function buildSessionTimelineForTests(
+  snapshot: SessionSnapshotContent | null | undefined,
   turnPreviews: TurnPreview[],
-): ExtractionPreview[] {
-  return buildExtractions(snapshotContent, turnPreviews);
+): SessionTimelineItem[] {
+  return buildSessionTimeline(snapshot, turnPreviews);
 }
 
 export function buildSessionTurnPageForTests(params: {
   turns: TurnPreview[];
-  snapshotContent?: string | null;
+  snapshot?: SessionSnapshotContent | null;
   offset: number;
   limit: number;
 }): {
   turns: TurnPreview[];
   segments: SessionSegmentPreview[];
-  observations: ExtractionPreview[];
-  sessionSummary?: string;
+  timeline: SessionTimelineItem[];
   nextOffset: number | null;
 } {
   return buildSessionTurnPage(params);
@@ -853,8 +886,7 @@ webRoutes.get('/api/v1/ui/session/agents/:agent/sessions/:sessionKey/turns', asy
   const response: SessionTurnsResponse = {
     turns: page.turns,
     segments: page.segments,
-    observations: page.observations,
-    sessionSummary: page.sessionSummary,
+    timeline: page.timeline,
     nextOffset: page.nextOffset,
     requestId: generateRequestId(),
   };
