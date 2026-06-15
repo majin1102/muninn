@@ -2,7 +2,7 @@ import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 
-export type ServeOptions = {
+export type RunOptions = {
   host?: string;
   port?: number;
   home?: string;
@@ -14,7 +14,7 @@ type ServerModule = {
 
 const require = createRequire(import.meta.url);
 
-export function resolveServeEnv(options: ServeOptions): Record<'HOST' | 'PORT' | 'MUNINN_HOME', string> {
+export function resolveRunEnv(options: RunOptions): Record<'HOST' | 'PORT' | 'MUNINN_HOME', string> {
   return {
     HOST: options.host ?? '127.0.0.1',
     PORT: String(options.port ?? 8080),
@@ -22,8 +22,8 @@ export function resolveServeEnv(options: ServeOptions): Record<'HOST' | 'PORT' |
   };
 }
 
-export async function runServe(options: ServeOptions): Promise<void> {
-  const env = resolveServeEnv(options);
+export async function runServer(options: RunOptions): Promise<void> {
+  const env = resolveRunEnv(options);
   process.env.HOST = env.HOST;
   process.env.PORT = env.PORT;
   process.env.MUNINN_HOME = env.MUNINN_HOME;

@@ -3,18 +3,40 @@ import assert from 'node:assert/strict';
 
 import { parseArgs } from '../dist/args.js';
 
-test('parseArgs parses serve defaults and flags', () => {
-  assert.deepEqual(parseArgs(['serve']), {
-    command: 'serve',
+test('parseArgs parses run defaults and flags', () => {
+  assert.deepEqual(parseArgs(['run']), {
+    command: 'run',
     host: undefined,
     port: undefined,
     home: undefined,
   });
-  assert.deepEqual(parseArgs(['serve', '--host', '127.0.0.1', '--port', '8081', '--home', '/tmp/muninn']), {
-    command: 'serve',
+  assert.deepEqual(parseArgs(['run', '--host', '127.0.0.1', '--port', '8081', '--home', '/tmp/muninn']), {
+    command: 'run',
     host: '127.0.0.1',
     port: 8081,
     home: '/tmp/muninn',
+  });
+});
+
+test('parseArgs parses process commands', () => {
+  assert.deepEqual(parseArgs(['start', '--host', '0.0.0.0', '--port', '8082', '--home', '/tmp/muninn', '--force']), {
+    command: 'start',
+    host: '0.0.0.0',
+    port: 8082,
+    home: '/tmp/muninn',
+    force: true,
+  });
+  assert.deepEqual(parseArgs(['restart', '--force']), {
+    command: 'restart',
+    host: undefined,
+    port: undefined,
+    home: undefined,
+    force: true,
+  });
+  assert.deepEqual(parseArgs(['stop', '--home', '/tmp/muninn', '--force']), {
+    command: 'stop',
+    home: '/tmp/muninn',
+    force: true,
   });
 });
 
@@ -54,10 +76,17 @@ test('parseArgs rejects conflicting install part flags', () => {
   );
 });
 
-test('parseArgs rejects unknown serve flags', () => {
+test('parseArgs rejects unknown run flags', () => {
   assert.throws(
-    () => parseArgs(['serve', '--porrt', '8081']),
+    () => parseArgs(['run', '--porrt', '8081']),
     /unknown flag: --porrt/,
+  );
+});
+
+test('parseArgs rejects valued force flags', () => {
+  assert.throws(
+    () => parseArgs(['start', '--force', 'true']),
+    /--force does not accept a value/,
   );
 });
 
@@ -70,7 +99,7 @@ test('parseArgs rejects unknown install flags', () => {
 
 test('parseArgs rejects ports outside TCP range', () => {
   assert.throws(
-    () => parseArgs(['serve', '--port', '70000']),
+    () => parseArgs(['run', '--port', '70000']),
     /--port must be an integer from 1 to 65535/,
   );
 });

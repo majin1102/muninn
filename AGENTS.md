@@ -33,7 +33,7 @@ Current strategic direction:
 
 - `cli/`
   - `@muninn/cli`.
-  - Owns `doctor`, `serve`, host install/uninstall, and status commands.
+  - Owns `doctor`, `run`, `start`, `stop`, `restart`, host install/uninstall, and status commands.
   - Normal users should enter through this package instead of invoking subpackages directly.
 - `server/`
   - Single backend entrypoint for normal operation.
@@ -115,7 +115,10 @@ Current runtime config requirements:
 Current installable surface:
 
 - `@muninn/cli` is the user-facing package.
-- `muninn serve` runs the server in the foreground.
+- `muninn run` runs the server in the foreground.
+- `muninn start` starts a CLI-managed background process and returns.
+- `muninn stop` stops that CLI-managed process.
+- `muninn restart --force` force-restarts that CLI-managed process.
 - `muninn install codex|claude|all` installs MCP and hook config for hosts.
 - There is no `muninn install mcp` target.
 - The first release path supports macOS and Linux, not Windows.
@@ -140,9 +143,9 @@ pnpm run build:runtime
 Run locally:
 
 ```bash
-MUNINN_HOME=/tmp/muninn pnpm --filter @muninn/server start
-pnpm --filter @muninn/cli build
-node cli/dist/cli.js serve
+pnpm run build:runtime
+MUNINN_HOME=/tmp/muninn pnpm muninn run
+pnpm muninn doctor
 ```
 
 Targeted checks:

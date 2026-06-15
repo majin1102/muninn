@@ -17,6 +17,10 @@ test('CLI entry runs when invoked through an npm-style symlink', async () => {
 
   assert.equal(result.status, 0);
   assert.match(result.stdout, /Usage:/);
+  assert.match(result.stdout, /muninn run/);
+  assert.match(result.stdout, /muninn start/);
+  assert.match(result.stdout, /muninn restart/);
+  assert.doesNotMatch(result.stdout, /muninn serve/);
 });
 
 test('CLI install writes package-local dependency bin paths for host commands', async () => {

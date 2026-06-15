@@ -58,13 +58,48 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       process.stdout.write(renderDoctorChecks(checks));
       return checks.every((check) => check.ok || check.name === 'server health') ? 0 : 1;
     }
-    if (parsed.command === 'serve') {
-      const { runServe } = await import('./serve.js');
-      await runServe({
+    if (parsed.command === 'run') {
+      const { runServer } = await import('./run.js');
+      await runServer({
         host: parsed.host,
         port: parsed.port,
         home: parsed.home,
       });
+      return 0;
+    }
+    if (parsed.command === 'start') {
+      const { startManagedServer } = await import('./server-process.js');
+      const result = await startManagedServer({
+        host: parsed.host,
+        port: parsed.port,
+        home: parsed.home,
+        force: parsed.force,
+      }, process.argv[1] ?? fileURLToPath(import.meta.url));
+      process.stdout.write(`Muninn server started: http://${result.state.host}:${result.state.port}\n`);
+      process.stdout.write(`Data home: ${result.state.home}\n`);
+      process.stdout.write(`Logs: ${result.paths.stdoutLog}\n`);
+      return 0;
+    }
+    if (parsed.command === 'stop') {
+      const { stopManagedServer } = await import('./server-process.js');
+      const result = await stopManagedServer({
+        home: parsed.home,
+        force: parsed.force,
+      });
+      process.stdout.write(`${result.message}\n`);
+      return 0;
+    }
+    if (parsed.command === 'restart') {
+      const { restartManagedServer } = await import('./server-process.js');
+      const result = await restartManagedServer({
+        host: parsed.host,
+        port: parsed.port,
+        home: parsed.home,
+        force: parsed.force,
+      }, process.argv[1] ?? fileURLToPath(import.meta.url));
+      process.stdout.write(`Muninn server restarted: http://${result.state.host}:${result.state.port}\n`);
+      process.stdout.write(`Data home: ${result.state.home}\n`);
+      process.stdout.write(`Logs: ${result.paths.stdoutLog}\n`);
       return 0;
     }
     process.stdout.write(`muninn ${parsed.command} is not implemented yet\n`);
@@ -80,7 +115,10 @@ function helpText(): string {
   return [
     'Usage:',
     '  muninn doctor',
-    '  muninn serve [--host 127.0.0.1] [--port 8080] [--home ~/.muninn]',
+    '  muninn run [--host 127.0.0.1] [--port 8080] [--home ~/.muninn]',
+    '  muninn start [--host 127.0.0.1] [--port 8080] [--home ~/.muninn] [--force]',
+    '  muninn stop [--home ~/.muninn] [--force]',
+    '  muninn restart [--host 127.0.0.1] [--port 8080] [--home ~/.muninn] [--force]',
     '  muninn install codex|claude|all [--mcp-only|--hook-only] [--scope user|project] [--server-url URL] [--dry-run] [--yes]',
     '  muninn uninstall codex|claude|all [--mcp-only|--hook-only] [--scope user|project] [--server-url URL] [--dry-run] [--yes]',
     '  muninn status [--server-url URL] [--scope user|project]',
