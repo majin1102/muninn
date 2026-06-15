@@ -6,7 +6,8 @@ import {
   resolveStorageTarget,
 } from '../server/dist/memory/config.js';
 import { createNativeTables } from '../server/dist/memory/native.js';
-import { __testing as updateTesting } from '../server/dist/memory/extractor/update.js';
+import { __testing as indexTesting } from '../server/dist/memory/extractor/extraction-index.js';
+import { __testing as sessionTesting } from '../server/dist/memory/extractor/session.js';
 
 function usage() {
   return [
@@ -124,7 +125,7 @@ async function main() {
     for (let offset = 0, batchIndex = 0; offset < turns.length; offset += batchSize, batchIndex += 1) {
       const batch = turns.slice(offset, offset + batchSize);
       log(`batch ${batchIndex + 1}/${Math.ceil(turns.length / batchSize)} turns=${batch.length}`);
-      const result = await updateTesting.extractEpoch({
+      const result = await sessionTesting.extractEpoch({
         client: tables,
         extractorName: extractorConfig.name,
         activeWindowDays: extractorConfig.activeWindowDays,
@@ -142,7 +143,7 @@ async function main() {
     }
     log(`touchedThreads=${touchedIds.size}`);
 
-    const extractionChanges = await updateTesting.buildTouchedIndex(tables, threads, touchedIds);
+    const extractionChanges = await indexTesting.buildTouchedIndex(tables, threads, touchedIds);
     log(`extractionChanges=${extractionChanges.length}`);
 
     const sessionSnapshots = await tables.sessionTable.threadSnapshots(options.sessionId);

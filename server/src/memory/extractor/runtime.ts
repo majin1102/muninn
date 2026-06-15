@@ -19,9 +19,10 @@ import {
   loadThreads,
   replaySnapshots,
   threadFromSnapshots,
-} from './thread.js';
+} from './snapshot.js';
 import type { SessionMemoryThread } from './types.js';
-import { buildExtraction, buildTouchedIndex, extractEpoch } from './update.js';
+import { extractEpoch } from './session.js';
+import { buildExtraction, buildTouchedIndex } from './extraction-index.js';
 import { resolveDatabaseName } from '../config.js';
 import { writeMuninnLog } from '../logging.js';
 
@@ -151,10 +152,10 @@ export class Extractor {
     const pendingTurnIds = [...pendingById.values()]
       .sort(compareTurns)
       .map((turn) => turn.turnId);
-    const hasPendingExtraction = this.hasPendingExtraction();
-    const phase = this.lastIndexError && hasPendingExtraction
+    const hasAnyUnindexedSnapshots = this.hasAnyUnindexedSnapshots();
+    const phase = this.lastIndexError && hasAnyUnindexedSnapshots
       ? 'error'
-      : this.currentEpoch || hasPendingExtraction
+      : this.currentEpoch || hasAnyUnindexedSnapshots
         ? 'running'
       : pendingTurnIds.length > 0
         ? 'pending'
@@ -169,7 +170,7 @@ export class Extractor {
         observer: 'idle',
       },
     };
-    if (this.lastIndexError && hasPendingExtraction) {
+    if (this.lastIndexError && hasAnyUnindexedSnapshots) {
       watermark.error = {
         phase: 'extractor',
         message: this.lastIndexError,
@@ -211,10 +212,10 @@ export class Extractor {
       return;
     }
     const sealedEpoch = await barrier.sealed;
-    const barrierRequiresObserve = sealedEpoch.turns.length > 0;
+    const barrierRequiresExtract = sealedEpoch.turns.length > 0;
     const barrierComplete = () => {
-      const observed = !barrierRequiresObserve || (this.committedEpoch ?? -1) >= barrier.epoch;
-      return observed && !this.hasPendingExtractionUpTo(barrier.epoch);
+      const extracted = !barrierRequiresExtract || (this.committedEpoch ?? -1) >= barrier.epoch;
+      return extracted && !this.hasUnindexedSnapshotsAtOrBefore(barrier.epoch);
     };
 
     while (true) {
@@ -241,7 +242,7 @@ export class Extractor {
 
   private async bootstrapInternal(): Promise<void> {
     let pendingTurns: Turn[] = [];
-    const restored = await this.restoreCheckpointState();
+    const restored = await this.restore();
     if (restored) {
       this.threads = restored.threads;
       this.committedEpoch = restored.committedEpoch;
@@ -254,7 +255,7 @@ export class Extractor {
         observer: this.name,
         committedEpoch: null,
       })).map(readTurn);
-      const fallback = await this.restoreThreadsFromCheckpoint({
+      const fallback = await this.replayCheckpoint({
         baseline: {
           turn: 0,
           session: 0,
@@ -270,7 +271,7 @@ export class Extractor {
       if (fallback) {
         this.threads = fallback.threads;
         this.committedEpoch = fallback.committedEpoch;
-        pendingTurns = pendingObservableTurns(
+        pendingTurns = pendingExtractableTurns(
           turns.filter((turn) => !fallback.observedTurnIds.has(turn.turnId)),
           fallback.committedEpoch,
         );
@@ -282,7 +283,7 @@ export class Extractor {
           this.activeWindowDays,
           0,
         );
-        pendingTurns = pendingObservableTurns(turns, undefined);
+        pendingTurns = pendingExtractableTurns(turns, undefined);
       }
     }
 
@@ -291,7 +292,7 @@ export class Extractor {
       const turnsByEpoch = new Map<number, Turn[]>();
       for (const turn of pendingTurns) {
         if (turn.observingEpoch == null) {
-          throw new Error(`pending observable turn ${turn.turnId} is missing extractionEpoch`);
+          throw new Error(`pending extractable turn ${turn.turnId} is missing extractionEpoch`);
         }
         const turns = turnsByEpoch.get(turn.observingEpoch) ?? [];
         turns.push(turn);
@@ -331,13 +332,13 @@ export class Extractor {
     while (true) {
       try {
         if (this.currentEpoch) {
-          await this.observeCurrentEpoch();
+          await this.extractCurrentEpoch();
           retryDelayMs = BASE_RETRY_DELAY_MS;
           continue;
         }
 
-        if (this.shouldRetryExtraction()) {
-          await this.retryExtraction();
+        if (this.shouldRetrySnapshotIndexing()) {
+          await this.retrySnapshotIndexing();
           retryDelayMs = BASE_RETRY_DELAY_MS;
           continue;
         }
@@ -349,7 +350,7 @@ export class Extractor {
           continue;
         }
 
-        if (this.hasPendingExtraction()) {
+        if (this.hasAnyUnindexedSnapshots()) {
           await this.waitForIndexRetryOrChange();
           retryDelayMs = BASE_RETRY_DELAY_MS;
           continue;
@@ -373,7 +374,7 @@ export class Extractor {
     }
   }
 
-  private async observeCurrentEpoch(): Promise<void> {
+  private async extractCurrentEpoch(): Promise<void> {
     if (!this.currentEpoch) {
       return;
     }
@@ -391,11 +392,11 @@ export class Extractor {
       });
       this.threads = result.threads;
       try {
-        const extractionChanges = await this.buildCurrentEpochIndex(result.touchedIds);
+        const extractionChanges = await this.indexCurrentEpochSnapshots(result.touchedIds);
         this.mergePendingExtractionChanges(extractionChanges);
         this.handoffPendingExtractionChanges();
         this.lastIndexError = undefined;
-        if (!this.hasPendingExtraction()) {
+        if (!this.hasAnyUnindexedSnapshots()) {
           this.nextIndexRetryAt = undefined;
         }
       } catch (error) {
@@ -415,7 +416,7 @@ export class Extractor {
     });
   }
 
-  private buildCurrentEpochIndex(touchedIds: Set<string>): Promise<QueuedExtractionChange[]> {
+  private indexCurrentEpochSnapshots(touchedIds: Set<string>): Promise<QueuedExtractionChange[]> {
     return buildTouchedIndex(
       this.client,
       this.threads,
@@ -502,20 +503,20 @@ export class Extractor {
     };
   }
 
-  private hasPendingExtraction(): boolean {
+  private hasAnyUnindexedSnapshots(): boolean {
     return this.threads.some((thread) => getPendingIndex(thread) !== null);
   }
 
-  private hasPendingExtractionUpTo(maxEpoch: number): boolean {
+  private hasUnindexedSnapshotsAtOrBefore(maxEpoch: number): boolean {
     return this.threads.some((thread) => getPendingIndexUpTo(thread, maxEpoch) !== null);
   }
 
-  private shouldRetryExtraction(): boolean {
-    return this.hasPendingExtraction()
+  private shouldRetrySnapshotIndexing(): boolean {
+    return this.hasAnyUnindexedSnapshots()
       && (this.nextIndexRetryAt == null || Date.now() >= this.nextIndexRetryAt);
   }
 
-  private async retryExtraction(): Promise<void> {
+  private async retrySnapshotIndexing(): Promise<void> {
     try {
       await this.checkpointLock.shared(async () => {
         const extractionChanges = await buildExtraction(this.client, this.threads, this.shutdownController.signal);
@@ -535,7 +536,7 @@ export class Extractor {
       await writeMuninnLog(this.database, 'error', 'extractor', 'index_retry_failed', { message });
       this.nextIndexRetryAt = Date.now() + INDEX_RETRY_DELAY_MS;
     } finally {
-      if (!this.hasPendingExtraction()) {
+      if (!this.hasAnyUnindexedSnapshots()) {
         this.nextIndexRetryAt = undefined;
         this.lastIndexError = undefined;
       }
@@ -584,7 +585,7 @@ export class Extractor {
     this.checkpointRuns = this.checkpointRuns.filter((run) => run.status === 'running');
   }
 
-  private async restoreCheckpointState(): Promise<{
+  private async restore(): Promise<{
     threads: SessionMemoryThread[];
     committedEpoch?: number;
     pendingTurns: Turn[];
@@ -602,7 +603,7 @@ export class Extractor {
       committedEpoch: section.committedEpoch ?? null,
     })).map(readTurn);
     const turnById = new Map(turns.map((turn) => [turn.turnId, turn]));
-    const restored = await this.restoreThreadsFromCheckpoint(
+    const restored = await this.replayCheckpoint(
       section,
       sessionDelta,
       turnById,
@@ -613,14 +614,14 @@ export class Extractor {
     return {
       threads: restored.threads,
       committedEpoch: restored.committedEpoch,
-      pendingTurns: pendingObservableTurns(
+      pendingTurns: pendingExtractableTurns(
         turns.filter((turn) => !restored.observedTurnIds.has(turn.turnId)),
         restored.committedEpoch,
       ),
     };
   }
 
-  private async restoreThreadsFromCheckpoint(
+  private async replayCheckpoint(
     section: ExtractorCheckpoint,
     deltaRows: Array<import('./types.js').SessionSnapshot>,
     turnById: Map<string, Turn>,
@@ -870,7 +871,7 @@ function cloneQueuedExtractionChange(change: QueuedExtractionChange): QueuedExtr
   };
 }
 
-function isObservable(turn: Turn): boolean {
+function isExtractable(turn: Turn): boolean {
   return Boolean(turn.response?.trim() && turn.summary?.trim());
 }
 
@@ -881,13 +882,13 @@ function keepNewestTurn(byId: Map<string, Turn>, turn: Turn): void {
   }
 }
 
-function pendingObservableTurns(
+function pendingExtractableTurns(
   turns: Turn[],
   committedEpoch?: number,
 ): Turn[] {
   const recoveredEpoch = committedEpoch == null ? 0 : committedEpoch + 1;
   return turns
-    .filter(isObservable)
+    .filter(isExtractable)
     .filter((turn) => (
       turn.observingEpoch == null
       || committedEpoch == null

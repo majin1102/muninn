@@ -1,27 +1,24 @@
 import type { Turn } from '../backend.js';
-import type { QueuedExtractionChange } from '../checkpoint.js';
 import { Memories } from '../memories.js';
 import type { NativeTables } from '../native.js';
 import { extractSessionMemory } from '../llm/extracting.js';
-import { applyExtractionChanges, applyExtractionTableChanges } from './memory-delta.js';
+import { applyExtractionChanges } from './extraction-index.js';
 import type { SealedEpoch } from './epoch.js';
 import {
-  isActiveThread,
-  applyExtractionResult,
+  applyExtraction,
   createSessionMemoryThread,
   currentSessionMemoryContent,
-  getPendingIndex,
-  snapshotRef,
+  DEFAULT_SESSION_ID,
+  isActiveThread,
+  threadIdentityKey,
   toSessionSnapshot,
-} from './thread.js';
-import type { FragmentTurnInput, SessionMemoryThread } from './types.js';
+} from './snapshot.js';
+import type { FragmentTurnInput, SessionMemoryThread, SessionSnapshot } from './types.js';
 
 type ExtractSessionMemoryImpl = typeof extractSessionMemory;
-const DEFAULT_SESSION_ID = '__muninn_default_session__';
 
 type ExtractSessionThreadParams = {
-  threads: SessionMemoryThread[];
-  extractorName: string;
+  thread: SessionMemoryThread;
   pendingTurns: Turn[];
   extractionEpoch: number;
   signal?: AbortSignal;
@@ -48,15 +45,14 @@ export async function extractEpoch(params: {
   const memories = new Memories(params.client);
   const touchedIds = new Set<string>();
   for (const turns of groupTurnsBySession(params.sealedEpoch.turns)) {
-    ensureSessionThread(
+    const thread = getOrCreateSessionThread(
       params.threads,
       params.extractorName,
       turns,
       params.sealedEpoch.epoch,
     );
     const groupTouchedIds = await extractSessionThread({
-      threads: params.threads,
-      extractorName: params.extractorName,
+      thread,
       pendingTurns: turns,
       extractionEpoch: params.sealedEpoch.epoch,
       signal: params.signal,
@@ -116,16 +112,6 @@ function turnGroupKey(turn: Turn, sessionId: string): string {
   return `${turn.agent}\0${turn.cwd}\0${sessionId}`;
 }
 
-function threadIdentityKey(value: {
-  agent: string;
-  project: string;
-  cwd: string;
-  sessionId?: string | null;
-  threadId?: string;
-}): string {
-  return `${value.agent}\0${value.cwd}\0${value.sessionId ?? value.threadId ?? DEFAULT_SESSION_ID}`;
-}
-
 function ownershipForTurns(turns: Turn[]): { agent: string; project: string; cwd: string } {
   const first = turns[0];
   if (!first) {
@@ -143,22 +129,6 @@ function ownershipForTurns(turns: Turn[]): { agent: string; project: string; cwd
   };
 }
 
-function activeThreadInputs(
-  threads: SessionMemoryThread[],
-  extractorName: string,
-  activeWindowDays: number,
-) {
-  return threads
-    .filter((thread) => thread.observer === extractorName)
-    .filter((thread) => isActiveThread(thread.updatedAt, activeWindowDays))
-    .map((thread) => ({
-      threadId: thread.threadId,
-      ...(thread.snapshotId ? { memoryId: thread.snapshotId } : {}),
-      title: thread.title,
-      summary: thread.summary,
-    }));
-}
-
 function ensureActiveThreads(
   threads: SessionMemoryThread[],
   activeWindowDays: number,
@@ -167,12 +137,12 @@ function ensureActiveThreads(
   threads.splice(0, threads.length, ...activeThreads);
 }
 
-function ensureSessionThread(
+function getOrCreateSessionThread(
   threads: SessionMemoryThread[],
   extractorName: string,
   pendingTurns: Turn[],
   extractionEpoch: number,
-): SessionMemoryThread | null {
+): SessionMemoryThread {
   const sessionId = sessionIdForTurns(pendingTurns);
   const ownership = ownershipForTurns(pendingTurns);
   const existing = threads.find((thread) => (
@@ -180,6 +150,7 @@ function ensureSessionThread(
     && thread.kind === 'session'
     && (thread.sessionId ?? null) === sessionId
     && thread.agent === ownership.agent
+    && thread.project === ownership.project
     && thread.cwd === ownership.cwd
   ));
   if (existing) {
@@ -206,8 +177,7 @@ function ensureSessionThread(
 
 async function extractSessionThread(params: ExtractSessionThreadParams): Promise<Set<string>> {
   const {
-    threads,
-    extractorName,
+    thread,
     pendingTurns,
     extractionEpoch,
     signal,
@@ -216,21 +186,13 @@ async function extractSessionThread(params: ExtractSessionThreadParams): Promise
   } = params;
   throwIfAborted(signal);
   const touchedIds = new Set<string>();
-  const now = new Date().toISOString();
-  const sessionId = sessionIdForTurns(pendingTurns);
-  const ownership = ownershipForTurns(pendingTurns);
-  const thread = threads.find((candidate) => (
-    candidate.observer === extractorName
-    && candidate.kind === 'session'
-    && (candidate.sessionId ?? null) === sessionId
-    && candidate.agent === ownership.agent
-    && candidate.project === ownership.project
-    && candidate.cwd === ownership.cwd
-  ));
-  if (!thread || pendingTurns.length === 0) {
+  sessionIdForTurns(pendingTurns);
+  ownershipForTurns(pendingTurns);
+  if (pendingTurns.length === 0) {
     return touchedIds;
   }
 
+  const now = new Date().toISOString();
   const turns: FragmentTurnInput[] = pendingTurns.map((turn) => ({
     turnId: turn.turnId,
     prompt: turn.prompt,
@@ -243,7 +205,7 @@ async function extractSessionThread(params: ExtractSessionThreadParams): Promise
     sessionMemoryContent: currentSessionMemoryContent(thread),
     turns,
   }, signal, { memories, database: params.database });
-  applyExtractionResult(thread, result, extractionEpoch, applyExtractionChanges);
+  applyExtraction(thread, result, extractionEpoch, applyExtractionChanges);
   touchedIds.add(threadIdentityKey(thread));
   return touchedIds;
 }
@@ -266,110 +228,9 @@ async function flushThreads(
   updateThreadsFromRows(threads, persistedRows);
 }
 
-async function catchUpIndex(
-  client: NativeTables,
-  thread: SessionMemoryThread,
-  signal?: AbortSignal,
-): Promise<QueuedExtractionChange[]> {
-  const pending = getPendingIndex(thread);
-  if (!pending) {
-    return [];
-  }
-
-  let latestIndexedSequence = thread.indexedSnapshotSequence ?? null;
-  const queued: QueuedExtractionChange[] = [];
-  for (let snapshotIndex = pending.start; snapshotIndex <= pending.end; snapshotIndex += 1) {
-    throwIfAborted(signal);
-    const current = thread.snapshots[snapshotIndex];
-    const previous = snapshotIndex > 0 ? thread.snapshots[snapshotIndex - 1] : undefined;
-    const previousIds = new Set((previous?.extractions ?? [])
-      .map((extraction) => extraction.id)
-      .filter((id): id is string => Boolean(id)));
-    const diff = applyExtractionChanges(previous?.extractions ?? [], {
-      title: thread.title,
-      summary: thread.summary,
-      signals: current.signals ?? '',
-      snapshotContent: current.snapshotContent,
-      extractions: current.extractions.map((extraction) => (
-        extraction.id && previousIds.has(extraction.id)
-          ? extraction
-          : { ...extraction, id: undefined }
-      )),
-      openQuestions: current.openQuestions ?? [],
-      nextSteps: current.nextSteps ?? [],
-      contextRefs: current.contextRefs,
-    });
-    queued.push(...await applyExtractionTableChanges(
-      client,
-      {
-        ...current,
-        extractions: diff.extractions,
-        extractionChanges: diff.extractionChanges,
-      },
-      snapshotRef(thread, snapshotIndex),
-      signal,
-    ));
-    latestIndexedSequence = snapshotIndex;
-  }
-
-  if (latestIndexedSequence !== thread.indexedSnapshotSequence) {
-    thread.indexedSnapshotSequence = latestIndexedSequence;
-  }
-  return queued;
-}
-
-export async function buildExtraction(
-  client: NativeTables,
-  threads: SessionMemoryThread[],
-  signal?: AbortSignal,
-): Promise<QueuedExtractionChange[]> {
-  let firstError: unknown = null;
-  const queued: QueuedExtractionChange[] = [];
-  for (const thread of threads) {
-    throwIfAborted(signal);
-    if (!getPendingIndex(thread)) {
-      continue;
-    }
-    try {
-      queued.push(...await catchUpIndex(client, thread, signal));
-    } catch (error) {
-      firstError ??= error;
-    }
-  }
-  if (firstError) {
-    throw firstError;
-  }
-  return queued;
-}
-
-export async function buildTouchedIndex(
-  client: NativeTables,
-  threads: SessionMemoryThread[],
-  touchedIds: Set<string>,
-  signal?: AbortSignal,
-): Promise<QueuedExtractionChange[]> {
-  let firstError: unknown = null;
-  const queued: QueuedExtractionChange[] = [];
-  for (const thread of threads) {
-    throwIfAborted(signal);
-    if (!touchedIds.has(threadIdentityKey(thread)) || !getPendingIndex(thread)) {
-      continue;
-    }
-    try {
-      queued.push(...await catchUpIndex(client, thread, signal));
-    } catch (error) {
-      firstError ??= error;
-    }
-  }
-  if (firstError) {
-    throw firstError;
-  }
-  return queued;
-}
-
 function updateThreadsFromRows(
   threads: SessionMemoryThread[],
-  rows: Array<import('./types.js').SessionSnapshot>,
+  rows: SessionSnapshot[],
 ): void {
   const rowsById = new Map(rows.map((row) => [threadIdentityKey(row), row]));
   for (const thread of threads) {
@@ -388,10 +249,7 @@ function updateThreadsFromRows(
 
 export const __testing = {
   flushThreads,
-  buildTouchedIndex,
-  buildExtraction,
   extractEpoch,
-  activeThreadInputsForTests: activeThreadInputs,
   extractSessionThreadForTests: extractSessionThread,
 };
 

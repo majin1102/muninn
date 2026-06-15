@@ -180,8 +180,9 @@ export function locomoTurns(sample: LocomoSample, sessionNo: number): Array<{
 
 async function defaultPipeline(): Promise<LabPipeline> {
   const extractingModule = await import('../../../server/dist/memory/llm/extracting.js');
+  const gatewayModule = await import('../../../server/dist/memory/llm/session-gateway.js');
   return {
-    fit: async (input) => extractingModule.routeSessionMemoryThreads(
+    fit: async (input) => gatewayModule.routeSessionMemoryThreads(
       input.observingThreads,
       toTurns(input.pendingTurns),
     ),

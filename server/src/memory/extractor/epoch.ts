@@ -16,14 +16,14 @@ export class EpochSealedError extends Error {
 
 export class OpenEpoch {
   private acceptChain: Promise<void> = Promise.resolve();
-  private stagedObservableTurns: Turn[];
+  private stagedExtractableTurns: Turn[];
   private sealed = false;
 
   constructor(
     readonly epoch: number,
-    stagedObservableTurns: Turn[] = [],
+    stagedExtractableTurns: Turn[] = [],
   ) {
-    this.stagedObservableTurns = [...stagedObservableTurns];
+    this.stagedExtractableTurns = [...stagedExtractableTurns];
   }
 
   accept(
@@ -50,8 +50,8 @@ export class OpenEpoch {
           turnOwnership(turnContent),
         );
         const accepted = await session.accept(turnContent, this.epoch);
-        if (accepted.turn && !accepted.deduped && isObservable(accepted.turn)) {
-          this.stagedObservableTurns.push(accepted.turn);
+        if (accepted.turn && !accepted.deduped && isExtractable(accepted.turn)) {
+          this.stagedExtractableTurns.push(accepted.turn);
         }
         resolveTurn!();
       } catch (error) {
@@ -68,15 +68,15 @@ export class OpenEpoch {
   }
 
   hasStagedTurns(): boolean {
-    return this.stagedObservableTurns.length > 0;
+    return this.stagedExtractableTurns.length > 0;
   }
 
   stagedTurnCount(): number {
-    return this.stagedObservableTurns.length;
+    return this.stagedExtractableTurns.length;
   }
 
   stagedTurns(): Turn[] {
-    return [...this.stagedObservableTurns];
+    return [...this.stagedExtractableTurns];
   }
 
   async seal(): Promise<SealedEpoch> {
@@ -84,7 +84,7 @@ export class OpenEpoch {
     await this.acceptChain;
     return {
       epoch: this.epoch,
-      turns: [...this.stagedObservableTurns],
+      turns: [...this.stagedExtractableTurns],
     };
   }
 }
@@ -150,6 +150,6 @@ export class EpochQueue {
   }
 }
 
-function isObservable(turn: Turn): boolean {
+function isExtractable(turn: Turn): boolean {
   return Boolean(turn.response?.trim() && turn.summary?.trim());
 }

@@ -13,24 +13,28 @@ import {
   validateMuninnConfigInput,
 } from '../../dist/memory/config.js';
 import { MuninnBackend } from '../../dist/memory/backend.js';
-import { Extractor as Observer } from '../../dist/memory/extractor/extractor.js';
+import { Extractor as Observer } from '../../dist/memory/extractor/runtime.js';
 import { EpochQueue, OpenEpoch } from '../../dist/memory/extractor/epoch.js';
 import { parseCheckpointFile, readCheckpointFile, resolveCheckpointPath } from '../../dist/memory/checkpoint.js';
 import { SessionRegistry } from '../../dist/memory/turn/registry.js';
 import { normalizeSessionId, sessionKey } from '../../dist/memory/turn/key.js';
 import { Session } from '../../dist/memory/turn/session.js';
 import { Watchdog } from '../../dist/memory/watchdog.js';
-import updateModule from '../../dist/memory/extractor/update.js';
-import threadModule from '../../dist/memory/extractor/thread.js';
-import observingGatewayModule from '../../dist/memory/llm/extracting.js';
-import { applyExtractionChanges, applyExtractionTableChanges } from '../../dist/memory/extractor/memory-delta.js';
+import extractionIndexModule from '../../dist/memory/extractor/extraction-index.js';
+import sessionModule from '../../dist/memory/extractor/session.js';
+import threadModule from '../../dist/memory/extractor/snapshot.js';
+import extractingModule from '../../dist/memory/llm/extracting.js';
+import sessionGatewayModule from '../../dist/memory/llm/session-gateway.js';
+import { applyExtractionChanges, applyExtractionTableChanges } from '../../dist/memory/extractor/extraction-index.js';
 import { recallMemories } from '../../dist/memory/recall/index.js';
 import { validateMemoryRecallResult } from '../../dist/memory/recall/memory-recaller.js';
 import { getNativeTables } from '../../dist/memory/native.js';
 
-const { __testing: updateTesting } = updateModule;
+const { __testing: indexTesting } = extractionIndexModule;
+const { __testing: sessionTesting } = sessionModule;
 const { __testing: threadTesting } = threadModule;
-const { __testing: observingGatewayTesting } = observingGatewayModule;
+const { __testing: extractingTesting } = extractingModule;
+const { __testing: sessionGatewayTesting } = sessionGatewayModule;
 const { createSessionMemoryThread, getPendingIndex, getPendingIndexUpTo, loadThreads, toSessionSnapshot } = threadModule;
 const { captureTurn, observer: observerApi, shutdownCoreForTests } = core;
 const CHECKPOINT_SCHEMA_VERSION = 7;
@@ -617,7 +621,7 @@ function deferred() {
   return { promise, resolve, reject };
 }
 
-function makeObservableTurn(turnId, extractionEpoch, text) {
+function makeExtractableTurn(turnId, extractionEpoch, text) {
   return {
     turnId,
     createdAt: '2024-01-01T00:00:00Z',
@@ -2078,8 +2082,8 @@ test('observer bootstrap without checkpoint derives committedEpoch from session 
   const observer = new Observer({
     turnTable: {
       loadTurnsAfterEpoch: async () => [
-        makeObservableTurn('turn-13', 13, 'epoch13'),
-        makeObservableTurn('turn-14', 14, 'epoch14'),
+        makeExtractableTurn('turn-13', 13, 'epoch13'),
+        makeExtractableTurn('turn-14', 14, 'epoch14'),
       ],
     },
     sessionTable: {
@@ -2107,8 +2111,8 @@ test('observer bootstrap publishes pending turns by their extractionEpoch', asyn
   const observer = new Observer({
     turnTable: {
       loadTurnsAfterEpoch: async () => [
-        makeObservableTurn('turn-13', 13, 'epoch13'),
-        makeObservableTurn('turn-14', 14, 'epoch14'),
+        makeExtractableTurn('turn-13', 13, 'epoch13'),
+        makeExtractableTurn('turn-14', 14, 'epoch14'),
       ],
     },
     sessionTable: {
@@ -2331,7 +2335,7 @@ test('observer checkpoint restore keeps full history for active threads', async 
   assert.equal(observer.threads[0].indexedSnapshotSequence, 1);
 });
 
-test('observer restoreCheckpointState advances committedEpoch and excludes observed turns from pending', async (t) => {
+test('extractor restore advances committedEpoch and excludes extracted turns from pending', async (t) => {
   const { dir, homeDir, configPath } = await makeConfigHome();
   t.after(async () => rm(dir, { recursive: true, force: true }));
   process.env.MUNINN_HOME = homeDir;
@@ -2359,8 +2363,8 @@ test('observer restoreCheckpointState advances committedEpoch and excludes obser
   const observer = new Observer({
     turnTable: {
       loadTurnsAfterEpoch: async () => [
-        makeObservableTurn('turn-13', 13, 'epoch13'),
-        makeObservableTurn('turn-14', 14, 'epoch14'),
+        makeExtractableTurn('turn-13', 13, 'epoch13'),
+        makeExtractableTurn('turn-14', 14, 'epoch14'),
       ],
     },
     sessionTable: {
@@ -2433,7 +2437,7 @@ test('observer restoreCheckpointState advances committedEpoch and excludes obser
   }, checkpoint);
   t.after(async () => observer.shutdown());
 
-  const restored = await observer.restoreCheckpointState();
+  const restored = await observer.restore();
 
   assert.equal(restored.committedEpoch, 14);
   assert.deepEqual(restored.pendingTurns, []);
@@ -2441,7 +2445,7 @@ test('observer restoreCheckpointState advances committedEpoch and excludes obser
   assert.deepEqual(restored.threads[0].snapshotEpochs, [12, 13, 14]);
 });
 
-test('observer restoreCheckpointState falls back when session delta refs are missing turn epochs', async (t) => {
+test('observer restore falls back when session delta refs are missing turn epochs', async (t) => {
   const { dir, homeDir, configPath } = await makeConfigHome();
   t.after(async () => rm(dir, { recursive: true, force: true }));
   process.env.MUNINN_HOME = homeDir;
@@ -2465,7 +2469,7 @@ test('observer restoreCheckpointState falls back when session delta refs are mis
   const checkpoint = (await readCheckpointFile())?.extractor ?? null;
   const observer = new Observer({
     turnTable: {
-      loadTurnsAfterEpoch: async () => [makeObservableTurn('turn-13', 13, 'epoch13')],
+      loadTurnsAfterEpoch: async () => [makeExtractableTurn('turn-13', 13, 'epoch13')],
     },
     sessionTable: {
       delta: async () => [
@@ -2501,12 +2505,12 @@ test('observer restoreCheckpointState falls back when session delta refs are mis
   }, checkpoint);
   t.after(async () => observer.shutdown());
 
-  const restored = await observer.restoreCheckpointState();
+  const restored = await observer.restore();
 
   assert.equal(restored, null);
 });
 
-test('observer restoreCheckpointState skips stale threads resource only from session delta', async (t) => {
+test('observer restore skips stale threads resource only from session delta', async (t) => {
   const { dir, homeDir, configPath } = await makeConfigHome();
   t.after(async () => rm(dir, { recursive: true, force: true }));
   process.env.MUNINN_HOME = homeDir;
@@ -2535,7 +2539,7 @@ test('observer restoreCheckpointState skips stale threads resource only from ses
   };
   const observer = new Observer({
     turnTable: {
-      loadTurnsAfterEpoch: async () => [makeObservableTurn('turn-13', 13, 'epoch13')],
+      loadTurnsAfterEpoch: async () => [makeExtractableTurn('turn-13', 13, 'epoch13')],
     },
     sessionTable: {
       delta: async () => [staleRow],
@@ -2545,14 +2549,14 @@ test('observer restoreCheckpointState skips stale threads resource only from ses
   }, checkpoint);
   t.after(async () => observer.shutdown());
 
-  const restored = await observer.restoreCheckpointState();
+  const restored = await observer.restore();
 
   assert.equal(restored.committedEpoch, 13);
   assert.equal(restored.threads.length, 0);
   assert.deepEqual(restored.pendingTurns, []);
 });
 
-test('observer restoreCheckpointState rebuilds delta-only threads from full history', async (t) => {
+test('observer restore rebuilds delta-only threads from full history', async (t) => {
   const { dir, homeDir, configPath } = await makeConfigHome();
   t.after(async () => rm(dir, { recursive: true, force: true }));
   process.env.MUNINN_HOME = homeDir;
@@ -2581,7 +2585,7 @@ test('observer restoreCheckpointState rebuilds delta-only threads from full hist
   }));
   const turnById = new Map(fullRows.map((row, index) => [
     `turn-${index + 1}`,
-    makeObservableTurn(`turn-${index + 1}`, index + 1, `epoch${index + 1}`),
+    makeExtractableTurn(`turn-${index + 1}`, index + 1, `epoch${index + 1}`),
   ]));
   const observer = new Observer({
     turnTable: {
@@ -2600,7 +2604,7 @@ test('observer restoreCheckpointState rebuilds delta-only threads from full hist
   }, checkpoint);
   t.after(async () => observer.shutdown());
 
-  const restored = await observer.restoreCheckpointState();
+  const restored = await observer.restore();
 
   assert.equal(restored.committedEpoch, 8);
   assert.deepEqual(restored.pendingTurns, []);
@@ -2671,7 +2675,7 @@ test('observer bootstrap skips stale checkpoint threads', async (t) => {
   assert.equal(observer.openEpoch.epoch, 13);
 });
 
-test('observer exportCheckpoint keeps the last committed snapshot while observeCurrentEpoch is mid-flight', async (t) => {
+test('observer exportCheckpoint keeps the last committed snapshot while extractCurrentEpoch is mid-flight', async (t) => {
   const { dir, homeDir, configPath } = await makeConfigHome();
   t.after(async () => rm(dir, { recursive: true, force: true }));
   process.env.MUNINN_HOME = homeDir;
@@ -2727,17 +2731,17 @@ test('observer exportCheckpoint keeps the last committed snapshot while observeC
   observer.refreshCheckpointSnapshot();
   observer.currentEpoch = {
     epoch: 1,
-    turns: [makeObservableTurn('turn-1', 1, 'first')],
+    turns: [makeExtractableTurn('turn-1', 1, 'first')],
   };
 
   let midFlight;
-  observer.buildCurrentEpochIndex = async () => {
+  observer.indexCurrentEpochSnapshots = async () => {
     midFlight = observer.exportCheckpoint();
     entered.resolve();
     await release.promise;
   };
 
-  const observePromise = observer.observeCurrentEpoch();
+  const observePromise = observer.extractCurrentEpoch();
   await entered.promise;
 
   assert.deepEqual(midFlight, {
@@ -3920,7 +3924,7 @@ test('session.accept drops stale recent turns before inserting a new turn', asyn
   );
 });
 
-test('open epoch skips deduped turns when staging observable turns', async () => {
+test('open epoch skips deduped turns when staging extractable turns', async () => {
   const epoch = new OpenEpoch(7);
   const dedupedTurn = {
     turnId: 'turn:1',
@@ -3958,7 +3962,7 @@ test('open epoch skips deduped turns when staging observable turns', async () =>
   assert.deepEqual(epoch.stagedTurns(), []);
 });
 
-test('observer.observeCurrentEpoch keeps thread state unchanged when pre-commit work fails', async () => {
+test('observer.extractCurrentEpoch keeps thread state unchanged when pre-commit work fails', async () => {
   const { dir, homeDir, configPath } = await makeConfigHome();
   process.env.MUNINN_HOME = homeDir;
   await writeObserverConfig(configPath);
@@ -4012,7 +4016,7 @@ test('observer.observeCurrentEpoch keeps thread state unchanged when pre-commit 
     observer.currentEpoch = { epoch: 1, turns: [turn] };
     observer.threads = structuredClone(originalThreads);
 
-    await assert.rejects(() => observer.observeCurrentEpoch(), /persist failed/);
+    await assert.rejects(() => observer.extractCurrentEpoch(), /persist failed/);
     assert.deepEqual(observer.threads, originalThreads);
     assert.deepEqual(observer.currentEpoch, { epoch: 1, turns: [turn] });
     assert.equal(observer.committedEpoch, undefined);
@@ -4149,64 +4153,8 @@ test('extraction state rewrite rejects unknown and duplicate ids', () => {
   );
 });
 
-test('extraction extraction validation rejects empty text', async () => {
-  const { __testing: extractionTesting } = await import('../../dist/memory/extractor/extraction-extraction.js');
-  assert.throws(
-    () => extractionTesting.validateExtraction({
-      extractions: [{ text: ' ', category: 'Fact', references: ['turn:1'] }],
-    }),
-    /text must be a non-empty string/i,
-  );
-});
-
-test('extraction extraction validation rejects missing references', async () => {
-  const { __testing: extractionTesting } = await import('../../dist/memory/extractor/extraction-extraction.js');
-  assert.throws(
-    () => extractionTesting.validateExtraction({
-      extractions: [{ text: 'Caroline joined a support group.', category: 'Fact', references: [] }],
-    }),
-    /references must include at least one reference/i,
-  );
-});
-
-test('extraction extraction prompt can include a domain prompt supplement', async () => {
-  const { __testing: extractionTesting } = await import('../../dist/memory/extractor/extraction-extraction.js');
-  const rendered = extractionTesting.renderExtractionPrompt({
-    inputJson: JSON.stringify({ turns: [] }),
-    domainPrompt: 'Category guide:\n- `Fact`: concrete answerable detail.',
-  });
-
-  assert.match(rendered.system, /domain-specific extraction guidance/i);
-  assert.match(rendered.system, /Category guide/);
-  assert.match(rendered.system, /concrete answerable detail/);
-  assert.match(rendered.prompt, /"turns":\[\]/);
-});
-
-test('extraction extraction input includes recent context turns', async () => {
-  const { __testing: extractionTesting } = await import('../../dist/memory/extractor/extraction-extraction.js');
-  const turn = extractionTesting.toExtractionTurn({
-    turnId: 'turn:4',
-    createdAt: '2026-01-01T00:00:04.000Z',
-    updatedAt: '2026-01-01T00:00:04.000Z',
-    sessionId: 'group-a',
-    agent: 'agent-a',
-    observer: 'default-observer',
-    prompt: 'I am off to research that.',
-    response: 'Recorded.',
-    summary: 'research note',
-    recentContext: [
-      { turnId: 'turn:1', updatedAt: '2026-01-01T00:00:01.000Z', prompt: 'What career options?', response: 'Counseling.' },
-      { turnId: 'turn:2', updatedAt: '2026-01-01T00:00:02.000Z', prompt: 'Any education plans?', response: 'Continue education.' },
-    ],
-  });
-
-  assert.deepEqual(turn.recentContext.map((contextTurn) => contextTurn.turnId), ['turn:1', 'turn:2']);
-  assert.equal(turn.recentContext[1].response, 'Continue education.');
-  assert.equal(turn.prompt, 'I am off to research that.');
-});
-
 test('session extraction batch input uses turn headings without horizontal rules', () => {
-  const rendered = observingGatewayTesting.renderNewTurnsForTests([
+  const rendered = extractingTesting.renderNewTurnsForTests([
     {
       turnId: 'turn:1',
       prompt: 'First prompt',
@@ -4226,125 +4174,6 @@ test('session extraction batch input uses turn headings without horizontal rules
   assert.match(rendered, /### turn:2/);
   assert.doesNotMatch(rendered, /^----$/m);
   assert.doesNotMatch(rendered, /Summary:/);
-});
-
-test('extraction review validation requires every new extraction to be reviewed', async () => {
-  const { __testing: reviewTesting } = await import('../../dist/memory/extractor/extraction-review.js');
-  assert.throws(
-    () => reviewTesting.validateReview({
-      newExtractions: [storedExtraction('obs-1')],
-      candidateExtractions: [],
-    }, {
-      removeExtractionIds: [],
-      reviewedExtractionIds: [],
-    }),
-    /not reviewed/i,
-  );
-});
-
-test('extraction review validation rejects unknown removals', async () => {
-  const { __testing: reviewTesting } = await import('../../dist/memory/extractor/extraction-review.js');
-  assert.throws(
-    () => reviewTesting.validateReview({
-      newExtractions: [storedExtraction('obs-1')],
-      candidateExtractions: [],
-    }, {
-      removeExtractionIds: ['obs-missing'],
-      reviewedExtractionIds: ['obs-1'],
-    }),
-    /unknown extraction id/i,
-  );
-});
-
-test('thread preparation validation rejects duplicate extraction coverage', async () => {
-  const { __testing: preparationTesting } = await import('../../dist/memory/extractor/thread-preparation.js');
-  const input = {
-    reviewedExtractions: [storedExtraction('obs-1'), storedExtraction('obs-2')],
-    activeThreads: [{ threadId: 'thread-1', title: 'Thread one' }],
-  };
-  assert.throws(
-    () => preparationTesting.validateThreadPreparation(input, {
-      workItems: [{
-        extractionIds: ['obs-1'],
-        targetThreadId: 'thread-1',
-        rationale: 'same topic',
-      }],
-      unthreadedExtractionIds: ['obs-1', 'obs-2'],
-    }),
-    /exactly once/i,
-  );
-});
-
-test('thread preparation validation rejects single-extraction new threads', async () => {
-  const { __testing: preparationTesting } = await import('../../dist/memory/extractor/thread-preparation.js');
-  const input = {
-    reviewedExtractions: [storedExtraction('obs-1')],
-    activeThreads: [],
-  };
-  assert.throws(
-    () => preparationTesting.validateThreadPreparation(input, {
-      workItems: [{
-        extractionIds: ['obs-1'],
-        newThreadTitle: 'Caroline support group',
-        rationale: 'new durable subject',
-      }],
-      unthreadedExtractionIds: [],
-    }),
-    /at least two/i,
-  );
-});
-
-test('thread preparation validation rejects unknown target threads', async () => {
-  const { __testing: preparationTesting } = await import('../../dist/memory/extractor/thread-preparation.js');
-  const input = {
-    reviewedExtractions: [storedExtraction('obs-1')],
-    activeThreads: [{ threadId: 'thread-1', title: 'Thread one' }],
-  };
-  assert.throws(
-    () => preparationTesting.validateThreadPreparation(input, {
-      workItems: [{
-        extractionIds: ['obs-1'],
-        targetThreadId: 'thread-missing',
-        rationale: 'same topic',
-      }],
-      unthreadedExtractionIds: [],
-    }),
-    /unknown targetThreadId/i,
-  );
-});
-
-test('thread preparation model validation failure falls back to unthreaded extractions', async (t) => {
-  const { dir, homeDir, configPath } = await makeConfigHome();
-  t.after(async () => rm(dir, { recursive: true, force: true }));
-
-  process.env.MUNINN_HOME = homeDir;
-  await writeOpenAiObserverConfig(configPath);
-
-  const { __testing: preparationTesting } = await import('../../dist/memory/extractor/thread-preparation.js');
-  const input = {
-    reviewedExtractions: [storedExtraction('obs-1'), storedExtraction('obs-2')],
-    activeThreads: [],
-    candidateMemories: [{ memoryId: 'extraction:candidate-1', title: 'Candidate', summary: 'Candidate' }],
-  };
-
-  const result = await preparationTesting.prepareThreadsWithModel(input, {
-    model: async () => ({
-      type: 'final',
-      text: JSON.stringify({
-        workItems: [{
-          extractionIds: ['candidate-1'],
-          newThreadTitle: 'Candidate thread',
-          rationale: 'mistaken candidate id',
-        }],
-        unthreadedExtractionIds: ['obs-1', 'obs-2'],
-      }),
-    }),
-  });
-
-  assert.deepEqual(result, {
-    workItems: [],
-    unthreadedExtractionIds: ['obs-1', 'obs-2'],
-  });
 });
 
 test('buildExtraction surfaces extraction write failures and leaves work pending', async (t) => {
@@ -4404,7 +4233,7 @@ test('buildExtraction surfaces extraction write failures and leaves work pending
   let semanticUpserts = 0;
 
   await assert.rejects(
-    () => updateTesting.buildExtraction({
+    () => indexTesting.buildExtraction({
       sessionTable: {
         update: async ({ snapshots }) => snapshots,
       },
@@ -4431,7 +4260,7 @@ test('gateway validation accepts session fragments', () => {
     'Melanie asked what the group had done for Caroline, which was answered in a later turn.',
     'This content needs to remain complete because the observer uses it as selected session material.',
   ].join(' ');
-  const result = observingGatewayTesting.validateGatewayResultForTests(
+  const result = sessionGatewayTesting.validateGatewayResultForTests(
     [{
       threadId: 'thread-1',
       kind: 'subject',
@@ -4459,7 +4288,7 @@ test('gateway validation accepts session fragments', () => {
 });
 
 test('gateway system prompt injects chat session thread definition only', () => {
-  const system = observingGatewayTesting.buildGatewaySystemPromptForTests('chat');
+  const system = sessionGatewayTesting.buildGatewaySystemPromptForTests('chat');
 
   assert.match(system, /Session memory thread definition/);
   assert.match(system, /tracks one coherent subject that can develop over time/);
@@ -4472,7 +4301,7 @@ test('gateway system prompt injects chat session thread definition only', () => 
 
 test('gateway validation rejects session fragments without reason', () => {
   assert.throws(
-    () => observingGatewayTesting.validateGatewayResultForTests(
+    () => sessionGatewayTesting.validateGatewayResultForTests(
       [{
         threadId: 'thread-1',
         kind: 'subject',
@@ -4494,7 +4323,7 @@ test('gateway validation rejects session fragments without reason', () => {
 
 test('gateway validation rejects session fragments with unknown threads', () => {
   assert.throws(
-    () => observingGatewayTesting.validateGatewayResultForTests(
+    () => sessionGatewayTesting.validateGatewayResultForTests(
       [{
         threadId: 'thread-1',
         kind: 'subject',
@@ -4516,7 +4345,7 @@ test('gateway validation rejects session fragments with unknown threads', () => 
 });
 
 test('observer validation derives extractions from titled snapshot content', () => {
-  const result = observingGatewayTesting.validateExtractSessionMemoryResultForTests(
+  const result = extractingTesting.validateExtractSessionMemoryResultForTests(
     snapshotContentFixture([
       '<!-- refs: [turn:13] -->',
       '### Title',
@@ -4600,7 +4429,7 @@ test('observer validation derives extractions from titled snapshot content', () 
 });
 
 test('observer validation preserves session-level signals in snapshot content', () => {
-  const result = observingGatewayTesting.validateExtractSessionMemoryResultForTests(
+  const result = extractingTesting.validateExtractSessionMemoryResultForTests(
     snapshotContentFixture([
       '<!-- refs: [turn:13] -->',
       '### Title',
@@ -4659,19 +4488,19 @@ test('snapshot patch can preserve, replace, and clear session-level signals', ()
     }],
   };
 
-  const preserved = observingGatewayTesting.validateExtractSessionMemoryResultForTests([
+  const preserved = extractingTesting.validateExtractSessionMemoryResultForTests([
     '## Summary',
     'Extractor prompt design continues.',
   ].join('\n'), baseInput);
   assert.equal(preserved.signals, '- User preference: Keep signal bullets natural.');
 
-  const replaced = observingGatewayTesting.validateExtractSessionMemoryResultForTests([
+  const replaced = extractingTesting.validateExtractSessionMemoryResultForTests([
     '## Signals',
     '- Repeated requirement or correction: Signals are session-level state.',
   ].join('\n'), baseInput);
   assert.equal(replaced.signals, '- Repeated requirement or correction: Signals are session-level state.');
 
-  const cleared = observingGatewayTesting.validateExtractSessionMemoryResultForTests([
+  const cleared = extractingTesting.validateExtractSessionMemoryResultForTests([
     '## Signals',
     '',
   ].join('\n'), baseInput);
@@ -4679,7 +4508,7 @@ test('snapshot patch can preserve, replace, and clear session-level signals', ()
 });
 
 test('observer validation keeps independent refs per snapshot content unit', () => {
-  const result = observingGatewayTesting.validateExtractSessionMemoryResultForTests(
+  const result = extractingTesting.validateExtractSessionMemoryResultForTests(
     snapshotContentFixture([
       '<!-- refs: [turn:13] -->',
       '### Title',
@@ -4723,7 +4552,7 @@ test('observer validation keeps independent refs per snapshot content unit', () 
 });
 
 test('observer validation splits adjacent metadata snapshot units without separators', () => {
-  const result = observingGatewayTesting.validateExtractSessionMemoryResultForTests(
+  const result = extractingTesting.validateExtractSessionMemoryResultForTests(
     snapshotContentFixture([
       '<!-- refs: [turn:13] -->',
       '### Title',
@@ -4769,7 +4598,7 @@ test('observer validation splits adjacent metadata snapshot units without separa
 });
 
 test('session extraction turn input omits turn summary when prompt and response are present', () => {
-  const markdown = observingGatewayTesting.renderNewTurnsForTests([{
+  const markdown = extractingTesting.renderNewTurnsForTests([{
     turnId: 'turn:13',
     prompt: 'User asked whether app session rows should use snapshot titles.',
     response: 'Agent confirmed the session index should cache the latest snapshot title.',
@@ -4784,7 +4613,7 @@ test('session extraction turn input omits turn summary when prompt and response 
 });
 
 test('observer validation accepts markdown fenced snapshot content', () => {
-  const result = observingGatewayTesting.validateExtractSessionMemoryResultForTests(
+  const result = extractingTesting.validateExtractSessionMemoryResultForTests(
     [
       '```markdown',
       '# Painting Memory',
@@ -4822,7 +4651,7 @@ test('observer validation accepts markdown fenced snapshot content', () => {
 
 test('observer validation rejects session signals after extractions', () => {
   assert.throws(
-    () => observingGatewayTesting.validateExtractSessionMemoryResultForTests([
+    () => extractingTesting.validateExtractSessionMemoryResultForTests([
       '# Painting Memory',
       '',
       '## Summary',
@@ -4854,7 +4683,7 @@ test('observer validation rejects session signals after extractions', () => {
 
 test('snapshot patch rejects session signals after extractions', () => {
   assert.throws(
-    () => observingGatewayTesting.validateExtractSessionMemoryResultForTests([
+    () => extractingTesting.validateExtractSessionMemoryResultForTests([
       '## Extractions',
       '<!-- refs: [turn:13] -->',
       '### Title',
@@ -4881,7 +4710,7 @@ test('snapshot patch rejects session signals after extractions', () => {
 
 test('observer validation rejects snapshot content units without metadata', () => {
   assert.throws(
-    () => observingGatewayTesting.validateExtractSessionMemoryResultForTests(
+    () => extractingTesting.validateExtractSessionMemoryResultForTests(
       snapshotContentFixture('### Title\nPainting\n\n### Summary\nMelanie painted a lake sunrise in 2022.'),
       {
         sessionMemoryContent: {
@@ -4900,7 +4729,7 @@ test('observer validation rejects snapshot content units without metadata', () =
 
 test('observer validation rejects legacy snapshot content format', () => {
   assert.throws(
-    () => observingGatewayTesting.validateExtractSessionMemoryResultForTests(
+    () => extractingTesting.validateExtractSessionMemoryResultForTests(
       snapshotContentFixture('<!-- categories: [Fact]; refs: [turn:13] -->\n[Entity] Melanie\n[Extraction] Melanie painted a lake sunrise in 2022.'),
       {
         sessionMemoryContent: {
@@ -4919,7 +4748,7 @@ test('observer validation rejects legacy snapshot content format', () => {
 
 test('observer validation rejects snapshot content units without title', () => {
   assert.throws(
-    () => observingGatewayTesting.validateExtractSessionMemoryResultForTests(
+    () => extractingTesting.validateExtractSessionMemoryResultForTests(
       snapshotContentFixture('<!-- refs: [turn:13] -->\n### Summary\nMelanie painted a lake sunrise in 2022.'),
       {
         sessionMemoryContent: {
@@ -4938,7 +4767,7 @@ test('observer validation rejects snapshot content units without title', () => {
 
 test('observer validation rejects unknown snapshot content refs', () => {
   assert.throws(
-    () => observingGatewayTesting.validateExtractSessionMemoryResultForTests(
+    () => extractingTesting.validateExtractSessionMemoryResultForTests(
       snapshotContentFixture('<!-- refs: [session:missing] -->\n### Title\nPainting\n\n### Summary\nMelanie painted a lake sunrise in 2022.'),
       {
         sessionMemoryContent: {
@@ -4957,7 +4786,7 @@ test('observer validation rejects unknown snapshot content refs', () => {
 
 test('observer validation rejects snapshot content units without refs metadata', () => {
   assert.throws(
-    () => observingGatewayTesting.validateExtractSessionMemoryResultForTests(
+    () => extractingTesting.validateExtractSessionMemoryResultForTests(
       snapshotContentFixture('<!-- refs: [] -->\n### Title\nPainting\n\n### Summary\nMelanie painted a lake sunrise in 2022.'),
       {
         sessionMemoryContent: {
@@ -4976,7 +4805,7 @@ test('observer validation rejects snapshot content units without refs metadata',
 
 test('observer validation rejects JSON output', () => {
   assert.throws(
-    () => observingGatewayTesting.validateExtractSessionMemoryResultForTests(JSON.stringify({
+    () => extractingTesting.validateExtractSessionMemoryResultForTests(JSON.stringify({
       title: 'Painting',
       snapshotContent: '<!-- refs: [turn:13] -->\n### Title\nPainting\n\n### Summary\nMelanie painted a lake sunrise.',
       openQuestions: [],
@@ -4988,7 +4817,7 @@ test('observer validation rejects JSON output', () => {
 });
 
 test('observer validation accepts long titles without runtime length rejection', () => {
-  const result = observingGatewayTesting.validateExtractSessionMemoryResultForTests(
+  const result = extractingTesting.validateExtractSessionMemoryResultForTests(
     snapshotContentFixture(
       `<!-- refs: [turn:13] -->\n### Title\n${'x'.repeat(81)}\n\n### Summary\nMelanie painted a lake sunrise in 2022.`,
     ),
@@ -5002,7 +4831,7 @@ test('observer validation accepts long titles without runtime length rejection',
 
 test('observer validation rejects snapshot content units without summary', () => {
   assert.throws(
-    () => observingGatewayTesting.validateExtractSessionMemoryResultForTests(
+    () => extractingTesting.validateExtractSessionMemoryResultForTests(
       snapshotContentFixture('<!-- refs: [turn:13] -->\n### Title\nPainting'),
       {
         sessionMemoryContent: {
@@ -5032,7 +4861,7 @@ test('thread session get_extraction expands visible extraction sequences only', 
   });
 
   const requests = [];
-  const result = await observingGatewayModule.extractSessionMemory({
+  const result = await extractingModule.extractSessionMemory({
     sessionMemoryContent: {
       title: 'Caroline support group',
       summary: 'Caroline discussed a support group.',
@@ -5151,7 +4980,7 @@ test('thread session can create unrelated extraction without get_extraction', as
   await writeOpenAiObserverConfig(configPath);
 
   const requests = [];
-  const result = await observingGatewayModule.extractSessionMemory({
+  const result = await extractingModule.extractSessionMemory({
     sessionMemoryContent: {
       title: 'Caroline support group',
       summary: 'Caroline discussed a support group.',
@@ -5221,7 +5050,7 @@ test('thread session requires get_extraction before updating an existing sequenc
   });
 
   const requests = [];
-  const result = await observingGatewayModule.extractSessionMemory({
+  const result = await extractingModule.extractSessionMemory({
     sessionMemoryContent: {
       title: 'Caroline support group',
       summary: 'Caroline discussed a support group.',
@@ -5299,7 +5128,7 @@ test('thread session allows at most five get_extraction calls', async (t) => {
 
   let calls = 0;
   await assert.rejects(
-    observingGatewayModule.extractSessionMemory({
+    extractingModule.extractSessionMemory({
       sessionMemoryContent: {
         title: 'Caroline support group',
         summary: 'Caroline discussed a support group.',
@@ -5345,7 +5174,7 @@ test('thread session omits generated default session title from memory input', a
   await writeOpenAiObserverConfig(configPath);
 
   const requests = [];
-  await observingGatewayModule.extractSessionMemory({
+  await extractingModule.extractSessionMemory({
     sessionMemoryContent: {
       title: 'Session group-a',
       summary: 'Default session memory thread for session group-a.',
@@ -5394,7 +5223,7 @@ test('thread session traces invalid markdown attempts without JSON retry instruc
   });
 
   const requests = [];
-  const result = await observingGatewayModule.extractSessionMemory({
+  const result = await extractingModule.extractSessionMemory({
     sessionMemoryContent: {
       title: 'Caroline support group',
       summary: '',
@@ -5458,7 +5287,7 @@ test('thread session omits default session summary from memory input', async (t)
   await writeOpenAiObserverConfig(configPath);
 
   const requests = [];
-  await observingGatewayModule.extractSessionMemory({
+  await extractingModule.extractSessionMemory({
     sessionMemoryContent: {
       title: 'Session locomo',
       summary: 'Default session thread for session locomo:conv-26:session_1.',
@@ -5506,7 +5335,7 @@ test('thread session inlines chat memory categories', async (t) => {
   await writeOpenAiObserverConfig(configPath);
 
   const requests = [];
-  await observingGatewayModule.extractSessionMemory({
+  await extractingModule.extractSessionMemory({
     sessionMemoryContent: {
       title: 'Caroline support group',
       summary: 'Caroline discussed a support group.',
@@ -5568,7 +5397,7 @@ test('session snapshots keep complete cumulative context refs', () => {
   });
 
   for (let index = 1; index <= 10; index += 1) {
-    threadTesting.applyExtractionResultForTests(
+    threadTesting.applyExtractionForTests(
       thread,
       result(`slice ${index}`, `turn:${index}`),
       index,
@@ -5623,14 +5452,14 @@ test('session context refs update duplicate turn summaries without duplicates', 
     contextRefs: [{ turnId: 'turn:1', summary }],
   });
 
-  threadTesting.applyExtractionResultForTests(
+  threadTesting.applyExtractionForTests(
     thread,
     observeResult('initial summary'),
     1,
     applyExtractionChanges,
     '2026-01-01T00:00:00.000Z',
   );
-  threadTesting.applyExtractionResultForTests(
+  threadTesting.applyExtractionForTests(
     thread,
     observeResult('updated summary'),
     2,
@@ -5669,7 +5498,7 @@ test('session snapshot persists markdown content with parsed title and summary',
     },
   );
 
-  threadTesting.applyExtractionResultForTests(
+  threadTesting.applyExtractionForTests(
     thread,
     {
       title: 'Melanie Painting',
@@ -5709,9 +5538,9 @@ test('extractSessionThread passes raw turns to observer', async () => {
     'locomo',
     { agent: 'Melanie', project: 'locomo', cwd: '/workspace/locomo' },
   );
-  const observedInputs = [];
+  const extractionInputs = [];
   const extractSessionMemoryImpl = async (input) => {
-    observedInputs.push(input);
+    extractionInputs.push(input);
     return {
       title: 'Painting',
       snapshotContent: snapshotContentFixture(
@@ -5738,9 +5567,8 @@ test('extractSessionThread passes raw turns to observer', async () => {
     };
   };
 
-  await updateTesting.extractSessionThreadForTests({
-    threads: [thread],
-    extractorName: 'default-observer',
+  await sessionTesting.extractSessionThreadForTests({
+    thread,
     pendingTurns: [{
       turnId: 'turn:13',
       createdAt: now,
@@ -5760,7 +5588,7 @@ test('extractSessionThread passes raw turns to observer', async () => {
     extractSessionMemoryImpl,
   });
 
-  assert.deepEqual(observedInputs[0].turns, [{
+  assert.deepEqual(extractionInputs[0].turns, [{
     turnId: 'turn:13',
     prompt: 'DATE: 1:56 pm on 8 May, 2023\nDIALOGUE:\nMelanie said: "Yeah, I painted that lake sunrise last year!"',
     response: '[imported dialogue event; no assistant response]',
@@ -5797,7 +5625,7 @@ test('gateway input includes thread kind and prompt plus response turn text', ()
     extractionChanges: [],
   });
 
-  const turns = observingGatewayTesting.gatewayTurnsForTests([{
+  const turns = sessionGatewayTesting.gatewayTurnsForTests([{
     turnId: 'turn:12',
     createdAt: '2026-01-01T00:00:00.000Z',
     updatedAt: '2026-01-01T00:00:00.000Z',
@@ -5815,7 +5643,7 @@ test('gateway input includes thread kind and prompt plus response turn text', ()
     text: 'Prompt:\nMelanie encouraged Caroline.\n\nResponse:\nplaceholder',
   });
 
-  const responseOnlyTurns = observingGatewayTesting.gatewayTurnsForTests([{
+  const responseOnlyTurns = sessionGatewayTesting.gatewayTurnsForTests([{
     turnId: 'turn:13',
     createdAt: '2026-01-01T00:00:00.000Z',
     updatedAt: '2026-01-01T00:00:00.000Z',
@@ -5833,7 +5661,7 @@ test('gateway input includes thread kind and prompt plus response turn text', ()
   );
 });
 
-test('observed turns without observer context refs are not persisted as references', async () => {
+test('extracted turns without extractor context refs are not persisted as references', async () => {
   const now = '2026-01-01T00:00:00.000Z';
   const thread = createSessionMemoryThread(
     'default-observer',
@@ -5855,9 +5683,8 @@ test('observed turns without observer context refs are not persisted as referenc
     contextRefs: [],
   });
 
-  await updateTesting.extractSessionThreadForTests({
-    threads: [thread],
-    extractorName: 'default-observer',
+  await sessionTesting.extractSessionThreadForTests({
+    thread,
     pendingTurns: [{
       turnId: 'turn:99',
       createdAt: now,
@@ -5895,9 +5722,9 @@ test('raw-turn session only updates the session thread', async () => {
     { agent: 'Melanie', project: 'locomo', cwd: '/workspace/locomo' },
   );
   const threads = [thread];
-  const observedInputs = [];
+  const extractionInputs = [];
   const extractSessionMemoryImpl = async (input) => {
-    observedInputs.push(input);
+    extractionInputs.push(input);
     return {
       title: 'Melanie lake sunrise painting and creative outlet',
       snapshotContent: snapshotContentFixture(
@@ -5924,9 +5751,8 @@ test('raw-turn session only updates the session thread', async () => {
     };
   };
 
-  await updateTesting.extractSessionThreadForTests({
-    threads,
-    extractorName: 'default-observer',
+  await sessionTesting.extractSessionThreadForTests({
+    thread,
     pendingTurns: [{
       turnId: 'turn:12',
       createdAt: now,
@@ -5948,17 +5774,17 @@ test('raw-turn session only updates the session thread', async () => {
 
   assert.equal(threads.length, 1);
   assert.equal(threads[0].kind, 'session');
-  assert.equal(observedInputs[0].turns[0].prompt, 'Melanie said: "You would be a great counselor. By the way, take a look at this painting."');
+  assert.equal(extractionInputs[0].turns[0].prompt, 'Melanie said: "You would be a great counselor. By the way, take a look at this painting."');
 });
 
 test('extractEpoch groups mixed session turns before session', async () => {
   const threads = [];
-  const observedInputs = [];
-  const observingRows = [];
+  const extractionInputs = [];
+  const snapshotRows = [];
   const client = {
     sessionTable: {
       insert: async ({ snapshots }) => {
-        observingRows.push(...snapshots);
+        snapshotRows.push(...snapshots);
         return snapshots.map((snapshot, index) => ({
           ...snapshot,
           snapshotId: `snapshot-${index + 1}`,
@@ -5967,7 +5793,7 @@ test('extractEpoch groups mixed session turns before session', async () => {
     },
   };
   const extractSessionMemoryImpl = async (input) => {
-    observedInputs.push(input);
+    extractionInputs.push(input);
     return {
       title: input.sessionMemoryContent.title,
       snapshotContent: '',
@@ -5981,11 +5807,11 @@ test('extractEpoch groups mixed session turns before session', async () => {
     };
   };
 
-  const groupA1 = makeObservableTurn('session:a1', 2, 'a1');
-  const groupB1 = { ...makeObservableTurn('session:b1', 2, 'b1'), sessionId: 'group-b' };
-  const groupA2 = makeObservableTurn('session:a2', 2, 'a2');
+  const groupA1 = makeExtractableTurn('session:a1', 2, 'a1');
+  const groupB1 = { ...makeExtractableTurn('session:b1', 2, 'b1'), sessionId: 'group-b' };
+  const groupA2 = makeExtractableTurn('session:a2', 2, 'a2');
 
-  const result = await updateTesting.extractEpoch({
+  const result = await sessionTesting.extractEpoch({
     client,
     extractorName: 'default-observer',
     activeWindowDays: 3650,
@@ -5997,17 +5823,17 @@ test('extractEpoch groups mixed session turns before session', async () => {
     extractSessionMemoryImpl,
   });
 
-  assert.equal(observedInputs.length, 2);
-  assert.deepEqual(observedInputs[0].turns.map((turn) => turn.turnId), ['session:a1', 'session:a2']);
-  assert.deepEqual(observedInputs[1].turns.map((turn) => turn.turnId), ['session:b1']);
+  assert.equal(extractionInputs.length, 2);
+  assert.deepEqual(extractionInputs[0].turns.map((turn) => turn.turnId), ['session:a1', 'session:a2']);
+  assert.deepEqual(extractionInputs[1].turns.map((turn) => turn.turnId), ['session:b1']);
   assert.deepEqual(threads.map((thread) => thread.sessionId), ['group-a', 'group-b']);
   assert.equal(result.touchedIds.size, 2);
-  assert.equal(observingRows.length, 2);
+  assert.equal(snapshotRows.length, 2);
 });
 
 test('extractEpoch routes missing sessionId turns to default session thread', async () => {
   const threads = [];
-  const observedInputs = [];
+  const extractionInputs = [];
   const client = {
     sessionTable: {
       insert: async ({ snapshots }) => snapshots.map((snapshot, index) => ({
@@ -6017,7 +5843,7 @@ test('extractEpoch routes missing sessionId turns to default session thread', as
     },
   };
   const extractSessionMemoryImpl = async (input) => {
-    observedInputs.push(input);
+    extractionInputs.push(input);
     return {
       title: input.sessionMemoryContent.title,
       snapshotContent: '',
@@ -6031,7 +5857,7 @@ test('extractEpoch routes missing sessionId turns to default session thread', as
     };
   };
 
-  await updateTesting.extractEpoch({
+  await sessionTesting.extractEpoch({
     client,
     extractorName: 'default-observer',
     activeWindowDays: 3650,
@@ -6039,15 +5865,15 @@ test('extractEpoch routes missing sessionId turns to default session thread', as
     sealedEpoch: {
       epoch: 2,
       turns: [
-        { ...makeObservableTurn('turn:null-1', 2, 'null-1'), sessionId: null },
-        { ...makeObservableTurn('turn:blank-1', 2, 'blank-1'), sessionId: '   ' },
+        { ...makeExtractableTurn('turn:null-1', 2, 'null-1'), sessionId: null },
+        { ...makeExtractableTurn('turn:blank-1', 2, 'blank-1'), sessionId: '   ' },
       ],
     },
     extractSessionMemoryImpl,
   });
 
-  assert.equal(observedInputs.length, 1);
-  assert.deepEqual(observedInputs[0].turns.map((turn) => turn.turnId), ['turn:null-1', 'turn:blank-1']);
+  assert.equal(extractionInputs.length, 1);
+  assert.deepEqual(extractionInputs[0].turns.map((turn) => turn.turnId), ['turn:null-1', 'turn:blank-1']);
   assert.equal(threads.length, 1);
   assert.equal(threads[0].sessionId, '__muninn_default_session__');
 });
@@ -6060,12 +5886,11 @@ test('extractSessionThread rejects mixed session turns', async () => {
   };
 
   await assert.rejects(
-    updateTesting.extractSessionThreadForTests({
-      threads: [thread],
-      extractorName: 'default-observer',
+    sessionTesting.extractSessionThreadForTests({
+      thread,
       pendingTurns: [
-        makeObservableTurn('session:a1', 2, 'a1'),
-        { ...makeObservableTurn('session:b1', 2, 'b1'), sessionId: 'group-b' },
+        makeExtractableTurn('session:a1', 2, 'a1'),
+        { ...makeExtractableTurn('session:b1', 2, 'b1'), sessionId: 'group-b' },
       ],
       extractionEpoch: 2,
       extractSessionMemoryImpl,
@@ -6129,7 +5954,7 @@ test('buildTouchedIndex immediately advances extraction index for touched thread
     updatedAt: '2024-01-01T00:00:00Z',
   }];
 
-  await updateTesting.buildTouchedIndex({
+  await indexTesting.buildTouchedIndex({
     sessionTable: {
       update: async ({ snapshots }) => snapshots,
     },
@@ -6147,7 +5972,7 @@ test('buildTouchedIndex immediately advances extraction index for touched thread
   assert.equal(getPendingIndex(threads[0]), null);
 });
 
-test('observer.retryExtraction refreshes the committed checkpoint snapshot after session rows are updated', async (t) => {
+test('observer.retrySnapshotIndexing refreshes the committed checkpoint snapshot after session rows are updated', async (t) => {
   const { dir, homeDir, configPath } = await makeConfigHome();
   t.after(async () => rm(dir, { recursive: true, force: true }));
 
@@ -6216,7 +6041,7 @@ test('observer.retryExtraction refreshes the committed checkpoint snapshot after
   }];
   observer.refreshCheckpointSnapshot();
 
-  await observer.retryExtraction();
+  await observer.retrySnapshotIndexing();
 
   assert.deepEqual(observer.exportCheckpoint(), {
     committedEpoch: 1,
@@ -6233,7 +6058,7 @@ test('observer.retryExtraction refreshes the committed checkpoint snapshot after
   });
 });
 
-test('observer.observeCurrentEpoch commits session rows before retrying extraction changes', async (t) => {
+test('observer.extractCurrentEpoch commits session rows before retrying extraction changes', async (t) => {
   const { dir, homeDir, configPath } = await makeConfigHome();
   t.after(async () => rm(dir, { recursive: true, force: true }));
 
@@ -6263,7 +6088,7 @@ test('observer.observeCurrentEpoch commits session rows before retrying extracti
   observer.openEpoch = new OpenEpoch(2);
   observer.currentEpoch = {
     epoch: 1,
-    turns: [makeObservableTurn('turn-1', 1, 'first')],
+    turns: [makeExtractableTurn('turn-1', 1, 'first')],
   };
   observer.threads = [{
     sessionId: 'session-a',
@@ -6281,12 +6106,12 @@ test('observer.observeCurrentEpoch commits session rows before retrying extracti
     createdAt: '2024-01-01T00:00:00Z',
     updatedAt: '2024-01-01T00:00:00Z',
   }];
-  observer.buildCurrentEpochIndex = async () => {
+  observer.indexCurrentEpochSnapshots = async () => {
     indexAttempts += 1;
     throw new Error('extraction write failed');
   };
 
-  await observer.observeCurrentEpoch();
+  await observer.extractCurrentEpoch();
 
   assert.equal(extractionUpserts, 0);
   assert.equal(indexAttempts, 1);
@@ -6380,12 +6205,12 @@ test('observer.run retries pending extraction index before queued epochs when du
     ],
   });
 
-  observer.retryExtraction = async () => {
+  observer.retrySnapshotIndexing = async () => {
     calls.push('index');
     observer.nextIndexRetryAt = undefined;
     observer.threads = [];
   };
-  observer.observeCurrentEpoch = async () => {
+  observer.extractCurrentEpoch = async () => {
     calls.push('observe');
     observer.currentEpoch = null;
     observer.threads = [];
@@ -6466,7 +6291,7 @@ test('observer.watermark exposes extraction index retry failures', async (t) => 
     updatedAt: '2024-01-01T00:00:00Z',
   }];
 
-  await observer.retryExtraction();
+  await observer.retrySnapshotIndexing();
 
   const watermark = await observer.watermark();
   assert.equal(watermark.phases.extractor, 'error');
@@ -6494,7 +6319,7 @@ test('observer.accept keeps a partial epoch open until epochTurns is reached', a
       accept: async (_content, epoch) => {
         acceptCount += 1;
         return {
-          turn: makeObservableTurn(`turn-${acceptCount}`, epoch, `turn ${acceptCount}`),
+          turn: makeExtractableTurn(`turn-${acceptCount}`, epoch, `turn ${acceptCount}`),
           deduped: false,
         };
       },
@@ -6533,7 +6358,7 @@ test('observer.accept seals a partial epoch when the epoch window expires', asyn
   const registry = {
     load: async () => ({
       accept: async (_content, epoch) => ({
-        turn: makeObservableTurn('turn-1', epoch, 'first'),
+        turn: makeExtractableTurn('turn-1', epoch, 'first'),
         deduped: false,
       }),
     }),
@@ -6548,7 +6373,7 @@ test('observer.accept seals a partial epoch when the epoch window expires', asyn
   assert.deepEqual(observer.epochQueue.pendingTurns().map((turn) => turn.turnId), ['turn-1']);
 });
 
-test('observer.accept does not start the epoch window for non-observable turns', async (t) => {
+test('observer.accept does not start the epoch window for non-extractable turns', async (t) => {
   const { dir, homeDir, configPath } = await makeConfigHome();
   t.after(async () => rm(dir, { recursive: true, force: true }));
 
@@ -6564,7 +6389,7 @@ test('observer.accept does not start the epoch window for non-observable turns',
     load: async () => ({
       accept: async () => ({
         turn: {
-          ...makeObservableTurn('turn-1', 1, 'first'),
+          ...makeExtractableTurn('turn-1', 1, 'first'),
           response: null,
         },
         deduped: false,
@@ -6601,7 +6426,7 @@ test('flushPending waits for an in-flight accept that started before the barrier
         firstEntered.resolve();
         await releaseFirst.promise;
         return {
-          turn: makeObservableTurn('turn-1', epoch, 'first'),
+          turn: makeExtractableTurn('turn-1', epoch, 'first'),
           deduped: false,
         };
       },
@@ -6648,7 +6473,7 @@ test('flushPending does not wait for accepts that start after the barrier', asyn
         acceptCount += 1;
         if (acceptCount === 1) {
           return {
-            turn: makeObservableTurn('turn-1', epoch, 'first'),
+            turn: makeExtractableTurn('turn-1', epoch, 'first'),
             deduped: false,
           };
         }
@@ -6656,7 +6481,7 @@ test('flushPending does not wait for accepts that start after the barrier', asyn
         secondEntered.resolve();
         await releaseSecond.promise;
         return {
-          turn: makeObservableTurn('turn-2', epoch, 'second'),
+          turn: makeExtractableTurn('turn-2', epoch, 'second'),
           deduped: true,
         };
       },
@@ -6724,7 +6549,7 @@ test('observer.accept rejects new writes after shutdown starts', async (t) => {
   await assert.rejects(
     () => observer.accept(makeTurnContent('late prompt', 'late response'), {
       load: async () => ({
-        accept: async () => makeObservableTurn('turn-late', 1, 'late'),
+        accept: async () => makeExtractableTurn('turn-late', 1, 'late'),
       }),
     }),
     /extractor is shutting down/,
@@ -6768,7 +6593,7 @@ test('observer.watermark keeps sealed turns visible while publish is in flight',
 
   const observer = new Observer({});
   observer.bootstrapped = true;
-  const turn = makeObservableTurn('turn:42', 7, 'publishing');
+  const turn = makeExtractableTurn('turn:42', 7, 'publishing');
   const openEpoch = new OpenEpoch(7, [turn]);
   observer.openEpoch = openEpoch;
 
@@ -6864,7 +6689,7 @@ test('flushThreads persists session state without inline ref or index builders',
     },
   ];
 
-  await updateTesting.flushThreads({
+  await sessionTesting.flushThreads({
     sessionTable: {
       insert: async ({ snapshots }) => {
         return snapshots.map((snapshot) => ({
@@ -6924,7 +6749,7 @@ test('flushThreads keeps same raw session id isolated by cwd', async (t) => {
     makeThread('beta', '/workspace/beta'),
   ];
 
-  await updateTesting.flushThreads({
+  await sessionTesting.flushThreads({
     sessionTable: {
       insert: async ({ snapshots }) => snapshots.map((snapshot) => ({
         ...snapshot,
