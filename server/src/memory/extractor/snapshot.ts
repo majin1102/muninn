@@ -212,7 +212,7 @@ export function currentSessionMemoryContent(thread: SessionMemoryThread): Sessio
   };
 }
 
-export function applyExtractionResult(
+export function applyExtraction(
   thread: SessionMemoryThread,
   result: ExtractSessionMemoryResult,
   extractionEpoch: number,
@@ -849,5 +849,5 @@ function normalizeContext(value: string): string | null {
 }
 
 export const __testing = {
-  applyExtractionResultForTests: applyExtractionResult,
+  applyExtractionForTests: applyExtraction,
 };

@@ -5,7 +5,7 @@ import { extractSessionMemory } from '../llm/extracting.js';
 import { applyExtractionChanges } from './extraction-index.js';
 import type { SealedEpoch } from './epoch.js';
 import {
-  applyExtractionResult,
+  applyExtraction,
   createSessionMemoryThread,
   currentSessionMemoryContent,
   isActiveThread,
@@ -214,7 +214,7 @@ async function extractSessionThread(params: ExtractSessionThreadParams): Promise
     sessionMemoryContent: currentSessionMemoryContent(thread),
     turns,
   }, signal, { memories, database: params.database });
-  applyExtractionResult(thread, result, extractionEpoch, applyExtractionChanges);
+  applyExtraction(thread, result, extractionEpoch, applyExtractionChanges);
   touchedIds.add(threadIdentityKey(thread));
   return touchedIds;
 }
