@@ -22,6 +22,38 @@ test('desktop token protects api routes when configured', async () => {
   assert.equal(wrong.status, 401);
 });
 
+test('desktop token protects artifact routes when configured', async (t) => {
+  const home = await mkdtemp(path.join(os.tmpdir(), 'muninn-desktop-artifact-auth-'));
+  const previousHome = process.env.MUNINN_HOME;
+  process.env.MUNINN_DESKTOP_TOKEN = 'desktop-secret';
+  process.env.MUNINN_HOME = home;
+  t.after(async () => {
+    if (previousHome === undefined) {
+      delete process.env.MUNINN_HOME;
+    } else {
+      process.env.MUNINN_HOME = previousHome;
+    }
+    await rm(home, { recursive: true, force: true });
+  });
+
+  const artifactDir = path.join(home, 'default', 'artifacts');
+  await mkdir(artifactDir, { recursive: true });
+  await writeFile(path.join(artifactDir, 'capture.png'), Buffer.from('89504e470d0a1a0a', 'hex'));
+
+  const missing = await app.request('/app/artifacts/capture.png');
+  assert.equal(missing.status, 401);
+
+  const wrong = await app.request('/app/artifacts/capture.png', {
+    headers: { authorization: 'Bearer wrong-secret' },
+  });
+  assert.equal(wrong.status, 401);
+
+  const allowed = await app.request('/app/artifacts/capture.png', {
+    headers: { authorization: 'Bearer desktop-secret' },
+  });
+  assert.equal(allowed.status, 200);
+});
+
 test('desktop token allows api routes with matching bearer token', async () => {
   const home = await mkdtemp(path.join(os.tmpdir(), 'muninn-desktop-auth-'));
   const previousHome = process.env.MUNINN_HOME;

@@ -1,4 +1,4 @@
-import { Hono } from 'hono';
+import { Hono, type Context, type Next } from 'hono';
 import { cors } from 'hono/cors';
 import type {
   Artifact,
@@ -49,7 +49,7 @@ app.use('/health', cors({
   origin: LOCAL_WEB_CORS_ORIGINS,
 }));
 
-app.use('/api/*', async (c, next) => {
+async function requireDesktopToken(c: Context, next: Next) {
   const token = process.env.MUNINN_DESKTOP_TOKEN;
   if (!token) {
     await next();
@@ -65,25 +65,11 @@ app.use('/api/*', async (c, next) => {
   }
 
   await next();
-});
+}
 
-app.use('/app/api/*', async (c, next) => {
-  const token = process.env.MUNINN_DESKTOP_TOKEN;
-  if (!token) {
-    await next();
-    return;
-  }
-
-  if (c.req.header('authorization') !== `Bearer ${token}`) {
-    return c.json({
-      errorCode: 'unauthorized',
-      errorMessage: 'desktop authorization token is required',
-      requestId: generateRequestId(),
-    }, 401);
-  }
-
-  await next();
-});
+app.use('/api/*', requireDesktopToken);
+app.use('/app/api/*', requireDesktopToken);
+app.use('/app/artifacts/*', requireDesktopToken);
 
 app.get('/health', (c) => {
   return c.json({
