@@ -22,7 +22,7 @@ import {
 } from './snapshot.js';
 import type { SessionMemoryThread } from './types.js';
 import { extractEpoch } from './session.js';
-import { buildExtraction, buildTouchedIndex } from './update.js';
+import { buildExtraction, buildTouchedIndex } from './extraction-index.js';
 import { resolveDatabaseName } from '../config.js';
 import { writeMuninnLog } from '../logging.js';
 

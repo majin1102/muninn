@@ -20,7 +20,7 @@ import { SessionRegistry } from '../../dist/memory/turn/registry.js';
 import { normalizeSessionId, sessionKey } from '../../dist/memory/turn/key.js';
 import { Session } from '../../dist/memory/turn/session.js';
 import { Watchdog } from '../../dist/memory/watchdog.js';
-import updateModule from '../../dist/memory/extractor/update.js';
+import extractionIndexModule from '../../dist/memory/extractor/extraction-index.js';
 import sessionModule from '../../dist/memory/extractor/session.js';
 import threadModule from '../../dist/memory/extractor/snapshot.js';
 import observingGatewayModule from '../../dist/memory/llm/extracting.js';
@@ -30,7 +30,7 @@ import { recallMemories } from '../../dist/memory/recall/index.js';
 import { validateMemoryRecallResult } from '../../dist/memory/recall/memory-recaller.js';
 import { getNativeTables } from '../../dist/memory/native.js';
 
-const { __testing: updateTesting } = updateModule;
+const { __testing: updateTesting } = extractionIndexModule;
 const { __testing: sessionTesting } = sessionModule;
 const { __testing: threadTesting } = threadModule;
 const { __testing: extractingTesting } = observingGatewayModule;
