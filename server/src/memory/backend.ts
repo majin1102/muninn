@@ -29,7 +29,7 @@ import {
   type SessionIndexEntry,
 } from './checkpoint.js';
 import { Memories } from './memories.js';
-import { Extractor } from './extractor/extractor.js';
+import { Extractor } from './extractor/runtime.js';
 import { Observer } from './observer/observer.js';
 import { SessionRegistry } from './turn/registry.js';
 import { readTurn } from './turn/types.js';

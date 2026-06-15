@@ -13,7 +13,7 @@ import {
   validateMuninnConfigInput,
 } from '../../dist/memory/config.js';
 import { MuninnBackend } from '../../dist/memory/backend.js';
-import { Extractor as Observer } from '../../dist/memory/extractor/extractor.js';
+import { Extractor as Observer } from '../../dist/memory/extractor/runtime.js';
 import { EpochQueue, OpenEpoch } from '../../dist/memory/extractor/epoch.js';
 import { parseCheckpointFile, readCheckpointFile, resolveCheckpointPath } from '../../dist/memory/checkpoint.js';
 import { SessionRegistry } from '../../dist/memory/turn/registry.js';
@@ -21,10 +21,10 @@ import { normalizeSessionId, sessionKey } from '../../dist/memory/turn/key.js';
 import { Session } from '../../dist/memory/turn/session.js';
 import { Watchdog } from '../../dist/memory/watchdog.js';
 import updateModule from '../../dist/memory/extractor/update.js';
-import threadModule from '../../dist/memory/extractor/thread.js';
+import threadModule from '../../dist/memory/extractor/snapshot.js';
 import observingGatewayModule from '../../dist/memory/llm/extracting.js';
 import sessionGatewayModule from '../../dist/memory/llm/session-gateway.js';
-import { applyExtractionChanges, applyExtractionTableChanges } from '../../dist/memory/extractor/memory-delta.js';
+import { applyExtractionChanges, applyExtractionTableChanges } from '../../dist/memory/extractor/extraction-index.js';
 import { recallMemories } from '../../dist/memory/recall/index.js';
 import { validateMemoryRecallResult } from '../../dist/memory/recall/memory-recaller.js';
 import { getNativeTables } from '../../dist/memory/native.js';

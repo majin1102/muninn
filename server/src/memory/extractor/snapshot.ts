@@ -9,7 +9,7 @@ import type {
   ContextRef,
   SnapshotContent,
 } from './types.js';
-import { parseSnapshotContent } from './thread-memory.js';
+import { parseSnapshotContent } from './session.js';
 
 const PENDING_SNAPSHOT_ID = 'session:18446744073709551615';
 const MAX_REFERENCES = 1000;

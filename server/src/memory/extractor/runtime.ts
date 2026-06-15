@@ -19,7 +19,7 @@ import {
   loadThreads,
   replaySnapshots,
   threadFromSnapshots,
-} from './thread.js';
+} from './snapshot.js';
 import type { SessionMemoryThread } from './types.js';
 import { buildExtraction, buildTouchedIndex, extractEpoch } from './update.js';
 import { resolveDatabaseName } from '../config.js';

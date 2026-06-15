@@ -3,7 +3,7 @@ import type { QueuedExtractionChange } from '../checkpoint.js';
 import { Memories } from '../memories.js';
 import type { NativeTables } from '../native.js';
 import { extractSessionMemory } from '../llm/extracting.js';
-import { applyExtractionChanges, applyExtractionTableChanges } from './memory-delta.js';
+import { applyExtractionChanges, applyExtractionTableChanges } from './extraction-index.js';
 import type { SealedEpoch } from './epoch.js';
 import {
   isActiveThread,
@@ -13,7 +13,7 @@ import {
   getPendingIndex,
   snapshotRef,
   toSessionSnapshot,
-} from './thread.js';
+} from './snapshot.js';
 import type { FragmentTurnInput, SessionMemoryThread } from './types.js';
 
 type ExtractSessionMemoryImpl = typeof extractSessionMemory;
