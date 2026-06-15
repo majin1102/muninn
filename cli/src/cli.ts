@@ -68,7 +68,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       return 0;
     }
     if (parsed.command === 'start') {
-      const { startManagedServer } = await import('./server-process.js');
+      const { startManagedServer } = await import('./server.js');
       const result = await startManagedServer({
         host: parsed.host,
         port: parsed.port,
@@ -81,7 +81,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       return 0;
     }
     if (parsed.command === 'stop') {
-      const { stopManagedServer } = await import('./server-process.js');
+      const { stopManagedServer } = await import('./server.js');
       const result = await stopManagedServer({
         home: parsed.home,
         force: parsed.force,
@@ -90,7 +90,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       return 0;
     }
     if (parsed.command === 'restart') {
-      const { restartManagedServer } = await import('./server-process.js');
+      const { restartManagedServer } = await import('./server.js');
       const result = await restartManagedServer({
         host: parsed.host,
         port: parsed.port,
