@@ -10,6 +10,7 @@ import { captureFromTranscript } from '@muninn/common/agent-hook';
 import { CLAUDE_AGENT, CLAUDE_MARKER_KEY, readClaudeSession, readClaudeSessionSummary, toTurnContent } from '../dist/claude.js';
 
 const execFileAsync = promisify(execFile);
+const LEGACY_SEQUENCE_KEY = 'source' + 'TurnSequence';
 const PNG_1x1 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M8AAAMBAQDJ/pLvAAAAAElFTkSuQmCC';
 
 const META = { cwd: '/Users/dev/workspace/muninn', sessionId: '0aba-claude-session' };
@@ -121,12 +122,13 @@ test('toTurnContent for claude-code has no title and the claude marker', async (
 
   assert.equal(turn.agent, 'claude-code');
   assert.equal(turn.title, undefined);
-  assert.equal(turn.metadata.sourceTurnSequence, 0);
+  assert.equal(turn.turnSequence, 0);
+  assert.equal(turn.metadata[LEGACY_SEQUENCE_KEY], undefined);
   const marker = turn.artifacts.find((artifact) => artifact.key === 'claudeImport');
   assert.ok(marker, 'expected the claudeImport marker artifact');
   const markerContent = JSON.parse(marker.content);
   assert.equal(markerContent.marker, '0aba-claude-session#1');
-  assert.equal(markerContent.sourceTurnSequence, 0);
+  assert.equal(markerContent[LEGACY_SEQUENCE_KEY], undefined);
 });
 
 test('readClaudeSession and summary keep multiple transcript files independent', async () => {
@@ -240,7 +242,7 @@ test('captureFromTranscript keeps separate cache entries for multiple Claude tra
   assert.equal(await captureFromTranscript({ transcriptPath: sessionA, readSession: readClaudeSession, toTurnContent, toTurnOptions: options, label: 'test-claude-hook', client }), true);
 
   assert.equal(captured.length, 3);
-  assert.deepEqual(captured.map(({ turn }) => [turn.sessionId, turn.prompt, turn.metadata.sourceTurnSequence]), [
+  assert.deepEqual(captured.map(({ turn }) => [turn.sessionId, turn.prompt, turn.turnSequence]), [
     ['claude-hook-b', 'beta second prompt', 1],
     ['claude-hook-a', 'alpha first prompt', 0],
     ['claude-hook-a', 'alpha second prompt', 1],

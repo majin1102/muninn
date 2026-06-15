@@ -19,7 +19,7 @@ type PipelineFilterMenu = 'type' | 'status' | 'time';
 const TASK_FILTERS: Array<{ value: PipelineTaskFilter; label: string }> = [
   { value: 'all', label: 'Type: All' },
   { value: 'session-observing', label: 'Extraction' },
-  { value: 'global-observing', label: 'Observation' },
+  { value: 'observation', label: 'Observation' },
   { value: 'wiki-compiling', label: 'Dreaming' },
 ];
 
@@ -579,7 +579,7 @@ function kindLabel(kind: PipelineTaskKind): string {
   switch (kind) {
     case 'session-observing':
       return 'Extraction';
-    case 'global-observing':
+    case 'observation':
       return 'Observation';
     case 'wiki-compiling':
       return 'Dreaming';

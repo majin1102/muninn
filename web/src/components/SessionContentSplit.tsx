@@ -5,15 +5,15 @@ import { FileText } from 'lucide-react';
 import type { ProjectSessionNode, ProjectTurnNode } from '../lib/api.js';
 import { chatTurnWindow } from '../lib/chat_window.js';
 import {
-  clampObservationWidth,
+  clampTimelineWidth,
   conversationLocatorTurnIds,
-  DEFAULT_OBSERVATION_WIDTH,
+  DEFAULT_TIMELINE_WIDTH,
   gridTemplateForMode,
   hasSessionContext,
   locateConversationEnabled,
-  locateObservationEnabled,
-  observationForConversationWindow,
+  locateTimelineEnabled,
   selectedSessionKey,
+  timelineItemForConversationWindow,
   toggleSessionTreeLayoutMode,
   type SessionContentMode,
 } from '../lib/session_content_state.js';
@@ -21,7 +21,7 @@ import { cn } from '../lib/utils.js';
 import { ArtifactList } from './ArtifactList.js';
 import { ChatView } from './ChatView.js';
 import { LocateIcon } from './icons.js';
-import { ObservationPane } from './ObservationPane.js';
+import { TimelinePane } from './TimelinePane.js';
 import { EmptyState } from './ui/empty-state.js';
 import { ScrollArea } from './ui/scroll-area.js';
 
@@ -29,14 +29,14 @@ type SessionContentSplitProps = {
   session: ProjectSessionNode | null | undefined;
   document: MemoryDocument | null;
   mode: SessionContentMode;
-  activeObservationId: string | null;
-  openObservationId: string | null;
-  openObservationRequestId: number;
+  activeTimelineId: string | null;
+  openTimelineId: string | null;
+  openTimelineRequestId: number;
   focusMemoryId: string | null;
   focusRequestId: number;
   sessionTurns: ProjectTurnNode[];
-  onActiveObservationChange: (memoryId: string | null) => void;
-  onOpenObservation: (memoryId: string) => void;
+  onActiveTimelineChange: (memoryId: string | null) => void;
+  onOpenTimeline: (memoryId: string) => void;
   onLocateConversationTurn: (memoryId: string) => void;
   canLoadMoreAfter: boolean;
   loadingMoreAfter: boolean;
@@ -50,14 +50,14 @@ export function SessionContentSplit({
   session,
   document,
   mode,
-  activeObservationId,
-  openObservationId,
-  openObservationRequestId,
+  activeTimelineId,
+  openTimelineId,
+  openTimelineRequestId,
   focusMemoryId,
   focusRequestId,
   sessionTurns,
-  onActiveObservationChange,
-  onOpenObservation,
+  onActiveTimelineChange,
+  onOpenTimeline,
   onLocateConversationTurn,
   canLoadMoreAfter,
   loadingMoreAfter,
@@ -67,17 +67,17 @@ export function SessionContentSplit({
   onModeChange,
 }: SessionContentSplitProps) {
   const [contentTab, setContentTab] = useState<'conversation' | 'artifacts'>('conversation');
-  const [observationWidth, setObservationWidth] = useState(DEFAULT_OBSERVATION_WIDTH);
+  const [timelineWidth, setTimelineWidth] = useState(DEFAULT_TIMELINE_WIDTH);
   const [containerWidth, setContainerWidth] = useState<number | undefined>(undefined);
   const [visibleConversationTurnIds, setVisibleConversationTurnIds] = useState<string[]>([]);
   const rootRef = useRef<HTMLDivElement>(null);
   const hasContext = hasSessionContext(session, document);
   const title = session?.displaySessionId ?? document?.title ?? 'Session';
   const sessionKey = session ? selectedSessionKey(session) : null;
-  const activeObservation = activeObservationId
-    ? session?.observations.find((observation) => observation.memoryId === activeObservationId)
+  const activeTimelineItem = activeTimelineId
+    ? session?.timeline.find((item) => item.memoryId === activeTimelineId)
     : undefined;
-  const activeConversationMemoryId = activeObservation?.refs[0] ?? activeObservationId;
+  const activeConversationMemoryId = activeTimelineItem?.refs[0] ?? turnIdFromTimelineId(activeTimelineId);
   const inferredConversationTurnIds = useMemo(() => (
     chatTurnWindow(sessionTurns, focusMemoryId).turns
       .map((turn) => turn.memoryId)
@@ -93,21 +93,22 @@ export function SessionContentSplit({
       .filter((memoryId): memoryId is string => Boolean(memoryId))
   ), [sessionTurns]);
   const sessionArtifacts = useMemo(() => collectSessionArtifacts(document, sessionTurns), [document, sessionTurns]);
-  const conversationObservation = useMemo(() => observationForConversationWindow(
-    session?.observations ?? [],
+  const conversationTimelineItem = useMemo(() => timelineItemForConversationWindow(
+    session?.timeline ?? [],
     conversationWindowTurnIds,
     orderedConversationTurnIds,
-  ), [conversationWindowTurnIds, orderedConversationTurnIds, session?.observations]);
-  const canLocateObservation = locateObservationEnabled(
-    conversationObservation,
-    activeObservationId,
+  ), [conversationWindowTurnIds, orderedConversationTurnIds, session?.timeline]);
+  const canLocateTimeline = locateTimelineEnabled(
+    conversationTimelineItem,
+    activeTimelineId,
     conversationWindowTurnIds,
-    activeObservation,
+    activeTimelineItem,
   );
-  const canLocateConversation = locateConversationEnabled(activeObservation, conversationWindowTurnIds);
+  const canLocateConversation = Boolean(activeConversationMemoryId)
+    && locateConversationEnabled(activeTimelineItem, conversationWindowTurnIds);
   const style = useMemo(() => ({
-    '--session-content-grid': gridTemplateForMode(mode, observationWidth, containerWidth),
-  }) as CSSProperties, [containerWidth, mode, observationWidth]);
+    '--session-content-grid': gridTemplateForMode(mode, timelineWidth, containerWidth),
+  }) as CSSProperties, [containerWidth, mode, timelineWidth]);
 
   useLayoutEffect(() => {
     const root = rootRef.current;
@@ -131,18 +132,18 @@ export function SessionContentSplit({
     );
   }
 
-  const locateObservationButton = (
+  const locateTimelineButton = (
     <button
       className="session-locate-button"
       type="button"
-      title={canLocateObservation ? 'Locate observation from conversation' : 'Observation already matches conversation'}
-      aria-label="Locate observation from conversation"
-      disabled={!canLocateObservation}
+      title={canLocateTimeline ? 'Locate timeline from conversation' : 'Timeline already matches conversation'}
+      aria-label="Locate timeline from conversation"
+      disabled={!canLocateTimeline}
       onClick={() => {
-        if (!canLocateObservation || !conversationObservation) {
+        if (!canLocateTimeline || !conversationTimelineItem) {
           return;
         }
-        onOpenObservation(conversationObservation.memoryId);
+        onOpenTimeline(conversationTimelineItem.memoryId);
       }}
     >
       <LocateIcon />
@@ -152,8 +153,8 @@ export function SessionContentSplit({
     <button
       className="session-locate-button"
       type="button"
-      title={canLocateConversation ? 'Locate conversation from observation' : 'Conversation already matches observation'}
-      aria-label="Locate conversation from observation"
+      title={canLocateConversation ? 'Locate conversation from timeline' : 'Conversation already matches timeline'}
+      aria-label="Locate conversation from timeline"
       disabled={!canLocateConversation}
       onClick={() => {
         if (!canLocateConversation || !activeConversationMemoryId) {
@@ -185,7 +186,7 @@ export function SessionContentSplit({
 
     const resize = (clientX: number) => {
       const rect = root.getBoundingClientRect();
-      setObservationWidth(clampObservationWidth(clientX - rect.left, rect.width));
+      setTimelineWidth(clampTimelineWidth(clientX - rect.left, rect.width));
     };
 
     const onPointerMove = (moveEvent: globalThis.PointerEvent) => resize(moveEvent.clientX);
@@ -208,31 +209,30 @@ export function SessionContentSplit({
       className={cn('session-content-split', `session-content-mode-${mode}`)}
       style={style}
     >
-      <section className="extraction-pane" aria-label="Session observations">
-        <div className="session-pane-toolbar extraction-toolbar">
+      <section className="timeline-pane" aria-label="Session timeline">
+        <div className="session-pane-toolbar timeline-toolbar">
           <div className="session-pane-title-group">
             <div className="session-pane-title" title={title}>{title}</div>
           </div>
-          <div className="extraction-toolbar-actions">
-            {locateObservationButton}
+          <div className="timeline-toolbar-actions">
+            {locateTimelineButton}
           </div>
         </div>
-        <ObservationPane
-          observations={session?.observations ?? []}
-          sessionSummary={session?.sessionSummary}
-          activeObservationId={activeObservationId}
-          openObservationId={openObservationId}
-          openObservationRequestId={openObservationRequestId}
+        <TimelinePane
+          timeline={session?.timeline ?? []}
+          activeTimelineId={activeTimelineId}
+          openTimelineId={openTimelineId}
+          openTimelineRequestId={openTimelineRequestId}
           sessionKey={session ? selectedSessionKey(session) : null}
           sessionTurns={sessionTurns}
-          onActiveObservationChange={onActiveObservationChange}
+          onActiveTimelineChange={onActiveTimelineChange}
           onLocateTurn={onLocateConversationTurn}
         />
       </section>
       <button
         className="session-content-divider"
         type="button"
-        aria-label="Resize observation and conversation panes"
+        aria-label="Resize timeline and conversation panes"
         onPointerDown={startResize}
       />
       <section className="session-conversation-pane" aria-label="Conversation">
@@ -306,6 +306,14 @@ function collectSessionArtifacts(document: MemoryDocument | null, sessionTurns: 
   return artifacts;
 }
 
+function turnIdFromTimelineId(memoryId: string | null): string | null {
+  if (!memoryId?.startsWith('turn:')) {
+    return null;
+  }
+  const timelineIndex = memoryId.indexOf('~timeline');
+  return timelineIndex >= 0 ? memoryId.slice(0, timelineIndex) : memoryId;
+}
+
 function SessionArtifacts({ artifacts, agent }: { artifacts: Artifact[]; agent?: string }) {
   if (artifacts.length === 0) {
     return <div className="session-artifacts-empty">No artifacts yet.</div>;
@@ -319,12 +327,12 @@ function SessionArtifacts({ artifacts, agent }: { artifacts: Artifact[]; agent?:
 
 function modeTitle(mode: SessionContentMode): string {
   if (mode === 'split') {
-    return 'Session tree, observations, and conversation';
+    return 'Session tree, timeline, and conversation';
   }
   if (mode === 'conversation') {
     return 'Session tree and conversation';
   }
-  return 'Observations and conversation';
+  return 'Timeline and conversation';
 }
 
 function SessionContentModeIcon({ mode }: { mode: SessionContentMode }) {

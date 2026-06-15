@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 
-import core from '../dist/memory/index.js';
+import core, { turns } from '../dist/memory/index.js';
 import { getNativeTables } from '../dist/memory/native.js';
 import { serializeTurn } from '../dist/memory/turn/types.js';
 import { resetSessionTreeCacheForTests } from '../dist/web/routes.js';
@@ -85,6 +85,14 @@ async function captureTurn(turn) {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ turn }),
+  });
+}
+
+async function captureTurnsBatch(batchTurns) {
+  return app.request('/api/v1/turn/capture/batch', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ turns: batchTurns }),
   });
 }
 
@@ -272,6 +280,219 @@ test('turn/capture writes a complete turn and detail reads it back', async (t) =
   assert.match(detail.memoryHits[0].content, /## Detail/);
   assert.match(detail.memoryHits[0].content, /alpha prompt/);
   assert.match(detail.memoryHits[0].content, /alpha response/);
+});
+
+test('turn/capture/batch writes multiple turns and updates session UI immediately', async (t) => {
+  const { dir, homeDir, configPath } = await makeDatasetUri();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+
+  process.env.MUNINN_HOME = homeDir;
+  await writeMuninnConfig(configPath, { turnProvider: 'mock' });
+  resetSessionTreeCacheForTests();
+
+  const response = await captureTurnsBatch([
+    makeTurnContent({
+      sessionId: 'batch-session',
+      turnSequence: 0,
+      prompt: 'batch prompt 1',
+      response: 'batch response 1',
+      summary: 'batch source summary 1',
+      createdAt: '2026-06-14T11:00:00.000Z',
+      updatedAt: '2026-06-14T11:01:00.000Z',
+    }),
+    makeTurnContent({
+      sessionId: 'batch-session',
+      turnSequence: 1,
+      prompt: 'batch prompt 2',
+      response: 'batch response 2',
+      summary: 'batch source summary 2',
+      createdAt: '2026-06-14T11:02:00.000Z',
+      updatedAt: '2026-06-14T11:03:00.000Z',
+    }),
+  ]);
+
+  assert.equal(response.status, 200);
+  const body = await json(response);
+  assert.equal(body.capturedTurns, 2);
+  assert.equal(body.skippedTurns, 0);
+  assert.match(body.requestId, /^req_/);
+
+  const sessionsResponse = await app.request('/api/v1/ui/session/agents/agent-a/sessions');
+  assert.equal(sessionsResponse.status, 200);
+  const sessionsBody = await json(sessionsResponse);
+  assert.equal(sessionsBody.sessions.length, 1);
+  assert.equal(sessionsBody.sessions[0].sessionKey, 'batch-session');
+
+  const turnsResponse = await app.request(sessionTurnsPath('agent-a', 'batch-session'));
+  assert.equal(turnsResponse.status, 200);
+  const turnsBody = await json(turnsResponse);
+  assert.deepEqual(
+    turnsBody.turns.map((turn) => turn.prompt),
+    ['batch prompt 1', 'batch prompt 2'],
+  );
+  assert.deepEqual(
+    turnsBody.turns.map((turn) => turn.turnSequence),
+    [0, 1],
+  );
+});
+
+test('turn/capture/batch reuses recent-turn duplicate detection', async (t) => {
+  const { dir, homeDir, configPath } = await makeDatasetUri();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+
+  process.env.MUNINN_HOME = homeDir;
+  await writeMuninnConfig(configPath, { turnProvider: 'mock' });
+
+  const batch = [
+    makeTurnContent({
+      sessionId: 'batch-dedupe-session',
+      turnSequence: 0,
+      prompt: 'dedupe prompt 1',
+      response: 'dedupe response 1',
+      summary: 'dedupe summary 1',
+      createdAt: '2026-06-14T12:00:00.000Z',
+      updatedAt: '2026-06-14T12:01:00.000Z',
+    }),
+    makeTurnContent({
+      sessionId: 'batch-dedupe-session',
+      turnSequence: 0,
+      prompt: 'dedupe prompt 1 changed',
+      response: 'dedupe response 1 changed',
+      summary: 'dedupe summary 1 duplicate',
+      createdAt: '2026-06-14T12:02:00.000Z',
+      updatedAt: '2026-06-14T12:03:00.000Z',
+    }),
+    makeTurnContent({
+      sessionId: 'batch-dedupe-session',
+      turnSequence: 1,
+      prompt: 'dedupe prompt 2',
+      response: 'dedupe response 2',
+      summary: 'dedupe summary 2',
+      createdAt: '2026-06-14T12:04:00.000Z',
+      updatedAt: '2026-06-14T12:05:00.000Z',
+    }),
+  ];
+
+  const firstResponse = await captureTurnsBatch(batch);
+  assert.equal(firstResponse.status, 200);
+  const firstBody = await json(firstResponse);
+  assert.equal(firstBody.capturedTurns, 2);
+  assert.equal(firstBody.skippedTurns, 1);
+
+  const retryResponse = await captureTurnsBatch([batch[0], batch[2]]);
+  assert.equal(retryResponse.status, 200);
+  const retryBody = await json(retryResponse);
+  assert.equal(retryBody.capturedTurns, 0);
+  assert.equal(retryBody.skippedTurns, 2);
+
+  const persisted = await turns.list({
+    mode: { type: 'page', offset: 0, limit: 20 },
+    agent: 'agent-a',
+    sessionId: 'batch-dedupe-session',
+  });
+  assert.equal(persisted.length, 2);
+  assert.deepEqual(
+    [...new Set(persisted.map((turn) => turn.prompt))].sort(),
+    ['dedupe prompt 1', 'dedupe prompt 2'],
+  );
+  assert.deepEqual(
+    persisted.map((turn) => turn.turnSequence).sort((left, right) => left - right),
+    [0, 1],
+  );
+});
+
+test('turn/capture/batch does not dedupe identical content without turnSequence', async (t) => {
+  const { dir, homeDir, configPath } = await makeDatasetUri();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+
+  process.env.MUNINN_HOME = homeDir;
+  await writeMuninnConfig(configPath, { turnProvider: 'mock' });
+
+  const response = await captureTurnsBatch([
+    makeTurnContent({
+      sessionId: 'batch-fallback-dedupe-session',
+      prompt: 'fallback dedupe prompt',
+      response: 'fallback dedupe response',
+      summary: 'fallback dedupe summary',
+    }),
+    makeTurnContent({
+      sessionId: 'batch-fallback-dedupe-session',
+      prompt: 'fallback dedupe prompt',
+      response: 'fallback dedupe response',
+      summary: 'fallback duplicate summary',
+    }),
+  ]);
+
+  assert.equal(response.status, 200);
+  const body = await json(response);
+  assert.equal(body.capturedTurns, 2);
+  assert.equal(body.skippedTurns, 0);
+});
+
+test('turn/capture/batch does not generate missing title or summary', async (t) => {
+  const { dir, homeDir, configPath } = await makeDatasetUri();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+
+  process.env.MUNINN_HOME = homeDir;
+  await writeMuninnConfig(configPath, { turnProvider: 'mock' });
+
+  const response = await captureTurnsBatch([
+    makeTurnContent({
+      sessionId: 'batch-raw-session',
+      prompt: 'raw batch prompt',
+      response: 'raw batch response',
+    }),
+  ]);
+  assert.equal(response.status, 200);
+  const body = await json(response);
+  assert.equal(body.capturedTurns, 1);
+
+  const persisted = await turns.list({
+    mode: { type: 'page', offset: 0, limit: 20 },
+    agent: 'agent-a',
+    sessionId: 'batch-raw-session',
+  });
+  assert.equal(persisted.length, 1);
+  assert.equal(persisted[0].title, null);
+  assert.equal(persisted[0].summary, null);
+  assert.equal(persisted[0].prompt, 'raw batch prompt');
+  assert.equal(persisted[0].response, 'raw batch response');
+});
+
+test('turn/capture/batch skips disallowed hook turns and captures import turns', async (t) => {
+  const { dir, homeDir, configPath } = await makeDatasetUri();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+
+  process.env.MUNINN_HOME = homeDir;
+  await writeMuninnConfig(configPath, { turnProvider: 'mock' });
+
+  const response = await captureTurnsBatch([
+    makeTurnContent({
+      sessionId: 'batch-policy-session',
+      prompt: 'blocked hook prompt',
+      response: 'blocked hook response',
+      summary: 'blocked hook summary',
+      metadata: { ingest: 'agent-hook' },
+    }),
+    makeTurnContent({
+      sessionId: 'batch-policy-session',
+      prompt: 'allowed import prompt',
+      response: 'allowed import response',
+      summary: 'allowed import summary',
+      metadata: { ingest: 'agent-import' },
+    }),
+  ]);
+  assert.equal(response.status, 200);
+  const body = await json(response);
+  assert.equal(body.capturedTurns, 1);
+  assert.equal(body.skippedTurns, 1);
+
+  const persisted = await turns.list({
+    mode: { type: 'page', offset: 0, limit: 20 },
+    agent: 'agent-a',
+    sessionId: 'batch-policy-session',
+  });
+  assert.deepEqual(persisted.map((turn) => turn.prompt), ['allowed import prompt']);
 });
 
 test('openclaw hook capture persists artifacts through server and native readback', async (t) => {
@@ -500,6 +721,9 @@ test('turn/capture validates request shape and requires a complete turn', async 
       { ...makeTurnContent(), events: [{ type: 'toolCall', name: 123 }] },
       { ...makeTurnContent(), artifacts: { key: 'artifact', content: 'value' } },
       { ...makeTurnContent(), artifacts: [{ key: 'artifact', content: 1 }] },
+      { ...makeTurnContent(), turnSequence: -1 },
+      { ...makeTurnContent(), turnSequence: 1.5 },
+      { ...makeTurnContent(), turnSequence: Number.MAX_SAFE_INTEGER + 1 },
       { ...makeTurnContent(), observer: 'unexpected' },
     ]) {
       const invalidResponse = await captureTurn(badTurn);
@@ -508,6 +732,40 @@ test('turn/capture validates request shape and requires a complete turn', async 
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+test('turn/capture/batch rejects invalid turns before writing any row', async (t) => {
+  const { dir, homeDir, configPath } = await makeDatasetUri();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+
+  process.env.MUNINN_HOME = homeDir;
+  await writeMuninnConfig(configPath, { turnProvider: 'mock' });
+
+  const response = await captureTurnsBatch([
+    makeTurnContent({
+      sessionId: 'batch-invalid-session',
+      prompt: 'valid batch prompt',
+      response: 'valid batch response',
+      summary: 'valid batch summary',
+    }),
+    makeTurnContent({
+      sessionId: 'batch-invalid-session',
+      prompt: 'invalid batch prompt',
+      response: 'invalid batch response',
+      events: [],
+    }),
+  ]);
+  assert.equal(response.status, 400);
+  const body = await json(response);
+  assert.equal(body.errorCode, 'invalidRequest');
+  assert.match(body.errorMessage, /turns\[1\]: turn\.events must be a non-empty array/);
+
+  const persisted = await turns.list({
+    mode: { type: 'page', offset: 0, limit: 20 },
+    agent: 'agent-a',
+    sessionId: 'batch-invalid-session',
+  });
+  assert.equal(persisted.length, 0);
 });
 
 test('turn/capture rejects incomplete turns', async (t) => {

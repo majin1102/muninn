@@ -43,14 +43,14 @@ export type Extraction = {
   cwd: string;
   vector: number[];
   turnRefs: string[];
-  globalObservationPaths: string[];
+  observationPaths: string[];
   createdAt: string;
   updatedAt: string;
 };
 
-export type GlobalObservationContext = {
+export type ObservationContext = {
   id: string;
-  globalPath: string;
+  path: string;
   parentId?: string | null;
   position: number;
   content: string;
@@ -61,9 +61,9 @@ export type GlobalObservationContext = {
   updatedAt: string;
 };
 
-export type GlobalObservation = {
+export type Observation = {
   id: string;
-  globalPath: string;
+  path: string;
   text: string;
   vector: number[];
   extractionRefs: string[];
@@ -159,47 +159,47 @@ type NativeCoreBinding = {
   extractionOptimize(params: {
     mergeCount: number;
   }): MaybePromise<CompactResult>;
-  globalObservationContextUpsert(params: {
-    rows: GlobalObservationContext[];
+  observationContextUpsert(params: {
+    rows: ObservationContext[];
   }): MaybePromise<void>;
-  globalObservationContextList(params: {
+  observationContextList(params: {
     observer?: string;
-  }): MaybePromise<GlobalObservationContext[]>;
-  globalObservationContextGet(params: {
+  }): MaybePromise<ObservationContext[]>;
+  observationContextGet(params: {
     ids: string[];
-  }): MaybePromise<GlobalObservationContext[]>;
-  globalObservationContextDelete(params: {
+  }): MaybePromise<ObservationContext[]>;
+  observationContextDelete(params: {
     ids: string[];
   }): MaybePromise<{ deleted: number }>;
-  globalObservationContextTableStats(): MaybePromise<TableStats | null>;
-  globalObservationContextEnsureIdIndex(): MaybePromise<EnsureVectorIndexResult>;
-  globalObservationContextOptimize(params: {
+  observationContextTableStats(): MaybePromise<TableStats | null>;
+  observationContextEnsureIdIndex(): MaybePromise<EnsureVectorIndexResult>;
+  observationContextOptimize(params: {
     mergeCount: number;
   }): MaybePromise<CompactResult>;
-  globalObservationUpsert(params: {
-    rows: GlobalObservation[];
+  observationUpsert(params: {
+    rows: Observation[];
   }): MaybePromise<void>;
-  globalObservationDelete(params: {
+  observationDelete(params: {
     ids: string[];
   }): MaybePromise<{ deleted: number }>;
-  globalObservationSearch(params: {
+  observationSearch(params: {
     query: string;
     vector: number[];
     limit: number;
     mode: RecallMode;
-  }): MaybePromise<GlobalObservation[]>;
-  globalObservationGet(params: {
+  }): MaybePromise<Observation[]>;
+  observationGet(params: {
     ids: string[];
-  }): MaybePromise<GlobalObservation[]>;
-  globalObservationTableStats(): MaybePromise<TableStats | null>;
-  globalObservationEnsureVectorIndex(params: {
+  }): MaybePromise<Observation[]>;
+  observationTableStats(): MaybePromise<TableStats | null>;
+  observationEnsureVectorIndex(params: {
     targetPartitionSize: number;
   }): MaybePromise<EnsureVectorIndexResult>;
-  globalObservationCompact(): MaybePromise<CompactResult>;
-  globalObservationCleanup(params: {
+  observationCompact(): MaybePromise<CompactResult>;
+  observationCleanup(params: {
     floorVersion: number;
   }): MaybePromise<CompactResult>;
-  globalObservationOptimize(params: {
+  observationOptimize(params: {
     mergeCount: number;
   }): MaybePromise<CompactResult>;
   describeTurnTable(): MaybePromise<TableDescription | null>;
@@ -310,16 +310,16 @@ export interface ExtractionTableBinding {
   describe(): Promise<TableDescription | null>;
 }
 
-export interface GlobalObservationContextTableBinding {
+export interface ObservationContextTableBinding {
   upsert(params: {
-    rows: GlobalObservationContext[];
+    rows: ObservationContext[];
   }): Promise<void>;
   list(params: {
     observer?: string;
-  }): Promise<GlobalObservationContext[]>;
+  }): Promise<ObservationContext[]>;
   get(params: {
     ids: string[];
-  }): Promise<GlobalObservationContext[]>;
+  }): Promise<ObservationContext[]>;
   delete(params: {
     ids: string[];
   }): Promise<{ deleted: number }>;
@@ -330,9 +330,9 @@ export interface GlobalObservationContextTableBinding {
   }): Promise<CompactResult>;
 }
 
-export interface GlobalObservationTableBinding {
+export interface ObservationTableBinding {
   upsert(params: {
-    rows: GlobalObservation[];
+    rows: Observation[];
   }): Promise<void>;
   delete(params: {
     ids: string[];
@@ -342,10 +342,10 @@ export interface GlobalObservationTableBinding {
     vector: number[];
     limit: number;
     mode: RecallMode;
-  }): Promise<GlobalObservation[]>;
+  }): Promise<Observation[]>;
   get(params: {
     ids: string[];
-  }): Promise<GlobalObservation[]>;
+  }): Promise<Observation[]>;
   stats(): Promise<TableStats | null>;
   ensureVectorIndex(params: {
     targetPartitionSize: number;
@@ -364,8 +364,8 @@ export interface NativeTables {
   turnTable: TurnTableBinding;
   sessionTable: SessionTableBinding;
   extractionTable: ExtractionTableBinding;
-  globalObservationContextTable: GlobalObservationContextTableBinding;
-  globalObservationTable: GlobalObservationTableBinding;
+  observationContextTable: ObservationContextTableBinding;
+  observationTable: ObservationTableBinding;
 }
 
 const singletons = new Map<string, NativeTables>();
@@ -466,25 +466,25 @@ function wrapBinding(native: NativeCoreBinding): NativeTables {
       optimize: async (params) => resolveNativeResult(native.extractionOptimize(params)),
       describe: async () => resolveNativeResult(native.describeExtractionTable()),
     },
-    globalObservationContextTable: {
-      upsert: async (params) => resolveNativeResult(native.globalObservationContextUpsert(params)),
-      list: async (params) => resolveNativeResult(native.globalObservationContextList(params)),
-      get: async (params) => resolveNativeResult(native.globalObservationContextGet(params)),
-      delete: async (params) => resolveNativeResult(native.globalObservationContextDelete(params)),
-      stats: async () => resolveNativeResult(native.globalObservationContextTableStats()),
-      ensureIdIndex: async () => resolveNativeResult(native.globalObservationContextEnsureIdIndex()),
-      optimize: async (params) => resolveNativeResult(native.globalObservationContextOptimize(params)),
+    observationContextTable: {
+      upsert: async (params) => resolveNativeResult(native.observationContextUpsert(params)),
+      list: async (params) => resolveNativeResult(native.observationContextList(params)),
+      get: async (params) => resolveNativeResult(native.observationContextGet(params)),
+      delete: async (params) => resolveNativeResult(native.observationContextDelete(params)),
+      stats: async () => resolveNativeResult(native.observationContextTableStats()),
+      ensureIdIndex: async () => resolveNativeResult(native.observationContextEnsureIdIndex()),
+      optimize: async (params) => resolveNativeResult(native.observationContextOptimize(params)),
     },
-    globalObservationTable: {
-      upsert: async (params) => resolveNativeResult(native.globalObservationUpsert(params)),
-      delete: async (params) => resolveNativeResult(native.globalObservationDelete(params)),
-      search: async (params) => resolveNativeResult(native.globalObservationSearch(params)),
-      get: async (params) => resolveNativeResult(native.globalObservationGet(params)),
-      stats: async () => resolveNativeResult(native.globalObservationTableStats()),
-      ensureVectorIndex: async (params) => resolveNativeResult(native.globalObservationEnsureVectorIndex(params)),
-      compact: async () => resolveNativeResult(native.globalObservationCompact()),
-      cleanup: async (params) => resolveNativeResult(native.globalObservationCleanup(params)),
-      optimize: async (params) => resolveNativeResult(native.globalObservationOptimize(params)),
+    observationTable: {
+      upsert: async (params) => resolveNativeResult(native.observationUpsert(params)),
+      delete: async (params) => resolveNativeResult(native.observationDelete(params)),
+      search: async (params) => resolveNativeResult(native.observationSearch(params)),
+      get: async (params) => resolveNativeResult(native.observationGet(params)),
+      stats: async () => resolveNativeResult(native.observationTableStats()),
+      ensureVectorIndex: async (params) => resolveNativeResult(native.observationEnsureVectorIndex(params)),
+      compact: async () => resolveNativeResult(native.observationCompact()),
+      cleanup: async (params) => resolveNativeResult(native.observationCleanup(params)),
+      optimize: async (params) => resolveNativeResult(native.observationOptimize(params)),
     },
   };
 }

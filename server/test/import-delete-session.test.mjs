@@ -48,13 +48,13 @@ function makeTurn(sessionId, sequence, prompt) {
     prompt,
     response: `${prompt} response`,
     createdAt: `2026-06-14T10:0${sequence}:00.000Z`,
+    turnSequence: sequence,
     events: [
       { type: 'userMessage', text: prompt },
       { type: 'assistantMessage', text: `${prompt} response` },
     ],
     metadata: {
       ingest: 'codex-import',
-      sourceTurnSequence: sequence,
     },
   };
 }

@@ -124,6 +124,7 @@ async function runMockRound(config, workspace, server) {
     prompt: baselineRelease.prompt,
     response: baselineRelease.response,
   });
+  await finalizeMemory(server.baseUrl);
   await assertRecallHit(server.baseUrl, `${config.shortName} dist-tag next MVP1 beta`, {
     agent: config.agent,
     project: PROJECT_ID,

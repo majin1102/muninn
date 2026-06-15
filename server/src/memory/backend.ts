@@ -44,6 +44,7 @@ export interface Turn {
   createdAt: string;
   updatedAt: string;
   sessionId?: string | null;
+  turnSequence?: number | null;
   project: string;
   cwd: string;
   agent: string;
@@ -325,6 +326,20 @@ export class MuninnBackend {
     });
   }
 
+  async acceptBatch(turnContents: TurnContent[]): Promise<number> {
+    if (turnContents.length === 0) {
+      return 0;
+    }
+    return this.checkpointLock.shared(async () => {
+      if (this.observerEnabled) {
+        await this.ensureObserver();
+      }
+      const extractor = await this.ensureExtractor();
+      const registry = this.ensureSessionRegistry(extractor.name);
+      return extractor.acceptBatch(turnContents, registry);
+    });
+  }
+
   async deleteTurns(turnIds: string[]): Promise<{ deleted: number }> {
     return this.checkpointLock.exclusive(async () => {
       const result = await this.client.turnTable.deleteTurns({ turnIds });
@@ -396,7 +411,7 @@ export class MuninnBackend {
   async recallMemories(
     query: string,
     limit?: number,
-    options?: { mode?: RecallMode; budget?: number; queryLimit?: number; includeGlobalObservations?: boolean },
+    options?: { mode?: RecallMode; budget?: number; queryLimit?: number; includeObservations?: boolean },
   ): Promise<RecallHit[]> {
     await writeMuninnLog(this.database, 'info', 'recall', 'query', {
       query,
@@ -424,15 +439,15 @@ export class MuninnBackend {
         this.client.turnTable.stats(),
         this.client.sessionTable.stats(),
         this.client.extractionTable.stats(),
-        this.client.globalObservationContextTable.stats(),
-        this.client.globalObservationTable.stats(),
+        this.client.observationContextTable.stats(),
+        this.client.observationTable.stats(),
       ]);
       const extractorSection: ExtractorCheckpoint = {
         baseline: {
           turn: turnStats?.version ?? 0,
           session: sessionStats?.version ?? 0,
           extraction: extractionStats?.version ?? 0,
-          global_observation: observationStats?.version ?? 0,
+          observation: observationStats?.version ?? 0,
         },
         committedEpoch: extractorCheckpoint.committedEpoch,
         nextEpoch: extractorCheckpoint.nextEpoch,
@@ -447,14 +462,14 @@ export class MuninnBackend {
         runs: observerCheckpoint.runs,
       } : {
         baseline: {
-          globalObservationContext: observationContextStats?.version ?? 0,
-          global_observation: observationStats?.version ?? 0,
+          observationContext: observationContextStats?.version ?? 0,
+          observation: observationStats?.version ?? 0,
         },
         observeQueue: { cwdBuckets: [] },
         runs: [],
       };
       return {
-        schemaVersion: 7,
+        schemaVersion: 9,
         extractor: extractorSection,
         observer: observerSection,
         sessionIndex: await this.sessionIndex.exportCheckpoint(this.client),
@@ -633,6 +648,14 @@ export async function captureTurn(turnContent: TurnContent, database?: string | 
   await (await getBackend(databaseName)).accept(turnContent);
 }
 
+export async function captureTurns(turnContents: TurnContent[], database?: string | null): Promise<number> {
+  const databaseName = resolveDatabaseName(database);
+  await writeMuninnLog(databaseName, 'info', 'server', 'turn_capture_batch', {
+    count: turnContents.length,
+  });
+  return (await getBackend(databaseName)).acceptBatch(turnContents);
+}
+
 export async function validateSettings(content: string): Promise<void> {
   const config = validateMuninnConfigInput(content);
   const storage = resolveStorageTarget(config);
@@ -746,7 +769,7 @@ export const memories = {
   async recall(
     query: string,
     limit?: number,
-    options?: { mode?: RecallMode; budget?: number; queryLimit?: number; includeGlobalObservations?: boolean; database?: string | null },
+    options?: { mode?: RecallMode; budget?: number; queryLimit?: number; includeObservations?: boolean; database?: string | null },
   ): Promise<RecallHit[]> {
     return (await getBackend(options?.database)).recallMemories(query, limit, options);
   },

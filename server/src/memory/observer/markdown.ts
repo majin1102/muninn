@@ -106,11 +106,11 @@ function parseSections(
     }
     const hint = parseHint(match[3] ?? '', validRefs);
     const parent = stack.at(-1);
-    const globalPath = `${parent?.globalPath ?? title} / ${heading}`;
+    const path = `${parent?.path ?? title} / ${heading}`;
     const section: DraftSection = {
       level,
       heading,
-      globalPath,
+      path,
       sourceRefs: hint.sourceRefs,
       expandRefs: hint.expandRefs,
       body: '',
@@ -243,10 +243,10 @@ function editDistanceAtMost(left: string, right: string, limit: number): boolean
 function validateTree(sections: DraftSection[], validRefs: Set<string>): void {
   const paths = new Set<string>();
   for (const section of walk(sections)) {
-    if (paths.has(section.globalPath)) {
-      throw new Error(`duplicate observer section path: ${section.globalPath}`);
+    if (paths.has(section.path)) {
+      throw new Error(`duplicate observer section path: ${section.path}`);
     }
-    paths.add(section.globalPath);
+    paths.add(section.path);
     const sectionRefs = refsForSection(section);
     if (section.children.length > 0 && sectionRefs.length > 0) {
       throw new Error(`non-leaf observer section cannot declare refs: ${section.heading}`);
@@ -275,7 +275,7 @@ function validateTree(sections: DraftSection[], validRefs: Set<string>): void {
 
 function validateTitle(_title: string): void {
   // The root title can be a cwd scope such as /Users/Nathan/workspace/muninn.
-  // Section headings still reject "/" so global_path segments stay unambiguous.
+  // Section headings still reject "/" so path segments stay unambiguous.
 }
 
 function trimBodies(sections: DraftSection[]): void {
@@ -347,7 +347,7 @@ function stripParent(section: DraftSection): ParsedObserverSection {
   return {
     level: section.level,
     heading: section.heading,
-    globalPath: section.globalPath,
+    path: section.path,
     sourceRefs: section.sourceRefs,
     expandRefs: section.expandRefs,
     body: section.body,

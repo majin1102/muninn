@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { captureTurn, isCanonicalProjectIdentity, observer, sessions, turns } from '../memory/index.js';
+import { captureTurns, isCanonicalProjectIdentity, sessions, turns } from '../memory/index.js';
 import { loadMuninnConfig, resolveStorageTarget } from '../memory/config.js';
 import { getNativeTables } from '../memory/native.js';
 import {
@@ -19,6 +19,7 @@ import type {
   ImportSelectedResponse,
   ImportSessionsListResponse,
   SessionIdentity,
+  TurnContent,
 } from '@muninn/common';
 import * as SessionIdentityKey from '@muninn/common/session-identity';
 import { getCapturePolicy, removeCapturePolicy, setCaptureEnabled } from './capture_policy.js';
@@ -156,53 +157,53 @@ export async function importSelectedSessions(adapter: ImportAdapter, sourcePaths
   }
 
   const indexByIdentity = new Map((await sessions.index()).map((entry) => [SessionIdentityKey.sessionIdentityKey(entry), entry]));
-  const importablePaths: string[] = [];
+  const importablePaths: Array<{ sourcePath: string; firstTurnSequence?: number }> = [];
   for (const summary of selectedSummaries) {
     const entry = indexByIdentity.get(identityKey(adapter, summary));
     if (entry?.firstTurnSequence === 0) {
       failedSessions.push({ sourcePath: summary.sourcePath, errorMessage: 'session already imported' });
       continue;
     }
-    importablePaths.push(summary.sourcePath);
+    importablePaths.push({
+      sourcePath: summary.sourcePath,
+      firstTurnSequence: entry?.firstTurnSequence,
+    });
   }
 
   let importedSessions = 0;
   let importedTurns = 0;
   const enabledProjects = new Set<string>();
-  for (const sourcePath of importablePaths) {
+  for (const { sourcePath, firstTurnSequence } of importablePaths) {
     try {
       const session = await adapter.readSession(sourcePath, { artifactStore, artifactMode: 'copy' });
       if (!session || adapter.isExcluded?.(session)) {
         continue;
       }
-      let turnsForSession = 0;
       const seen = new Set<string>();
-      const existingSequences = await existingSourceSequences(adapter, session);
+      const turnContents: TurnContent[] = [];
       for (const [index, turn] of session.turns.entries()) {
-        if (existingSequences.has(index)) {
+        if (firstTurnSequence !== undefined && index >= firstTurnSequence) {
           continue;
         }
         const marker = importMarker(session, index);
         if (seen.has(marker)) {
           continue;
         }
-        await captureTurn(toTurnContent(session, turn, index, { agent: adapter.agent, ingest: adapter.ingest, markerKey: adapter.markerKey }));
+        turnContents.push(toTurnContent(session, turn, index, { agent: adapter.agent, ingest: adapter.ingest, markerKey: adapter.markerKey }));
         seen.add(marker);
-        existingSequences.add(index);
-        turnsForSession += 1;
       }
-      if (turnsForSession > 0) {
+      let capturedTurns = 0;
+      if (turnContents.length > 0) {
+        capturedTurns = await captureTurns(turnContents);
+      }
+      if (capturedTurns > 0) {
         importedSessions += 1;
-        importedTurns += turnsForSession;
+        importedTurns += capturedTurns;
         enabledProjects.add(session.project);
       }
     } catch (error) {
       failedSessions.push({ sourcePath, errorMessage: error instanceof Error ? error.message : String(error) });
     }
-  }
-
-  if (importedTurns > 0) {
-    await observer.flushPending();
   }
 
   // Importing a project opts it into live auto-capture going forward.
@@ -291,13 +292,13 @@ async function deleteRelatedMemories(turnIds: string[]): Promise<void> {
   const extractions = (await tables.extractionTable.list({}))
     .filter((row) => row.turnRefs.some((ref) => turnIdSet.has(ref)));
   const extractionIds = [...new Set(extractions.map((row) => row.id))];
-  const globalPaths = [...new Set(extractions.flatMap((row) => row.globalObservationPaths))];
+  const observationPaths = [...new Set(extractions.flatMap((row) => row.observationPaths))];
   if (extractionIds.length > 0) {
     await tables.extractionTable.delete({ ids: extractionIds });
   }
-  if (globalPaths.length > 0) {
-    await tables.globalObservationContextTable.delete({ ids: globalPaths });
-    await tables.globalObservationTable.delete({ ids: globalPaths });
+  if (observationPaths.length > 0) {
+    await tables.observationContextTable.delete({ ids: observationPaths });
+    await tables.observationTable.delete({ ids: observationPaths });
   }
 }
 
@@ -313,30 +314,6 @@ async function listAgentTurns(agent: string): Promise<ImportTurn[]> {
       return allTurns;
     }
   }
-}
-
-async function existingSourceSequences(adapter: ImportAdapter, session: Pick<SessionIdentity, 'project' | 'sessionId'>): Promise<Set<number>> {
-  const sequences = new Set<number>();
-  for (let offset = 0; ; offset += TURN_PAGE_SIZE) {
-    const page = await turns.list({
-      mode: { type: 'page', offset, limit: TURN_PAGE_SIZE },
-      agent: adapter.agent,
-      sessionId: session.sessionId,
-    });
-    for (const turn of page) {
-      if (turn.project !== session.project) {
-        continue;
-      }
-      const value = turn.metadata?.sourceTurnSequence;
-      if (typeof value === 'number' && Number.isInteger(value) && value >= 0) {
-        sequences.add(value);
-      }
-    }
-    if (page.length < TURN_PAGE_SIZE) {
-      break;
-    }
-  }
-  return sequences;
 }
 
 async function sessionsIndexForAgent(agent: string): Promise<Array<Awaited<ReturnType<typeof sessions.index>>[number]>> {

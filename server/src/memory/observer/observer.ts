@@ -46,8 +46,8 @@ export class Observer {
     this.cwdThreshold = runtime.cwdThreshold;
     this.cwdBatchSize = runtime.cwdBatchSize;
     this.baseline = checkpoint?.baseline ?? {
-      globalObservationContext: 0,
-      global_observation: 0,
+      observationContext: 0,
+      observation: 0,
     };
     this.observeQueue = checkpoint?.observeQueue ?? { cwdBuckets: [] };
   }

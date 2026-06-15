@@ -1,23 +1,23 @@
 import { getObserverRuntimeConfig } from '../config.js';
 import { embedText } from '../llm/embedding-provider.js';
 import { observeCwdScope, type ObserverExtractionInput } from '../llm/observing.js';
-import type { Extraction, NativeTables, GlobalObservation, GlobalObservationContext } from '../native.js';
+import type { Extraction, NativeTables, Observation, ObservationContext } from '../native.js';
 import type { QueuedExtractionChange } from '../checkpoint.js';
 import type { ParsedObserverDocument, ParsedObserverSection } from './types.js';
 
 type ObserveCwdScopeImpl = typeof observeCwdScope;
 
 type ExistingTree = {
-  rows: GlobalObservationContext[];
-  rootRows: GlobalObservationContext[];
-  byPath: Map<string, GlobalObservationContext>;
-  byParent: Map<string | null, GlobalObservationContext[]>;
+  rows: ObservationContext[];
+  rootRows: ObservationContext[];
+  byPath: Map<string, ObservationContext>;
+  byParent: Map<string | null, ObservationContext[]>;
 };
 
 type NextNode = {
   id: string;
   heading: string;
-  globalPath: string;
+  path: string;
   parentId: string | null;
   position: number;
   content: string;
@@ -72,7 +72,7 @@ export async function runObserver(params: {
   }
   const baselineInput = params.baselineVersion ?? 0;
   const { extractions, baselineVersion } = await loadChangedExtractions(params.client, baselineInput);
-  const allContexts = await params.client.globalObservationContextTable.list({ observer: params.observerName });
+  const allContexts = await params.client.observationContextTable.list({ observer: params.observerName });
   const groups = groupByCwd(extractions);
   let observed = 0;
   let skipped = 0;
@@ -98,16 +98,16 @@ export async function runObserver(params: {
   for (const group of groups) {
     throwIfAborted(params.signal);
     const tree = contextsForCwd(allContexts, group.cwd);
-    const currentGlobalObservationRefs = stripChangedExtractionRefs(refHintsById(tree.rows), group.extractions);
+    const currentObservationRefs = stripChangedExtractionRefs(refHintsById(tree.rows), group.extractions);
     const rewriteScope = buildRewriteScope(tree, group.extractions);
     const extractions = group.extractions.map(toObserverExtractionInput);
     const result = await (params.observeCwdScopeImpl ?? observeCwdScope)({
       cwdScope: group.cwd,
       outline: renderOutline(group.cwd, tree.rootRows),
-      observedDocument: renderObservedDocument(group.cwd, tree.rows, rewriteScope.paths, currentGlobalObservationRefs),
+      observedDocument: renderObservedDocument(group.cwd, tree.rows, rewriteScope.paths, currentObservationRefs),
       extractions,
-      validRefs: [...currentGlobalObservationRefs.values()].flatMap(allRefs),
-      getGlobalObservation: createGetGlobalObservationTool(group.cwd, tree, currentGlobalObservationRefs),
+      validRefs: [...currentObservationRefs.values()].flatMap(allRefs),
+      getObservation: createGetObservationTool(group.cwd, tree, currentObservationRefs),
       signal: params.signal,
       database: params.database,
     });
@@ -139,17 +139,17 @@ async function runQueuedObserver(params: {
   const upsertExtractions = params.extractionChanges
     .filter((change) => change.type === 'upsert')
     .map((change) => change.extraction);
-  const allContexts = await params.client.globalObservationContextTable.list({ observer: params.observerName });
+  const allContexts = await params.client.observationContextTable.list({ observer: params.observerName });
   const tree = contextsForCwd(allContexts, params.cwd);
-  const currentGlobalObservationRefs = stripChangedExtractionRefs(refHintsById(tree.rows), changedExtractions);
+  const currentObservationRefs = stripChangedExtractionRefs(refHintsById(tree.rows), changedExtractions);
   const rewriteScope = buildRewriteScope(tree, changedExtractions);
   const result = await (params.observeCwdScopeImpl ?? observeCwdScope)({
     cwdScope: params.cwd,
     outline: renderOutline(params.cwd, tree.rootRows),
-    observedDocument: renderObservedDocument(params.cwd, tree.rows, rewriteScope.paths, currentGlobalObservationRefs),
+    observedDocument: renderObservedDocument(params.cwd, tree.rows, rewriteScope.paths, currentObservationRefs),
     extractions: upsertExtractions.map(toObserverExtractionInput),
-    validRefs: [...currentGlobalObservationRefs.values()].flatMap(allRefs),
-    getGlobalObservation: createGetGlobalObservationTool(params.cwd, tree, currentGlobalObservationRefs),
+    validRefs: [...currentObservationRefs.values()].flatMap(allRefs),
+    getObservation: createGetObservationTool(params.cwd, tree, currentObservationRefs),
     signal: params.signal,
     database: params.database,
   });
@@ -242,7 +242,7 @@ function normalizeCwd(cwd: string): string {
 function toObserverExtractionInput(extraction: Extraction): ObserverExtractionInput {
   return {
     id: extraction.id,
-    status: extraction.globalObservationPaths.length > 0 ? 'changed' : 'new',
+    status: extraction.observationPaths.length > 0 ? 'changed' : 'new',
     text: extraction.summary,
     context: extraction.content,
     cwd: extraction.cwd,
@@ -250,15 +250,15 @@ function toObserverExtractionInput(extraction: Extraction): ObserverExtractionIn
   };
 }
 
-function contextsForCwd(rows: GlobalObservationContext[], cwdScope: string): ExistingTree {
+function contextsForCwd(rows: ObservationContext[], cwdScope: string): ExistingTree {
   const prefix = `${cwdScope} / `;
   const rootRows = rows
-    .filter((row) => row.globalPath === cwdScope || row.globalPath.startsWith(prefix))
-    .sort((left, right) => left.globalPath.localeCompare(right.globalPath));
+    .filter((row) => row.path === cwdScope || row.path.startsWith(prefix))
+    .sort((left, right) => left.path.localeCompare(right.path));
   return {
     rows: rootRows,
     rootRows: rootRows.sort(byPosition),
-    byPath: new Map(rootRows.map((row) => [row.globalPath, row])),
+    byPath: new Map(rootRows.map((row) => [row.path, row])),
     byParent: groupByParent(rootRows),
   };
 }
@@ -283,41 +283,41 @@ async function applyDocument(params: {
     observerName: params.observerName,
   }));
   const nodesToWrite = next.filter((node) => shouldUpsertNode(node, params.tree.byPath));
-  const returnedPaths = new Set(next.map((node) => node.globalPath));
+  const returnedPaths = new Set(next.map((node) => node.path));
   const writablePaths = writableScopePaths(params.tree.rows, params.result.sections);
   const deletedContextIds = deletedPaths(writablePaths, returnedPaths);
-  const deletedGlobalObservationIds = unique([
+  const deletedObservationIds = unique([
     ...deletedContextIds,
     ...next
       .filter((node) => node.children.length > 0)
       .map((node) => node.id),
   ]);
 
-  const rows: GlobalObservationContext[] = nodesToWrite.map((node) => ({
+  const rows: ObservationContext[] = nodesToWrite.map((node) => ({
     id: node.id,
-    globalPath: node.globalPath,
+    path: node.path,
     parentId: node.parentId,
     position: node.position,
     content: node.content,
     sourceRefs: node.sourceRefs,
     expandRefs: node.expandRefs,
-    createdAt: params.tree.byPath.get(node.globalPath)?.createdAt ?? now,
+    createdAt: params.tree.byPath.get(node.path)?.createdAt ?? now,
     updatedAt: now,
     observer: params.observerName,
   }));
   if (rows.length > 0) {
-    await params.client.globalObservationContextTable.upsert({ rows });
+    await params.client.observationContextTable.upsert({ rows });
   }
   if (deletedContextIds.length > 0) {
-    await params.client.globalObservationContextTable.delete({ ids: deletedContextIds });
+    await params.client.observationContextTable.delete({ ids: deletedContextIds });
   }
-  if (deletedGlobalObservationIds.length > 0) {
-    await params.client.globalObservationTable.delete({ ids: deletedGlobalObservationIds });
+  if (deletedObservationIds.length > 0) {
+    await params.client.observationTable.delete({ ids: deletedObservationIds });
   }
 
-  const observationRows = await buildGlobalObservationRows(nodesToWrite, params.tree.byPath, now, params.signal);
+  const observationRows = await buildObservationRows(nodesToWrite, params.tree.byPath, now, params.signal);
   if (observationRows.length > 0) {
-    await params.client.globalObservationTable.upsert({ rows: observationRows });
+    await params.client.observationTable.upsert({ rows: observationRows });
   }
   await updateExtractionLinks(params.client, {
     extractions: params.linkExtractions,
@@ -329,17 +329,17 @@ async function applyDocument(params: {
 }
 
 function writableScopePaths(
-  treeRows: GlobalObservationContext[],
+  treeRows: ObservationContext[],
   returnedSections: ParsedObserverSection[],
 ): Set<string> {
-  const scopeRoots = rewrittenScopeRoots(returnedSections).map((section) => section.globalPath);
-  const protectedRoots = protectedKeepRoots(returnedSections).map((section) => section.globalPath);
+  const scopeRoots = rewrittenScopeRoots(returnedSections).map((section) => section.path);
+  const protectedRoots = protectedKeepRoots(returnedSections).map((section) => section.path);
   const paths = new Set<string>();
   for (const row of treeRows) {
-    const inScope = scopeRoots.some((root) => pathInSubtree(row.globalPath, root));
-    const protectedByKeepMarker = protectedRoots.some((root) => pathInSubtree(row.globalPath, root));
+    const inScope = scopeRoots.some((root) => pathInSubtree(row.path, root));
+    const protectedByKeepMarker = protectedRoots.some((root) => pathInSubtree(row.path, root));
     if (inScope && !protectedByKeepMarker) {
-      paths.add(row.globalPath);
+      paths.add(row.path);
     }
   }
   return paths;
@@ -351,16 +351,16 @@ function deletedPaths(writablePaths: Set<string>, returnedPaths: Set<string>): s
 
 function validateHeadingOnlySections(
   sections: ParsedObserverSection[],
-  existing: Map<string, GlobalObservationContext>,
+  existing: Map<string, ObservationContext>,
 ): void {
   for (const section of walkSections(sections)) {
     if (sectionIsRewritten(section)) {
       continue;
     }
-    if (existing.has(section.globalPath) || hasRewrittenDescendant(section)) {
+    if (existing.has(section.path) || hasRewrittenDescendant(section)) {
       continue;
     }
-    throw new Error(`heading-only observer section does not exist: ${section.globalPath}`);
+    throw new Error(`heading-only observer section does not exist: ${section.path}`);
   }
 }
 
@@ -405,26 +405,26 @@ function buildNodes(params: {
   sections: ParsedObserverSection[];
   parentId: string | null;
   parentPath: string;
-  existing: Map<string, GlobalObservationContext>;
+  existing: Map<string, ObservationContext>;
   now: string;
   observerName: string;
 }): NextNode[] {
   return params.sections
     .map((section, index) => {
-      const globalPath = section.globalPath;
-      const id = globalPath;
-      const existing = params.existing.get(globalPath);
+      const path = section.path;
+      const id = path;
+      const existing = params.existing.get(path);
       const parentId = params.parentId;
       const children = buildNodes({
         ...params,
         sections: section.children,
         parentId: id,
-        parentPath: globalPath,
+        parentPath: path,
       });
       return {
         id,
         heading: section.heading,
-        globalPath,
+        path,
         parentId,
         position: existing?.position ?? index,
         content: section.body,
@@ -436,8 +436,8 @@ function buildNodes(params: {
     });
 }
 
-function shouldUpsertNode(node: NextNode, existing: Map<string, GlobalObservationContext>): boolean {
-  const existingNode = existing.get(node.globalPath);
+function shouldUpsertNode(node: NextNode, existing: Map<string, ObservationContext>): boolean {
+  const existingNode = existing.get(node.path);
   return node.rewritten
     || (!existingNode && hasRewrittenDescendantNode(node))
     || Boolean(existingNode && node.children.length > 0 && allRefs({
@@ -450,13 +450,13 @@ function hasRewrittenDescendantNode(node: NextNode): boolean {
   return node.children.some((child) => child.rewritten || hasRewrittenDescendantNode(child));
 }
 
-async function buildGlobalObservationRows(
+async function buildObservationRows(
   nodes: NextNode[],
-  existing: Map<string, GlobalObservationContext>,
+  existing: Map<string, ObservationContext>,
   now: string,
   signal?: AbortSignal,
-): Promise<GlobalObservation[]> {
-  const rows: GlobalObservation[] = [];
+): Promise<Observation[]> {
+  const rows: Observation[] = [];
   for (const node of nodes) {
     if (node.children.length > 0) {
       continue;
@@ -465,10 +465,10 @@ async function buildGlobalObservationRows(
       continue;
     }
     const expandRefs = unique(node.expandRefs ?? []);
-    const text = leafGlobalObservationText(node);
+    const text = leafObservationText(node);
     rows.push({
       id: node.id,
-      globalPath: node.globalPath,
+      path: node.path,
       text,
       vector: await embedText(text, signal),
       extractionRefs: expandRefs,
@@ -479,15 +479,15 @@ async function buildGlobalObservationRows(
   return rows;
 }
 
-function leafGlobalObservationText(node: NextNode): string {
-  return `${node.globalPath}\n\n${node.content.trim()}`.trim();
+function leafObservationText(node: NextNode): string {
+  return `${node.path}\n\n${node.content.trim()}`.trim();
 }
 
 async function updateExtractionLinks(
   client: NativeTables,
   params: {
     extractions: Extraction[];
-    existingRows: GlobalObservationContext[];
+    existingRows: ObservationContext[];
     writablePaths: Set<string>;
     nodes: NextNode[];
     now: string;
@@ -500,7 +500,7 @@ async function updateExtractionLinks(
     }
     for (const ref of allNodeRefs(node)) {
       const paths = leafByRef.get(ref) ?? [];
-      paths.push(node.globalPath);
+      paths.push(node.path);
       leafByRef.set(ref, paths);
     }
   }
@@ -508,7 +508,7 @@ async function updateExtractionLinks(
   const affectedIds = unique([
     ...params.extractions.map((extraction) => extraction.id),
     ...params.existingRows
-      .filter((row) => params.writablePaths.has(row.globalPath))
+      .filter((row) => params.writablePaths.has(row.path))
       .flatMap((row) => allRefs(row)),
     ...leafByRef.keys(),
   ]);
@@ -522,18 +522,18 @@ async function updateExtractionLinks(
   const rows = affectedIds
     .map((id) => extractionById.get(id))
     .filter((extraction): extraction is Extraction => Boolean(extraction))
-    .filter((extraction) => leafByRef.has(extraction.id) || extraction.globalObservationPaths.some((path) => params.writablePaths.has(path)))
+    .filter((extraction) => leafByRef.has(extraction.id) || extraction.observationPaths.some((path) => params.writablePaths.has(path)))
     .map((extraction) => {
-      const globalObservationPaths = unique([
-        ...extraction.globalObservationPaths.filter((path) => !params.writablePaths.has(path)),
+      const observationPaths = unique([
+        ...extraction.observationPaths.filter((path) => !params.writablePaths.has(path)),
         ...(leafByRef.get(extraction.id) ?? []),
       ]);
-      if (sameStringSet(extraction.globalObservationPaths, globalObservationPaths)) {
+      if (sameStringSet(extraction.observationPaths, observationPaths)) {
         return null;
       }
       return {
         ...extraction,
-        globalObservationPaths,
+        observationPaths,
         updatedAt: params.now,
       };
     })
@@ -543,8 +543,8 @@ async function updateExtractionLinks(
   }
 }
 
-function refHintsById(contexts: GlobalObservationContext[]): Map<string, RefHints> {
-  return new Map(contexts.map((context) => [context.globalPath, {
+function refHintsById(contexts: ObservationContext[]): Map<string, RefHints> {
+  return new Map(contexts.map((context) => [context.path, {
     sourceRefs: context.sourceRefs ?? [],
     expandRefs: context.expandRefs ?? [],
   }]));
@@ -569,14 +569,14 @@ function extractionRefVariants(extraction: Extraction): string[] {
 
 function renderTree(
   cwdScope: string,
-  roots: GlobalObservationContext[],
+  roots: ObservationContext[],
   refsById: Map<string, RefHints>,
   selectedPaths?: Set<string>,
 ): string {
   if (roots.length === 0) {
     return `# ${cwdScope}`;
   }
-  const byParent = new Map<string | null, GlobalObservationContext[]>();
+  const byParent = new Map<string | null, ObservationContext[]>();
   for (const row of roots) {
     const rows = byParent.get(row.parentId ?? null) ?? [];
     rows.push(row);
@@ -590,14 +590,14 @@ function renderTree(
 
 function renderObservedDocument(
   cwdScope: string,
-  rows: GlobalObservationContext[],
+  rows: ObservationContext[],
   selectedPaths: Set<string>,
   refsById: Map<string, RefHints>,
 ): string {
   return renderTree(cwdScope, rows, refsById, selectedPaths);
 }
 
-function renderOutline(cwdScope: string, roots: GlobalObservationContext[]): string {
+function renderOutline(cwdScope: string, roots: ObservationContext[]): string {
   if (roots.length === 0) {
     return `# ${cwdScope}\n\n(empty)`;
   }
@@ -606,24 +606,24 @@ function renderOutline(cwdScope: string, roots: GlobalObservationContext[]): str
 }
 
 function renderOutlineRows(
-  byParent: Map<string | null, GlobalObservationContext[]>,
+  byParent: Map<string | null, ObservationContext[]>,
   parentId: string | null,
   depth: number,
 ): string[] {
   return (byParent.get(parentId) ?? []).flatMap((row) => {
-    const hasChildren = byParent.has(row.globalPath);
+    const hasChildren = byParent.has(row.path);
     const indent = '  '.repeat(depth);
     return [
-      `${indent}- ${hasChildren ? 'non-leaf' : 'leaf'}: ${row.globalPath}`,
-      ...renderOutlineRows(byParent, row.globalPath, depth + 1),
+      `${indent}- ${hasChildren ? 'non-leaf' : 'leaf'}: ${row.path}`,
+      ...renderOutlineRows(byParent, row.path, depth + 1),
     ];
   });
 }
 
-function buildRewriteScope(tree: ExistingTree, extractions: Extraction[]): { rows: GlobalObservationContext[]; paths: Set<string> } {
+function buildRewriteScope(tree: ExistingTree, extractions: Extraction[]): { rows: ObservationContext[]; paths: Set<string> } {
   const paths = new Set<string>();
   for (const extraction of extractions) {
-    for (const path of extraction.globalObservationPaths) {
+    for (const path of extraction.observationPaths) {
       if (!tree.byPath.has(path)) {
         continue;
       }
@@ -632,7 +632,7 @@ function buildRewriteScope(tree: ExistingTree, extractions: Extraction[]): { row
     }
   }
   return {
-    rows: tree.rows.filter((row) => paths.has(row.globalPath)).sort(byPosition),
+    rows: tree.rows.filter((row) => paths.has(row.path)).sort(byPosition),
     paths,
   };
 }
@@ -640,7 +640,7 @@ function buildRewriteScope(tree: ExistingTree, extractions: Extraction[]): { row
 function addAncestors(paths: Set<string>, tree: ExistingTree, path: string): void {
   let current = tree.byPath.get(path);
   while (current) {
-    paths.add(current.globalPath);
+    paths.add(current.path);
     current = current.parentId ? tree.byPath.get(current.parentId) : undefined;
   }
 }
@@ -649,12 +649,12 @@ function addDescendants(paths: Set<string>, tree: ExistingTree, path: string): v
   const stack = [...(tree.byParent.get(path) ?? [])];
   while (stack.length > 0) {
     const row = stack.pop()!;
-    paths.add(row.globalPath);
-    stack.push(...(tree.byParent.get(row.globalPath) ?? []));
+    paths.add(row.path);
+    stack.push(...(tree.byParent.get(row.path) ?? []));
   }
 }
 
-function createGetGlobalObservationTool(
+function createGetObservationTool(
   cwdScope: string,
   tree: ExistingTree,
   refsById: Map<string, RefHints>,
@@ -669,11 +669,11 @@ function createGetGlobalObservationTool(
         throw new Error(`get_observation path is not visible in the outline: ${path}`);
       }
     }
-    return paths.map((path) => renderGlobalObservationSelection(cwdScope, tree, path, refsById)).join('\n\n----\n\n');
+    return paths.map((path) => renderObservationSelection(cwdScope, tree, path, refsById)).join('\n\n----\n\n');
   };
 }
 
-function renderGlobalObservationSelection(
+function renderObservationSelection(
   cwdScope: string,
   tree: ExistingTree,
   path: string,
@@ -688,14 +688,14 @@ function renderGlobalObservationSelection(
   addDescendants(paths, tree, path);
   return renderTree(
     cwdScope,
-    tree.rows.filter((row) => paths.has(row.globalPath)),
+    tree.rows.filter((row) => paths.has(row.path)),
     refsById,
     paths,
   );
 }
 
-function groupByParent(rows: GlobalObservationContext[]): Map<string | null, GlobalObservationContext[]> {
-  const byParent = new Map<string | null, GlobalObservationContext[]>();
+function groupByParent(rows: ObservationContext[]): Map<string | null, ObservationContext[]> {
+  const byParent = new Map<string | null, ObservationContext[]>();
   for (const row of rows) {
     const siblings = byParent.get(row.parentId ?? null) ?? [];
     siblings.push(row);
@@ -708,7 +708,7 @@ function groupByParent(rows: GlobalObservationContext[]): Map<string | null, Glo
 }
 
 function renderContextRows(
-  byParent: Map<string | null, GlobalObservationContext[]>,
+  byParent: Map<string | null, ObservationContext[]>,
   parentId: string | null,
   refsById: Map<string, RefHints>,
   selectedPaths?: Set<string>,
@@ -716,22 +716,22 @@ function renderContextRows(
   return (byParent.get(parentId) ?? []).flatMap((row) => [
     renderContextRow(
       row,
-      byParent.has(row.globalPath),
-      refsById.get(row.globalPath) ?? emptyRefs(),
-      selectedPaths?.has(row.globalPath) ?? true,
+      byParent.has(row.path),
+      refsById.get(row.path) ?? emptyRefs(),
+      selectedPaths?.has(row.path) ?? true,
     ),
-    ...renderContextRows(byParent, row.globalPath, refsById, selectedPaths),
+    ...renderContextRows(byParent, row.path, refsById, selectedPaths),
   ]);
 }
 
 function renderContextRow(
-  row: GlobalObservationContext,
+  row: ObservationContext,
   hasChildren: boolean,
   refs: RefHints,
   selected: boolean,
 ): string {
-  const level = headingLevel(row.globalPath);
-  const lines = [`${level} ${lastPathSegment(row.globalPath)} <!-- path: ${row.globalPath} -->`];
+  const level = headingLevel(row.path);
+  const lines = [`${level} ${lastPathSegment(row.path)} <!-- path: ${row.path} -->`];
   if (selected && row.content.trim()) {
     lines.push('', row.content.trim());
   }
@@ -741,8 +741,8 @@ function renderContextRow(
   return lines.join('\n').trim();
 }
 
-function byPosition(left: GlobalObservationContext, right: GlobalObservationContext): number {
-  return left.position - right.position || left.globalPath.localeCompare(right.globalPath);
+function byPosition(left: ObservationContext, right: ObservationContext): number {
+  return left.position - right.position || left.path.localeCompare(right.path);
 }
 
 function flattenNodes(nodes: NextNode[]): NextNode[] {

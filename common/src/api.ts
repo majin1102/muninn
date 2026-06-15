@@ -127,6 +127,7 @@ export interface TurnContent {
   metadata?: Record<string, unknown> | null;
   createdAt?: string;
   updatedAt?: string;
+  turnSequence?: number;
   title?: string;
   summary?: string;
   events: TurnEvent[];
@@ -138,6 +139,17 @@ export interface TurnContent {
 export interface CaptureTurnRequest {
   database?: string;
   turn: TurnContent;
+}
+
+export interface CaptureTurnsRequest {
+  database?: string;
+  turns: TurnContent[];
+}
+
+export interface CaptureTurnsResponse {
+  capturedTurns: number;
+  skippedTurns: number;
+  requestId: string;
 }
 
 export interface AgentNode {
@@ -167,6 +179,7 @@ export interface TurnPreview {
   memoryId: string;
   createdAt: string;
   updatedAt: string;
+  turnSequence?: number | null;
   title?: string;
   summary: string;
   prompt?: string;
@@ -183,8 +196,9 @@ export interface SessionSegmentPreview {
   updatedAt?: string;
 }
 
-export interface ExtractionPreview {
+export interface SessionTimelineItem {
   memoryId: string;
+  kind: 'summary' | 'signals' | 'extraction';
   title: string;
   createdAt: string;
   updatedAt?: string;
@@ -195,15 +209,14 @@ export interface ExtractionPreview {
 export interface SessionTurnsResponse {
   turns: TurnPreview[];
   segments: SessionSegmentPreview[];
-  observations: ExtractionPreview[];
-  sessionSummary?: string;
+  timeline: SessionTimelineItem[];
   nextOffset: number | null;
   requestId: string;
 }
 
 export interface MemoryDocument {
   memoryId: string;
-  kind: 'turn' | 'session' | 'extraction' | 'global_observation';
+  kind: 'turn' | 'session' | 'extraction' | 'observation';
   title: string;
   markdown: string;
   agent?: string;
@@ -249,7 +262,7 @@ export type PipelineTaskStatus = 'running' | 'queued' | 'failed' | 'done';
 
 export type PipelineTaskKind =
   | 'session-observing'
-  | 'global-observing'
+  | 'observation'
   | 'wiki-compiling';
 
 export interface PipelineDataMetric {

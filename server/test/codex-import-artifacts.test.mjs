@@ -3,20 +3,22 @@ import { mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import core, { captureTurn, turns } from '../dist/memory/index.js';
+import core, { captureTurn, observer, turns } from '../dist/memory/index.js';
 import { __testing, previewCodexImport, runCodexImport } from '../dist/web/codex_import.js';
 import { codexAdapter } from '../dist/web/codex_import.js';
 import { importSelectedSessions } from '../dist/web/import_core.js';
 
 const { shutdownCoreForTests } = core;
 
-async function writeTestConfig(homeDir) {
+async function writeTestConfig(homeDir, { epochTurns, epochWindowMs } = {}) {
   await mkdir(homeDir, { recursive: true });
   await writeFile(path.join(homeDir, 'muninn.json'), JSON.stringify({
     extractor: {
       name: 'default',
       llmProvider: 'mock',
       embeddingProvider: 'mock',
+      ...(epochTurns === undefined ? {} : { epochTurns }),
+      ...(epochWindowMs === undefined ? {} : { epochWindowMs }),
     },
     observer: {
       name: 'default',
@@ -421,7 +423,7 @@ test('session import fails when firstTurnSequence is zero', async () => {
       project,
       cwd,
       agent: 'codex',
-      metadata: { sourceTurnSequence: 0 },
+      turnSequence: 0,
       createdAt: '2026-06-13T01:01:00.000Z',
       updatedAt: '2026-06-13T01:02:00.000Z',
       prompt: 'already imported prompt',
@@ -554,7 +556,7 @@ test('session import allows later hook coverage and skips duplicate source turn'
       project,
       cwd,
       agent: 'codex',
-      metadata: { sourceTurnSequence: 2 },
+      turnSequence: 2,
       createdAt: '2026-06-13T02:05:00.000Z',
       updatedAt: '2026-06-13T02:06:00.000Z',
       prompt: 'third late prompt',
@@ -583,11 +585,114 @@ test('session import allows later hook coverage and skips duplicate source turn'
     assert.deepEqual(
       persisted
         .filter((turn) => turn.project === project)
-        .map((turn) => turn.metadata?.sourceTurnSequence)
+        .map((turn) => turn.turnSequence)
         .sort((left, right) => left - right),
       [0, 1, 2],
     );
-    assert.equal(persisted.filter((turn) => turn.project === project && turn.metadata?.sourceTurnSequence === 2).length, 1);
+    assert.equal(persisted.filter((turn) => turn.project === project && turn.turnSequence === 2).length, 1);
+  } finally {
+    await shutdownCoreForTests();
+    if (previousHome === undefined) {
+      delete process.env.MUNINN_HOME;
+    } else {
+      process.env.MUNINN_HOME = previousHome;
+    }
+    if (previousObserverPollMs === undefined) {
+      delete process.env.MUNINN_OBSERVER_POLL_MS;
+    } else {
+      process.env.MUNINN_OBSERVER_POLL_MS = previousObserverPollMs;
+    }
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('session import returns after batch write without flushing extraction', async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), 'muninn-codex-import-async-'));
+  const previousHome = process.env.MUNINN_HOME;
+  const previousObserverPollMs = process.env.MUNINN_OBSERVER_POLL_MS;
+  process.env.MUNINN_HOME = path.join(tempDir, 'muninn');
+  process.env.MUNINN_OBSERVER_POLL_MS = '60000';
+  try {
+    await writeTestConfig(process.env.MUNINN_HOME, {
+      epochTurns: 100,
+      epochWindowMs: 60_000,
+    });
+
+    const sourceRoot = path.join(tempDir, 'codex');
+    const cwd = path.join(tempDir, 'workspace', 'async-import');
+    const sessionDir = path.join(sourceRoot, 'sessions', '2026', '06', '13');
+    await mkdir(sessionDir, { recursive: true });
+    await mkdir(cwd, { recursive: true });
+    const sourcePath = path.join(sessionDir, 'async-import.jsonl');
+    const entries = [
+      {
+        timestamp: '2026-06-13T03:00:00.000Z',
+        type: 'session_meta',
+        payload: {
+          id: 'async-import-session',
+          cwd,
+          timestamp: '2026-06-13T03:00:00.000Z',
+        },
+      },
+      {
+        timestamp: '2026-06-13T03:01:00.000Z',
+        type: 'response_item',
+        payload: {
+          type: 'message',
+          role: 'user',
+          content: [{ type: 'input_text', text: 'first async prompt' }],
+        },
+      },
+      {
+        timestamp: '2026-06-13T03:02:00.000Z',
+        type: 'response_item',
+        payload: {
+          type: 'message',
+          role: 'assistant',
+          content: [{ type: 'output_text', text: 'first async response' }],
+        },
+      },
+      {
+        timestamp: '2026-06-13T03:03:00.000Z',
+        type: 'response_item',
+        payload: {
+          type: 'message',
+          role: 'user',
+          content: [{ type: 'input_text', text: 'second async prompt' }],
+        },
+      },
+      {
+        timestamp: '2026-06-13T03:04:00.000Z',
+        type: 'response_item',
+        payload: {
+          type: 'message',
+          role: 'assistant',
+          content: [{ type: 'output_text', text: 'second async response' }],
+        },
+      },
+    ];
+    await writeFile(sourcePath, `${entries.map((entry) => JSON.stringify(entry)).join('\n')}\n`);
+
+    const result = await importSelectedSessions(
+      { ...codexAdapter, sourceRoot },
+      [sourcePath],
+      'req-async-import',
+    );
+
+    assert.equal(result.importedTurns, 2);
+    assert.equal(result.importedSessions, 1);
+    assert.equal(result.failedSessions.length, 0, JSON.stringify(result.failedSessions));
+
+    const persisted = await turns.list({
+      mode: { type: 'page', offset: 0, limit: 20 },
+      agent: 'codex',
+      sessionId: 'async-import-session',
+    });
+    assert.equal(persisted.length, 2);
+
+    const watermark = await observer.watermark();
+    assert.equal(watermark.pending.turns.length, 2);
+    assert.equal(watermark.phases.extractor, 'pending');
   } finally {
     await shutdownCoreForTests();
     if (previousHome === undefined) {

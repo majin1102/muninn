@@ -213,7 +213,7 @@ export async function applyExtractionTableChanges(
       cwd,
       vector: await embedText(summary, signal),
       turnRefs: references,
-      globalObservationPaths: existing?.globalObservationPaths ?? [],
+      observationPaths: existing?.observationPaths ?? [],
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
     });

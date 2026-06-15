@@ -13,6 +13,7 @@ type IndexedTurn = {
   observer?: string | null;
   summary?: string | null;
   metadata?: Record<string, unknown> | null;
+  turnSequence?: number | null;
   updatedAt: string;
 };
 
@@ -141,7 +142,7 @@ export class SessionIndex {
     if (!turn.sessionId || !turn.summary?.trim()) {
       return;
     }
-    const sequence = sourceTurnSequence(turn);
+    const sequence = turnSequence(turn);
     const entryBase = {
       sessionId: turn.sessionId,
       agent: turn.agent,
@@ -217,9 +218,9 @@ function entryKey(value: {
   });
 }
 
-function sourceTurnSequence(turn: IndexedTurn): number | undefined {
-  const value = turn.metadata?.sourceTurnSequence;
-  return typeof value === 'number' && Number.isInteger(value) && value >= 0
+function turnSequence(turn: IndexedTurn): number | undefined {
+  const value = turn.turnSequence;
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
     ? value
     : undefined;
 }

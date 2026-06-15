@@ -217,14 +217,43 @@ export async function getDemoSessionTurns(
 ): Promise<{
   turns: DemoSessionTimelineItem[];
   segments: Array<{ memoryId: string; title: string; createdAt: string; updatedAt: string }>;
-  observations: Array<{ memoryId: string; title: string; createdAt: string; updatedAt: string; markdown: string; refs: string[] }>;
-  sessionSummary?: string;
+  timeline: Array<{ memoryId: string; kind: 'summary' | 'signals' | 'extraction'; title: string; createdAt: string; updatedAt: string; markdown: string; refs: string[] }>;
   nextOffset: number | null;
 }> {
   const turns = demoSessionTurns[`${agent}::${sessionKey}`] ?? [];
   const page = turns.slice(offset, offset + limit).map(enrichDemoTurn);
-  const observations = turns.map((turn) => ({
-    memoryId: turn.memoryId,
+  const firstTurn = turns[0];
+  const timeline: Array<{
+    memoryId: string;
+    kind: 'summary' | 'signals' | 'extraction';
+    title: string;
+    createdAt: string;
+    updatedAt: string;
+    markdown: string;
+    refs: string[];
+  }> = [];
+  if (firstTurn) {
+    timeline.push({
+      memoryId: `${firstTurn.memoryId}~timeline:summary`,
+      kind: 'summary',
+      title: 'Summary',
+      createdAt: firstTurn.createdAt,
+      updatedAt: firstTurn.updatedAt,
+      markdown: firstTurn.summary,
+      refs: [],
+    }, {
+      memoryId: `${firstTurn.memoryId}~timeline:signals`,
+      kind: 'signals',
+      title: 'Signals',
+      createdAt: firstTurn.createdAt,
+      updatedAt: firstTurn.updatedAt,
+      markdown: '- Demo sessions keep lightweight signals for UI preview.',
+      refs: [],
+    });
+  }
+  timeline.push(...turns.map((turn) => ({
+    memoryId: `${turn.memoryId}~timeline`,
+    kind: 'extraction' as const,
     title: turn.title ?? turn.summary,
     createdAt: turn.createdAt,
     updatedAt: turn.updatedAt,
@@ -237,17 +266,16 @@ export async function getDemoSessionTurns(
       turn.response ? `- Response: ${turn.response}` : undefined,
     ].filter(Boolean).join('\n'),
     refs: [turn.memoryId],
-  }));
+  })));
   return {
     turns: page,
     segments: turns.map((turn) => ({
-      memoryId: turn.memoryId,
+      memoryId: `${turn.memoryId}~timeline`,
       title: turn.title ?? turn.summary,
       createdAt: turn.createdAt,
       updatedAt: turn.updatedAt,
     })),
-    observations,
-    sessionSummary: turns[0]?.summary,
+    timeline,
     nextOffset: offset + limit < turns.length ? offset + limit : null,
   };
 }

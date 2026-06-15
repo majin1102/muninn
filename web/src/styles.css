@@ -435,7 +435,7 @@ svg {
   gap: 6px;
 }
 
-.extraction-toolbar {
+.timeline-toolbar {
   gap: 8px;
   padding-left: 12px;
   padding-right: 12px;
@@ -480,7 +480,7 @@ svg {
   cursor: default;
 }
 
-.extraction-toolbar-actions {
+.timeline-toolbar-actions {
   min-width: 0;
   display: inline-flex;
   align-items: center;
@@ -518,7 +518,7 @@ svg {
 }
 
 
-.extraction-pane,
+.timeline-pane,
 .session-conversation-pane {
   min-width: 0;
   min-height: 0;
@@ -555,7 +555,7 @@ svg {
   background: #cfd2d6;
 }
 
-.session-content-mode-conversation .extraction-pane {
+.session-content-mode-conversation .timeline-pane {
   opacity: 0;
   pointer-events: none;
   transform: translateX(-8px);
@@ -576,7 +576,7 @@ svg {
     visibility 0s linear 120ms;
 }
 
-.observation-scroll-shell {
+.timeline-scroll-shell {
   position: relative;
   width: 100%;
   height: 100%;
@@ -584,28 +584,28 @@ svg {
   min-height: 0;
 }
 
-.observation-scroll {
+.timeline-scroll {
   width: 100%;
   height: 100%;
   min-width: 0;
   min-height: 0;
 }
 
-.observation-pane-content {
+.timeline-pane-content {
   min-width: 0;
   max-width: 100%;
   padding: 8px 8px 24px;
   overflow-x: hidden;
 }
 
-.observation-session-summary {
+.timeline-session-summary {
   margin-bottom: 10px;
   color: #4f5359;
   font-size: 13px;
   line-height: 1.65;
 }
 
-.observation-summary-trigger {
+.timeline-summary-trigger {
   width: 100%;
   min-height: 34px;
   display: grid;
@@ -623,16 +623,16 @@ svg {
   text-align: left;
 }
 
-.observation-summary-trigger:hover {
+.timeline-summary-trigger:hover {
   background: #f4f5f6;
   color: #2f3338;
 }
 
-.ui-collapsible[data-state="open"] .observation-summary-trigger .observation-chevron {
+.ui-collapsible[data-state="open"] .timeline-summary-trigger .timeline-chevron {
   transform: rotate(90deg);
 }
 
-.observation-summary-markdown {
+.timeline-summary-markdown {
   padding: 6px 4px 12px;
   color: #5d6269;
   font-size: 13px;
@@ -640,25 +640,52 @@ svg {
   overflow-wrap: anywhere;
 }
 
-.observation-summary-markdown p {
+.timeline-summary-markdown p {
   margin: 0 0 8px;
 }
 
-.observation-list {
+.timeline-list {
   display: grid;
-  gap: 6px;
+  gap: 10px;
 }
 
-.observation-item {
+.timeline-item {
+  min-width: 0;
+  padding: 8px 6px 10px;
   border-radius: 8px;
+  cursor: pointer;
+  outline: none;
+  transition: background-color 120ms ease;
 }
 
-.observation-item-active > .ui-collapsible > .observation-trigger {
-  background: #f1f2f4;
+.timeline-item:hover,
+.timeline-item:focus-visible {
+  background: #fafafa;
+}
+
+.timeline-item-active {
+  background: #f5f6f8;
   color: #20242a;
 }
 
-.observation-trigger {
+.timeline-item-title {
+  min-width: 0;
+  margin-bottom: 6px;
+  overflow: hidden;
+  color: #25292f;
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.timeline-item-summary .timeline-item-title,
+.timeline-item-signals .timeline-item-title {
+  color: #555b64;
+}
+
+.timeline-trigger {
   width: 100%;
   min-height: 34px;
   display: grid;
@@ -675,22 +702,22 @@ svg {
   text-align: left;
 }
 
-.observation-trigger:hover {
+.timeline-trigger:hover {
   background: #f0f1f2;
   color: var(--foreground);
 }
 
-.observation-chevron {
+.timeline-chevron {
   width: 14px;
   height: 14px;
   transition: transform 120ms ease;
 }
 
-.ui-collapsible[data-state="open"] > .observation-trigger .observation-chevron {
+.ui-collapsible[data-state="open"] > .timeline-trigger .timeline-chevron {
   transform: rotate(90deg);
 }
 
-.observation-title {
+.timeline-title {
   min-width: 0;
   overflow: hidden;
   font-weight: 500;
@@ -698,13 +725,13 @@ svg {
   white-space: nowrap;
 }
 
-.observation-time {
+.timeline-time {
   color: #8a8d92;
   font-size: 11px;
   white-space: nowrap;
 }
 
-.observation-detail-title {
+.timeline-detail-title {
   min-width: 0;
   min-height: 34px;
   display: grid;
@@ -719,7 +746,7 @@ svg {
   font-size: 13px;
 }
 
-.observation-detail-title span {
+.timeline-detail-title span {
   min-width: 0;
   overflow: hidden;
   font-weight: 600;
@@ -727,14 +754,14 @@ svg {
   white-space: nowrap;
 }
 
-.observation-detail-title time {
+.timeline-detail-title time {
   color: #8a8d92;
   font-size: 11px;
   white-space: nowrap;
 }
 
-.observation-markdown,
-.observation-detail-markdown {
+.timeline-markdown,
+.timeline-detail-markdown {
   min-width: 0;
   max-width: 100%;
   margin: 4px 0 12px;
@@ -746,51 +773,51 @@ svg {
   overflow-wrap: anywhere;
 }
 
-.observation-markdown *,
-.observation-detail-markdown * {
+.timeline-markdown *,
+.timeline-detail-markdown * {
   max-width: 100%;
 }
 
-.observation-markdown :first-child,
-.observation-detail-markdown :first-child {
+.timeline-markdown :first-child,
+.timeline-detail-markdown :first-child {
   margin-top: 0;
 }
 
-.observation-markdown :last-child,
-.observation-detail-markdown :last-child {
+.timeline-markdown :last-child,
+.timeline-detail-markdown :last-child {
   margin-bottom: 0;
 }
 
-.observation-markdown h3,
-.observation-detail-markdown h3 {
+.timeline-markdown h3,
+.timeline-detail-markdown h3 {
   margin: 10px 0 5px;
   color: #2b2e33;
   font-size: 12px;
   font-weight: 650;
 }
 
-.observation-markdown p,
-.observation-markdown ul,
-.observation-markdown ol,
-.observation-markdown pre,
-.observation-markdown table,
-.observation-detail-markdown p,
-.observation-detail-markdown ul,
-.observation-detail-markdown ol,
-.observation-detail-markdown pre,
-.observation-detail-markdown table {
+.timeline-markdown p,
+.timeline-markdown ul,
+.timeline-markdown ol,
+.timeline-markdown pre,
+.timeline-markdown table,
+.timeline-detail-markdown p,
+.timeline-detail-markdown ul,
+.timeline-detail-markdown ol,
+.timeline-detail-markdown pre,
+.timeline-detail-markdown table {
   margin: 0 0 8px;
 }
 
-.observation-markdown ul,
-.observation-markdown ol,
-.observation-detail-markdown ul,
-.observation-detail-markdown ol {
+.timeline-markdown ul,
+.timeline-markdown ol,
+.timeline-detail-markdown ul,
+.timeline-detail-markdown ol {
   padding-left: 18px;
 }
 
-.observation-markdown code,
-.observation-detail-markdown code {
+.timeline-markdown code,
+.timeline-detail-markdown code {
   padding: 1px 4px;
   border-radius: 4px;
   background: #f0f0f0;
@@ -800,6 +827,7 @@ svg {
   word-break: break-word;
 }
 
+.timeline-inline-citation,
 .observation-inline-citation {
   display: inline;
   margin: 0 1px;
@@ -818,14 +846,16 @@ svg {
   vertical-align: baseline;
 }
 
+.timeline-inline-citation:hover,
+.timeline-inline-citation:focus-visible,
 .observation-inline-citation:hover,
 .observation-inline-citation:focus-visible {
   background: transparent;
   color: #155cb0;
 }
 
-.observation-markdown pre,
-.observation-detail-markdown pre {
+.timeline-markdown pre,
+.timeline-detail-markdown pre {
   max-width: 100%;
   overflow-x: hidden;
   padding: 9px;
@@ -835,29 +865,29 @@ svg {
   overflow-wrap: anywhere;
 }
 
-.observation-markdown pre code,
-.observation-detail-markdown pre code {
+.timeline-markdown pre code,
+.timeline-detail-markdown pre code {
   padding: 0;
   background: transparent;
   white-space: pre-wrap;
 }
 
-.observation-markdown table,
-.observation-detail-markdown table {
+.timeline-markdown table,
+.timeline-detail-markdown table {
   width: 100%;
   border-collapse: collapse;
 }
 
-.observation-markdown th,
-.observation-markdown td,
-.observation-detail-markdown th,
-.observation-detail-markdown td {
+.timeline-markdown th,
+.timeline-markdown td,
+.timeline-detail-markdown th,
+.timeline-detail-markdown td {
   padding: 5px 6px;
   border: 1px solid var(--border);
   vertical-align: top;
 }
 
-.observation-empty {
+.timeline-empty {
   color: var(--muted-foreground);
   font-size: 13px;
 }
@@ -884,10 +914,10 @@ svg {
   .project-pane,
   .conversation-pane,
   .session-content-split,
-  .extraction-pane,
+  .timeline-pane,
   .session-conversation-pane,
   .session-content-divider,
-  .observation-chevron {
+  .timeline-chevron {
     transition: none;
   }
 
@@ -982,7 +1012,7 @@ svg {
 
 .project-scroll:hover,
 .chat-scroll:hover,
-.ui-scroll-area:hover:not(.observation-scroll) {
+.ui-scroll-area:hover:not(.timeline-scroll) {
   scrollbar-color: var(--scrollbar-thumb-hover) transparent;
 }
 
@@ -1020,43 +1050,43 @@ svg {
   background-color: var(--scrollbar-thumb-active);
 }
 
-.observation-scroll {
+.timeline-scroll {
   overflow-y: scroll;
   scrollbar-gutter: auto;
   scrollbar-color: transparent transparent;
   scrollbar-width: none;
 }
 
-.observation-scroll:hover {
+.timeline-scroll:hover {
   scrollbar-color: transparent transparent;
 }
 
-.observation-scroll::-webkit-scrollbar {
+.timeline-scroll::-webkit-scrollbar {
   width: 0 !important;
   height: 0 !important;
   display: none;
 }
 
-.observation-scroll::-webkit-scrollbar-track {
+.timeline-scroll::-webkit-scrollbar-track {
   background: transparent;
 }
 
-.observation-scroll::-webkit-scrollbar-thumb {
+.timeline-scroll::-webkit-scrollbar-thumb {
   border: 0;
   border-radius: 999px;
   background-clip: border-box;
   background-color: transparent;
 }
 
-.observation-scroll:hover::-webkit-scrollbar-thumb {
+.timeline-scroll:hover::-webkit-scrollbar-thumb {
   background-color: transparent;
 }
 
-.observation-scroll::-webkit-scrollbar-thumb:active {
+.timeline-scroll::-webkit-scrollbar-thumb:active {
   background-color: transparent;
 }
 
-.observation-scrollbar-overlay {
+.timeline-scrollbar-overlay {
   pointer-events: none;
   position: absolute;
   top: 4px;
@@ -1066,7 +1096,7 @@ svg {
   width: 3px;
 }
 
-.observation-scrollbar-thumb {
+.timeline-scrollbar-thumb {
   width: 3px;
   border-radius: 999px;
   background: var(--scrollbar-thumb-hover);

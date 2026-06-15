@@ -292,9 +292,9 @@ async function readIncrementalLatestTurn<Session extends AgentSession>(params: {
   }
 
   const lastIndex = session.turns.length - 1;
-  const sourceTurnSequence = params.cached.nextTurnSequence + lastIndex;
+  const turnSequence = params.cached.nextTurnSequence + lastIndex;
   return {
-    turn: params.toTurnContent(session, session.turns[lastIndex], sourceTurnSequence, params.toTurnOptions),
+    turn: params.toTurnContent(session, session.turns[lastIndex], turnSequence, params.toTurnOptions),
     transcriptPath: params.transcriptPath,
     cacheEntry: await cacheEntryFromSession(
       params.agent,

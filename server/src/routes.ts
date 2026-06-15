@@ -3,6 +3,8 @@ import { cors } from 'hono/cors';
 import type {
   Artifact,
   CaptureTurnRequest,
+  CaptureTurnsRequest,
+  CaptureTurnsResponse,
   ErrorResponse,
   MemoryHit,
   MemoryResponse,
@@ -13,6 +15,7 @@ import type {
 } from '@muninn/common';
 import {
   captureTurn,
+  captureTurns,
   memories,
   observer,
   turns,
@@ -559,6 +562,7 @@ const TURN_CONTENT_FIELDS = new Set([
   'metadata',
   'createdAt',
   'updatedAt',
+  'turnSequence',
   'title',
   'summary',
   'events',
@@ -688,6 +692,13 @@ function validateTurn(turn: TurnContent | undefined): string | null {
     return 'turn.metadata must be an object or null';
   }
 
+  if (
+    turn.turnSequence !== undefined
+    && (!Number.isSafeInteger(turn.turnSequence) || turn.turnSequence < 0)
+  ) {
+    return 'turn.turnSequence must be a non-negative safe integer';
+  }
+
   if (!hasTextContent(turn.prompt)) {
     return 'turn.prompt is required';
   }
@@ -731,6 +742,42 @@ function validateTurn(turn: TurnContent | undefined): string | null {
   return null;
 }
 
+function validateBatchTurns(turnsInput: unknown): { turns: TurnContent[] | null; error: string | null } {
+  if (!Array.isArray(turnsInput) || turnsInput.length === 0) {
+    return { turns: null, error: 'turns must be a non-empty array' };
+  }
+
+  const turns: TurnContent[] = [];
+  for (const [index, turn] of turnsInput.entries()) {
+    if (!turn || typeof turn !== 'object' || Array.isArray(turn)) {
+      return { turns: null, error: `turns[${index}] must be a turn object` };
+    }
+    const validationError = validateTurn(turn as TurnContent);
+    if (validationError) {
+      return { turns: null, error: `turns[${index}]: ${validationError}` };
+    }
+    turns.push(turn as TurnContent);
+  }
+
+  return { turns, error: null };
+}
+
+async function filterAllowedTurns(turns: TurnContent[]): Promise<{ turns: TurnContent[]; skippedTurns: number }> {
+  const allowedTurns: TurnContent[] = [];
+  let skippedTurns = 0;
+  for (const turn of turns) {
+    const ingest = typeof turn.metadata?.ingest === 'string' ? turn.metadata.ingest : '';
+    if (ingest.endsWith('-hook') && turn.project) {
+      if (!(await isCaptureEnabled(turn.agent, turn.project))) {
+        skippedTurns += 1;
+        continue;
+      }
+    }
+    allowedTurns.push(turn);
+  }
+  return { turns: allowedTurns, skippedTurns };
+}
+
 app.post('/api/v1/turn/capture', async (c) => {
   let body: CaptureTurnRequest;
   try {
@@ -765,6 +812,45 @@ app.post('/api/v1/turn/capture', async (c) => {
 
   invalidateSessionTreeCache();
   return c.body(null, 204);
+});
+
+app.post('/api/v1/turn/capture/batch', async (c) => {
+  let body: CaptureTurnsRequest | null;
+  try {
+    body = await c.req.json<CaptureTurnsRequest>();
+  } catch {
+    return c.json(errorResponse('invalidRequest', 'Invalid JSON body'), 400);
+  }
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    return c.json(errorResponse('invalidRequest', 'request body must be an object'), 400);
+  }
+
+  const validated = validateBatchTurns(body.turns);
+  if (validated.error || !validated.turns) {
+    return c.json(errorResponse('invalidRequest', validated.error ?? 'turns are required'), 400);
+  }
+
+  const allowed = await filterAllowedTurns(validated.turns);
+  let capturedTurns = 0;
+  try {
+    if (allowed.turns.length > 0) {
+      capturedTurns = await captureTurns(allowed.turns, body.database);
+    }
+  } catch (error) {
+    const mapped = mapCoreWriteError(error);
+    return c.json(mapped.body, mapped.status as 400 | 500);
+  }
+
+  if (capturedTurns > 0) {
+    invalidateSessionTreeCache();
+  }
+  const dedupedTurns = allowed.turns.length - capturedTurns;
+  const response: CaptureTurnsResponse = {
+    capturedTurns,
+    skippedTurns: allowed.skippedTurns + dedupedTurns,
+    requestId: generateRequestId(),
+  };
+  return c.json(response, 200);
 });
 
 app.post('/api/v1/benchmark/locomo/turn/capture', async (c) => {

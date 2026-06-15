@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
-use lance::dataset::{MergeInsertBuilder, WhenMatched, WhenNotMatched};
 use lance::Result;
+use lance::dataset::{MergeInsertBuilder, WhenMatched, WhenNotMatched};
 use object_store::path::Path;
 use serde::{Deserialize, Serialize};
 
@@ -11,17 +11,17 @@ use super::access::{
     LanceDataset, TableAccess, TableDescription, TableOptions, TableStats, delete_by_ids,
     describe_dataset, escape_predicate_string,
 };
-use super::codec::{global_observation_contexts_to_reader, record_batch_to_global_observation_contexts};
+use super::codec::{observation_contexts_to_reader, record_batch_to_observation_contexts};
 use crate::maintenance::{
-    cleanup_dataset, compact_dataset, ensure_global_observation_context_id_index,
-    optimize_global_observation_context,
+    cleanup_dataset, compact_dataset, ensure_observation_context_id_index,
+    optimize_observation_context,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
-pub struct GlobalObservationContext {
+pub struct ObservationContext {
     pub id: String,
-    pub global_path: String,
+    pub path: String,
     pub parent_id: Option<String>,
     pub position: i64,
     pub content: String,
@@ -33,16 +33,16 @@ pub struct GlobalObservationContext {
 }
 
 #[derive(Debug, Clone)]
-pub struct GlobalObservationContextTable {
+pub struct ObservationContextTable {
     access: TableAccess,
 }
 
-impl GlobalObservationContextTable {
+impl ObservationContextTable {
     pub fn new(options: TableOptions) -> Self {
         Self {
             access: TableAccess::new(
                 options,
-                Path::parse("global_observation_context").expect("valid global observation context table path"),
+                Path::parse("observation_context").expect("valid observation context table path"),
             ),
         }
     }
@@ -55,7 +55,9 @@ impl GlobalObservationContextTable {
         if let Some(dataset) = self.access.try_open().await? {
             return Ok(dataset);
         }
-        self.access.write(global_observation_contexts_to_reader(Vec::new())?).await
+        self.access
+            .write(observation_contexts_to_reader(Vec::new())?)
+            .await
     }
 
     pub async fn stats(&self) -> Result<Option<TableStats>> {
@@ -70,14 +72,14 @@ impl GlobalObservationContextTable {
         let Some(mut dataset) = self.access.try_open().await? else {
             return Ok(false);
         };
-        ensure_global_observation_context_id_index(&mut dataset).await
+        ensure_observation_context_id_index(&mut dataset).await
     }
 
     pub async fn optimize(&self, merge_count: usize) -> Result<bool> {
         let Some(mut dataset) = self.access.try_open().await? else {
             return Ok(false);
         };
-        optimize_global_observation_context(&mut dataset, merge_count).await
+        optimize_observation_context(&mut dataset, merge_count).await
     }
 
     pub async fn cleanup(&self, floor_version: u64) -> Result<bool> {
@@ -91,7 +93,7 @@ impl GlobalObservationContextTable {
         Ok(Some(describe_dataset(&dataset)))
     }
 
-    pub async fn list(&self, observer: Option<&str>) -> Result<Vec<GlobalObservationContext>> {
+    pub async fn list(&self, observer: Option<&str>) -> Result<Vec<ObservationContext>> {
         let Some(dataset) = self.access.try_open().await? else {
             return Ok(Vec::new());
         };
@@ -106,17 +108,17 @@ impl GlobalObservationContextTable {
         if batch.num_rows() == 0 {
             return Ok(Vec::new());
         }
-        let mut rows = record_batch_to_global_observation_contexts(&batch)?;
+        let mut rows = record_batch_to_observation_contexts(&batch)?;
         rows.sort_by(|left, right| {
-            left.global_path
-                .cmp(&right.global_path)
+            left.path
+                .cmp(&right.path)
                 .then(left.position.cmp(&right.position))
                 .then(left.updated_at.cmp(&right.updated_at))
         });
         Ok(rows)
     }
 
-    pub async fn get(&self, ids: &[String]) -> Result<Vec<GlobalObservationContext>> {
+    pub async fn get(&self, ids: &[String]) -> Result<Vec<ObservationContext>> {
         if ids.is_empty() {
             return Ok(Vec::new());
         }
@@ -137,7 +139,7 @@ impl GlobalObservationContextTable {
         if batch.num_rows() == 0 {
             return Ok(Vec::new());
         }
-        let rows = record_batch_to_global_observation_contexts(&batch)?;
+        let rows = record_batch_to_observation_contexts(&batch)?;
         let mut by_id = rows
             .into_iter()
             .map(|row| (row.id.clone(), row))
@@ -145,7 +147,7 @@ impl GlobalObservationContextTable {
         Ok(ids.iter().filter_map(|id| by_id.remove(id)).collect())
     }
 
-    pub async fn upsert(&self, rows: Vec<GlobalObservationContext>) -> Result<()> {
+    pub async fn upsert(&self, rows: Vec<ObservationContext>) -> Result<()> {
         if rows.is_empty() {
             return Ok(());
         }
@@ -157,14 +159,17 @@ impl GlobalObservationContextTable {
                 .when_matched(WhenMatched::UpdateAll)
                 .when_not_matched(WhenNotMatched::InsertAll);
             let job = builder.try_build()?;
-            job.execute_reader(global_observation_contexts_to_reader(rows)?).await?;
+            job.execute_reader(observation_contexts_to_reader(rows)?)
+                .await?;
         } else {
-            self.access.write(global_observation_contexts_to_reader(rows)?).await?;
+            self.access
+                .write(observation_contexts_to_reader(rows)?)
+                .await?;
         }
         Ok(())
     }
 
-pub async fn delete(&self, ids: Vec<String>) -> Result<usize> {
+    pub async fn delete(&self, ids: Vec<String>) -> Result<usize> {
         delete_by_ids(self.access.try_open().await?, "id", ids).await
     }
 }
@@ -173,19 +178,19 @@ pub async fn delete(&self, ids: Vec<String>) -> Result<usize> {
 mod tests {
     use chrono::Utc;
 
-    use super::{GlobalObservationContext, GlobalObservationContextTable};
+    use super::{ObservationContext, ObservationContextTable};
     use crate::TableOptions;
 
     #[tokio::test]
-    async fn global_observation_context_table_upserts_lists_and_deletes_rows() {
+    async fn observation_context_table_upserts_lists_and_deletes_rows() {
         let dir = tempfile::tempdir().unwrap();
-        let table = GlobalObservationContextTable::new(TableOptions::local(dir.path()).unwrap());
+        let table = ObservationContextTable::new(TableOptions::local(dir.path()).unwrap());
         let now = Utc::now();
 
         table
-            .upsert(vec![GlobalObservationContext {
+            .upsert(vec![ObservationContext {
                 id: "00000000-0000-4000-8000-000000000001".to_string(),
-                global_path: "Caroline / What happened?".to_string(),
+                path: "Caroline / What happened?".to_string(),
                 parent_id: None,
                 position: 0,
                 content: "Caroline attended a support group.".to_string(),
@@ -199,9 +204,9 @@ mod tests {
             .unwrap();
 
         table
-            .upsert(vec![GlobalObservationContext {
+            .upsert(vec![ObservationContext {
                 id: "00000000-0000-4000-8000-000000000001".to_string(),
-                global_path: "Caroline / What happened?".to_string(),
+                path: "Caroline / What happened?".to_string(),
                 parent_id: None,
                 position: 0,
                 content: "Caroline attended an LGBTQ support group.".to_string(),
@@ -214,9 +219,9 @@ mod tests {
             .await
             .unwrap();
         table
-            .upsert(vec![GlobalObservationContext {
+            .upsert(vec![ObservationContext {
                 id: "00000000-0000-4000-8000-000000000002".to_string(),
-                global_path: "Melanie / What happened?".to_string(),
+                path: "Melanie / What happened?".to_string(),
                 parent_id: None,
                 position: 1,
                 content: "Melanie painted a lake sunrise.".to_string(),

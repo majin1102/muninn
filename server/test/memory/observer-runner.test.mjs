@@ -100,10 +100,10 @@ test('runObserver finalizes pending extractions below threshold', async (t) => {
   assert.deepEqual(result, { observed: 1, skipped: 0, baselineVersion: 1 });
   assert.equal(observedInput.cwdScope, CWD);
   assert.deepEqual(observedInput.extractions.map((extraction) => extraction.id), ['so-1', 'so-2']);
-  assert.equal(client.writes.globalObservationContexts.length, 2);
-  assert.equal(client.writes.globalObservations.length, 1);
+  assert.equal(client.writes.observationContexts.length, 2);
+  assert.equal(client.writes.observations.length, 1);
   assert.deepEqual(
-    client.writes.extractions.map((row) => [row.id, row.globalObservationPaths]),
+    client.writes.extractions.map((row) => [row.id, row.observationPaths]),
     [['so-1', [`${CWD} / Work / Decision`]], ['so-2', [`${CWD} / Work / Decision`]]],
   );
 });
@@ -124,7 +124,7 @@ test('runObserver skips until cwd threshold is reached', async () => {
   assert.deepEqual(result, { observed: 0, skipped: 1, baselineVersion: 0 });
 });
 
-test('runObserver preserves unrelated cwd global observation branches', async (t) => {
+test('runObserver preserves unrelated cwd observation branches', async (t) => {
   await useMockHome(t, 'muninn-observer-runner-cwd-scope-');
   const oldPath = `${CWD} / Existing / Leaf`;
   const otherPath = '/Users/Nathan/workspace/lance / Existing / Leaf';
@@ -135,12 +135,12 @@ test('runObserver preserves unrelated cwd global observation branches', async (t
       contextRow('/Users/Nathan/workspace/lance / Existing', null, ''),
       contextRow(otherPath, '/Users/Nathan/workspace/lance / Existing', 'Other cwd content.', ['other']),
     ],
-    globalObservations: [
-      globalObservationRow(oldPath, ['so-1']),
-      globalObservationRow(otherPath, ['other']),
+    observations: [
+      observationRow(oldPath, ['so-1']),
+      observationRow(otherPath, ['other']),
     ],
     extractions: [
-      extractionRow('so-1', { globalObservationPaths: [oldPath] }),
+      extractionRow('so-1', { observationPaths: [oldPath] }),
     ],
   });
 
@@ -153,7 +153,7 @@ test('runObserver preserves unrelated cwd global observation branches', async (t
     observeCwdScopeImpl: async (input) => observerResult(input.cwdScope, [input.extractions[0].id]),
   });
 
-  assert.equal(client.writes.deletedGlobalObservationIds.includes(otherPath), false);
+  assert.equal(client.writes.deletedObservationIds.includes(otherPath), false);
   assert.equal(client.writes.deletedContextIds.includes(otherPath), false);
 });
 
@@ -172,7 +172,7 @@ test('observeCwdScope accepts slash-containing cwd as root title', async (t) => 
       cwd: CWD,
       turnRefs: ['turn:1'],
     }],
-    getGlobalObservation: () => `# ${CWD}`,
+    getObservation: () => `# ${CWD}`,
     maxAttempts: 1,
     model: async () => ({
       type: 'final',
@@ -187,8 +187,8 @@ Source extractions:
   });
 
   assert.equal(result.title, CWD);
-  assert.equal(result.sections[0].globalPath, `${CWD} / Work`);
-  assert.equal(result.sections[0].children[0].globalPath, `${CWD} / Work / Decision`);
+  assert.equal(result.sections[0].path, `${CWD} / Work`);
+  assert.equal(result.sections[0].children[0].path, `${CWD} / Work / Decision`);
 });
 
 test('observeCwdScope exposes get_observation tool without memory-get', async (t) => {
@@ -208,7 +208,7 @@ test('observeCwdScope exposes get_observation tool without memory-get', async (t
       cwd: CWD,
       turnRefs: ['turn:1'],
     }],
-    getGlobalObservation: () => `# ${CWD}
+    getObservation: () => `# ${CWD}
 
 ## Work
 
@@ -266,7 +266,7 @@ test('observeCwdScope rejects more than three get_observation calls', async (t) 
       cwd: CWD,
       turnRefs: ['turn:1'],
     }],
-    getGlobalObservation: () => `# ${CWD}`,
+    getObservation: () => `# ${CWD}`,
     validRefs: ['so-old'],
     maxAttempts: 1,
     model: async () => {
@@ -312,7 +312,7 @@ test('observeCwdScope writes observer trace with cwd input', async (t) => {
       cwd: CWD,
       turnRefs: ['turn:1'],
     }],
-    getGlobalObservation: () => `# ${CWD}`,
+    getObservation: () => `# ${CWD}`,
     maxAttempts: 1,
     model: async () => ({
       type: 'final',
@@ -337,11 +337,11 @@ Source extractions:
 function makeClient({
   extractions,
   contexts = [],
-  globalObservations = [],
+  observations = [],
   version = 1,
 }) {
   const normalizedContexts = contexts.map((context) => {
-    const observation = globalObservations.find((row) => row.id === context.id);
+    const observation = observations.find((row) => row.id === context.id);
     return {
       sourceRefs: observation?.extractionRefs ?? [],
       expandRefs: observation?.extractionRefs ?? [],
@@ -349,11 +349,11 @@ function makeClient({
     };
   });
   const writes = {
-    globalObservationContexts: [],
-    globalObservations: [],
+    observationContexts: [],
+    observations: [],
     extractions: [],
     deletedContextIds: [],
-    deletedGlobalObservationIds: [],
+    deletedObservationIds: [],
   };
   return {
     writes,
@@ -371,24 +371,24 @@ function makeClient({
         writes.extractions.push(...rows);
       },
     },
-    globalObservationContextTable: {
+    observationContextTable: {
       list: async () => normalizedContexts,
       get: async ({ ids }) => normalizedContexts.filter((row) => ids.includes(row.id)),
       upsert: async ({ rows }) => {
-        writes.globalObservationContexts.push(...rows);
+        writes.observationContexts.push(...rows);
       },
       delete: async ({ ids }) => {
         writes.deletedContextIds.push(...ids);
         return { deleted: ids.length };
       },
     },
-    globalObservationTable: {
-      get: async ({ ids }) => globalObservations.filter((row) => ids.includes(row.id)),
+    observationTable: {
+      get: async ({ ids }) => observations.filter((row) => ids.includes(row.id)),
       upsert: async ({ rows }) => {
-        writes.globalObservations.push(...rows);
+        writes.observations.push(...rows);
       },
       delete: async ({ ids }) => {
-        writes.deletedGlobalObservationIds.push(...ids);
+        writes.deletedObservationIds.push(...ids);
         return { deleted: ids.length };
       },
     },
@@ -401,14 +401,14 @@ function observerResult(cwdScope, refs) {
     sections: [{
       level: 2,
       heading: 'Work',
-      globalPath: `${cwdScope} / Work`,
+      path: `${cwdScope} / Work`,
       sourceRefs: [],
       expandRefs: [],
       body: '',
       children: [{
         level: 3,
         heading: 'Decision',
-        globalPath: `${cwdScope} / Work / Decision`,
+        path: `${cwdScope} / Work / Decision`,
         sourceRefs: refs,
         expandRefs: refs,
         body: 'The cwd scoped observer groups related extractions.',
@@ -450,16 +450,16 @@ function extractionRow(id, overrides = {}) {
     cwd: overrides.cwd ?? CWD,
     vector: overrides.vector ?? [0.1, 0.2],
     turnRefs: overrides.turnRefs ?? ['turn:1'],
-    globalObservationPaths: overrides.globalObservationPaths ?? [],
+    observationPaths: overrides.observationPaths ?? [],
     createdAt: overrides.createdAt ?? '2026-05-17T00:00:00.000Z',
     updatedAt: overrides.updatedAt ?? '2026-05-17T00:00:00.000Z',
   };
 }
 
-function contextRow(globalPath, parentId, content, refs = []) {
+function contextRow(path, parentId, content, refs = []) {
   return {
-    id: globalPath,
-    globalPath,
+    id: path,
+    path,
     parentId,
     position: 0,
     content,
@@ -471,11 +471,11 @@ function contextRow(globalPath, parentId, content, refs = []) {
   };
 }
 
-function globalObservationRow(globalPath, refs) {
+function observationRow(path, refs) {
   return {
-    id: globalPath,
-    globalPath,
-    text: `${globalPath}\n\nGlobal observation text.`,
+    id: path,
+    path,
+    text: `${path}\n\nObservation text.`,
     vector: [0.3, 0.4],
     extractionRefs: refs,
     createdAt: '2024-01-01T00:00:00Z',

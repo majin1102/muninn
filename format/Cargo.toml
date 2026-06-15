@@ -9,6 +9,7 @@ path = "src/lib.rs"
 
 [dependencies]
 alloc-stdlib = "=0.2.2"
+alloc-no-stdlib = "=2.0.4"
 arrow-array = "57.0.0"
 arrow-schema = "57.0.0"
 async-trait = "0.1"

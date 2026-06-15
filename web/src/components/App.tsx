@@ -54,9 +54,9 @@ export function App() {
   const [projectLoading, setProjectLoading] = useState(false);
   const [projectError, setProjectError] = useState<string | null>(null);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(() => parseRoute(window.location.hash).sessionSelectionId);
-  const [activeObservationId, setActiveObservationId] = useState<string | null>(() => parseRoute(window.location.hash).memoryId);
-  const [openObservationId, setOpenObservationId] = useState<string | null>(() => parseRoute(window.location.hash).memoryId);
-  const [openObservationRequestId, setOpenObservationRequestId] = useState(0);
+  const [activeTimelineId, setActiveTimelineId] = useState<string | null>(() => parseRoute(window.location.hash).memoryId);
+  const [openTimelineId, setOpenTimelineId] = useState<string | null>(() => parseRoute(window.location.hash).memoryId);
+  const [openTimelineRequestId, setOpenTimelineRequestId] = useState(0);
   const [focusMemoryId, setFocusMemoryId] = useState<string | null>(() => parseRoute(window.location.hash).memoryId);
   const [focusRequestId, setFocusRequestId] = useState(0);
   const [document, setDocument] = useState<MemoryDocument | null>(null);
@@ -64,7 +64,7 @@ export function App() {
   const [documentError, setDocumentError] = useState<string | null>(null);
   const contentShellRef = useRef<HTMLDivElement>(null);
   const client = useMemo(() => createAppClient(apiBase, usesDemoData), [apiBase, usesDemoData]);
-  const routeTurnMemoryId = route.memoryId ? turnMemoryIdFromObservationMemoryId(route.memoryId) : null;
+  const routeTurnMemoryId = route.memoryId ? turnMemoryIdFromTimelineMemoryId(route.memoryId) : null;
   const activeTurnSession = useMemo(() => (
     routeTurnMemoryId ? findSessionForTurn(projects, routeTurnMemoryId) : null
   ), [projects, routeTurnMemoryId]);
@@ -152,18 +152,18 @@ export function App() {
   useEffect(() => {
     if (route.memoryId) {
       setSelectedSessionId(null);
-      setActiveObservationId(route.memoryId);
-      setOpenObservationId(route.memoryId);
-      setOpenObservationRequestId((current) => current + 1);
-      setFocusMemoryId(turnMemoryIdFromObservationMemoryId(route.memoryId));
+      setActiveTimelineId(route.memoryId);
+      setOpenTimelineId(route.memoryId);
+      setOpenTimelineRequestId((current) => current + 1);
+      setFocusMemoryId(turnMemoryIdFromTimelineMemoryId(route.memoryId));
       setFocusRequestId((current) => current + 1);
       return;
     }
     if (route.view === 'session' && route.sessionSelectionId) {
       setSelectedSessionId(route.sessionSelectionId);
-      setActiveObservationId(null);
-      setOpenObservationId(null);
-      setOpenObservationRequestId((current) => current + 1);
+      setActiveTimelineId(null);
+      setOpenTimelineId(null);
+      setOpenTimelineRequestId((current) => current + 1);
       setFocusMemoryId(null);
       setFocusRequestId((current) => current + 1);
       setDocument(null);
@@ -213,8 +213,7 @@ export function App() {
       updateSession(session, {
         turns: response.turns,
         segments: response.segments,
-        observations: response.observations,
-        sessionSummary: response.sessionSummary,
+        timeline: response.timeline,
         nextOffset: response.nextOffset,
         loading: false,
         loaded: true,
@@ -235,8 +234,7 @@ export function App() {
       updateSession(session, {
         turns: [...session.turns, ...response.turns],
         segments: response.segments.length > 0 ? response.segments : session.segments,
-        observations: response.observations.length > 0 ? response.observations : session.observations,
-        sessionSummary: response.sessionSummary ?? session.sessionSummary,
+        timeline: response.timeline.length > 0 ? response.timeline : session.timeline,
         nextOffset: response.nextOffset,
         loading: false,
         loaded: true,
@@ -254,8 +252,7 @@ export function App() {
 
     let turns = session.turns;
     let segments = session.segments;
-    let observations = session.observations;
-    let sessionSummary = session.sessionSummary;
+    let timeline = session.timeline;
     let nextOffset: number | null = session.nextOffset;
 
     updateSession(session, { loading: true });
@@ -265,23 +262,20 @@ export function App() {
           ...session,
           turns,
           segments,
-          observations,
-          sessionSummary,
+          timeline,
           nextOffset,
           loaded: true,
           loading: true,
         }, nextOffset);
         turns = [...turns, ...response.turns];
         segments = response.segments.length > 0 ? response.segments : segments;
-        observations = response.observations.length > 0 ? response.observations : observations;
-        sessionSummary = response.sessionSummary ?? sessionSummary;
+        timeline = response.timeline.length > 0 ? response.timeline : timeline;
         nextOffset = response.nextOffset;
       }
       updateSession(session, {
         turns,
         segments,
-        observations,
-        sessionSummary,
+        timeline,
         nextOffset,
         loading: false,
         loaded: true,
@@ -295,9 +289,9 @@ export function App() {
   function selectSession(session: ProjectSessionNode) {
     const selectionId = selectedSessionKey(session);
     setSelectedSessionId(selectionId);
-    setActiveObservationId(null);
-    setOpenObservationId(null);
-    setOpenObservationRequestId((current) => current + 1);
+    setActiveTimelineId(null);
+    setOpenTimelineId(null);
+    setOpenTimelineRequestId((current) => current + 1);
     setFocusMemoryId(null);
     setFocusRequestId((current) => current + 1);
     setDocument(null);
@@ -319,20 +313,20 @@ export function App() {
     })));
   }
 
-  function openObservationFromTree(memoryId: string, session: ProjectSessionNode) {
+  function openTimelineFromTree(memoryId: string, session: ProjectSessionNode) {
     setSelectedSessionId(selectedSessionKey(session));
-    setActiveObservationId(memoryId);
-    setOpenObservationId(memoryId);
-    setOpenObservationRequestId((current) => current + 1);
-    setFocusMemoryId(turnMemoryIdFromObservationMemoryId(memoryId));
+    setActiveTimelineId(memoryId);
+    setOpenTimelineId(memoryId);
+    setOpenTimelineRequestId((current) => current + 1);
+    setFocusMemoryId(turnMemoryIdFromTimelineMemoryId(memoryId));
     setFocusRequestId((current) => current + 1);
     window.location.hash = `#/session/${encodeURIComponent(memoryId)}`;
   }
 
-  function openObservationInPane(memoryId: string) {
-    setActiveObservationId(memoryId);
-    setOpenObservationId(memoryId);
-    setOpenObservationRequestId((current) => current + 1);
+  function openTimelineInPane(memoryId: string) {
+    setActiveTimelineId(memoryId);
+    setOpenTimelineId(memoryId);
+    setOpenTimelineRequestId((current) => current + 1);
   }
 
   function locateConversationTurn(memoryId: string) {
@@ -461,7 +455,7 @@ export function App() {
                 <SessionTree
                   projects={projects}
                   selectedSessionId={activeSessionSelectionId}
-                  activeMemoryId={activeObservationId}
+                  activeMemoryId={activeTimelineId}
                   canExpandSessions={sessionTreeCanExpand(sessionContentMode)}
                   loading={projectLoading}
                   error={projectError}
@@ -471,7 +465,7 @@ export function App() {
                       void openSession(session);
                     }
                   }}
-                  onOpenTurn={openObservationFromTree}
+                  onOpenTurn={openTimelineFromTree}
                   onLoadMore={loadMore}
                   onImportSessions={() => {
                     window.location.hash = '#/settings?mode=import&pipeline=extractor';
@@ -490,16 +484,16 @@ export function App() {
                 <SessionContentSplit
                   session={activeSession}
                   document={document}
-                  activeObservationId={activeObservationId}
-                  openObservationId={openObservationId}
-                  openObservationRequestId={openObservationRequestId}
+                  activeTimelineId={activeTimelineId}
+                  openTimelineId={openTimelineId}
+                  openTimelineRequestId={openTimelineRequestId}
                   focusMemoryId={focusMemoryId}
                   focusRequestId={focusRequestId}
                   sessionTurns={activeSessionTurns}
                   mode={sessionContentMode}
                   onModeChange={setSessionContentMode}
-                  onActiveObservationChange={setActiveObservationId}
-                  onOpenObservation={openObservationInPane}
+                  onActiveTimelineChange={setActiveTimelineId}
+                  onOpenTimeline={openTimelineInPane}
                   onLocateConversationTurn={locateConversationTurn}
                   canLoadMoreAfter={Boolean(activeSession && activeSession.nextOffset !== null)}
                   loadingMoreAfter={activeSession?.loading ?? false}
@@ -663,6 +657,7 @@ function parseRoute(hash: string): RouteState {
   };
 }
 
-function turnMemoryIdFromObservationMemoryId(memoryId: string): string {
-  return memoryId.split('~observation:')[0] ?? memoryId;
+function turnMemoryIdFromTimelineMemoryId(memoryId: string): string {
+  const timelineIndex = memoryId.indexOf('~timeline');
+  return timelineIndex >= 0 ? memoryId.slice(0, timelineIndex) : memoryId;
 }

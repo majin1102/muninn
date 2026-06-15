@@ -77,6 +77,81 @@ export class Session {
     });
   }
 
+  async acceptBatch(contents: TurnContent[], observingEpoch: number): Promise<AcceptedTurn[]> {
+    if (contents.length === 0) {
+      return [];
+    }
+    return this.runAcceptExclusive(async () => {
+      this.touch();
+      const recentTurns = this.recentTurns.map((turn) => ({ ...turn }));
+      const pendingTurns: Turn[] = [];
+      const accepted: Array<{ pendingIndex?: number }> = [];
+
+      for (const content of contents) {
+        const sessionId = normalizeSessionId(content.sessionId);
+        validateTurnContent(this.config, content, sessionId);
+        let deduped = false;
+        while (true) {
+          const duplicate = this.findRecentDuplicate(content, recentTurns);
+          if (!duplicate) {
+            break;
+          }
+          if (duplicate.turnId.startsWith('batch-pending:')) {
+            accepted.push({});
+            deduped = true;
+            break;
+          }
+          const persisted = await this.client.turnTable.getTurn(duplicate.turnId);
+          if (persisted) {
+            accepted.push({});
+            deduped = true;
+            break;
+          }
+          this.removeRecentTurn(duplicate.turnId);
+          removeRecentTurn(recentTurns, duplicate.turnId);
+        }
+        if (deduped) {
+          continue;
+        }
+        const turn = buildRawTurn(
+          this.config,
+          content,
+          sessionId,
+          resolveTurnOwnership(content),
+          observingEpoch,
+        );
+        const pendingIndex = pendingTurns.push(turn) - 1;
+        accepted.push({ pendingIndex });
+        rememberRecentTurn(recentTurns, recentTurnFromTurn(turn, `batch-pending:${pendingIndex}`));
+      }
+
+      const rows = pendingTurns.length > 0
+        ? await this.client.turnTable.insert({
+          turns: pendingTurns.map(serializeTurn),
+        })
+        : [];
+      const persisted = rows.map(readTurn);
+      const result = accepted.map((acceptedTurn): AcceptedTurn => {
+        if (acceptedTurn.pendingIndex === undefined) {
+          return {
+            turn: null,
+            deduped: true,
+          };
+        }
+        const turn = persisted[acceptedTurn.pendingIndex] ?? null;
+        if (turn) {
+          this.rememberTurn(turn);
+        }
+        return {
+          turn,
+          deduped: false,
+        };
+      });
+      this.touch();
+      return result;
+    });
+  }
+
   touch(): void {
     this.lastUsedAt = Date.now();
   }
@@ -115,21 +190,19 @@ export class Session {
 
   rememberTurn(turn: Turn): void {
     this.touch();
-    this.recentTurns.push({
-      turnId: turn.turnId,
-      updatedAt: turn.updatedAt,
-      prompt: turn.prompt ?? '',
-      response: turn.response ?? '',
-    });
+    this.recentTurns.push(recentTurnFromTurn(turn, turn.turnId));
     if (this.recentTurns.length > RECENT_TURN_WINDOW) {
       this.recentTurns.splice(0, this.recentTurns.length - RECENT_TURN_WINDOW);
     }
   }
 
-  private findRecentDuplicate(turn: Pick<TurnContent, 'prompt' | 'response'>): RecentTurn | undefined {
-    for (let index = this.recentTurns.length - 1; index >= 0; index -= 1) {
-      const recentTurn = this.recentTurns[index];
-      if (samePromptResponse(recentTurn, turn)) {
+  private findRecentDuplicate(
+    turn: Pick<TurnContent, 'turnSequence'>,
+    recentTurns = this.recentTurns,
+  ): RecentTurn | undefined {
+    for (let index = recentTurns.length - 1; index >= 0; index -= 1) {
+      const recentTurn = recentTurns[index];
+      if (sameTurnSequence(recentTurn, turn)) {
         return recentTurn;
       }
     }
@@ -157,6 +230,30 @@ async function buildTurn(
     summary: content.summary,
     response: content.response,
   });
+  return buildStoredTurn(config, content, sessionId, ownership, observingEpoch, summary);
+}
+
+function buildRawTurn(
+  config: { sessionId?: string; agent: string; observer: string },
+  content: TurnContent,
+  sessionId: string | undefined,
+  ownership: { project: string; cwd: string },
+  observingEpoch: number,
+): Turn {
+  return buildStoredTurn(config, content, sessionId, ownership, observingEpoch, {
+    title: content.title ?? null,
+    summary: content.summary ?? null,
+  });
+}
+
+function buildStoredTurn(
+  config: { sessionId?: string; agent: string; observer: string },
+  content: TurnContent,
+  sessionId: string | undefined,
+  ownership: { project: string; cwd: string },
+  observingEpoch: number,
+  summary: { title?: string | null; summary?: string | null },
+): Turn {
   const now = new Date().toISOString();
   const createdAt = content.createdAt ?? content.updatedAt ?? now;
   const updatedAt = content.updatedAt ?? createdAt;
@@ -165,6 +262,7 @@ async function buildTurn(
     createdAt,
     updatedAt,
     sessionId: sessionId ?? null,
+    turnSequence: content.turnSequence ?? null,
     project: ownership.project,
     cwd: ownership.cwd,
     agent: config.agent,
@@ -215,6 +313,9 @@ function validateTurnContent(
   if (content.metadata !== undefined && !isMetadataObject(content.metadata)) {
     throw new Error('turn.metadata must be an object or null');
   }
+  if (content.turnSequence !== undefined && turnSequence(content.turnSequence) === undefined) {
+    throw new Error('turn.turnSequence must be a non-negative safe integer');
+  }
   if (content.createdAt !== undefined && !isTimestamp(content.createdAt)) {
     throw new Error('turn.createdAt must be an ISO timestamp');
   }
@@ -253,12 +354,46 @@ function isTimestamp(value: unknown): value is string {
   return typeof value === 'string' && !Number.isNaN(Date.parse(value));
 }
 
-function samePromptResponse(
-  left: Pick<RecentTurn, 'prompt' | 'response'>,
-  right: Pick<TurnContent, 'prompt' | 'response'>,
+function sameTurnSequence(
+  left: Pick<RecentTurn, 'turnSequence'>,
+  right: Pick<TurnContent, 'turnSequence'>,
 ): boolean {
-  return left.prompt === right.prompt
-    && left.response === right.response;
+  const leftSequence = turnSequence(left.turnSequence);
+  const rightSequence = turnSequence(right.turnSequence);
+  return leftSequence !== undefined
+    && rightSequence !== undefined
+    && leftSequence === rightSequence;
+}
+
+function turnSequence(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+    ? value
+    : undefined;
+}
+
+function recentTurnFromTurn(turn: Turn, turnId: string): RecentTurn {
+  const sequence = turnSequence(turn.turnSequence);
+  return {
+    turnId,
+    updatedAt: turn.updatedAt,
+    ...(sequence !== undefined ? { turnSequence: sequence } : {}),
+    prompt: turn.prompt ?? '',
+    response: turn.response ?? '',
+  };
+}
+
+function rememberRecentTurn(recentTurns: RecentTurn[], turn: RecentTurn): void {
+  recentTurns.push(turn);
+  if (recentTurns.length > RECENT_TURN_WINDOW) {
+    recentTurns.splice(0, recentTurns.length - RECENT_TURN_WINDOW);
+  }
+}
+
+function removeRecentTurn(recentTurns: RecentTurn[], turnId: string): void {
+  const index = recentTurns.findIndex((turn) => turn.turnId === turnId);
+  if (index >= 0) {
+    recentTurns.splice(index, 1);
+  }
 }
 
 function summarizeRecentTurn(turn: RecentTurn | undefined): string | null {

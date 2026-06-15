@@ -285,7 +285,7 @@ type CheckpointContent = {
 
 - `RecentTurn` 只用于 recent dedupe window
 - `RecentTurn` 不是完整 `SessionTurn` 缓存
-- 当前 dedupe 仍然只比较 `prompt + response`
+- 当前 dedupe 只比较同一 session 内的 `turnSequence`；缺失 `turnSequence` 的 turn 不参与 dedupe
 - checkpoint 文件路径当前按 `storage + observer.name` 分桶
 
 恢复语义：

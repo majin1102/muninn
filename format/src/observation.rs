@@ -2,9 +2,9 @@ use std::collections::HashMap;
 
 use arrow_array::{Float32Array, RecordBatch, StringArray};
 use chrono::{DateTime, Utc};
+use lance::Result;
 use lance::dataset::MergeInsertBuilder;
 use lance::dataset::{WhenMatched, WhenNotMatched};
-use lance::Result;
 use lance_index::scalar::FullTextSearchQuery;
 use object_store::path::Path;
 use serde::{Deserialize, Serialize};
@@ -14,18 +14,18 @@ use super::access::{
     LanceDataset, TableAccess, TableDescription, TableOptions, TableStats, delete_by_ids,
     describe_dataset, escape_predicate_string,
 };
-use super::codec::{global_observations_to_reader, record_batch_to_global_observations};
+use super::codec::{observations_to_reader, record_batch_to_observations};
 use crate::extraction::RecallMode;
 use crate::maintenance::{
-    GLOBAL_OBSERVATION_SEARCH_TEXT_COLUMN, cleanup_dataset, compact_dataset, ensure_global_observation_fts_index,
-    ensure_global_observation_id_index, ensure_semantic_vector_index, optimize_global_observation,
+    OBSERVATION_SEARCH_TEXT_COLUMN, cleanup_dataset, compact_dataset, ensure_observation_fts_index,
+    ensure_observation_id_index, ensure_semantic_vector_index, optimize_observation,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
-pub struct GlobalObservation {
+pub struct Observation {
     pub id: String,
-    pub global_path: String,
+    pub path: String,
     pub text: String,
     pub vector: Vec<f32>,
     pub extraction_refs: Vec<String>,
@@ -34,16 +34,16 @@ pub struct GlobalObservation {
 }
 
 #[derive(Debug, Clone)]
-pub struct GlobalObservationTable {
+pub struct ObservationTable {
     access: TableAccess,
 }
 
-impl GlobalObservationTable {
+impl ObservationTable {
     pub fn new(options: TableOptions) -> Self {
         Self {
             access: TableAccess::new(
                 options,
-                Path::parse("global_observation").expect("valid global observation table path"),
+                Path::parse("observation").expect("valid observation table path"),
             ),
         }
     }
@@ -56,7 +56,7 @@ impl GlobalObservationTable {
         if let Some(dataset) = self.access.try_open().await? {
             return Ok(dataset);
         }
-        self.access.write(global_observations_to_reader(Vec::new())?).await
+        self.access.write(observations_to_reader(Vec::new())?).await
     }
 
     pub async fn stats(&self) -> Result<Option<TableStats>> {
@@ -75,7 +75,7 @@ impl GlobalObservationTable {
         let Some(mut dataset) = self.access.try_open().await? else {
             return Ok(false);
         };
-        optimize_global_observation(&mut dataset, merge_count).await
+        optimize_observation(&mut dataset, merge_count).await
     }
 
     pub async fn describe(&self) -> Result<Option<TableDescription>> {
@@ -89,13 +89,14 @@ impl GlobalObservationTable {
         let Some(mut dataset) = self.access.try_open().await? else {
             return Ok(false);
         };
-        let vector_created = ensure_semantic_vector_index(&mut dataset, target_partition_size).await?;
-        let fts_created = ensure_global_observation_fts_index(&mut dataset).await?;
-        let id_created = ensure_global_observation_id_index(&mut dataset).await?;
+        let vector_created =
+            ensure_semantic_vector_index(&mut dataset, target_partition_size).await?;
+        let fts_created = ensure_observation_fts_index(&mut dataset).await?;
+        let id_created = ensure_observation_id_index(&mut dataset).await?;
         Ok(vector_created || fts_created || id_created)
     }
 
-    pub async fn get(&self, ids: &[String]) -> Result<Vec<GlobalObservation>> {
+    pub async fn get(&self, ids: &[String]) -> Result<Vec<Observation>> {
         if ids.is_empty() {
             return Ok(Vec::new());
         }
@@ -116,7 +117,7 @@ impl GlobalObservationTable {
         if batch.num_rows() == 0 {
             return Ok(Vec::new());
         }
-        let rows = record_batch_to_global_observations(&batch)?;
+        let rows = record_batch_to_observations(&batch)?;
         let mut by_id = rows
             .into_iter()
             .map(|row| (row.id.clone(), row))
@@ -124,7 +125,7 @@ impl GlobalObservationTable {
         Ok(ids.iter().filter_map(|id| by_id.remove(id)).collect())
     }
 
-    pub async fn upsert(&self, rows: Vec<GlobalObservation>) -> Result<()> {
+    pub async fn upsert(&self, rows: Vec<Observation>) -> Result<()> {
         if rows.is_empty() {
             return Ok(());
         }
@@ -136,9 +137,9 @@ impl GlobalObservationTable {
                 .when_matched(WhenMatched::UpdateAll)
                 .when_not_matched(WhenNotMatched::InsertAll);
             let job = builder.try_build()?;
-            job.execute_reader(global_observations_to_reader(rows)?).await?;
+            job.execute_reader(observations_to_reader(rows)?).await?;
         } else {
-            self.access.write(global_observations_to_reader(rows)?).await?;
+            self.access.write(observations_to_reader(rows)?).await?;
         }
         Ok(())
     }
@@ -153,7 +154,7 @@ impl GlobalObservationTable {
         query_vector: &[f32],
         limit: usize,
         mode: RecallMode,
-    ) -> Result<Vec<GlobalObservation>> {
+    ) -> Result<Vec<Observation>> {
         match mode {
             RecallMode::Vector => self.nearest(query_vector, limit).await,
             RecallMode::Fts => self.full_text(query, limit).await,
@@ -161,7 +162,7 @@ impl GlobalObservationTable {
         }
     }
 
-    async fn nearest(&self, query_vector: &[f32], limit: usize) -> Result<Vec<GlobalObservation>> {
+    async fn nearest(&self, query_vector: &[f32], limit: usize) -> Result<Vec<Observation>> {
         if limit == 0 || query_vector.is_empty() {
             return Ok(Vec::new());
         }
@@ -176,7 +177,7 @@ impl GlobalObservationTable {
                 if batch.num_rows() == 0 {
                     return Ok(Vec::new());
                 }
-                return record_batch_to_global_observations(&batch);
+                return record_batch_to_observations(&batch);
             }
         }
 
@@ -184,7 +185,7 @@ impl GlobalObservationTable {
         if batch.num_rows() == 0 {
             return Ok(Vec::new());
         }
-        let mut rows = record_batch_to_global_observations(&batch)?;
+        let mut rows = record_batch_to_observations(&batch)?;
         rows.sort_by(|left, right| {
             vector_score(query_vector.values(), &right.vector)
                 .partial_cmp(&vector_score(query_vector.values(), &left.vector))
@@ -195,7 +196,7 @@ impl GlobalObservationTable {
         Ok(rows)
     }
 
-    async fn full_text(&self, query: &str, limit: usize) -> Result<Vec<GlobalObservation>> {
+    async fn full_text(&self, query: &str, limit: usize) -> Result<Vec<Observation>> {
         if limit == 0 || query.trim().is_empty() {
             return Ok(Vec::new());
         }
@@ -204,7 +205,7 @@ impl GlobalObservationTable {
         };
         let normalized_query = query.trim();
         let query = FullTextSearchQuery::new(normalized_query.to_string())
-            .with_column(GLOBAL_OBSERVATION_SEARCH_TEXT_COLUMN.to_string())?
+            .with_column(OBSERVATION_SEARCH_TEXT_COLUMN.to_string())?
             .limit(Some(limit as i64));
         if let Ok(scanner) = dataset.scan().full_text_search(query) {
             if let Ok(batch) = scanner.try_into_batch().await {
@@ -223,7 +224,7 @@ impl GlobalObservationTable {
         query: &str,
         query_vector: &[f32],
         limit: usize,
-    ) -> Result<Vec<GlobalObservation>> {
+    ) -> Result<Vec<Observation>> {
         if limit == 0 {
             return Ok(Vec::new());
         }
@@ -232,26 +233,27 @@ impl GlobalObservationTable {
         let fts_rows = self.full_text(query, candidate_limit).await?;
         Ok(merge_ranked(vector_rows, fts_rows, limit))
     }
-
 }
 
 fn batch_ids(batch: &RecordBatch) -> Result<Vec<String>> {
     let ids = batch
         .column_by_name("id")
-        .ok_or_else(|| lance::Error::invalid_input("global observation search result missing id column"))?
+        .ok_or_else(|| lance::Error::invalid_input("observation search result missing id column"))?
         .as_any()
         .downcast_ref::<StringArray>()
-        .ok_or_else(|| lance::Error::invalid_input("global observation search id column must be Utf8"))?;
-    Ok((0..batch.num_rows()).map(|index| ids.value(index).to_string()).collect())
+        .ok_or_else(|| lance::Error::invalid_input("observation search id column must be Utf8"))?;
+    Ok((0..batch.num_rows())
+        .map(|index| ids.value(index).to_string())
+        .collect())
 }
 
 fn merge_ranked(
-    vector_rows: Vec<GlobalObservation>,
-    fts_rows: Vec<GlobalObservation>,
+    vector_rows: Vec<Observation>,
+    fts_rows: Vec<Observation>,
     limit: usize,
-) -> Vec<GlobalObservation> {
+) -> Vec<Observation> {
     let mut scores: HashMap<String, f32> = HashMap::new();
-    let mut rows: HashMap<String, GlobalObservation> = HashMap::new();
+    let mut rows: HashMap<String, Observation> = HashMap::new();
 
     for (rank, row) in vector_rows.into_iter().enumerate() {
         add_rank(&mut scores, &mut rows, rank, row);
@@ -275,9 +277,9 @@ fn merge_ranked(
 
 fn add_rank(
     scores: &mut HashMap<String, f32>,
-    rows: &mut HashMap<String, GlobalObservation>,
+    rows: &mut HashMap<String, Observation>,
     rank: usize,
-    row: GlobalObservation,
+    row: Observation,
 ) {
     let score = 1.0_f32 / (60.0 + rank as f32 + 1.0);
     *scores.entry(row.id.clone()).or_default() += score;
@@ -288,7 +290,7 @@ async fn fallback_full_text(
     dataset: &LanceDataset,
     query: &str,
     limit: usize,
-) -> Result<Vec<GlobalObservation>> {
+) -> Result<Vec<Observation>> {
     let tokens = query_tokens(query);
     if tokens.is_empty() {
         return Ok(Vec::new());
@@ -297,7 +299,7 @@ async fn fallback_full_text(
     if batch.num_rows() == 0 {
         return Ok(Vec::new());
     }
-    let mut scored = record_batch_to_global_observations(&batch)?
+    let mut scored = record_batch_to_observations(&batch)?
         .into_iter()
         .filter_map(|row| {
             let score = lexical_score(&row, &tokens);
@@ -313,9 +315,12 @@ async fn fallback_full_text(
     Ok(scored.into_iter().map(|(_, row)| row).collect())
 }
 
-fn lexical_score(row: &GlobalObservation, tokens: &[String]) -> usize {
+fn lexical_score(row: &Observation, tokens: &[String]) -> usize {
     let haystack = normalize_search_text(&row.text);
-    tokens.iter().filter(|token| haystack.contains(token.as_str())).count()
+    tokens
+        .iter()
+        .filter(|token| haystack.contains(token.as_str()))
+        .count()
 }
 
 fn query_tokens(query: &str) -> Vec<String> {
@@ -351,9 +356,32 @@ fn normalize_token(token: &str) -> &str {
 fn is_stopword(token: &str) -> bool {
     matches!(
         token,
-        "the" | "and" | "for" | "with" | "that" | "this" | "what" | "when" | "where" | "who"
-            | "why" | "how" | "did" | "does" | "was" | "were" | "are" | "about" | "from"
-            | "into" | "after" | "before" | "their" | "there" | "then" | "than"
+        "the"
+            | "and"
+            | "for"
+            | "with"
+            | "that"
+            | "this"
+            | "what"
+            | "when"
+            | "where"
+            | "who"
+            | "why"
+            | "how"
+            | "did"
+            | "does"
+            | "was"
+            | "were"
+            | "are"
+            | "about"
+            | "from"
+            | "into"
+            | "after"
+            | "before"
+            | "their"
+            | "there"
+            | "then"
+            | "than"
     )
 }
 
@@ -379,11 +407,11 @@ fn vector_score(query: &[f32], row: &[f32]) -> f32 {
 mod tests {
     use chrono::Utc;
 
-    use super::{GlobalObservation, GlobalObservationTable};
+    use super::{Observation, ObservationTable};
     use crate::{TableOptions, config::llm_test_env_guard};
 
     #[tokio::test]
-    async fn global_observation_table_upserts_and_deletes_rows() {
+    async fn observation_table_upserts_and_deletes_rows() {
         let _guard = llm_test_env_guard();
         let dir = tempfile::tempdir().unwrap();
         let home = dir.path().join("muninn");
@@ -413,13 +441,13 @@ mod tests {
             .to_string(),
         )
         .unwrap();
-        let table = GlobalObservationTable::new(TableOptions::local(dir.path()).unwrap());
+        let table = ObservationTable::new(TableOptions::local(dir.path()).unwrap());
         let now = Utc::now();
 
         table
-            .upsert(vec![GlobalObservation {
+            .upsert(vec![Observation {
                 id: "one".to_string(),
-                global_path: "Caroline".to_string(),
+                path: "Caroline".to_string(),
                 text: "first".to_string(),
                 vector: vec![0.1, 0.2, 0.3, 0.4],
                 extraction_refs: vec!["extraction:a".to_string()],
@@ -430,9 +458,9 @@ mod tests {
             .unwrap();
 
         table
-            .upsert(vec![GlobalObservation {
+            .upsert(vec![Observation {
                 id: "one".to_string(),
-                global_path: "Caroline".to_string(),
+                path: "Caroline".to_string(),
                 text: "second".to_string(),
                 vector: vec![0.4, 0.3, 0.2, 0.1],
                 extraction_refs: vec!["extraction:b".to_string()],
@@ -442,9 +470,9 @@ mod tests {
             .await
             .unwrap();
         table
-            .upsert(vec![GlobalObservation {
+            .upsert(vec![Observation {
                 id: "two".to_string(),
-                global_path: "Melanie".to_string(),
+                path: "Melanie".to_string(),
                 text: "third".to_string(),
                 vector: vec![0.0, 0.0, 0.0, 1.0],
                 extraction_refs: vec!["extraction:c".to_string()],

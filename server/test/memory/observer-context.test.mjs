@@ -15,8 +15,8 @@ Source extractions:
 `, new Set(['ext-1', 'ext-2']));
 
   assert.equal(parsed.title, 'Caroline');
-  assert.equal(parsed.sections[0].globalPath, 'Caroline / Plans');
-  assert.equal(parsed.sections[0].children[0].globalPath, 'Caroline / Plans / Summer plans');
+  assert.equal(parsed.sections[0].path, 'Caroline / Plans');
+  assert.equal(parsed.sections[0].children[0].path, 'Caroline / Plans / Summer plans');
   assert.deepEqual(parsed.sections[0].children[0].sourceRefs, ['ext-1', 'ext-2']);
   assert.deepEqual(parsed.sections[0].children[0].expandRefs, []);
   assert.match(parsed.sections[0].children[0].body, /Caroline researched adoption agencies/);
@@ -110,7 +110,7 @@ Source extractions:
 - [ext-1]
 `, new Set(['ext-1']));
 
-  assert.equal(parsed.sections[0].globalPath, 'Caroline / Plans');
+  assert.equal(parsed.sections[0].path, 'Caroline / Plans');
   assert.deepEqual(parsed.sections[0].sourceRefs, ['ext-1']);
 });
 
@@ -154,7 +154,7 @@ Source extractions:
 
   assert.equal(parsed.sections[0].children[0].children[0].level, 4);
   assert.equal(
-    parsed.sections[0].children[0].children[0].globalPath,
+    parsed.sections[0].children[0].children[0].path,
     'Caroline / Support / Friends / Long-term friends',
   );
 
@@ -179,7 +179,7 @@ Source extractions:
 `, new Set(['ext-1']));
 
   assert.equal(parsed.title, '/workspace/AC/DC');
-  assert.equal(parsed.sections[0].globalPath, '/workspace/AC/DC / Preferences');
+  assert.equal(parsed.sections[0].path, '/workspace/AC/DC / Preferences');
 });
 
 test('observer document parser rejects duplicate observing paths', () => {

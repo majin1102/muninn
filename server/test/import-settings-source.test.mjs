@@ -56,14 +56,16 @@ test('project import registers projects without importing sessions', async () =>
   assert.doesNotMatch(pickerSource, /sourcePath/);
 });
 
-test('session import flushes the imported batch into extraction without finalize', async () => {
+test('session import writes turns in batch without synchronously flushing extraction', async () => {
   const importSource = await readFile(new URL('../src/web/import_core.ts', import.meta.url), 'utf8');
 
-  assert.match(importSource, /import \{[^}]*captureTurn[^}]*\} from '\.\.\/memory\/index\.js'/s);
-  assert.match(importSource, /await captureTurn\(toTurnContent/);
+  assert.match(importSource, /import \{[^}]*captureTurns[^}]*\} from '\.\.\/memory\/index\.js'/s);
+  assert.match(importSource, /const turnContents: TurnContent\[\] = \[\];/);
+  assert.match(importSource, /turnContents\.push\(toTurnContent/);
+  assert.match(importSource, /await captureTurns\(turnContents\);/);
   assert.doesNotMatch(importSource, /addMessage/);
-  assert.match(importSource, /import \{[^}]*observer[^}]*\} from '\.\.\/memory\/index\.js'/s);
-  assert.match(importSource, /if \(importedTurns > 0\) \{\s*await observer\.flushPending\(\);\s*\}/s);
+  assert.doesNotMatch(importSource, /import \{[^}]*observer[^}]*\} from '\.\.\/memory\/index\.js'/s);
+  assert.doesNotMatch(importSource, /observer\.flushPending\(\)/);
   assert.doesNotMatch(importSource, /observer\.finalize\(\)/);
 });
 
@@ -179,14 +181,16 @@ test('local import session scan is concurrency bounded', async () => {
   assert.match(claudeImportSource, /readSessionSummary: \(sourcePath\) => readClaudeSessionSummary\(sourcePath\)/);
 });
 
-test('import duplicate detection paginates existing turns', async () => {
+test('ordinary session import does not scan existing turns for duplicate detection', async () => {
   const importSource = await readFile(new URL('../src/web/import_core.ts', import.meta.url), 'utf8');
   const codexImportSource = await readFile(new URL('../src/web/codex_import.ts', import.meta.url), 'utf8');
+  const importStart = importSource.indexOf('export async function importSelectedSessions');
+  const importEnd = importSource.indexOf('export async function importProjects', importStart);
+  const ordinaryImportSource = importSource.slice(importStart, importEnd);
 
-  assert.match(importSource, /async function listAgentTurns/);
-  assert.match(importSource, /offset \+= TURN_PAGE_SIZE/);
-  assert.match(importSource, /page\.length < TURN_PAGE_SIZE/);
-  assert.doesNotMatch(importSource, /limit: 100_000/);
+  assert.doesNotMatch(importSource, /async function existingTurnSequences/);
+  assert.doesNotMatch(ordinaryImportSource, /turns\.list/);
+  assert.doesNotMatch(ordinaryImportSource, /existingTurnSequences/);
 
   assert.match(codexImportSource, /async function listCodexImportTurns/);
   assert.match(codexImportSource, /offset \+= TURN_PAGE_SIZE/);
@@ -220,6 +224,7 @@ test('ordinary import does not delete existing turns before import', async () =>
   const ordinaryImportSource = importSource.slice(importStart, importEnd);
 
   assert.match(ordinaryImportSource, /session already imported/);
-  assert.match(ordinaryImportSource, /existingSourceSequences\(adapter, session\)/);
+  assert.match(ordinaryImportSource, /firstTurnSequence/);
+  assert.doesNotMatch(ordinaryImportSource, /existingTurnSequences/);
   assert.doesNotMatch(ordinaryImportSource, /deleteExistingTurns/);
 });

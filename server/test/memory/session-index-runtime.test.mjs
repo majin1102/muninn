@@ -75,11 +75,11 @@ async function withTempMuninnHome(t) {
 
 function checkpoint(overrides = {}) {
   return {
-    schemaVersion: 7,
+    schemaVersion: 9,
     writtenAt: '2026-06-02T00:00:00.000Z',
     writerPid: 123,
     extractor: {
-      baseline: { turn: 10, session: 10, extraction: 2, global_observation: 3 },
+      baseline: { turn: 10, session: 10, extraction: 2, observation: 3 },
       committedEpoch: 5,
       nextEpoch: 6,
       recentSessions: [],
@@ -88,7 +88,7 @@ function checkpoint(overrides = {}) {
       pendingExtractionChanges: [],
     },
     observer: {
-      baseline: { globalObservationContext: 4, global_observation: 3 },
+      baseline: { observationContext: 4, observation: 3 },
       observeQueue: { cwdBuckets: [] },
       runs: [],
     },
@@ -418,7 +418,7 @@ test('sessionIndex groups entries by project agent and session id, not cwd', asy
   ]);
 });
 
-test('sessionIndex records firstTurnSequence from turn metadata', async () => {
+test('sessionIndex records firstTurnSequence from turnSequence', async () => {
   const index = new SessionIndex(null, 'default-observer');
   const fake = client({
     turns: [{
@@ -428,7 +428,7 @@ test('sessionIndex records firstTurnSequence from turn metadata', async () => {
       cwd: '/Users/Nathan/workspace/repo',
       observer: 'default-observer',
       summary: 'late summary',
-      metadata: { sourceTurnSequence: 17 },
+      turnSequence: 17,
       updatedAt: '2026-06-02T10:00:00.000Z',
     }],
     turnVersion: 9,
@@ -465,7 +465,7 @@ test('sessionIndex lowers firstTurnSequence when import fills history from zero'
       cwd: '/Users/Nathan/workspace/repo',
       observer: 'default-observer',
       summary: 'first summary',
-      metadata: { sourceTurnSequence: 0 },
+      turnSequence: 0,
       updatedAt: '2026-06-02T11:00:00.000Z',
     }],
     turnVersion: 5,
@@ -505,11 +505,11 @@ test('backend refreshSessionIndex rebuilds stale checkpoint entries from current
     sessionVersion: 12,
   });
   const backend = MuninnBackend.createForTests(fake.tables, {
-    schemaVersion: 7,
+    schemaVersion: 9,
     writtenAt: '2026-06-02T00:00:00.000Z',
     writerPid: 123,
     extractor: {
-      baseline: { turn: 10, session: 10, extraction: 0, global_observation: 0 },
+      baseline: { turn: 10, session: 10, extraction: 0, observation: 0 },
       committedEpoch: 0,
       nextEpoch: 1,
       recentSessions: [],
@@ -518,7 +518,7 @@ test('backend refreshSessionIndex rebuilds stale checkpoint entries from current
       pendingExtractionChanges: [],
     },
     observer: {
-      baseline: { globalObservationContext: 0, global_observation: 0 },
+      baseline: { observationContext: 0, observation: 0 },
       observeQueue: { cwdBuckets: [] },
       runs: [],
     },

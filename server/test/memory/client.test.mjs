@@ -179,7 +179,7 @@ function firstExtractionRef(hits) {
       ref
       && !ref.startsWith('turn:')
       && !ref.startsWith('session:')
-      && !ref.startsWith('global_observation:')
+      && !ref.startsWith('observation:')
     ) {
       return ref;
     }
@@ -438,14 +438,14 @@ test('captureTurn without sessionId is rejected', async (t) => {
   );
 });
 
-test('captureTurn dedupes identical prompt and response within the same session', async (t) => {
+test('captureTurn does not dedupe identical prompt and response without turnSequence', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(cleanupDataset(dir));
 
   process.env.MUNINN_HOME = homeDir;
   await writeMuninnConfig(configPath);
 
-  const first = await writeTurnAndGet(makeTurnContent({
+  await captureTurn(makeTurnContent({
     prompt: 'same prompt',
     response: 'same response',
     events: [
@@ -454,7 +454,7 @@ test('captureTurn dedupes identical prompt and response within the same session'
       { type: 'assistantMessage', text: 'same response' },
     ],
   }));
-  const second = await writeTurnAndGet(makeTurnContent({
+  await captureTurn(makeTurnContent({
     prompt: 'same prompt',
     response: 'same response',
     events: [
@@ -465,7 +465,44 @@ test('captureTurn dedupes identical prompt and response within the same session'
     artifacts: [{ key: 'artifact', kind: 'text', source: 'tool', content: 'value' }],
   }));
 
-  assert.equal(second.turnId, first.turnId);
+  const listed = await turns.list({
+    mode: { type: 'page', offset: 0, limit: 20 },
+    agent: 'agent-a',
+    sessionId: 'group-a',
+  });
+  const matches = listed.filter((turn) => turn.prompt === 'same prompt' && turn.response === 'same response');
+  assert.equal(matches.length, 2);
+  assert.equal(new Set(matches.map((turn) => turn.turnId)).size, 2);
+});
+
+test('captureTurn dedupes identical turnSequence within the same session', async (t) => {
+  const { dir, homeDir, configPath } = await makeDatasetUri();
+  t.after(cleanupDataset(dir));
+
+  process.env.MUNINN_HOME = homeDir;
+  await writeMuninnConfig(configPath);
+
+  const first = makeTurnContent({
+    turnSequence: 7,
+    prompt: 'sequence prompt',
+    response: 'sequence response',
+  });
+  await captureTurn(first);
+  await captureTurn(makeTurnContent({
+    turnSequence: 7,
+    prompt: 'changed sequence prompt',
+    response: 'changed sequence response',
+  }));
+
+  const listed = await turns.list({
+    mode: { type: 'page', offset: 0, limit: 20 },
+    agent: 'agent-a',
+    sessionId: 'group-a',
+  });
+  const sequenceTurns = listed.filter((turn) => turn.turnSequence === 7);
+  assert.equal(sequenceTurns.length, 1);
+  assert.equal(sequenceTurns[0].prompt, first.prompt);
+  assert.equal(sequenceTurns[0].response, first.response);
 });
 
 test('turns.list returns the recent window in chronological order, and memories.timeline covers the happy path', async (t) => {
@@ -617,12 +654,14 @@ test('checkpoint restore keeps recent turn dedupe within the same observer', asy
   const firstBackend = await MuninnBackend.create(await getNativeTables());
   try {
     await firstBackend.accept(makeTurnContent({
+      turnSequence: 0,
       prompt: 'same prompt',
       response: 'same response',
     }));
     const first = (await firstBackend.memories.listTurns({ mode: { type: 'recency', limit: 1 } }))[0];
     assert.ok(first);
     await firstBackend.accept(makeTurnContent({
+      turnSequence: 1,
       prompt: 'before checkpoint',
       response: 'before checkpoint response',
     }));
@@ -635,6 +674,7 @@ test('checkpoint restore keeps recent turn dedupe within the same observer', asy
       writerPid: process.pid,
     }, null, 2)}\n`, 'utf8');
     await firstBackend.accept(makeTurnContent({
+      turnSequence: 2,
       prompt: 'after checkpoint',
       response: 'after checkpoint response',
     }));
@@ -644,10 +684,12 @@ test('checkpoint restore keeps recent turn dedupe within the same observer', asy
     const secondBackend = await MuninnBackend.create(await getNativeTables());
     try {
       await secondBackend.accept(makeTurnContent({
+        turnSequence: 2,
         prompt: 'after checkpoint',
         response: 'after checkpoint response',
       }));
       await secondBackend.accept(makeTurnContent({
+        turnSequence: 0,
         prompt: 'same prompt',
         response: 'same response',
       }));
@@ -1171,7 +1213,7 @@ test('validateSettings rejects extraction dimension changes when the table exist
       content: '## Title\n\nextraction text\n\n## Summary\n\nextraction text\n\n## Content\n\n',
       cwd: '/workspace/project-a',
       turnRefs: ['turn:1'],
-      globalObservationPaths: [],
+      observationPaths: [],
       vector: [0.1, 0.2, 0.3, 0.4],
       createdAt: '2024-01-01T00:00:00Z',
       updatedAt: '2024-01-01T00:00:00Z',
@@ -1274,7 +1316,7 @@ test('createNativeTables returns an independent native table binding', async (t)
   assert.notStrictEqual(standalone, singleton);
   assert.notStrictEqual(standalone.turnTable, singleton.turnTable);
   assert.notStrictEqual(standalone.extractionTable, singleton.extractionTable);
-  assert.notStrictEqual(standalone.globalObservationTable, singleton.globalObservationTable);
+  assert.notStrictEqual(standalone.observationTable, singleton.observationTable);
 });
 
 test('observer.watermark reports pending turns until the observer flush completes', async (t) => {
@@ -1459,7 +1501,7 @@ test('recall returns extraction memory ids and detail renders references', async
       content: '## Title\n\nCaroline support group\n\n## Summary\n\nCaroline joined an LGBTQ support group in May 2023.\n\n## Content\n\n',
       cwd: '/workspace/project-a',
       turnRefs: ['turn:1'],
-      globalObservationPaths: [],
+      observationPaths: [],
       vector: [1, 0, 0, 0],
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),

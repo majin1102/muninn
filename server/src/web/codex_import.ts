@@ -2,7 +2,7 @@ import type { Dirent } from 'node:fs';
 import { readdir } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { captureTurn, turns } from '../memory/index.js';
+import { captureTurns, turns } from '../memory/index.js';
 import {
   CODEX_IMPORT_AGENT,
   IMPORT_ARTIFACT_KEY,
@@ -20,6 +20,7 @@ import type {
   CodexImportProjectPreview,
   CodexImportRunResponse,
   CodexImportSessionPreview,
+  TurnContent,
 } from '@muninn/common';
 import * as SessionIdentity from '@muninn/common/session-identity';
 import type { ImportAdapter } from './import_core.js';
@@ -181,6 +182,7 @@ async function importCodexSession(session: CodexSession): Promise<{ importedTurn
   let importedTurns = 0;
   let skippedTurns = 0;
   const importedMarkers = new Set<string>();
+  const turnContents: TurnContent[] = [];
   for (const [index, turn] of session.turns.entries()) {
     const marker = importMarker(session, index);
     if (importedMarkers.has(marker)) {
@@ -188,9 +190,12 @@ async function importCodexSession(session: CodexSession): Promise<{ importedTurn
       continue;
     }
 
-    await captureTurn(toTurnContent(session, turn, index));
+    turnContents.push(toTurnContent(session, turn, index));
     importedMarkers.add(marker);
     importedTurns += 1;
+  }
+  if (turnContents.length > 0) {
+    await captureTurns(turnContents);
   }
   return { importedTurns, skippedTurns };
 }

@@ -128,7 +128,7 @@ Expected behavior:
 - Validate known import agent.
 - Require `project` and `sessionId`.
 - Delete turns for that agent/project/session identity.
-- Delete extraction and global observation rows derived from those turns.
+- Delete extraction and observation rows derived from those turns.
 - Refresh the session index.
 - Invalidate session tree cache.
 - Return deleted session and turn counts.

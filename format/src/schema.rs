@@ -16,6 +16,7 @@ pub fn turn_schema() -> Schema {
             false,
         ),
         Field::new("session_id", DataType::Utf8, true),
+        Field::new("turn_sequence", DataType::Int64, true),
         Field::new("project", DataType::Utf8, false),
         Field::new("cwd", DataType::Utf8, false),
         Field::new("agent", DataType::Utf8, false),
@@ -60,7 +61,7 @@ pub fn session_schema() -> Schema {
     ])
 }
 
-pub fn global_observation_context_schema() -> Schema {
+pub fn observation_context_schema() -> Schema {
     let mut id_metadata = HashMap::new();
     id_metadata.insert(
         "lance-schema:unenforced-primary-key".to_string(),
@@ -73,7 +74,7 @@ pub fn global_observation_context_schema() -> Schema {
 
     Schema::new(vec![
         Field::new("id", DataType::Utf8, false).with_metadata(id_metadata),
-        Field::new("global_path", DataType::Utf8, false),
+        Field::new("path", DataType::Utf8, false),
         Field::new("parent_id", DataType::Utf8, true),
         Field::new("position", DataType::Int64, false),
         Field::new("content", DataType::Utf8, false),
@@ -132,7 +133,7 @@ pub fn extraction_schema(dimensions: usize) -> Schema {
             false,
         ),
         Field::new(
-            "global_observation_paths",
+            "observation_paths",
             DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
             false,
         ),
@@ -149,7 +150,7 @@ pub fn extraction_schema(dimensions: usize) -> Schema {
     ])
 }
 
-pub fn global_observation_schema(dimensions: usize) -> Schema {
+pub fn observation_schema(dimensions: usize) -> Schema {
     let mut id_metadata = HashMap::new();
     id_metadata.insert(
         "lance-schema:unenforced-primary-key".to_string(),
@@ -162,7 +163,7 @@ pub fn global_observation_schema(dimensions: usize) -> Schema {
 
     Schema::new(vec![
         Field::new("id", DataType::Utf8, false).with_metadata(id_metadata),
-        Field::new("global_path", DataType::Utf8, false),
+        Field::new("path", DataType::Utf8, false),
         Field::new("text", DataType::Utf8, false),
         Field::new(
             "vector",
@@ -206,8 +207,7 @@ mod tests {
         assert!(schema.field_with_name("importance").is_err());
         assert!(schema.field_with_name("category").is_err());
         assert!(schema.field_with_name("turn_refs").is_ok());
-        assert!(schema.field_with_name("global_observation_paths").is_ok());
-        assert!(schema.field_with_name("observation_paths").is_err());
+        assert!(schema.field_with_name("observation_paths").is_ok());
         assert!(schema.field_with_name("observed_root_anchors").is_err());
         assert!(schema.field_with_name("anchors").is_err());
         assert!(schema.field_with_name("created_at").is_ok());
@@ -223,10 +223,10 @@ mod tests {
     }
 
     #[test]
-    fn global_observation_context_schema_has_expected_fields() {
-        let schema = global_observation_context_schema();
+    fn observation_context_schema_has_expected_fields() {
+        let schema = observation_context_schema();
         assert!(schema.field_with_name("id").is_ok());
-        assert!(schema.field_with_name("global_path").is_ok());
+        assert!(schema.field_with_name("path").is_ok());
         assert!(schema.field_with_name("observing_path").is_err());
         assert!(schema.field_with_name("parent_id").is_ok());
         assert!(schema.field_with_name("position").is_ok());
@@ -239,10 +239,10 @@ mod tests {
     }
 
     #[test]
-    fn global_observation_schema_is_thin_index_row() {
-        let schema = global_observation_schema(3);
+    fn observation_schema_is_thin_index_row() {
+        let schema = observation_schema(3);
         assert!(schema.field_with_name("id").is_ok());
-        assert!(schema.field_with_name("global_path").is_ok());
+        assert!(schema.field_with_name("path").is_ok());
         assert!(schema.field_with_name("observing_path").is_err());
         assert!(schema.field_with_name("text").is_ok());
         assert!(schema.field_with_name("search_text").is_err());
@@ -259,6 +259,7 @@ mod tests {
         let schema = turn_schema();
         assert!(schema.field_with_name("project").is_ok());
         assert!(schema.field_with_name("cwd").is_ok());
+        assert!(schema.field_with_name("turn_sequence").is_ok());
         assert!(schema.field_with_name("metadata_json").is_ok());
         assert!(schema.field_with_name("events_json").is_ok());
         assert!(schema.field_with_name("tool_calls_json").is_err());
