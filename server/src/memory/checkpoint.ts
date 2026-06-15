@@ -5,8 +5,7 @@ import path from 'node:path';
 import { loadMuninnConfig, resolveDatabaseHome, resolveDatabaseName, resolveStorageTarget } from './config.js';
 import type {
   SessionSnapshot,
-  SessionFragment,
-} from './extractor/types.js';
+} from './extractor/snapshot.js';
 import type { Extraction } from './native.js';
 
 export type RecentTurn = {
@@ -106,7 +105,6 @@ export type ExtractorRun = {
   stage: ExtractorRunStage;
   inputTurnIds: string[];
   pending?: {
-    sessionFragments?: SessionFragment[];
     snapshotResults?: SessionSnapshot[];
   };
   committed: {
@@ -595,12 +593,6 @@ function parseRunPending(value: unknown): NonNullable<ExtractorRun['pending']> |
     return null;
   }
   const pending: NonNullable<ExtractorRun['pending']> = {};
-  if (value.sessionFragments != null) {
-    if (!Array.isArray(value.sessionFragments)) {
-      return null;
-    }
-    pending.sessionFragments = value.sessionFragments as SessionFragment[];
-  }
   if (value.snapshotResults != null) {
     if (!Array.isArray(value.snapshotResults)) {
       return null;

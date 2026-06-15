@@ -24,7 +24,6 @@ import extractionIndexModule from '../../dist/memory/extractor/extraction-index.
 import sessionModule from '../../dist/memory/extractor/session.js';
 import threadModule from '../../dist/memory/extractor/snapshot.js';
 import extractingModule from '../../dist/memory/llm/extracting.js';
-import sessionGatewayModule from '../../dist/memory/llm/session-gateway.js';
 import { applyExtractionChanges, applyExtractionTableChanges } from '../../dist/memory/extractor/extraction-index.js';
 import { recallMemories } from '../../dist/memory/recall/index.js';
 import { validateMemoryRecallResult } from '../../dist/memory/recall/memory-recaller.js';
@@ -34,8 +33,7 @@ const { __testing: indexTesting } = extractionIndexModule;
 const { __testing: sessionTesting } = sessionModule;
 const { __testing: threadTesting } = threadModule;
 const { __testing: extractingTesting } = extractingModule;
-const { __testing: sessionGatewayTesting } = sessionGatewayModule;
-const { createSessionMemoryThread, getPendingIndex, getPendingIndexUpTo, loadThreads, toSessionSnapshot } = threadModule;
+const { createSessionThread, getPendingIndex, getPendingIndexUpTo, loadThreads, toSessionSnapshot } = threadModule;
 const { captureTurn, observer: observerApi, shutdownCoreForTests } = core;
 const CHECKPOINT_SCHEMA_VERSION = 9;
 let defaultConfigDir = null;
@@ -726,7 +724,7 @@ function makeTurnContent(prompt, response, overrides = {}) {
   };
 }
 
-test('createSessionMemoryThread preserves complete readable title and summary text', () => {
+test('createSessionThread preserves complete readable title and summary text', () => {
   const title = 'Caroline LGBTQ support group impact and counseling career direction';
   const summary = [
     'Caroline attended an LGBTQ support group on 7 May 2023.',
@@ -735,7 +733,7 @@ test('createSessionMemoryThread preserves complete readable title and summary te
     'Melanie believes Caroline would be a strong counselor because of Caroline\'s empathy and understanding.',
   ].join(' ');
 
-  const thread = createSessionMemoryThread(
+  const thread = createSessionThread(
     'default-observer',
     title,
     summary,
@@ -1712,12 +1710,7 @@ test('checkpoint preserves session runs', async () => {
         stage: 'fittingThreads',
         inputTurnIds: ['turn:1'],
         pending: {
-          sessionFragments: [{
-            threadId: 'thread-1',
-            turnIds: ['turn:1'],
-            content: 'source content',
-            reason: 'The source continues the thread.',
-          }],
+          snapshotResults: [],
         },
         committed: { extractionIds: ['obs-1'], snapshotIds: [] },
         traceRefs: [],
@@ -1731,7 +1724,7 @@ test('checkpoint preserves session runs', async () => {
 
   const parsed = parseCheckpointFile(serializeCheckpointFile(file));
   assert.equal(parsed.extractor.runs[0].stage, 'fittingThreads');
-  assert.equal(parsed.extractor.runs[0].pending.sessionFragments[0].content, 'source content');
+  assert.deepEqual(parsed.extractor.runs[0].pending.snapshotResults, []);
   assert.deepEqual(parsed.extractor.runs[0].committed.extractionIds, ['obs-1']);
 });
 
@@ -4288,99 +4281,8 @@ test('buildExtraction surfaces extraction write failures and leaves work pending
   assert.deepEqual(getPendingIndex(threads[0]), { start: 1, end: 1 });
 });
 
-test('gateway validation accepts session fragments', () => {
-  const longContent = [
-    'Caroline described attending the LGBTQ support group yesterday and finding it powerful.',
-    'She said the transgender stories were inspiring and that she felt happy and thankful for the support.',
-    'Melanie asked what the group had done for Caroline, which was answered in a later turn.',
-    'This content needs to remain complete because the observer uses it as selected session material.',
-  ].join(' ');
-  const result = sessionGatewayTesting.validateGatewayResultForTests(
-    [{
-      threadId: 'thread-1',
-      kind: 'subject',
-      title: 'Caroline counseling and mental-health career plans',
-      summary: 'Caroline is exploring counseling and mental-health work.',
-    }],
-    [{ turnId: 'turn:1', text: 'Caroline mentions career plans.' }],
-    {
-      sessionFragments: [{
-        threadId: 'thread-1',
-        turnIds: ['turn:1'],
-        content: longContent,
-        reason: 'This content fits the existing career planning thread.',
-      }],
-    },
-  );
-
-  assert.deepEqual(result.sessionFragments, [{
-    threadId: 'thread-1',
-    turnIds: ['turn:1'],
-    content: longContent,
-    reason: 'This content fits the existing career planning thread.',
-  }]);
-  assert.ok(result.sessionFragments[0].content.length > 220);
-});
-
-test('gateway system prompt injects chat session thread definition only', () => {
-  const system = sessionGatewayTesting.buildGatewaySystemPromptForTests('chat');
-
-  assert.match(system, /Session memory thread definition/);
-  assert.match(system, /tracks one coherent subject that can develop over time/);
-  assert.match(system, /narrower than the whole conversation and more stable than a single message/);
-  assert.match(system, /updates, answers, clarifies, corrects, supports, or directly continues/);
-  assert.doesNotMatch(system, /Chat category guide/);
-  assert.doesNotMatch(system, /Category selection/);
-  assert.doesNotMatch(system, /Chat filtering/);
-});
-
-test('gateway validation rejects session fragments without reason', () => {
-  assert.throws(
-    () => sessionGatewayTesting.validateGatewayResultForTests(
-      [{
-        threadId: 'thread-1',
-        kind: 'subject',
-        title: 'Caroline counseling and mental-health career plans',
-        summary: 'Caroline is exploring counseling and mental-health work.',
-      }],
-      [{ turnId: 'turn:1', text: 'Caroline mentions career plans.' }],
-      {
-        sessionFragments: [{
-          threadId: 'thread-1',
-          turnIds: ['turn:1'],
-          content: 'Caroline mentions career plans.',
-        }],
-      },
-    ),
-    /empty reason/i,
-  );
-});
-
-test('gateway validation rejects session fragments with unknown threads', () => {
-  assert.throws(
-    () => sessionGatewayTesting.validateGatewayResultForTests(
-      [{
-        threadId: 'thread-1',
-        kind: 'subject',
-        title: 'Caroline counseling and mental-health career plans',
-        summary: 'Caroline is exploring counseling and mental-health work.',
-      }],
-      [{ turnId: 'turn:1', text: 'Caroline mentions career plans.' }],
-      {
-        sessionFragments: [{
-          threadId: 'missing-thread',
-          turnIds: ['turn:1'],
-          content: 'Caroline mentions career plans.',
-          reason: 'This content fits a missing thread.',
-        }],
-      },
-    ),
-    /unknown threadId/i,
-  );
-});
-
 test('observer validation derives extractions from titled snapshot content', () => {
-  const result = extractingTesting.validateExtractSessionMemoryResultForTests(
+  const result = extractingTesting.validateSessionExtractionResultForTests(
     snapshotContentFixture([
       '<!-- refs: [turn:13] -->',
       '### Title',
@@ -4405,7 +4307,7 @@ test('observer validation derives extractions from titled snapshot content', () 
       summary: 'Melanie painted a lake sunrise in 2022.',
     }),
     {
-      sessionMemoryContent: {
+      sessionMemory: {
         title: 'Painting',
         summary: '',
         extractions: [],
@@ -4464,7 +4366,7 @@ test('observer validation derives extractions from titled snapshot content', () 
 });
 
 test('observer validation preserves session-level signals in snapshot content', () => {
-  const result = extractingTesting.validateExtractSessionMemoryResultForTests(
+  const result = extractingTesting.validateSessionExtractionResultForTests(
     snapshotContentFixture([
       '<!-- refs: [turn:13] -->',
       '### Title',
@@ -4484,7 +4386,7 @@ test('observer validation preserves session-level signals in snapshot content', 
       ].join('\n'),
     }),
     {
-      sessionMemoryContent: {
+      sessionMemory: {
         title: 'Extractor Signals',
         summary: '',
         extractions: [],
@@ -4509,7 +4411,7 @@ test('observer validation preserves session-level signals in snapshot content', 
 
 test('snapshot patch can preserve, replace, and clear session-level signals', () => {
   const baseInput = {
-    sessionMemoryContent: {
+    sessionMemory: {
       title: 'Extractor Signals',
       summary: 'Extractor prompt design.',
       signals: '- User preference: Keep signal bullets natural.',
@@ -4523,19 +4425,19 @@ test('snapshot patch can preserve, replace, and clear session-level signals', ()
     }],
   };
 
-  const preserved = extractingTesting.validateExtractSessionMemoryResultForTests([
+  const preserved = extractingTesting.validateSessionExtractionResultForTests([
     '## Summary',
     'Extractor prompt design continues.',
   ].join('\n'), baseInput);
   assert.equal(preserved.signals, '- User preference: Keep signal bullets natural.');
 
-  const replaced = extractingTesting.validateExtractSessionMemoryResultForTests([
+  const replaced = extractingTesting.validateSessionExtractionResultForTests([
     '## Signals',
     '- Repeated requirement or correction: Signals are session-level state.',
   ].join('\n'), baseInput);
   assert.equal(replaced.signals, '- Repeated requirement or correction: Signals are session-level state.');
 
-  const cleared = extractingTesting.validateExtractSessionMemoryResultForTests([
+  const cleared = extractingTesting.validateSessionExtractionResultForTests([
     '## Signals',
     '',
   ].join('\n'), baseInput);
@@ -4543,7 +4445,7 @@ test('snapshot patch can preserve, replace, and clear session-level signals', ()
 });
 
 test('observer validation keeps independent refs per snapshot content unit', () => {
-  const result = extractingTesting.validateExtractSessionMemoryResultForTests(
+  const result = extractingTesting.validateSessionExtractionResultForTests(
     snapshotContentFixture([
       '<!-- refs: [turn:13] -->',
       '### Title',
@@ -4565,7 +4467,7 @@ test('observer validation keeps independent refs per snapshot content unit', () 
       summary: 'Session memory.',
     }),
     {
-      sessionMemoryContent: {
+      sessionMemory: {
         title: 'Session',
         summary: '',
         extractions: [],
@@ -4587,7 +4489,7 @@ test('observer validation keeps independent refs per snapshot content unit', () 
 });
 
 test('observer validation splits adjacent metadata snapshot units without separators', () => {
-  const result = extractingTesting.validateExtractSessionMemoryResultForTests(
+  const result = extractingTesting.validateSessionExtractionResultForTests(
     snapshotContentFixture([
       '<!-- refs: [turn:13] -->',
       '### Title',
@@ -4607,7 +4509,7 @@ test('observer validation splits adjacent metadata snapshot units without separa
       summary: 'Session memory.',
     }),
     {
-      sessionMemoryContent: {
+      sessionMemory: {
         title: 'Session',
         summary: '',
         extractions: [],
@@ -4648,7 +4550,7 @@ test('session extraction turn input omits turn summary when prompt and response 
 });
 
 test('observer validation accepts markdown fenced snapshot content', () => {
-  const result = extractingTesting.validateExtractSessionMemoryResultForTests(
+  const result = extractingTesting.validateSessionExtractionResultForTests(
     [
       '```markdown',
       '# Painting Memory',
@@ -4666,7 +4568,7 @@ test('observer validation accepts markdown fenced snapshot content', () => {
       '```',
     ].join('\n'),
     {
-      sessionMemoryContent: {
+      sessionMemory: {
         title: 'Painting',
         summary: '',
         extractions: [],
@@ -4686,7 +4588,7 @@ test('observer validation accepts markdown fenced snapshot content', () => {
 
 test('observer validation rejects session signals after extractions', () => {
   assert.throws(
-    () => extractingTesting.validateExtractSessionMemoryResultForTests([
+    () => extractingTesting.validateSessionExtractionResultForTests([
       '# Painting Memory',
       '',
       '## Summary',
@@ -4703,7 +4605,7 @@ test('observer validation rejects session signals after extractions', () => {
       '## Signals',
       '- User preference: Keep signals top-level.',
     ].join('\n'), {
-      sessionMemoryContent: {
+      sessionMemory: {
         title: 'Painting',
         summary: '',
         extractions: [],
@@ -4718,7 +4620,7 @@ test('observer validation rejects session signals after extractions', () => {
 
 test('snapshot patch rejects session signals after extractions', () => {
   assert.throws(
-    () => extractingTesting.validateExtractSessionMemoryResultForTests([
+    () => extractingTesting.validateSessionExtractionResultForTests([
       '## Extractions',
       '<!-- refs: [turn:13] -->',
       '### Title',
@@ -4730,7 +4632,7 @@ test('snapshot patch rejects session signals after extractions', () => {
       '## Signals',
       '- User preference: Keep signals top-level.',
     ].join('\n'), {
-      sessionMemoryContent: {
+      sessionMemory: {
         title: 'Painting',
         summary: '',
         extractions: [],
@@ -4745,10 +4647,10 @@ test('snapshot patch rejects session signals after extractions', () => {
 
 test('observer validation rejects snapshot content units without metadata', () => {
   assert.throws(
-    () => extractingTesting.validateExtractSessionMemoryResultForTests(
+    () => extractingTesting.validateSessionExtractionResultForTests(
       snapshotContentFixture('### Title\nPainting\n\n### Summary\nMelanie painted a lake sunrise in 2022.'),
       {
-        sessionMemoryContent: {
+        sessionMemory: {
           title: 'Painting',
           summary: '',
           extractions: [],
@@ -4764,10 +4666,10 @@ test('observer validation rejects snapshot content units without metadata', () =
 
 test('observer validation rejects legacy snapshot content format', () => {
   assert.throws(
-    () => extractingTesting.validateExtractSessionMemoryResultForTests(
+    () => extractingTesting.validateSessionExtractionResultForTests(
       snapshotContentFixture('<!-- categories: [Fact]; refs: [turn:13] -->\n[Entity] Melanie\n[Extraction] Melanie painted a lake sunrise in 2022.'),
       {
-        sessionMemoryContent: {
+        sessionMemory: {
           title: 'Painting',
           summary: '',
           extractions: [],
@@ -4783,10 +4685,10 @@ test('observer validation rejects legacy snapshot content format', () => {
 
 test('observer validation rejects snapshot content units without title', () => {
   assert.throws(
-    () => extractingTesting.validateExtractSessionMemoryResultForTests(
+    () => extractingTesting.validateSessionExtractionResultForTests(
       snapshotContentFixture('<!-- refs: [turn:13] -->\n### Summary\nMelanie painted a lake sunrise in 2022.'),
       {
-        sessionMemoryContent: {
+        sessionMemory: {
           title: 'Painting',
           summary: '',
           extractions: [],
@@ -4802,10 +4704,10 @@ test('observer validation rejects snapshot content units without title', () => {
 
 test('observer validation rejects unknown snapshot content refs', () => {
   assert.throws(
-    () => extractingTesting.validateExtractSessionMemoryResultForTests(
+    () => extractingTesting.validateSessionExtractionResultForTests(
       snapshotContentFixture('<!-- refs: [session:missing] -->\n### Title\nPainting\n\n### Summary\nMelanie painted a lake sunrise in 2022.'),
       {
-        sessionMemoryContent: {
+        sessionMemory: {
           title: 'Painting',
           summary: '',
           extractions: [],
@@ -4821,10 +4723,10 @@ test('observer validation rejects unknown snapshot content refs', () => {
 
 test('observer validation rejects snapshot content units without refs metadata', () => {
   assert.throws(
-    () => extractingTesting.validateExtractSessionMemoryResultForTests(
+    () => extractingTesting.validateSessionExtractionResultForTests(
       snapshotContentFixture('<!-- refs: [] -->\n### Title\nPainting\n\n### Summary\nMelanie painted a lake sunrise in 2022.'),
       {
-        sessionMemoryContent: {
+        sessionMemory: {
           title: 'Painting',
           summary: '',
           extractions: [],
@@ -4840,7 +4742,7 @@ test('observer validation rejects snapshot content units without refs metadata',
 
 test('observer validation rejects JSON output', () => {
   assert.throws(
-    () => extractingTesting.validateExtractSessionMemoryResultForTests(JSON.stringify({
+    () => extractingTesting.validateSessionExtractionResultForTests(JSON.stringify({
       title: 'Painting',
       snapshotContent: '<!-- refs: [turn:13] -->\n### Title\nPainting\n\n### Summary\nMelanie painted a lake sunrise.',
       openQuestions: [],
@@ -4852,12 +4754,12 @@ test('observer validation rejects JSON output', () => {
 });
 
 test('observer validation accepts long titles without runtime length rejection', () => {
-  const result = extractingTesting.validateExtractSessionMemoryResultForTests(
+  const result = extractingTesting.validateSessionExtractionResultForTests(
     snapshotContentFixture(
       `<!-- refs: [turn:13] -->\n### Title\n${'x'.repeat(81)}\n\n### Summary\nMelanie painted a lake sunrise in 2022.`,
     ),
     {
-      sessionMemoryContent: { title: 'Painting', summary: '', extractions: [], openQuestions: [], nextSteps: [] },
+      sessionMemory: { title: 'Painting', summary: '', extractions: [], openQuestions: [], nextSteps: [] },
       turns: [{ turnId: 'turn:13', summary: 'Melanie discussed painting.' }],
     },
   );
@@ -4866,10 +4768,10 @@ test('observer validation accepts long titles without runtime length rejection',
 
 test('observer validation rejects snapshot content units without summary', () => {
   assert.throws(
-    () => extractingTesting.validateExtractSessionMemoryResultForTests(
+    () => extractingTesting.validateSessionExtractionResultForTests(
       snapshotContentFixture('<!-- refs: [turn:13] -->\n### Title\nPainting'),
       {
-        sessionMemoryContent: {
+        sessionMemory: {
           title: 'Painting',
           summary: '',
           extractions: [],
@@ -4897,7 +4799,7 @@ test('thread session get_extraction expands visible extraction sequences only', 
 
   const requests = [];
   const result = await extractingModule.extractSessionMemory({
-    sessionMemoryContent: {
+    sessionMemory: {
       title: 'Caroline support group',
       summary: 'Caroline discussed a support group.',
       snapshotContent: [
@@ -5016,7 +4918,7 @@ test('thread session can create unrelated extraction without get_extraction', as
 
   const requests = [];
   const result = await extractingModule.extractSessionMemory({
-    sessionMemoryContent: {
+    sessionMemory: {
       title: 'Caroline support group',
       summary: 'Caroline discussed a support group.',
       snapshotContent: [
@@ -5086,7 +4988,7 @@ test('thread session requires get_extraction before updating an existing sequenc
 
   const requests = [];
   const result = await extractingModule.extractSessionMemory({
-    sessionMemoryContent: {
+    sessionMemory: {
       title: 'Caroline support group',
       summary: 'Caroline discussed a support group.',
       snapshotContent: '',
@@ -5164,7 +5066,7 @@ test('thread session allows at most five get_extraction calls', async (t) => {
   let calls = 0;
   await assert.rejects(
     extractingModule.extractSessionMemory({
-      sessionMemoryContent: {
+      sessionMemory: {
         title: 'Caroline support group',
         summary: 'Caroline discussed a support group.',
         extractions: [{
@@ -5210,7 +5112,7 @@ test('thread session omits generated default session title from memory input', a
 
   const requests = [];
   await extractingModule.extractSessionMemory({
-    sessionMemoryContent: {
+    sessionMemory: {
       title: 'Session group-a',
       summary: 'Default session memory thread for session group-a.',
       snapshotContent: '',
@@ -5259,7 +5161,7 @@ test('thread session traces invalid markdown attempts without JSON retry instruc
 
   const requests = [];
   const result = await extractingModule.extractSessionMemory({
-    sessionMemoryContent: {
+    sessionMemory: {
       title: 'Caroline support group',
       summary: '',
       extractions: [],
@@ -5323,7 +5225,7 @@ test('thread session omits default session summary from memory input', async (t)
 
   const requests = [];
   await extractingModule.extractSessionMemory({
-    sessionMemoryContent: {
+    sessionMemory: {
       title: 'Session locomo',
       summary: 'Default session thread for session locomo:conv-26:session_1.',
       extractions: [],
@@ -5371,7 +5273,7 @@ test('thread session inlines chat memory categories', async (t) => {
 
   const requests = [];
   await extractingModule.extractSessionMemory({
-    sessionMemoryContent: {
+    sessionMemory: {
       title: 'Caroline support group',
       summary: 'Caroline discussed a support group.',
       extractions: [],
@@ -5414,7 +5316,7 @@ test('thread session inlines chat memory categories', async (t) => {
 });
 
 test('session snapshots keep complete cumulative context refs', () => {
-  const thread = createSessionMemoryThread(
+  const thread = createSessionThread(
     'default-observer',
     'Career',
     'Career thread',
@@ -5470,7 +5372,7 @@ test('session snapshots keep complete cumulative context refs', () => {
 });
 
 test('session context refs update duplicate turn summaries without duplicates', () => {
-  const thread = createSessionMemoryThread(
+  const thread = createSessionThread(
     'default-observer',
     'Career',
     'Career thread',
@@ -5510,7 +5412,7 @@ test('session context refs update duplicate turn summaries without duplicates', 
 });
 
 test('session snapshot persists markdown content with parsed title and summary', () => {
-  const thread = createSessionMemoryThread(
+  const thread = createSessionThread(
     'default-observer',
     'Draft title',
     'Draft summary',
@@ -5562,7 +5464,7 @@ test('session snapshot persists markdown content with parsed title and summary',
 
 test('extractSessionThread passes raw turns to observer', async () => {
   const now = '2026-01-01T00:00:00.000Z';
-  const thread = createSessionMemoryThread(
+  const thread = createSessionThread(
     'default-observer',
     'Session locomo',
     'Default session thread for session locomo.',
@@ -5574,7 +5476,7 @@ test('extractSessionThread passes raw turns to observer', async () => {
     { agent: 'Melanie', project: 'locomo', cwd: '/workspace/locomo' },
   );
   const extractionInputs = [];
-  const extractSessionMemoryImpl = async (input) => {
+  const sessionExtractionImpl = async (input) => {
     extractionInputs.push(input);
     return {
       title: 'Painting',
@@ -5620,7 +5522,7 @@ test('extractSessionThread passes raw turns to observer', async () => {
       extractionEpoch: 2,
     }],
     extractionEpoch: 2,
-    extractSessionMemoryImpl,
+    sessionExtractionImpl,
   });
 
   assert.deepEqual(extractionInputs[0].turns, [{
@@ -5635,70 +5537,9 @@ test('extractSessionThread passes raw turns to observer', async () => {
   }]);
 });
 
-test('gateway input includes thread kind and prompt plus response turn text', () => {
-  const thread = createSessionMemoryThread(
-    'default-observer',
-    'Career',
-    'Career thread',
-    [],
-    1,
-    '2026-01-01T00:00:00.000Z',
-  );
-  thread.snapshots.push({
-    project: 'locomo',
-    cwd: '/workspace/locomo',
-    agent: 'Melanie',
-    snapshotContent: '',
-    extractions: [],
-    contextRefs: [
-      { turnId: 'turn:10', summary: 'Caroline attended a LGBTQ support group.' },
-      { turnId: 'turn:11', summary: 'Caroline is considering counseling work.' },
-      { turnId: 'turn:12', summary: 'Melanie encouraged Caroline to pursue counseling.' },
-    ],
-    openQuestions: [],
-    nextSteps: [],
-    extractionChanges: [],
-  });
-
-  const turns = sessionGatewayTesting.gatewayTurnsForTests([{
-    turnId: 'turn:12',
-    createdAt: '2026-01-01T00:00:00.000Z',
-    updatedAt: '2026-01-01T00:00:00.000Z',
-    sessionId: 'locomo',
-    agent: 'Melanie',
-    observer: 'default-observer',
-    summary: 'Melanie encouraged Caroline.',
-    prompt: 'Melanie encouraged Caroline.',
-    response: 'placeholder',
-    extractionEpoch: 2,
-    previousTurnSummary: 'Caroline said she is keen on counseling or mental health.',
-  }]);
-  assert.deepEqual(turns[0], {
-    turnId: 'turn:12',
-    text: 'Prompt:\nMelanie encouraged Caroline.\n\nResponse:\nplaceholder',
-  });
-
-  const responseOnlyTurns = sessionGatewayTesting.gatewayTurnsForTests([{
-    turnId: 'turn:13',
-    createdAt: '2026-01-01T00:00:00.000Z',
-    updatedAt: '2026-01-01T00:00:00.000Z',
-    sessionId: 'locomo',
-    agent: 'Melanie',
-    observer: 'default-observer',
-    summary: 'Melanie talked about camping.',
-    prompt: 'Melanie talked about camping.',
-    response: 'Caroline researched adoption agencies.',
-    extractionEpoch: 2,
-  }]);
-  assert.equal(
-    responseOnlyTurns[0].text,
-    'Prompt:\nMelanie talked about camping.\n\nResponse:\nCaroline researched adoption agencies.',
-  );
-});
-
 test('extracted turns without extractor context refs are not persisted as references', async () => {
   const now = '2026-01-01T00:00:00.000Z';
-  const thread = createSessionMemoryThread(
+  const thread = createSessionThread(
     'default-observer',
     'Session locomo',
     'Default session thread for session locomo.',
@@ -5709,7 +5550,7 @@ test('extracted turns without extractor context refs are not persisted as refere
     'locomo',
     { agent: 'Melanie', project: 'locomo', cwd: '/workspace/locomo' },
   );
-  const extractSessionMemoryImpl = async () => ({
+  const sessionExtractionImpl = async () => ({
     title: 'Career',
     snapshotContent: '',
     extractions: [],
@@ -5736,7 +5577,7 @@ test('extracted turns without extractor context refs are not persisted as refere
       extractionEpoch: 2,
     }],
     extractionEpoch: 2,
-    extractSessionMemoryImpl,
+    sessionExtractionImpl,
   });
 
   assert.deepEqual(thread.snapshots.at(-1).contextRefs, []);
@@ -5745,7 +5586,7 @@ test('extracted turns without extractor context refs are not persisted as refere
 
 test('raw-turn session only updates the session thread', async () => {
   const now = '2026-01-01T00:00:00.000Z';
-  const thread = createSessionMemoryThread(
+  const thread = createSessionThread(
     'default-observer',
     'Session locomo',
     'Default session thread for session locomo.',
@@ -5758,7 +5599,7 @@ test('raw-turn session only updates the session thread', async () => {
   );
   const threads = [thread];
   const extractionInputs = [];
-  const extractSessionMemoryImpl = async (input) => {
+  const sessionExtractionImpl = async (input) => {
     extractionInputs.push(input);
     return {
       title: 'Melanie lake sunrise painting and creative outlet',
@@ -5804,7 +5645,7 @@ test('raw-turn session only updates the session thread', async () => {
       extractionEpoch: 2,
     }],
     extractionEpoch: 2,
-    extractSessionMemoryImpl,
+    sessionExtractionImpl,
   });
 
   assert.equal(threads.length, 1);
@@ -5827,10 +5668,10 @@ test('extractEpoch groups mixed session turns before session', async () => {
       },
     },
   };
-  const extractSessionMemoryImpl = async (input) => {
+  const sessionExtractionImpl = async (input) => {
     extractionInputs.push(input);
     return {
-      title: input.sessionMemoryContent.title,
+      title: input.sessionMemory.title,
       snapshotContent: '',
       extractions: [],
       openQuestions: [],
@@ -5855,7 +5696,7 @@ test('extractEpoch groups mixed session turns before session', async () => {
       epoch: 2,
       turns: [groupA1, groupB1, groupA2],
     },
-    extractSessionMemoryImpl,
+    sessionExtractionImpl,
   });
 
   assert.equal(extractionInputs.length, 2);
@@ -5877,10 +5718,10 @@ test('extractEpoch routes missing sessionId turns to default session thread', as
       })),
     },
   };
-  const extractSessionMemoryImpl = async (input) => {
+  const sessionExtractionImpl = async (input) => {
     extractionInputs.push(input);
     return {
-      title: input.sessionMemoryContent.title,
+      title: input.sessionMemory.title,
       snapshotContent: '',
       extractions: [],
       openQuestions: [],
@@ -5904,7 +5745,7 @@ test('extractEpoch routes missing sessionId turns to default session thread', as
         { ...makeExtractableTurn('turn:blank-1', 2, 'blank-1'), sessionId: '   ' },
       ],
     },
-    extractSessionMemoryImpl,
+    sessionExtractionImpl,
   });
 
   assert.equal(extractionInputs.length, 1);
@@ -5915,9 +5756,9 @@ test('extractEpoch routes missing sessionId turns to default session thread', as
 
 test('extractSessionThread rejects mixed session turns', async () => {
   const now = '2026-01-01T00:00:00.000Z';
-  const thread = createSessionMemoryThread('default-observer', 'Session group-a', 'Default session thread for session group-a.', [], 1, now, 'session', 'group-a');
-  const extractSessionMemoryImpl = async () => {
-    throw new Error('extractSessionMemoryImpl should not be called for mixed session turns');
+  const thread = createSessionThread('default-observer', 'Session group-a', 'Default session thread for session group-a.', [], 1, now, 'session', 'group-a');
+  const sessionExtractionImpl = async () => {
+    throw new Error('sessionExtractionImpl should not be called for mixed session turns');
   };
 
   await assert.rejects(
@@ -5928,7 +5769,7 @@ test('extractSessionThread rejects mixed session turns', async () => {
         { ...makeExtractableTurn('session:b1', 2, 'b1'), sessionId: 'group-b' },
       ],
       extractionEpoch: 2,
-      extractSessionMemoryImpl,
+      sessionExtractionImpl,
     }),
     /single session/i,
   );

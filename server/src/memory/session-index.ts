@@ -1,7 +1,7 @@
 import type { NativeTables } from './native.js';
 import type { Turn } from './backend.js';
 import type { SessionIndexCheckpoint, SessionIndexEntry } from './checkpoint.js';
-import type { SessionSnapshot } from './extractor/types.js';
+import type { SessionSnapshot } from './extractor/snapshot.js';
 import { sessionIdentityKey } from '@muninn/common/session-identity';
 import { readTurn } from './turn/types.js';
 

@@ -49,7 +49,6 @@ type ExtractorConfigRecord = {
   continuityHints?: number;
   epochTurns?: number;
   epochWindowMs?: number;
-  domainPrompt?: string;
 };
 
 type ObserverConfigRecord = {
@@ -110,7 +109,6 @@ export type ExtractorLlmConfig = TextProviderConfig & {
   continuityHints: number;
   epochTurns: number;
   epochWindowMs: number;
-  domainPrompt?: string;
 };
 
 export type ObserverLlmConfig = TextProviderConfig & {
@@ -244,7 +242,6 @@ export function getExtractorLlmConfig(): ExtractorLlmConfig | null {
     continuityHints: extractor.continuityHints ?? DEFAULT_EXTRACTOR_CONTINUITY_HINTS,
     epochTurns: extractor.epochTurns ?? DEFAULT_EXTRACTOR_EPOCH_TURNS,
     epochWindowMs: extractor.epochWindowMs ?? DEFAULT_EXTRACTOR_EPOCH_WINDOW_MS,
-    domainPrompt: extractor.domainPrompt,
     provider: parseLlmProvider(llm.type),
     model: llm.model,
     api: llm.api,
@@ -577,7 +574,6 @@ function validateExtractorConfig(extractor: unknown): void {
   validateOptionalPositiveInteger(config.continuityHints, 'extractor.continuityHints');
   validateOptionalPositiveInteger(config.epochTurns, 'extractor.epochTurns');
   validateOptionalPositiveInteger(config.epochWindowMs, 'extractor.epochWindowMs');
-  validateOptionalDomainPrompt(config.domainPrompt);
 }
 
 function validateObserverConfig(observer: unknown): void {
@@ -782,15 +778,6 @@ function requirePositiveInteger(value: unknown, label: string): number {
 function validateOptionalString(value: unknown, label: string): void {
   if (value !== undefined && typeof value !== 'string') {
     throw new Error(`${label} must be a string.`);
-  }
-}
-
-function validateOptionalDomainPrompt(value: unknown): void {
-  if (value === undefined) {
-    return;
-  }
-  if (value !== 'chat') {
-    throw new Error('extractor.domainPrompt must be one of: chat');
   }
 }
 

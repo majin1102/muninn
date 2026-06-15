@@ -199,7 +199,6 @@ async function writeMuninnConfig(configPath, {
   epochTurns = 1,
   epochWindowMs,
   omitEpochSealSettings = false,
-  domainPrompt,
 } = {}) {
   const root = {};
   const providers = { llm: {}, embedding: {} };
@@ -223,7 +222,6 @@ async function writeMuninnConfig(configPath, {
       ...(continuityHints === undefined ? {} : { continuityHints }),
       ...(omitEpochSealSettings || epochTurns === undefined ? {} : { epochTurns }),
       ...(omitEpochSealSettings || epochWindowMs === undefined ? {} : { epochWindowMs }),
-      ...(domainPrompt === undefined ? {} : { domainPrompt }),
     };
     root.observer = {
       name: 'test-observer',
@@ -328,18 +326,6 @@ test('extractor config defaults activeWindowDays, continuityHints, and epoch sea
   assert.equal(extractorConfig.continuityHints, 3);
   assert.equal(extractorConfig.epochTurns, 5);
   assert.equal(extractorConfig.epochWindowMs, 2_500);
-});
-
-test('extractor config accepts an optional domain prompt name', async (t) => {
-  const { dir, homeDir, configPath } = await makeDatasetUri();
-  t.after(cleanupDataset(dir));
-
-  process.env.MUNINN_HOME = homeDir;
-  await writeMuninnConfig(configPath, { observerProvider: 'mock', domainPrompt: 'chat' });
-
-  const extractorConfig = getExtractorLlmConfig();
-  assert.ok(extractorConfig);
-  assert.equal(extractorConfig.domainPrompt, 'chat');
 });
 
 test('captureTurn and turns.get roundtrip through the native binding', async (t) => {
@@ -845,22 +831,6 @@ test('validateSettings rejects invalid extractor epoch seal settings', async (t)
       new RegExp(`extractor\\.${key} must be a positive integer`, 'i'),
     );
   }
-});
-
-test('validateSettings rejects unknown extractor.domainPrompt', async (t) => {
-  const { dir, homeDir, configPath } = await makeDatasetUri();
-  t.after(cleanupDataset(dir));
-
-  process.env.MUNINN_HOME = homeDir;
-  await mkdir(path.dirname(configPath), { recursive: true });
-  await writeFile(configPath, '{\n  "storage": {\n    "uri": ""\n  }\n}\n', 'utf8');
-
-  await assert.rejects(
-    () => validateSettings(JSON.stringify(validSettings({
-      extractor: { domainPrompt: 'unknown' },
-    }), null, 2)),
-    /extractor\.domainPrompt must be one of: chat/i,
-  );
 });
 
 test('validateSettings rejects missing observer config', async (t) => {
