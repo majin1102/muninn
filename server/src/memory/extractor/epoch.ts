@@ -103,8 +103,8 @@ export class OpenEpoch {
           for (const acceptedTurn of accepted) {
             if (acceptedTurn.turn && !acceptedTurn.deduped) {
               acceptedTurns.push(acceptedTurn.turn);
-              if (isObservable(acceptedTurn.turn)) {
-                this.stagedObservableTurns.push(acceptedTurn.turn);
+              if (isExtractable(acceptedTurn.turn)) {
+                this.stagedExtractableTurns.push(acceptedTurn.turn);
               }
             }
           }
