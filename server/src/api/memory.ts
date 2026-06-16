@@ -519,7 +519,7 @@ export async function recallMemories(
       memoryId: `observation:${row.id}`,
       title: row.text,
       summary: row.text,
-      content: renderObservationHit(row.text, row.extractionRefs, extractionDetails),
+      content: renderObservationHit(row.text, references, extractionDetails),
       references,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,

@@ -3249,6 +3249,64 @@ test('recallMemories filters raw hits source by selected curated hits', async ()
   assert.deepEqual(hits.map((hit) => hit.memoryId), ['observation:curated-1', 'extraction:raw-2']);
 });
 
+test('recallMemories renders observation context source refs when extraction refs are empty', async () => {
+  const client = {
+    observationTable: {
+      search: async () => [
+        {
+          id: 'curated-1',
+          path: 'Caroline / Research',
+          text: 'Caroline researched adoption agencies.',
+          vector: [],
+          extractionRefs: [],
+          createdAt: '2024-01-01T00:00:00Z',
+          updatedAt: '2024-01-01T00:00:00Z',
+        },
+      ],
+    },
+    observationContextTable: {
+      get: async ({ ids }) => ids.includes('curated-1')
+        ? [{
+            id: 'curated-1',
+            path: 'Caroline / Research',
+            parentId: null,
+            position: 0,
+            content: 'Caroline researched adoption agencies.',
+            sourceRefs: ['extraction:raw-1'],
+            expandRefs: [],
+            observer: 'test-observer',
+            createdAt: '2024-01-01T00:00:00Z',
+            updatedAt: '2024-01-01T00:00:00Z',
+          }]
+        : [],
+    },
+    extractionTable: {
+      search: async () => [],
+      get: async ({ ids }) => [{
+        id: 'raw-1',
+        title: 'Adoption agency research',
+        summary: 'Caroline researched adoption agencies.',
+        content: extractionContent('Adoption agency research', 'Caroline researched adoption agencies.'),
+        anchors: [],
+        vector: [],
+        category: 'Fact',
+        turnRefs: ['turn:1'],
+        observationPaths: [],
+        observedRootAnchors: [],
+        createdAt: '2024-01-01T00:00:00Z',
+        updatedAt: '2024-01-01T00:00:00Z',
+      }].filter((row) => ids.includes(row.id)),
+    },
+  };
+
+  const hits = await recallMemories(client, 'Caroline research', 1, { embed: async () => [1, 0] });
+
+  assert.equal(hits[0]?.memoryId, 'observation:curated-1');
+  assert.deepEqual(hits[0]?.references, ['extraction:raw-1']);
+  assert.match(hits[0]?.content, /^EXTRACTION: ## Title$/m);
+  assert.match(hits[0]?.content, /^Adoption agency research$/m);
+});
+
 test('recallMemories includes referenced extraction text for observation hits', async () => {
   const calls = [];
   const client = {
