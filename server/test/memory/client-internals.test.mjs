@@ -3087,6 +3087,101 @@ test('recallMemories enriches extraction hits from raw turn session_id', async (
   assert.equal(hits[0]?.displaySession, 'Native session title');
 });
 
+test('recallMemories enriches curated hits from referenced extraction ownership', async () => {
+  const client = {
+    turnTable: {
+      getTurn: async (turnId) => {
+        assert.equal(turnId, 'turn:curated-session');
+        return {
+          turnId,
+          session_id: 'codex-e2e-session',
+          project: 'github.com/muninn/e2e-fixture',
+          cwd: '/tmp/muninn-e2e/project',
+          agent: 'codex',
+          observer: 'default-extractor',
+          title: 'Codex E2E title',
+          summary: 'Codex E2E summary',
+          events: [],
+          createdAt: '2024-01-02T00:00:00Z',
+          updatedAt: '2024-01-02T00:00:00Z',
+        };
+      },
+    },
+    sessionTable: {
+      threadSnapshots: async (sessionId) => {
+        assert.equal(sessionId, 'codex-e2e-session');
+        return [{
+          snapshotId: 'session:snapshot-curated',
+          sessionId,
+          project: 'github.com/muninn/e2e-fixture',
+          cwd: '/tmp/muninn-e2e/project',
+          agent: 'codex',
+          snapshotSequence: 1,
+          createdAt: '2024-01-03T00:00:00Z',
+          updatedAt: '2024-01-03T00:00:00Z',
+          extractor: 'default-extractor',
+          title: 'Codex E2E session',
+          summary: 'Curated summary',
+          content: 'Curated content',
+          references: ['turn:curated-session'],
+        }];
+      },
+    },
+    observationTable: {
+      search: async () => [{
+        id: 'curated-1',
+        path: 'Muninn / Release',
+        text: 'Codex dist-tag next stays until MVP1 beta exits.',
+        vector: [],
+        extractionRefs: ['extraction:raw-1'],
+        createdAt: '2024-01-01T00:00:00Z',
+        updatedAt: '2024-01-01T00:00:00Z',
+      }],
+    },
+    extractionTable: {
+      search: async () => [{
+        id: 'raw-1',
+        title: 'Codex dist tag',
+        summary: 'Codex uses dist-tag next until MVP1 beta exits.',
+        content: extractionContent('Codex dist tag', 'Codex uses dist-tag next until MVP1 beta exits.'),
+        anchors: [],
+        vector: [],
+        category: 'Fact',
+        turnRefs: ['turn:curated-session'],
+        observationPaths: [],
+        observedRootAnchors: [],
+        createdAt: '2024-01-01T00:00:00Z',
+        updatedAt: '2024-01-01T00:00:00Z',
+      }],
+      get: async ({ ids }) => [{
+        id: 'raw-1',
+        title: 'Codex dist tag',
+        summary: 'Codex uses dist-tag next until MVP1 beta exits.',
+        content: extractionContent('Codex dist tag', 'Codex uses dist-tag next until MVP1 beta exits.'),
+        anchors: [],
+        vector: [],
+        category: 'Fact',
+        turnRefs: ['turn:curated-session'],
+        observationPaths: [],
+        observedRootAnchors: [],
+        createdAt: '2024-01-01T00:00:00Z',
+        updatedAt: '2024-01-01T00:00:00Z',
+      }].filter((row) => ids.includes(row.id)),
+    },
+  };
+
+  const hits = await recallMemories(client, 'codex dist-tag next MVP1 beta', 1, { embed: async () => [1, 0] });
+
+  assert.equal(hits[0]?.memoryId, 'observation:curated-1');
+  assert.equal(hits[0]?.project, 'github.com/muninn/e2e-fixture');
+  assert.equal(hits[0]?.sessionId, 'codex-e2e-session');
+  assert.equal(hits[0]?.agent, 'codex');
+  assert.equal(hits[0]?.cwd, '/tmp/muninn-e2e/project');
+  assert.equal(hits[0]?.sessionKey, 'cwd:/tmp/muninn-e2e/project|session:codex-e2e-session|agent:codex|observer:default-extractor');
+  assert.equal(hits[0]?.displaySession, 'Codex E2E session');
+  assert.match(hits[0]?.content, /Codex uses dist-tag next until MVP1 beta exits/);
+});
+
 test('recallMemories filters raw hits source by selected curated hits', async () => {
   const client = {
     observationTable: {
