@@ -504,19 +504,27 @@ export async function recallMemories(
     ? observationRows.filter((row) => leafObservationIds.has(row.id))
     : observationRows;
   const observationRefs = await loadObservationContextRefs(client, filteredObservationRows.map((row) => row.id));
+  const observationReferences = new Map(filteredObservationRows.map((row) => [
+    row.id,
+    observationRefs.get(row.id) ?? row.extractionRefs,
+  ]));
   const extractionDetails = await loadExtractionDetails(
     client,
-    filteredObservationRows.flatMap((row) => row.extractionRefs),
+    Array.from(observationReferences.values()).flat(),
   );
-  const curatedHits: RouteHit[] = filteredObservationRows.map((row) => ({
-    route: 'curated',
-    memoryId: `observation:${row.id}`,
-    title: row.text,
-    summary: row.text,
-    content: renderObservationHit(row.text, row.extractionRefs, extractionDetails),
-    references: observationRefs.get(row.id) ?? row.extractionRefs,
-    createdAt: row.createdAt,
-    updatedAt: row.updatedAt,
+  const curatedHits: RouteHit[] = await Promise.all(filteredObservationRows.map(async (row) => {
+    const references = observationReferences.get(row.id) ?? row.extractionRefs;
+    return {
+      route: 'curated' as const,
+      memoryId: `observation:${row.id}`,
+      title: row.text,
+      summary: row.text,
+      content: renderObservationHit(row.text, references, extractionDetails),
+      references,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+      ...await ownershipFromExtractionRefs(client, references, extractionDetails),
+    };
   }));
   const rawHits = await Promise.all(extractionRows.map(async (row) => ({
     ...(await extractionHit(client, row)),
@@ -605,6 +613,18 @@ async function extractionHit(client: NativeTables, row: Extraction): Promise<Rec
     updatedAt: row.updatedAt,
     ...await ownershipFromTurnRefs(client, row.turnRefs),
   };
+}
+
+async function ownershipFromExtractionRefs(
+  client: NativeTables,
+  refs: string[],
+  details: Map<string, ExtractionDetail>,
+): Promise<Partial<RecallHit>> {
+  const turnRefs = uniqueRefs(refs.flatMap((ref) => {
+    const id = extractionRowId(ref);
+    return id ? details.get(id)?.turnRefs ?? [] : [];
+  }));
+  return ownershipFromTurnRefs(client, turnRefs);
 }
 
 async function ownershipFromTurnRefs(client: NativeTables, refs: string[]): Promise<Partial<RecallHit>> {

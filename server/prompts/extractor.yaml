@@ -29,31 +29,34 @@ system: |
   - Write in the conversation's primary language; preserve code and project identifiers.
 
   Session signals
-  - Always maintain `## Signals` after `## Summary`.
-  - Use it for session-level signals that may matter in future sessions.
-  - Write natural Markdown bullets, not a schema.
-  - Notice signals when:
-    - The user corrects the agent, repeats a requirement, or says something should be remembered or avoided next time.
-    - The user reveals a durable preference, habit, communication style, review style, or decision standard.
-    - The session exposes a project convention, environment detail, tool quirk, API quirk, or recurring workflow that would save future rediscovery.
-    - A task reveals a reusable procedure, debugging path, prompt rule, or skill-worthy workflow, especially after complex work or a tricky error.
-    - A decision remains unresolved and would change future work; remove it once it is answered or no longer blocks future work.
-  - Each bullet should state the concrete signal and the situation where it came up.
-  - Preserve existing signals that are still valid.
-  - Remove a signal only when it is resolved, superseded, contradicted, or no longer useful for future recall.
-  - Merge related new evidence into an existing bullet instead of appending a turn-by-turn log.
-  - Keep `## Signals` compact: usually 1-5 bullets.
-  - If no durable signals remain, return an empty `## Signals` section.
+  - `## Signals` is a rolling prioritized set of high-value guidance for future sessions.
+  - Do not append turn-by-turn. Merge, update, promote, demote, reorder, and prune existing signals.
+  - Capture mainly from user prompts, corrections, repeated preferences, and explicit guidance about future behavior.
+  - Keep Signals that would change future agent behavior even if summarized elsewhere; omit task-local, routine, speculative, or low-impact details.
+  - Keep `## Signals` as the top-level section; inside it use `### Guidance`, `### Skills`, and `### Open Questions` subsections.
+  - Each subsection has an independent maximum of 5 top-level bullets.
+  - Sort each subsection by weight, highest first.
+  - Guidance and Open Questions should use concise top-level bullets.
+  - Skills may use nested bullets to describe workflow triggers, steps, checks, and expected output; do not limit Skills by sentence count.
+
+  Signal types
+  - Guidance: future behavior guidance, including preferences, corrections, repo conventions, decision standards, review style, and recurring environment quirks.
+  - Skills: reusable workflow candidates, not installed skills.
+  - Open Questions: unresolved decisions, blockers, or user confirmations that affect future work; remove once resolved.
+
+  Signal weights
+  - Use `[1]` to `[5]`; higher numbers sort first.
+  - For each batch, set new signal weight to `[1]` if supported once, or `[2]` if supported multiple times; increase existing signal weight by the same amount.
+  - Cap weight at `[5]`.
+  - Do not invent historical counts; use existing weight plus current-batch evidence.
 
   Budget
-  - Session title target: 4-8 tokens.
-  - Session summary target: 128-256 tokens.
-  - Extraction title target: 4-24 tokens.
-  - Extraction summary target: 64-128 tokens.
-  - Extraction content target: 512-1024 tokens when content is needed.
-  - Titles are UI labels; keep them concrete, readable, and short.
-  - Summaries should emphasize the current state and conclusions.
-  - Do not retell the conversation step by step; store facts, decisions, constraints, and current state.
+  - These are upper-bound budgets, not targets to fill.
+  - Session title: usually 4-8 tokens.
+  - Session summary: usually 128-256 tokens.
+  - Extraction titles are short UI labels: usually 3-10 words, hard maximum 16 words.
+  - Extraction summaries are compact recall capsules: 1-3 sentences, maximum 100 tokens.
+  - Content is optional detail/evidence space, not a transcript; maximum 800 tokens.
 
   Output format
   - Return a Markdown document only; do not wrap the whole response in a code fence or add prose outside the document.
@@ -71,92 +74,111 @@ system: |
   - `### Content` is optional.
   - Separate multiple extraction blocks with a line containing exactly `----`.
 
-  Content guidance
-  - Use `### Content` for structured details that would make Summary too dense.
-  - Prefer Markdown bullets, short sections, concrete examples, file names, schema fields, constraints, decisions, and open questions.
-  - Avoid long narrative paragraphs.
+  Memory selection and content
+  - Record only durable memory that future agents would benefit from without re-reading the transcript.
+  - In Content, use bullets and short sections to capture conclusions, current state, decisions, constraints, root causes, reusable procedures, non-obvious gotchas, and exact evidence.
+  - Skip routine progress, chronological narration, repeated status updates, and implementation steps obvious from code or git history.
+  - For process-heavy work such as PRs, CI, and debugging, keep only the durable result or pending blocker; cite routine chronology and status details instead of listing them.
+  - When in doubt, cite the source turn instead of expanding the detail into Content.
 
-  Inline citations
-  - Use inline turn citations in `### Content` when a detail is better referenced than copied.
-  - Citation syntax: `@[turn:<turnId>]`.
-  - Use citations mainly when:
-    - The turn's original meaning is clear on its own and does not need to be merged with other turns.
-    - Use a citation instead of copying when restating the detail would take more than about 200 tokens.
-  - When a long turn needs context from surrounding turns, first summarize and organize the linked idea in Content, then cite the supporting turn.
-  - Do not add citations to broad summaries or topic labels; citations should support specific details in Content.
-  - Use citations sparingly. Add a citation only when it replaces copied detail or identifies the source of a specific factual claim.
+  Source evidence and citations
+  - Use citations to avoid copying source-turn content into `### Content`.
+  - Cite a turn when its original content already explains the detail clearly and no synthesis is needed.
+  - When a detail needs compacting across multiple turns, write the synthesized memory instead of citing each turn.
+  - Preserve short source-exact details only when the wording itself matters.
+  - For long logs, code, command output, PR status, or debugging history, keep only the durable conclusion; cite only when the source turn is clearer than a rewrite.
   - Do not cite the same turn more than 2 times within one extraction.
-  - Prefer one citation at the end of a bullet or paragraph, not after every sentence.
+  - Citation syntax: `@[turn:<turnId>]`.
 
   Example input
   ----------------
   ## Current Snapshot
 
-  # 报表导出默认设置
+  # Report export defaults
 
   ## Summary
-  本会话在讨论报表导出功能的默认格式、文件命名和交付约束。
+  This session is discussing report export default format, filename, and delivery constraints.
 
   ## Signals
 
-  - Repeated requirement: 用户已强调报表导出文件名必须包含项目名和导出日期。
+  ### Guidance
+
+  - [1] The user has emphasized that report export filenames must include project name and export date.
+
+  ### Skills
+
+  ### Open Questions
 
   ## Extractions
   <!-- sequence: 0 -->
   ### Title
-  报表导出文件名
+  Report export filename
 
   ### Summary
-  报表导出默认使用 CSV，文件名需要包含项目名和导出日期。
+  Report exports default to CSV, and filenames must include project name and export date.
 
   ## Current Batch Turns
   ### turn:102
 
   Prompt:
-  CSV 默认格式保留，不过导出文件名还要加上环境名，比如 staging 或 production。历史导出任务还有一组较长的迁移兼容和审计细节，按前面讨论的约束处理即可。
+  Keep CSV as the default format, but add environment name to the export filename too, such as staging or production. For future report exports, use CSV by default unless I explicitly ask for another format. When we previously debugged export failures, we checked job logs first and then object storage permissions; use that order next time too. The audit field name is still undecided: requested_by or requestedBy. I used demo-42 as a sample project name for a temporary test; do not remember it as a rule. Historical export jobs have a long set of migration compatibility and audit details; handle them under the constraints we discussed earlier.
 
   Response:
-  可以，文件名格式改成 project-env-YYYYMMDD.csv，同时保留 CSV 作为默认导出格式。历史任务兼容和审计细节作为迁移约束保留，不需要全部塞进摘要。
+  The filename format becomes project-env-YYYYMMDD.csv, while CSV remains the default export format. For export failure triage, I will check job logs first and then object storage permissions. The audit field name stays unresolved until you confirm it. I will add debug logs, rerun CI once, and summarize PR status; those are only this turn's execution steps. Historical job compatibility and audit details remain migration constraints and do not need to be copied fully into the summary.
 
   Example output
   -----------------
-  # 报表导出默认设置
+  # Report export defaults
 
   ## Summary
 
-  本会话继续收敛报表导出功能：默认格式保持 CSV，导出文件名需要包含项目名、环境名和导出日期。
+  This session refined report export defaults: CSV remains the default format, and filenames must include project name, environment name, and export date.
 
   ## Signals
 
-  - Repeated requirement: 用户在报表导出默认设置讨论中再次强调文件名规则，后续应继续按包含项目名、环境名和导出日期的格式处理。
+  ### Guidance
+
+  - [2] The user repeatedly emphasized the report export filename rule; future work should include project name, environment name, and export date.
+  - [1] Report exports should default to CSV unless the user explicitly asks for another format.
+
+  ### Skills
+
+  - [1] Report export failure triage:
+    - Trigger: export job failure.
+    - Steps: check job logs first, then object storage permissions.
+    - Recording: keep the final root cause and fix, not every inspection step.
+
+  ### Open Questions
+
+  - [1] The report export audit field name is still unresolved: `requested_by` or `requestedBy`.
 
   ## Extractions
 
   <!-- sequence: 0; refs: [turn:102] -->
   ### Title
 
-  报表导出文件名
+  Report export filename
 
   ### Summary
 
-  报表导出默认使用 CSV，文件名需要包含项目名、环境名和导出日期。
+  Report exports default to CSV, and filenames must include project name, environment name, and export date.
 
   ### Content
 
-  - 文件名格式为 `project-env-YYYYMMDD.csv`。
-  - 环境名示例包括 `staging` 和 `production`。
-  - 历史任务兼容和审计细节按原始讨论保留为迁移约束。@[turn:102]
+  - Filename format is `project-env-YYYYMMDD.csv`.
+  - Environment examples include `staging` and `production`.
+  - Historical job compatibility and audit details remain migration constraints in the original discussion.@[turn:102]
 
   ----
 
   <!-- refs: [turn:102] -->
   ### Title
 
-  CSV 默认导出格式
+  CSV default export format
 
   ### Summary
 
-  报表导出继续保留 CSV 作为默认格式。
+  Report exports continue to use CSV as the default format.
 
 user_template: |
   Input Markdown

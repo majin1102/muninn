@@ -3087,6 +3087,101 @@ test('recallMemories enriches extraction hits from raw turn session_id', async (
   assert.equal(hits[0]?.displaySession, 'Native session title');
 });
 
+test('recallMemories enriches curated hits from referenced extraction ownership', async () => {
+  const client = {
+    turnTable: {
+      getTurn: async (turnId) => {
+        assert.equal(turnId, 'turn:curated-session');
+        return {
+          turnId,
+          session_id: 'codex-e2e-session',
+          project: 'github.com/muninn/e2e-fixture',
+          cwd: '/tmp/muninn-e2e/project',
+          agent: 'codex',
+          observer: 'default-extractor',
+          title: 'Codex E2E title',
+          summary: 'Codex E2E summary',
+          events: [],
+          createdAt: '2024-01-02T00:00:00Z',
+          updatedAt: '2024-01-02T00:00:00Z',
+        };
+      },
+    },
+    sessionTable: {
+      threadSnapshots: async (sessionId) => {
+        assert.equal(sessionId, 'codex-e2e-session');
+        return [{
+          snapshotId: 'session:snapshot-curated',
+          sessionId,
+          project: 'github.com/muninn/e2e-fixture',
+          cwd: '/tmp/muninn-e2e/project',
+          agent: 'codex',
+          snapshotSequence: 1,
+          createdAt: '2024-01-03T00:00:00Z',
+          updatedAt: '2024-01-03T00:00:00Z',
+          extractor: 'default-extractor',
+          title: 'Codex E2E session',
+          summary: 'Curated summary',
+          content: 'Curated content',
+          references: ['turn:curated-session'],
+        }];
+      },
+    },
+    observationTable: {
+      search: async () => [{
+        id: 'curated-1',
+        path: 'Muninn / Release',
+        text: 'Codex dist-tag next stays until MVP1 beta exits.',
+        vector: [],
+        extractionRefs: ['extraction:raw-1'],
+        createdAt: '2024-01-01T00:00:00Z',
+        updatedAt: '2024-01-01T00:00:00Z',
+      }],
+    },
+    extractionTable: {
+      search: async () => [{
+        id: 'raw-1',
+        title: 'Codex dist tag',
+        summary: 'Codex uses dist-tag next until MVP1 beta exits.',
+        content: extractionContent('Codex dist tag', 'Codex uses dist-tag next until MVP1 beta exits.'),
+        anchors: [],
+        vector: [],
+        category: 'Fact',
+        turnRefs: ['turn:curated-session'],
+        observationPaths: [],
+        observedRootAnchors: [],
+        createdAt: '2024-01-01T00:00:00Z',
+        updatedAt: '2024-01-01T00:00:00Z',
+      }],
+      get: async ({ ids }) => [{
+        id: 'raw-1',
+        title: 'Codex dist tag',
+        summary: 'Codex uses dist-tag next until MVP1 beta exits.',
+        content: extractionContent('Codex dist tag', 'Codex uses dist-tag next until MVP1 beta exits.'),
+        anchors: [],
+        vector: [],
+        category: 'Fact',
+        turnRefs: ['turn:curated-session'],
+        observationPaths: [],
+        observedRootAnchors: [],
+        createdAt: '2024-01-01T00:00:00Z',
+        updatedAt: '2024-01-01T00:00:00Z',
+      }].filter((row) => ids.includes(row.id)),
+    },
+  };
+
+  const hits = await recallMemories(client, 'codex dist-tag next MVP1 beta', 1, { embed: async () => [1, 0] });
+
+  assert.equal(hits[0]?.memoryId, 'observation:curated-1');
+  assert.equal(hits[0]?.project, 'github.com/muninn/e2e-fixture');
+  assert.equal(hits[0]?.sessionId, 'codex-e2e-session');
+  assert.equal(hits[0]?.agent, 'codex');
+  assert.equal(hits[0]?.cwd, '/tmp/muninn-e2e/project');
+  assert.equal(hits[0]?.sessionKey, 'cwd:/tmp/muninn-e2e/project|session:codex-e2e-session|agent:codex|observer:default-extractor');
+  assert.equal(hits[0]?.displaySession, 'Codex E2E session');
+  assert.match(hits[0]?.content, /Codex uses dist-tag next until MVP1 beta exits/);
+});
+
 test('recallMemories filters raw hits source by selected curated hits', async () => {
   const client = {
     observationTable: {
@@ -3152,6 +3247,64 @@ test('recallMemories filters raw hits source by selected curated hits', async ()
 
   const hits = await recallMemories(client, 'Caroline research', 2, { embed: async () => [1, 0] });
   assert.deepEqual(hits.map((hit) => hit.memoryId), ['observation:curated-1', 'extraction:raw-2']);
+});
+
+test('recallMemories renders observation context source refs when extraction refs are empty', async () => {
+  const client = {
+    observationTable: {
+      search: async () => [
+        {
+          id: 'curated-1',
+          path: 'Caroline / Research',
+          text: 'Caroline researched adoption agencies.',
+          vector: [],
+          extractionRefs: [],
+          createdAt: '2024-01-01T00:00:00Z',
+          updatedAt: '2024-01-01T00:00:00Z',
+        },
+      ],
+    },
+    observationContextTable: {
+      get: async ({ ids }) => ids.includes('curated-1')
+        ? [{
+            id: 'curated-1',
+            path: 'Caroline / Research',
+            parentId: null,
+            position: 0,
+            content: 'Caroline researched adoption agencies.',
+            sourceRefs: ['extraction:raw-1'],
+            expandRefs: [],
+            observer: 'test-observer',
+            createdAt: '2024-01-01T00:00:00Z',
+            updatedAt: '2024-01-01T00:00:00Z',
+          }]
+        : [],
+    },
+    extractionTable: {
+      search: async () => [],
+      get: async ({ ids }) => [{
+        id: 'raw-1',
+        title: 'Adoption agency research',
+        summary: 'Caroline researched adoption agencies.',
+        content: extractionContent('Adoption agency research', 'Caroline researched adoption agencies.'),
+        anchors: [],
+        vector: [],
+        category: 'Fact',
+        turnRefs: ['turn:1'],
+        observationPaths: [],
+        observedRootAnchors: [],
+        createdAt: '2024-01-01T00:00:00Z',
+        updatedAt: '2024-01-01T00:00:00Z',
+      }].filter((row) => ids.includes(row.id)),
+    },
+  };
+
+  const hits = await recallMemories(client, 'Caroline research', 1, { embed: async () => [1, 0] });
+
+  assert.equal(hits[0]?.memoryId, 'observation:curated-1');
+  assert.deepEqual(hits[0]?.references, ['extraction:raw-1']);
+  assert.match(hits[0]?.content, /^EXTRACTION: ## Title$/m);
+  assert.match(hits[0]?.content, /^Adoption agency research$/m);
 });
 
 test('recallMemories includes referenced extraction text for observation hits', async () => {
@@ -4292,8 +4445,16 @@ test('observer validation preserves session-level signals in snapshot content', 
       title: 'Extractor Signals',
       summary: 'Extractor prompt design refined durable signal handling.',
       signals: [
-        '- User preference: The user prefers natural Markdown bullets for extractor signals.',
-        '- Reusable workflow or skill gap: Confirm parser support before asking the model to emit a new Markdown section.',
+        '### Guidance',
+        '',
+        '- [2] The user prefers concise Markdown signals under named subsections.',
+        '',
+        '### Skills',
+        '',
+        '- [1] Extractor signal prompt review:',
+        '  - Confirm parser support before asking the model to emit a new Markdown section.',
+        '',
+        '### Open Questions',
       ].join('\n'),
     }),
     {
@@ -4312,11 +4473,20 @@ test('observer validation preserves session-level signals in snapshot content', 
   );
 
   assert.equal(result.signals, [
-    '- User preference: The user prefers natural Markdown bullets for extractor signals.',
-    '- Reusable workflow or skill gap: Confirm parser support before asking the model to emit a new Markdown section.',
+    '### Guidance',
+    '',
+    '- [2] The user prefers concise Markdown signals under named subsections.',
+    '',
+    '### Skills',
+    '',
+    '- [1] Extractor signal prompt review:',
+    '  - Confirm parser support before asking the model to emit a new Markdown section.',
+    '',
+    '### Open Questions',
   ].join('\n'));
   assert.equal(result.extractions[0]?.context, '- Keep the signal recall-ready without a rigid pseudo-schema.');
-  assert.match(result.snapshotContent, /## Signals\n- User preference:/);
+  assert.match(result.snapshotContent, /## Signals\n### Guidance/);
+  assert.match(result.snapshotContent, /\[2\] The user prefers concise Markdown signals/);
   assert.match(result.snapshotContent, /### Content\n- Keep the signal recall-ready/);
 });
 
@@ -4325,7 +4495,15 @@ test('snapshot patch can preserve, replace, and clear session-level signals', ()
     sessionMemory: {
       title: 'Extractor Signals',
       summary: 'Extractor prompt design.',
-      signals: '- User preference: Keep signal bullets natural.',
+      signals: [
+        '### Guidance',
+        '',
+        '- [2] Keep signal bullets under named subsections.',
+        '',
+        '### Skills',
+        '',
+        '### Open Questions',
+      ].join('\n'),
       extractions: [],
       openQuestions: [],
       nextSteps: [],
@@ -4340,13 +4518,35 @@ test('snapshot patch can preserve, replace, and clear session-level signals', ()
     '## Summary',
     'Extractor prompt design continues.',
   ].join('\n'), baseInput);
-  assert.equal(preserved.signals, '- User preference: Keep signal bullets natural.');
+  assert.equal(preserved.signals, [
+    '### Guidance',
+    '',
+    '- [2] Keep signal bullets under named subsections.',
+    '',
+    '### Skills',
+    '',
+    '### Open Questions',
+  ].join('\n'));
 
   const replaced = extractorLlmTesting.validateSessionExtractionResultForTests([
     '## Signals',
-    '- Repeated requirement or correction: Signals are session-level state.',
+    '### Guidance',
+    '',
+    '- [2] Signals are session-level state.',
+    '',
+    '### Skills',
+    '',
+    '### Open Questions',
   ].join('\n'), baseInput);
-  assert.equal(replaced.signals, '- Repeated requirement or correction: Signals are session-level state.');
+  assert.equal(replaced.signals, [
+    '### Guidance',
+    '',
+    '- [2] Signals are session-level state.',
+    '',
+    '### Skills',
+    '',
+    '### Open Questions',
+  ].join('\n'));
 
   const cleared = extractorLlmTesting.validateSessionExtractionResultForTests([
     '## Signals',
@@ -4514,7 +4714,13 @@ test('observer validation rejects session signals after extractions', () => {
       'Melanie painted a lake sunrise in 2022.',
       '',
       '## Signals',
-      '- User preference: Keep signals top-level.',
+      '### Guidance',
+      '',
+      '- [2] Keep signals before extractions.',
+      '',
+      '### Skills',
+      '',
+      '### Open Questions',
     ].join('\n'), {
       sessionMemory: {
         title: 'Painting',
@@ -4541,7 +4747,13 @@ test('snapshot patch rejects session signals after extractions', () => {
       'Melanie painted a lake sunrise in 2022.',
       '',
       '## Signals',
-      '- User preference: Keep signals top-level.',
+      '### Guidance',
+      '',
+      '- [2] Keep signals before extractions.',
+      '',
+      '### Skills',
+      '',
+      '### Open Questions',
     ].join('\n'), {
       sessionMemory: {
         title: 'Painting',
