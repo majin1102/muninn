@@ -4387,8 +4387,16 @@ test('observer validation preserves session-level signals in snapshot content', 
       title: 'Extractor Signals',
       summary: 'Extractor prompt design refined durable signal handling.',
       signals: [
-        '- User preference: The user prefers natural Markdown bullets for extractor signals.',
-        '- Reusable workflow or skill gap: Confirm parser support before asking the model to emit a new Markdown section.',
+        '### Guidance',
+        '',
+        '- [2] The user prefers concise Markdown signals under named subsections.',
+        '',
+        '### Skills',
+        '',
+        '- [1] Extractor signal prompt review:',
+        '  - Confirm parser support before asking the model to emit a new Markdown section.',
+        '',
+        '### Open Questions',
       ].join('\n'),
     }),
     {
@@ -4407,11 +4415,20 @@ test('observer validation preserves session-level signals in snapshot content', 
   );
 
   assert.equal(result.signals, [
-    '- User preference: The user prefers natural Markdown bullets for extractor signals.',
-    '- Reusable workflow or skill gap: Confirm parser support before asking the model to emit a new Markdown section.',
+    '### Guidance',
+    '',
+    '- [2] The user prefers concise Markdown signals under named subsections.',
+    '',
+    '### Skills',
+    '',
+    '- [1] Extractor signal prompt review:',
+    '  - Confirm parser support before asking the model to emit a new Markdown section.',
+    '',
+    '### Open Questions',
   ].join('\n'));
   assert.equal(result.extractions[0]?.context, '- Keep the signal recall-ready without a rigid pseudo-schema.');
-  assert.match(result.snapshotContent, /## Signals\n- User preference:/);
+  assert.match(result.snapshotContent, /## Signals\n### Guidance/);
+  assert.match(result.snapshotContent, /\[2\] The user prefers concise Markdown signals/);
   assert.match(result.snapshotContent, /### Content\n- Keep the signal recall-ready/);
 });
 
@@ -4420,7 +4437,15 @@ test('snapshot patch can preserve, replace, and clear session-level signals', ()
     sessionMemory: {
       title: 'Extractor Signals',
       summary: 'Extractor prompt design.',
-      signals: '- User preference: Keep signal bullets natural.',
+      signals: [
+        '### Guidance',
+        '',
+        '- [2] Keep signal bullets under named subsections.',
+        '',
+        '### Skills',
+        '',
+        '### Open Questions',
+      ].join('\n'),
       extractions: [],
       openQuestions: [],
       nextSteps: [],
@@ -4435,13 +4460,35 @@ test('snapshot patch can preserve, replace, and clear session-level signals', ()
     '## Summary',
     'Extractor prompt design continues.',
   ].join('\n'), baseInput);
-  assert.equal(preserved.signals, '- User preference: Keep signal bullets natural.');
+  assert.equal(preserved.signals, [
+    '### Guidance',
+    '',
+    '- [2] Keep signal bullets under named subsections.',
+    '',
+    '### Skills',
+    '',
+    '### Open Questions',
+  ].join('\n'));
 
   const replaced = extractorLlmTesting.validateSessionExtractionResultForTests([
     '## Signals',
-    '- Repeated requirement or correction: Signals are session-level state.',
+    '### Guidance',
+    '',
+    '- [2] Signals are session-level state.',
+    '',
+    '### Skills',
+    '',
+    '### Open Questions',
   ].join('\n'), baseInput);
-  assert.equal(replaced.signals, '- Repeated requirement or correction: Signals are session-level state.');
+  assert.equal(replaced.signals, [
+    '### Guidance',
+    '',
+    '- [2] Signals are session-level state.',
+    '',
+    '### Skills',
+    '',
+    '### Open Questions',
+  ].join('\n'));
 
   const cleared = extractorLlmTesting.validateSessionExtractionResultForTests([
     '## Signals',
@@ -4609,7 +4656,13 @@ test('observer validation rejects session signals after extractions', () => {
       'Melanie painted a lake sunrise in 2022.',
       '',
       '## Signals',
-      '- User preference: Keep signals top-level.',
+      '### Guidance',
+      '',
+      '- [2] Keep signals before extractions.',
+      '',
+      '### Skills',
+      '',
+      '### Open Questions',
     ].join('\n'), {
       sessionMemory: {
         title: 'Painting',
@@ -4636,7 +4689,13 @@ test('snapshot patch rejects session signals after extractions', () => {
       'Melanie painted a lake sunrise in 2022.',
       '',
       '## Signals',
-      '- User preference: Keep signals top-level.',
+      '### Guidance',
+      '',
+      '- [2] Keep signals before extractions.',
+      '',
+      '### Skills',
+      '',
+      '### Open Questions',
     ].join('\n'), {
       sessionMemory: {
         title: 'Painting',

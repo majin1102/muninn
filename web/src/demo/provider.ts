@@ -247,7 +247,15 @@ export async function getDemoSessionTurns(
       title: 'Signals',
       createdAt: firstTurn.createdAt,
       updatedAt: firstTurn.updatedAt,
-      markdown: '- Demo sessions keep lightweight signals for UI preview.',
+      markdown: [
+        '### Guidance',
+        '',
+        '- [1] Demo sessions keep lightweight signals for UI preview.',
+        '',
+        '### Skills',
+        '',
+        '### Open Questions',
+      ].join('\n'),
       refs: [],
     });
   }
