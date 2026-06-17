@@ -203,3 +203,68 @@ test('incremental dream fails when index parent row is missing', async () => {
     /project dream parent not found: dreaming:42/,
   );
 });
+
+test('concurrent dream creates for one project serialize before reading latest parent', async () => {
+  const rows = [{
+    dreamingId: 'dreaming:1',
+    project: '/repo/muninn',
+    parentId: null,
+    createdAt: '2026-06-18T00:00:00Z',
+    sessionSnapshotVersion: 12,
+    content: '# Project Dream\n\n## Signals\n\n### Guidance\n- [1] Initial.\n\n### Skills\n\n### Open Questions',
+  }];
+  const deltaBaselines = [];
+  let activeMerges = 0;
+  let maxActiveMerges = 0;
+  const client = {
+    sessionTable: {
+      delta: async ({ baselineVersion }) => {
+        deltaBaselines.push(baselineVersion);
+        return {
+          sourceVersion: baselineVersion + 1,
+          rows: [
+            snapshot({
+              snapshotId: `session:${baselineVersion + 1}`,
+              sessionId: 's1',
+              snapshotSequence: baselineVersion,
+              signals: `- [1] Source ${baselineVersion + 1}.`,
+            }),
+          ],
+        };
+      },
+    },
+    dreamingTable: {
+      append: async ({ row }) => {
+        const dream = { ...row, dreamingId: `dreaming:${rows.length + 1}` };
+        rows.push(dream);
+        return dream;
+      },
+      get: async (dreamingId) => rows.find((row) => row.dreamingId === dreamingId) ?? null,
+      list: async () => rows,
+      delta: async () => ({ sourceVersion: rows.length, rows: [] }),
+      stats: async () => ({ version: rows.length, rowCount: rows.length, fragmentCount: 1 }),
+    },
+  };
+  const service = new ProjectDreamingService(client, new DreamingIndex({
+    baseline: { dreaming: 1 },
+    entries: [{ project: '/repo/muninn', dreamingId: 'dreaming:1', createdAt: rows[0].createdAt, sessionSnapshotVersion: 12 }],
+  }), 'default-observer', {
+    merge: async ({ incrementalSignals }) => {
+      activeMerges += 1;
+      maxActiveMerges = Math.max(maxActiveMerges, activeMerges);
+      await Promise.resolve();
+      activeMerges -= 1;
+      return `# Project Dream\n\n## Signals\n\n### Guidance\n${incrementalSignals}\n\n### Skills\n\n### Open Questions`;
+    },
+  });
+
+  const results = await Promise.all([
+    service.create('/repo/muninn'),
+    service.create('/repo/muninn'),
+  ]);
+
+  assert.deepEqual(results.map((result) => result.created), [true, true]);
+  assert.equal(maxActiveMerges, 1);
+  assert.deepEqual(deltaBaselines, [12, 13]);
+  assert.equal(rows.at(-1).sessionSnapshotVersion, 14);
+});

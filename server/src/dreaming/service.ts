@@ -9,6 +9,8 @@ export type ProjectDreamCreateResult = {
 };
 
 export class ProjectDreamingService {
+  private readonly creates = new Map<string, Promise<ProjectDreamCreateResult>>();
+
   constructor(
     private readonly client: NativeTables,
     private readonly index: DreamingIndex,
@@ -27,6 +29,21 @@ export class ProjectDreamingService {
   }
 
   async create(project: string): Promise<ProjectDreamCreateResult> {
+    const previous = this.creates.get(project) ?? Promise.resolve(null);
+    const next = previous
+      .catch(() => null)
+      .then(() => this.createNow(project));
+    this.creates.set(project, next);
+    try {
+      return await next;
+    } finally {
+      if (this.creates.get(project) === next) {
+        this.creates.delete(project);
+      }
+    }
+  }
+
+  private async createNow(project: string): Promise<ProjectDreamCreateResult> {
     if (!this.extractorName) {
       throw new Error('extractor is not configured');
     }
