@@ -36,13 +36,33 @@ test('mergeProjectDream validates and retries LLM Markdown output', async (t) =>
       prompts.push(request.prompt);
       return prompts.length === 1
         ? '# Not A Project Dream'
-        : '# Project Dream\n\n## Signals\n\n### Guidance\n- [1] Keep schemas minimal.\n\n### Skills\n\n### Open Questions';
+        : '```markdown\n# Project Dream\n\n## Signals\n\n### Guidance\n- [1] Keep schemas minimal.\n\n### Skills\n\n### Open Questions\n```';
     },
   });
   assert.match(result, /# Project Dream/);
   assert.match(result, /Keep schemas minimal/);
+  assert.doesNotMatch(result, /```/);
   assert.equal(prompts.length, 2);
   assert.match(prompts[1], /Previous output was invalid\. Validation error: project dream content must start with # Project Dream/);
+});
+
+test('mergeProjectDream mock provider appends incremental signals to parent dream', async (t) => {
+  await withTempMuninnHome(t, {
+    providers: {
+      llm: { dreamer: { type: 'mock' } },
+      embedding: { mock: { type: 'mock', dimensions: 8 } },
+    },
+  });
+
+  const result = await mergeProjectDream({
+    project: '/repo/muninn',
+    parentDream: '# Project Dream\n\n## Signals\n\n### Guidance\n- [2] Keep schemas minimal.\n\n### Skills\n\n### Open Questions',
+    incrementalSignals: '- [1] Keep schemas small.',
+  });
+
+  assert.match(result, /Keep schemas minimal/);
+  assert.match(result, /Keep schemas small/);
+  assert.match(result, /### Skills/);
 });
 
 async function withTempMuninnHome(t, overrides = {}) {

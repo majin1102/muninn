@@ -1,7 +1,7 @@
 import { getExtractorLlmConfig } from '../config.js';
 import { generateText } from '../llm/provider.js';
 import { loadPromptTemplate, renderPromptTemplate } from '../llm/prompts.js';
-import { validateProjectDreamContent } from './content.js';
+import { normalizeProjectDreamContent, validateProjectDreamContent } from './content.js';
 
 export type ProjectDreamInput = {
   project: string;
@@ -58,7 +58,7 @@ export async function mergeProjectDream(input: ProjectDreamInput & {
       continue;
     }
     try {
-      const dream = raw.trim();
+      const dream = normalizeProjectDreamContent(raw);
       validateProjectDreamContent(dream);
       return dream;
     } catch (error) {
@@ -70,26 +70,64 @@ export async function mergeProjectDream(input: ProjectDreamInput & {
 }
 
 function mockProjectDream(input: ProjectDreamInput): string {
+  const incremental = input.incrementalSignals.trim();
   const parent = input.parentDream.trim();
   if (parent && parent !== '(none)') {
-    return parent;
+    const dream = incremental
+      ? appendGuidance(normalizeProjectDreamContent(parent), incremental)
+      : normalizeProjectDreamContent(parent);
+    validateProjectDreamContent(dream);
+    return dream;
   }
-  return [
+  const dream = [
     '# Project Dream',
     '',
     '## Signals',
     '',
     '### Guidance',
-    input.incrementalSignals.trim(),
+    incremental,
     '',
     '### Skills',
     '',
     '### Open Questions',
   ].join('\n').trim();
+  validateProjectDreamContent(dream);
+  return dream;
 }
 
 function throwIfAborted(signal?: AbortSignal): void {
   if (signal?.aborted) {
     throw signal.reason instanceof Error ? signal.reason : new Error('operation aborted');
   }
+}
+
+function appendGuidance(parent: string, incremental: string): string {
+  const lines = parent.split('\n');
+  const guidance = lines.findIndex((line) => line === '### Guidance');
+  const nextSection = lines.findIndex((line, index) => index > guidance && line.startsWith('### '));
+  const insertAt = nextSection < 0 ? lines.length : nextSection;
+  const before = trimTrailingBlank(lines.slice(0, insertAt));
+  const after = trimLeadingBlank(lines.slice(insertAt));
+  return [
+    ...before,
+    ...incremental.split('\n'),
+    '',
+    ...after,
+  ].join('\n').trim();
+}
+
+function trimTrailingBlank(lines: string[]): string[] {
+  const next = [...lines];
+  while (next.length > 0 && next[next.length - 1].trim() === '') {
+    next.pop();
+  }
+  return next;
+}
+
+function trimLeadingBlank(lines: string[]): string[] {
+  const next = [...lines];
+  while (next.length > 0 && next[0].trim() === '') {
+    next.shift();
+  }
+  return next;
 }
