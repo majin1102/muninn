@@ -29,7 +29,10 @@ export async function mergeProjectDream(input: ProjectDreamInput & {
   model?: ProjectDreamModel;
 }): Promise<string> {
   const template = loadPromptTemplate('project_dreaming');
-  const config = getDreamConfig(input.model);
+  const config = getExtractorLlmConfig();
+  if (!config) {
+    throw new Error('extraction update is not configured');
+  }
   if (config.provider === 'mock') {
     const dream = mockProjectDream(input);
     validateProjectDreamContent(dream);
@@ -64,36 +67,6 @@ export async function mergeProjectDream(input: ProjectDreamInput & {
   }
 
   throw lastError;
-}
-
-function getDreamConfig(model?: ProjectDreamModel): {
-  provider: 'mock' | 'openai' | 'openai-codex';
-  maxAttempts: number;
-} {
-  try {
-    const config = getExtractorLlmConfig();
-    if (config) {
-      return {
-        provider: config.provider,
-        maxAttempts: config.maxAttempts,
-      };
-    }
-  } catch (error) {
-    if (model) {
-      return {
-        provider: 'openai',
-        maxAttempts: 3,
-      };
-    }
-    throw error;
-  }
-  if (model) {
-    return {
-      provider: 'openai',
-      maxAttempts: 3,
-    };
-  }
-  throw new Error('extraction update is not configured');
 }
 
 function mockProjectDream(input: ProjectDreamInput): string {
