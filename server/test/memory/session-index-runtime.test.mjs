@@ -105,6 +105,10 @@ function checkpoint(overrides = {}) {
         latestUpdatedAt: '2026-06-02T10:00:00.000Z',
       }],
     },
+    dreamingIndex: {
+      baseline: { dreaming: 0 },
+      entries: [],
+    },
     ...overrides,
   };
 }
@@ -536,6 +540,10 @@ test('backend refreshSessionIndex rebuilds stale checkpoint entries from current
         cwd: '/Users/Nathan/workspace/muninn',
         latestUpdatedAt: '2026-06-02T10:00:00.000Z',
       }],
+    },
+    dreamingIndex: {
+      baseline: { dreaming: 0 },
+      entries: [],
     },
   });
 
