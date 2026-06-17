@@ -9,7 +9,7 @@ function snapshot(overrides) {
     snapshotId: overrides.snapshotId,
     sessionId: overrides.sessionId,
     project: overrides.project ?? '/repo/muninn',
-    cwd: '/repo/muninn',
+    cwd: overrides.cwd ?? '/repo/muninn',
     agent: 'codex',
     snapshotSequence: overrides.snapshotSequence ?? 0,
     createdAt: overrides.createdAt ?? '2026-06-18T00:00:00Z',
@@ -81,7 +81,7 @@ test('incremental dream reads delta from parent sessionSnapshotVersion and store
         appended.push(row);
         return { ...row, dreamingId: 'dreaming:2' };
       },
-      get: async ({ dreamingId }) => dreamingId === 'dreaming:1' ? parent : null,
+      get: async (dreamingId) => dreamingId === 'dreaming:1' ? parent : null,
       list: async () => [parent],
       delta: async () => ({ sourceVersion: 1, rows: [] }),
       stats: async () => ({ version: 1, rowCount: 1, fragmentCount: 1 }),
@@ -101,4 +101,36 @@ test('incremental dream reads delta from parent sessionSnapshotVersion and store
   assert.equal(result.created, true);
   assert.equal(appended[0].parentId, 1);
   assert.equal(appended[0].sessionSnapshotVersion, 15);
+});
+
+test('dream source selection keeps same session id in different cwd buckets', async () => {
+  const client = {
+    sessionTable: {
+      listSnapshotsWithVersion: async () => ({
+        sourceVersion: 22,
+        rows: [
+          snapshot({ snapshotId: 'session:5', sessionId: 's1', cwd: '/repo/muninn/a', snapshotSequence: 2, signals: '- [1] Keep cwd A.' }),
+          snapshot({ snapshotId: 'session:6', sessionId: 's1', cwd: '/repo/muninn/b', snapshotSequence: 3, signals: '- [1] Keep cwd B.' }),
+        ],
+      }),
+    },
+    dreamingTable: {
+      append: async ({ row }) => ({ ...row, dreamingId: 'dreaming:7' }),
+      get: async () => null,
+      list: async () => [],
+      delta: async () => ({ sourceVersion: 0, rows: [] }),
+      stats: async () => ({ version: 0, rowCount: 0, fragmentCount: 0 }),
+    },
+  };
+  const service = new ProjectDreamingService(client, new DreamingIndex(null), 'default-observer', {
+    merge: async ({ incrementalSignals }) => {
+      assert.match(incrementalSignals, /Keep cwd A/);
+      assert.match(incrementalSignals, /Keep cwd B/);
+      return '# Project Dream\n\n## Signals\n\n### Guidance\n- [1] Keep cwd A.\n- [1] Keep cwd B.\n\n### Skills\n\n### Open Questions';
+    },
+  });
+
+  const result = await service.create('/repo/muninn');
+
+  assert.equal(result.created, true);
 });

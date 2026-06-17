@@ -1,5 +1,3 @@
-import { sessionIdentityKey } from '@muninn/common/session-identity';
-
 import type { DreamingRow, NativeTables, SessionSnapshotRow, SourceRows } from '../native.js';
 import { parseProjectDreamSignals, type ProjectDreamSignals } from './content.js';
 import { DreamingIndex } from './index.js';
@@ -68,15 +66,7 @@ export class ProjectDreamingService {
   }
 
   private async getDream(dreamingId: string): Promise<DreamingRow | null> {
-    const row = await this.client.dreamingTable.get(dreamingId);
-    if (row) {
-      return row;
-    }
-    try {
-      return await this.client.dreamingTable.get({ dreamingId } as unknown as string);
-    } catch {
-      return null;
-    }
+    return this.client.dreamingTable.get(dreamingId);
   }
 }
 
@@ -86,11 +76,7 @@ function selectedSignals(source: SourceRows<SessionSnapshotRow>, project: string
     if (row.project !== project || row.signals.trim().length === 0) {
       continue;
     }
-    const key = sessionIdentityKey({
-      sessionId: row.sessionId,
-      agent: row.agent,
-      project: row.project,
-    });
+    const key = dreamSessionKey(row);
     const current = latest.get(key);
     if (!current || compareSnapshots(row, current) > 0) {
       latest.set(key, row);
@@ -111,4 +97,13 @@ function rowId(id: string): bigint {
     return 0n;
   }
   return BigInt(match[1]);
+}
+
+function dreamSessionKey(value: {
+  sessionId: string;
+  agent: string;
+  project: string;
+  cwd: string;
+}): string {
+  return [value.project, value.agent, value.sessionId, value.cwd].join('\u001f');
 }
