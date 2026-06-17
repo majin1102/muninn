@@ -514,7 +514,11 @@ function checkpointFloors(checkpoint: CheckpointContent | CheckpointFile): Recor
 }
 
 function minNumber(values: Array<number | null | undefined>): number | null {
-  const present = values.filter((value): value is number => typeof value === 'number');
+  const present = values.filter((value): value is number => (
+    typeof value === 'number'
+    && Number.isSafeInteger(value)
+    && value >= 0
+  ));
   return present.length === 0 ? null : Math.min(...present);
 }
 
