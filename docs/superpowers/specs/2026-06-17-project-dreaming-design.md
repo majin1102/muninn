@@ -198,9 +198,7 @@ system: |
 
   Inputs
   - Parent dream content, if one exists.
-  - Source session signals grouped by `session:<rowid>`.
-  - Source session signals are current project evidence.
-  - Parent dream content is prior project memory, not new evidence by itself.
+  - Incremental signals from active sessions, grouped by `session:<rowid>`.
 
   Merge rules
   - Semantically merge overlapping or equivalent signals instead of copying duplicates.
