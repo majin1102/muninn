@@ -102,10 +102,10 @@ and must use this shape:
 ## Signals
 
 ### Guidance
-- [5] Prefer short, context-aware names when local context is clear. (refs: session:12, session:19)
+- [12] Prefer short, context-aware names when local context is clear. (refs: session:12, session:19)
 
 ### Skills
-- [4] When changing prompts, include the exact prompt text or diff in the plan. (refs: session:8)
+- [7] When changing prompts, include the exact prompt text or diff in the plan. (refs: session:8)
 
 ### Open Questions
 - [2] Decide whether project dreams participate in recall. (refs: session:21)
@@ -118,7 +118,8 @@ Rules:
   categories.
 - Each category keeps at most 20 signal bullets in `dreaming.content`.
 - Signals are ordered by project-level importance within each category.
-- Weights use `[1]` through `[5]`.
+- Weights use positive integer markers like `[7]`; higher numbers sort first.
+- Weights are accumulated support scores, not fixed bounded buckets.
 - References use public session snapshot ids in text, such as `session:12`.
 - The document may contain fewer than 20 signals per category.
 - The document should not include empty filler signals.
@@ -219,13 +220,14 @@ system: |
   - Open Questions: unresolved decisions, blockers, or user confirmations that affect future work; remove once resolved.
 
   Signal weights
-  - Use `[1]` to `[5]`; higher numbers sort first.
-  - `[5]` means strong, repeated, current project guidance.
-  - `[4]` means important project guidance with clear support.
-  - `[3]` means useful recurring guidance or a meaningful unresolved question.
-  - `[2]` means weak but still useful project guidance.
-  - `[1]` means low-confidence guidance worth preserving for future merge.
-  - Cap weight at `[5]`.
+  - Use weight marker format `[N]`, where `N` is a positive integer.
+  - Do not cap weights at a fixed maximum.
+  - Treat weight as accumulated support, not as a bounded category label.
+  - When semantically equivalent parent and source signals support the same project-level meaning, merge them into one normalized signal and add their numeric weights.
+  - When multiple signals are similar but not identical, normalize them into the clearest project-level wording and assign one weight that reflects the combined support for that normalized meaning.
+  - When current source signals correct or supersede a parent signal, do not add the contradicted parent weight; rewrite, demote, or remove the parent signal.
+  - If an input signal is useful but has no readable weight marker, treat it as `[1]`.
+  - Sort top-level bullets by weight descending within each category.
 
   Budget
   - Keep at most 20 top-level bullets under each signal category.
@@ -326,6 +328,8 @@ Focused tests should cover:
   projects.
 - Markdown parsing returns at most 5 signals per category for MCP reads.
 - Dream append validates the 20-per-category contract.
+- Dream append parses positive integer weight markers without imposing a fixed
+  maximum.
 
 ## Open Follow-Up
 
