@@ -238,7 +238,6 @@ system: |
   - Each top-level signal bullet must start with a weight marker like `- [4]`.
   - End each top-level signal bullet with refs in this format: `(refs: session:12, session:19)`.
   - Use only input refs.
-  - If a category has no signals, include the heading and no bullets under it.
 ```
 
 The user prompt should pass input as Markdown with this exact shape:
