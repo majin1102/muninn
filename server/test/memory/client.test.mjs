@@ -1079,6 +1079,7 @@ test('validateSettings rejects extraction dimension changes when the table exist
   const binding = await getNativeTables(defaultStorageTarget(homeDir));
   assert.ok(typeof binding.turnTable.describe === 'function');
   assert.ok(typeof binding.sessionTable.describe === 'function');
+  assert.ok(typeof binding.dreamingTable.describe === 'function');
   assert.ok(typeof binding.extractionTable.describe === 'function');
 
   await binding.extractionTable.upsert({

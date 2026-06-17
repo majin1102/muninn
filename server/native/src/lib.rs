@@ -3,8 +3,8 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use muninn_format::{
-    Extraction, ExtractionTable, MemoryId, MemoryLayer, RecallMode, SessionSnapshot, SessionTable,
-    TableOptions, Turn, TurnTable, data_root,
+    Dreaming, DreamingTable, Extraction, ExtractionTable, MemoryId, MemoryLayer, RecallMode,
+    SessionSnapshot, SessionTable, TableOptions, Turn, TurnTable, data_root,
 };
 use napi::{Error, Result as NapiResult};
 use napi_derive::napi;
@@ -14,6 +14,7 @@ use tokio::sync::Mutex;
 
 #[derive(Clone)]
 struct CoreResources {
+    dreaming_table: DreamingTable,
     session_table: SessionTable,
     turn_table: TurnTable,
     extraction_table: ExtractionTable,
@@ -89,6 +90,12 @@ struct SessionListSnapshotsParams {
 #[serde(rename_all = "camelCase")]
 struct SessionInsertParams {
     snapshots: Vec<SessionSnapshot>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DreamingAppendParams {
+    row: Dreaming,
 }
 
 #[derive(Debug, Deserialize)]
@@ -435,6 +442,56 @@ impl CoreBinding {
         into_napi_value(resources.session_table.describe().await)
     }
 
+    #[napi(js_name = "dreamingGet")]
+    pub async fn dreaming_get(&self, dreaming_id: String) -> NapiResult<Value> {
+        let resources = self.resources().await?;
+        let memory_id = parse_memory_id(&dreaming_id, MemoryLayer::Dreaming)?;
+        into_napi_value(resources.dreaming_table.get(memory_id.memory_point()).await)
+    }
+
+    #[napi(js_name = "dreamingList")]
+    pub async fn dreaming_list(&self) -> NapiResult<Value> {
+        let resources = self.resources().await?;
+        into_napi_value(resources.dreaming_table.list().await)
+    }
+
+    #[napi(js_name = "dreamingDelta")]
+    pub async fn dreaming_delta(&self, params: Value) -> NapiResult<Value> {
+        let params = parse_params::<ExtractionDeltaParams>(params)?;
+        let resources = self.resources().await?;
+        into_napi_value(
+            resources
+                .dreaming_table
+                .delta(params.baseline_version)
+                .await,
+        )
+    }
+
+    #[napi(js_name = "dreamingAppend")]
+    pub async fn dreaming_append(&self, params: Value) -> NapiResult<Value> {
+        let params = parse_params::<DreamingAppendParams>(params)?;
+        let resources = self.resources().await?;
+        let mut row = params.row;
+        resources
+            .dreaming_table
+            .append(&mut row)
+            .await
+            .map_err(to_napi_error)?;
+        to_napi_value(row)
+    }
+
+    #[napi(js_name = "dreamingTableStats")]
+    pub async fn dreaming_table_stats(&self) -> NapiResult<Value> {
+        let resources = self.resources().await?;
+        into_napi_value(resources.dreaming_table.stats().await)
+    }
+
+    #[napi(js_name = "describeDreamingTable")]
+    pub async fn describe_dreaming_table(&self) -> NapiResult<Value> {
+        let resources = self.resources().await?;
+        into_napi_value(resources.dreaming_table.describe().await)
+    }
+
     #[napi(js_name = "extractionNearest")]
     pub async fn extraction_nearest(&self, params: Value) -> NapiResult<Value> {
         let params = parse_params::<ExtractionNearestParams>(params)?;
@@ -596,10 +653,12 @@ pub fn create_core_binding(params: Option<Value>) -> NapiResult<CoreBinding> {
     };
     let turn_table = TurnTable::new(table_options.clone());
     let session_table = SessionTable::new(table_options.clone());
+    let dreaming_table = DreamingTable::new(table_options.clone());
     let extraction_table = ExtractionTable::new(table_options);
     Ok(CoreBinding {
         inner: Arc::new(CoreState {
             resources: Mutex::new(Some(CoreResources {
+                dreaming_table,
                 turn_table,
                 session_table,
                 extraction_table,
@@ -641,6 +700,7 @@ fn parse_memory_id(raw: &str, expected_layer: MemoryLayer) -> NapiResult<MemoryI
             match expected_layer {
                 MemoryLayer::Turn => "turn",
                 MemoryLayer::Session => "session",
+                MemoryLayer::Dreaming => "dreaming",
             },
             memory_id.memory_layer()
         )));

@@ -11,8 +11,9 @@ use lance::dataset::ROW_ID;
 use lance::{Error, Result};
 use serde_json::{Map, Value};
 
-use super::schema::{extraction_schema, session_schema, turn_schema};
+use super::schema::{dreaming_schema, extraction_schema, session_schema, turn_schema};
 use crate::config::extraction_config;
+use crate::dreaming::Dreaming;
 use crate::extraction::Extraction;
 use crate::memory_id::{MemoryId, MemoryLayer};
 use crate::session::SessionSnapshot;
@@ -497,6 +498,94 @@ pub(crate) fn record_batch_to_session_snapshots_with_row_ids(
         })
         .collect::<Result<Vec<_>>>()?;
     Ok(session_snapshots)
+}
+
+pub(crate) fn dreamings_to_record_batch(
+    rows: &[Dreaming],
+) -> std::result::Result<RecordBatch, ArrowError> {
+    let project = StringArray::from_iter_values(rows.iter().map(|row| row.project.as_str()));
+    let parent_id = UInt64Array::from(
+        rows.iter()
+            .map(|row| row.parent_id)
+            .collect::<Vec<Option<u64>>>(),
+    );
+    let created_at = TimestampMicrosecondArray::from_iter_values(
+        rows.iter().map(|row| row.created_at.timestamp_micros()),
+    )
+    .with_timezone("UTC");
+    let session_snapshot_version =
+        UInt64Array::from_iter_values(rows.iter().map(|row| row.session_snapshot_version));
+    let content = StringArray::from_iter_values(rows.iter().map(|row| row.content.as_str()));
+
+    Ok(RecordBatch::try_new(
+        Arc::new(dreaming_schema()),
+        vec![
+            Arc::new(project),
+            Arc::new(parent_id),
+            Arc::new(created_at),
+            Arc::new(session_snapshot_version),
+            Arc::new(content),
+        ],
+    )?)
+}
+
+pub(crate) fn dreamings_to_reader(
+    rows: Vec<Dreaming>,
+) -> RecordBatchIterator<impl Iterator<Item = std::result::Result<RecordBatch, ArrowError>>> {
+    let schema = Arc::new(dreaming_schema());
+    let batch = dreamings_to_record_batch(&rows);
+    RecordBatchIterator::new(vec![batch].into_iter(), schema)
+}
+
+pub(crate) fn record_batch_to_dreamings(batch: &RecordBatch) -> Result<Vec<Dreaming>> {
+    let row_ids = batch_row_ids(batch)?;
+    record_batch_to_dreamings_with_row_ids(batch, &row_ids)
+}
+
+pub(crate) fn record_batch_to_dreamings_with_row_ids(
+    batch: &RecordBatch,
+    row_ids: &[u64],
+) -> Result<Vec<Dreaming>> {
+    let project = batch
+        .column(0)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap();
+    let parent_id = batch
+        .column(1)
+        .as_any()
+        .downcast_ref::<UInt64Array>()
+        .unwrap();
+    let created_at = batch
+        .column(2)
+        .as_any()
+        .downcast_ref::<TimestampMicrosecondArray>()
+        .unwrap();
+    let session_snapshot_version = batch
+        .column(3)
+        .as_any()
+        .downcast_ref::<UInt64Array>()
+        .unwrap();
+    let content = batch
+        .column(4)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap();
+
+    let rows = (0..batch.num_rows())
+        .map(|index| Dreaming {
+            dreaming_id: MemoryId::new(MemoryLayer::Dreaming, row_ids[index]),
+            project: project.value(index).to_string(),
+            parent_id: optional_u64(parent_id, index),
+            created_at: Utc
+                .timestamp_micros(created_at.value(index))
+                .single()
+                .unwrap(),
+            session_snapshot_version: session_snapshot_version.value(index),
+            content: content.value(index).to_string(),
+        })
+        .collect();
+    Ok(rows)
 }
 
 pub(crate) fn batch_row_ids(batch: &RecordBatch) -> Result<Vec<u64>> {

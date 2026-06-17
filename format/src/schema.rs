@@ -59,6 +59,20 @@ pub fn session_schema() -> Schema {
     ])
 }
 
+pub fn dreaming_schema() -> Schema {
+    Schema::new(vec![
+        Field::new("project", DataType::Utf8, false),
+        Field::new("parent_id", DataType::UInt64, true),
+        Field::new(
+            "created_at",
+            DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+            false,
+        ),
+        Field::new("session_snapshot_version", DataType::UInt64, false),
+        Field::new("content", DataType::Utf8, false),
+    ])
+}
+
 pub fn extraction_schema(dimensions: usize) -> Schema {
     let mut id_metadata = std::collections::HashMap::new();
     id_metadata.insert(

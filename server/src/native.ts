@@ -80,6 +80,15 @@ export interface SessionSnapshotRow {
   references: string[];
 }
 
+export type DreamingRow = {
+  dreamingId: string;
+  project: string;
+  parentId?: number | null;
+  createdAt: string;
+  sessionSnapshotVersion: number;
+  content: string;
+};
+
 export type ExtractionRow = {
   id: string;
   title: string;
@@ -94,6 +103,7 @@ export type ExtractionRow = {
 
 export type Turn = TurnRow;
 export type SessionSnapshot = SessionSnapshotRow;
+export type Dreaming = DreamingRow;
 export type Extraction = ExtractionRow;
 
 
@@ -150,6 +160,15 @@ type NativeCoreBinding = {
   sessionCleanup(params: {
     floorVersion: number;
   }): MaybePromise<CompactResult>;
+  dreamingGet(dreamingId: string): MaybePromise<DreamingRow | null>;
+  dreamingList(): MaybePromise<DreamingRow[]>;
+  dreamingDelta(params: {
+    baselineVersion: number;
+  }): MaybePromise<SourceRows<DreamingRow>>;
+  dreamingAppend(params: {
+    row: DreamingRow;
+  }): MaybePromise<DreamingRow>;
+  dreamingTableStats(): MaybePromise<TableStats | null>;
   extractionNearest(params: {
     vector: number[];
     limit: number;
@@ -191,6 +210,7 @@ type NativeCoreBinding = {
   }): MaybePromise<CompactResult>;
   describeTurnTable(): MaybePromise<TableDescription | null>;
   describeSessionTable(): MaybePromise<TableDescription | null>;
+  describeDreamingTable(): MaybePromise<TableDescription | null>;
   describeExtractionTable(): MaybePromise<TableDescription | null>;
 };
 
@@ -258,6 +278,19 @@ export interface SessionTableBinding {
   describe(): Promise<TableDescription | null>;
 }
 
+export interface DreamingTableBinding {
+  get(dreamingId: string): Promise<DreamingRow | null>;
+  list(): Promise<DreamingRow[]>;
+  delta(params: {
+    baselineVersion: number;
+  }): Promise<SourceRows<DreamingRow>>;
+  append(params: {
+    row: DreamingRow;
+  }): Promise<DreamingRow>;
+  stats(): Promise<TableStats | null>;
+  describe(): Promise<TableDescription | null>;
+}
+
 export interface ExtractionTableBinding {
   nearest(params: {
     vector: number[];
@@ -305,6 +338,7 @@ export interface NativeTables {
   close(): Promise<void>;
   turnTable: TurnTableBinding;
   sessionTable: SessionTableBinding;
+  dreamingTable: DreamingTableBinding;
   extractionTable: ExtractionTableBinding;
 }
 
@@ -391,6 +425,17 @@ function wrapBinding(native: NativeCoreBinding): NativeTables {
       cleanup: async (params) => resolveNativeResult(native.sessionCleanup(params)),
       describe: async () => resolveNativeResult(native.describeSessionTable()),
     },
+    dreamingTable: {
+      get: async (dreamingId) => normalizeOptionalRecord(
+        await resolveNativeResult(native.dreamingGet(dreamingId)),
+        'dreamingId',
+      ),
+      list: async () => resolveNativeResult(native.dreamingList()),
+      delta: async (params) => resolveNativeResult(native.dreamingDelta(params)),
+      append: async (params) => resolveNativeResult(native.dreamingAppend(params)),
+      stats: async () => resolveNativeResult(native.dreamingTableStats()),
+      describe: async () => resolveNativeResult(native.describeDreamingTable()),
+    },
     extractionTable: {
       nearest: async (params) => resolveNativeResult(native.extractionNearest(params)),
       search: async (params) => resolveNativeResult(native.extractionSearch(params)),
@@ -427,6 +472,7 @@ export const __testing = {
 export type TableName =
   | 'turn'
   | 'session'
+  | 'dreaming'
   | 'extraction';
 
 export class TableMutationLocks {
@@ -467,6 +513,10 @@ export function lockNativeTables<T extends NativeTables>(tables: T, locks: Table
       insert: (params) => locks.with('session', () => tables.sessionTable.insert(params)),
       compact: () => locks.with('session', () => tables.sessionTable.compact()),
       cleanup: (params) => locks.with('session', () => tables.sessionTable.cleanup(params)),
+    },
+    dreamingTable: tables.dreamingTable && {
+      ...tables.dreamingTable,
+      append: (params) => locks.with('dreaming', () => tables.dreamingTable.append(params)),
     },
     extractionTable: tables.extractionTable && {
       ...tables.extractionTable,
