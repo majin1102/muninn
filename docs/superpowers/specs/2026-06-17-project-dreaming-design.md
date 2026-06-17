@@ -239,7 +239,6 @@ system: |
   - End each top-level signal bullet with refs in this format: `(refs: session:12, session:19)`.
   - Use only input refs.
   - If a category has no signals, include the heading and no bullets under it.
-  - Do not include `## Summary`, `## Extractions`, JSON, tables, or metadata comments.
 ```
 
 The user prompt should pass input as Markdown with this exact shape:
