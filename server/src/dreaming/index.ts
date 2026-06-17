@@ -26,7 +26,8 @@ export class DreamingIndex {
 
   async latest(client: NativeTables, project: string): Promise<DreamingIndexEntry | null> {
     await this.ensureFresh(client);
-    return this.entries.get(project) ?? null;
+    const entry = this.entries.get(project);
+    return entry ? { ...entry } : null;
   }
 
   async exportCheckpoint(client: NativeTables): Promise<DreamingIndexCheckpoint> {

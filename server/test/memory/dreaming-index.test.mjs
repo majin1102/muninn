@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { DreamingIndex } from '../../dist/dreaming/index.js';
 
 function client({ rows = [], deltaRows = [], version = 10 } = {}) {
-  const calls = { list: 0, delta: 0 };
+  const calls = { list: 0, delta: 0, baselineVersions: [] };
   return {
     calls,
     tables: {
@@ -13,9 +13,13 @@ function client({ rows = [], deltaRows = [], version = 10 } = {}) {
           calls.list += 1;
           return rows;
         },
-        delta: async () => {
+        delta: async ({ baselineVersion } = {}) => {
           calls.delta += 1;
-          return { sourceVersion: version, rows: deltaRows };
+          calls.baselineVersions.push(baselineVersion);
+          return {
+            sourceVersion: version,
+            rows: typeof deltaRows === 'function' ? deltaRows(baselineVersion) : deltaRows,
+          };
         },
         stats: async () => ({ version, rowCount: rows.length, fragmentCount: 1 }),
       },
@@ -49,4 +53,45 @@ test('DreamingIndex cleanup floor is min latest-project session snapshot version
     ],
   });
   assert.equal(index.sessionSnapshotFloor(), 3);
+});
+
+test('DreamingIndex delta refresh uses source version and protects latest entry copies', async () => {
+  const index = new DreamingIndex({
+    baseline: { dreaming: 4 },
+    entries: [
+      {
+        project: '/repo/a',
+        dreamingId: 'dreaming:5',
+        createdAt: '2026-06-18T01:00:00Z',
+        sessionSnapshotVersion: 8,
+      },
+    ],
+  });
+  const fake = client({
+    deltaRows: (baselineVersion) => (baselineVersion === 4
+      ? [
+          { dreamingId: 'dreaming:4', project: '/repo/a', parentId: null, createdAt: '2026-06-18T00:00:00Z', sessionSnapshotVersion: 7, content: '# Project Dream' },
+          { dreamingId: 'dreaming:9', project: '/repo/b', parentId: null, createdAt: '2026-06-18T03:00:00Z', sessionSnapshotVersion: 12, content: '# Project Dream' },
+        ]
+      : []),
+    version: 13,
+  });
+
+  const latest = await index.latest(fake.tables, '/repo/a');
+  latest.sessionSnapshotVersion = 99;
+
+  assert.deepEqual(await index.list(fake.tables), [
+    { project: '/repo/a', dreamingId: 'dreaming:5', createdAt: '2026-06-18T01:00:00Z', sessionSnapshotVersion: 8 },
+    { project: '/repo/b', dreamingId: 'dreaming:9', createdAt: '2026-06-18T03:00:00Z', sessionSnapshotVersion: 12 },
+  ]);
+  assert.equal(fake.calls.list, 0);
+  assert.equal(fake.calls.delta, 2);
+  assert.deepEqual(fake.calls.baselineVersions, [4, 13]);
+  assert.deepEqual(await index.exportCheckpoint(fake.tables), {
+    baseline: { dreaming: 13 },
+    entries: [
+      { project: '/repo/a', dreamingId: 'dreaming:5', createdAt: '2026-06-18T01:00:00Z', sessionSnapshotVersion: 8 },
+      { project: '/repo/b', dreamingId: 'dreaming:9', createdAt: '2026-06-18T03:00:00Z', sessionSnapshotVersion: 12 },
+    ],
+  });
 });

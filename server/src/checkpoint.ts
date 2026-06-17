@@ -288,9 +288,11 @@ function parseDreamingIndexSection(value: unknown): DreamingIndexCheckpoint | nu
       !isObjectRecord(entry)
       || typeof entry.project !== 'string'
       || typeof entry.dreamingId !== 'string'
+      || !isDreamingId(entry.dreamingId)
       || (entry.parentId != null && typeof entry.parentId !== 'string')
+      || (entry.parentId != null && !isDreamingId(entry.parentId))
       || typeof entry.createdAt !== 'string'
-      || typeof entry.sessionSnapshotVersion !== 'number'
+      || !isNonNegativeInteger(entry.sessionSnapshotVersion)
     ) {
       return null;
     }
@@ -306,7 +308,7 @@ function parseDreamingIndexSection(value: unknown): DreamingIndexCheckpoint | nu
 }
 
 function parseDreamingIndexBaseline(value: unknown): DreamingIndexCheckpoint['baseline'] | null {
-  if (!isObjectRecord(value) || typeof value.dreaming !== 'number') {
+  if (!isObjectRecord(value) || !isNonNegativeInteger(value.dreaming)) {
     return null;
   }
   return {
@@ -384,7 +386,15 @@ function parseRecentTurn(value: unknown): RecentTurn | null {
 }
 
 function isTurnSequence(value: unknown): value is number {
+  return isNonNegativeInteger(value);
+}
+
+function isNonNegativeInteger(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+}
+
+function isDreamingId(value: string): boolean {
+  return /^dreaming:\d+$/.test(value);
 }
 
 function parseThreads(value: unknown): ThreadRef[] | null {

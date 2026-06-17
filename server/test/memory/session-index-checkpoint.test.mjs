@@ -89,3 +89,22 @@ test('checkpoint rejects missing dreamingIndex', () => {
     /dreamingIndex section is invalid/,
   );
 });
+
+test('checkpoint rejects invalid dreamingIndex values', () => {
+  for (const mutate of [
+    (content) => { content.dreamingIndex.baseline.dreaming = -1; },
+    (content) => { content.dreamingIndex.baseline.dreaming = 1.5; },
+    (content) => { content.dreamingIndex.entries[0].dreamingId = 'turn:12'; },
+    (content) => { content.dreamingIndex.entries[0].parentId = 'session:8'; },
+    (content) => { content.dreamingIndex.entries[0].sessionSnapshotVersion = -1; },
+    (content) => { content.dreamingIndex.entries[0].sessionSnapshotVersion = 1.5; },
+  ]) {
+    const content = checkpoint();
+    mutate(content);
+
+    assert.throws(
+      () => parseCheckpointFile(JSON.stringify(content)),
+      /dreamingIndex section is invalid/,
+    );
+  }
+});
