@@ -304,3 +304,18 @@ test('session memory prompt uses raw turns and returns snapshot content document
   assert.doesNotMatch(system, /Do not turn .*liked.*reacted.*image.*painting.* into .*Fact/i);
   assert.doesNotMatch(system, /`summary`: grounded content from the turn/);
 });
+
+test('project dreamer prompt merges incremental project signals without session refs', () => {
+  const template = loadPromptTemplate('project_dreaming');
+  const system = template.system;
+  assert.match(system, /project dreaming agent/i);
+  assert.match(system, /Merge the parent dream with incremental project signals/);
+  assert.match(system, /Merge only signals that express the same underlying guidance/);
+  assert.match(system, /add their numeric weights/);
+  assert.match(system, /Do not cap weights at a fixed maximum/);
+  assert.doesNotMatch(system, /session:<rowid>/);
+  assert.doesNotMatch(system, /\(refs:/);
+  assert.match(template.userTemplate, /## Parent Dream/);
+  assert.match(template.userTemplate, /## Incremental Signals/);
+  assert.doesNotMatch(template.userTemplate, /### session:/);
+});
