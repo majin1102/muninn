@@ -6,8 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use super::access::{
     LanceDataset, TableAccess, TableDescription, TableOptions, TableStats, delete_by_row_ids,
-    describe_dataset,
-    escape_predicate_string,
+    describe_dataset, escape_predicate_string,
 };
 use super::codec::{
     record_batch_to_session_snapshots, record_batch_to_session_snapshots_with_row_ids,
@@ -34,8 +33,50 @@ pub struct SessionSnapshot {
     pub extractor: String,
     pub title: String,
     pub summary: String,
+    pub signals: String,
     pub content: String,
     pub references: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceRows<T> {
+    pub source_version: u64,
+    pub rows: Vec<T>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "PascalCase")]
+pub enum MemoryCategory {
+    Preference,
+    Fact,
+    Decision,
+    Entity,
+    Concept,
+    Other,
+}
+
+impl MemoryCategory {
+    pub fn semantic_index_category(&self) -> &'static str {
+        match self {
+            Self::Preference => "preference",
+            Self::Fact => "fact",
+            Self::Decision => "decision",
+            Self::Entity => "entity",
+            Self::Concept | Self::Other => "other",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ObservedMemory {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    pub text: String,
+    pub category: MemoryCategory,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_memory: Option<String>,
 }
 
 impl SessionSnapshot {
@@ -90,12 +131,34 @@ impl SessionTable {
         Ok(Some(describe_dataset(&dataset)))
     }
 
-    pub async fn list(&self, extractor: Option<&str>) -> Result<Vec<SessionSnapshot>> {
-        let mut snapshots = self.load_all().await?;
+    pub async fn list_with_version(
+        &self,
+        extractor: Option<&str>,
+    ) -> Result<SourceRows<SessionSnapshot>> {
+        let Some(dataset) = self.access.try_open().await? else {
+            return Ok(SourceRows {
+                source_version: 0,
+                rows: Vec::new(),
+            });
+        };
+        let source_version = dataset.version().version;
+        let batch = dataset.scan().with_row_id().try_into_batch().await?;
+        let mut rows = if batch.num_rows() == 0 {
+            Vec::new()
+        } else {
+            record_batch_to_session_snapshots(&batch)?
+        };
         if let Some(extractor) = extractor {
-            snapshots.retain(|snapshot| snapshot.extractor == extractor);
+            rows.retain(|snapshot| snapshot.extractor == extractor);
         }
-        Ok(snapshots)
+        Ok(SourceRows {
+            source_version,
+            rows,
+        })
+    }
+
+    pub async fn list(&self, extractor: Option<&str>) -> Result<Vec<SessionSnapshot>> {
+        Ok(self.list_with_version(extractor).await?.rows)
     }
 
     pub async fn get(&self, row_id: u64) -> Result<Option<SessionSnapshot>> {
@@ -108,9 +171,11 @@ impl SessionTable {
         if batch.num_rows() == 0 {
             return Ok(None);
         }
-        Ok(record_batch_to_session_snapshots_with_row_ids(&batch, &[row_id])?
-            .into_iter()
-            .next())
+        Ok(
+            record_batch_to_session_snapshots_with_row_ids(&batch, &[row_id])?
+                .into_iter()
+                .next(),
+        )
     }
 
     pub async fn insert(&self, snapshots: &mut [SessionSnapshot]) -> Result<()> {
@@ -134,8 +199,13 @@ impl SessionTable {
                     self.access.options().write_params(),
                 )
                 .await?;
-            assign_inserted_snapshot_ids_from_delta(&dataset, before_version, snapshots, &new_indexes)
-                .await?;
+            assign_inserted_snapshot_ids_from_delta(
+                &dataset,
+                before_version,
+                snapshots,
+                &new_indexes,
+            )
+            .await?;
         } else {
             let dataset = self
                 .access
@@ -165,10 +235,7 @@ impl SessionTable {
         .await
     }
 
-    pub async fn load_thread_snapshots(
-        &self,
-        session_id: &str,
-    ) -> Result<Vec<SessionSnapshot>> {
+    pub async fn load_thread_snapshots(&self, session_id: &str) -> Result<Vec<SessionSnapshot>> {
         let Some(dataset) = self.access.try_open().await? else {
             return Ok(Vec::new());
         };
@@ -191,13 +258,19 @@ impl SessionTable {
         &self,
         extractor: &str,
         baseline_version: u64,
-    ) -> Result<Vec<SessionSnapshot>> {
+    ) -> Result<SourceRows<SessionSnapshot>> {
         let Some(dataset) = self.access.try_open().await? else {
-            return Ok(Vec::new());
+            return Ok(SourceRows {
+                source_version: 0,
+                rows: Vec::new(),
+            });
         };
-        let version = dataset.version().version;
-        if version <= baseline_version {
-            return Ok(Vec::new());
+        let source_version = dataset.version().version;
+        if source_version <= baseline_version {
+            return Ok(SourceRows {
+                source_version,
+                rows: Vec::new(),
+            });
         }
         let delta = dataset
             .delta()
@@ -222,18 +295,10 @@ impl SessionTable {
                 .then(left.updated_at.cmp(&right.updated_at))
                 .then(left.snapshot_id.cmp(&right.snapshot_id))
         });
-        Ok(rows)
-    }
-
-    async fn load_all(&self) -> Result<Vec<SessionSnapshot>> {
-        let Some(dataset) = self.access.try_open().await? else {
-            return Ok(Vec::new());
-        };
-        let batch = dataset.scan().with_row_id().try_into_batch().await?;
-        if batch.num_rows() == 0 {
-            return Ok(Vec::new());
-        }
-        record_batch_to_session_snapshots(&batch)
+        Ok(SourceRows {
+            source_version,
+            rows,
+        })
     }
 }
 
@@ -311,6 +376,7 @@ mod tests {
             extractor: "extractor-a".to_string(),
             title: "Session Title".to_string(),
             summary: "Session summary".to_string(),
+            signals: String::new(),
             content: "{\"memories\":[]}".to_string(),
             references: vec!["turn:7".to_string()],
         };
@@ -334,6 +400,7 @@ mod tests {
             extractor: "extractor-a".to_string(),
             title: "Session Title".to_string(),
             summary: "Session summary".to_string(),
+            signals: String::new(),
             content: "{\"memories\":[]}".to_string(),
             references: vec!["turn:7".to_string()],
         }];
@@ -354,11 +421,57 @@ mod tests {
                 extractor: "extractor-a".to_string(),
                 title: "Session Title".to_string(),
                 summary: "Session summary".to_string(),
+                signals: String::new(),
                 content: "{\"memories\":[]}".to_string(),
                 references: vec!["turn:7".to_string()],
             }])
             .await
             .unwrap_err();
-        assert!(err.to_string().contains("session update is no longer supported"));
+        assert!(
+            err.to_string()
+                .contains("session update is no longer supported")
+        );
+    }
+
+    #[tokio::test]
+    async fn session_signals_roundtrip_and_delta_returns_source_version() {
+        let dir = tempfile::tempdir().unwrap();
+        let table = SessionTable::new(TableOptions::local(dir.path()).unwrap());
+        let mut rows = vec![SessionSnapshot {
+            snapshot_id: MemoryId::new(MemoryLayer::Session, u64::MAX),
+            session_id: "session-a".to_string(),
+            project: "muninn".to_string(),
+            cwd: "/repo/muninn".to_string(),
+            agent: "codex".to_string(),
+            snapshot_sequence: 0,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            extractor: "default-observer".to_string(),
+            title: "Session Title".to_string(),
+            summary: "Session summary".to_string(),
+            signals: "- [2] Keep schemas minimal.".to_string(),
+            content: "# Session Title\n\n## Summary\nSession summary\n\n## Signals\n- [2] Keep schemas minimal.".to_string(),
+            references: vec!["turn:7".to_string()],
+        }];
+
+        table.insert(&mut rows).await.unwrap();
+        let loaded = table
+            .get(rows[0].snapshot_id.memory_point())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(loaded.signals, "- [2] Keep schemas minimal.");
+
+        let delta = table.delta("default-observer", 0).await.unwrap();
+        assert_eq!(delta.rows.len(), 1);
+        assert_eq!(delta.rows[0].signals, "- [2] Keep schemas minimal.");
+        assert!(delta.source_version > 0);
+
+        let scanned = table
+            .list_with_version(Some("default-observer"))
+            .await
+            .unwrap();
+        assert_eq!(scanned.rows.len(), 1);
+        assert_eq!(scanned.source_version, delta.source_version);
     }
 }

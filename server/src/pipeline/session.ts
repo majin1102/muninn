@@ -66,6 +66,7 @@ export type SessionSnapshot = {
   extractor: string;
   title: string;
   summary: string;
+  signals: string;
   content: string;
   references: string[];
 };
@@ -372,6 +373,7 @@ export function toSessionSnapshot(thread: SessionThread): SessionSnapshot {
     extractor: thread.extractor,
     title: thread.title,
     summary: thread.summary,
+    signals: snapshot.signals ?? '',
     content: snapshot.snapshotContent,
     references: snapshot.contextRefs.map((reference) => reference.turnId),
   };
@@ -449,7 +451,7 @@ function deserializeSnapshot(row: SessionSnapshot): SnapshotContent {
     cwd: row.cwd,
     agent: row.agent,
     snapshotContent: parsed.snapshotContent,
-    signals: parsed.signals,
+    signals: row.signals,
     extractions: parsed.extractions,
     contextRefs: row.references.map((turnId) => ({ turnId, summary: turnId })),
     openQuestions: [],

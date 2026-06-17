@@ -349,6 +349,11 @@ pub(crate) fn session_snapshots_to_record_batch(
             .iter()
             .map(|session_snapshot| session_snapshot.summary.as_str()),
     );
+    let signals = StringArray::from_iter_values(
+        session_snapshots
+            .iter()
+            .map(|session_snapshot| session_snapshot.signals.as_str()),
+    );
     let content = StringArray::from_iter_values(
         session_snapshots
             .iter()
@@ -373,6 +378,7 @@ pub(crate) fn session_snapshots_to_record_batch(
             Arc::new(extractor),
             Arc::new(title),
             Arc::new(summary),
+            Arc::new(signals),
             Arc::new(content),
             Arc::new(references),
         ],
@@ -448,13 +454,18 @@ pub(crate) fn record_batch_to_session_snapshots_with_row_ids(
         .as_any()
         .downcast_ref::<StringArray>()
         .unwrap();
-    let content = batch
+    let signals = batch
         .column(10)
         .as_any()
         .downcast_ref::<StringArray>()
         .unwrap();
-    let references = batch
+    let content = batch
         .column(11)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap();
+    let references = batch
+        .column(12)
         .as_any()
         .downcast_ref::<ListArray>()
         .unwrap();
@@ -479,6 +490,7 @@ pub(crate) fn record_batch_to_session_snapshots_with_row_ids(
                 extractor: extractor.value(index).to_string(),
                 title: title.value(index).to_string(),
                 summary: summary.value(index).to_string(),
+                signals: signals.value(index).to_string(),
                 content: content.value(index).to_string(),
                 references: optional_string_list(references, index).unwrap_or_default(),
             })

@@ -352,6 +352,18 @@ impl CoreBinding {
         )
     }
 
+    #[napi(js_name = "sessionListSnapshotsWithVersion")]
+    pub async fn session_list_snapshots_with_version(&self, params: Value) -> NapiResult<Value> {
+        let params = parse_params::<SessionListSnapshotsParams>(params)?;
+        let resources = self.resources().await?;
+        into_napi_value(
+            resources
+                .session_table
+                .list_with_version(params.observer.as_deref())
+                .await,
+        )
+    }
+
     #[napi(js_name = "sessionSnapshots")]
     pub async fn session_snapshots(&self, session_id: String) -> NapiResult<Value> {
         let resources = self.resources().await?;

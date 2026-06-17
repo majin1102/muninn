@@ -1711,7 +1711,7 @@ test('extractor bootstrap restores committed state from checkpoint when baseline
       },
     },
     sessionTable: {
-      delta: async () => [],
+      delta: async () => ({ sourceVersion: 21, rows: [] }),
       stats: async () => ({
         version: 21,
         fragmentCount: 1,
@@ -1814,7 +1814,7 @@ test('extractor checkpoint restore keeps full history for active threads', async
       loadTurnsAfterEpoch: async () => [],
     },
     sessionTable: {
-      delta: async () => [],
+      delta: async () => ({ sourceVersion: 21, rows: [] }),
       stats: async () => ({
         version: 21,
         fragmentCount: 1,
@@ -1902,32 +1902,37 @@ test('extractor restore advances committedEpoch and excludes extracted turns fro
       ],
     },
     sessionTable: {
-      delta: async () => [
-        {
-          snapshotId: 'snapshot-1',
-          sessionId: 'obs-1',
-          snapshotSequence: 1,
-          createdAt: snapshot1At,
-          updatedAt: snapshot1At,
-          extractor: 'default-extractor',
-          title: 'Thread',
-          summary: 'Summary',
-          content: snapshotContentFixture('', { title: 'Thread', summary: 'Summary' }),
-          references: ['turn-13'],
-        },
-        {
-          snapshotId: 'snapshot-2',
-          sessionId: 'obs-1',
-          snapshotSequence: 2,
-          createdAt: snapshot2At,
-          updatedAt: snapshot2At,
-          extractor: 'default-extractor',
-          title: 'Thread',
-          summary: 'Summary',
-          content: snapshotContentFixture('', { title: 'Thread', summary: 'Summary' }),
-          references: ['turn-13', 'turn-14'],
-        },
-      ],
+      delta: async () => ({
+        sourceVersion: 21,
+        rows: [
+          {
+            snapshotId: 'snapshot-1',
+            sessionId: 'obs-1',
+            snapshotSequence: 1,
+            createdAt: snapshot1At,
+            updatedAt: snapshot1At,
+            extractor: 'default-extractor',
+            title: 'Thread',
+            summary: 'Summary',
+            signals: '',
+            content: snapshotContentFixture('', { title: 'Thread', summary: 'Summary' }),
+            references: ['turn-13'],
+          },
+          {
+            snapshotId: 'snapshot-2',
+            sessionId: 'obs-1',
+            snapshotSequence: 2,
+            createdAt: snapshot2At,
+            updatedAt: snapshot2At,
+            extractor: 'default-extractor',
+            title: 'Thread',
+            summary: 'Summary',
+            signals: '',
+            content: snapshotContentFixture('', { title: 'Thread', summary: 'Summary' }),
+            references: ['turn-13', 'turn-14'],
+          },
+        ],
+      }),
       threadSnapshots: async () => [
         {
           snapshotId: 'snapshot-0',
@@ -1938,6 +1943,7 @@ test('extractor restore advances committedEpoch and excludes extracted turns fro
           extractor: 'default-extractor',
           title: 'Thread',
           summary: 'Summary',
+          signals: '',
           content: snapshotContentFixture('', { title: 'Thread', summary: 'Summary' }),
           references: [],
         },
@@ -1950,6 +1956,7 @@ test('extractor restore advances committedEpoch and excludes extracted turns fro
           extractor: 'default-extractor',
           title: 'Thread',
           summary: 'Summary',
+          signals: '',
           content: snapshotContentFixture('', { title: 'Thread', summary: 'Summary' }),
           references: ['turn-13'],
         },
@@ -1962,6 +1969,7 @@ test('extractor restore advances committedEpoch and excludes extracted turns fro
           extractor: 'default-extractor',
           title: 'Thread',
           summary: 'Summary',
+          signals: '',
           content: snapshotContentFixture('', { title: 'Thread', summary: 'Summary' }),
           references: ['turn-13', 'turn-14'],
         },
@@ -2006,20 +2014,24 @@ test('extractor restore falls back when session delta refs are missing turn epoc
       loadTurnsAfterEpoch: async () => [makeExtractableTurn('turn-13', 13, 'epoch13')],
     },
     sessionTable: {
-      delta: async () => [
-        {
-          snapshotId: 'snapshot-1',
-          sessionId: 'obs-1',
-          snapshotSequence: 1,
-          createdAt: '2024-01-01T00:00:01Z',
-          updatedAt: '2024-01-01T00:00:01Z',
-          extractor: 'default-extractor',
-          title: 'Thread',
-          summary: 'Summary',
-          content: snapshotContentFixture('', { title: 'Thread', summary: 'Summary' }),
-          references: ['missing-turn'],
-        },
-      ],
+      delta: async () => ({
+        sourceVersion: 21,
+        rows: [
+          {
+            snapshotId: 'snapshot-1',
+            sessionId: 'obs-1',
+            snapshotSequence: 1,
+            createdAt: '2024-01-01T00:00:01Z',
+            updatedAt: '2024-01-01T00:00:01Z',
+            extractor: 'default-extractor',
+            title: 'Thread',
+            summary: 'Summary',
+            signals: '',
+            content: snapshotContentFixture('', { title: 'Thread', summary: 'Summary' }),
+            references: ['missing-turn'],
+          },
+        ],
+      }),
       threadSnapshots: async () => [
         {
           snapshotId: 'snapshot-0',
@@ -2030,6 +2042,7 @@ test('extractor restore falls back when session delta refs are missing turn epoc
           extractor: 'default-extractor',
           title: 'Thread',
           summary: 'Summary',
+          signals: '',
           content: snapshotContentFixture('', { title: 'Thread', summary: 'Summary' }),
           references: [],
         },
@@ -2076,7 +2089,7 @@ test('extractor restore skips stale threads resource only from session delta', a
       loadTurnsAfterEpoch: async () => [makeExtractableTurn('turn-13', 13, 'epoch13')],
     },
     sessionTable: {
-      delta: async () => [staleRow],
+      delta: async () => ({ sourceVersion: 21, rows: [staleRow] }),
       threadSnapshots: async () => [staleRow],
     },
     extractionTable: {},
@@ -2131,7 +2144,7 @@ test('extractor restore rebuilds delta-only threads from full history', async (t
       getTurn: async (turnId) => turnById.get(turnId) ?? null,
     },
     sessionTable: {
-      delta: async () => [fullRows[6], fullRows[7]],
+      delta: async () => ({ sourceVersion: 21, rows: [fullRows[6], fullRows[7]] }),
       threadSnapshots: async () => fullRows,
     },
     extractionTable: {},
@@ -2181,7 +2194,7 @@ test('extractor bootstrap skips stale checkpoint threads', async (t) => {
       loadTurnsAfterEpoch: async () => [],
     },
     sessionTable: {
-      delta: async () => [],
+      delta: async () => ({ sourceVersion: 21, rows: [] }),
       stats: async () => ({
         version: 21,
         fragmentCount: 1,
@@ -2339,7 +2352,7 @@ test('extractor bootstrap ignores extraction version mismatches when session bas
       loadTurnsAfterEpoch: async () => [],
     },
     sessionTable: {
-      delta: async () => [],
+      delta: async () => ({ sourceVersion: 21, rows: [] }),
       stats: async () => ({
         version: 21,
         fragmentCount: 1,
@@ -4495,6 +4508,7 @@ test('session snapshot persists markdown content with parsed title and summary',
     {
       title: 'Melanie Painting',
       summary: 'Melanie painted a lake sunrise and considers it special.',
+      signals: 'Melanie values art that captures important personal moments.',
       snapshotContent: markdown,
       extractions: [{
         text: 'Melanie painted a lake sunrise in 2022.',
@@ -4513,6 +4527,7 @@ test('session snapshot persists markdown content with parsed title and summary',
   const snapshot = toSessionSnapshot(thread);
   assert.equal(snapshot.title, 'Melanie Painting');
   assert.equal(snapshot.summary, 'Melanie painted a lake sunrise and considers it special.');
+  assert.equal(snapshot.signals, 'Melanie values art that captures important personal moments.');
   assert.equal(snapshot.content, markdown);
   assert.doesNotMatch(snapshot.content, /^\s*\{/);
 });

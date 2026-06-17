@@ -26,6 +26,11 @@ export interface TableStats {
   rowCount: number;
 }
 
+export type SourceRows<T> = {
+  sourceVersion: number;
+  rows: T[];
+};
+
 export interface CompactResult {
   changed: boolean;
 }
@@ -70,6 +75,7 @@ export interface SessionSnapshotRow {
   extractor: string;
   title: string;
   summary: string;
+  signals: string;
   content: string;
   references: string[];
 }
@@ -128,11 +134,14 @@ type NativeCoreBinding = {
   sessionListSnapshots(params: {
     extractor?: string;
   }): MaybePromise<SessionSnapshotRow[]>;
+  sessionListSnapshotsWithVersion(params: {
+    observer?: string;
+  }): MaybePromise<SourceRows<SessionSnapshotRow>>;
   sessionSnapshots(sessionId: string): MaybePromise<SessionSnapshotRow[]>;
   sessionDelta(params: {
     extractor: string;
     baselineVersion: number;
-  }): MaybePromise<SessionSnapshotRow[]>;
+  }): MaybePromise<SourceRows<SessionSnapshotRow>>;
   sessionInsert(params: {
     snapshots: SessionSnapshotRow[];
   }): MaybePromise<SessionSnapshotRow[]>;
@@ -230,11 +239,14 @@ export interface SessionTableBinding {
   listSnapshots(params: {
     extractor?: string;
   }): Promise<SessionSnapshotRow[]>;
+  listSnapshotsWithVersion(params: {
+    observer?: string;
+  }): Promise<SourceRows<SessionSnapshotRow>>;
   threadSnapshots(sessionId: string): Promise<SessionSnapshotRow[]>;
   delta(params: {
     extractor: string;
     baselineVersion: number;
-  }): Promise<SessionSnapshotRow[]>;
+  }): Promise<SourceRows<SessionSnapshotRow>>;
   insert(params: {
     snapshots: SessionSnapshotRow[];
   }): Promise<SessionSnapshotRow[]>;
@@ -370,6 +382,7 @@ function wrapBinding(native: NativeCoreBinding): NativeTables {
         'snapshotId',
       ),
       listSnapshots: async (params) => resolveNativeResult(native.sessionListSnapshots(params)),
+      listSnapshotsWithVersion: async (params) => resolveNativeResult(native.sessionListSnapshotsWithVersion(params)),
       threadSnapshots: async (sessionId) => resolveNativeResult(native.sessionSnapshots(sessionId)),
       delta: async (params) => resolveNativeResult(native.sessionDelta(params)),
       insert: async (params) => resolveNativeResult(native.sessionInsert(params)),

@@ -49,6 +49,7 @@ pub fn session_schema() -> Schema {
         Field::new("extractor", DataType::Utf8, false),
         Field::new("title", DataType::Utf8, false),
         Field::new("summary", DataType::Utf8, false),
+        Field::new("signals", DataType::Utf8, false),
         Field::new("content", DataType::Utf8, false),
         Field::new(
             "references",
@@ -158,5 +159,15 @@ mod tests {
         assert!(schema.field_with_name("agent").is_ok());
         assert!(schema.field_with_name("extractor").is_ok());
         assert!(schema.field_with_name("metadata_json").is_err());
+    }
+
+    #[test]
+    fn session_schema_has_signals_field() {
+        let schema = session_schema();
+        assert!(schema.field_with_name("signals").is_ok());
+        assert_eq!(
+            schema.field_with_name("signals").unwrap().data_type(),
+            &DataType::Utf8
+        );
     }
 }

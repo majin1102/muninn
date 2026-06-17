@@ -47,9 +47,17 @@ function client({
             ? snapshots.filter((snapshot) => (snapshot.extractor ?? snapshot.extractor) === query.extractor)
             : snapshots;
         },
+        listSnapshotsWithVersion: async (query = {}) => {
+          calls.listSnapshots += 1;
+          calls.listSnapshotQueries.push(query);
+          const rows = query.observer
+            ? snapshots.filter((snapshot) => (snapshot.extractor ?? snapshot.observer) === query.observer)
+            : snapshots;
+          return { sourceVersion: sessionVersion, rows };
+        },
         delta: async () => {
           calls.sessionDelta += 1;
-          return sessionDelta;
+          return { sourceVersion: sessionVersion, rows: sessionDelta };
         },
         stats: async () => ({ version: sessionVersion, rowCount: snapshots.length, fragmentCount: 1 }),
       },

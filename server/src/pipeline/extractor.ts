@@ -600,7 +600,7 @@ export class Extractor {
     const turnById = new Map(turns.map((turn) => [turn.turnId, turn]));
     const restored = await this.replayCheckpoint(
       section,
-      sessionDelta,
+      sessionDelta.rows,
       turnById,
     );
     if (!restored) {
