@@ -198,7 +198,7 @@ system: |
 
   Inputs
   - Parent dream content, if one exists.
-  - Incremental signals from active sessions, grouped by `session:<rowid>`.
+  - Incremental signals from active sessions.
 
   Merge rules
   - Semantically merge overlapping or equivalent signals instead of copying duplicates.
