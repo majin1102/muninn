@@ -99,7 +99,7 @@ test('incremental dream reads delta from parent sessionSnapshotVersion and store
   });
   const result = await service.create('/repo/muninn');
   assert.equal(result.created, true);
-  assert.equal(appended[0].parentId, 1);
+  assert.equal(appended[0].parentId, '1');
   assert.equal(appended[0].sessionSnapshotVersion, 15);
 });
 
@@ -133,4 +133,73 @@ test('dream source selection keeps same session id in different cwd buckets', as
   const result = await service.create('/repo/muninn');
 
   assert.equal(result.created, true);
+});
+
+test('incremental dream preserves large parent row id as decimal string', async () => {
+  const appended = [];
+  const parent = {
+    dreamingId: 'dreaming:9007199254740993',
+    project: '/repo/muninn',
+    parentId: null,
+    createdAt: '2026-06-18T00:00:00Z',
+    sessionSnapshotVersion: 12,
+    content: '# Project Dream\n\n## Signals\n\n### Guidance\n- [1] Keep schemas minimal.\n\n### Skills\n\n### Open Questions',
+  };
+  const client = {
+    sessionTable: {
+      delta: async () => ({
+        sourceVersion: 16,
+        rows: [
+          snapshot({ snapshotId: 'session:8', sessionId: 's1', snapshotSequence: 3, signals: '- [1] Keep parent precise.' }),
+        ],
+      }),
+    },
+    dreamingTable: {
+      append: async ({ row }) => {
+        appended.push(row);
+        return { ...row, dreamingId: 'dreaming:9007199254740994' };
+      },
+      get: async (dreamingId) => dreamingId === parent.dreamingId ? parent : null,
+      list: async () => [parent],
+      delta: async () => ({ sourceVersion: 1, rows: [] }),
+      stats: async () => ({ version: 1, rowCount: 1, fragmentCount: 1 }),
+    },
+  };
+  const service = new ProjectDreamingService(client, new DreamingIndex({
+    baseline: { dreaming: 1 },
+    entries: [{ project: '/repo/muninn', dreamingId: parent.dreamingId, createdAt: parent.createdAt, sessionSnapshotVersion: 12 }],
+  }), 'default-observer', {
+    merge: async () => '# Project Dream\n\n## Signals\n\n### Guidance\n- [1] Keep parent precise.\n\n### Skills\n\n### Open Questions',
+  });
+
+  const result = await service.create('/repo/muninn');
+
+  assert.equal(result.created, true);
+  assert.equal(appended[0].parentId, '9007199254740993');
+});
+
+test('incremental dream fails when index parent row is missing', async () => {
+  const client = {
+    sessionTable: {
+      delta: async () => assert.fail('delta should not run without parent row'),
+    },
+    dreamingTable: {
+      append: async () => assert.fail('append should not run without parent row'),
+      get: async () => null,
+      list: async () => [],
+      delta: async () => ({ sourceVersion: 1, rows: [] }),
+      stats: async () => ({ version: 1, rowCount: 0, fragmentCount: 0 }),
+    },
+  };
+  const service = new ProjectDreamingService(client, new DreamingIndex({
+    baseline: { dreaming: 1 },
+    entries: [{ project: '/repo/muninn', dreamingId: 'dreaming:42', createdAt: '2026-06-18T00:00:00Z', sessionSnapshotVersion: 12 }],
+  }), 'default-observer', {
+    merge: async () => assert.fail('merge should not run without parent row'),
+  });
+
+  await assert.rejects(
+    () => service.create('/repo/muninn'),
+    /project dream parent not found: dreaming:42/,
+  );
 });

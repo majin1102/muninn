@@ -31,7 +31,7 @@ test('DreamingIndex rebuild selects latest dream per project by row id', async (
   const fake = client({
     rows: [
       { dreamingId: 'dreaming:2', project: '/repo/a', parentId: null, createdAt: '2026-06-18T00:00:00Z', sessionSnapshotVersion: 4, content: '# Project Dream' },
-      { dreamingId: 'dreaming:5', project: '/repo/a', parentId: 2, createdAt: '2026-06-18T01:00:00Z', sessionSnapshotVersion: 8, content: '# Project Dream' },
+      { dreamingId: 'dreaming:5', project: '/repo/a', parentId: '2', createdAt: '2026-06-18T01:00:00Z', sessionSnapshotVersion: 8, content: '# Project Dream' },
       { dreamingId: 'dreaming:3', project: '/repo/b', parentId: null, createdAt: '2026-06-18T00:30:00Z', sessionSnapshotVersion: 7, content: '# Project Dream' },
     ],
     version: 9,

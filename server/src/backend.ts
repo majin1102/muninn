@@ -283,7 +283,7 @@ export class MuninnBackend {
   }
 
   async createProjectDream(project: string): Promise<ProjectDreamCreateResult> {
-    return this.checkpointLock.exclusive(async () => this.projectDreaming.create(project));
+    return this.projectDreaming.create(project);
   }
 
   async memoryWatermark(): Promise<MemoryWatermark> {

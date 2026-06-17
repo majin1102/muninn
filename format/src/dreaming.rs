@@ -10,7 +10,10 @@ use super::access::{
 use super::codec::{
     dreamings_to_reader, record_batch_to_dreamings, record_batch_to_dreamings_with_row_ids,
 };
-use super::memory_id::{MemoryId, MemoryLayer, deserialize_memory_id, serialize_memory_id};
+use super::memory_id::{
+    MemoryId, MemoryLayer, deserialize_memory_id, deserialize_optional_u64_string,
+    serialize_memory_id, serialize_optional_u64_string,
+};
 use super::session::SourceRows;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -22,6 +25,10 @@ pub struct Dreaming {
     )]
     pub dreaming_id: MemoryId,
     pub project: String,
+    #[serde(
+        serialize_with = "serialize_optional_u64_string",
+        deserialize_with = "deserialize_optional_u64_string"
+    )]
     pub parent_id: Option<u64>,
     pub created_at: DateTime<Utc>,
     pub session_snapshot_version: u64,
@@ -234,6 +241,24 @@ mod tests {
         assert_eq!(loaded.parent_id, None);
         assert_eq!(loaded.session_snapshot_version, 5);
         assert!(loaded.content.contains("Keep schemas minimal"));
+    }
+
+    #[test]
+    fn parent_id_serializes_as_decimal_string() {
+        let row = Dreaming {
+            dreaming_id: MemoryId::new(MemoryLayer::Dreaming, 1),
+            project: "/repo/muninn".to_string(),
+            parent_id: Some(9_007_199_254_740_993),
+            created_at: Utc::now(),
+            session_snapshot_version: 5,
+            content: "# Project Dream".to_string(),
+        };
+
+        let json = serde_json::to_value(&row).unwrap();
+        assert_eq!(json["parentId"], "9007199254740993");
+
+        let parsed: Dreaming = serde_json::from_value(json).unwrap();
+        assert_eq!(parsed.parent_id, Some(9_007_199_254_740_993));
     }
 
     #[tokio::test]

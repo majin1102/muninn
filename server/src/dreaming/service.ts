@@ -33,6 +33,9 @@ export class ProjectDreamingService {
 
     const parent = await this.index.latest(this.client, project);
     const parentRow = parent ? await this.getDream(parent.dreamingId) : null;
+    if (parent && !parentRow) {
+      throw new Error(`project dream parent not found: ${parent.dreamingId}`);
+    }
     const source = parent
       ? await this.client.sessionTable.delta({
         observer: this.extractorName,
@@ -55,7 +58,7 @@ export class ProjectDreamingService {
     const row: DreamingRow = {
       dreamingId: 'dreaming:18446744073709551615',
       project,
-      parentId: parent ? Number(rowId(parent.dreamingId)) : null,
+      parentId: parent ? rowPoint(parent.dreamingId) : null,
       createdAt: new Date().toISOString(),
       sessionSnapshotVersion: source.sourceVersion,
       content,
@@ -92,11 +95,15 @@ function compareSnapshots(left: SessionSnapshotRow, right: SessionSnapshotRow): 
 }
 
 function rowId(id: string): bigint {
+  return BigInt(rowPoint(id));
+}
+
+function rowPoint(id: string): string {
   const match = /:(\d+)$/.exec(id);
   if (!match) {
-    return 0n;
+    return '0';
   }
-  return BigInt(match[1]);
+  return match[1];
 }
 
 function dreamSessionKey(value: {

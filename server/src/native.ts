@@ -83,7 +83,7 @@ export interface SessionSnapshotRow {
 export type DreamingRow = {
   dreamingId: string;
   project: string;
-  parentId?: number | null;
+  parentId?: string | null;
   createdAt: string;
   sessionSnapshotVersion: number;
   content: string;
