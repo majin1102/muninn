@@ -55,6 +55,21 @@ test('DreamingIndex cleanup floor is min latest-project session snapshot version
   assert.equal(index.sessionSnapshotFloor(), 3);
 });
 
+test('DreamingIndex compares row ids without Number precision loss', async () => {
+  const fake = client({
+    rows: [
+      { dreamingId: 'dreaming:9007199254740992', project: '/repo/a', parentId: null, createdAt: '2026-06-18T00:00:00Z', sessionSnapshotVersion: 7, content: '# Project Dream' },
+      { dreamingId: 'dreaming:9007199254740993', project: '/repo/a', parentId: null, createdAt: '2026-06-18T01:00:00Z', sessionSnapshotVersion: 8, content: '# Project Dream' },
+    ],
+    version: 11,
+  });
+  const index = new DreamingIndex(null);
+
+  assert.deepEqual(await index.list(fake.tables), [
+    { project: '/repo/a', dreamingId: 'dreaming:9007199254740993', createdAt: '2026-06-18T01:00:00Z', sessionSnapshotVersion: 8 },
+  ]);
+});
+
 test('DreamingIndex delta refresh uses source version and protects latest entry copies', async () => {
   const index = new DreamingIndex({
     baseline: { dreaming: 4 },

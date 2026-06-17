@@ -90,10 +90,10 @@ export class DreamingIndex {
   }
 }
 
-function rowId(dreamingId: string): number {
+function rowId(dreamingId: string): bigint {
   const match = /^dreaming:(\d+)$/.exec(dreamingId);
   if (!match) {
     throw new Error(`invalid dreaming id: ${dreamingId}`);
   }
-  return Number(match[1]);
+  return BigInt(match[1]);
 }
