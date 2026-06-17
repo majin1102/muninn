@@ -202,7 +202,6 @@ system: |
 
   Merge rules
   - Semantically merge overlapping or equivalent signals instead of copying duplicates.
-  - Preserve high-value guidance that should change future agent behavior in this project.
   - Promote signals supported by multiple source sessions or by stronger current evidence.
   - Do not increase a parent-only signal's weight unless current source signals support it.
   - Demote, rewrite, or remove stale, contradicted, task-local, speculative, or low-impact signals.
