@@ -6,19 +6,19 @@ export type ProjectDreamSignals = {
 
 export function validateProjectDreamContent(content: string): void {
   const text = stripFence(content).trim();
-  if (!text.startsWith('# Project Dream')) {
+  if (!/^# Project Dream$/m.test(text.split('\n')[0] ?? '')) {
     throw new Error('project dream content must start with # Project Dream');
   }
   if (!/^## Signals$/m.test(text)) {
     throw new Error('project dream content must include ## Signals');
   }
   for (const heading of ['### Guidance', '### Skills', '### Open Questions']) {
-    if (!text.includes(heading)) {
+    if (!new RegExp(`^${escapeRegExp(heading)}$`, 'm').test(text)) {
       throw new Error(`project dream content must include ${heading}`);
     }
   }
-  if (/\(refs:\s*session:\d+/i.test(text) || /session:<rowid>/i.test(text)) {
-    throw new Error('project dream content must not include session refs');
+  if (hasProvenanceRef(text)) {
+    throw new Error('project dream content must not include provenance refs');
   }
 }
 
@@ -81,4 +81,16 @@ function block(lines: string[], index: number): { weight: number; index: number;
   const text = lines.join('\n').trimEnd();
   const weight = Number(/^- \[(\d+)\]/.exec(lines[0])?.[1] ?? '1');
   return { weight, index, text };
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function hasProvenanceRef(text: string): boolean {
+  return /refs\s*:/i.test(text)
+    || /<!--[\s\S]*?refs[\s\S]*?-->/i.test(text)
+    || /\bsession:\d+\b/i.test(text)
+    || /\bturn:\d+\b/i.test(text)
+    || /session:<rowid>/i.test(text);
 }

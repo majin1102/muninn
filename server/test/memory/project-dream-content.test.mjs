@@ -33,8 +33,28 @@ test('project dream content parser returns top weighted signals per category', (
 });
 
 test('project dream content rejects refs and session ids', () => {
+  for (const marker of [
+    '(refs: session:1)',
+    '(refs: [turn:102])',
+    '<!-- sequence: 0; refs: [turn:102] -->',
+    'refs: session:1',
+    'session:1',
+    'turn:1',
+  ]) {
+    assert.throws(
+      () => validateProjectDreamContent(`# Project Dream\n\n## Signals\n\n### Guidance\n- [1] Keep refs. ${marker}\n\n### Skills\n\n### Open Questions`),
+      /must not include provenance refs/i,
+    );
+  }
+});
+
+test('project dream content rejects prompt echo and non-exact headings', () => {
   assert.throws(
-    () => validateProjectDreamContent('# Project Dream\n\n## Signals\n\n### Guidance\n- [1] Keep refs. (refs: session:1)\n\n### Skills\n\n### Open Questions'),
-    /must not include session refs/i,
+    () => validateProjectDreamContent('# Project Dreaming Input\n\n## Signals\n\n### Guidance\n- [1] Echoed prompt.\n\n### Skills\n\n### Open Questions'),
+    /must start with # Project Dream/i,
+  );
+  assert.throws(
+    () => validateProjectDreamContent('# Project Dream\n\n## Signals Draft\n\n### Guidance\n- [1] Wrong heading.\n\n### Skills\n\n### Open Questions'),
+    /must include ## Signals/i,
   );
 });
