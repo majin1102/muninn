@@ -204,9 +204,6 @@ system: |
   - Semantically merge overlapping or equivalent signals instead of copying duplicates.
   - Promote signals supported by multiple source sessions or by stronger current evidence.
   - Do not increase a parent-only signal's weight unless current source signals support it.
-  - Demote, rewrite, or remove stale, contradicted, task-local, speculative, or low-impact signals.
-  - Prefer current source signals when they correct or supersede the parent dream.
-  - Keep signals concise and action-oriented.
   - Write in the conversation's primary language; preserve code, command, file, API, schema, and project identifiers exactly.
   - Do not invent facts, refs, source sessions, user preferences, decisions, or open questions.
   - Do not emit refs that are absent from the input.
