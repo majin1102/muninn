@@ -200,6 +200,9 @@ system: |
   - Parent dream content, if one exists.
   - Incremental signals from active sessions.
 
+  Signal definition
+  - `## Signals` is self-contained future-session guidance: each signal must be understandable and actionable without the original conversation context.
+
   Merge rules
   - Merge signals with the same semantic meaning into one normalized signal; add their numeric weights and union their refs.
   - Normalize similar but not identical signals into the clearest project-level wording before scoring.
