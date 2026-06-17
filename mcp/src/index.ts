@@ -32,6 +32,30 @@ function renderMemoryResponse(
   }).join('\n\n---\n\n');
 }
 
+function renderProjectSignals(result: {
+  project: string;
+  memoryId: string;
+  guidance: string[];
+  skills: string[];
+  openQuestions: string[];
+}): string {
+  return [
+    `# Project Signals`,
+    '',
+    `Project: ${result.project}`,
+    `Memory ID: ${result.memoryId}`,
+    '',
+    '## Guidance',
+    ...result.guidance,
+    '',
+    '## Skills',
+    ...result.skills,
+    '',
+    '## Open Questions',
+    ...result.openQuestions,
+  ].join('\n').trimEnd();
+}
+
 async function writeDebugMarkdown(toolName: string, args: unknown): Promise<string> {
   const muninnHome = process.env.MUNINN_HOME ?? path.join(os.homedir(), '.muninn');
   const debugDir = path.join(muninnHome, 'debug');
@@ -169,6 +193,23 @@ async function main() {
       const result = await serverClient.getDetail(args);
       return {
         content: [{ type: 'text', text: renderMemoryResponse(result) }],
+      };
+    }
+  );
+
+  registerTool(
+    'project_signals',
+    {
+      description: 'Get top project dreaming signals for a project',
+      inputSchema: z.object({
+        project: z.string().describe('Project key/path'),
+        database: z.string().optional().describe('Muninn database name; defaults to main'),
+      }),
+    },
+    async (args: any) => {
+      const result = await serverClient.projectSignals(args);
+      return {
+        content: [{ type: 'text', text: renderProjectSignals(result) }],
       };
     }
   );

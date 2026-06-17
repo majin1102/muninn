@@ -4,6 +4,8 @@ import type {
   GetTimelineRequest,
   ListRequest,
   MemoryResponse,
+  ProjectDreamRequest,
+  ProjectDreamSignalsResponse,
   RecallRequest,
 } from '@muninn/common';
 
@@ -15,29 +17,33 @@ export class ServerClient {
   }
 
   async recall(request: RecallRequest): Promise<MemoryResponse> {
-    return this.fetchJson('/api/v1/recall', request);
+    return this.fetchJson<MemoryResponse, RecallRequest>('/api/v1/recall', request);
   }
 
   async list(request: ListRequest): Promise<MemoryResponse> {
-    return this.fetchJson('/api/v1/list', request);
+    return this.fetchJson<MemoryResponse, ListRequest>('/api/v1/list', request);
   }
 
   async getTimeline(request: GetTimelineRequest): Promise<MemoryResponse> {
-    return this.fetchJson('/api/v1/timeline', request);
+    return this.fetchJson<MemoryResponse, GetTimelineRequest>('/api/v1/timeline', request);
   }
 
   async getDetail(request: GetDetailRequest): Promise<MemoryResponse> {
-    return this.fetchJson('/api/v1/detail', request);
+    return this.fetchJson<MemoryResponse, GetDetailRequest>('/api/v1/detail', request);
   }
 
-  private async fetchJson<T extends object>(path: string, params: T): Promise<MemoryResponse> {
+  async projectSignals(request: ProjectDreamRequest): Promise<ProjectDreamSignalsResponse> {
+    return this.fetchJson<ProjectDreamSignalsResponse, ProjectDreamRequest>('/api/v1/dreaming/project/signals', request);
+  }
+
+  private async fetchJson<TResponse, TParams extends object>(path: string, params: TParams): Promise<TResponse> {
     const response = await fetch(this.buildUrl(path, params));
     if (!response.ok) {
       const error = await response.json() as ErrorResponse;
       throw new Error(`${error.errorCode}: ${error.errorMessage}`);
     }
 
-    return response.json() as Promise<MemoryResponse>;
+    return response.json() as Promise<TResponse>;
   }
 
   private buildUrl<T extends object>(path: string, params: T): string {
