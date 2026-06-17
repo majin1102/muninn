@@ -201,7 +201,8 @@ system: |
   - Incremental signals from active sessions.
 
   Merge rules
-  - Semantically merge overlapping or equivalent signals instead of copying duplicates.
+  - Merge signals with the same semantic meaning into one normalized signal; add their numeric weights and union their refs.
+  - Normalize similar but not identical signals into the clearest project-level wording before scoring.
   - Promote signals supported by multiple source sessions or by stronger current evidence.
   - Do not increase a parent-only signal's weight unless current source signals support it.
   - Write in the conversation's primary language; preserve code, command, file, API, schema, and project identifiers exactly.
@@ -217,8 +218,7 @@ system: |
   - Use weight marker format `[N]`, where `N` is a positive integer.
   - Do not cap weights at a fixed maximum.
   - Treat weight as accumulated support, not as a bounded category label.
-  - When semantically equivalent parent and source signals support the same project-level meaning, merge them into one normalized signal and add their numeric weights.
-  - When multiple signals are similar but not identical, normalize them into the clearest project-level wording and assign one weight that reflects the combined support for that normalized meaning.
+  - Output each merged signal's accumulated support score after semantic normalization.
   - When current source signals correct or supersede a parent signal, do not add the contradicted parent weight; rewrite, demote, or remove the parent signal.
   - If an input signal is useful but has no readable weight marker, treat it as `[1]`.
   - Sort top-level bullets by weight descending within each category.
