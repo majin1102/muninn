@@ -167,8 +167,10 @@ Project dreaming runs in the server. MCP remains a thin adapter.
 project
 -> DreamingIndex finds latest parent dream for the project
 -> load parent dreaming.content when present
--> read session_snapshot delta after parent.session_snapshot_version, or 0,
-   at one stable source table version
+-> if a parent exists, read session_snapshot delta after
+   parent.session_snapshot_version at one stable source table version
+-> if no parent exists, scan current session_snapshot rows at one stable source
+   table version
 -> keep project rows with non-empty session_snapshot.signals
 -> LLM semantically merges parent content and incremental signals
 -> validate Markdown contract
@@ -187,10 +189,15 @@ per category.
 
 Version semantics:
 
-- The session snapshot delta read must return both `sourceVersion` and rows from
+- The session snapshot source read must return both `sourceVersion` and rows from
   the same stable `session_snapshot` table version.
+- When a parent dream exists, the source read is
+  `session_snapshot.delta(parent.session_snapshot_version)`.
+- When no parent dream exists, the source read is a current session snapshot scan
+  at `sourceVersion`, not a delta from `0`; this keeps first dreaming compatible
+  with session table cleanup.
 - The incremental signals passed to the LLM must be derived only from rows in
-  that delta result after project, session, and non-empty-signal filtering.
+  that source result after project, session, and non-empty-signal filtering.
 - The appended dream stores exactly that `sourceVersion` as
   `session_snapshot_version`.
 - Do not read session table stats after the LLM call to choose the stored
@@ -296,13 +303,12 @@ parse session snapshots or run merge logic itself.
 
 ## Source Selection
 
-For the first version, incremental project signals are selected from the
-`session_snapshot` table delta:
+For the first version, incremental project signals are selected from
+`session_snapshot` rows at one stable source table version:
 
 - read the latest parent dream for the project,
-- use `parent.session_snapshot_version` as the delta baseline, or `0` when no
-  parent exists,
-- read `session_snapshot.delta(baseline)` at one stable source version,
+- when a parent exists, read `session_snapshot.delta(parent.session_snapshot_version)`,
+- when no parent exists, scan current session snapshots,
 - filter changed rows to the current project,
 - group by session identity and select the latest changed snapshot per session,
 - filter out snapshots whose `signals` field is empty,
@@ -322,6 +328,8 @@ project-level memory forward.
   appended.
 - If the session snapshot delta cannot be read for the parent version, the write
   fails before calling the LLM.
+- If the first-dream session snapshot scan cannot read a stable source version,
+  the write fails before calling the LLM.
 
 ## Maintenance
 
@@ -342,7 +350,9 @@ Focused tests should cover:
 - `dreaming` row insertion assigns `dreaming:<rowid>` from stable row id.
 - `parent_id` and `session_snapshot_version` round-trip as `UInt64` values.
 - Dream append reads session snapshot sources from the parent
-  `session_snapshot_version` delta baseline.
+  `session_snapshot_version` delta baseline when a parent exists.
+- Dream append reads first-dream sources from a stable current snapshot scan
+  when no parent exists.
 - Dream append stores the delta `sourceVersion`, not a later post-LLM session
   table stats version.
 - Session cleanup floor includes active dreaming `sessionSnapshotVersion`
