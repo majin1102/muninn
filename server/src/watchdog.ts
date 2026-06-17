@@ -499,9 +499,23 @@ export class Watchdog {
 }
 
 function checkpointFloors(checkpoint: CheckpointContent | CheckpointFile): Record<DatasetName, number | null> {
+  const dreamingSessionFloor = minNumber(checkpoint.dreamingIndex.entries.map((entry) => entry.sessionSnapshotVersion));
+  const sessionFloor = minNumber([
+    checkpoint.extractor.baseline.session,
+    checkpoint.sessionIndex.baseline.session,
+    dreamingSessionFloor,
+  ]);
+
   return {
     turn: checkpoint.extractor.baseline.turn,
-    session: checkpoint.extractor.baseline.session,
+    session: sessionFloor,
     extraction: checkpoint.extractor.baseline.extraction,
   };
 }
+
+function minNumber(values: Array<number | null | undefined>): number | null {
+  const present = values.filter((value): value is number => typeof value === 'number');
+  return present.length === 0 ? null : Math.min(...present);
+}
+
+export const __testing = { checkpointFloors };
