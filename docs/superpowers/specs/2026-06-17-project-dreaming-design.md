@@ -76,7 +76,8 @@ Field meanings:
 - `created_at`: Append time. There is no `updated_at` because rows are never
   updated.
 - `session_snapshot_ids`: Stable row ids of session snapshots used as source
-  input for this dream.
+  input for this dream. These ids are lineage and de-duplication metadata only;
+  they are not embedded in `content` or passed to the LLM.
 - `content`: The full Markdown project dream document.
 
 The table does not store `dreaming_id`. The public id is derived from the stable
@@ -102,13 +103,13 @@ and must use this shape:
 ## Signals
 
 ### Guidance
-- [12] Prefer short, context-aware names when local context is clear. (refs: session:12, session:19)
+- [12] Prefer short, context-aware names when local context is clear.
 
 ### Skills
-- [7] When changing prompts, include the exact prompt text or diff in the plan. (refs: session:8)
+- [7] When changing prompts, include the exact prompt text or diff in the plan.
 
 ### Open Questions
-- [2] Decide whether project dreams participate in recall. (refs: session:21)
+- [2] Decide whether project dreams participate in recall.
 ```
 
 Rules:
@@ -120,7 +121,8 @@ Rules:
 - Signals are ordered by project-level importance within each category.
 - Weights use positive integer markers like `[7]`; higher numbers sort first.
 - Weights are accumulated support scores, not fixed bounded buckets.
-- References use public session snapshot ids in text, such as `session:12`.
+- `dreaming.content` does not include session identifiers, source references, or
+  provenance metadata.
 - The document may contain fewer than 20 signals per category.
 - The document should not include empty filler signals.
 
@@ -152,8 +154,9 @@ Behavior:
 - For each project, keep the latest dream.
 - Latest is selected by greatest stable row id. `created_at` is display data,
   not the primary ordering key.
-- `parentId` and `sessionSnapshotIds` are exposed as public memory ids:
-  `dreaming:<rowid>` and `session:<rowid>`.
+- `parentId` may be rendered as `dreaming:<rowid>` for external reads.
+- `sessionSnapshotIds` stay as internal row-id metadata for lineage and
+  de-duplication; they are not returned by top-signal read responses.
 
 ## Write Path
 
@@ -174,11 +177,10 @@ project
 The LLM input consists of:
 
 - Parent `dreaming.content`, if this project already has a dream.
-- Current project session snapshot signals, grouped with their public
-  `session:<rowid>` references.
+- Current project session snapshot signals.
 
 The LLM output is a new `content` document, not a patch. It semantically merges
-the parent content with current session evidence and keeps at most 20 signals per
+the parent content with incremental project signals and keeps at most 20 signals per
 category.
 
 ## Project Dreamer Prompt
@@ -198,19 +200,17 @@ system: |
 
   Inputs
   - Parent dream content, if one exists.
-  - Incremental signals from active sessions.
+  - Incremental project signals selected for this merge.
 
   Signal definition
   - `## Signals` is self-contained future-session guidance: each signal must be understandable and actionable without the original conversation context.
 
   Merge rules
-  - Merge signals with the same semantic meaning into one normalized signal; add their numeric weights and union their refs.
+  - Merge signals with the same semantic meaning into one normalized signal and add their numeric weights.
   - Normalize similar but not identical signals into the clearest project-level wording before scoring.
-  - Promote signals supported by multiple source sessions or by stronger current evidence.
   - Do not increase a parent-only signal's weight unless current source signals support it.
   - Write in the conversation's primary language; preserve code, command, file, API, schema, and project identifiers exactly.
-  - Do not invent facts, refs, source sessions, user preferences, decisions, or open questions.
-  - Do not emit refs that are absent from the input.
+  - Do not invent facts, user preferences, decisions, or open questions.
 
   Signal types
   - Guidance: future behavior guidance, including preferences, corrections, repo conventions, decision standards, review style, and recurring environment quirks.
@@ -222,7 +222,7 @@ system: |
   - Do not cap weights at a fixed maximum.
   - Treat weight as accumulated support, not as a bounded category label.
   - Output each merged signal's accumulated support score after semantic normalization.
-  - When current source signals correct or supersede a parent signal, do not add the contradicted parent weight; rewrite, demote, or remove the parent signal.
+  - When incremental signals correct or supersede a parent signal, do not add the contradicted parent weight; rewrite, demote, or remove the parent signal.
   - If an input signal is useful but has no readable weight marker, treat it as `[1]`.
   - Sort top-level bullets by weight descending within each category.
 
@@ -239,8 +239,6 @@ system: |
   - Include `## Signals`.
   - Include `### Guidance`, `### Skills`, and `### Open Questions` in that order.
   - Each top-level signal bullet must start with a weight marker like `- [4]`.
-  - End each top-level signal bullet with refs in this format: `(refs: session:12, session:19)`.
-  - Use only input refs.
 ```
 
 The user prompt should pass input as Markdown with this exact shape:
@@ -254,14 +252,10 @@ The user prompt should pass input as Markdown with this exact shape:
 ## Parent Dream
 <parent dreaming.content or "(none)">
 
-## Source Session Signals
+## Incremental Signals
 
-### session:<rowid>
-<session_snapshot.signals>
+<combined incremental project signals selected for this merge>
 ```
-
-Repeat the `### session:<rowid>` block once for each selected source session
-snapshot.
 
 ## Read Path
 
@@ -294,7 +288,8 @@ For the first version, source session snapshots are selected by project:
 - group by session identity,
 - select the latest snapshot per session,
 - filter out snapshots whose `signals` field is empty,
-- pass selected row ids and signals to the merge step.
+- pass selected signals to the merge step,
+- store selected row ids in `session_snapshot_ids`.
 
 This keeps the input compact while allowing the parent dream to carry older
 project-level memory forward.
