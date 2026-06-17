@@ -1385,6 +1385,7 @@ test('loadThreads filters snapshots by the configured active window', () => {
       extractor: 'default-extractor',
       title: 'Fresh thread',
       summary: 'Fresh summary',
+      signals: '',
       content: snapshotContentFixture('', { title: 'Fresh thread', summary: 'Fresh summary' }),
       references: [],
     },
@@ -1400,6 +1401,7 @@ test('loadThreads filters snapshots by the configured active window', () => {
       extractor: 'default-extractor',
       title: 'Stale thread',
       summary: 'Stale summary',
+      signals: '',
       content: snapshotContentFixture('', { title: 'Stale thread', summary: 'Stale summary' }),
       references: [],
     },
@@ -1427,6 +1429,7 @@ test('loadThreads keeps full history for active threads', () => {
       extractor: 'default-extractor',
       title: 'Thread',
       summary: 'Summary',
+      signals: '',
       content: snapshotContentFixture('', { title: 'Thread', summary: 'Summary' }),
       references: [],
     },
@@ -1442,6 +1445,7 @@ test('loadThreads keeps full history for active threads', () => {
       extractor: 'default-extractor',
       title: 'Thread',
       summary: 'Summary',
+      signals: '',
       content: snapshotContentFixture('', { title: 'Thread', summary: 'Summary' }),
       references: [],
     },
@@ -1592,24 +1596,32 @@ test('extractor bootstrap without checkpoint derives committedEpoch from session
     {
       snapshotId: 'snapshot-1',
       sessionId: 'obs-1',
+      project: 'project-a',
+      cwd: '/workspace/project-a',
+      agent: 'agent-a',
       snapshotSequence: 0,
       createdAt: snapshot1At,
       updatedAt: snapshot1At,
       extractor: 'default-extractor',
       title: 'Thread',
       summary: 'Summary',
+      signals: '',
       content: snapshotContentFixture('', { title: 'Thread', summary: 'Summary' }),
       references: ['turn-13'],
     },
     {
       snapshotId: 'snapshot-2',
       sessionId: 'obs-1',
+      project: 'project-a',
+      cwd: '/workspace/project-a',
+      agent: 'agent-a',
       snapshotSequence: 1,
       createdAt: snapshot2At,
       updatedAt: snapshot2At,
       extractor: 'default-extractor',
       title: 'Thread',
       summary: 'Summary',
+      signals: '',
       content: snapshotContentFixture('', { title: 'Thread', summary: 'Summary' }),
       references: ['turn-13', 'turn-14'],
     },
@@ -1727,24 +1739,32 @@ test('extractor bootstrap restores committed state from checkpoint when baseline
           {
             snapshotId: 'turn:41',
             sessionId: 'obs-1',
+            project: 'project-a',
+            cwd: '/workspace/project-a',
+            agent: 'agent-a',
             snapshotSequence: 0,
             createdAt: '2024-01-01T00:00:00Z',
             updatedAt: '2024-01-01T00:00:00Z',
             extractor: 'default-extractor',
             title: 'Thread',
             summary: 'Summary',
+            signals: '',
             content: snapshotContentFixture('', { title: 'Thread', summary: 'Summary' }),
             references: [],
           },
           {
             snapshotId: 'turn:42',
             sessionId: 'obs-1',
+            project: 'project-a',
+            cwd: '/workspace/project-a',
+            agent: 'agent-a',
             snapshotSequence: 1,
             createdAt: '2024-01-01T00:00:01Z',
             updatedAt: '2024-01-01T00:00:01Z',
             extractor: 'default-extractor',
             title: 'Thread',
             summary: 'Summary',
+            signals: '',
             content: snapshotContentFixture('', { title: 'Thread', summary: 'Summary' }),
             references: [],
           },
@@ -1827,24 +1847,32 @@ test('extractor checkpoint restore keeps full history for active threads', async
           {
             snapshotId: 'snapshot-0',
             sessionId: 'mixed-thread',
+            project: 'project-a',
+            cwd: '/workspace/project-a',
+            agent: 'agent-a',
             snapshotSequence: 0,
             createdAt: staleUpdatedAt,
             updatedAt: staleUpdatedAt,
             extractor: 'default-extractor',
             title: 'Thread',
             summary: 'Summary',
+            signals: '',
             content: snapshotContentFixture('', { title: 'Thread', summary: 'Summary' }),
             references: [],
           },
           {
             snapshotId: 'snapshot-1',
             sessionId: 'mixed-thread',
+            project: 'project-a',
+            cwd: '/workspace/project-a',
+            agent: 'agent-a',
             snapshotSequence: 1,
             createdAt: freshUpdatedAt,
             updatedAt: freshUpdatedAt,
             extractor: 'default-extractor',
             title: 'Thread',
             summary: 'Summary',
+            signals: '',
             content: snapshotContentFixture('', { title: 'Thread', summary: 'Summary' }),
             references: [],
           },
@@ -1908,6 +1936,9 @@ test('extractor restore advances committedEpoch and excludes extracted turns fro
           {
             snapshotId: 'snapshot-1',
             sessionId: 'obs-1',
+            project: 'project-a',
+            cwd: '/workspace/project-a',
+            agent: 'agent-a',
             snapshotSequence: 1,
             createdAt: snapshot1At,
             updatedAt: snapshot1At,
@@ -1921,6 +1952,9 @@ test('extractor restore advances committedEpoch and excludes extracted turns fro
           {
             snapshotId: 'snapshot-2',
             sessionId: 'obs-1',
+            project: 'project-a',
+            cwd: '/workspace/project-a',
+            agent: 'agent-a',
             snapshotSequence: 2,
             createdAt: snapshot2At,
             updatedAt: snapshot2At,
@@ -1937,6 +1971,9 @@ test('extractor restore advances committedEpoch and excludes extracted turns fro
         {
           snapshotId: 'snapshot-0',
           sessionId: 'obs-1',
+          project: 'project-a',
+          cwd: '/workspace/project-a',
+          agent: 'agent-a',
           snapshotSequence: 0,
           createdAt: snapshot0At,
           updatedAt: snapshot0At,
@@ -1950,6 +1987,9 @@ test('extractor restore advances committedEpoch and excludes extracted turns fro
         {
           snapshotId: 'snapshot-1',
           sessionId: 'obs-1',
+          project: 'project-a',
+          cwd: '/workspace/project-a',
+          agent: 'agent-a',
           snapshotSequence: 1,
           createdAt: snapshot1At,
           updatedAt: snapshot1At,
@@ -1963,6 +2003,9 @@ test('extractor restore advances committedEpoch and excludes extracted turns fro
         {
           snapshotId: 'snapshot-2',
           sessionId: 'obs-1',
+          project: 'project-a',
+          cwd: '/workspace/project-a',
+          agent: 'agent-a',
           snapshotSequence: 2,
           createdAt: snapshot2At,
           updatedAt: snapshot2At,
@@ -2020,6 +2063,9 @@ test('extractor restore falls back when session delta refs are missing turn epoc
           {
             snapshotId: 'snapshot-1',
             sessionId: 'obs-1',
+            project: 'project-a',
+            cwd: '/workspace/project-a',
+            agent: 'agent-a',
             snapshotSequence: 1,
             createdAt: '2024-01-01T00:00:01Z',
             updatedAt: '2024-01-01T00:00:01Z',
@@ -2036,6 +2082,9 @@ test('extractor restore falls back when session delta refs are missing turn epoc
         {
           snapshotId: 'snapshot-0',
           sessionId: 'obs-1',
+          project: 'project-a',
+          cwd: '/workspace/project-a',
+          agent: 'agent-a',
           snapshotSequence: 0,
           createdAt: '2024-01-01T00:00:00Z',
           updatedAt: '2024-01-01T00:00:00Z',
@@ -2075,12 +2124,16 @@ test('extractor restore skips stale threads resource only from session delta', a
   const staleRow = {
     snapshotId: 'snapshot-1',
     sessionId: 'obs-stale',
+    project: 'project-a',
+    cwd: '/workspace/project-a',
+    agent: 'agent-a',
     snapshotSequence: 0,
     createdAt: staleUpdatedAt,
     updatedAt: staleUpdatedAt,
     extractor: 'default-extractor',
     title: 'Stale Thread',
     summary: 'Summary',
+    signals: '',
     content: snapshotContentFixture('', { title: 'Thread', summary: 'Summary' }),
     references: ['turn-13'],
   };
@@ -2121,12 +2174,16 @@ test('extractor restore rebuilds delta-only threads from full history', async (t
   const fullRows = Array.from({ length: 8 }, (_, index) => ({
     snapshotId: `snapshot-${index}`,
     sessionId: 'extraction-session',
+    project: 'project-a',
+    cwd: '/workspace/project-a',
+    agent: 'agent-a',
     snapshotSequence: index,
     createdAt: rowTimes[index],
     updatedAt: rowTimes[index],
     extractor: 'default-extractor',
     title: 'Extraction Thread',
     summary: `Summary ${index}`,
+    signals: '',
     content: snapshotContentFixture('', { title: 'Thread', summary: 'Summary' }),
     references: Array.from({ length: index + 1 }, (_, turnIndex) => `turn-${turnIndex + 1}`),
   }));
@@ -2366,24 +2423,32 @@ test('extractor bootstrap ignores extraction version mismatches when session bas
         {
           snapshotId: 'turn:41',
           sessionId: 'obs-1',
+          project: 'project-a',
+          cwd: '/workspace/project-a',
+          agent: 'agent-a',
           snapshotSequence: 0,
           createdAt: '2024-01-01T00:00:00Z',
           updatedAt: '2024-01-01T00:00:00Z',
           extractor: 'default-extractor',
           title: 'Thread',
           summary: 'Summary',
+          signals: '',
           content: snapshotContentFixture('', { title: 'Thread', summary: 'Summary' }),
           references: [],
         },
         {
           snapshotId: 'turn:42',
           sessionId: 'obs-1',
+          project: 'project-a',
+          cwd: '/workspace/project-a',
+          agent: 'agent-a',
           snapshotSequence: 1,
           createdAt: '2024-01-01T00:00:01Z',
           updatedAt: '2024-01-01T00:00:01Z',
           extractor: 'default-extractor',
           title: 'Thread',
           summary: 'Summary',
+          signals: '',
           content: snapshotContentFixture('', { title: 'Thread', summary: 'Summary' }),
           references: [],
         },
@@ -2520,6 +2585,7 @@ test('recallMemories searches extraction routes and enriches hits', async () => 
             extractor: 'default-extractor',
             title: 'Readable session title',
             summary: 'Readable summary',
+            signals: '',
             content: 'Readable content',
             references: ['turn:session-2'],
           }]
@@ -2570,6 +2636,550 @@ test('recallMemories searches extraction routes and enriches hits', async () => 
     limit: 3,
     mode: 'hybrid',
   });
+  assert.deepEqual(calls[1][1], {
+    query: 'What are Caroline plans?',
+    vector: [1, 0],
+    limit: 3,
+    mode: 'hybrid',
+  });
+});
+
+test('recallMemories enriches extraction hits from raw turn session_id', async () => {
+  const client = {
+    turnTable: {
+      getTurn: async (turnId) => {
+        assert.equal(turnId, 'turn:raw-session');
+        return {
+          turnId,
+          session_id: ' session-from-native ',
+          project: 'memory-project',
+          cwd: '/workspace/memory-project',
+          agent: 'codex',
+          extractor: 'default-extractor',
+          title: 'Raw session title',
+          summary: 'Raw session summary',
+          events: [],
+          createdAt: '2024-01-02T00:00:00Z',
+          updatedAt: '2024-01-02T00:00:00Z',
+        };
+      },
+    },
+    sessionTable: {
+      threadSnapshots: async (sessionId) => {
+        assert.equal(sessionId, 'session-from-native');
+        return [{
+          snapshotId: 'session:snapshot-native',
+          sessionId,
+          project: 'memory-project',
+          cwd: '/workspace/memory-project',
+          agent: 'codex',
+          snapshotSequence: 1,
+          createdAt: '2024-01-03T00:00:00Z',
+          updatedAt: '2024-01-03T00:00:00Z',
+          extractor: 'default-extractor',
+          title: 'Native session title',
+          summary: 'Native summary',
+          signals: '',
+          content: 'Native content',
+          references: ['turn:raw-session'],
+        }];
+      },
+    },
+    observationTable: {
+      search: async () => [],
+    },
+    extractionTable: {
+      search: async () => [{
+        id: 'raw-native',
+        title: 'Native turn ownership',
+        summary: 'Native row uses snake case session id.',
+        content: extractionContent('Native turn ownership', 'Native row uses snake case session id.'),
+        anchors: [],
+        vector: [],
+        category: 'Fact',
+        turnRefs: ['turn:raw-session'],
+        observationPaths: [],
+        observedRootAnchors: [],
+        createdAt: '2024-01-01T00:00:00Z',
+        updatedAt: '2024-01-01T00:00:00Z',
+      }],
+    },
+  };
+
+  const hits = await recallMemories(client, 'native session', 1, {
+    embed: async () => [1, 0],
+    includeObservations: false,
+  });
+
+  assert.equal(hits[0]?.memoryId, 'extraction:raw-native');
+  assert.equal(hits[0]?.sessionId, 'session-from-native');
+  assert.equal(hits[0]?.project, 'memory-project');
+  assert.equal(hits[0]?.cwd, '/workspace/memory-project');
+  assert.equal(hits[0]?.agent, 'codex');
+  assert.equal(hits[0]?.sessionKey, 'cwd:/workspace/memory-project|session:session-from-native|agent:codex|extractor:default-extractor');
+  assert.equal(hits[0]?.displaySession, 'Native session title');
+});
+
+test('recallMemories enriches curated hits from referenced extraction ownership', async () => {
+  const client = {
+    turnTable: {
+      getTurn: async (turnId) => {
+        assert.equal(turnId, 'turn:curated-session');
+        return {
+          turnId,
+          session_id: 'codex-e2e-session',
+          project: 'github.com/muninn/e2e-fixture',
+          cwd: '/tmp/muninn-e2e/project',
+          agent: 'codex',
+          extractor: 'default-extractor',
+          title: 'Codex E2E title',
+          summary: 'Codex E2E summary',
+          events: [],
+          createdAt: '2024-01-02T00:00:00Z',
+          updatedAt: '2024-01-02T00:00:00Z',
+        };
+      },
+    },
+    sessionTable: {
+      threadSnapshots: async (sessionId) => {
+        assert.equal(sessionId, 'codex-e2e-session');
+        return [{
+          snapshotId: 'session:snapshot-curated',
+          sessionId,
+          project: 'github.com/muninn/e2e-fixture',
+          cwd: '/tmp/muninn-e2e/project',
+          agent: 'codex',
+          snapshotSequence: 1,
+          createdAt: '2024-01-03T00:00:00Z',
+          updatedAt: '2024-01-03T00:00:00Z',
+          extractor: 'default-extractor',
+          title: 'Codex E2E session',
+          summary: 'Curated summary',
+          signals: '',
+          content: 'Curated content',
+          references: ['turn:curated-session'],
+        }];
+      },
+    },
+    observationTable: {
+      search: async () => [{
+        id: 'curated-1',
+        path: 'Muninn / Release',
+        text: 'Codex dist-tag next stays until MVP1 beta exits.',
+        vector: [],
+        extractionRefs: ['extraction:raw-1'],
+        createdAt: '2024-01-01T00:00:00Z',
+        updatedAt: '2024-01-01T00:00:00Z',
+      }],
+    },
+    extractionTable: {
+      search: async () => [{
+        id: 'raw-1',
+        title: 'Codex dist tag',
+        summary: 'Codex uses dist-tag next until MVP1 beta exits.',
+        content: extractionContent('Codex dist tag', 'Codex uses dist-tag next until MVP1 beta exits.'),
+        anchors: [],
+        vector: [],
+        category: 'Fact',
+        turnRefs: ['turn:curated-session'],
+        observationPaths: [],
+        observedRootAnchors: [],
+        createdAt: '2024-01-01T00:00:00Z',
+        updatedAt: '2024-01-01T00:00:00Z',
+      }],
+      get: async ({ ids }) => [{
+        id: 'raw-1',
+        title: 'Codex dist tag',
+        summary: 'Codex uses dist-tag next until MVP1 beta exits.',
+        content: extractionContent('Codex dist tag', 'Codex uses dist-tag next until MVP1 beta exits.'),
+        anchors: [],
+        vector: [],
+        category: 'Fact',
+        turnRefs: ['turn:curated-session'],
+        observationPaths: [],
+        observedRootAnchors: [],
+        createdAt: '2024-01-01T00:00:00Z',
+        updatedAt: '2024-01-01T00:00:00Z',
+      }].filter((row) => ids.includes(row.id)),
+    },
+  };
+
+  const hits = await recallMemories(client, 'codex dist-tag next MVP1 beta', 1, { embed: async () => [1, 0] });
+
+  assert.equal(hits[0]?.memoryId, 'observation:curated-1');
+  assert.equal(hits[0]?.project, 'github.com/muninn/e2e-fixture');
+  assert.equal(hits[0]?.sessionId, 'codex-e2e-session');
+  assert.equal(hits[0]?.agent, 'codex');
+  assert.equal(hits[0]?.cwd, '/tmp/muninn-e2e/project');
+  assert.equal(hits[0]?.sessionKey, 'cwd:/tmp/muninn-e2e/project|session:codex-e2e-session|agent:codex|extractor:default-extractor');
+  assert.equal(hits[0]?.displaySession, 'Codex E2E session');
+  assert.match(hits[0]?.content, /Codex uses dist-tag next until MVP1 beta exits/);
+});
+
+test('recallMemories filters raw hits source by selected curated hits', async () => {
+  const client = {
+    observationTable: {
+      search: async () => [
+        {
+          id: 'curated-1',
+          path: 'Caroline / Research',
+          text: 'Caroline researched adoption agencies.',
+          vector: [],
+          extractionRefs: [],
+          createdAt: '2024-01-01T00:00:00Z',
+          updatedAt: '2024-01-01T00:00:00Z',
+        },
+      ],
+    },
+    observationContextTable: {
+      get: async ({ ids }) => ids.includes('curated-1')
+        ? [{
+            id: 'curated-1',
+            path: 'Caroline / Research',
+            parentId: null,
+            position: 0,
+            content: 'Caroline researched adoption agencies.',
+            sourceRefs: ['extraction:raw-1'],
+            expandRefs: [],
+            observer: 'test-observer',
+            createdAt: '2024-01-01T00:00:00Z',
+            updatedAt: '2024-01-01T00:00:00Z',
+          }]
+        : [],
+    },
+    extractionTable: {
+      search: async () => [
+        {
+          id: 'raw-1',
+          text: 'Caroline researched adoption agencies.',
+          context: null,
+          anchors: [],
+          vector: [],
+          category: 'Fact',
+          turnRefs: ['session:1'],
+          observationPaths: [],
+          observedRootAnchors: [],
+          createdAt: '2024-01-01T00:00:00Z',
+          updatedAt: '2024-01-01T00:00:00Z',
+        },
+        {
+          id: 'raw-2',
+          text: 'Melanie painted a lake sunrise in 2022.',
+          context: null,
+          anchors: [],
+          vector: [],
+          category: 'Fact',
+          turnRefs: ['session:2'],
+          observationPaths: [],
+          observedRootAnchors: [],
+          createdAt: '2024-01-01T00:00:00Z',
+          updatedAt: '2024-01-01T00:00:00Z',
+        },
+      ],
+    },
+  };
+
+  const hits = await recallMemories(client, 'Caroline research', 2, { embed: async () => [1, 0] });
+  assert.deepEqual(hits.map((hit) => hit.memoryId), ['observation:curated-1', 'extraction:raw-2']);
+});
+
+test('recallMemories renders observation context source refs when extraction refs are empty', async () => {
+  const client = {
+    observationTable: {
+      search: async () => [
+        {
+          id: 'curated-1',
+          path: 'Caroline / Research',
+          text: 'Caroline researched adoption agencies.',
+          vector: [],
+          extractionRefs: [],
+          createdAt: '2024-01-01T00:00:00Z',
+          updatedAt: '2024-01-01T00:00:00Z',
+        },
+      ],
+    },
+    observationContextTable: {
+      get: async ({ ids }) => ids.includes('curated-1')
+        ? [{
+            id: 'curated-1',
+            path: 'Caroline / Research',
+            parentId: null,
+            position: 0,
+            content: 'Caroline researched adoption agencies.',
+            sourceRefs: ['extraction:raw-1'],
+            expandRefs: [],
+            observer: 'test-observer',
+            createdAt: '2024-01-01T00:00:00Z',
+            updatedAt: '2024-01-01T00:00:00Z',
+          }]
+        : [],
+    },
+    extractionTable: {
+      search: async () => [],
+      get: async ({ ids }) => [{
+        id: 'raw-1',
+        title: 'Adoption agency research',
+        summary: 'Caroline researched adoption agencies.',
+        content: extractionContent('Adoption agency research', 'Caroline researched adoption agencies.'),
+        anchors: [],
+        vector: [],
+        category: 'Fact',
+        turnRefs: ['turn:1'],
+        observationPaths: [],
+        observedRootAnchors: [],
+        createdAt: '2024-01-01T00:00:00Z',
+        updatedAt: '2024-01-01T00:00:00Z',
+      }].filter((row) => ids.includes(row.id)),
+    },
+  };
+
+  const hits = await recallMemories(client, 'Caroline research', 1, { embed: async () => [1, 0] });
+
+  assert.equal(hits[0]?.memoryId, 'observation:curated-1');
+  assert.deepEqual(hits[0]?.references, ['extraction:raw-1']);
+  assert.match(hits[0]?.content, /^EXTRACTION: ## Title$/m);
+  assert.match(hits[0]?.content, /^Adoption agency research$/m);
+});
+
+test('recallMemories includes referenced extraction text for observation hits', async () => {
+  const calls = [];
+  const client = {
+    observationTable: {
+      search: async () => [
+        {
+          id: 'curated-1',
+          path: 'Caroline / Summer plans',
+          text: [
+            'Caroline is working on summer plans.',
+            '- [priority] adoption research',
+            '',
+            'Source extractions:',
+            '- [raw-1]',
+            '- [raw-2, raw-3] Caroline compared multiple adoption options.',
+          ].join('\n'),
+          vector: [],
+          extractionRefs: ['raw-1', 'raw-2'],
+          createdAt: '2024-01-01T00:00:00Z',
+          updatedAt: '2024-01-01T00:00:00Z',
+        },
+      ],
+    },
+    extractionTable: {
+      search: async (params) => {
+        calls.push(['extraction', params]);
+        const title = 'Adoption agency research';
+        const summary = 'Caroline researched adoption agencies.';
+        return [
+          {
+            id: 'raw-1',
+            title,
+            summary: `${title}\n\n${summary}`,
+            content: extractionContent(title, summary),
+            anchors: [],
+            turnRefs: ['turn:1'],
+            vector: [],
+            category: 'Fact',
+            observationPaths: [],
+            observedRootAnchors: [],
+            createdAt: '2024-01-01T00:00:00Z',
+            updatedAt: '2024-01-01T00:00:00Z',
+          },
+        ];
+      },
+      get: async ({ ids }) => {
+        calls.push(['get', ids]);
+        const raw1Title = 'Adoption agency research';
+        const raw1Summary = 'Caroline researched adoption agencies.\nShe compared options.';
+        const raw1Content = 'Melanie asked Caroline about her summer plans.\nThe discussion focused on next steps.';
+        const raw2Title = 'Inclusive adoption agency';
+        const raw2Summary = 'Caroline chose an LGBTQ+ inclusive adoption agency.';
+        return [
+        {
+          id: 'raw-1',
+          title: raw1Title,
+          summary: `${raw1Title}\n\n${raw1Summary}`,
+          content: extractionContent(raw1Title, raw1Summary, raw1Content),
+          anchors: ['Entity: Caroline'],
+          turnRefs: ['turn:1'],
+          vector: [],
+          category: 'Fact',
+          observationPaths: [],
+          observedRootAnchors: [],
+          createdAt: '2024-01-01T00:00:00Z',
+          updatedAt: '2024-01-01T00:00:00Z',
+        },
+        {
+          id: 'raw-2',
+          title: raw2Title,
+          summary: `${raw2Title}\n\n${raw2Summary}`,
+          content: extractionContent(raw2Title, raw2Summary),
+          anchors: [],
+          turnRefs: ['turn:2'],
+          vector: [],
+          category: 'Fact',
+          observationPaths: [],
+          observedRootAnchors: [],
+          createdAt: '2024-01-01T00:00:00Z',
+          updatedAt: '2024-01-01T00:00:00Z',
+        },
+      ].filter((row) => ids.includes(row.id));
+      },
+    },
+  };
+
+  const hits = await recallMemories(client, 'Caroline summer plans', 1, { embed: async () => [1, 0] });
+
+  assert.equal(hits[0].memoryId, 'observation:curated-1');
+  assert.match(hits[0].content, /OBSERVATION: Caroline is working on summer plans/);
+  assert.match(hits[0].content, /- \[priority\] adoption research/);
+  assert.match(hits[0].content, /- extraction: ## Title/);
+  assert.match(hits[0].content, /^  Adoption agency research$/m);
+  assert.match(hits[0].content, /^  ## Content$/m);
+  assert.match(hits[0].content, /^  Melanie asked Caroline about her summer plans\.$/m);
+  assert.match(hits[0].content, /^  The discussion focused on next steps\.$/m);
+  assert.match(hits[0].content, /- Caroline compared multiple adoption options\./);
+  assert.doesNotMatch(hits[0].content, /\[raw-2, raw-3\]/);
+  assert.doesNotMatch(hits[0].content, /\[raw-1\]/);
+  assert.doesNotMatch(hits[0].content, /^CONTEXT: Melanie asked Caroline about her summer plans\.$/m);
+  assert.doesNotMatch(hits[0].content, /^EXTRACTION: Caroline researched adoption agencies\.$/m);
+  assert.match(hits[0].content, /^EXTRACTION: ## Title$/m);
+  assert.match(hits[0].content, /^Inclusive adoption agency$/m);
+  assert.match(hits[0].content, /Source extractions:/);
+  assert.deepEqual(hits[0].references, ['raw-1', 'raw-2']);
+  assert.deepEqual(calls, [
+    ['extraction', {
+      query: 'Caroline summer plans',
+      vector: [1, 0],
+      limit: 1,
+      mode: 'hybrid',
+    }],
+    ['get', ['raw-1', 'raw-2']],
+  ]);
+});
+
+test('recallMemories filters parent observation contexts from curated hits', async () => {
+  const calls = [];
+  const client = {
+    observationContextTable: {
+      list: async () => [
+        {
+          id: 'parent-1',
+          path: 'Caroline / Family plans',
+          parentId: null,
+          position: 0,
+          content: 'Caroline is pursuing adoption.',
+          observer: 'default',
+          createdAt: '2024-01-01T00:00:00Z',
+          updatedAt: '2024-01-01T00:00:00Z',
+        },
+        {
+          id: 'leaf-1',
+          path: 'Caroline / Family plans / Summer plans',
+          parentId: 'parent-1',
+          position: 0,
+          content: 'Caroline researched adoption agencies.',
+          observer: 'default',
+          createdAt: '2024-01-01T00:00:00Z',
+          updatedAt: '2024-01-01T00:00:00Z',
+        },
+        {
+          id: 'leaf-2',
+          path: 'Caroline / Family plans / Agency choice',
+          parentId: 'parent-1',
+          position: 1,
+          content: 'Caroline chose an LGBTQ-supportive adoption agency.',
+          observer: 'default',
+          createdAt: '2024-01-01T00:00:00Z',
+          updatedAt: '2024-01-01T00:00:00Z',
+        },
+      ],
+    },
+    observationTable: {
+      search: async (params) => {
+        calls.push(params);
+        return [
+          {
+            id: 'parent-1',
+            path: 'Caroline / Family plans',
+            text: 'Caroline is pursuing adoption.',
+            vector: [],
+            extractionRefs: ['extraction:raw-parent'],
+            createdAt: '2024-01-01T00:00:00Z',
+            updatedAt: '2024-01-01T00:00:00Z',
+          },
+          {
+            id: 'leaf-1',
+            path: 'Caroline / Family plans / Summer plans',
+            text: 'Caroline researched adoption agencies.',
+            vector: [],
+            extractionRefs: ['extraction:raw-1'],
+            createdAt: '2024-01-01T00:00:00Z',
+            updatedAt: '2024-01-01T00:00:00Z',
+          },
+          {
+            id: 'leaf-2',
+            path: 'Caroline / Family plans / Agency choice',
+            text: 'Caroline chose an LGBTQ-supportive adoption agency.',
+            vector: [],
+            extractionRefs: ['extraction:raw-2'],
+            createdAt: '2024-01-01T00:00:00Z',
+            updatedAt: '2024-01-01T00:00:00Z',
+          },
+        ];
+      },
+    },
+    extractionTable: {
+      search: async () => [],
+    },
+  };
+
+  const hits = await recallMemories(client, 'Caroline summer plans', 2, { embed: async () => [1, 0] });
+
+  assert.deepEqual(hits.map((hit) => hit.memoryId), ['observation:leaf-1', 'observation:leaf-2']);
+  assert.equal(calls[0].limit, 8);
+});
+
+test('recallMemories does not filter raw hits source only by unselected curated candidates', async () => {
+  const curated = Array.from({ length: 5 }, (_, index) => ({
+    id: `curated-${index + 1}`,
+    path: `Entity ${index + 1}`,
+    text: `Curated memory ${index + 1}.`,
+    vector: [],
+    extractionRefs: [`extraction:raw-${index + 1}`],
+    createdAt: '2024-01-01T00:00:00Z',
+    updatedAt: '2024-01-01T00:00:00Z',
+  }));
+  const client = {
+    observationTable: {
+      search: async () => curated,
+    },
+    extractionTable: {
+      search: async () => [
+        {
+          id: 'raw-5',
+          text: 'Raw memory source only by unselected curated memory.',
+          context: null,
+          anchors: [],
+          vector: [],
+          category: 'Fact',
+          turnRefs: ['session:5'],
+          observationPaths: [],
+          observedRootAnchors: [],
+          createdAt: '2024-01-01T00:00:00Z',
+          updatedAt: '2024-01-01T00:00:00Z',
+        },
+      ],
+    },
+  };
+
+  const hits = await recallMemories(client, 'query', 5, { embed: async () => [1, 0] });
+  assert.deepEqual(hits.map((hit) => hit.memoryId), [
+    'observation:curated-1',
+    'observation:curated-2',
+    'observation:curated-3',
+    'observation:curated-4',
+    'extraction:raw-5',
+  ]);
 });
 
 test('recallMemories supports fts mode without embedding the query', async () => {
