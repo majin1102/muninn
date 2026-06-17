@@ -189,6 +189,8 @@ Version semantics:
 
 - The session snapshot delta read must return both `sourceVersion` and rows from
   the same stable `session_snapshot` table version.
+- The incremental signals passed to the LLM must be derived only from rows in
+  that delta result after project, session, and non-empty-signal filtering.
 - The appended dream stores exactly that `sourceVersion` as
   `session_snapshot_version`.
 - Do not read session table stats after the LLM call to choose the stored
@@ -325,8 +327,11 @@ project-level memory forward.
 
 Session table cleanup must preserve versions needed by future dreaming deltas.
 When computing the session cleanup floor, include the minimum
-`sessionSnapshotVersion` from `DreamingIndex` entries alongside existing session
-baselines. If no dream exists, dreaming contributes no cleanup floor.
+`sessionSnapshotVersion` across current `DreamingIndex` entries alongside
+existing session baselines. `DreamingIndex` contains the latest dream per
+project, so this is the minimum across current projects' latest dreams, not
+across historical dreaming rows. If no dream exists, dreaming contributes no
+cleanup floor.
 
 ## Testing
 
