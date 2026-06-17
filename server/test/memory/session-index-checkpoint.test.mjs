@@ -30,6 +30,18 @@ function checkpoint(overrides = {}) {
         },
       ],
     },
+    dreamingIndex: {
+      baseline: { dreaming: 7 },
+      entries: [
+        {
+          project: '/Users/Nathan/workspace/muninn',
+          dreamingId: 'dreaming:12',
+          parentId: 'dreaming:8',
+          createdAt: '2026-06-02T13:00:00.000Z',
+          sessionSnapshotVersion: 5,
+        },
+      ],
+    },
     ...overrides,
   };
 }
@@ -55,6 +67,7 @@ test('checkpoint parses and serializes sessionIndex entries', () => {
 
   const reparsed = parseCheckpointFile(serializeCheckpointFile(parsed));
   assert.deepEqual(reparsed.sessionIndex, parsed.sessionIndex);
+  assert.deepEqual(reparsed.dreamingIndex, parsed.dreamingIndex);
 });
 
 test('checkpoint rejects missing sessionIndex', () => {
@@ -64,5 +77,15 @@ test('checkpoint rejects missing sessionIndex', () => {
   assert.throws(
     () => parseCheckpointFile(JSON.stringify(content)),
     /sessionIndex section is invalid/,
+  );
+});
+
+test('checkpoint rejects missing dreamingIndex', () => {
+  const content = checkpoint();
+  delete content.dreamingIndex;
+
+  assert.throws(
+    () => parseCheckpointFile(JSON.stringify(content)),
+    /dreamingIndex section is invalid/,
   );
 });

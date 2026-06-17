@@ -388,6 +388,7 @@ export class Watchdog {
       schemaVersion: checkpoint.schemaVersion,
       extractor: checkpoint.extractor,
       sessionIndex: checkpoint.sessionIndex,
+      dreamingIndex: checkpoint.dreamingIndex,
     });
     this.updateCheckpointFloors(checkpoint);
   }

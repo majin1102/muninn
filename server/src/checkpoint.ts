@@ -63,10 +63,24 @@ export type SessionIndexCheckpoint = {
   entries: SessionIndexEntry[];
 };
 
+export type DreamingIndexEntry = {
+  project: string;
+  dreamingId: string;
+  parentId?: string;
+  createdAt: string;
+  sessionSnapshotVersion: number;
+};
+
+export type DreamingIndexCheckpoint = {
+  baseline: { dreaming: number };
+  entries: DreamingIndexEntry[];
+};
+
 export type CheckpointContent = {
   schemaVersion: 11;
   extractor: ExtractorCheckpoint;
   sessionIndex: SessionIndexCheckpoint;
+  dreamingIndex: DreamingIndexCheckpoint;
 };
 
 export type CheckpointFile = CheckpointContent & {
@@ -117,11 +131,15 @@ export function parseCheckpointFile(raw: string): CheckpointFile {
   }
   const extractor = parseExtractorSection(parsed.extractor);
   const sessionIndex = parseSessionIndexSection(parsed.sessionIndex);
+  const dreamingIndex = parseDreamingIndexSection(parsed.dreamingIndex);
   if (!extractor) {
     throw new Error('checkpoint extractor section is invalid');
   }
   if (!sessionIndex) {
     throw new Error('checkpoint sessionIndex section is invalid');
+  }
+  if (!dreamingIndex) {
+    throw new Error('checkpoint dreamingIndex section is invalid');
   }
   return {
     schemaVersion: 11,
@@ -129,6 +147,7 @@ export function parseCheckpointFile(raw: string): CheckpointFile {
     writerPid: typeof parsed.writerPid === 'number' ? parsed.writerPid : 0,
     extractor,
     sessionIndex,
+    dreamingIndex,
   };
 }
 
@@ -255,6 +274,45 @@ function parseSessionIndexBaseline(value: unknown): SessionIndexCheckpoint['base
   };
 }
 
+function parseDreamingIndexSection(value: unknown): DreamingIndexCheckpoint | null {
+  if (!isObjectRecord(value) || !Array.isArray(value.entries)) {
+    return null;
+  }
+  const baseline = parseDreamingIndexBaseline(value.baseline);
+  if (!baseline) {
+    return null;
+  }
+  const entries: DreamingIndexEntry[] = [];
+  for (const entry of value.entries) {
+    if (
+      !isObjectRecord(entry)
+      || typeof entry.project !== 'string'
+      || typeof entry.dreamingId !== 'string'
+      || (entry.parentId != null && typeof entry.parentId !== 'string')
+      || typeof entry.createdAt !== 'string'
+      || typeof entry.sessionSnapshotVersion !== 'number'
+    ) {
+      return null;
+    }
+    entries.push({
+      project: entry.project,
+      dreamingId: entry.dreamingId,
+      ...(entry.parentId != null ? { parentId: entry.parentId } : {}),
+      createdAt: entry.createdAt,
+      sessionSnapshotVersion: entry.sessionSnapshotVersion,
+    });
+  }
+  return { baseline, entries };
+}
+
+function parseDreamingIndexBaseline(value: unknown): DreamingIndexCheckpoint['baseline'] | null {
+  if (!isObjectRecord(value) || typeof value.dreaming !== 'number') {
+    return null;
+  }
+  return {
+    dreaming: value.dreaming,
+  };
+}
 
 function parseRecentSessions(value: unknown): RecentSessionCheckpoint[] | null {
   if (!Array.isArray(value)) {

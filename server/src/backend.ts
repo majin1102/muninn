@@ -36,6 +36,7 @@ import { readTurnRow } from './pipeline/ingest.js';
 import { Watchdog } from './watchdog.js';
 import { writeMuninnLog } from './logging.js';
 import { SessionIndex } from './session-index.js';
+import { DreamingIndex } from './dreaming/index.js';
 import type { TurnContent } from '@muninn/common';
 
 export type Turn = TurnRow;
@@ -159,6 +160,7 @@ export class MuninnBackend {
   private extractor: Extractor | null = null;
   private sessionRegistry: IngestSessionRegistry | null = null;
   private readonly sessionIndex: SessionIndex;
+  private readonly dreamingIndex: DreamingIndex;
   private watchdog: Watchdog | null = null;
   private watchdogClient: NativeTables | null = null;
   private finalizeDrainPromise: Promise<void> | null = null;
@@ -172,6 +174,7 @@ export class MuninnBackend {
     this.checkpointLock = new AsyncCheckpointLock();
     const extractorName = loadMuninnConfig()?.extractor?.name;
     this.sessionIndex = new SessionIndex(checkpoint?.sessionIndex ?? null, extractorName ?? null);
+    this.dreamingIndex = new DreamingIndex(checkpoint?.dreamingIndex ?? null);
     this.sessionRegistry = extractorName
       ? new IngestSessionRegistry(client, extractorName)
       : null;
@@ -190,6 +193,7 @@ export class MuninnBackend {
           schemaVersion: checkpoint.schemaVersion,
           extractor: checkpoint.extractor,
           sessionIndex: checkpoint.sessionIndex,
+          dreamingIndex: checkpoint.dreamingIndex,
         })
         : null;
       const watchdogClient = lockNativeTables(
@@ -335,6 +339,7 @@ export class MuninnBackend {
         schemaVersion: 11,
         extractor: extractorSection,
         sessionIndex: await this.sessionIndex.exportCheckpoint(this.client),
+        dreamingIndex: await this.dreamingIndex.exportCheckpoint(this.client),
       };
     });
   }
