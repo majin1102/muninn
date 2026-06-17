@@ -10,17 +10,23 @@ import type {
   MemoryResponse,
   MemoryWatermark,
   MemoryWatermarkResponse,
+  ProjectDreamDocument,
+  ProjectDreamResponse,
+  ProjectDreamSignals as ApiProjectDreamSignals,
+  ProjectDreamSignalsResponse,
   TurnContent,
   TurnEvent,
 } from '@muninn/common';
 import {
   captureTurn,
   captureTurns,
+  dreaming,
   memories,
   memoryPipeline,
   turns,
 } from './backend.js';
 import type { RecallMode } from './backend.js';
+import type { DreamingRow } from './native.js';
 import type { RenderedMemory } from './api/memory.js';
 import { isCaptureEnabled } from './api/capture.js';
 import { renderRecallHit, renderRenderedMemoryHit } from './web/render.js';
@@ -114,6 +120,32 @@ function memoryWatermarkResponse(watermark: MemoryWatermark): MemoryWatermarkRes
   };
 }
 
+function projectDreamDocument(dream: DreamingRow): ProjectDreamDocument {
+  return {
+    memoryId: dream.dreamingId,
+    project: dream.project,
+    parentId: dream.parentId == null ? null : `dreaming:${dream.parentId}`,
+    createdAt: dream.createdAt,
+    sessionSnapshotVersion: dream.sessionSnapshotVersion,
+    content: dream.content,
+  };
+}
+
+function projectDreamResponse(dream: DreamingRow, created?: boolean): ProjectDreamResponse {
+  return {
+    dream: projectDreamDocument(dream),
+    created,
+    requestId: generateRequestId(),
+  };
+}
+
+function projectDreamSignalsResponse(signals: ApiProjectDreamSignals): ProjectDreamSignalsResponse {
+  return {
+    ...signals,
+    requestId: generateRequestId(),
+  };
+}
+
 function parseNonNegativeInteger(
   raw: string | undefined,
   fieldName: string,
@@ -202,6 +234,55 @@ type LocomoBridgeHit = {
   matched_text: string;
   detail?: string;
 };
+
+app.get('/api/v1/dreaming/project', async (c) => {
+  const project = c.req.query('project')?.trim();
+  const database = c.req.query('database');
+  if (!project) {
+    return c.json(errorResponse('invalidRequest', 'project is required'), 400);
+  }
+  const dream = await dreaming.getProject(project, database);
+  if (!dream) {
+    return c.json(errorResponse('notFound', 'project dream not found'), 404);
+  }
+  return c.json(projectDreamResponse(dream));
+});
+
+app.get('/api/v1/dreaming/project/signals', async (c) => {
+  const project = c.req.query('project')?.trim();
+  const database = c.req.query('database');
+  if (!project) {
+    return c.json(errorResponse('invalidRequest', 'project is required'), 400);
+  }
+  const dream = await dreaming.getProject(project, database);
+  if (!dream) {
+    return c.json(errorResponse('notFound', 'project dream not found'), 404);
+  }
+  const signals = await dreaming.getProjectSignals(project, database);
+  if (!signals) {
+    return c.json(errorResponse('notFound', 'project dream not found'), 404);
+  }
+  return c.json(projectDreamSignalsResponse({
+    memoryId: dream.dreamingId,
+    project: dream.project,
+    createdAt: dream.createdAt,
+    ...signals,
+  }));
+});
+
+app.post('/api/v1/dreaming/project', async (c) => {
+  const body = await c.req.json().catch(() => ({})) as { database?: unknown; project?: unknown };
+  const project = (c.req.query('project') ?? (typeof body.project === 'string' ? body.project : '')).trim();
+  const database = c.req.query('database') ?? (typeof body.database === 'string' ? body.database : undefined);
+  if (!project) {
+    return c.json(errorResponse('invalidRequest', 'project is required'), 400);
+  }
+  const result = await dreaming.createProject(project, database);
+  if (!result.dream) {
+    return c.json(errorResponse('notFound', 'no project signals available'), 404);
+  }
+  return c.json(projectDreamResponse(result.dream, result.created));
+});
 
 app.get('/api/v1/recall', async (c) => {
   const query = c.req.query('query');

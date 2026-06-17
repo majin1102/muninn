@@ -25,6 +25,39 @@ export interface ErrorResponse {
   requestId: string;
 }
 
+export interface ProjectDreamDocument {
+  memoryId: string;
+  project: string;
+  parentId?: string | null;
+  createdAt: string;
+  sessionSnapshotVersion: number;
+  content: string;
+}
+
+export interface ProjectDreamResponse {
+  dream: ProjectDreamDocument;
+  created?: boolean;
+  requestId: string;
+}
+
+export interface ProjectDreamSignals {
+  memoryId: string;
+  project: string;
+  createdAt: string;
+  guidance: string[];
+  skills: string[];
+  openQuestions: string[];
+}
+
+export interface ProjectDreamSignalsResponse extends ProjectDreamSignals {
+  requestId: string;
+}
+
+export interface ProjectDreamRequest {
+  database?: string;
+  project: string;
+}
+
 export interface MemoryWatermark {
   pending: {
     turns: string[];
