@@ -16,10 +16,6 @@ export async function writeMuninnConfig(home) {
       llmProvider: 'mock',
       embeddingProvider: 'mock',
     },
-    observer: {
-      name: 'default',
-      llmProvider: 'mock',
-    },
     providers: {
       llm: {
         mock: {

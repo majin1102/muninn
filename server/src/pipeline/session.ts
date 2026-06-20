@@ -49,7 +49,7 @@ export type SessionThread = {
   snapshots: SnapshotContent[];
   references: string[];
   indexedSnapshotSequence?: number | null;
-  observer: string;
+  extractor: string;
   createdAt: string;
   updatedAt: string;
 };
@@ -133,7 +133,7 @@ function threadKey(value: {
 }
 
 export function createSessionThread(
-  observer: string,
+  extractor: string,
   title: string,
   summary: string,
   references: string[],
@@ -162,7 +162,7 @@ export function createSessionThread(
     summary: normalizeSummary(summary),
     snapshots: [],
     references,
-    observer,
+    extractor,
     createdAt: now,
     updatedAt: now,
   };
@@ -207,13 +207,13 @@ export function cloneSessionThreads(threads: SessionThread[]): SessionThread[] {
 
 export function loadThreads(
   snapshots: SessionSnapshot[],
-  observer: string,
+  extractor: string,
   activeWindowDays: number,
   extractionEpoch = 0,
 ): SessionThread[] {
   const grouped = new Map<string, SessionSnapshot[]>();
   for (const snapshot of snapshots) {
-    if (snapshot.extractor !== observer) {
+    if (snapshot.extractor !== extractor) {
       continue;
     }
     const key = threadKey(snapshot);
@@ -257,7 +257,7 @@ export function threadFromSnapshots(
     snapshots: ordered.map(deserializeSnapshot),
     references: [...latest.references],
     indexedSnapshotSequence,
-    observer: latest.extractor,
+    extractor: latest.extractor,
     createdAt: ordered[0]?.createdAt ?? latest.createdAt,
     updatedAt: latest.updatedAt,
   };
@@ -369,7 +369,7 @@ export function toSessionSnapshot(thread: SessionThread): SessionSnapshot {
     snapshotSequence: thread.snapshots.length - 1,
     createdAt: thread.updatedAt,
     updatedAt: thread.updatedAt,
-    extractor: thread.observer,
+    extractor: thread.extractor,
     title: thread.title,
     summary: thread.summary,
     content: snapshot.snapshotContent,
@@ -645,7 +645,7 @@ function getOrCreateSessionThread(
   const sessionId = sessionIdForTurns(pendingTurns);
   const ownership = ownershipForTurns(pendingTurns);
   const existing = threads.find((thread) => (
-    thread.observer === extractorName
+    thread.extractor === extractorName
     && thread.kind === 'session'
     && (thread.sessionId ?? null) === sessionId
     && thread.agent === ownership.agent

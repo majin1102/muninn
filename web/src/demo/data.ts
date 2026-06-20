@@ -54,7 +54,7 @@ export type DemoImportAgentData = {
 };
 
 const LONG_DEMO_PROJECT = 'memory-inbox-with-a-very-long-project-name-for-cross-agent-recall';
-const LONG_DEMO_SESSION = 'memory-inbox/daily-recall-and-cross-agent-search-regression-review-session';
+const LONG_DEMO_SESSION = 'memory-inbox/daily-recall-and-cross-agent-search-quality-review-session';
 
 export const demoImportAgents: Record<string, DemoImportAgentData> = {
   codex: {
@@ -240,10 +240,10 @@ export const demoImportAgents: Record<string, DemoImportAgentData> = {
 
 export const demoSearchResults: SearchSessionResult[] = [
   {
-    sessionKey: 'app-mvp',
-    sessionLabel: 'app-mvp',
+    sessionKey: 'app-memory',
+    sessionLabel: 'app-memory',
     agent: 'openclaw',
-    projectKey: 'app-mvp',
+    projectKey: 'app-memory',
     projectCwd: '/Users/Nathan/.codex/worktrees/dde8/muninn',
     latestUpdatedAt: '2026-06-02T10:30:00.000Z',
     items: [
@@ -368,8 +368,8 @@ export const demoSearchResults: SearchSessionResult[] = [
       {
         id: 'demo-search-benchmark-1',
         source: 'conversation',
-        title: 'LoCoMo benchmark regression triage',
-        content: 'Release check reviewed a benchmark regression where recall improved for conversation evidence but extraction recall still missed a small set of LoCoMo questions.',
+        title: 'LoCoMo benchmark quality triage',
+        content: 'Release check reviewed benchmark quality where recall improved for conversation evidence but extraction recall still missed a small set of LoCoMo questions.',
         createdAt: '2026-05-26T12:00:00.000Z',
         memoryId: 'turn:1301',
       },
@@ -419,9 +419,9 @@ export const demoAgents: DemoSessionAgentItem[] = [
 
 export const demoPipelineTasks: DemoPipelineTask[] = [
   {
-    id: 'pipeline:observation:lance-row-id',
-    kind: 'observation',
-    title: 'Observation',
+    id: 'pipeline:wiki:lance-row-id',
+    kind: 'wiki-compiling',
+    title: 'Wiki compiling',
     target: 'Project: lance Session: row-id-recall',
     status: 'running',
     statusText: 'generating draft from 16 extractions',
@@ -429,34 +429,33 @@ export const demoPipelineTasks: DemoPipelineTask[] = [
     updatedAt: '2026-06-04T08:38:12.000Z',
     input: { bytes: 43600, tokens: 18400 },
     toolCalls: [
-      { name: 'get_observation', count: 2 },
       { name: 'get_extraction', count: 3 },
-      { name: 'validate_entity', count: 1 },
+      { name: 'validate_topic', count: 1 },
     ],
     inputDetails: [
-      '16 session-level observations',
+      '16 extraction memories',
       '3 source turns from Lance discussions',
-      'Entity key: Lance row id',
+      'Topic: Lance row id',
     ],
     outputDetails: [
-      'Entity-level observation draft',
+      'Wiki draft',
       'Pending parser validation before commit',
     ],
     trace: [
       'selected input: done',
       'generating draft: running',
       'commit output: pending',
-      'trace ref: observer-run-42',
+      'trace ref: wiki-run-42',
     ],
     errors: [],
   },
   {
     id: 'pipeline:session:codex-import-timeline',
-    kind: 'session-observing',
-    title: 'Session observing',
+    kind: 'extraction',
+    title: 'Extraction',
     target: 'Project: muninn Session: codex session import timeline',
     status: 'done',
-    statusText: 'produced 12 extractions and queued observation work',
+    statusText: 'produced 12 extractions and updated the index',
     startedAt: '2026-06-04T08:24:12.000Z',
     endedAt: '2026-06-04T08:36:12.000Z',
     updatedAt: '2026-06-04T08:36:12.000Z',
@@ -464,14 +463,14 @@ export const demoPipelineTasks: DemoPipelineTask[] = [
     output: { bytes: 12400, tokens: 4800 },
     toolCalls: [
       { name: 'get_turns', count: 5 },
-      { name: 'write_observation', count: 12 },
+      { name: 'write_extraction', count: 12 },
     ],
     inputDetails: ['100 imported turns', 'agent: codex', 'session: import timeline'],
-    outputDetails: ['12 session-level observations', 'observation work queued'],
+    outputDetails: ['12 extraction memories', 'search index updated'],
     trace: [
       'read turns: done',
-      'extracted observations: done',
-      'queued observation work: done',
+      'extracted memory: done',
+      'updated index: done',
     ],
     errors: [],
   },
@@ -481,38 +480,38 @@ export const demoPipelineTasks: DemoPipelineTask[] = [
     title: 'Wiki compiling',
     target: 'Project: muninn Session: memory architecture',
     status: 'queued',
-    statusText: 'waiting for observations before compiling wiki draft',
+    statusText: 'waiting for extraction index before compiling wiki draft',
     updatedAt: '2026-06-04T08:35:12.000Z',
     input: { bytes: 68200, tokens: 27100 },
     toolCalls: [
-      { name: 'get_observation', count: 4 },
+      { name: 'get_extraction', count: 4 },
       { name: 'get_wiki_context', count: 1 },
     ],
-    inputDetails: ['Memory architecture observation tree', 'Related entity summaries'],
-    outputDetails: ['Wiki page draft', 'Pending source observation readiness'],
-    trace: ['waiting for observations'],
+    inputDetails: ['Memory architecture extraction set', 'Related topic summaries'],
+    outputDetails: ['Wiki page draft', 'Pending source extraction readiness'],
+    trace: ['waiting for extraction index'],
     errors: [],
   },
   {
-    id: 'pipeline:observation:prompt-design',
-    kind: 'observation',
-    title: 'Observation',
+    id: 'pipeline:session:prompt-design',
+    kind: 'extraction',
+    title: 'Extraction',
     target: 'Project: muninn Session: prompt design',
     status: 'queued',
-    statusText: 'waiting for extractions before observation rewrite',
+    statusText: 'waiting for new turns before extraction rewrite',
     updatedAt: '2026-06-04T08:34:12.000Z',
     input: { bytes: 14800, tokens: 6100 },
     toolCalls: [],
-    inputDetails: ['5 session-level observations', 'Entity key: Muninn prompt design', 'Below observer threshold'],
-    outputDetails: ['Waiting to produce entity observation draft'],
+    inputDetails: ['5 extraction memories', 'Topic: Muninn prompt design', 'Below extraction threshold'],
+    outputDetails: ['Waiting to produce updated extraction memory'],
     trace: ['waiting for more extractions'],
     errors: [],
   },
   {
-    id: 'pipeline:observation:app-settings',
-    kind: 'observation',
-    title: 'Observation',
-    target: 'Project: app-mvp Session: settings polish',
+    id: 'pipeline:session:app-settings',
+    kind: 'extraction',
+    title: 'Extraction',
+    target: 'Project: app-memory Session: settings polish',
     status: 'failed',
     statusText: 'parser validation failed after 8 extractions · retry retained',
     startedAt: '2026-06-04T08:29:12.000Z',
@@ -520,12 +519,12 @@ export const demoPipelineTasks: DemoPipelineTask[] = [
     updatedAt: '2026-06-04T08:32:12.000Z',
     input: { bytes: 19600, tokens: 8200 },
     toolCalls: [
-      { name: 'get_observation', count: 2 },
-      { name: 'validate_entity', count: 1 },
+      { name: 'get_extraction', count: 2 },
+      { name: 'validate_memory', count: 1 },
       { name: 'retry_commit', count: 1 },
     ],
-    inputDetails: ['8 session-level observations', 'Entity key: Muninn Web settings', 'Retry retained'],
-    outputDetails: ['Draft failed parser validation', 'No committed observation'],
+    inputDetails: ['8 extraction memories', 'Topic: Muninn Web settings', 'Retry retained'],
+    outputDetails: ['Draft failed parser validation', 'No committed extraction'],
     trace: [
       'selected input: done',
       'generated draft: done',
@@ -538,7 +537,7 @@ export const demoPipelineTasks: DemoPipelineTask[] = [
 export const demoSessionGroups: Record<string, DemoSessionGroupItem[]> = {
   openclaw: [
     { sessionKey: 'auth-refactor', displaySessionId: 'auth-refactor', projectKey: 'auth-refactor', latestUpdatedAt: '2026-06-01T12:01:00.000Z' },
-    { sessionKey: 'app-mvp', displaySessionId: 'app-mvp', projectKey: 'app-mvp', latestUpdatedAt: '2026-06-01T07:15:00.000Z' },
+    { sessionKey: 'app-memory', displaySessionId: 'app-memory', projectKey: 'app-memory', latestUpdatedAt: '2026-06-01T07:15:00.000Z' },
   ],
   claude_code: [
     { sessionKey: 'auth-refactor', displaySessionId: 'auth-refactor', projectKey: 'auth-refactor', latestUpdatedAt: '2026-05-29T12:00:00.000Z' },
@@ -640,7 +639,7 @@ export const demoSessionTurns: Record<string, DemoSessionTimelineItem[]> = {
       preview: '让 demo 模式默认预加载并展开 session turns，避免进入页面后看不到任何样例聊天轮次',
     },
   ],
-  'openclaw::app-mvp': [
+  'openclaw::app-memory': [
     {
       memoryId: 'turn:1010',
       createdAt: '2026-03-20T11:05:00.000Z',
@@ -1034,14 +1033,14 @@ Demo 模式会默认预加载 session turns，并展开 session 内容。
     kind: 'turn',
     title: '为 Muninn App 单独创建 web 模块',
     agent: 'openclaw',
-    sessionId: 'app-mvp',
+    sessionId: 'app-memory',
     updatedAt: '2026-03-20T11:05:00.000Z',
     markdown: `# turn:1010
 
 ## Context
 
 - Agent: openclaw
-- Session: app-mvp
+- Session: app-memory
 - Created At: 2026-03-20T11:05:00.000Z
 - Updated At: 2026-03-20T11:05:00.000Z
 

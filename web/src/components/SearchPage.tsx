@@ -57,10 +57,9 @@ const ADD_OPTIONS = [
   { label: 'File', value: 'file', icon: File },
   { label: 'Agent', value: 'agent', icon: Bot },
 ];
-type SearchSourceKey = 'all' | 'observation' | 'conversation' | 'llmWiki';
+type SearchSourceKey = 'all' | 'conversation' | 'llmWiki';
 const SOURCE_TABS: Array<{ label: string; value: SearchSourceKey }> = [
   { label: 'All', value: 'all' },
-  { label: 'Observation', value: 'observation' },
   { label: 'Conversation', value: 'conversation' },
   { label: 'LLM Wiki', value: 'llmWiki' },
 ];
@@ -1175,7 +1174,7 @@ function SearchTurnReferences({ references }: { references: string[] }) {
       <div className="search-hit-references-title">Referenced turns</div>
       <div className="search-hit-reference-list">
         {turnReferences.map((reference) => (
-          <a key={reference} href={`#/session/${encodeURIComponent(reference)}`} className="observation-inline-citation search-hit-reference">
+          <a key={reference} href={`#/session/${encodeURIComponent(reference)}`} className="memory-inline-citation search-hit-reference">
             [{turnReferenceLabel(reference)}]
           </a>
         ))}

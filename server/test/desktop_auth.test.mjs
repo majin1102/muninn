@@ -66,10 +66,6 @@ test('desktop token allows api routes with matching bearer token', async () => {
       llmProvider: 'mock',
       embeddingProvider: 'mock',
     },
-    observer: {
-      name: 'default',
-      llmProvider: 'mock',
-    },
     providers: {
       llm: {
         mock: {

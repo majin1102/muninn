@@ -28,14 +28,12 @@ export interface ErrorResponse {
 export interface MemoryWatermark {
   pending: {
     turns: string[];
-    extractions: string[];
   };
   phases: {
     extractor: 'idle' | 'pending' | 'running' | 'draining' | 'error';
-    observer: 'idle' | 'pending' | 'running' | 'draining' | 'error';
   };
   error?: {
-    phase: 'extractor' | 'observer';
+    phase: 'extractor';
     message: string;
   };
 }
@@ -213,11 +211,11 @@ export interface SessionTurnsResponse {
 
 export interface MemoryDocument {
   memoryId: string;
-  kind: 'turn' | 'session' | 'extraction' | 'observation';
+  kind: 'turn' | 'session' | 'extraction';
   title: string;
   markdown: string;
   agent?: string;
-  observer?: string;
+  extractor?: string;
   sessionId?: string;
   project?: string;
   cwd?: string;
@@ -258,8 +256,7 @@ export interface SessionSnapshotListResponse {
 export type PipelineTaskStatus = 'running' | 'queued' | 'failed' | 'done';
 
 export type PipelineTaskKind =
-  | 'session-observing'
-  | 'observation'
+  | 'extraction'
   | 'wiki-compiling';
 
 export interface PipelineDataMetric {

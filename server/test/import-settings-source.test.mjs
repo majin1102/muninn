@@ -64,9 +64,9 @@ test('session import writes turns in batch without synchronously flushing extrac
   assert.match(importSource, /turnContents\.push\(toTurnContent/);
   assert.match(importSource, /await captureTurns\(turnContents\);/);
   assert.doesNotMatch(importSource, /addMessage/);
-  assert.doesNotMatch(importSource, /import \{[^}]*observer[^}]*\} from '\.\.\/memory\/index\.js'/s);
-  assert.doesNotMatch(importSource, /observer\.flushPending\(\)/);
-  assert.doesNotMatch(importSource, /observer\.finalize\(\)/);
+  assert.doesNotMatch(importSource, /import \{[^}]*extractor[^}]*\} from '\.\.\/memory\/index\.js'/s);
+  assert.doesNotMatch(importSource, /extractor\.flushPending\(\)/);
+  assert.doesNotMatch(importSource, /extractor\.finalize\(\)/);
 });
 
 test('capture settings are stored in muninn json and ignore legacy policy files', async () => {

@@ -456,7 +456,6 @@ function isGeneratedSnapshotTitle(title: string, summary: string): boolean {
   if (
     title === 'Session memory thread'
     || title === 'Session memory snapshot'
-    || title === 'Session observing thread'
   ) {
     return true;
   }

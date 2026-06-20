@@ -1,7 +1,6 @@
 import {
   type ExtractorCheckpoint,
   type ExtractorRun,
-  type QueuedExtractionChange,
   type ThreadRef,
 } from '../checkpoint.js';
 import type { CheckpointLock } from '../backend.js';
@@ -37,7 +36,6 @@ export type ExtractorCheckpointState = {
   nextEpoch: number;
   threads: ThreadRef[];
   runs: ExtractorRun[];
-  pendingExtractionChanges: QueuedExtractionChange[];
 };
 
 const noopCheckpointLock: CheckpointLock = {
@@ -57,7 +55,6 @@ export class Extractor {
   private threads: SessionThread[] = [];
   private nextIndexRetryAt?: number;
   private lastIndexError?: string;
-  private pendingExtractionChanges: QueuedExtractionChange[] = [];
   private shuttingDown = false;
   private bootstrapped = false;
   private bootstrapPromise: Promise<void> | null = null;
@@ -78,7 +75,6 @@ export class Extractor {
     private readonly client: NativeTables,
     private readonly checkpoint: ExtractorCheckpoint | null = null,
     private readonly checkpointLock: CheckpointLock = noopCheckpointLock,
-    private readonly onExtractionCommitted: ((changes: QueuedExtractionChange[]) => void) | null = null,
     database: string = 'main',
   ) {
     this.database = resolveDatabaseName(database);
@@ -90,7 +86,6 @@ export class Extractor {
     this.activeWindowDays = config.activeWindowDays;
     this.epochTurns = config.epochTurns;
     this.epochWindowMs = config.epochWindowMs;
-    this.pendingExtractionChanges = checkpoint?.pendingExtractionChanges.map(cloneQueuedExtractionChange) ?? [];
     this.checkpointRuns = checkpoint?.runs.filter((run) => run.status === 'running').map(cloneExtractorRun) ?? [];
   }
 
@@ -194,11 +189,9 @@ export class Extractor {
     const watermark: MemoryWatermark = {
       pending: {
         turns: pendingTurnIds,
-        extractions: [],
       },
       phases: {
         extractor: phase,
-        observer: 'idle',
       },
     };
     if (this.lastIndexError && hasAnyUnindexedSnapshots) {
@@ -231,7 +224,6 @@ export class Extractor {
       nextEpoch: this.checkpointNextEpoch,
       threads: this.checkpointThreads.map((thread) => ({ ...thread })),
       runs: this.checkpointRuns.map(cloneExtractorRun),
-      pendingExtractionChanges: this.pendingExtractionChanges.map(cloneQueuedExtractionChange),
     };
   }
 
@@ -280,10 +272,10 @@ export class Extractor {
       pendingTurns = restored.pendingTurns;
     } else {
       const snapshots = await this.client.sessionTable.listSnapshots({
-        observer: this.name,
+        extractor: this.name,
       });
       const turns = (await this.client.turnTable.loadTurnsAfterEpoch({
-        observer: this.name,
+        extractor: this.name,
         committedEpoch: null,
       })).map(readTurnRow);
       const fallback = await this.replayCheckpoint({
@@ -291,19 +283,17 @@ export class Extractor {
           turn: 0,
           session: 0,
           extraction: 0,
-          observation: 0,
         },
         nextEpoch: 0,
         recentSessions: [],
         threads: [],
         runs: [],
-        pendingExtractionChanges: [],
       }, snapshots, new Map(turns.map((turn) => [turn.turnId, turn])));
       if (fallback) {
         this.threads = fallback.threads;
         this.committedEpoch = fallback.committedEpoch;
         pendingTurns = pendingExtractableTurns(
-          turns.filter((turn) => !fallback.observedTurnIds.has(turn.turnId)),
+          turns.filter((turn) => !fallback.indexedTurnIds.has(turn.turnId)),
           fallback.committedEpoch,
         );
       } else {
@@ -322,12 +312,12 @@ export class Extractor {
     if (pendingTurns.length > 0) {
       const turnsByEpoch = new Map<number, TurnRow[]>();
       for (const turn of pendingTurns) {
-        if (turn.observingEpoch == null) {
+        if (turn.extractionEpoch == null) {
           throw new Error(`pending extractable turn ${turn.turnId} is missing extractionEpoch`);
         }
-        const turns = turnsByEpoch.get(turn.observingEpoch) ?? [];
+        const turns = turnsByEpoch.get(turn.extractionEpoch) ?? [];
         turns.push(turn);
-        turnsByEpoch.set(turn.observingEpoch, turns);
+        turnsByEpoch.set(turn.extractionEpoch, turns);
       }
       const epochs = [...turnsByEpoch.keys()].sort((left, right) => left - right);
       for (const epoch of epochs) {
@@ -346,7 +336,6 @@ export class Extractor {
     }
     this.refreshCheckpointSnapshot();
     this.bootstrapped = true;
-    this.handoffPendingExtractionChanges();
     this.refreshCheckpointSnapshot();
     this.start();
     this.notifyChange();
@@ -423,9 +412,7 @@ export class Extractor {
       });
       this.threads = result.threads;
       try {
-        const extractionChanges = await this.indexCurrentEpochSnapshots(result.touchedIds);
-        this.mergePendingExtractionChanges(extractionChanges);
-        this.handoffPendingExtractionChanges();
+        await this.indexCurrentEpochSnapshots(result.touchedIds);
         this.lastIndexError = undefined;
         if (!this.hasAnyUnindexedSnapshots()) {
           this.nextIndexRetryAt = undefined;
@@ -447,7 +434,7 @@ export class Extractor {
     });
   }
 
-  private indexCurrentEpochSnapshots(touchedIds: Set<string>): Promise<QueuedExtractionChange[]> {
+  private indexCurrentEpochSnapshots(touchedIds: Set<string>): Promise<void> {
     return indexTouchedExtractions(
       this.client,
       this.threads,
@@ -550,9 +537,7 @@ export class Extractor {
   private async retrySnapshotIndexing(): Promise<void> {
     try {
       await this.checkpointLock.shared(async () => {
-        const extractionChanges = await indexPendingExtractions(this.client, this.threads, this.shutdownController.signal);
-        this.mergePendingExtractionChanges(extractionChanges);
-        this.handoffPendingExtractionChanges();
+        await indexPendingExtractions(this.client, this.threads, this.shutdownController.signal);
         this.lastIndexError = undefined;
         this.refreshCheckpointSnapshot();
         this.nextIndexRetryAt = undefined;
@@ -573,27 +558,6 @@ export class Extractor {
       }
       this.notifyChange();
     }
-  }
-
-  private mergePendingExtractionChanges(changes: QueuedExtractionChange[] | undefined): void {
-    for (const change of changes ?? []) {
-      const index = this.pendingExtractionChanges
-        .findIndex((pending) => pending.extraction.id === change.extraction.id);
-      if (index < 0) {
-        this.pendingExtractionChanges.push(cloneQueuedExtractionChange(change));
-      } else {
-        this.pendingExtractionChanges[index] = cloneQueuedExtractionChange(change);
-      }
-    }
-  }
-
-  private handoffPendingExtractionChanges(): void {
-    if (this.pendingExtractionChanges.length === 0) {
-      return;
-    }
-    const changes = this.pendingExtractionChanges.map(cloneQueuedExtractionChange);
-    this.onExtractionCommitted?.(changes);
-    this.pendingExtractionChanges = [];
   }
 
   private exportCheckpointThreads(): ThreadRef[] {
@@ -626,11 +590,11 @@ export class Extractor {
       return null;
     }
     const sessionDelta = await this.client.sessionTable.delta({
-      observer: this.name,
+      extractor: this.name,
       baselineVersion: section.baseline.session,
     });
     const turns = (await this.client.turnTable.loadTurnsAfterEpoch({
-      observer: this.name,
+      extractor: this.name,
       committedEpoch: section.committedEpoch ?? null,
     })).map(readTurnRow);
     const turnById = new Map(turns.map((turn) => [turn.turnId, turn]));
@@ -646,7 +610,7 @@ export class Extractor {
       threads: restored.threads,
       committedEpoch: restored.committedEpoch,
       pendingTurns: pendingExtractableTurns(
-        turns.filter((turn) => !restored.observedTurnIds.has(turn.turnId)),
+        turns.filter((turn) => !restored.indexedTurnIds.has(turn.turnId)),
         restored.committedEpoch,
       ),
     };
@@ -658,7 +622,7 @@ export class Extractor {
     turnById: Map<string, TurnRow>,
   ): Promise<{
     threads: SessionThread[];
-    observedTurnIds: Set<string>;
+    indexedTurnIds: Set<string>;
     committedEpoch?: number;
   } | null> {
     const rowsById = new Map<string, Array<import('./session.js').SessionSnapshot>>();
@@ -668,7 +632,7 @@ export class Extractor {
       rowsById.set(row.sessionId, rows);
     }
     const restored: SessionThread[] = [];
-    const observedTurnIds = new Set<string>();
+    const indexedTurnIds = new Set<string>();
     let committedEpoch = section.committedEpoch;
     const turnCache = new Map(turnById);
     for (const threadRef of section.threads) {
@@ -712,12 +676,12 @@ export class Extractor {
               turnCache.set(reference, turn);
             }
           }
-          if (turn?.observingEpoch == null) {
+          if (turn?.extractionEpoch == null) {
             return null;
           }
-          observedTurnIds.add(reference);
-          rowEpoch = rowEpoch == null || turn.observingEpoch > rowEpoch
-            ? turn.observingEpoch
+          indexedTurnIds.add(reference);
+          rowEpoch = rowEpoch == null || turn.extractionEpoch > rowEpoch
+            ? turn.extractionEpoch
             : rowEpoch;
         }
         if (rowEpoch == null) {
@@ -772,12 +736,12 @@ export class Extractor {
               turnCache.set(reference, turn);
             }
           }
-          if (turn?.observingEpoch == null) {
+          if (turn?.extractionEpoch == null) {
             return null;
           }
-          observedTurnIds.add(reference);
-          rowEpoch = rowEpoch == null || turn.observingEpoch > rowEpoch
-            ? turn.observingEpoch
+          indexedTurnIds.add(reference);
+          rowEpoch = rowEpoch == null || turn.extractionEpoch > rowEpoch
+            ? turn.extractionEpoch
             : rowEpoch;
         }
         if (rowEpoch == null) {
@@ -807,12 +771,12 @@ export class Extractor {
               turnCache.set(reference, turn);
             }
           }
-          if (turn?.observingEpoch == null) {
+          if (turn?.extractionEpoch == null) {
             return null;
           }
-          observedTurnIds.add(reference);
-          rowEpoch = rowEpoch == null || turn.observingEpoch > rowEpoch
-            ? turn.observingEpoch
+          indexedTurnIds.add(reference);
+          rowEpoch = rowEpoch == null || turn.extractionEpoch > rowEpoch
+            ? turn.extractionEpoch
             : rowEpoch;
         }
         if (rowEpoch == null) {
@@ -837,7 +801,7 @@ export class Extractor {
     }
     return {
       threads: restored.sort((left, right) => left.updatedAt.localeCompare(right.updatedAt)),
-      observedTurnIds,
+      indexedTurnIds,
       committedEpoch,
     };
   }
@@ -890,18 +854,6 @@ function cloneExtractorRun(run: ExtractorRun): ExtractorRun {
   };
 }
 
-function cloneQueuedExtractionChange(change: QueuedExtractionChange): QueuedExtractionChange {
-  return {
-    type: change.type,
-    extraction: {
-      ...change.extraction,
-      vector: [...change.extraction.vector],
-      turnRefs: [...change.extraction.turnRefs],
-      observationPaths: [...change.extraction.observationPaths],
-    },
-  };
-}
-
 function isExtractable(turn: TurnRow): boolean {
   return Boolean(turn.response?.trim());
 }
@@ -921,12 +873,12 @@ function pendingExtractableTurns(
   return turns
     .filter(isExtractable)
     .filter((turn) => (
-      turn.observingEpoch == null
+      turn.extractionEpoch == null
       || committedEpoch == null
-      || turn.observingEpoch > committedEpoch
+      || turn.extractionEpoch > committedEpoch
     ))
     .sort((left, right) => (
-      (left.observingEpoch ?? recoveredEpoch) - (right.observingEpoch ?? recoveredEpoch)
+      (left.extractionEpoch ?? recoveredEpoch) - (right.extractionEpoch ?? recoveredEpoch)
       || left.createdAt.localeCompare(right.createdAt)
       || left.updatedAt.localeCompare(right.updatedAt)
     ));

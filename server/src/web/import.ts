@@ -297,13 +297,8 @@ async function deleteRelatedMemories(turnIds: string[]): Promise<void> {
   const extractions = (await tables.extractionTable.list({}))
     .filter((row) => row.turnRefs.some((ref) => turnIdSet.has(ref)));
   const extractionIds = [...new Set(extractions.map((row) => row.id))];
-  const observationPaths = [...new Set(extractions.flatMap((row) => row.observationPaths))];
   if (extractionIds.length > 0) {
     await tables.extractionTable.delete({ ids: extractionIds });
-  }
-  if (observationPaths.length > 0) {
-    await tables.observationContextTable.delete({ ids: observationPaths });
-    await tables.observationTable.delete({ ids: observationPaths });
   }
 }
 

@@ -17,7 +17,7 @@ import {
   captureTurn,
   captureTurns,
   memories,
-  observer,
+  memoryPipeline,
   turns,
 } from './backend.js';
 import type { RecallMode } from './backend.js';
@@ -201,7 +201,6 @@ type LocomoBridgeHit = {
   memory_id: string;
   matched_text: string;
   detail?: string;
-  observationRatio?: number | null;
 };
 
 app.get('/api/v1/recall', async (c) => {
@@ -427,7 +426,6 @@ function toLocomoHit(
     memory_id: rendered.memoryId,
     matched_text: matchedText,
     detail: renderBridgeMemoryText(rendered, matchedText),
-    observationRatio: observingRatio(rendered.detail),
   };
 }
 
@@ -441,25 +439,6 @@ function renderBridgeMemoryText(rendered: RenderedMemory, matchedText: string): 
     ].filter(Boolean).join('\n');
   }
   return matchedText || rendered.summary || rendered.title || rendered.detail || '';
-}
-
-function observingRatio(detail?: string | null): number | null | undefined {
-  if (!detail) {
-    return undefined;
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(detail);
-  } catch {
-    return undefined;
-  }
-  if (!parsed || typeof parsed !== 'object') {
-    return undefined;
-  }
-  const record = parsed as Record<string, unknown>;
-  const extractions = Array.isArray(record.extractions) ? record.extractions : [];
-  const contextRefs = Array.isArray(record.contextRefs) ? record.contextRefs : [];
-  return contextRefs.length === 0 ? null : extractions.length / contextRefs.length;
 }
 
 app.get('/api/v1/timeline', async (c) => {
@@ -533,7 +512,7 @@ app.get('/api/v1/memory/watermark', async (c) => {
   const database = c.req.query('database');
   let watermark;
   try {
-    watermark = await observer.watermark(database);
+    watermark = await memoryPipeline.watermark(database);
   } catch (error) {
     const mapped = mapCoreLookupError(error);
     return c.json(mapped.body, mapped.status as 400 | 500);
@@ -552,7 +531,7 @@ app.post('/api/v1/memory/finalize', async (c) => {
   }
   let watermark;
   try {
-    watermark = await observer.finalize(database);
+    watermark = await memoryPipeline.finalize(database);
   } catch (error) {
     const mapped = mapCoreLookupError(error);
     return c.json(mapped.body, mapped.status as 400 | 500);

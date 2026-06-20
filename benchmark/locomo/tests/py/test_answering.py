@@ -34,7 +34,7 @@ class AnsweringTests(unittest.TestCase):
         hit = RecallHit(
             memory_id="turn:3",
             detail=(
-                "OBSERVATION: Caroline attended an LGBTQ support group on 7 May 2023.\n"
+                "MEMORY: Caroline attended an LGBTQ support group on 7 May 2023.\n"
                 "CONTEXT: Caroline mentioned it after Melanie asked about her week."
             ),
             matched_text="Caroline attended an LGBTQ support group on 7 May 2023.",
@@ -53,10 +53,10 @@ class AnsweringTests(unittest.TestCase):
                 "Caroline mentioned it after Melanie asked about her week."
             ),
         )
-        self.assertNotIn("Related Observations:", context)
-        self.assertNotIn("OBSERVATION:", context)
+        self.assertNotIn("Related Memories:", context)
+        self.assertNotIn("MEMORY:", context)
         self.assertNotIn("CONTEXT:", context)
-        self.assertNotIn("OBSERVATION_ID: turn:3", context)
+        self.assertNotIn("MEMORY_ID: turn:3", context)
         self.assertNotIn("EVIDENCE_IDS:", context)
         self.assertNotIn("Related Memories:", context)
         self.assertNotIn("MEMORY:", context)
@@ -124,11 +124,11 @@ class AnsweringTests(unittest.TestCase):
         self.assertEqual(trace["f1"], round(scored.f1, 4))
         self.assertNotIn("recall", trace)
 
-    def test_load_answerer_config_uses_observer_llm_provider_and_redacts_nothing_in_memory(self) -> None:
+    def test_load_answerer_config_uses_extractor_llm_provider_and_redacts_nothing_in_memory(self) -> None:
         with TemporaryDirectory() as tmpdir:
             home = Path(tmpdir)
             config = {
-                "observer": {"name": "locomo-observer", "llmProvider": "seed"},
+                "extractor": {"name": "locomo-extractor", "llmProvider": "seed"},
                 "providers": {
                     "llm": {
                         "seed": {
@@ -201,7 +201,7 @@ class AnsweringTests(unittest.TestCase):
                     result = run_llm_answerer(
                         question="When did Caroline go to the support group?",
                         category=2,
-                        answer_context="OBSERVATION: Caroline attended on 7 May 2023.",
+                        answer_context="MEMORY: Caroline attended on 7 May 2023.",
                         config={"provider": "openai-codex", "model": "gpt-5.4-mini"},
                     )
             finally:
@@ -216,7 +216,7 @@ class AnsweringTests(unittest.TestCase):
         self.assertEqual(captured["timeout"], 120)
         self.assertIn("Bearer ", captured["headers"]["Authorization"])
         self.assertEqual(captured["body"]["model"], "gpt-5.4-mini")
-        self.assertEqual(captured["body"]["instructions"], "You answer LoCoMo benchmark questions using only the provided Muninn observation context. Return only the short answer text.")
+        self.assertEqual(captured["body"]["instructions"], "You answer LoCoMo benchmark questions using only the provided Muninn memory context. Return only the short answer text.")
         self.assertEqual(captured["body"]["store"], False)
         self.assertEqual(captured["body"]["stream"], True)
         self.assertEqual(captured["body"]["input"][0]["role"], "user")
@@ -270,7 +270,7 @@ class AnsweringTests(unittest.TestCase):
                     result = run_llm_answerer(
                         question="When did Caroline go to the support group?",
                         category=2,
-                        answer_context="OBSERVATION: Caroline attended on 7 May 2023.",
+                        answer_context="MEMORY: Caroline attended on 7 May 2023.",
                         config={"provider": "openai-codex", "model": "gpt-5.4-mini"},
                     )
             finally:
@@ -339,12 +339,12 @@ class AnsweringTests(unittest.TestCase):
         self.assertIsNone(result["memory_clarity_score"])
         self.assertEqual(result["memory_clarity_reason"], "")
 
-    def test_load_answerer_config_fails_without_observer_llm_provider(self) -> None:
+    def test_load_answerer_config_fails_without_extractor_llm_provider(self) -> None:
         with TemporaryDirectory() as tmpdir:
             home = Path(tmpdir)
-            (home / "muninn.json").write_text('{"observer":{"name":"locomo-observer"},"providers":{"llm":{}}}', encoding="utf8")
+            (home / "muninn.json").write_text('{"extractor":{"name":"locomo-extractor"},"providers":{"llm":{}}}', encoding="utf8")
 
-            with self.assertRaisesRegex(ValueError, "observer.llmProvider"):
+            with self.assertRaisesRegex(ValueError, "extractor.llmProvider"):
                 load_answerer_config(home)
 
 

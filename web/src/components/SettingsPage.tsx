@@ -18,7 +18,7 @@ type SettingsPageProps = {
 };
 
 type SettingsMode = 'visual' | 'json' | 'import';
-type PipelineSettingsTab = 'extractor' | 'observer';
+type PipelineSettingsTab = 'extractor';
 type SaveStatus = 'idle' | 'loading' | 'saved' | 'saving' | 'invalid' | 'failed' | 'unavailable';
 const DEFAULT_DATABASE = 'main';
 const DEFAULT_MUNINN_HOME = '/Users/Nathan/.muninn';
@@ -378,39 +378,19 @@ function PipelineTabs({ tab, onSelect }: { tab: PipelineSettingsTab; onSelect: (
       >
         Extractor
       </button>
-      <button
-        className={tab === 'observer' ? 'settings-provider-capability-tab settings-provider-capability-tab-active' : 'settings-provider-capability-tab'}
-        type="button"
-        onClick={() => onSelect('observer')}
-      >
-        Observer
-      </button>
     </div>
   );
 }
 
-function PipelineSettings({ draft, tab }: { draft: MuninnSettingsDraft; tab: PipelineSettingsTab }) {
-  if (tab === 'extractor') {
-    return (
-      <div className="settings-card">
-        <OptionalSettingsRow draft={draft} label="Name" description="extractor.name" path={['extractor', 'name']} />
-        <OptionalSettingsRow draft={draft} label="LLM provider" description="extractor.llmProvider" path={['extractor', 'llmProvider']} />
-        <OptionalSettingsRow draft={draft} label="Embedding provider" description="extractor.embeddingProvider" path={['extractor', 'embeddingProvider']} />
-        <OptionalSettingsRow draft={draft} label="Recall mode" description="extractor.recallMode" path={['extractor', 'recallMode']} />
-        <OptionalSettingsRow draft={draft} label="Max attempts" description="extractor.maxAttempts" path={['extractor', 'maxAttempts']} />
-        <OptionalSettingsRow draft={draft} label="Active window days" description="extractor.activeWindowDays" path={['extractor', 'activeWindowDays']} />
-      </div>
-    );
-  }
-
+function PipelineSettings({ draft, tab: _tab }: { draft: MuninnSettingsDraft; tab: PipelineSettingsTab }) {
   return (
     <div className="settings-card">
-      <OptionalSettingsRow draft={draft} label="Name" description="observer.name" path={['observer', 'name']} />
-      <OptionalSettingsRow draft={draft} label="LLM provider" description="observer.llmProvider" path={['observer', 'llmProvider']} />
-      <OptionalSettingsRow draft={draft} label="Max attempts" description="observer.maxAttempts" path={['observer', 'maxAttempts']} />
-      <OptionalSettingsRow draft={draft} label="CWD threshold" description="observer.cwdThreshold" path={['observer', 'cwdThreshold']} />
-      <OptionalSettingsRow draft={draft} label="CWD batch size" description="observer.cwdBatchSize" path={['observer', 'cwdBatchSize']} />
-      <OptionalSettingsRow draft={draft} label="Content budget" description="observer.contentBudgetChars" path={['observer', 'contentBudgetChars']} />
+      <OptionalSettingsRow draft={draft} label="Name" description="extractor.name" path={['extractor', 'name']} />
+      <OptionalSettingsRow draft={draft} label="LLM provider" description="extractor.llmProvider" path={['extractor', 'llmProvider']} />
+      <OptionalSettingsRow draft={draft} label="Embedding provider" description="extractor.embeddingProvider" path={['extractor', 'embeddingProvider']} />
+      <OptionalSettingsRow draft={draft} label="Recall mode" description="extractor.recallMode" path={['extractor', 'recallMode']} />
+      <OptionalSettingsRow draft={draft} label="Max attempts" description="extractor.maxAttempts" path={['extractor', 'maxAttempts']} />
+      <OptionalSettingsRow draft={draft} label="Active window days" description="extractor.activeWindowDays" path={['extractor', 'activeWindowDays']} />
     </div>
   );
 }
@@ -426,11 +406,10 @@ function initialSettingsHashState(): SettingsHashState {
   const rawMode = params.get('mode');
   const mode: SettingsMode = rawMode === 'visual' || rawMode === 'json' || rawMode === 'import' ? rawMode : 'import';
   const provider = params.get('provider');
-  const pipeline = params.get('pipeline');
   return {
     mode,
     providerCapability: provider === 'llm' || provider === 'embedding' ? provider : null,
-    pipelineTab: pipeline === 'observer' ? 'observer' : 'extractor',
+    pipelineTab: 'extractor',
   };
 }
 

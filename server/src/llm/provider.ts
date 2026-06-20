@@ -1,9 +1,9 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { getExtractorLlmConfig, getObserverLlmConfig, type TextProviderConfig } from '../config.js';
+import { getExtractorLlmConfig, type TextProviderConfig } from '../config.js';
 
-export type LlmTask = 'extractor' | 'observer';
+export type LlmTask = 'extractor';
 
 export type LlmTextRequest = {
   system: string;
@@ -43,9 +43,7 @@ export async function generateText(
   task: LlmTask,
   request: LlmTextRequest,
 ): Promise<string | null> {
-  const config = task === 'extractor'
-    ? getExtractorLlmConfig()
-    : getObserverLlmConfig();
+  const config = getExtractorLlmConfig();
   if (!config) {
     return null;
   }
@@ -66,9 +64,7 @@ export async function* generateTextStream(
   task: LlmTask,
   request: LlmTextRequest,
 ): AsyncIterable<string> {
-  const config = task === 'extractor'
-    ? getExtractorLlmConfig()
-    : getObserverLlmConfig();
+  const config = getExtractorLlmConfig();
   if (!config) {
     return;
   }
@@ -98,9 +94,7 @@ export async function generateWithTools(
   task: LlmTask,
   request: LlmToolRequest,
 ): Promise<LlmToolResult | null> {
-  const config = task === 'extractor'
-    ? getExtractorLlmConfig()
-    : getObserverLlmConfig();
+  const config = getExtractorLlmConfig();
   if (!config) {
     return null;
   }
@@ -154,30 +148,6 @@ function generateMockText(request: LlmTextRequest): string {
       refs,
     });
   }
-  if (
-    request.system.includes('observer that rewrites an observing document')
-    || request.system.includes('observer that rewrites a cross-session curated observation document')
-    || request.system.includes('observer that rewrites part of a cross-extraction document')
-    || request.system.includes('observer that maintains parts of a cross-extraction document')
-    || request.system.includes('observer that rewrites a subtree of a cross-extraction document')
-    || request.system.includes('observer that maintains parts of a cross-extraction tree')
-  ) {
-    const ref = request.prompt.match(/^\s*-\s+([A-Za-z0-9:_-]+)/m)?.[1] ?? 'mock-extraction';
-    const scope = request.prompt.match(/^\s*#\s+(.+)$/m)?.[1]?.trim() || 'Mock cwd scope';
-    return [
-      `# ${scope}`,
-      '',
-      `## What is remembered in this scope?`,
-      '',
-      `This cwd scope has curated memory from the provided extraction.`,
-      '',
-      `### What evidence supports this scope?`,
-      `This cwd scope has curated memory from the provided extraction.`,
-      '',
-      'Source extractions:',
-      `- [${ref}]`,
-    ].join('\n');
-  }
   if (request.system.includes('extractor that rewrites one session memory document')) {
     const ref = request.prompt.match(/(?:session|turn):[A-Za-z0-9:_-]+/)?.[0] ?? 'turn:mock';
     return [
@@ -194,17 +164,6 @@ function generateMockText(request: LlmTextRequest): string {
       '### Summary',
       `${excerpt(seed)}`,
     ].join('\n');
-  }
-  if (request.system.includes('"memory_delta"')) {
-    return JSON.stringify({
-      observing_content_update: {
-        title: 'Mock session memory thread',
-        summary: `Mock session memory summary: ${excerpt(seed)}`,
-        open_questions: [],
-        next_steps: [],
-      },
-      memory_delta: { before: [], after: [] },
-    });
   }
   return JSON.stringify({
     title: `Mock title: ${excerpt(seed)}`,

@@ -706,7 +706,6 @@ def apply_predictions(
                 "memory_id": hit.memory_id,
                 "matched_text": hit.matched_text,
                 "detail": hit.detail,
-                "observationRatio": hit.observation_ratio,
             }
             for hit in hits
         ]

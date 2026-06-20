@@ -27,21 +27,21 @@ enum TurnQuery {
     ByIdentity {
         session_id: Option<String>,
         agent: String,
-        observer: String,
+        extractor: String,
     },
 }
 
 impl TurnQuery {
-    fn by_identity(session_id: Option<&str>, agent: &str, observer: &str) -> Self {
+    fn by_identity(session_id: Option<&str>, agent: &str, extractor: &str) -> Self {
         Self::ByIdentity {
             session_id: session_id.map(str::to_string),
             agent: agent.to_string(),
-            observer: observer.to_string(),
+            extractor: extractor.to_string(),
         }
     }
 
     fn from_turn(turn: &Turn) -> Self {
-        Self::by_identity(turn.session_id.as_deref(), &turn.agent, &turn.observer)
+        Self::by_identity(turn.session_id.as_deref(), &turn.agent, &turn.extractor)
     }
 
     fn matches_turn(&self, turn: &Turn) -> bool {
@@ -49,9 +49,9 @@ impl TurnQuery {
             Self::ByIdentity {
                 session_id,
                 agent,
-                observer,
+                extractor,
             } => {
-                turn.session_id == *session_id && turn.agent == *agent && turn.observer == *observer
+                turn.session_id == *session_id && turn.agent == *agent && turn.extractor == *extractor
             }
         }
     }
@@ -125,18 +125,18 @@ pub struct Turn {
     pub project: String,
     pub cwd: String,
     pub agent: String,
-    pub observer: String,
+    pub extractor: String,
     pub events: Vec<TurnEvent>,
     pub artifacts: Option<Vec<Artifact>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metadata: Option<Map<String, Value>>,
     pub prompt: Option<String>,
     pub response: Option<String>,
-    pub observing_epoch: Option<u64>,
+    pub extraction_epoch: Option<u64>,
 }
 
 impl Turn {
-    pub fn observable(&self) -> bool {
+    pub fn extractable(&self) -> bool {
         has_text_content(self.response.as_deref())
     }
 
@@ -167,6 +167,7 @@ pub(crate) enum TurnSelect {
     Filter {
         agent: Option<String>,
         session_id: Option<String>,
+        extractor: Option<String>,
     },
 }
 
@@ -210,9 +211,14 @@ impl TurnTable {
     pub(crate) async fn select(&self, selector: TurnSelect) -> Result<Vec<Turn>> {
         match selector {
             TurnSelect::ById(turn_id) => Ok(self.get_turn(turn_id).await?.into_iter().collect()),
-            TurnSelect::Filter { agent, session_id } => {
+            TurnSelect::Filter { agent, session_id, extractor } => {
                 let turns = self.load_all_turns().await?;
-                Ok(filter_turns(turns, agent.as_deref(), session_id.as_deref()))
+                Ok(filter_turns(
+                    turns,
+                    agent.as_deref(),
+                    session_id.as_deref(),
+                    extractor.as_deref(),
+                ))
             }
         }
     }
@@ -308,9 +314,9 @@ impl TurnTable {
         &self,
         session_id: Option<&str>,
         agent: &str,
-        observer: &str,
+        extractor: &str,
     ) -> Result<Option<Turn>> {
-        let query = TurnQuery::by_identity(session_id, agent, observer);
+        let query = TurnQuery::by_identity(session_id, agent, extractor);
         self.load_latest_turn(&query).await
     }
 
@@ -345,7 +351,7 @@ impl TurnTable {
 
     pub async fn turns_after_epoch(
         &self,
-        observer: &str,
+        extractor: &str,
         committed_epoch: Option<u64>,
     ) -> Result<Vec<Turn>> {
         let recovered_epoch = committed_epoch.map(|epoch| epoch + 1).unwrap_or(0);
@@ -353,18 +359,18 @@ impl TurnTable {
             .load_all_turns()
             .await?
             .into_iter()
-            .filter(|turn| turn.observer == observer)
-            .filter(|turn| turn.observable())
-            .filter(|turn| match (committed_epoch, turn.observing_epoch) {
+            .filter(|turn| turn.extractor == extractor)
+            .filter(|turn| turn.extractable())
+            .filter(|turn| match (committed_epoch, turn.extraction_epoch) {
                 (_, None) => true,
                 (Some(epoch), Some(turn_epoch)) => turn_epoch > epoch,
                 (None, Some(_)) => true,
             })
             .collect::<Vec<_>>();
         turns.sort_by(|left, right| {
-            left.observing_epoch
+            left.extraction_epoch
                 .unwrap_or(recovered_epoch)
-                .cmp(&right.observing_epoch.unwrap_or(recovered_epoch))
+                .cmp(&right.extraction_epoch.unwrap_or(recovered_epoch))
                 .then(left.created_at.cmp(&right.created_at))
                 .then(left.updated_at.cmp(&right.updated_at))
         });
@@ -373,7 +379,7 @@ impl TurnTable {
 
     pub async fn delta(
         &self,
-        observer: &str,
+        extractor: &str,
         baseline_version: u64,
     ) -> Result<Vec<Turn>> {
         let Some(dataset) = self.access.try_open().await? else {
@@ -396,7 +402,7 @@ impl TurnTable {
             rows.extend(
                 record_batch_to_turns(&batch)?
                     .into_iter()
-                    .filter(|turn| turn.observer == observer),
+                    .filter(|turn| turn.extractor == extractor),
             );
         }
         rows.sort_by(|left, right| {
@@ -410,9 +416,9 @@ impl TurnTable {
 
     #[cfg(test)]
     #[allow(dead_code)]
-    pub(crate) async fn turns_for_observing_epochs(
+    pub(crate) async fn turns_for_extraction_epochs(
         &self,
-        observer: &str,
+        extractor: &str,
         epochs: &HashSet<u64>,
     ) -> Result<Vec<Turn>> {
         if epochs.is_empty() {
@@ -423,16 +429,16 @@ impl TurnTable {
             .load_all_turns()
             .await?
             .into_iter()
-            .filter(|turn| turn.observer == observer)
-            .filter(|turn| turn.observable())
+            .filter(|turn| turn.extractor == extractor)
+            .filter(|turn| turn.extractable())
             .filter(|turn| {
-                turn.observing_epoch
+                turn.extraction_epoch
                     .is_some_and(|epoch| epochs.contains(&epoch))
             })
             .collect::<Vec<_>>();
         turns.sort_by(|left, right| {
-            left.observing_epoch
-                .cmp(&right.observing_epoch)
+            left.extraction_epoch
+                .cmp(&right.extraction_epoch)
                 .then(left.created_at.cmp(&right.created_at))
                 .then(left.updated_at.cmp(&right.updated_at))
                 .then(left.turn_id.cmp(&right.turn_id))
@@ -514,11 +520,12 @@ impl TurnTable {
         &self,
         agent: Option<String>,
         session_id: Option<String>,
+        extractor: Option<String>,
         offset: usize,
         limit: usize,
     ) -> Result<Vec<Turn>> {
         let turns = self
-            .select(TurnSelect::Filter { agent, session_id })
+            .select(TurnSelect::Filter { agent, session_id, extractor })
             .await?;
         Ok(apply_list_mode(turns, offset, limit, false))
     }
@@ -527,10 +534,11 @@ impl TurnTable {
         &self,
         agent: Option<String>,
         session_id: Option<String>,
+        extractor: Option<String>,
         limit: usize,
     ) -> Result<Vec<Turn>> {
         let turns = self
-            .select(TurnSelect::Filter { agent, session_id })
+            .select(TurnSelect::Filter { agent, session_id, extractor })
             .await?;
         Ok(apply_list_mode(turns, 0, limit, true))
     }
@@ -595,6 +603,7 @@ fn filter_turns(
     turns: Vec<Turn>,
     agent: Option<&str>,
     session_id: Option<&str>,
+    extractor: Option<&str>,
 ) -> Vec<Turn> {
     turns
         .into_iter()
@@ -603,7 +612,8 @@ fn filter_turns(
             let session_match = session_id
                 .map(|value| turn.session_id.as_deref() == Some(value))
                 .unwrap_or(true);
-            agent_match && session_match
+            let extractor_match = extractor.map(|value| turn.extractor == value).unwrap_or(true);
+            agent_match && session_match && extractor_match
         })
         .collect()
 }
@@ -613,21 +623,21 @@ fn session_query_filter(query: &TurnQuery) -> String {
         TurnQuery::ByIdentity {
             session_id: Some(session_id),
             agent,
-            observer,
+            extractor,
         } => format!(
-            "session_id = '{}' AND agent = '{}' AND observer = '{}'",
+            "session_id = '{}' AND agent = '{}' AND extractor = '{}'",
             escape_predicate_string(session_id),
             escape_predicate_string(agent),
-            escape_predicate_string(observer),
+            escape_predicate_string(extractor),
         ),
         TurnQuery::ByIdentity {
             session_id: None,
             agent,
-            observer,
+            extractor,
         } => format!(
-            "session_id IS NULL AND agent = '{}' AND observer = '{}'",
+            "session_id IS NULL AND agent = '{}' AND extractor = '{}'",
             escape_predicate_string(agent),
-            escape_predicate_string(observer),
+            escape_predicate_string(extractor),
         ),
     }
 }

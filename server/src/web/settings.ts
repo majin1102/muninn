@@ -19,12 +19,6 @@ function defaultConfigContent(): string {
     '    "maxAttempts": 3,',
     '    "activeWindowDays": 7',
     '  },',
-    '  "observer": {',
-    '    "name": "default-observer",',
-    '    "llmProvider": "default",',
-    '    "maxAttempts": 3,',
-    '    "cwdThreshold": 8',
-    '  },',
     '  "providers": {',
     '    "llm": {',
     '      "default": {',
@@ -133,4 +127,3 @@ settingsRoutes.put('/app/api/settings/config', async (c) => {
 
   return c.json(response);
 });
-

@@ -226,23 +226,25 @@ async function writeMuninnConfig(configPath, { sourcePath, storageUri }) {
   const config = sourcePath
     ? JSON.parse(await fs.readFile(sourcePath, "utf8"))
     : {
-      observer: {
-        name: "live-observer",
-        llm: "default_observer_llm",
+      extractor: {
+        name: "live-extractor",
+        llmProvider: "default_extractor_llm",
+        embeddingProvider: "default_embedding",
         maxAttempts: 3,
-        activeWindowDays: 7,
       },
-      llm: {
-        default_observer_llm: {
-          provider: "mock",
+      providers: {
+        llm: {
+          default_extractor_llm: {
+            type: "mock",
+          },
         },
-      },
-      semanticIndex: {
         embedding: {
-          provider: "mock",
-          dimensions: 8,
+          default_embedding: {
+            type: "mock",
+            model: "mock-embedding",
+            dimensions: 8,
+          },
         },
-        defaultImportance: 0.7,
       },
       watchdog: {
         enabled: false,
@@ -325,7 +327,11 @@ async function waitForSeedRecall({ baseUrl, query, expectedText, serverOutput })
 
   try {
     await waitFor(async () => {
-      lastWatermark = await getJson(`${baseUrl}/api/v1/observer/watermark`);
+      const finalizeResponse = await postJson(`${baseUrl}/api/v1/memory/finalize`, {});
+      if (!finalizeResponse.ok) {
+        throw new Error(`finalize failed ${finalizeResponse.status}: ${await finalizeResponse.text()}`);
+      }
+      lastWatermark = await finalizeResponse.json();
       if (!lastWatermark?.resolved) {
         return false;
       }

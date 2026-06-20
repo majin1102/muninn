@@ -75,16 +75,16 @@ export function TimelinePane({
 
     updateThumb();
     scrollElement.addEventListener('scroll', updateThumb, { passive: true });
-    const observer = new ResizeObserver(updateThumb);
-    observer.observe(scrollElement);
+    const resizeWatcher = new ResizeObserver(updateThumb);
+    resizeWatcher.observe(scrollElement);
     if (scrollElement.firstElementChild) {
-      observer.observe(scrollElement.firstElementChild);
+      resizeWatcher.observe(scrollElement.firstElementChild);
     }
 
     return () => {
       window.cancelAnimationFrame(frame);
       scrollElement.removeEventListener('scroll', updateThumb);
-      observer.disconnect();
+      resizeWatcher.disconnect();
     };
   }, [timeline]);
 

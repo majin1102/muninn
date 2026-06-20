@@ -25,19 +25,9 @@ function makeConfig({ provider = 'openai-codex', model, baseUrl } = {}) {
       maxAttempts: 3,
       activeWindowDays: 3650,
     },
-    observer: {
-      name: 'test-observer',
-      llmProvider: 'observer_llm',
-      maxAttempts: 3,
-    },
     providers: {
       llm: {
         extractor_llm: {
-          type: provider,
-          ...(model ? { model } : {}),
-          ...(baseUrl ? { baseUrl } : {}),
-        },
-        observer_llm: {
           type: provider,
           ...(model ? { model } : {}),
           ...(baseUrl ? { baseUrl } : {}),
@@ -122,7 +112,7 @@ test('generateText sends openai-codex requests through Codex CLI auth', async (t
     globalThis.fetch = originalFetch;
   });
 
-  const output = await generateText('observer', {
+  const output = await generateText('extractor', {
     system: 'system prompt',
     prompt: 'user prompt',
   });
@@ -169,7 +159,7 @@ test('generateWithTools sends openai-codex Responses tools and parses calls', as
     globalThis.fetch = originalFetch;
   });
 
-  const result = await generateWithTools('observer', {
+  const result = await generateWithTools('extractor', {
     messages: [
       { role: 'system', content: 'system prompt' },
       { role: 'user', content: 'user prompt' },
@@ -247,7 +237,7 @@ test('generateWithTools dedupes openai-codex streaming function call skeletons',
     globalThis.fetch = originalFetch;
   });
 
-  const result = await generateWithTools('observer', {
+  const result = await generateWithTools('extractor', {
     messages: [
       { role: 'system', content: 'system prompt' },
       { role: 'user', content: 'user prompt' },
@@ -300,7 +290,7 @@ test('generateText normalizes Codex backend baseUrl and parses output fragments'
     globalThis.fetch = originalFetch;
   });
 
-  const output = await generateText('observer', {
+  const output = await generateText('extractor', {
     system: 'system prompt',
     prompt: 'user prompt',
   });
@@ -325,7 +315,7 @@ test('generateText normalizes generic ChatGPT responses endpoint to Codex respon
     globalThis.fetch = originalFetch;
   });
 
-  await generateText('observer', {
+  await generateText('extractor', {
     system: 'system prompt',
     prompt: 'user prompt',
   });
@@ -346,7 +336,7 @@ test('generateText rejects non-ChatGPT Codex auth before request', async (t) => 
   });
 
   await assert.rejects(
-    () => generateText('observer', { system: 'system', prompt: 'prompt' }),
+    () => generateText('extractor', { system: 'system', prompt: 'prompt' }),
     /Codex CLI auth.*ChatGPT/i,
   );
   assert.equal(called, false);
@@ -365,7 +355,7 @@ test('generateText rejects missing Codex access token before request', async (t)
   });
 
   await assert.rejects(
-    () => generateText('observer', { system: 'system', prompt: 'prompt' }),
+    () => generateText('extractor', { system: 'system', prompt: 'prompt' }),
     /Codex CLI auth.*access_token/i,
   );
   assert.equal(called, false);
@@ -386,7 +376,7 @@ test('generateText rejects Codex access tokens expiring within twenty four hours
   });
 
   await assert.rejects(
-    () => generateText('observer', { system: 'system', prompt: 'prompt' }),
+    () => generateText('extractor', { system: 'system', prompt: 'prompt' }),
     /Codex CLI auth token expires within 24 hours/i,
   );
   assert.equal(called, false);
@@ -405,7 +395,7 @@ test('generateText rejects Codex access tokens without a parseable JWT expiry', 
   });
 
   await assert.rejects(
-    () => generateText('observer', { system: 'system', prompt: 'prompt' }),
+    () => generateText('extractor', { system: 'system', prompt: 'prompt' }),
     /Codex CLI auth token is not a JWT with an exp claim/i,
   );
   assert.equal(called, false);
@@ -420,7 +410,7 @@ test('generateText reports openai-codex HTTP errors with status and body', async
   });
 
   await assert.rejects(
-    () => generateText('observer', { system: 'system', prompt: 'prompt' }),
+    () => generateText('extractor', { system: 'system', prompt: 'prompt' }),
     /openai-codex request failed with status 401: not authorized/i,
   );
 });

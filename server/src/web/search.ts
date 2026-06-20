@@ -40,7 +40,6 @@ type SearchDeps = {
     mode?: 'vector' | 'fts' | 'hybrid';
     budget?: number;
     queryLimit?: number;
-    includeObservations?: boolean;
   }) => Promise<RecallHit[]>;
 };
 
@@ -55,7 +54,6 @@ export async function searchAppMemory(params: AppSearchParams, deps: SearchDeps)
   const extractionHits = await deps.recall(query, Math.max(params.topN * params.sessionTopN, params.topN * 3), {
     mode: 'hybrid',
     budget: 0,
-    includeObservations: false,
   });
   const candidates = hitCandidates(extractionHits, {
     projectKeys: params.projectKeys,

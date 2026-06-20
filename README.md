@@ -2,7 +2,7 @@
 
 Muninn is a memory format and framework for agent-generated context. It automatically captures real-time context from Codex, Claude Code, and other agents, turning conversations, documents, images, and other artifacts into provenance-aware, multi-modal context lakes.
 
-Muninn pipelines curate raw context into grounded, source-linked, layered memory for human-and-agent browsing, inspection, recall, and LLM-Wiki generation. Shared across agents, sessions, and projects, these memories compound into long-lived context, experience, and knowledge, helping agents continuously learn, evolve, and better understand you and your projects over time.
+Muninn pipelines distill raw context into grounded, source-linked, layered memory for human-and-agent browsing, inspection, recall, and LLM-Wiki generation. Shared across agents, sessions, and projects, these memories compound into long-lived context, experience, and knowledge, helping agents continuously learn, evolve, and better understand you and your projects over time.
 
 ## Quick Start
 
@@ -70,7 +70,6 @@ $MUNINN_HOME/muninn.json
 The active runtime requires:
 
 - `extractor`
-- `observer` unless `observer.enabled` is `false`
 - `providers.llm`
 - `providers.embedding`
 

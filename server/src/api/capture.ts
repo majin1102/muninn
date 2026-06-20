@@ -135,12 +135,6 @@ function defaultConfigRoot(): JsonObject {
       maxAttempts: 3,
       activeWindowDays: 7,
     },
-    observer: {
-      name: 'default-observer',
-      llmProvider: 'default',
-      maxAttempts: 3,
-      cwdThreshold: 8,
-    },
     providers: {
       llm: {
         default: {

@@ -106,9 +106,9 @@ export function createMemoryOpenVikingContextEngine(params): ContextEngine {
 
 ## Muninn 的需求分析
 
-### 当前 MVP1 需求
+### 当前集成需求
 
-根据 `../workstreams/progress-openclaw-integration.md`：
+根据当前 OpenClaw plugin 接入形态：
 
 1. **agent_end** → 一次生成完整 turn
 2. `prompt` / `response` 为必填基础事实
@@ -124,7 +124,7 @@ export function createMemoryOpenVikingContextEngine(params): ContextEngine {
 ### 未来扩展
 
 - 可能需要在 `before_model_resolve` 时召回 Muninn 记忆注入 context
-- 可能需要在 `afterTurn` 批量触发 Observer 生成
+- 可能需要在 `afterTurn` 后触发 memory finalize，确保 extractor 完成写入和索引
 
 ## 决策建议
 
@@ -132,7 +132,7 @@ export function createMemoryOpenVikingContextEngine(params): ContextEngine {
 
 **理由：**
 
-1. **MVP1 需求匹配度高**
+1. **当前需求匹配度高**
    - `agent_end` 可以作为完整 turn 的稳定闭合时机
    - 不再依赖 prompt/tool/response 分段写入
    - 失败只打日志，不阻塞主流程
@@ -236,7 +236,7 @@ api.on("agent_end", async (event, ctx) => {
 
 **当前阶段选择 Hook-based 集成**，理由：
 
-1. ✅ 实现简单，符合 MVP1 需求
+1. ✅ 实现简单，符合当前需求
 2. ✅ 错误隔离好，不阻塞主流程
 3. ✅ 参考实现清晰（memory-lancedb）
 4. ✅ 未来可扩展（不排除同时提供 Context Engine）

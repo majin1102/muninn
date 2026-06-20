@@ -203,7 +203,7 @@ class RunTests(unittest.TestCase):
         path = Path("/tmp/muninn-gateway-routes-test.jsonl")
         self.addCleanup(lambda: path.unlink(missing_ok=True))
         path.write_text(
-            '{"observingEpoch":2,"sessionFragments":[{"threadId":"turn:1","turnIds":["turn:11"],"content":"Caroline is interested in counseling.","reason":"This continues the career thread."}]}\n',
+            '{"extractionEpoch":2,"sessionFragments":[{"threadId":"turn:1","turnIds":["turn:11"],"content":"Caroline is interested in counseling.","reason":"This continues the career thread."}]}\n',
             encoding="utf8",
         )
 

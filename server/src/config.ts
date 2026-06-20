@@ -10,16 +10,12 @@ const DEFAULT_EXTRACTOR_ACTIVE_WINDOW_DAYS = 7;
 const DEFAULT_EXTRACTOR_CONTINUITY_HINTS = 1;
 const DEFAULT_EXTRACTOR_EPOCH_TURNS = 3;
 const DEFAULT_EXTRACTOR_EPOCH_WINDOW_MS = 10_000;
-const DEFAULT_OBSERVER_MAX_ATTEMPTS = 3;
 const DEFAULT_WATCHDOG_INTERVAL_MS = 60_000;
 const DEFAULT_WATCHDOG_COMPACT_MIN_FRAGMENTS = 8;
 const DEFAULT_WATCHDOG_TARGET_PARTITION_SIZE = 1_024;
 const DEFAULT_WATCHDOG_OPTIMIZE_MERGE_COUNT = 4;
 const DEFAULT_EXTRACTION_DIMENSIONS = 8;
 const DEFAULT_RECALL_MODE = 'hybrid';
-const DEFAULT_OBSERVER_CWD_THRESHOLD = 8;
-const DEFAULT_OBSERVER_CWD_BATCH_SIZE = 16;
-const DEFAULT_OBSERVER_CONTENT_BUDGET_CHARS = 24_000;
 
 export type RecallMode = 'vector' | 'fts' | 'hybrid';
 
@@ -43,16 +39,6 @@ type ExtractorConfigRecord = {
   epochWindowMs?: number;
 };
 
-type ObserverConfigRecord = {
-  enabled?: boolean;
-  name?: string;
-  llmProvider?: string;
-  maxAttempts?: number;
-  cwdThreshold?: number;
-  cwdBatchSize?: number;
-  contentBudgetChars?: number;
-};
-
 type EmbeddingConfigRecord = {
   type: string;
   model?: string;
@@ -74,7 +60,6 @@ export type CaptureConfigRecord = {
 export type MuninnConfigRecord = {
   storage?: Record<string, unknown>;
   extractor?: ExtractorConfigRecord;
-  observer?: ObserverConfigRecord;
   providers?: ProvidersConfigRecord;
   watchdog?: Record<string, unknown>;
   capture?: CaptureConfigRecord;
@@ -97,11 +82,6 @@ export type ExtractorLlmConfig = TextProviderConfig & {
   epochWindowMs: number;
 };
 
-export type ObserverLlmConfig = TextProviderConfig & {
-  name: string;
-  maxAttempts: number;
-};
-
 export type EmbeddingConfig = {
   provider: 'mock' | 'openai';
   model?: string;
@@ -112,12 +92,6 @@ export type EmbeddingConfig = {
 
 export type RecallConfig = {
   mode: RecallMode;
-};
-
-export type ObserverRuntimeConfig = {
-  cwdThreshold: number;
-  cwdBatchSize: number;
-  contentBudgetChars: number;
 };
 
 export type WatchdogConfig = {
@@ -138,9 +112,6 @@ export type CaptureConfig = {
 type CoreRuntimeConfig = {
   extractor: ExtractorConfigRecord;
   extractorLlm: LlmConfigRecord;
-  observer?: ObserverConfigRecord;
-  observerLlm?: LlmConfigRecord;
-  observerEnabled: boolean;
   embedding: EmbeddingConfigRecord & { dimensions: number };
 };
 
@@ -214,22 +185,6 @@ export function getExtractorLlmConfig(): ExtractorLlmConfig | null {
   };
 }
 
-export function getObserverLlmConfig(): ObserverLlmConfig | null {
-  const { observer, observerLlm: llm, observerEnabled } = requireCoreRuntimeConfig(loadMuninnConfig());
-  if (!observerEnabled || !observer || !llm) {
-    return null;
-  }
-  return {
-    name: observer.name!,
-    maxAttempts: observer.maxAttempts ?? DEFAULT_OBSERVER_MAX_ATTEMPTS,
-    provider: parseLlmProvider(llm.type),
-    model: llm.model,
-    api: llm.api,
-    apiKey: llm.apiKey,
-    baseUrl: llm.baseUrl,
-  };
-}
-
 export function getEffectiveExtractorName(): string {
   return requireCoreRuntimeConfig(loadMuninnConfig()).extractor.name;
 }
@@ -248,26 +203,6 @@ export function getEmbeddingConfig(): EmbeddingConfig {
 export function getRecallConfig(): RecallConfig {
   return {
     mode: parseRecallMode(loadMuninnConfig()?.extractor?.recallMode ?? DEFAULT_RECALL_MODE),
-  };
-}
-
-export function isObserverEnabled(): boolean {
-  return isObserverEnabledFromConfig(loadMuninnConfig());
-}
-
-export function getObserverRuntimeConfig(): ObserverRuntimeConfig {
-  return getObserverRuntimeConfigFromConfig(loadMuninnConfig());
-}
-
-export function getObserverRuntimeConfigFromConfigForTests(config: MuninnConfigRecord | null): ObserverRuntimeConfig {
-  return getObserverRuntimeConfigFromConfig(config);
-}
-
-function getObserverRuntimeConfigFromConfig(config: MuninnConfigRecord | null): ObserverRuntimeConfig {
-  return {
-    cwdThreshold: config?.observer?.cwdThreshold ?? DEFAULT_OBSERVER_CWD_THRESHOLD,
-    cwdBatchSize: config?.observer?.cwdBatchSize ?? DEFAULT_OBSERVER_CWD_BATCH_SIZE,
-    contentBudgetChars: config?.observer?.contentBudgetChars ?? DEFAULT_OBSERVER_CONTENT_BUDGET_CHARS,
   };
 }
 
@@ -330,7 +265,7 @@ export function parseMuninnConfigContent(content: string): MuninnConfigRecord {
 
 export function validateMuninnConfigInput(content: string): MuninnConfigRecord {
   const config = parseMuninnConfigContent(content);
-  if ((config.extractor || config.observer) && !config.providers) {
+  if (config.extractor && !config.providers) {
     throw new Error('providers is required.');
   }
   validateConfiguredProviders(config);
@@ -378,10 +313,6 @@ function requireCoreRuntimeConfig(config: MuninnConfigRecord | null): CoreRuntim
   if (!config?.extractor) {
     throw new Error('extractor is required.');
   }
-  const observerEnabled = isObserverEnabledFromConfig(config);
-  if (observerEnabled && !config.observer) {
-    throw new Error('observer is required.');
-  }
   if (!config.providers) {
     throw new Error('providers is required.');
   }
@@ -393,17 +324,12 @@ function requireCoreRuntimeConfig(config: MuninnConfigRecord | null): CoreRuntim
   }
 
   const extractor = config.extractor;
-  const observer = config.observer;
   const llm = config.providers.llm;
   const embeddings = config.providers.embedding;
 
   requireNonEmptyString(extractor.name, 'extractor.name');
   requireNonEmptyString(extractor.llmProvider, 'extractor.llmProvider');
   requireNonEmptyString(extractor.embeddingProvider, 'extractor.embeddingProvider');
-  if (observerEnabled) {
-    requireNonEmptyString(observer?.name, 'observer.name');
-    requireNonEmptyString(observer?.llmProvider, 'observer.llmProvider');
-  }
   const embeddingProvider = extractor.embeddingProvider;
   const dimensions = effectiveEmbeddingDimensions(config);
 
@@ -413,15 +339,6 @@ function requireCoreRuntimeConfig(config: MuninnConfigRecord | null): CoreRuntim
   }
   requireNonEmptyString(extractorLlm.type, `providers.llm.${extractor.llmProvider}.type`);
   parseLlmProvider(extractorLlm.type);
-
-  const observerLlm = observerEnabled ? llm[observer!.llmProvider!] : undefined;
-  if (observerEnabled) {
-    if (!observerLlm) {
-      throw new Error(`observer.llmProvider references missing providers.llm.${observer!.llmProvider}.`);
-    }
-    requireNonEmptyString(observerLlm.type, `providers.llm.${observer!.llmProvider}.type`);
-    parseLlmProvider(observerLlm.type);
-  }
 
   const embedding = embeddings[embeddingProvider];
   if (!embedding) {
@@ -433,18 +350,11 @@ function requireCoreRuntimeConfig(config: MuninnConfigRecord | null): CoreRuntim
   return {
     extractor,
     extractorLlm,
-    observer,
-    observerLlm,
-    observerEnabled,
     embedding: {
       ...embedding,
       dimensions,
     },
   };
-}
-
-function isObserverEnabledFromConfig(config: MuninnConfigRecord | null): boolean {
-  return config?.observer?.enabled !== false;
 }
 
 function parseLlmProvider(provider: string): 'mock' | 'openai' | 'openai-codex' {
@@ -463,21 +373,14 @@ function parseEmbeddingProvider(provider: string): 'mock' | 'openai' {
 
 function validateTopLevelConfig(config: MuninnConfigRecord): void {
   const raw = config as Record<string, unknown>;
-  if (raw.semanticIndex !== undefined) {
-    throw new Error('semanticIndex is no longer supported; use extractor.embeddingProvider instead.');
-  }
-  if (raw.llm !== undefined) {
-    throw new Error('llm is no longer supported; use providers.llm instead.');
-  }
-  if (raw.extraction !== undefined) {
-    throw new Error('extraction is no longer supported; use extractor.embeddingProvider and extractor.recallMode instead.');
-  }
-  if (raw.turn !== undefined) {
-    throw new Error('turn is no longer supported; turn summaries are generated locally during ingest.');
+  const allowedKeys = new Set(['storage', 'extractor', 'providers', 'watchdog', 'capture']);
+  for (const key of Object.keys(raw)) {
+    if (!allowedKeys.has(key)) {
+      throw new Error(`unsupported top-level config key: ${key}`);
+    }
   }
   validateStorageConfig(config.storage);
   validateExtractorConfig(config.extractor);
-  validateObserverConfig(config.observer);
   validateProvidersConfig(config.providers);
   validateWatchdogConfig(config.watchdog);
   validateCaptureConfig(config.capture);
@@ -485,9 +388,6 @@ function validateTopLevelConfig(config: MuninnConfigRecord): void {
 
 function validateConfiguredProviders(config: MuninnConfigRecord): void {
   validateReferencedLlmProvider(config.providers?.llm, config.extractor?.llmProvider, 'extractor.llmProvider');
-  if (isObserverEnabledFromConfig(config)) {
-    validateReferencedLlmProvider(config.providers?.llm, config.observer?.llmProvider, 'observer.llmProvider');
-  }
   validateReferencedEmbeddingProvider(
     config.providers?.embedding,
     config.extractor?.embeddingProvider,
@@ -526,28 +426,6 @@ function validateExtractorConfig(extractor: unknown): void {
   validateOptionalPositiveInteger(config.continuityHints, 'extractor.continuityHints');
   validateOptionalPositiveInteger(config.epochTurns, 'extractor.epochTurns');
   validateOptionalPositiveInteger(config.epochWindowMs, 'extractor.epochWindowMs');
-}
-
-function validateObserverConfig(observer: unknown): void {
-  if (observer === undefined) {
-    return;
-  }
-  const config = expectRecord(observer, 'observer');
-  if (config.llm !== undefined) {
-    throw new Error('observer.llm is no longer supported; use observer.llmProvider instead.');
-  }
-  validateOptionalBoolean(config.enabled, 'observer.enabled');
-  if (config.enabled === false) {
-    validateOptionalString(config.name, 'observer.name');
-    validateOptionalString(config.llmProvider, 'observer.llmProvider');
-    return;
-  }
-  requireNonEmptyString(config.name, 'observer.name');
-  requireNonEmptyString(config.llmProvider, 'observer.llmProvider');
-  validateOptionalPositiveInteger(config.maxAttempts, 'observer.maxAttempts');
-  validateOptionalPositiveInteger(config.cwdThreshold, 'observer.cwdThreshold');
-  validateOptionalPositiveInteger(config.cwdBatchSize, 'observer.cwdBatchSize');
-  validateOptionalPositiveInteger(config.contentBudgetChars, 'observer.contentBudgetChars');
 }
 
 function validateProvidersConfig(providers: unknown): void {

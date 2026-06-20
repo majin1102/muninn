@@ -21,10 +21,6 @@ function baseConfig() {
       embeddingProvider: 'default',
       recallMode: 'hybrid',
     },
-    observer: {
-      name: 'default-observer',
-      llmProvider: 'default',
-    },
     providers: {
       llm: {
         default: {

@@ -124,10 +124,10 @@ test('hitCandidates filters extraction hits without real session metadata', asyn
   assert.equal(candidates.length, 0);
 });
 
-test('hitCandidates ignores observation hits for app recall', async () => {
+test('hitCandidates ignores non-extraction hits for app recall', async () => {
   const { __testing } = await loadSearchServer();
   const candidates = __testing.hitCandidates([
-    recallHit({ memoryId: 'observation:1' }),
+    recallHit({ memoryId: 'session:1' }),
     recallHit({ memoryId: 'extraction:1' }),
   ], {});
 
@@ -215,7 +215,6 @@ test('searchAppMemory uses recall hits without scanning turns or building an ans
   });
 
   assert.equal('answer' in response, false);
-  assert.equal(recallOptions.includeObservations, false);
   assert.equal(response.results.length, 1);
   assert.equal(response.results[0].sessionKey, sessionScopeKey('muninn', 'codex', 'search-a'));
   assert.equal(response.results[0].projectCwd, '/workspace/muninn');

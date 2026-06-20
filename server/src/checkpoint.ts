@@ -6,7 +6,6 @@ import { loadMuninnConfig, resolveDatabaseHome, resolveDatabaseName, resolveStor
 import type {
   SessionSnapshot,
 } from './pipeline/session.js';
-import type { Extraction } from './native.js';
 
 export type RecentTurn = {
   turnId: string;
@@ -37,14 +36,12 @@ export type ExtractorCheckpoint = {
     turn: number;
     session: number;
     extraction: number;
-    observation: number;
   };
   committedEpoch?: number;
   nextEpoch: number;
   recentSessions: RecentSessionCheckpoint[];
   threads: ThreadRef[];
   runs: ExtractorRun[];
-  pendingExtractionChanges: QueuedExtractionChange[];
 };
 
 export type SessionIndexEntry = {
@@ -66,14 +63,9 @@ export type SessionIndexCheckpoint = {
   entries: SessionIndexEntry[];
 };
 
-export type QueuedExtractionChange =
-  | { type: 'upsert'; extraction: Extraction }
-  | { type: 'delete'; extraction: Extraction };
-
 export type CheckpointContent = {
-  schemaVersion: 10;
+  schemaVersion: 11;
   extractor: ExtractorCheckpoint;
-  observer: ObserverCheckpoint;
   sessionIndex: SessionIndexCheckpoint;
 };
 
@@ -99,7 +91,7 @@ export type ExtractorRunError = {
 };
 
 export type ExtractorRun = {
-  observer: string;
+  extractor: string;
   epoch: number;
   status: ExtractorRunStatus;
   stage: ExtractorRunStage;
@@ -115,46 +107,27 @@ export type ExtractorRun = {
   errors: ExtractorRunError[];
 };
 
-export type ObserverCheckpoint = {
-  baseline: {
-    observationContext: number;
-    observation: number;
-  };
-  observeQueue: {
-    cwdBuckets: Array<{
-      key: string;
-      cwd: string;
-      extractionChanges: QueuedExtractionChange[];
-    }>;
-  };
-};
-
 export function parseCheckpointFile(raw: string): CheckpointFile {
   const parsed = JSON.parse(raw) as Partial<CheckpointFile>;
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
     throw new Error('checkpoint must be a JSON object');
   }
-  if (parsed.schemaVersion !== 10) {
+  if (parsed.schemaVersion !== 11) {
     throw new Error(`unsupported checkpoint schemaVersion: ${String(parsed.schemaVersion)}`);
   }
   const extractor = parseExtractorSection(parsed.extractor);
-  const observer = parseObservationSection(parsed.observer);
   const sessionIndex = parseSessionIndexSection(parsed.sessionIndex);
   if (!extractor) {
     throw new Error('checkpoint extractor section is invalid');
-  }
-  if (!observer) {
-    throw new Error('checkpoint observer section is invalid');
   }
   if (!sessionIndex) {
     throw new Error('checkpoint sessionIndex section is invalid');
   }
   return {
-    schemaVersion: 10,
+    schemaVersion: 11,
     writtenAt: typeof parsed.writtenAt === 'string' ? parsed.writtenAt : new Date(0).toISOString(),
     writerPid: typeof parsed.writerPid === 'number' ? parsed.writerPid : 0,
     extractor,
-    observer,
     sessionIndex,
   };
 }
@@ -196,8 +169,7 @@ function parseExtractorSection(value: unknown): ExtractorCheckpoint | null {
   const recentSessions = parseRecentSessions(value.recentSessions);
   const threads = parseThreads(value.threads);
   const runs = parseExtractorRuns(value.runs ?? []);
-  const pendingExtractionChanges = parseQueuedExtractionChanges(value.pendingExtractionChanges);
-  if (!baseline || typeof nextEpoch !== 'number' || !recentSessions || !threads || !runs || !pendingExtractionChanges) {
+  if (!baseline || typeof nextEpoch !== 'number' || !recentSessions || !threads || !runs) {
     return null;
   }
   const committedEpoch = value.committedEpoch;
@@ -211,7 +183,6 @@ function parseExtractorSection(value: unknown): ExtractorCheckpoint | null {
     recentSessions,
     threads,
     runs,
-    pendingExtractionChanges,
   };
 }
 
@@ -223,7 +194,6 @@ function parseExtractorBaseline(value: unknown): ExtractorCheckpoint['baseline']
     typeof value.turn !== 'number'
     || typeof value.session !== 'number'
     || typeof value.extraction !== 'number'
-    || typeof value.observation !== 'number'
   ) {
     return null;
   }
@@ -231,35 +201,6 @@ function parseExtractorBaseline(value: unknown): ExtractorCheckpoint['baseline']
     turn: value.turn,
     session: value.session,
     extraction: value.extraction,
-    observation: value.observation,
-  };
-}
-
-function parseObservationSection(value: unknown): ObserverCheckpoint | null {
-  if (!isObjectRecord(value)) {
-    return null;
-  }
-  const baseline = parseObservationBaseline(value.baseline);
-  const observeQueue = parseObserveQueue(value.observeQueue);
-  if (!baseline || !observeQueue) {
-    return null;
-  }
-  return { baseline, observeQueue };
-}
-
-function parseObservationBaseline(value: unknown): ObserverCheckpoint['baseline'] | null {
-  if (!isObjectRecord(value)) {
-    return null;
-  }
-  if (
-    typeof value.observationContext !== 'number'
-    || typeof value.observation !== 'number'
-  ) {
-    return null;
-  }
-  return {
-    observationContext: value.observationContext,
-    observation: value.observation,
   };
 }
 
@@ -314,81 +255,6 @@ function parseSessionIndexBaseline(value: unknown): SessionIndexCheckpoint['base
   };
 }
 
-function parseObserveQueue(value: unknown): ObserverCheckpoint['observeQueue'] | null {
-  if (!isObjectRecord(value) || !Array.isArray(value.cwdBuckets)) {
-    return null;
-  }
-  const cwdBuckets: ObserverCheckpoint['observeQueue']['cwdBuckets'] = [];
-  for (const bucket of value.cwdBuckets) {
-    if (
-      !isObjectRecord(bucket)
-      || typeof bucket.key !== 'string'
-      || typeof bucket.cwd !== 'string'
-    ) {
-      return null;
-    }
-    const extractionChanges = parseQueuedExtractionChanges(bucket.extractionChanges);
-    if (!extractionChanges) {
-      return null;
-    }
-    cwdBuckets.push({
-      key: bucket.key,
-      cwd: bucket.cwd,
-      extractionChanges,
-    });
-  }
-  return { cwdBuckets };
-}
-
-function parseQueuedExtractionChanges(value: unknown): QueuedExtractionChange[] | null {
-  if (!Array.isArray(value)) {
-    return null;
-  }
-  const changes: QueuedExtractionChange[] = [];
-  for (const entry of value) {
-    if (!isObjectRecord(entry) || (entry.type !== 'upsert' && entry.type !== 'delete')) {
-      return null;
-    }
-    const extraction = parseStoredExtraction(entry.extraction);
-    if (!extraction) {
-      return null;
-    }
-    changes.push({ type: entry.type, extraction });
-  }
-  return changes;
-}
-
-function parseStoredExtraction(value: unknown): Extraction | null {
-  if (!isObjectRecord(value)) {
-    return null;
-  }
-  if (
-    typeof value.id !== 'string'
-    || typeof value.title !== 'string'
-    || typeof value.summary !== 'string'
-    || typeof value.content !== 'string'
-    || typeof value.cwd !== 'string'
-    || !isNumberArray(value.vector)
-    || !isStringArray(value.turnRefs)
-    || !isStringArray(value.observationPaths)
-    || typeof value.createdAt !== 'string'
-    || typeof value.updatedAt !== 'string'
-  ) {
-    return null;
-  }
-  return {
-    id: value.id,
-    title: value.title,
-    summary: value.summary,
-    content: value.content,
-    cwd: value.cwd,
-    vector: [...value.vector],
-    turnRefs: [...value.turnRefs],
-    observationPaths: [...value.observationPaths],
-    createdAt: value.createdAt,
-    updatedAt: value.updatedAt,
-  };
-}
 
 function parseRecentSessions(value: unknown): RecentSessionCheckpoint[] | null {
   if (!Array.isArray(value)) {
@@ -515,7 +381,7 @@ function parseExtractorRun(value: unknown): ExtractorRun | null {
     return null;
   }
   if (
-    typeof value.observer !== 'string'
+    typeof value.extractor !== 'string'
     || typeof value.epoch !== 'number'
     || !isRunStatus(value.status)
     || !isRunStage(value.stage)
@@ -534,7 +400,7 @@ function parseExtractorRun(value: unknown): ExtractorRun | null {
     return null;
   }
   return {
-    observer: value.observer,
+    extractor: value.extractor,
     epoch: value.epoch,
     status: value.status,
     stage: value.stage,
@@ -604,10 +470,6 @@ function parseStringArray(value: unknown): string[] | null {
 
 function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((item) => typeof item === 'string');
-}
-
-function isNumberArray(value: unknown): value is number[] {
-  return Array.isArray(value) && value.every((item) => typeof item === 'number');
 }
 
 function isRunStatus(value: unknown): value is ExtractorRunStatus {

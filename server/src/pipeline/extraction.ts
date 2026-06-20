@@ -2,7 +2,6 @@ import { createHash } from 'node:crypto';
 
 import { embedText } from '../llm/embedding-provider.js';
 import type { NativeTables, Extraction as StoredExtraction } from '../native.js';
-import type { QueuedExtractionChange } from '../checkpoint.js';
 import type {
   ExtractionUnit,
   ExtractionChange,
@@ -116,11 +115,11 @@ export async function applyExtractionTableChanges(
   snapshot: SnapshotContent,
   _snapshotId: string,
   signal?: AbortSignal,
-): Promise<QueuedExtractionChange[]> {
+): Promise<void> {
   throwIfAborted(signal);
   const changes = snapshot.extractionChanges ?? [];
   if (changes.length === 0) {
-    return [];
+    return;
   }
   const cwd = snapshot.cwd?.trim();
   if (!cwd) {
@@ -156,25 +155,18 @@ export async function applyExtractionTableChanges(
     ? await client.extractionTable.get({ ids: [...sourceIds] })
     : [];
   const existingById = new Map(existingRows.map((row) => [row.id, row]));
-  const queued: QueuedExtractionChange[] = [];
 
   if (deletedIds.size > 0) {
     await client.extractionTable.delete({ ids: [...deletedIds] });
-    for (const id of deletedIds) {
-      const existing = existingById.get(id);
-      if (existing) {
-        queued.push({ type: 'delete', extraction: existing });
-      }
-    }
   }
 
   if (upsertIds.size === 0) {
-    return queued;
+    return;
   }
 
   const storedUpserts = await client.extractionTable.get({ ids: [...upsertIds] });
   const storedById = new Map(storedUpserts.map((row) => [row.id, row]));
-  const observationsById = new Map(
+  const extractionsById = new Map(
     snapshot.extractions
       .filter((row): row is ExtractionUnit & { id: string } => Boolean(row.id))
       .map((row) => [row.id, row]),
@@ -195,25 +187,24 @@ export async function applyExtractionTableChanges(
     if (!id || !upsertIds.has(id)) {
       continue;
     }
-    const observation = observationsById.get(id);
-    const text = observation?.text.trim() ?? '';
-    if (!observation || !text) {
+    const extraction = extractionsById.get(id);
+    const text = extraction?.text.trim() ?? '';
+    if (!extraction || !text) {
       continue;
     }
     const existing = storedById.get(id) ?? (change.type === 'update' ? existingById.get(id) : undefined);
     const references = referencesForChange(change, existingById);
     const now = new Date().toISOString();
-    const title = extractionTitle(observation);
-    const summary = extractionSummary(title, observation);
+    const title = extractionTitle(extraction);
+    const summary = extractionSummary(title, extraction);
     rows.push({
       id,
       title,
       summary,
-      content: extractionContent(title, observation),
+      content: extractionContent(title, extraction),
       cwd,
       vector: await embedText(summary, signal),
       turnRefs: references,
-      observationPaths: existing?.observationPaths ?? [],
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
     });
@@ -221,23 +212,20 @@ export async function applyExtractionTableChanges(
 
   if (rows.length > 0) {
     await client.extractionTable.upsert({ rows });
-    queued.push(...rows.map((row) => ({ type: 'upsert' as const, extraction: row })));
   }
-  return queued;
 }
 
 async function indexThreadExtractions(
   client: NativeTables,
   thread: SessionThread,
   signal?: AbortSignal,
-): Promise<QueuedExtractionChange[]> {
+): Promise<void> {
   const pending = getPendingIndex(thread);
   if (!pending) {
-    return [];
+    return;
   }
 
   let latestIndexedSequence = thread.indexedSnapshotSequence ?? null;
-  const queued: QueuedExtractionChange[] = [];
   for (let snapshotIndex = pending.start; snapshotIndex <= pending.end; snapshotIndex += 1) {
     throwIfAborted(signal);
     const current = thread.snapshots[snapshotIndex];
@@ -259,7 +247,7 @@ async function indexThreadExtractions(
       nextSteps: current.nextSteps ?? [],
       contextRefs: current.contextRefs,
     });
-    queued.push(...await applyExtractionTableChanges(
+    await applyExtractionTableChanges(
       client,
       {
         ...current,
@@ -268,30 +256,28 @@ async function indexThreadExtractions(
       },
       snapshotRef(thread, snapshotIndex),
       signal,
-    ));
+    );
     latestIndexedSequence = snapshotIndex;
   }
 
   if (latestIndexedSequence !== thread.indexedSnapshotSequence) {
     thread.indexedSnapshotSequence = latestIndexedSequence;
   }
-  return queued;
 }
 
 export async function indexPendingExtractions(
   client: NativeTables,
   threads: SessionThread[],
   signal?: AbortSignal,
-): Promise<QueuedExtractionChange[]> {
+): Promise<void> {
   let firstError: unknown = null;
-  const queued: QueuedExtractionChange[] = [];
   for (const thread of threads) {
     throwIfAborted(signal);
     if (!getPendingIndex(thread)) {
       continue;
     }
     try {
-      queued.push(...await indexThreadExtractions(client, thread, signal));
+      await indexThreadExtractions(client, thread, signal);
     } catch (error) {
       firstError ??= error;
     }
@@ -299,7 +285,6 @@ export async function indexPendingExtractions(
   if (firstError) {
     throw firstError;
   }
-  return queued;
 }
 
 export async function indexTouchedExtractions(
@@ -307,16 +292,15 @@ export async function indexTouchedExtractions(
   threads: SessionThread[],
   touchedIds: Set<string>,
   signal?: AbortSignal,
-): Promise<QueuedExtractionChange[]> {
+): Promise<void> {
   let firstError: unknown = null;
-  const queued: QueuedExtractionChange[] = [];
   for (const thread of threads) {
     throwIfAborted(signal);
     if (!touchedIds.has(threadIdentityKey(thread)) || !getPendingIndex(thread)) {
       continue;
     }
     try {
-      queued.push(...await indexThreadExtractions(client, thread, signal));
+      await indexThreadExtractions(client, thread, signal);
     } catch (error) {
       firstError ??= error;
     }
@@ -324,7 +308,6 @@ export async function indexTouchedExtractions(
   if (firstError) {
     throw firstError;
   }
-  return queued;
 }
 
 export const __testing = {

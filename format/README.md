@@ -59,7 +59,7 @@ Current Rust-side boundaries are intentionally narrow:
 
 Practical rule:
 
-- `server` owns session / observer / memories / LLM orchestration.
+- `server` owns turn capture, extraction, recall, session memory, and LLM orchestration.
 - Rust owns typed tables, persistence, and native storage operations.
 - Table APIs expose persisted/domain structs, not Arrow types.
 - Arrow/codec conversion stays below the table boundary.

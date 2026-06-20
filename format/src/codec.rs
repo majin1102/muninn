@@ -11,14 +11,10 @@ use lance::dataset::ROW_ID;
 use lance::{Error, Result};
 use serde_json::{Map, Value};
 
-use super::schema::{
-    extraction_schema, observation_context_schema, observation_schema, session_schema, turn_schema,
-};
+use super::schema::{extraction_schema, session_schema, turn_schema};
 use crate::config::extraction_config;
 use crate::extraction::Extraction;
 use crate::memory_id::{MemoryId, MemoryLayer};
-use crate::observation::Observation;
-use crate::observation_context::ObservationContext;
 use crate::session::SessionSnapshot;
 use crate::turn::{Artifact, Turn, TurnEvent};
 
@@ -48,7 +44,7 @@ pub(crate) fn turns_to_record_batch(
     let agent = StringArray::from_iter_values(turns.iter().map(|turn| turn.agent.as_str()));
     let project = StringArray::from_iter_values(turns.iter().map(|turn| turn.project.as_str()));
     let cwd = StringArray::from_iter_values(turns.iter().map(|turn| turn.cwd.as_str()));
-    let observer = StringArray::from_iter_values(turns.iter().map(|turn| turn.observer.as_str()));
+    let extractor = StringArray::from_iter_values(turns.iter().map(|turn| turn.extractor.as_str()));
     let events_json =
         StringArray::from_iter_values(turns.iter().map(|turn| events_to_json(&turn.events)));
     let artifacts_json = StringArray::from(
@@ -79,10 +75,10 @@ pub(crate) fn turns_to_record_batch(
             .map(|turn| turn.response.as_deref())
             .collect::<Vec<_>>(),
     );
-    let observing_epoch = UInt64Array::from(
+    let extraction_epoch = UInt64Array::from(
         turns
             .iter()
-            .map(|turn| turn.observing_epoch)
+            .map(|turn| turn.extraction_epoch)
             .collect::<Vec<_>>(),
     );
 
@@ -96,13 +92,13 @@ pub(crate) fn turns_to_record_batch(
             Arc::new(project),
             Arc::new(cwd),
             Arc::new(agent),
-            Arc::new(observer),
+            Arc::new(extractor),
             Arc::new(events_json),
             Arc::new(artifacts_json),
             Arc::new(metadata_json),
             Arc::new(prompt),
             Arc::new(response),
-            Arc::new(observing_epoch),
+            Arc::new(extraction_epoch),
         ],
     )?)
 }
@@ -154,7 +150,7 @@ pub(crate) fn record_batch_to_turns_with_row_ids(
         .as_any()
         .downcast_ref::<StringArray>()
         .unwrap();
-    let observer = batch
+    let extractor = batch
         .column(7)
         .as_any()
         .downcast_ref::<StringArray>()
@@ -184,7 +180,7 @@ pub(crate) fn record_batch_to_turns_with_row_ids(
         .as_any()
         .downcast_ref::<StringArray>()
         .unwrap();
-    let observing_epoch = batch
+    let extraction_epoch = batch
         .column(13)
         .as_any()
         .downcast_ref::<UInt64Array>()
@@ -212,13 +208,13 @@ pub(crate) fn record_batch_to_turns_with_row_ids(
             project: project.value(index).to_string(),
             cwd: cwd.value(index).to_string(),
             agent: agent.value(index).to_string(),
-            observer: observer.value(index).to_string(),
+            extractor: extractor.value(index).to_string(),
             events: required_events(events_json, index)?,
             artifacts: optional_artifacts(artifacts_json, index),
             metadata: optional_json(metadata_json, index),
             prompt: optional_string(prompt, index),
             response: optional_string(response, index),
-            observing_epoch: optional_u64(observing_epoch, index),
+            extraction_epoch: optional_u64(extraction_epoch, index),
         });
     }
     Ok(turns)
@@ -491,139 +487,6 @@ pub(crate) fn record_batch_to_session_snapshots_with_row_ids(
     Ok(session_snapshots)
 }
 
-pub(crate) fn observation_contexts_to_record_batch(
-    rows: &[ObservationContext],
-) -> std::result::Result<RecordBatch, ArrowError> {
-    let ids = StringArray::from_iter_values(rows.iter().map(|row| row.id.as_str()));
-    let path = StringArray::from_iter_values(rows.iter().map(|row| row.path.as_str()));
-    let parent_id = StringArray::from(
-        rows.iter()
-            .map(|row| row.parent_id.as_deref())
-            .collect::<Vec<_>>(),
-    );
-    let position = Int64Array::from_iter_values(rows.iter().map(|row| row.position));
-    let content = StringArray::from_iter_values(rows.iter().map(|row| row.content.as_str()));
-    let source_refs = build_string_list_array(rows.iter().map(|row| Some(&row.source_refs)));
-    let expand_refs = build_string_list_array(rows.iter().map(|row| Some(&row.expand_refs)));
-    let created_at = TimestampMicrosecondArray::from_iter_values(
-        rows.iter().map(|row| row.created_at.timestamp_micros()),
-    )
-    .with_timezone("UTC");
-    let updated_at = TimestampMicrosecondArray::from_iter_values(
-        rows.iter().map(|row| row.updated_at.timestamp_micros()),
-    )
-    .with_timezone("UTC");
-    let observer = StringArray::from_iter_values(rows.iter().map(|row| row.observer.as_str()));
-
-    Ok(RecordBatch::try_new(
-        Arc::new(observation_context_schema()),
-        vec![
-            Arc::new(ids),
-            Arc::new(path),
-            Arc::new(parent_id),
-            Arc::new(position),
-            Arc::new(content),
-            Arc::new(source_refs),
-            Arc::new(expand_refs),
-            Arc::new(created_at),
-            Arc::new(updated_at),
-            Arc::new(observer),
-        ],
-    )?)
-}
-
-pub(crate) fn observation_contexts_to_reader(
-    rows: Vec<ObservationContext>,
-) -> Result<RecordBatchIterator<impl Iterator<Item = std::result::Result<RecordBatch, ArrowError>>>>
-{
-    let schema = Arc::new(observation_context_schema());
-    let batch = observation_contexts_to_record_batch(&rows).map_err(|error| {
-        Error::invalid_input(format!("build observation context batch: {error}"))
-    })?;
-    Ok(RecordBatchIterator::new(
-        vec![Ok(batch)].into_iter(),
-        schema,
-    ))
-}
-
-pub(crate) fn record_batch_to_observation_contexts(
-    batch: &RecordBatch,
-) -> Result<Vec<ObservationContext>> {
-    let ids = batch
-        .column(0)
-        .as_any()
-        .downcast_ref::<StringArray>()
-        .unwrap();
-    let path = batch
-        .column(1)
-        .as_any()
-        .downcast_ref::<StringArray>()
-        .unwrap();
-    let parent_id = batch
-        .column(2)
-        .as_any()
-        .downcast_ref::<StringArray>()
-        .unwrap();
-    let position = batch
-        .column(3)
-        .as_any()
-        .downcast_ref::<Int64Array>()
-        .unwrap();
-    let content = batch
-        .column(4)
-        .as_any()
-        .downcast_ref::<StringArray>()
-        .unwrap();
-    let source_refs = batch
-        .column(5)
-        .as_any()
-        .downcast_ref::<ListArray>()
-        .unwrap();
-    let expand_refs = batch
-        .column(6)
-        .as_any()
-        .downcast_ref::<ListArray>()
-        .unwrap();
-    let created_at = batch
-        .column(7)
-        .as_any()
-        .downcast_ref::<TimestampMicrosecondArray>()
-        .unwrap();
-    let updated_at = batch
-        .column(8)
-        .as_any()
-        .downcast_ref::<TimestampMicrosecondArray>()
-        .unwrap();
-    let observer = batch
-        .column(9)
-        .as_any()
-        .downcast_ref::<StringArray>()
-        .unwrap();
-
-    (0..batch.num_rows())
-        .map(|index| {
-            Ok(ObservationContext {
-                id: ids.value(index).to_string(),
-                path: path.value(index).to_string(),
-                parent_id: (!parent_id.is_null(index)).then(|| parent_id.value(index).to_string()),
-                position: position.value(index),
-                content: content.value(index).to_string(),
-                source_refs: optional_string_list(source_refs, index).unwrap_or_default(),
-                expand_refs: optional_string_list(expand_refs, index).unwrap_or_default(),
-                created_at: Utc
-                    .timestamp_micros(created_at.value(index))
-                    .single()
-                    .unwrap(),
-                updated_at: Utc
-                    .timestamp_micros(updated_at.value(index))
-                    .single()
-                    .unwrap(),
-                observer: observer.value(index).to_string(),
-            })
-        })
-        .collect()
-}
-
 pub(crate) fn batch_row_ids(batch: &RecordBatch) -> Result<Vec<u64>> {
     let row_ids = batch
         .column_by_name(ROW_ID)
@@ -649,8 +512,6 @@ pub(crate) fn extractions_to_record_batch(rows: &[Extraction]) -> Result<RecordB
     )
     .map_err(|error| Error::invalid_input(format!("invalid extraction vector: {error}")))?;
     let turn_refs = build_string_list_array(rows.iter().map(|row| Some(&row.turn_refs)));
-    let observation_paths =
-        build_string_list_array(rows.iter().map(|row| Some(&row.observation_paths)));
     let created_at = TimestampMicrosecondArray::from_iter_values(
         rows.iter().map(|row| row.created_at.timestamp_micros()),
     )
@@ -670,7 +531,6 @@ pub(crate) fn extractions_to_record_batch(rows: &[Extraction]) -> Result<RecordB
             Arc::new(cwd),
             Arc::new(vector),
             Arc::new(turn_refs),
-            Arc::new(observation_paths),
             Arc::new(created_at),
             Arc::new(updated_at),
         ],
@@ -723,18 +583,13 @@ pub(crate) fn record_batch_to_extractions(batch: &RecordBatch) -> Result<Vec<Ext
         .as_any()
         .downcast_ref::<ListArray>()
         .unwrap();
-    let observation_paths = batch
-        .column(7)
-        .as_any()
-        .downcast_ref::<ListArray>()
-        .unwrap();
     let created_at = batch
-        .column(8)
+        .column(7)
         .as_any()
         .downcast_ref::<TimestampMicrosecondArray>()
         .unwrap();
     let updated_at = batch
-        .column(9)
+        .column(8)
         .as_any()
         .downcast_ref::<TimestampMicrosecondArray>()
         .unwrap();
@@ -759,121 +614,6 @@ pub(crate) fn record_batch_to_extractions(batch: &RecordBatch) -> Result<Vec<Ext
                 cwd: cwd.value(index).to_string(),
                 vector,
                 turn_refs: optional_string_list(turn_refs, index).unwrap_or_default(),
-                observation_paths: optional_string_list(observation_paths, index)
-                    .unwrap_or_default(),
-                created_at: Utc
-                    .timestamp_micros(created_at.value(index))
-                    .single()
-                    .unwrap(),
-                updated_at: Utc
-                    .timestamp_micros(updated_at.value(index))
-                    .single()
-                    .unwrap(),
-            })
-        })
-        .collect()
-}
-
-pub(crate) fn observations_to_record_batch(rows: &[Observation]) -> Result<RecordBatch> {
-    let dimensions = extraction_dimensions()?;
-    let ids = StringArray::from_iter_values(rows.iter().map(|row| row.id.as_str()));
-    let path = StringArray::from_iter_values(rows.iter().map(|row| row.path.as_str()));
-    let text = StringArray::from_iter_values(rows.iter().map(|row| row.text.as_str()));
-    let vector = build_float32_fixed_size_list_array(
-        rows.iter().map(|row| row.vector.as_slice()),
-        dimensions,
-    )
-    .map_err(|error| Error::invalid_input(format!("invalid observation vector: {error}")))?;
-    let extraction_refs =
-        build_string_list_array(rows.iter().map(|row| Some(&row.extraction_refs)));
-    let created_at = TimestampMicrosecondArray::from_iter_values(
-        rows.iter().map(|row| row.created_at.timestamp_micros()),
-    )
-    .with_timezone("UTC");
-    let updated_at = TimestampMicrosecondArray::from_iter_values(
-        rows.iter().map(|row| row.updated_at.timestamp_micros()),
-    )
-    .with_timezone("UTC");
-
-    RecordBatch::try_new(
-        Arc::new(observation_schema(dimensions)),
-        vec![
-            Arc::new(ids),
-            Arc::new(path),
-            Arc::new(text),
-            Arc::new(vector),
-            Arc::new(extraction_refs),
-            Arc::new(created_at),
-            Arc::new(updated_at),
-        ],
-    )
-    .map_err(|error| Error::invalid_input(format!("build observation batch: {error}")))
-}
-
-pub(crate) fn observations_to_reader(
-    rows: Vec<Observation>,
-) -> Result<RecordBatchIterator<impl Iterator<Item = std::result::Result<RecordBatch, ArrowError>>>>
-{
-    let dimensions = extraction_dimensions()?;
-    let schema = Arc::new(observation_schema(dimensions));
-    let batch = observations_to_record_batch(&rows).map_err(arrow_error_from_lance)?;
-    Ok(RecordBatchIterator::new(
-        vec![Ok(batch)].into_iter(),
-        schema,
-    ))
-}
-
-pub(crate) fn record_batch_to_observations(batch: &RecordBatch) -> Result<Vec<Observation>> {
-    let ids = batch
-        .column(0)
-        .as_any()
-        .downcast_ref::<StringArray>()
-        .unwrap();
-    let path = batch
-        .column(1)
-        .as_any()
-        .downcast_ref::<StringArray>()
-        .unwrap();
-    let text = batch
-        .column(2)
-        .as_any()
-        .downcast_ref::<StringArray>()
-        .unwrap();
-    let vector = batch.column(3);
-    let extraction_refs = batch
-        .column(4)
-        .as_any()
-        .downcast_ref::<ListArray>()
-        .unwrap();
-    let created_at = batch
-        .column(5)
-        .as_any()
-        .downcast_ref::<TimestampMicrosecondArray>()
-        .unwrap();
-    let updated_at = batch
-        .column(6)
-        .as_any()
-        .downcast_ref::<TimestampMicrosecondArray>()
-        .unwrap();
-
-    (0..batch.num_rows())
-        .map(|index| {
-            let vector = if let Some(vector) = vector.as_any().downcast_ref::<FixedSizeListArray>()
-            {
-                optional_float32_fixed_size_list(vector, index).unwrap_or_default()
-            } else {
-                return Err(Error::invalid_input(format!(
-                    "observation.vector must be FixedSizeList<Float32, N>, got {:?}",
-                    vector.data_type()
-                )));
-            };
-
-            Ok(Observation {
-                id: ids.value(index).to_string(),
-                path: path.value(index).to_string(),
-                text: text.value(index).to_string(),
-                vector,
-                extraction_refs: optional_string_list(extraction_refs, index).unwrap_or_default(),
                 created_at: Utc
                     .timestamp_micros(created_at.value(index))
                     .single()
@@ -953,7 +693,7 @@ mod tests {
             project: "muninn".to_string(),
             cwd: "/repo/muninn".to_string(),
             agent: "agent".to_string(),
-            observer: "observer".to_string(),
+            extractor: "extractor".to_string(),
             events: vec![TurnEvent::UserMessage {
                 text: "hello".to_string(),
                 timestamp: None,
@@ -963,7 +703,7 @@ mod tests {
             metadata: None,
             prompt: Some("hello".to_string()),
             response: Some("world".to_string()),
-            observing_epoch: None,
+            extraction_epoch: None,
         }
     }
 
@@ -976,7 +716,6 @@ mod tests {
             cwd: "/repo/reports".to_string(),
             vector: vec![0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8],
             turn_refs: vec!["turn:1".to_string()],
-            observation_paths: vec!["reports".to_string()],
             created_at: Utc.timestamp_micros(3_000_000).single().unwrap(),
             updated_at: Utc.timestamp_micros(4_000_000).single().unwrap(),
         }

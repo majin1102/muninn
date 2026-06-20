@@ -8,7 +8,7 @@ type IndexedTurn = {
   agent: string;
   project: string;
   cwd: string;
-  observer?: string | null;
+  extractor?: string | null;
   metadata?: Record<string, unknown> | null;
   response?: string | null;
   turnSequence?: number | null;
@@ -63,11 +63,11 @@ export class SessionIndex {
 
     const [turnDelta, sessionDelta] = await Promise.all([
       client.turnTable.delta({
-        observer: this.extractorName,
+        extractor: this.extractorName,
         baselineVersion: this.baseline.turn,
       }),
       client.sessionTable.delta({
-        observer: this.extractorName,
+        extractor: this.extractorName,
         baselineVersion: this.baseline.session,
       }),
     ]);
@@ -89,7 +89,7 @@ export class SessionIndex {
 
   private async rebuild(client: NativeTables): Promise<void> {
     const [snapshotRows, turnStats, sessionStats] = await Promise.all([
-      client.sessionTable.listSnapshots(this.extractorName ? { observer: this.extractorName } : {}),
+      client.sessionTable.listSnapshots(this.extractorName ? { extractor: this.extractorName } : {}),
       client.turnTable.stats(),
       client.sessionTable.stats(),
     ]);
@@ -98,7 +98,7 @@ export class SessionIndex {
     this.entries.clear();
     for (const turn of turnRows) {
       const decoded = readTurnRow(turn);
-      if (!this.extractorName || decoded.observer === this.extractorName) {
+      if (!this.extractorName || decoded.extractor === this.extractorName) {
         this.upsertTurn(decoded);
       }
     }
@@ -118,7 +118,7 @@ export class SessionIndex {
     while (true) {
       const page = await client.turnTable.listTurns({
         mode: { type: 'page', offset, limit: REBUILD_LIMIT },
-        ...(this.extractorName ? { observer: this.extractorName } : {}),
+        ...(this.extractorName ? { extractor: this.extractorName } : {}),
       });
       if (page.length === 0) {
         break;

@@ -41,47 +41,6 @@ test('memory recaller prompt composes recall context with a soft budget', () => 
   assert.match(prompt.userTemplate, /"refs"/);
 });
 
-test('thread session memory prompt organizes entity extractions by questions', () => {
-  const prompt = loadPromptTemplate('thread_observing');
-
-  assert.match(prompt.system, /observer that maintains parts of a cross-extraction tree/i);
-  assert.match(prompt.system, /observed_document: a view of the observation tree/i);
-  assert.match(prompt.system, /new or changed memory fragments to integrate/i);
-  assert.match(prompt.system, /observed_document is only this job's view/);
-  assert.match(prompt.system, /Use both Context and Extraction as source material/);
-  assert.match(prompt.system, /Headings without body content are navigation only/i);
-  assert.match(prompt.system, /get_observation\(paths\)/);
-  assert.match(prompt.system, /batch related paths in each call and copy path strings exactly from heading `path:` comments/);
-  assert.match(prompt.system, /Section, leaf, and source budget/);
-  assert.match(prompt.system, /Use headings up to `####` only/);
-  assert.match(prompt.system, /usually 100-500 words with 1-5 source extractions/);
-  assert.match(prompt.system, /keep exact dates, places, names, source objects, and concrete labels in the body/);
-  assert.match(prompt.system, /use `Source extractions:` for source-level detail below it/);
-  assert.match(prompt.system, /split into narrower sibling leaves/);
-  assert.match(prompt.system, /promote a broad scope into child leaves/);
-  assert.doesNotMatch(prompt.system, /will be expanded during future recall/);
-  assert.doesNotMatch(prompt.system, /under 2000 tokens/);
-  assert.doesNotMatch(prompt.system, /naturally needs nested leaf headings/);
-  assert.match(prompt.system, /Observation rewrite rules/);
-  assert.match(prompt.system, /Source extractions:/);
-  assert.match(prompt.system, /Single-source bullet format is exactly/);
-  assert.match(prompt.system, /no text may follow it/);
-  assert.match(prompt.system, /Use a multi-source bullet only when multiple source extractions are merged/);
-  assert.match(prompt.system, /content is required and must preserve source-level detail and wording/);
-  assert.match(prompt.system, /Heading-only sections mean unchanged: output only the heading line/);
-  assert.match(prompt.system, /headings visible in the observed_document or tool results/);
-  assert.match(prompt.system, /Do not output `path:` comments/);
-  assert.doesNotMatch(prompt.system, /observation ids/i);
-  assert.doesNotMatch(prompt.system, /delete: true/);
-  assert.doesNotMatch(prompt.system, /<!-- id:/);
-  assert.doesNotMatch(prompt.system, /memory-get/);
-  assert.doesNotMatch(prompt.userTemplate, /Root anchor:/);
-  assert.doesNotMatch(prompt.userTemplate, /Rewrite content:/);
-  assert.doesNotMatch(prompt.userTemplate, /Observation outline:/);
-  assert.match(prompt.userTemplate, /Observed document:/);
-  assert.match(prompt.userTemplate, /Extraction units:/);
-});
-
 test('chat domain prompt provides category guidance without session memory workflow schema', () => {
   const template = loadPromptTemplate('chat');
   const system = template.system;

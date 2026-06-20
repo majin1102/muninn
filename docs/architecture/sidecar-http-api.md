@@ -8,12 +8,12 @@
 
 - 读接口与 MCP tools 对齐：`recall`、`list`、`timeline`、`detail`
 - text-first：最终返回 `MemoryHit[]`，每个 `content` 为 Markdown
-- 结构化读取在 lance core 内部分层完成，sidecar 通过 `/server memory runtime` 调用并负责组合与渲染
+- 结构化读取在 server memory runtime 内部分层完成，sidecar 负责组合与渲染
 
 ### Write Side
 
 - 当前正式写接口只有 `POST /api/v1/turn/capture`
-- 观察/summary/semantic index 都属于后续派生流程，不作为独立 HTTP 写接口暴露
+- session snapshot、extraction 和索引都属于后续派生流程，不作为独立 HTTP 写接口暴露
 
 ## 1. Shared Response Types
 
@@ -31,11 +31,9 @@ export interface MemoryResponse {
 
 补充说明：
 
-- `memoryId` 仍是 HTTP 读侧统一导航键
+- `memoryId` 是 HTTP 读侧统一导航键
 - 约定为 `memoryId = {memoryLayer}:{memoryPoint}`
-- 当前有效值包括 `session:{row_id}` 与 `observing:{row_id}`
-- `SESSION` 是 public memory layer；内部仍然由 session turn rows 承载
-- `OBSERVING` 当前对应 observing snapshot row，不对应 observing line
+- 当前有效值包括 `session:{row_id}` 与 `extraction:{id}`
 
 ## 2. Read Endpoints
 
@@ -43,7 +41,7 @@ export interface MemoryResponse {
 
 用途：
 
-- 执行当前 demo 的文本检索
+- 执行文本检索
 
 Query 参数：
 
@@ -53,9 +51,8 @@ Query 参数：
 
 说明：
 
-- sidecar 通过 `/server memory runtime` 的统一 rendered 读接口读取 cross-layer recall 结果
-- `/server memory runtime` 返回 `RenderedMemory[]`
-- sidecar 仅负责将 `RenderedMemory` 渲染为统一 `MemoryHit[]`
+- server 读取 extraction table 并返回 rendered memory hits
+- sidecar 仅负责将 rendered memory 渲染为统一 `MemoryHit[]`
 
 ### 2.2 `GET /api/v1/list`
 
@@ -71,12 +68,7 @@ Query 参数：
 
 说明：
 
-- sidecar 通过 `/server memory runtime` 的统一 rendered `list` 接口读取 recent window
-- lance core 内部会：
-  - 读取 `SESSION` 层最近 session memory points（内部来源于 session turn rows）
-  - 读取 `OBSERVING` 层每条 observing line 的 latest snapshot row
-  - 按 recency 合并成统一 `RenderedMemory[]`
-- sidecar 再将其渲染为 `MemoryHit[]`
+- 返回最近 session memory points
 - 输出顺序从旧到新，便于直接注入 LLM context
 
 ### 2.3 `GET /api/v1/timeline`
@@ -93,11 +85,8 @@ Query 参数：
 
 说明：
 
-- sidecar 通过 `/server memory runtime` 的统一 rendered `timeline` 接口读取同层邻近 records
-- `session:{row_id}`
-  - 返回同层 session timeline（内部来源于 session turn rows）
-- `observing:{row_id}`
-  - 返回同一 `observing_id` 下按 `snapshot_sequence` 排序的邻近 snapshot rows
+- `session:{row_id}` 返回同层 session timeline
+- `extraction:{id}` 当前不提供 timeline 语义
 
 ### 2.4 `GET /api/v1/detail`
 
@@ -111,9 +100,8 @@ Query 参数：
 
 说明：
 
-- sidecar 通过 `/server memory runtime` 的统一 rendered `detail` 接口读取单个 memory row
 - `detail` 约定只返回一条 `MemoryHit`
-- `observing:{row_id}` 返回的是单个 observing snapshot 的 detail 文档
+- 当前支持 `session:{row_id}` 和 `extraction:{id}`
 
 ## 3. Write Endpoint
 
@@ -126,30 +114,19 @@ Query 参数：
 请求体语义：
 
 ```ts
-export interface Artifact {
-  key: string;
-  kind: "metadata" | "text" | "image" | "file";
-  source: "prompt" | "response" | "tool" | "import";
-  content?: string;
-  uri?: string;
-  name?: string;
-  mimeType?: string;
-  sizeBytes?: number;
-}
-
-export type TurnEvent =
-  | { type: "userMessage"; text: string; timestamp?: string; artifacts?: Artifact[] }
-  | { type: "assistantMessage"; text: string; timestamp?: string; artifacts?: Artifact[] }
-  | { type: "toolCall"; id?: string; name: string; input?: string; timestamp?: string }
-  | { type: "toolOutput"; id?: string; output?: string; timestamp?: string; artifacts?: Artifact[] };
-
 export interface TurnContent {
   sessionId: string;
+  project?: string;
+  cwd?: string;
   agent: string;
-  prompt: string;
-  response: string;
+  metadata?: Record<string, unknown> | null;
+  createdAt?: string;
+  updatedAt?: string;
+  turnSequence?: number;
   events: TurnEvent[];
   artifacts?: Artifact[];
+  prompt?: string;
+  response?: string;
 }
 ```
 
@@ -157,8 +134,7 @@ export interface TurnContent {
 
 - `sessionId` 是逻辑分组键
 - `agent` 是当前 turn 的基础归属信息
-- `observer` 在 backend 内部注入，不由 capture 请求提供
-- `prompt` / `response` 必须一次性完整提交
+- `extractor` 是 backend 内部注入的运行时身份字段，不由 capture 请求提供
 - `events` 是本轮 user/assistant/tool 事件的有序列表
 - `artifacts` 是可选结构化附件信息
 
@@ -166,10 +142,10 @@ export interface TurnContent {
 
 当前 sidecar 的渲染边界已经收敛为：
 
-- lance core 负责把不同 layer 的结构化 record 统一为 `RenderedMemory`
-- sidecar 负责把 `RenderedMemory` 渲染为 Markdown `MemoryHit`
+- server memory runtime 负责把结构化 record 统一为 rendered memory
+- sidecar 负责把 rendered memory 渲染为 Markdown `MemoryHit`
 
 也就是说：
 
-- 结构化 layer 读取仍在 lance core 内部分层完成
+- 结构化 layer 读取仍在 server 内部分层完成
 - HTTP/MCP 输出仍以 sidecar 渲染后的 `MemoryHit[]` 为准

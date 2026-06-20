@@ -28,7 +28,7 @@ const mockOpenClawModule = (t, relativePath, namedExports) => {
 };
 
 test("injects recall into system prompt and keeps captured turn prompt clean", async (t) => {
-  const observedModelContexts = [];
+  const capturedModelContexts = [];
   const fetchCalls = [];
   const captureBodies = [];
   let modelResolveCalls = 0;
@@ -72,10 +72,10 @@ test("injects recall into system prompt and keeps captured turn prompt clean", a
 
   const recordContext = (context) => {
     if (!context || typeof context !== "object") {
-      observedModelContexts.push({});
+      capturedModelContexts.push({});
       return;
     }
-    observedModelContexts.push({
+    capturedModelContexts.push({
       systemPrompt: typeof context.systemPrompt === "string" ? context.systemPrompt : undefined,
       messages: Array.isArray(context.messages) ? context.messages : undefined,
     });
@@ -605,7 +605,7 @@ test("injects recall into system prompt and keeps captured turn prompt clean", a
       sessionManagerOpenCalls,
       sessionPrepareCalls,
       agentSessionCreateCalls,
-      observedModelContexts: observedModelContexts.length,
+      capturedModelContexts: capturedModelContexts.length,
       captureBodies: captureBodies.length,
     }),
   );
@@ -618,11 +618,11 @@ test("injects recall into system prompt and keeps captured turn prompt clean", a
     ),
     true,
   );
-  assert.ok(observedModelContexts.length > 0);
-  assert.match(observedModelContexts[0]?.systemPrompt ?? "", /<relevant-memories>/);
-  assert.match(observedModelContexts[0]?.systemPrompt ?? "", /remembered design note/);
+  assert.ok(capturedModelContexts.length > 0);
+  assert.match(capturedModelContexts[0]?.systemPrompt ?? "", /<relevant-memories>/);
+  assert.match(capturedModelContexts[0]?.systemPrompt ?? "", /remembered design note/);
 
-  const lastUserMessage = observedModelContexts[0]?.messages
+  const lastUserMessage = capturedModelContexts[0]?.messages
     ?.slice()
     .reverse()
     .find((message) => message?.role === "user");

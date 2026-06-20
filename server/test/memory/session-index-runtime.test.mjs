@@ -31,7 +31,7 @@ function client({
         listTurns: async (query = {}) => {
           calls.listTurns += 1;
           calls.listTurnQueries.push(query);
-          return query.observer ? turns.filter((turn) => turn.observer === query.observer) : turns;
+          return query.extractor ? turns.filter((turn) => turn.extractor === query.extractor) : turns;
         },
         delta: async () => {
           calls.turnDelta += 1;
@@ -43,8 +43,8 @@ function client({
         listSnapshots: async (query = {}) => {
           calls.listSnapshots += 1;
           calls.listSnapshotQueries.push(query);
-          return query.observer
-            ? snapshots.filter((snapshot) => (snapshot.extractor ?? snapshot.observer) === query.observer)
+          return query.extractor
+            ? snapshots.filter((snapshot) => (snapshot.extractor ?? snapshot.extractor) === query.extractor)
             : snapshots;
         },
         delta: async () => {
@@ -75,21 +75,16 @@ async function withTempMuninnHome(t) {
 
 function checkpoint(overrides = {}) {
   return {
-    schemaVersion: 10,
+    schemaVersion: 11,
     writtenAt: '2026-06-02T00:00:00.000Z',
     writerPid: 123,
     extractor: {
-      baseline: { turn: 10, session: 10, extraction: 2, observation: 3 },
+      baseline: { turn: 10, session: 10, extraction: 2 },
       committedEpoch: 5,
       nextEpoch: 6,
       recentSessions: [],
       threads: [],
       runs: [],
-      pendingExtractionChanges: [],
-    },
-    observer: {
-      baseline: { observationContext: 4, observation: 3 },
-      observeQueue: { cwdBuckets: [] },
     },
     sessionIndex: {
       baseline: { turn: 10, session: 10 },
@@ -115,14 +110,14 @@ test('sessionIndex restores checkpoint and applies table deltas without full tur
       cwd: '/Users/Nathan/workspace/muninn',
       latestUpdatedAt: '2026-06-02T10:00:00.000Z',
     }],
-  }, 'default-observer');
+  }, 'default-extractor');
   const fake = client({
     turnDelta: [{
       sessionId: 'muninn/session-a',
       agent: 'codex',
       project: 'muninn',
       cwd: '/Users/Nathan/workspace/muninn',
-      observer: 'default-observer',
+      extractor: 'default-extractor',
       response: 'newer turn',
       updatedAt: '2026-06-02T11:00:00.000Z',
     }],
@@ -135,7 +130,7 @@ test('sessionIndex restores checkpoint and applies table deltas without full tur
       snapshotSequence: 2,
       createdAt: '2026-06-02T11:00:00.000Z',
       updatedAt: '2026-06-02T11:00:00.000Z',
-      observer: 'default-observer',
+      extractor: 'default-extractor',
       title: 'Snapshot title',
       summary: '',
       content: '',
@@ -172,7 +167,7 @@ test('sessionIndex rebuilds after dirty mark and drops removed sessions', async 
         latestUpdatedAt: '2026-06-02T10:00:00.000Z',
       },
     ],
-  }, 'default-observer');
+  }, 'default-extractor');
   index.markDirty();
   const fake = client({
     turns: [{
@@ -180,7 +175,7 @@ test('sessionIndex rebuilds after dirty mark and drops removed sessions', async 
       agent: 'codex',
       project: 'muninn',
       cwd: '/Users/Nathan/workspace/muninn',
-      observer: 'default-observer',
+      extractor: 'default-extractor',
       response: 'live turn',
       updatedAt: '2026-06-02T12:00:00.000Z',
     }],
@@ -193,7 +188,7 @@ test('sessionIndex rebuilds after dirty mark and drops removed sessions', async 
       snapshotSequence: 1,
       createdAt: '2026-06-02T12:00:00.000Z',
       updatedAt: '2026-06-02T12:00:00.000Z',
-      extractor: 'default-observer',
+      extractor: 'default-extractor',
       title: 'Live snapshot title',
       summary: '',
       content: '',
@@ -216,8 +211,8 @@ test('sessionIndex rebuilds after dirty mark and drops removed sessions', async 
   assert.equal(fake.calls.listSnapshots, 1);
 });
 
-test('sessionIndex rebuild filters turns and snapshots by observer', async () => {
-  const index = new SessionIndex(null, 'default-observer');
+test('sessionIndex rebuild filters turns and snapshots by extractor', async () => {
+  const index = new SessionIndex(null, 'default-extractor');
   const fake = client({
     turns: [
       {
@@ -225,8 +220,8 @@ test('sessionIndex rebuild filters turns and snapshots by observer', async () =>
         agent: 'codex',
         project: 'muninn',
         cwd: '/Users/Nathan/workspace/muninn',
-        observer: 'other-observer',
-        response: 'wrong observer turn',
+        extractor: 'other-extractor',
+        response: 'wrong extractor turn',
         updatedAt: '2026-06-02T13:00:00.000Z',
       },
       {
@@ -234,8 +229,8 @@ test('sessionIndex rebuild filters turns and snapshots by observer', async () =>
         agent: 'codex',
         project: 'muninn',
         cwd: '/Users/Nathan/workspace/muninn',
-        observer: 'default-observer',
-        response: 'right observer turn',
+        extractor: 'default-extractor',
+        response: 'right extractor turn',
         updatedAt: '2026-06-02T12:00:00.000Z',
       },
     ],
@@ -249,8 +244,8 @@ test('sessionIndex rebuild filters turns and snapshots by observer', async () =>
         snapshotSequence: 2,
         createdAt: '2026-06-02T13:00:00.000Z',
         updatedAt: '2026-06-02T13:00:00.000Z',
-        extractor: 'other-observer',
-        title: 'Wrong observer title',
+        extractor: 'other-extractor',
+        title: 'Wrong extractor title',
         summary: '',
         content: '',
         references: [],
@@ -264,8 +259,8 @@ test('sessionIndex rebuild filters turns and snapshots by observer', async () =>
         snapshotSequence: 1,
         createdAt: '2026-06-02T12:00:00.000Z',
         updatedAt: '2026-06-02T12:00:00.000Z',
-        extractor: 'default-observer',
-        title: 'Right observer title',
+        extractor: 'default-extractor',
+        title: 'Right extractor title',
         summary: '',
         content: '',
         references: [],
@@ -282,17 +277,17 @@ test('sessionIndex rebuild filters turns and snapshots by observer', async () =>
     cwd: '/Users/Nathan/workspace/muninn',
     latestUpdatedAt: '2026-06-02T12:00:00.000Z',
     snapshotId: 'session:right',
-    title: 'Right observer title',
+    title: 'Right extractor title',
   }]);
   assert.deepEqual(fake.calls.listTurnQueries, [{
     mode: { type: 'page', offset: 0, limit: 1_000_000 },
-    observer: 'default-observer',
+    extractor: 'default-extractor',
   }]);
-  assert.deepEqual(fake.calls.listSnapshotQueries, [{ observer: 'default-observer' }]);
+  assert.deepEqual(fake.calls.listSnapshotQueries, [{ extractor: 'default-extractor' }]);
 });
 
 test('sessionIndex rebuild reads every turn page', async () => {
-  const index = new SessionIndex(null, 'default-observer');
+  const index = new SessionIndex(null, 'default-extractor');
   const fake = client({
     turnVersion: 9,
     sessionVersion: 9,
@@ -303,7 +298,7 @@ test('sessionIndex rebuild reads every turn page', async () => {
       agent: 'codex',
       project: 'github.com/example/first',
       cwd: '/Users/Nathan/workspace/first',
-      observer: 'default-observer',
+      extractor: 'default-extractor',
       response: 'first page turn',
       updatedAt: '2026-06-02T10:00:00.000Z',
     }]],
@@ -312,7 +307,7 @@ test('sessionIndex rebuild reads every turn page', async () => {
       agent: 'codex',
       project: 'github.com/example/second',
       cwd: '/Users/Nathan/workspace/second',
-      observer: 'default-observer',
+      extractor: 'default-extractor',
       response: 'second page turn',
       updatedAt: '2026-06-02T11:00:00.000Z',
     }]],
@@ -341,13 +336,13 @@ test('sessionIndex rebuild reads every turn page', async () => {
     },
   ]);
   assert.deepEqual(fake.calls.listTurnQueries, [
-    { mode: { type: 'page', offset: 0, limit: 1_000_000 }, observer: 'default-observer' },
-    { mode: { type: 'page', offset: 1_000_000, limit: 1_000_000 }, observer: 'default-observer' },
+    { mode: { type: 'page', offset: 0, limit: 1_000_000 }, extractor: 'default-extractor' },
+    { mode: { type: 'page', offset: 1_000_000, limit: 1_000_000 }, extractor: 'default-extractor' },
   ]);
 });
 
 test('sessionIndex groups entries by project agent and session id, not cwd', async () => {
-  const index = new SessionIndex(null, 'default-observer');
+  const index = new SessionIndex(null, 'default-extractor');
   const fake = client({
     turns: [
       {
@@ -355,7 +350,7 @@ test('sessionIndex groups entries by project agent and session id, not cwd', asy
         agent: 'codex',
         project: '/workspace/muninn',
         cwd: '/Users/Nathan/.codex/worktrees/aaaa/muninn',
-        observer: 'default-observer',
+        extractor: 'default-extractor',
         response: 'older worktree turn',
         updatedAt: '2026-06-02T10:00:00.000Z',
       },
@@ -364,7 +359,7 @@ test('sessionIndex groups entries by project agent and session id, not cwd', asy
         agent: 'codex',
         project: '/workspace/muninn',
         cwd: '/Users/Nathan/.codex/worktrees/bbbb/muninn',
-        observer: 'default-observer',
+        extractor: 'default-extractor',
         response: 'newer worktree turn',
         updatedAt: '2026-06-02T11:00:00.000Z',
       },
@@ -373,7 +368,7 @@ test('sessionIndex groups entries by project agent and session id, not cwd', asy
         agent: 'codex',
         project: '/workspace/lance',
         cwd: '/Users/Nathan/workspace/lance',
-        observer: 'default-observer',
+        extractor: 'default-extractor',
         response: 'different project turn',
         updatedAt: '2026-06-02T12:00:00.000Z',
       },
@@ -387,7 +382,7 @@ test('sessionIndex groups entries by project agent and session id, not cwd', asy
       snapshotSequence: 1,
       createdAt: '2026-06-02T12:00:00.000Z',
       updatedAt: '2026-06-02T12:00:00.000Z',
-      extractor: 'default-observer',
+      extractor: 'default-extractor',
       title: 'Canonical project title',
       summary: '',
       content: '',
@@ -418,14 +413,14 @@ test('sessionIndex groups entries by project agent and session id, not cwd', asy
 });
 
 test('sessionIndex records firstTurnSequence from turnSequence', async () => {
-  const index = new SessionIndex(null, 'default-observer');
+  const index = new SessionIndex(null, 'default-extractor');
   const fake = client({
     turns: [{
       session_id: 'captured-late',
       agent: 'codex',
       project: 'github.com/example/repo',
       cwd: '/Users/Nathan/workspace/repo',
-      observer: 'default-observer',
+      extractor: 'default-extractor',
       response: 'late summary',
       turnSequence: 17,
       updatedAt: '2026-06-02T10:00:00.000Z',
@@ -455,14 +450,14 @@ test('sessionIndex lowers firstTurnSequence when import fills history from zero'
       latestUpdatedAt: '2026-06-02T10:00:00.000Z',
       firstTurnSequence: 17,
     }],
-  }, 'default-observer');
+  }, 'default-extractor');
   const fake = client({
     turnDelta: [{
       session_id: 'fill-history',
       agent: 'codex',
       project: 'github.com/example/repo',
       cwd: '/Users/Nathan/workspace/repo',
-      observer: 'default-observer',
+      extractor: 'default-extractor',
       response: 'first summary',
       turnSequence: 0,
       updatedAt: '2026-06-02T11:00:00.000Z',
@@ -494,7 +489,7 @@ test('backend refreshSessionIndex rebuilds stale checkpoint entries from current
       snapshotSequence: 1,
       createdAt: '2026-06-02T10:00:00.000Z',
       updatedAt: '2026-06-02T10:00:00.000Z',
-      extractor: 'default-observer',
+      extractor: 'default-extractor',
       title: 'Stale snapshot title',
       summary: '',
       content: '',
@@ -504,21 +499,16 @@ test('backend refreshSessionIndex rebuilds stale checkpoint entries from current
     sessionVersion: 12,
   });
   const backend = MuninnBackend.createForTests(fake.tables, {
-    schemaVersion: 10,
+    schemaVersion: 11,
     writtenAt: '2026-06-02T00:00:00.000Z',
     writerPid: 123,
     extractor: {
-      baseline: { turn: 10, session: 10, extraction: 0, observation: 0 },
+      baseline: { turn: 10, session: 10, extraction: 0 },
       committedEpoch: 0,
       nextEpoch: 1,
       recentSessions: [],
       threads: [],
       runs: [],
-      pendingExtractionChanges: [],
-    },
-    observer: {
-      baseline: { observationContext: 0, observation: 0 },
-      observeQueue: { cwdBuckets: [] },
     },
     sessionIndex: {
       baseline: { turn: 10, session: 10 },
@@ -554,7 +544,7 @@ test('backend refreshSessionIndex writes rebuilt sessionIndex back to an existin
       snapshotSequence: 1,
       createdAt: '2026-06-02T10:00:00.000Z',
       updatedAt: '2026-06-02T10:00:00.000Z',
-      extractor: 'default-observer',
+      extractor: 'default-extractor',
       title: 'Stale snapshot title',
       summary: '',
       content: '',
@@ -571,7 +561,7 @@ test('backend refreshSessionIndex writes rebuilt sessionIndex back to an existin
   assert.deepEqual(refreshed.sessionIndex.entries, []);
   assert.deepEqual(refreshed.sessionIndex.baseline, { turn: 12, session: 12 });
   assert.deepEqual(refreshed.extractor, staleCheckpoint.extractor);
-  assert.deepEqual(refreshed.observer, staleCheckpoint.observer);
+  assert.deepEqual(refreshed.extractor, staleCheckpoint.extractor);
   assert.equal(fake.calls.listTurns, 1);
   assert.equal(fake.calls.listSnapshots, 1);
 });

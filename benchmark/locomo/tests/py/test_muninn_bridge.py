@@ -104,7 +104,6 @@ class MuninnBridgeTests(unittest.TestCase):
                         {
                             "memory_id": "turn:1",
                             "detail": "memory",
-                            "observationRatio": 0.5,
                         }
                     ]
                 }
@@ -118,7 +117,6 @@ class MuninnBridgeTests(unittest.TestCase):
 
         self.assertEqual(results["0:0"][0].memory_id, "turn:1")
         self.assertEqual(results["0:0"][0].detail, "memory")
-        self.assertEqual(results["0:0"][0].observation_ratio, 0.5)
 
     def test_recall_batch_passes_budget_and_query_limit(self) -> None:
         bridge = MuninnBridge()

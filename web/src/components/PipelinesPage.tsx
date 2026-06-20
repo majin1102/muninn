@@ -18,8 +18,7 @@ type PipelineFilterMenu = 'type' | 'status' | 'time';
 
 const TASK_FILTERS: Array<{ value: PipelineTaskFilter; label: string }> = [
   { value: 'all', label: 'Type: All' },
-  { value: 'session-observing', label: 'Extraction' },
-  { value: 'observation', label: 'Observation' },
+  { value: 'extraction', label: 'Extraction' },
   { value: 'wiki-compiling', label: 'Dreaming' },
 ];
 
@@ -191,7 +190,7 @@ export function PipelinesPage({ client }: PipelinesPageProps) {
               Pipelines
             </h1>
             <div className="pipelines-subtitle-row">
-              <p>Memory pipelines including session extracting, observing and dreaming...</p>
+              <p>Memory pipelines including extraction and dreaming...</p>
               <PipelineUpdatedAt updatedAt={response?.summary.updatedAt ?? null} />
             </div>
           </div>
@@ -577,10 +576,8 @@ function PipelineInspectorSection({ title, items, fallback, tone = 'default' }: 
 
 function kindLabel(kind: PipelineTaskKind): string {
   switch (kind) {
-    case 'session-observing':
+    case 'extraction':
       return 'Extraction';
-    case 'observation':
-      return 'Observation';
     case 'wiki-compiling':
       return 'Dreaming';
   }

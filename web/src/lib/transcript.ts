@@ -26,7 +26,7 @@ export function transcriptMessages(document: MemoryDocument): TranscriptMessage[
 
   return [{
     role: 'agent',
-    label: document.agent ?? document.observer ?? 'Memory',
+    label: document.agent ?? document.extractor ?? 'Memory',
     body: document.markdown,
   }];
 }

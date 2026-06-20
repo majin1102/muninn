@@ -15,7 +15,7 @@ from benchmark.locomo.scoring import score_qa
 
 SYSTEM_PROMPT = (
     "You answer LoCoMo benchmark questions using only the provided Muninn "
-    "observation context. Return only the short answer text."
+    "memory context. Return only the short answer text."
 )
 MIN_CODEX_TOKEN_TTL_SECONDS = 24 * 60 * 60
 ANSWERER_ATTEMPTS = 3
@@ -47,8 +47,8 @@ def normalize_recall_text(text: str) -> str:
     parts: list[str] = []
     for line in text.strip().splitlines():
         stripped = line.strip()
-        if stripped.startswith("OBSERVATION:"):
-            stripped = stripped.removeprefix("OBSERVATION:").strip()
+        if stripped.startswith("MEMORY:"):
+            stripped = stripped.removeprefix("MEMORY:").strip()
         elif stripped.startswith("CONTEXT:"):
             stripped = stripped.removeprefix("CONTEXT:").strip()
         if stripped:
@@ -98,12 +98,12 @@ def build_qa_trace(
 def load_answerer_config(home: Path) -> dict[str, Any]:
     config_path = home / "muninn.json"
     config = json.loads(config_path.read_text(encoding="utf8"))
-    observer = config.get("observer") if isinstance(config, dict) else None
-    if not isinstance(observer, dict) or not isinstance(observer.get("llmProvider"), str):
-        raise ValueError("LoCoMo LLM answerer requires observer.llmProvider in muninn.json")
+    extractor = config.get("extractor") if isinstance(config, dict) else None
+    if not isinstance(extractor, dict) or not isinstance(extractor.get("llmProvider"), str):
+        raise ValueError("LoCoMo LLM answerer requires extractor.llmProvider in muninn.json")
     providers = config.get("providers")
     llms = providers.get("llm") if isinstance(providers, dict) else None
-    llm_provider = observer["llmProvider"]
+    llm_provider = extractor["llmProvider"]
     llm = llms.get(llm_provider) if isinstance(llms, dict) else None
     if not isinstance(llm, dict):
         raise ValueError(f"LoCoMo LLM answerer requires providers.llm.{llm_provider} in muninn.json")

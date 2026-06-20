@@ -31,7 +31,6 @@ pub struct Extraction {
     pub cwd: String,
     pub vector: Vec<f32>,
     pub turn_refs: Vec<String>,
-    pub observation_paths: Vec<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -582,7 +581,6 @@ mod tests {
             cwd: "/repo/muninn".to_string(),
             vector,
             turn_refs: vec!["turn:1".to_string()],
-            observation_paths: vec![],
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
         }
