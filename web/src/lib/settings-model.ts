@@ -38,12 +38,6 @@ export const SAMPLE_SETTINGS: JsonObject = {
     maxAttempts: 3,
     activeWindowDays: 30,
   },
-  observer: {
-    name: 'default-observer',
-    llmProvider: 'default',
-    maxAttempts: 3,
-    activeWindowDays: 30,
-  },
   capture: {
     agents: {
       codex: true,

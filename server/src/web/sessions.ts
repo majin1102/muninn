@@ -19,7 +19,7 @@ import { renderRenderedMemoryDocument } from './render.js';
 export const sessionRoutes = new Hono();
 
 const AGENT_DEFAULT_SESSION_PREFIX = '__agent_default__:';
-const OBSERVER_DEFAULT_SESSION_PREFIX = '__observer_default__:';
+const EXTRACTOR_DEFAULT_SESSION_PREFIX = '__extractor_default__:';
 const INTERNAL_SESSION_SUFFIX = /-?[0-9a-f]{8}$/i;
 const DEFAULT_AUTO_EXPAND_TURN_LIMIT = 20;
 const SESSION_TREE_PAGE_LIMIT = 1_000_000;
@@ -91,7 +91,7 @@ function normalizeText(value: string | undefined | null): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
-function resolveSessionNode(turn: Pick<AppSessionTurn, 'sessionId' | 'agent' | 'observer' | 'project' | 'cwd'>): {
+function resolveSessionNode(turn: Pick<AppSessionTurn, 'sessionId' | 'agent' | 'extractor' | 'project' | 'cwd'>): {
   sessionKey: string;
   displaySessionId: string;
   projectKey: string;
@@ -118,10 +118,10 @@ function resolveSessionNode(turn: Pick<AppSessionTurn, 'sessionId' | 'agent' | '
     };
   }
 
-  const observer = normalizeText(turn.observer) ?? 'observer';
+  const extractor = normalizeText(turn.extractor) ?? 'extractor';
   return {
-    sessionKey: `${OBSERVER_DEFAULT_SESSION_PREFIX}${observer}`,
-    displaySessionId: `Observer Default (${observer})`,
+    sessionKey: `${EXTRACTOR_DEFAULT_SESSION_PREFIX}${extractor}`,
+    displaySessionId: `Default Session (${extractor})`,
     projectKey: normalizeText(turn.project) ?? 'default',
     cwd: normalizeText(turn.cwd),
   };
@@ -146,7 +146,7 @@ function resolveIndexedSessionTitle(entry: Pick<AppSessionIndexEntry, 'sessionId
 }
 
 function isGeneratedSessionTitle(sessionId: string, title: string): boolean {
-  return title === `Session ${sessionId}` || title === 'Session observing thread';
+  return title === `Session ${sessionId}`;
 }
 
 export function resolveSessionNodeFromIndexForTests(entry: AppSessionIndexEntry): SessionNode {
@@ -159,7 +159,7 @@ function matchesSessionNode(turn: AppSessionTurn, sessionKey: string): boolean {
 
 function isDefaultSessionKey(sessionKey: string): boolean {
   return sessionKey.startsWith(AGENT_DEFAULT_SESSION_PREFIX)
-    || sessionKey.startsWith(OBSERVER_DEFAULT_SESSION_PREFIX);
+    || sessionKey.startsWith(EXTRACTOR_DEFAULT_SESSION_PREFIX);
 }
 
 function hasTurnPreviewContent(turn: Pick<AppSessionTurn, 'prompt' | 'response' | 'events' | 'artifacts'>): boolean {
@@ -297,7 +297,7 @@ async function enrichMemoryDocument(
   return {
     ...document,
     agent: turn.agent,
-    observer: turn.observer,
+    extractor: turn.extractor,
     sessionId: turn.sessionId ?? undefined,
     project: turn.project,
     cwd: turn.cwd,

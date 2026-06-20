@@ -119,7 +119,7 @@ async function main() {
 
     const batchSize = options.batchSize || turns.length;
     log(`batchSize=${batchSize}`);
-    const latestEpoch = Math.max(1, ...turns.map((turn) => turn.observingEpoch ?? 0));
+    const latestEpoch = Math.max(1, ...turns.map((turn) => turn.extractionEpoch ?? 0));
     const threads = [];
     const touchedIds = new Set();
     for (let offset = 0, batchIndex = 0; offset < turns.length; offset += batchSize, batchIndex += 1) {
@@ -143,8 +143,8 @@ async function main() {
     }
     log(`touchedThreads=${touchedIds.size}`);
 
-    const extractionChanges = await indexTesting.indexTouchedExtractions(tables, threads, touchedIds);
-    log(`extractionChanges=${extractionChanges.length}`);
+    await indexTesting.indexTouchedExtractions(tables, threads, touchedIds);
+    log(`indexedThreads=${touchedIds.size}`);
 
     const sessionSnapshots = await tables.sessionTable.threadSnapshots(options.sessionId);
     const extractionRows = await tables.extractionTable.list({ limit: 1_000_000 });

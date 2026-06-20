@@ -5,10 +5,10 @@ This file is the fast-path context for coding agents working in this repository.
 ## Repository Constraints
 
 - After opening a PR, do not mark it as draft; open it directly as ready for review.
-- Do not design or implement for forward compatibility. This repository is still in an MVP-stage of iteration, so when a schema or interface changes, update the code to the new shape only and remove obsolete compatibility handling instead of preserving support for historical versions.
+- Do not design or implement for forward compatibility. This repository is still in a rapid iteration stage, so when a schema or interface changes, update the code to the new shape only and remove obsolete compatibility handling instead of preserving support for historical versions.
 - Describe all code review findings in Chinese.
 - PR titles must follow the `Conventional Commits` style, such as `feat: ...`, `fix: ...`, and `docs: ...`. Use a valid type prefix followed by a short summary, do not open PRs with arbitrary title formats, and when developing a new feature always start by creating a new worktree from `main` with a new branch, then use that branch to implement the work and open the PR.
-- Prefer short, context-aware names for methods and variables. Avoid sentence-like names that restate the entire workflow; both method names and variable names should stay compact when the surrounding code already provides the domain context. For example, prefer `link_parent_refs(thread, refs)` over `resolve_pending_parent_references_after_flush(thread, refs)`, and prefer `pending_parent_id` over `pending_parent_observing_reference_id`.
+- Prefer short, context-aware names for methods and variables. Avoid sentence-like names that restate the entire workflow; both method names and variable names should stay compact when the surrounding code already provides the domain context. For example, prefer `link_refs(thread, refs)` over `resolve_pending_parent_references_after_flush(thread, refs)`, and prefer `pending_parent_id` over `pending_parent_reference_id`.
 - When a plan includes prompt changes, spell out the concrete prompt text or exact prompt diff in the plan instead of describing it vaguely.
 
 ## What This Repo Is
@@ -19,7 +19,7 @@ Product positioning:
 
 - Muninn automatically captures real-time context from Codex, Claude Code, and other agents.
 - Muninn turns conversations, documents, images, and webpages into provenance-aware, multi-modal context lakes.
-- Muninn pipelines curate raw context into grounded, source-linked layered memory for human-and-agent browsing, inspection, recall, and LLM-Wiki generation.
+- Muninn pipelines distill raw context into grounded, source-linked layered memory for human-and-agent browsing, inspection, recall, and LLM-Wiki generation.
 - Shared across agents and sessions, those memories compound experience and knowledge so agents can continuously learn, evolve, and grow with the user and their projects over time.
 - Muninn is not a raw transcript archive, a generic vector database wrapper, a note-taking app, a cloud collaboration service, or a hosted knowledge base.
 
@@ -74,7 +74,7 @@ Current strategic direction:
 Preferred dependency direction:
 
 - `server` may depend on `common`, `codex`, `claude`, and the Rust storage implementation through `server/native`.
-- `server/src/memory` owns extractor, observer, recall, watchdog, session, and turn orchestration.
+- `server/src/memory` owns extractor, recall, watchdog, session, and turn orchestration.
 - `format` owns typed tables, persistence, table maintenance, and Arrow/Lance conversion below the table API boundary.
 - `web` should talk to `server` through HTTP APIs and shared contracts from `common`.
 - `mcp` should talk to `server`, not directly to Rust/native by default.
@@ -107,7 +107,6 @@ Current write path:
 Current runtime config requirements:
 
 - `extractor` is required for core memory runtime.
-- `observer` is required unless `observer.enabled` is `false`.
 - `providers.llm` and `providers.embedding` are required.
 - Supported LLM provider types are `mock`, `openai`, and `openai-codex`.
 - Supported embedding provider types are `mock` and `openai`.

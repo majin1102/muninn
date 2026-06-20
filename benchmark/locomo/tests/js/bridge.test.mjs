@@ -74,9 +74,7 @@ async function startServer(t, home) {
       ...process.env,
       PORT: String(port),
       MUNINN_HOME: home,
-      MUNINN_OBSERVER_GATEWAY_TRACE_FILE: path.join(home, 'locomo-gateway-trace.jsonl'),
-      MUNINN_THREAD_OBSERVING_TRACE_FILE: path.join(home, 'locomo-thread-observing-trace.jsonl'),
-      MUNINN_OBSERVER_TRACE_FILE: path.join(home, 'locomo-observer-trace.jsonl'),
+      MUNINN_SESSION_MEMORY_TRACE_FILE: path.join(home, 'locomo-extraction-trace.jsonl'),
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -123,8 +121,8 @@ async function mockWatermarkServer(t, responses) {
   const server = http.createServer(async (request, response) => {
     calls.push({ url: `${baseUrl}${request.url}`, method: request.method ?? 'GET' });
     const next = responses.shift() ?? {
-      pending: { turns: ['turn:1'], extractions: [] },
-      phases: { extractor: 'pending', observer: 'idle' },
+      pending: { turns: ['turn:1'] },
+      phases: { extractor: 'pending' },
     };
     if (next.delayMs) {
       await new Promise((resolve) => setTimeout(resolve, next.delayMs));
@@ -164,7 +162,7 @@ function watermarkManifest() {
 
 async function writeMuninnConfig(
   home,
-  { observerProvider, semanticIndexProvider, storageUri } = {},
+  { llmProvider, embeddingProvider, storageUri } = {},
 ) {
   const root = {};
   if (storageUri) {
@@ -172,28 +170,24 @@ async function writeMuninnConfig(
       uri: storageUri,
     };
   }
-  if (observerProvider) {
-    root.observer = {
-      name: 'test-observer',
-      llmProvider: 'test_observer_llm',
-    };
+  if (llmProvider) {
     root.extractor = {
       name: 'test-extractor',
-      llmProvider: 'test_observer_llm',
+      llmProvider: 'test_extractor_llm',
       embeddingProvider: 'test_embedding',
     };
     root.providers = {
       ...(root.providers ?? {}),
       llm: {
-        test_observer_llm: { type: observerProvider },
+        test_extractor_llm: { type: llmProvider },
       },
     };
   }
-  if (semanticIndexProvider) {
+  if (embeddingProvider) {
     root.extractor = {
       ...(root.extractor ?? {
         name: 'test-extractor',
-        llmProvider: 'test_observer_llm',
+        llmProvider: 'test_extractor_llm',
       }),
       embeddingProvider: 'test_embedding',
     };
@@ -201,7 +195,7 @@ async function writeMuninnConfig(
       ...(root.providers ?? {}),
       embedding: {
         test_embedding: {
-          type: semanticIndexProvider,
+          type: embeddingProvider,
           dimensions: 4,
         },
       },
@@ -216,7 +210,7 @@ async function writeMuninnConfig(
 
 async function prepareSourceConfig(
   t,
-  { observerProvider, semanticIndexProvider, storageUri } = {},
+  { llmProvider, embeddingProvider, storageUri } = {},
 ) {
   const sourceHome = await mkdtemp(path.join(os.tmpdir(), 'muninn-locomo-source-'));
   t.after(async () => rm(sourceHome, { recursive: true, force: true }));
@@ -224,8 +218,8 @@ async function prepareSourceConfig(
     delete process.env.MUNINN_HOME;
   });
   await writeMuninnConfig(sourceHome, {
-    observerProvider,
-    semanticIndexProvider,
+    llmProvider,
+    embeddingProvider,
     storageUri,
   });
   process.env.MUNINN_HOME = sourceHome;
@@ -237,8 +231,8 @@ test('import writes an external manifest aligned to locomo sessions', async (t) 
   t.after(async () => core.shutdownCoreForTests());
 
   await prepareSourceConfig(t, {
-    observerProvider: 'mock',
-    semanticIndexProvider: 'mock',
+    llmProvider: 'mock',
+    embeddingProvider: 'mock',
     storageUri: 'file-object-store:///tmp/muninn-shared-storage',
   });
   await runBridge('reset-home', { 'muninn-home': home });
@@ -261,7 +255,7 @@ test('import writes an external manifest aligned to locomo sessions', async (t) 
   assert.equal(manifest.turns[1].source_id, 'D1:2');
   assert.equal(manifest.turns[0].session_id, 'locomo:sample-a:session_1');
   assert.equal(manifest.turns[2].session_id, 'locomo:sample-a:session_2');
-  assert.equal(copiedConfig.observer.llmProvider, 'test_observer_llm');
+  assert.equal(copiedConfig.extractor.llmProvider, 'test_extractor_llm');
   assert.equal(copiedConfig.storage, undefined);
 
   process.env.MUNINN_HOME = home;
@@ -286,16 +280,16 @@ test('recall returns body-only hits without leaking benchmark artifacts into mun
   const home = await mkdtemp(path.join(os.tmpdir(), 'muninn-locomo-recall-'));
   t.after(async () => rm(home, { recursive: true, force: true }));
   t.after(() => {
-    delete process.env.MUNINN_OBSERVER_POLL_MS;
+    delete process.env.MUNINN_EXTRACTOR_POLL_MS;
   });
 
   await prepareSourceConfig(t, {
-    observerProvider: 'mock',
-    semanticIndexProvider: 'mock',
+    llmProvider: 'mock',
+    embeddingProvider: 'mock',
   });
   await runBridge('reset-home', { 'muninn-home': home });
   await startServer(t, home);
-  process.env.MUNINN_OBSERVER_POLL_MS = '20';
+  process.env.MUNINN_EXTRACTOR_POLL_MS = '20';
   await runBridge('import-sample', {
     'data-file': fixturePath,
     'sample-id': 'sample-a',
@@ -317,13 +311,12 @@ test('recall returns body-only hits without leaking benchmark artifacts into mun
   assert.equal('references' in supportHit, false);
   assert.equal(typeof supportHit.matched_text, 'string');
   assert.ok(supportHit.matched_text.trim());
-  assert.match(supportHit.detail, /^(EXTRACTION|OBSERVATION): /);
+  assert.match(supportHit.detail, /^EXTRACTION: /);
   assert.match(supportHit.detail, new RegExp(escapeRegExp(supportHit.matched_text)));
   assert.doesNotMatch(supportHit.matched_text, /Recorded/);
-  assert.equal(supportHit.observationRatio ?? null, null);
   assert.ok(!('source_id' in recalled.hits[0]));
 
-  const gatewayTracePath = path.join(home, 'locomo-gateway-trace.jsonl');
+  const gatewayTracePath = path.join(home, 'sample-a', 'logs', 'locomo-extraction-trace.jsonl');
   if (await exists(gatewayTracePath)) {
     const gatewayTrace = await readFile(gatewayTracePath, 'utf8');
     const firstTrace = JSON.parse(gatewayTrace.trim().split('\n')[0]);
@@ -389,10 +382,10 @@ test('recursive evidence resolution can walk extraction lineage back to turn ids
   assert.deepEqual(evidenceIds, ['D1:1']);
 });
 
-test('recursive evidence resolution can walk observation lineage through extraction ids', async () => {
+test('recursive evidence resolution can walk extraction lineage through extraction ids', async () => {
   const bridgeModule = await import(bridgePath);
   const evidenceIds = bridgeModule.resolveEvidenceIdsFromGraph(
-    'observation:curated-1',
+    'extraction:memory-2',
     [
       {
         turn_id: 'session:101',
@@ -404,7 +397,7 @@ test('recursive evidence resolution can walk observation lineage through extract
       },
     ],
     {
-      'observation:curated-1': ['extraction:raw-1'],
+      'extraction:memory-2': ['extraction:raw-1'],
       'extraction:raw-1': ['session:101'],
     },
   );
@@ -419,7 +412,7 @@ test('withTransientRetry retries transient provider failures', async () => {
     async () => {
       attempts += 1;
       if (attempts < 2) {
-        throw new Error('semanticIndex embedding request failed with status 503');
+        throw new Error('embedding request failed with status 503');
       }
       return 'ok';
     },
@@ -465,9 +458,9 @@ test('bridge emits JSON error envelope for command failures', async () => {
   );
 });
 
-test('waitForImportWatermark times out with pending turn ids when observer does not flush in time', async (t) => {
+test('waitForImportWatermark times out with pending turn ids when extractor does not flush in time', async (t) => {
   await mockWatermarkServer(t, [
-    { pending: { turns: ['turn:1'], extractions: [] }, phases: { extractor: 'pending', observer: 'idle' } },
+    { pending: { turns: ['turn:1'] }, phases: { extractor: 'pending' } },
   ]);
   const bridgeModule = await import(bridgePath);
 
@@ -499,7 +492,7 @@ test('import only fails fast when extraction config is missing', async (t) => {
 
 test('waitForImportWatermark emits a delayed unresolved-watermark warning', async (t) => {
   await mockWatermarkServer(t, [
-    { pending: { turns: ['turn:1'], extractions: [] }, phases: { extractor: 'pending', observer: 'idle' } },
+    { pending: { turns: ['turn:1'] }, phases: { extractor: 'pending' } },
   ]);
   const bridgeModule = await import(bridgePath);
   const originalError = console.error;
@@ -526,7 +519,7 @@ test('waitForImportWatermark emits a delayed unresolved-watermark warning', asyn
 
 test('waitForImportWatermark returns after async finalize resolves immediately', async (t) => {
   await mockWatermarkServer(t, [
-    { delayMs: 30, payload: { pending: { turns: [], extractions: [] }, phases: { extractor: 'idle', observer: 'idle' } } },
+    { delayMs: 30, payload: { pending: { turns: [] }, phases: { extractor: 'idle' } } },
   ]);
   const bridgeModule = await import(`${bridgePath}?finalize-progress=${Date.now()}`);
   const originalError = console.error;
@@ -549,7 +542,7 @@ test('waitForImportWatermark returns after async finalize resolves immediately',
 
 test('waitForImportWatermark reads timeout and warning defaults from env', async (t) => {
   await mockWatermarkServer(t, [
-    { pending: { turns: ['turn:1'], extractions: [] }, phases: { extractor: 'pending', observer: 'idle' } },
+    { pending: { turns: ['turn:1'] }, phases: { extractor: 'pending' } },
   ]);
   t.after(() => {
     delete process.env.MUNINN_LOCOMO_WATERMARK_TIMEOUT_MS;
@@ -573,8 +566,8 @@ test('waitForImportWatermark default timeout is thirty minutes', async () => {
 
 test('waitForImportWatermark calls the configured persistent server', async (t) => {
   const calls = await mockWatermarkServer(t, [{
-    pending: { turns: [], extractions: [] },
-    phases: { extractor: 'idle', observer: 'idle' },
+    pending: { turns: [] },
+    phases: { extractor: 'idle' },
   }]);
 
   const bridgeModule = await import(`${bridgePath}?persistent-server=${Date.now()}`);
@@ -601,7 +594,7 @@ test('waitForImportWatermark does not depend on repo-root cwd', async (t) => {
     process.chdir(originalCwd);
   });
   await mockWatermarkServer(t, [
-    { pending: { turns: ['turn:1'], extractions: [] }, phases: { extractor: 'pending', observer: 'idle' } },
+    { pending: { turns: ['turn:1'] }, phases: { extractor: 'pending' } },
   ]);
   process.chdir(path.join(repoRoot, 'benchmark/locomo'));
   const bridgeModule = await import(bridgePath);

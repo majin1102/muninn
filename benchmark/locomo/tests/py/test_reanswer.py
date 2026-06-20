@@ -38,7 +38,7 @@ class ReanswerTests(unittest.TestCase):
             home = Path(tmpdir)
             (home / "muninn.json").write_text(
                 json.dumps({
-                    "observer": {"name": "test-observer", "llmProvider": "mock"},
+                    "extractor": {"name": "test-extractor", "llmProvider": "mock"},
                     "providers": {"llm": {"mock": {"type": "mock", "model": "mock-answerer"}}},
                 }),
                 encoding="utf8",

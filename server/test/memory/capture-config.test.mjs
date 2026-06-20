@@ -14,14 +14,9 @@ function makeConfig() {
       llmProvider: 'extractor_llm',
       embeddingProvider: 'default',
     },
-    observer: {
-      name: 'test-observer',
-      llmProvider: 'observer_llm',
-    },
     providers: {
       llm: {
         extractor_llm: { type: 'mock' },
-        observer_llm: { type: 'mock' },
       },
       embedding: {
         default: { type: 'mock', dimensions: 8 },

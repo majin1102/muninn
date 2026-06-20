@@ -117,9 +117,9 @@ export function SessionContentSplit({
     }
     const updateWidth = () => setContainerWidth(root.getBoundingClientRect().width);
     updateWidth();
-    const observer = new ResizeObserver(updateWidth);
-    observer.observe(root);
-    return () => observer.disconnect();
+    const resizeWatcher = new ResizeObserver(updateWidth);
+    resizeWatcher.observe(root);
+    return () => resizeWatcher.disconnect();
   }, []);
 
   useEffect(() => {
@@ -279,7 +279,7 @@ export function SessionContentSplit({
             error={error}
           />
         ) : (
-          <SessionArtifacts artifacts={sessionArtifacts} agent={session?.agent ?? document?.agent ?? document?.observer} />
+          <SessionArtifacts artifacts={sessionArtifacts} agent={session?.agent ?? document?.agent ?? document?.extractor} />
         )}
       </section>
     </div>

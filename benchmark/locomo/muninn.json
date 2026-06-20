@@ -5,12 +5,6 @@
     "embeddingProvider": "locomo_embedding",
     "maxAttempts": 3
   },
-  "observer": {
-    "name": "locomo-observer",
-    "llmProvider": "locomo_llm",
-    "maxAttempts": 3,
-    "cwdThreshold": 5
-  },
   "providers": {
     "llm": {},
     "embedding": {}

@@ -17,8 +17,6 @@ import {
   resolveStorageTarget,
   getEmbeddingConfig,
   getExtractorLlmConfig,
-  getObserverLlmConfig,
-  isObserverEnabled,
   getWatchdogConfig,
   validateMuninnConfigInput,
   validateMuninnConfigStorage,
@@ -29,12 +27,10 @@ import {
   type CheckpointContent,
   type CheckpointFile,
   type ExtractorCheckpoint,
-  type ObserverCheckpoint,
   type SessionIndexEntry,
 } from './checkpoint.js';
 import { Memories, type RecallHit, type RenderedMemory } from './api/memory.js';
 import { Extractor } from './pipeline/extractor.js';
-import { Observer } from './pipeline/observer.js';
 import { IngestSessionRegistry } from './pipeline/ingest.js';
 import { readTurnRow } from './pipeline/ingest.js';
 import { Watchdog } from './watchdog.js';
@@ -52,14 +48,12 @@ export type MemoryWatermarkPhase = 'idle' | 'pending' | 'running' | 'draining' |
 export interface MemoryWatermark {
   pending: {
     turns: string[];
-    extractions: string[];
   };
   phases: {
     extractor: MemoryWatermarkPhase;
-    observer: MemoryWatermarkPhase;
   };
   error?: {
-    phase: 'extractor' | 'observer';
+    phase: 'extractor';
     message: string;
   };
 }
@@ -155,36 +149,6 @@ class AsyncCheckpointLock implements CheckpointLock {
   }
 }
 
-function combineWatermarks(
-  extractorWatermark: MemoryWatermark,
-  observerWatermark: MemoryWatermark,
-): MemoryWatermark {
-  return {
-    pending: {
-      turns: extractorWatermark.pending.turns,
-      extractions: observerWatermark.pending.extractions,
-    },
-    phases: {
-      extractor: extractorWatermark.phases.extractor,
-      observer: observerWatermark.phases.observer,
-    },
-    error: extractorWatermark.error ?? observerWatermark.error,
-  };
-}
-
-function idleObserverWatermark(): MemoryWatermark {
-  return {
-    pending: {
-      turns: [],
-      extractions: [],
-    },
-    phases: {
-      extractor: 'idle',
-      observer: 'idle',
-    },
-  };
-}
-
 const backendCache = new Map<string, MuninnBackend>();
 const backendPromises = new Map<string, Promise<MuninnBackend>>();
 const bootstrapPromises = new Map<string, Promise<void>>();
@@ -193,13 +157,11 @@ export class MuninnBackend {
   readonly memories: Memories;
   readonly checkpointLock: CheckpointLock;
   private extractor: Extractor | null = null;
-  private observer: Observer | null = null;
   private sessionRegistry: IngestSessionRegistry | null = null;
   private readonly sessionIndex: SessionIndex;
   private watchdog: Watchdog | null = null;
   private watchdogClient: NativeTables | null = null;
   private finalizeDrainPromise: Promise<void> | null = null;
-  private readonly observerEnabled: boolean;
 
   private constructor(
     private readonly client: NativeTables,
@@ -208,7 +170,6 @@ export class MuninnBackend {
   ) {
     this.memories = new Memories(client);
     this.checkpointLock = new AsyncCheckpointLock();
-    this.observerEnabled = isObserverEnabled();
     const extractorName = loadMuninnConfig()?.extractor?.name;
     this.sessionIndex = new SessionIndex(checkpoint?.sessionIndex ?? null, extractorName ?? null);
     this.sessionRegistry = extractorName
@@ -228,7 +189,6 @@ export class MuninnBackend {
         ? JSON.stringify({
           schemaVersion: checkpoint.schemaVersion,
           extractor: checkpoint.extractor,
-          observer: checkpoint.observer,
           sessionIndex: checkpoint.sessionIndex,
         })
         : null;
@@ -256,9 +216,6 @@ export class MuninnBackend {
 
   async accept(turnContent: TurnContent): Promise<void> {
     return this.checkpointLock.shared(async () => {
-      if (this.observerEnabled) {
-        await this.ensureObserver();
-      }
       const extractor = await this.ensureExtractor();
       const registry = this.ensureSessionRegistry(extractor.name);
       await extractor.accept(turnContent, registry);
@@ -270,9 +227,6 @@ export class MuninnBackend {
       return 0;
     }
     return this.checkpointLock.shared(async () => {
-      if (this.observerEnabled) {
-        await this.ensureObserver();
-      }
       const extractor = await this.ensureExtractor();
       const registry = this.ensureSessionRegistry(extractor.name);
       return extractor.acceptBatch(turnContents, registry);
@@ -313,44 +267,35 @@ export class MuninnBackend {
 
   async memoryWatermark(): Promise<MemoryWatermark> {
     return this.checkpointLock.shared(async () => {
-      const observer = this.observerEnabled ? await this.ensureObserver() : null;
       const extractor = await this.ensureExtractor();
-      const extractorWatermark = await extractor.watermark();
-      const observerWatermark = observer ? await observer.watermark() : idleObserverWatermark();
-      return combineWatermarks(extractorWatermark, observerWatermark);
+      return extractor.watermark();
     });
   }
 
   async memoryFinalize(): Promise<MemoryWatermark> {
-    const { observer, extractor } = await this.checkpointLock.shared(async () => {
-      const observer = this.observerEnabled ? await this.ensureObserver() : null;
+    const extractor = await this.checkpointLock.shared(async () => {
       const extractor = await this.ensureExtractor();
-      return { observer, extractor };
+      return extractor;
     });
-    const extractorWatermark = await extractor.finalize();
-    const observerWatermark = observer ? await observer.finalize() : idleObserverWatermark();
-    this.scheduleFinalizeDrain(extractor, observer);
-    const watermark = combineWatermarks(extractorWatermark, observerWatermark);
+    const watermark = await extractor.finalize();
+    this.scheduleFinalizeDrain(extractor);
     return watermark;
   }
 
   async memoryFlushPending(): Promise<MemoryWatermark> {
-    const { observer, extractor } = await this.checkpointLock.shared(async () => {
-      const observer = this.observerEnabled ? await this.ensureObserver() : null;
+    const extractor = await this.checkpointLock.shared(async () => {
       const extractor = await this.ensureExtractor();
-      return { observer, extractor };
+      return extractor;
     });
     await extractor.flushPending();
     await this.watchdog?.flushCheckpoint();
-    const extractorWatermark = await extractor.watermark();
-    const observerWatermark = observer ? await observer.watermark() : idleObserverWatermark();
-    return combineWatermarks(extractorWatermark, observerWatermark);
+    return extractor.watermark();
   }
 
   async recallMemories(
     query: string,
     limit?: number,
-    options?: { mode?: RecallMode; budget?: number; queryLimit?: number; includeObservations?: boolean },
+    options?: { mode?: RecallMode; budget?: number; queryLimit?: number },
   ): Promise<RecallHit[]> {
     await writeMuninnLog(this.database, 'info', 'recall', 'query', {
       query,
@@ -365,50 +310,30 @@ export class MuninnBackend {
   async exportCheckpoint(): Promise<CheckpointContent | null> {
     return this.checkpointLock.exclusive(async () => {
       const extractor = this.extractor;
-      const observer = this.observer;
       const extractorCheckpoint = extractor?.exportCheckpoint();
-      const observerCheckpoint = observer?.exportCheckpoint();
       if (!extractor || !extractorCheckpoint) {
         return null;
       }
-      if (this.observerEnabled && (!observer || !observerCheckpoint)) {
-        return null;
-      }
-      const [turnStats, sessionStats, extractionStats, observationContextStats, observationStats] = await Promise.all([
+      const [turnStats, sessionStats, extractionStats] = await Promise.all([
         this.client.turnTable.stats(),
         this.client.sessionTable.stats(),
         this.client.extractionTable.stats(),
-        this.client.observationContextTable.stats(),
-        this.client.observationTable.stats(),
       ]);
       const extractorSection: ExtractorCheckpoint = {
         baseline: {
           turn: turnStats?.version ?? 0,
           session: sessionStats?.version ?? 0,
           extraction: extractionStats?.version ?? 0,
-          observation: observationStats?.version ?? 0,
         },
         committedEpoch: extractorCheckpoint.committedEpoch,
         nextEpoch: extractorCheckpoint.nextEpoch,
         recentSessions: this.sessionRegistry?.exportRecentSessions() ?? [],
         threads: extractorCheckpoint.threads,
         runs: extractorCheckpoint.runs,
-        pendingExtractionChanges: extractorCheckpoint.pendingExtractionChanges,
-      };
-      const observerSection: ObserverCheckpoint = observerCheckpoint ? {
-        baseline: observerCheckpoint.baseline,
-        observeQueue: observerCheckpoint.observeQueue,
-      } : {
-        baseline: {
-          observationContext: observationContextStats?.version ?? 0,
-          observation: observationStats?.version ?? 0,
-        },
-        observeQueue: { cwdBuckets: [] },
       };
       return {
-        schemaVersion: 10,
+        schemaVersion: 11,
         extractor: extractorSection,
-        observer: observerSection,
         sessionIndex: await this.sessionIndex.exportCheckpoint(this.client),
       };
     });
@@ -417,9 +342,6 @@ export class MuninnBackend {
   async shutdown(): Promise<void> {
     if (this.extractor) {
       await this.extractor.shutdown();
-    }
-    if (this.observer) {
-      await this.observer.shutdown();
     }
     if (this.watchdog) {
       await this.watchdog.stop({ flushCheckpoint: true });
@@ -430,16 +352,15 @@ export class MuninnBackend {
     this.watchdog = null;
     this.watchdogClient = null;
     this.extractor = null;
-    this.observer = null;
     this.finalizeDrainPromise = null;
     this.sessionRegistry = null;
   }
 
-  private scheduleFinalizeDrain(extractor: Extractor, observer: Observer | null): void {
+  private scheduleFinalizeDrain(extractor: Extractor): void {
     if (this.finalizeDrainPromise) {
       return;
     }
-    this.finalizeDrainPromise = this.runFinalizeDrain(extractor, observer)
+    this.finalizeDrainPromise = this.runFinalizeDrain(extractor)
       .catch(async (error) => {
         const message = error instanceof Error ? error.message : String(error);
         await writeMuninnLog(this.database, 'error', 'server', 'memory_finalize_drain_failed', { message });
@@ -449,11 +370,10 @@ export class MuninnBackend {
       });
   }
 
-  private async runFinalizeDrain(extractor: Extractor, observer: Observer | null): Promise<void> {
-    while (this.extractor === extractor && (!observer || this.observer === observer)) {
+  private async runFinalizeDrain(extractor: Extractor): Promise<void> {
+    while (this.extractor === extractor) {
       const watermark = await extractor.watermark();
       if (watermark.pending.turns.length === 0 && watermark.phases.extractor === 'idle') {
-        await observer?.finalize();
         await this.watchdog?.flushCheckpoint();
         return;
       }
@@ -468,31 +388,11 @@ export class MuninnBackend {
         this.client,
         checkpoint,
         this.checkpointLock,
-        (changes) => {
-          if (this.observerEnabled && changes.length > 0) {
-            this.observer?.enqueue(changes);
-          }
-          if (this.observerEnabled) {
-            this.observer?.notify();
-          }
-        },
         this.database,
       );
     }
     await this.extractor.ensureBootstrapped();
     return this.extractor;
-  }
-
-  private async ensureObserver(): Promise<Observer> {
-    if (!this.observerEnabled) {
-      throw new Error('observer is disabled.');
-    }
-    if (!this.observer) {
-      const checkpoint = this.checkpoint?.observer ?? null;
-      this.observer = new Observer(this.client, checkpoint, this.checkpointLock, this.database);
-    }
-    this.observer.start();
-    return this.observer;
   }
 
   private ensureSessionRegistry(extractorName: string): IngestSessionRegistry {
@@ -515,12 +415,12 @@ export class MuninnBackend {
       );
     }
     const delta = await this.client.turnTable.delta({
-      observer: this.sessionRegistry.extractorName,
+      extractor: this.sessionRegistry.extractorName,
       baselineVersion: this.checkpoint.extractor.baseline.turn,
     });
     for (const row of delta) {
       const turn = readTurnRow(row);
-      if (!turn.observer || turn.observer !== this.sessionRegistry.extractorName) {
+      if (!turn.extractor || turn.extractor !== this.sessionRegistry.extractorName) {
         continue;
       }
       if (!turn.prompt?.trim() || !turn.response?.trim()) {
@@ -644,14 +544,14 @@ export const sessions = {
 
   async list(params: {
     mode: ListModeInput;
-    observer?: string;
+    extractor?: string;
     database?: string | null;
   }): Promise<SessionSnapshot[]> {
     const databaseName = resolveDatabaseName(params.database);
     await writeMuninnLog(databaseName, 'info', 'list', 'session_list', {
       mode: params.mode.type,
       limit: 'limit' in params.mode ? params.mode.limit : undefined,
-      observer: params.observer,
+      extractor: params.extractor,
     });
     return (await getBackend(databaseName)).memories.listSessions(params);
   },
@@ -706,13 +606,13 @@ export const memories = {
   async recall(
     query: string,
     limit?: number,
-    options?: { mode?: RecallMode; budget?: number; queryLimit?: number; includeObservations?: boolean; database?: string | null },
+    options?: { mode?: RecallMode; budget?: number; queryLimit?: number; database?: string | null },
   ): Promise<RecallHit[]> {
     return (await getBackend(options?.database)).recallMemories(query, limit, options);
   },
 };
 
-export const observer = {
+export const memoryPipeline = {
   async watermark(database?: string | null): Promise<MemoryWatermark> {
     return (await getBackend(database)).memoryWatermark();
   },
@@ -749,7 +649,7 @@ const core = {
   turns,
   sessions,
   memories,
-  observer,
+  memoryPipeline,
   shutdownCoreForTests,
 };
 

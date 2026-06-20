@@ -9,7 +9,7 @@ import { generateWithTools } from '../../dist/llm/provider.js';
 test('generateWithTools sends OpenAI-compatible tools and parses tool calls', async (t) => {
   const { dir, homeDir, configPath } = await makeConfigHome();
   process.env.MUNINN_HOME = homeDir;
-  await writeObserverConfig(configPath);
+  await writeExtractorConfig(configPath);
   const originalFetch = globalThis.fetch;
   let capturedBody;
   globalThis.fetch = async (_url, init) => {
@@ -39,7 +39,7 @@ test('generateWithTools sends OpenAI-compatible tools and parses tool calls', as
     await rm(dir, { recursive: true, force: true });
   });
 
-  const result = await generateWithTools('observer', {
+  const result = await generateWithTools('extractor', {
     messages: [
       { role: 'system', content: 'system' },
       { role: 'user', content: 'prompt' },
@@ -72,7 +72,7 @@ test('generateWithTools sends OpenAI-compatible tools and parses tool calls', as
 test('generateWithTools sends tool result messages and parses final text', async (t) => {
   const { dir, homeDir, configPath } = await makeConfigHome();
   process.env.MUNINN_HOME = homeDir;
-  await writeObserverConfig(configPath);
+  await writeExtractorConfig(configPath);
   const originalFetch = globalThis.fetch;
   let capturedBody;
   globalThis.fetch = async (_url, init) => {
@@ -95,7 +95,7 @@ test('generateWithTools sends tool result messages and parses final text', async
     await rm(dir, { recursive: true, force: true });
   });
 
-  const result = await generateWithTools('observer', {
+  const result = await generateWithTools('extractor', {
     messages: [
       { role: 'system', content: 'system' },
       { role: 'user', content: 'prompt' },
@@ -136,7 +136,7 @@ async function makeConfigHome() {
   };
 }
 
-async function writeObserverConfig(configPath) {
+async function writeExtractorConfig(configPath) {
   await mkdir(path.dirname(configPath), { recursive: true });
   await writeFile(configPath, `${JSON.stringify({
     extractor: {
@@ -146,21 +146,9 @@ async function writeObserverConfig(configPath) {
       maxAttempts: 3,
       activeWindowDays: 3650,
     },
-    observer: {
-      name: 'test-observer',
-      llmProvider: 'observer_llm',
-      maxAttempts: 3,
-      activeWindowDays: 3650,
-    },
     providers: {
       llm: {
         extractor_llm: {
-          type: 'openai',
-          api: 'openai-completions',
-          apiKey: 'test-key',
-          baseUrl: 'https://example.test/api',
-        },
-        observer_llm: {
           type: 'openai',
           api: 'openai-completions',
           apiKey: 'test-key',

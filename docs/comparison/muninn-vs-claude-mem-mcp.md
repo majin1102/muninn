@@ -13,7 +13,7 @@
 | 0 | `__IMPORTANT` | `print` | 当前 demo 里 `print` 主要承担本地调试入口 |
 | 1 | `search(query, ...)` | `recall(query, limit?, thinkingRatio?)` | 都是检索入口；Muninn 当前通过 session-backed `MemoryHit[]` 返回 text-first 内容 |
 | 2 | `timeline(anchor, ...)` | `get_timeline(memoryId, beforeLimit?, afterLimit?)` | 都用于上下文窗口；Muninn 当前使用统一 `memoryId` |
-| 3 | `get_observations(ids...)` | `get_detail(memoryId)` | 都用于单条下钻；Muninn 返回单条 `MemoryHit` 的 `MemoryResponse` |
+| 3 | detail-by-ids 工具 | `get_detail(memoryId)` | 都用于单条下钻；Muninn 通过统一 `memoryId` 返回单条 `MemoryHit` 的 `MemoryResponse` |
 | + | （无） | `list(mode="recency", limit?, thinkingRatio?)` | Muninn 提供 recency 浏览入口，选择最近窗口但按旧到新返回 |
 
 ## 关键设计差异

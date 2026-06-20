@@ -15,7 +15,7 @@ const { createNativeTables, getNativeTables } = native;
 const {
   captureTurn,
   memories,
-  observer,
+  memoryPipeline,
   turns,
   shutdownCoreForTests,
   validateSettings,
@@ -42,17 +42,17 @@ function cleanupDataset(dir) {
   };
 }
 
-async function waitForObserverResolved({ timeoutMs = 2_000, intervalMs = 20 } = {}) {
+async function waitForPipelineResolved({ timeoutMs = 2_000, intervalMs = 20 } = {}) {
   const deadline = Date.now() + timeoutMs;
-  await observer.finalize();
+  await memoryPipeline.finalize();
   while (Date.now() < deadline) {
-    const watermark = await observer.watermark();
+    const watermark = await memoryPipeline.watermark();
     if (memoryWatermarkResolved(watermark)) {
       return;
     }
     await new Promise((resolve) => setTimeout(resolve, intervalMs));
   }
-  throw new Error('timed out waiting for observer watermark');
+  throw new Error('timed out waiting for memory pipeline watermark');
 }
 
 async function waitForFile(filePath, { timeoutMs = 2_000, intervalMs = 20 } = {}) {
@@ -88,16 +88,14 @@ async function waitForFileContent(filePath, predicate, { timeoutMs = 2_000, inte
 
 function memoryWatermarkResolved(watermark) {
   return watermark.pending.turns.length === 0
-    && watermark.pending.extractions.length === 0
     && watermark.phases.extractor === 'idle'
-    && watermark.phases.observer === 'idle'
     && !watermark.error;
 }
 
 function makePendingTurn({
   sessionId,
   agent,
-  observer,
+  extractor,
   prompt = null,
   events = [],
 }) {
@@ -108,12 +106,12 @@ function makePendingTurn({
     updatedAt: now,
     session_id: sessionId ?? null,
     agent,
-    observer,
+    extractor,
     events,
     artifacts: null,
     prompt,
     response: null,
-    observingEpoch: null,
+    extractionEpoch: null,
   };
 }
 
@@ -177,7 +175,6 @@ function firstExtractionRef(hits) {
       ref
       && !ref.startsWith('turn:')
       && !ref.startsWith('session:')
-      && !ref.startsWith('observation:')
     ) {
       return ref;
     }
@@ -186,7 +183,7 @@ function firstExtractionRef(hits) {
 }
 
 async function writeMuninnConfig(configPath, {
-  observerProvider = 'mock',
+  llmProvider = 'mock',
   semanticDimensions = 4,
   storageUri,
   storageOptions,
@@ -205,7 +202,7 @@ async function writeMuninnConfig(configPath, {
       root.storage.storageOptions = storageOptions;
     }
   }
-  if (observerProvider) {
+  if (llmProvider) {
     root.extractor = {
       name: 'test-extractor',
       llmProvider: 'test_extractor_llm',
@@ -216,18 +213,12 @@ async function writeMuninnConfig(configPath, {
       ...(omitEpochSealSettings || epochTurns === undefined ? {} : { epochTurns }),
       ...(omitEpochSealSettings || epochWindowMs === undefined ? {} : { epochWindowMs }),
     };
-    root.observer = {
-      name: 'test-observer',
-      llmProvider: 'test_observer_llm',
-      maxAttempts: 3,
-    };
-    providers.llm.test_extractor_llm = { type: observerProvider };
-    providers.llm.test_observer_llm = { type: observerProvider };
+    providers.llm.test_extractor_llm = { type: llmProvider };
   }
   if (Object.keys(providers.llm).length > 0 || Object.keys(providers.embedding).length > 0) {
     root.providers = providers;
   }
-  if (observerProvider) {
+  if (llmProvider) {
     providers.embedding.default = {
       type: 'mock',
       dimensions: semanticDimensions,
@@ -245,7 +236,6 @@ function validSettings(overrides = {}) {
     providers: {
       llm: {
         test_extractor_llm: { type: 'mock' },
-        test_observer_llm: { type: 'mock' },
       },
       embedding: {
         default: {
@@ -258,10 +248,6 @@ function validSettings(overrides = {}) {
       name: 'test-extractor',
       llmProvider: 'test_extractor_llm',
       embeddingProvider: 'default',
-    },
-    observer: {
-      name: 'test-observer',
-      llmProvider: 'test_observer_llm',
     },
   };
   return mergeSettings(config, overrides);
@@ -297,7 +283,7 @@ test('extractor config defaults activeWindowDays, continuityHints, and epoch sea
   t.after(cleanupDataset(dir));
 
   process.env.MUNINN_HOME = homeDir;
-  await writeMuninnConfig(configPath, { observerProvider: 'mock', omitEpochSealSettings: true });
+  await writeMuninnConfig(configPath, { llmProvider: 'mock', omitEpochSealSettings: true });
 
   let extractorConfig = getExtractorLlmConfig();
   assert.ok(extractorConfig);
@@ -307,7 +293,7 @@ test('extractor config defaults activeWindowDays, continuityHints, and epoch sea
   assert.equal(extractorConfig.epochWindowMs, 10_000);
 
   await writeMuninnConfig(configPath, {
-    observerProvider: 'mock',
+    llmProvider: 'mock',
     activeWindowDays: 14,
     continuityHints: 3,
     epochTurns: 5,
@@ -521,12 +507,12 @@ test('turns.list returns the recent window in chronological order, and memories.
   assert.ok(timeline.some((memory) => memory.memoryId === second.turnId));
 });
 
-test('pure read APIs work without observer bootstrap config', async (t) => {
+test('pure read APIs work without extractor bootstrap config', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(cleanupDataset(dir));
 
   process.env.MUNINN_HOME = homeDir;
-  await writeMuninnConfig(configPath, { observerProvider: 'mock' });
+  await writeMuninnConfig(configPath, { llmProvider: 'mock' });
 
   const created = await writeTurnAndGet(makeTurnContent({
     prompt: 'bootstrap-free prompt',
@@ -534,7 +520,7 @@ test('pure read APIs work without observer bootstrap config', async (t) => {
   }));
 
   for (let attempt = 0; attempt < 50; attempt += 1) {
-    const watermark = await observer.watermark();
+    const watermark = await memoryPipeline.watermark();
     if (memoryWatermarkResolved(watermark)) {
       break;
     }
@@ -623,12 +609,12 @@ test('shutdownCoreForTests allows the native binding to restart cleanly', async 
   assert.equal(detail.prompt, 'first prompt');
 });
 
-test('checkpoint restore keeps recent turn dedupe within the same observer', async (t) => {
+test('checkpoint restore keeps recent turn dedupe within the same extractor', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(cleanupDataset(dir));
 
   process.env.MUNINN_HOME = homeDir;
-  await writeMuninnConfig(configPath, { observerProvider: 'mock' });
+  await writeMuninnConfig(configPath, { llmProvider: 'mock' });
 
   const firstBackend = await MuninnBackend.create(await getNativeTables());
   try {
@@ -690,7 +676,7 @@ test('cold start does not wait for the first watchdog interval before serving wr
 
   process.env.MUNINN_HOME = homeDir;
   await writeMuninnConfig(configPath, {
-    observerProvider: 'mock',
+    llmProvider: 'mock',
     watchdog: {
       enabled: true,
       intervalMs: 250,
@@ -735,7 +721,7 @@ test('validateSettings rejects extraction index dimension changes that mismatch 
   t.after(cleanupDataset(dir));
 
   process.env.MUNINN_HOME = homeDir;
-  await writeMuninnConfig(configPath, { observerProvider: 'mock' });
+  await writeMuninnConfig(configPath, { llmProvider: 'mock' });
 
   await captureTurn(makeTurnContent({
     sessionId: 'group-a',
@@ -748,7 +734,6 @@ test('validateSettings rejects extraction index dimension changes that mismatch 
   await assert.rejects(
     () => validateSettings(JSON.stringify(validSettings({
       extractor: { maxAttempts: 3 },
-      observer: { maxAttempts: 3 },
       providers: { embedding: { default: { dimensions: 8 } } },
     }), null, 2)),
     /extraction dimension mismatch/i,
@@ -824,35 +809,6 @@ test('validateSettings rejects invalid extractor epoch seal settings', async (t)
   }
 });
 
-test('validateSettings rejects missing observer config', async (t) => {
-  const { dir, homeDir } = await makeDatasetUri();
-  t.after(cleanupDataset(dir));
-
-  process.env.MUNINN_HOME = homeDir;
-
-  await assert.rejects(
-    () => validateSettings(JSON.stringify(validSettings({
-      observer: undefined,
-    }), null, 2)),
-    /observer is required/i,
-  );
-});
-
-test('validateSettings accepts disabled observer without observer name or llmProvider', async (t) => {
-  const { dir, homeDir } = await makeDatasetUri();
-  t.after(cleanupDataset(dir));
-
-  process.env.MUNINN_HOME = homeDir;
-
-  await assert.doesNotReject(
-    () => validateSettings(JSON.stringify(validSettings({
-      observer: {
-        enabled: false,
-      },
-    }), null, 2)),
-  );
-});
-
 test('validateSettings rejects missing providers config', async (t) => {
   const { dir, homeDir } = await makeDatasetUri();
   t.after(cleanupDataset(dir));
@@ -894,10 +850,6 @@ test('validateSettings accepts provider registry references', async (t) => {
         embeddingProvider: 'default',
         recallMode: 'hybrid',
       },
-      observer: {
-        name: 'test-observer',
-        llmProvider: 'default',
-      },
     }, null, 2)),
   );
 });
@@ -914,15 +866,8 @@ test('validateSettings rejects legacy provider shape', async (t) => {
         name: 'test-extractor',
         llm: 'test_extractor_llm',
       },
-      observer: {
-        name: 'test-observer',
-        llm: 'test_observer_llm',
-      },
       llm: {
         test_extractor_llm: {
-          provider: 'mock',
-        },
-        test_observer_llm: {
           provider: 'mock',
         },
       },
@@ -933,7 +878,7 @@ test('validateSettings rejects legacy provider shape', async (t) => {
         },
       },
     }, null, 2)),
-    /llm is no longer supported|extractor\.llm is no longer supported|extraction is no longer supported/i,
+    /extractor\.llm is no longer supported|unsupported top-level config key: llm/i,
   );
 });
 
@@ -949,7 +894,7 @@ test('validateSettings rejects top-level extraction config', async (t) => {
         embeddingProvider: 'default',
       },
     }), null, 2)),
-    /extraction is no longer supported/i,
+    /unsupported top-level config key: extraction/i,
   );
 });
 
@@ -1003,7 +948,7 @@ test('validateSettings rejects omitted extraction dimensions for an existing non
   t.after(cleanupDataset(dir));
 
   process.env.MUNINN_HOME = homeDir;
-  await writeMuninnConfig(configPath, { observerProvider: 'mock', semanticDimensions: 4 });
+  await writeMuninnConfig(configPath, { llmProvider: 'mock', semanticDimensions: 4 });
 
   await captureTurn(makeTurnContent({
     sessionId: 'group-a',
@@ -1016,7 +961,6 @@ test('validateSettings rejects omitted extraction dimensions for an existing non
   await assert.rejects(
     () => validateSettings(JSON.stringify(validSettings({
       extractor: { maxAttempts: 3 },
-      observer: { maxAttempts: 3 },
       providers: { embedding: { default: { dimensions: undefined } } },
     }), null, 2)),
     /extraction dimension mismatch/i,
@@ -1043,23 +987,6 @@ test('validateSettings rejects providers.embedding type when it is empty', async
   );
 });
 
-test('validateSettings rejects observer config without observer.llmProvider', async (t) => {
-  const { dir, homeDir } = await makeDatasetUri();
-  t.after(cleanupDataset(dir));
-
-  process.env.MUNINN_HOME = homeDir;
-
-  await assert.rejects(
-    () => validateSettings(JSON.stringify(validSettings({
-      observer: {
-        name: 'test-observer',
-        llmProvider: undefined,
-      },
-    }), null, 2)),
-    /observer\.llmProvider must be a non-empty string/i,
-  );
-});
-
 test('validateSettings rejects referenced llm entries without type', async (t) => {
   const { dir, homeDir } = await makeDatasetUri();
   t.after(cleanupDataset(dir));
@@ -1071,11 +998,10 @@ test('validateSettings rejects referenced llm entries without type', async (t) =
       providers: {
         llm: {
           test_extractor_llm: { type: undefined },
-          test_observer_llm: { type: undefined },
         },
       },
     }), null, 2)),
-    /providers\.llm\.(test_extractor_llm|test_observer_llm)\.type must be a non-empty string/i,
+    /providers\.llm\.test_extractor_llm\.type must be a non-empty string/i,
   );
 });
 
@@ -1089,11 +1015,11 @@ test('validateSettings rejects top-level turn config', async (t) => {
     () => validateSettings(JSON.stringify(validSettings({
       turn: { llmProvider: 'removed_provider' },
     }), null, 2)),
-    /turn is no longer supported/i,
+    /unsupported top-level config key: turn/i,
   );
 });
 
-test('validateSettings rejects openai observer llm without apiKey', async (t) => {
+test('validateSettings rejects openai extractor llm without apiKey', async (t) => {
   const { dir, homeDir } = await makeDatasetUri();
   t.after(cleanupDataset(dir));
 
@@ -1103,11 +1029,11 @@ test('validateSettings rejects openai observer llm without apiKey', async (t) =>
     () => validateSettings(JSON.stringify(validSettings({
       providers: {
         llm: {
-          test_observer_llm: { type: 'openai' },
+          test_extractor_llm: { type: 'openai' },
         },
       },
     }), null, 2)),
-    /providers\.llm\.test_observer_llm\.apiKey must be a non-empty string/i,
+    /providers\.llm\.test_extractor_llm\.apiKey must be a non-empty string/i,
   );
 });
 
@@ -1148,7 +1074,7 @@ test('validateSettings rejects extraction dimension changes when the table exist
   t.after(cleanupDataset(dir));
 
   process.env.MUNINN_HOME = homeDir;
-  await writeMuninnConfig(configPath, { observerProvider: 'mock' });
+  await writeMuninnConfig(configPath, { llmProvider: 'mock' });
 
   const binding = await getNativeTables(defaultStorageTarget(homeDir));
   assert.ok(typeof binding.turnTable.describe === 'function');
@@ -1163,7 +1089,6 @@ test('validateSettings rejects extraction dimension changes when the table exist
       content: '## Title\n\nextraction text\n\n## Summary\n\nextraction text\n\n## Content\n\n',
       cwd: '/workspace/project-a',
       turnRefs: ['turn:1'],
-      observationPaths: [],
       vector: [0.1, 0.2, 0.3, 0.4],
       createdAt: '2024-01-01T00:00:00Z',
       updatedAt: '2024-01-01T00:00:00Z',
@@ -1178,7 +1103,6 @@ test('validateSettings rejects extraction dimension changes when the table exist
   await assert.rejects(
     () => validateSettings(JSON.stringify(validSettings({
       extractor: { maxAttempts: 3 },
-      observer: { maxAttempts: 3 },
       providers: { embedding: { default: { dimensions: 8 } } },
     }), null, 2)),
     /extraction dimension mismatch/i,
@@ -1195,7 +1119,7 @@ test('validateSettings checks the pending storage target instead of the current 
   process.env.MUNINN_HOME = homeDir;
 
   await writeMuninnConfig(configPath, {
-    observerProvider: 'mock',
+    llmProvider: 'mock',
     storageUri: toFileStoreUri(storageB),
   });
   await captureTurn(makeTurnContent({
@@ -1209,7 +1133,7 @@ test('validateSettings checks the pending storage target instead of the current 
   await shutdownCoreForTests();
 
   await writeMuninnConfig(configPath, {
-    observerProvider: 'mock',
+    llmProvider: 'mock',
     storageUri: toFileStoreUri(storageA),
   });
 
@@ -1219,7 +1143,6 @@ test('validateSettings checks the pending storage target instead of the current 
         uri: toFileStoreUri(storageB),
       },
       extractor: { maxAttempts: 3 },
-      observer: { maxAttempts: 3 },
       providers: { embedding: { default: { dimensions: 8 } } },
     }), null, 2)),
     /extraction dimension mismatch/i,
@@ -1266,34 +1189,33 @@ test('createNativeTables returns an independent native table binding', async (t)
   assert.notStrictEqual(standalone, singleton);
   assert.notStrictEqual(standalone.turnTable, singleton.turnTable);
   assert.notStrictEqual(standalone.extractionTable, singleton.extractionTable);
-  assert.notStrictEqual(standalone.observationTable, singleton.observationTable);
 });
 
-test('observer.watermark reports pending turns until the observer flush completes', async (t) => {
+test('memoryPipeline.watermark reports pending turns until extractor flush completes', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(cleanupDataset(dir));
 
   process.env.MUNINN_HOME = homeDir;
-  await writeMuninnConfig(configPath, { observerProvider: 'mock' });
+  await writeMuninnConfig(configPath, { llmProvider: 'mock' });
 
   const created = await writeTurnAndGet({
     sessionId: 'group-a',
     agent: 'agent-a',
-    prompt: 'observer pending prompt',
-    response: 'observer pending response',
+    prompt: 'extractor pending prompt',
+    response: 'extractor pending response',
   });
 
-  const current = await observer.watermark();
+  const current = await memoryPipeline.watermark();
   assert.equal(memoryWatermarkResolved(current), false);
   assert.ok(
     current.pending.turns.length === 0
     || (current.pending.turns.length === 1 && current.pending.turns[0] === created.turnId),
   );
 
-  await observer.finalize();
+  await memoryPipeline.finalize();
   let resolved = null;
   for (let attempt = 0; attempt < 50; attempt += 1) {
-    resolved = await observer.watermark();
+    resolved = await memoryPipeline.watermark();
     if (memoryWatermarkResolved(resolved)) {
       break;
     }
@@ -1304,13 +1226,13 @@ test('observer.watermark reports pending turns until the observer flush complete
   assert.deepEqual(resolved.pending.turns, []);
 });
 
-test('observer.flushPending drains the current extraction batch without finalize', async (t) => {
+test('memoryPipeline.flushPending drains the current extraction batch without finalize', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(cleanupDataset(dir));
 
   process.env.MUNINN_HOME = homeDir;
   await writeMuninnConfig(configPath, {
-    observerProvider: 'mock',
+    llmProvider: 'mock',
     epochTurns: 10,
     epochWindowMs: 60_000,
   });
@@ -1320,13 +1242,13 @@ test('observer.flushPending drains the current extraction batch without finalize
     response: 'batch flush response',
   }));
 
-  const pending = await observer.watermark();
+  const pending = await memoryPipeline.watermark();
   assert.deepEqual(pending.pending.turns, [created.turnId]);
 
-  await observer.flushPending();
+  await memoryPipeline.flushPending();
   let resolved = null;
   for (let attempt = 0; attempt < 50; attempt += 1) {
-    resolved = await observer.watermark();
+    resolved = await memoryPipeline.watermark();
     if (resolved.pending.turns.length === 0 && resolved.phases.extractor === 'idle') {
       break;
     }
@@ -1377,12 +1299,12 @@ test('captureTurn persists response turns when the summarizer is not configured'
   assert.equal('summary' in detail, false);
 });
 
-test('observer writes atomic extractions before observing snapshots', async (t) => {
+test('extractor writes atomic extractions before indexing snapshots', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(cleanupDataset(dir));
 
   process.env.MUNINN_HOME = homeDir;
-  await writeMuninnConfig(configPath, { observerProvider: 'mock' });
+  await writeMuninnConfig(configPath, { llmProvider: 'mock' });
 
   await writeTurnAndGet({
     sessionId: 'group-a',
@@ -1391,7 +1313,7 @@ test('observer writes atomic extractions before observing snapshots', async (t) 
     response: 'Caroline will research counseling programs.',
   });
 
-  await waitForObserverResolved();
+  await waitForPipelineResolved();
 
   const hits = await memories.recall('counseling programs', 5);
   const extractionRef = firstExtractionRef(hits);
@@ -1406,7 +1328,7 @@ test('rendered memory binding returns unified turn and extraction reads', async 
   t.after(cleanupDataset(dir));
 
   process.env.MUNINN_HOME = homeDir;
-  await writeMuninnConfig(configPath, { observerProvider: 'mock' });
+  await writeMuninnConfig(configPath, { llmProvider: 'mock' });
 
   const turn = await writeTurnAndGet({
     sessionId: 'group-a',
@@ -1415,7 +1337,7 @@ test('rendered memory binding returns unified turn and extraction reads', async 
     response: 'rendered response',
   });
 
-  await waitForObserverResolved();
+  await waitForPipelineResolved();
 
   const listed = await memories.list({ mode: { type: 'recency', limit: 10 } });
   assert.ok(listed.some((memory) => memory.memoryId === turn.turnId));
@@ -1441,7 +1363,7 @@ test('recall returns extraction memory ids and detail renders references', async
   t.after(cleanupDataset(dir));
 
   process.env.MUNINN_HOME = homeDir;
-  await writeMuninnConfig(configPath, { observerProvider: 'mock' });
+  await writeMuninnConfig(configPath, { llmProvider: 'mock' });
 
   const binding = await getNativeTables(defaultStorageTarget(homeDir));
   await binding.extractionTable.upsert({
@@ -1452,7 +1374,6 @@ test('recall returns extraction memory ids and detail renders references', async
       content: '## Title\n\nCaroline support group\n\n## Summary\n\nCaroline joined an LGBTQ support group in May 2023.\n\n## Content\n\n',
       cwd: '/workspace/project-a',
       turnRefs: ['turn:1'],
-      observationPaths: [],
       vector: [1, 0, 0, 0],
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
@@ -1467,12 +1388,12 @@ test('recall returns extraction memory ids and detail renders references', async
   assert.match(detail.detail ?? '', /turn:1/);
 });
 
-test('rendered memory page mode paginates after combining session and observing results', async (t) => {
+test('rendered memory page mode paginates after combining session and extraction results', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(cleanupDataset(dir));
 
   process.env.MUNINN_HOME = homeDir;
-  await writeMuninnConfig(configPath, { observerProvider: 'mock' });
+  await writeMuninnConfig(configPath, { llmProvider: 'mock' });
 
   for (let index = 0; index < 3; index += 1) {
     await captureTurn(makeTurnContent({

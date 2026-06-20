@@ -58,10 +58,9 @@ test('pipeline task titles use product labels and project session context', asyn
   const demo = await readFile(new URL('../src/demo/data.ts', import.meta.url), 'utf8');
 
   assert.match(source, /return 'Extraction'/);
-  assert.match(source, /return 'Observation'/);
   assert.match(source, /return 'Dreaming'/);
   assert.match(demo, /Project: muninn Session:/);
-  assert.match(demo, /Project: app-mvp Session:/);
+  assert.match(demo, /Project: app-memory Session:/);
   assert.doesNotMatch(demo, /Project: .*· Session:/);
 });
 

@@ -19,10 +19,6 @@ async function writeTestConfig(home) {
       llmProvider: 'mock',
       embeddingProvider: 'mock',
     },
-    observer: {
-      name: 'default',
-      llmProvider: 'mock',
-    },
     providers: {
       llm: {
         mock: {

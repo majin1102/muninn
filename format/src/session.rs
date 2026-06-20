@@ -38,40 +38,6 @@ pub struct SessionSnapshot {
     pub references: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "PascalCase")]
-pub enum MemoryCategory {
-    Preference,
-    Fact,
-    Decision,
-    Entity,
-    Concept,
-    Other,
-}
-
-impl MemoryCategory {
-    pub fn semantic_index_category(&self) -> &'static str {
-        match self {
-            Self::Preference => "preference",
-            Self::Fact => "fact",
-            Self::Decision => "decision",
-            Self::Entity => "entity",
-            Self::Concept | Self::Other => "other",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct ObservedMemory {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub id: Option<String>,
-    pub text: String,
-    pub category: MemoryCategory,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub updated_memory: Option<String>,
-}
-
 impl SessionSnapshot {
     pub fn memory_id(&self) -> Result<MemoryId> {
         if self.snapshot_id.memory_layer() != MemoryLayer::Session {
@@ -342,7 +308,7 @@ mod tests {
             snapshot_sequence: 1,
             created_at: Utc::now(),
             updated_at: Utc::now(),
-            extractor: "observer-a".to_string(),
+            extractor: "extractor-a".to_string(),
             title: "Session Title".to_string(),
             summary: "Session summary".to_string(),
             content: "{\"memories\":[]}".to_string(),
@@ -365,7 +331,7 @@ mod tests {
             snapshot_sequence: 0,
             created_at: Utc::now(),
             updated_at: Utc::now(),
-            extractor: "observer-a".to_string(),
+            extractor: "extractor-a".to_string(),
             title: "Session Title".to_string(),
             summary: "Session summary".to_string(),
             content: "{\"memories\":[]}".to_string(),
@@ -385,7 +351,7 @@ mod tests {
                 snapshot_sequence: 1,
                 created_at: Utc::now(),
                 updated_at: Utc::now(),
-                extractor: "observer-a".to_string(),
+                extractor: "extractor-a".to_string(),
                 title: "Session Title".to_string(),
                 summary: "Session summary".to_string(),
                 content: "{\"memories\":[]}".to_string(),

@@ -27,7 +27,6 @@ class RecallHit:
     memory_id: str
     detail: str | None
     matched_text: str = ""
-    observation_ratio: float | None = None
 
 
 class MuninnBridge:
@@ -90,7 +89,6 @@ class MuninnBridge:
                     memory_id=item["memory_id"],
                     detail=item.get("detail"),
                     matched_text=item.get("matched_text") or "",
-                    observation_ratio=item.get("observationRatio"),
                 )
             )
         return hits
@@ -139,7 +137,6 @@ class MuninnBridge:
                     memory_id=item["memory_id"],
                     detail=item.get("detail"),
                     matched_text=item.get("matched_text") or "",
-                    observation_ratio=item.get("observationRatio"),
                 )
                 for item in items
             ]

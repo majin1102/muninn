@@ -303,7 +303,6 @@ def serialize_hits(hits: list[RecallHit]) -> list[dict[str, Any]]:
             "memory_id": hit.memory_id,
             "matched_text": hit.matched_text,
             "detail": hit.detail,
-            "observationRatio": hit.observation_ratio,
         }
         for hit in hits
     ]

@@ -60,7 +60,6 @@ type BridgeHit = {
   memory_id: string;
   matched_text: string;
   detail?: string;
-  observationRatio?: number | null;
 };
 
 type TurnContent = {
@@ -308,13 +307,9 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: s
 
 function setGatewayTraceFile(home: string, database: string): string {
   const logsDir = path.join(home, database, 'logs');
-  const gatewayTracePath = path.join(logsDir, 'locomo-gateway-trace.jsonl');
-  const observingTracePath = path.join(logsDir, 'locomo-thread-observing-trace.jsonl');
-  const observerTracePath = path.join(logsDir, 'locomo-observer-trace.jsonl');
-  process.env.MUNINN_OBSERVER_GATEWAY_TRACE_FILE = gatewayTracePath;
-  process.env.MUNINN_THREAD_OBSERVING_TRACE_FILE = observingTracePath;
-  process.env.MUNINN_OBSERVER_TRACE_FILE = observerTracePath;
-  return gatewayTracePath;
+  const extractionTracePath = path.join(logsDir, 'locomo-extraction-trace.jsonl');
+  process.env.MUNINN_SESSION_MEMORY_TRACE_FILE = extractionTracePath;
+  return extractionTracePath;
 }
 
 export async function waitForImportWatermark(
@@ -338,7 +333,6 @@ export async function waitForImportWatermark(
     ?? envPositiveInt('MUNINN_LOCOMO_WATERMARK_WARNING_DELAY_MS', WATERMARK_WARNING_DELAY_MS);
   const startedAt = Date.now();
   let pendingTurnIds: string[] = [];
-  let pendingExtractionIds: string[] = [];
   let stalledWarningEmitted = false;
   const database = options?.database ?? manifest.sample_id;
   const finalized = await withTransientRetry(
@@ -350,7 +344,6 @@ export async function waitForImportWatermark(
     },
   );
   pendingTurnIds = finalized.pending.turns;
-  pendingExtractionIds = finalized.pending.extractions;
   if (finalized.error) {
     throw new Error(`memory ${finalized.error.phase} error: ${finalized.error.message}`);
   }
@@ -364,14 +357,12 @@ export async function waitForImportWatermark(
   while (Date.now() - startedAt <= timeoutMs) {
     const watermark = await fetchMemoryWatermark(database);
     pendingTurnIds = watermark.pending.turns;
-    pendingExtractionIds = watermark.pending.extractions;
     if (watermark.error) {
       throw new Error(`memory ${watermark.error.phase} error: ${watermark.error.message}`);
     }
     const turnPreview = pendingTurnIds.slice(0, 5).join(', ') || '(none)';
-    const extractionPreview = pendingExtractionIds.slice(0, 5).join(', ') || '(none)';
     console.error(
-      `[locomo] waiting for ${targetTurnId}: turns=${pendingTurnIds.length} (${turnPreview}) extractions=${pendingExtractionIds.length} (${extractionPreview}) phases=${watermark.phases.extractor}/${watermark.phases.observer}`
+      `[locomo] waiting for ${targetTurnId}: turns=${pendingTurnIds.length} (${turnPreview}) phase=${watermark.phases.extractor}`
     );
     if (memoryWatermarkResolved(watermark)) {
       return;
@@ -379,17 +370,17 @@ export async function waitForImportWatermark(
     if (
       !stalledWarningEmitted
       && Date.now() - startedAt >= warningDelayMs
-      && (pendingTurnIds.length > 0 || pendingExtractionIds.length > 0)
+      && pendingTurnIds.length > 0
     ) {
       stalledWarningEmitted = true;
       console.error(
-        `[locomo] warning: no memory progress detected after ${warningDelayMs}ms; pending turns=${turnPreview}; pending extractions=${extractionPreview}; phases=${watermark.phases.extractor}/${watermark.phases.observer}`
+        `[locomo] warning: no memory progress detected after ${warningDelayMs}ms; pending turns=${turnPreview}; phase=${watermark.phases.extractor}`
       );
     }
     await sleep(pollMs);
   }
 
-  const pendingText = `turns=${pendingTurnIds.length > 0 ? pendingTurnIds.join(', ') : '(none)'}; extractions=${pendingExtractionIds.length > 0 ? pendingExtractionIds.join(', ') : '(none)'}`;
+  const pendingText = `turns=${pendingTurnIds.length > 0 ? pendingTurnIds.join(', ') : '(none)'}`;
   throw new Error(
     `memory watermark timeout for ${targetTurnId}; pending: ${pendingText}`
   );
@@ -456,11 +447,9 @@ async function parseMemoryWatermarkPayload(
     errorMessage?: string;
     pending?: {
       turns?: unknown[];
-      extractions?: unknown[];
     };
     phases?: {
       extractor?: unknown;
-      observer?: unknown;
     };
     error?: {
       phase?: unknown;
@@ -475,30 +464,23 @@ async function parseMemoryWatermarkPayload(
     throw new Error(message);
   }
   const extractorPhase = parseWatermarkPhase(payload.phases?.extractor, 'extractor');
-  const observerPhase = parseWatermarkPhase(payload.phases?.observer, 'observer');
   return {
     pending: {
       turns: Array.isArray(payload.pending?.turns)
         ? payload.pending.turns.map((value) => String(value))
         : [],
-      extractions: Array.isArray(payload.pending?.extractions)
-        ? payload.pending.extractions.map((value) => String(value))
-        : [],
     },
     phases: {
       extractor: extractorPhase,
-      observer: observerPhase,
     },
-    ...(payload.error && typeof payload.error.message === 'string' && (payload.error.phase === 'extractor' || payload.error.phase === 'observer')
+    ...(payload.error && typeof payload.error.message === 'string' && payload.error.phase === 'extractor'
       ? { error: { phase: payload.error.phase, message: payload.error.message } }
       : {}),
   };
 }
 
-function parseWatermarkPhase(value: unknown, component: 'extractor' | 'observer') {
-  const allowed = component === 'observer'
-    ? ['idle', 'pending', 'running', 'draining', 'error']
-    : ['idle', 'pending', 'running', 'error'];
+function parseWatermarkPhase(value: unknown, component: 'extractor') {
+  const allowed = ['idle', 'pending', 'running', 'error'];
   if (typeof value === 'string' && allowed.includes(value)) {
     return value;
   }
@@ -507,9 +489,7 @@ function parseWatermarkPhase(value: unknown, component: 'extractor' | 'observer'
 
 function memoryWatermarkResolved(watermark: Awaited<ReturnType<typeof fetchMemoryWatermark>>): boolean {
   return watermark.pending.turns.length === 0
-    && watermark.pending.extractions.length === 0
     && watermark.phases.extractor === 'idle'
-    && watermark.phases.observer === 'idle'
     && !watermark.error;
 }
 
@@ -650,9 +630,6 @@ function parseBridgeHit(value: unknown): BridgeHit {
     memory_id: String(hit.memory_id ?? ''),
     matched_text: String(hit.matched_text ?? ''),
     detail: typeof hit.detail === 'string' ? hit.detail : undefined,
-    observationRatio: typeof hit.observationRatio === 'number' || hit.observationRatio === null
-      ? hit.observationRatio
-      : undefined,
   };
 }
 
@@ -798,12 +775,6 @@ function validateBenchmarkConfig(config: Record<string, unknown>): void {
   const embeddingConfig = requireObjectField(embedding, embeddingProvider, `providers.embedding.${embeddingProvider}`);
   requireStringField(llmConfig, 'type', `providers.llm.${llmProvider}.type`);
   requireStringField(embeddingConfig, 'type', `providers.embedding.${embeddingProvider}.type`);
-
-  if (isPlainObject(config.observer)) {
-    const observerLlmProvider = requireStringField(config.observer, 'llmProvider', 'observer.llmProvider');
-    const observerLlmConfig = requireObjectField(llm, observerLlmProvider, `providers.llm.${observerLlmProvider}`);
-    requireStringField(observerLlmConfig, 'type', `providers.llm.${observerLlmProvider}.type`);
-  }
 }
 
 function requireObjectField(

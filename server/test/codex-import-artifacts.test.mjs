@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import core, { captureTurn, observer, turns } from '../dist/backend.js';
+import core, { captureTurn, memoryPipeline, turns } from '../dist/backend.js';
 import { __testing, previewCodexImport, runCodexImport } from '../dist/web/import.js';
 import { codexAdapter } from '../dist/web/import.js';
 import { importSelectedSessions } from '../dist/web/import.js';
@@ -19,10 +19,6 @@ async function writeTestConfig(homeDir, { epochTurns, epochWindowMs } = {}) {
       embeddingProvider: 'mock',
       ...(epochTurns === undefined ? {} : { epochTurns }),
       ...(epochWindowMs === undefined ? {} : { epochWindowMs }),
-    },
-    observer: {
-      name: 'default',
-      llmProvider: 'mock',
     },
     providers: {
       llm: {
@@ -337,9 +333,9 @@ test('preserves interleaved assistant and tool events in order', async () => {
 test('run import stores raw session id with project cwd and metadata', async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), 'muninn-codex-import-raw-session-'));
   const previousHome = process.env.MUNINN_HOME;
-  const previousObserverPollMs = process.env.MUNINN_OBSERVER_POLL_MS;
+  const previousExtractorPollMs = process.env.MUNINN_EXTRACTOR_POLL_MS;
   process.env.MUNINN_HOME = path.join(tempDir, 'muninn');
-  process.env.MUNINN_OBSERVER_POLL_MS = '60000';
+  process.env.MUNINN_EXTRACTOR_POLL_MS = '60000';
   try {
     await writeTestConfig(process.env.MUNINN_HOME);
 
@@ -384,10 +380,10 @@ test('run import stores raw session id with project cwd and metadata', async () 
     } else {
       process.env.MUNINN_HOME = previousHome;
     }
-    if (previousObserverPollMs === undefined) {
-      delete process.env.MUNINN_OBSERVER_POLL_MS;
+    if (previousExtractorPollMs === undefined) {
+      delete process.env.MUNINN_EXTRACTOR_POLL_MS;
     } else {
-      process.env.MUNINN_OBSERVER_POLL_MS = previousObserverPollMs;
+      process.env.MUNINN_EXTRACTOR_POLL_MS = previousExtractorPollMs;
     }
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -396,9 +392,9 @@ test('run import stores raw session id with project cwd and metadata', async () 
 test('session import fails when firstTurnSequence is zero', async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), 'muninn-codex-import-already-imported-'));
   const previousHome = process.env.MUNINN_HOME;
-  const previousObserverPollMs = process.env.MUNINN_OBSERVER_POLL_MS;
+  const previousExtractorPollMs = process.env.MUNINN_EXTRACTOR_POLL_MS;
   process.env.MUNINN_HOME = path.join(tempDir, 'muninn');
-  process.env.MUNINN_OBSERVER_POLL_MS = '60000';
+  process.env.MUNINN_EXTRACTOR_POLL_MS = '60000';
   try {
     await writeTestConfig(process.env.MUNINN_HOME);
 
@@ -459,10 +455,10 @@ test('session import fails when firstTurnSequence is zero', async () => {
     } else {
       process.env.MUNINN_HOME = previousHome;
     }
-    if (previousObserverPollMs === undefined) {
-      delete process.env.MUNINN_OBSERVER_POLL_MS;
+    if (previousExtractorPollMs === undefined) {
+      delete process.env.MUNINN_EXTRACTOR_POLL_MS;
     } else {
-      process.env.MUNINN_OBSERVER_POLL_MS = previousObserverPollMs;
+      process.env.MUNINN_EXTRACTOR_POLL_MS = previousExtractorPollMs;
     }
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -471,9 +467,9 @@ test('session import fails when firstTurnSequence is zero', async () => {
 test('session import allows later hook coverage and skips duplicate source turn', async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), 'muninn-codex-import-late-coverage-'));
   const previousHome = process.env.MUNINN_HOME;
-  const previousObserverPollMs = process.env.MUNINN_OBSERVER_POLL_MS;
+  const previousExtractorPollMs = process.env.MUNINN_EXTRACTOR_POLL_MS;
   process.env.MUNINN_HOME = path.join(tempDir, 'muninn');
-  process.env.MUNINN_OBSERVER_POLL_MS = '60000';
+  process.env.MUNINN_EXTRACTOR_POLL_MS = '60000';
   try {
     await writeTestConfig(process.env.MUNINN_HOME);
 
@@ -597,10 +593,10 @@ test('session import allows later hook coverage and skips duplicate source turn'
     } else {
       process.env.MUNINN_HOME = previousHome;
     }
-    if (previousObserverPollMs === undefined) {
-      delete process.env.MUNINN_OBSERVER_POLL_MS;
+    if (previousExtractorPollMs === undefined) {
+      delete process.env.MUNINN_EXTRACTOR_POLL_MS;
     } else {
-      process.env.MUNINN_OBSERVER_POLL_MS = previousObserverPollMs;
+      process.env.MUNINN_EXTRACTOR_POLL_MS = previousExtractorPollMs;
     }
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -609,9 +605,9 @@ test('session import allows later hook coverage and skips duplicate source turn'
 test('session import returns after batch write without flushing extraction', async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), 'muninn-codex-import-async-'));
   const previousHome = process.env.MUNINN_HOME;
-  const previousObserverPollMs = process.env.MUNINN_OBSERVER_POLL_MS;
+  const previousExtractorPollMs = process.env.MUNINN_EXTRACTOR_POLL_MS;
   process.env.MUNINN_HOME = path.join(tempDir, 'muninn');
-  process.env.MUNINN_OBSERVER_POLL_MS = '60000';
+  process.env.MUNINN_EXTRACTOR_POLL_MS = '60000';
   try {
     await writeTestConfig(process.env.MUNINN_HOME, {
       epochTurns: 100,
@@ -690,7 +686,7 @@ test('session import returns after batch write without flushing extraction', asy
     });
     assert.equal(persisted.length, 2);
 
-    const watermark = await observer.watermark();
+    const watermark = await memoryPipeline.watermark();
     assert.equal(watermark.pending.turns.length, 2);
     assert.equal(watermark.phases.extractor, 'pending');
   } finally {
@@ -700,10 +696,10 @@ test('session import returns after batch write without flushing extraction', asy
     } else {
       process.env.MUNINN_HOME = previousHome;
     }
-    if (previousObserverPollMs === undefined) {
-      delete process.env.MUNINN_OBSERVER_POLL_MS;
+    if (previousExtractorPollMs === undefined) {
+      delete process.env.MUNINN_EXTRACTOR_POLL_MS;
     } else {
-      process.env.MUNINN_OBSERVER_POLL_MS = previousObserverPollMs;
+      process.env.MUNINN_EXTRACTOR_POLL_MS = previousExtractorPollMs;
     }
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -712,9 +708,9 @@ test('session import returns after batch write without flushing extraction', asy
 test('run import ignores unmarked legacy codex rows', async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), 'muninn-codex-import-cleanup-'));
   const previousHome = process.env.MUNINN_HOME;
-  const previousObserverPollMs = process.env.MUNINN_OBSERVER_POLL_MS;
+  const previousExtractorPollMs = process.env.MUNINN_EXTRACTOR_POLL_MS;
   process.env.MUNINN_HOME = path.join(tempDir, 'muninn');
-  process.env.MUNINN_OBSERVER_POLL_MS = '60000';
+  process.env.MUNINN_EXTRACTOR_POLL_MS = '60000';
   try {
     await writeTestConfig(process.env.MUNINN_HOME);
 
@@ -790,10 +786,10 @@ test('run import ignores unmarked legacy codex rows', async () => {
     } else {
       process.env.MUNINN_HOME = previousHome;
     }
-    if (previousObserverPollMs === undefined) {
-      delete process.env.MUNINN_OBSERVER_POLL_MS;
+    if (previousExtractorPollMs === undefined) {
+      delete process.env.MUNINN_EXTRACTOR_POLL_MS;
     } else {
-      process.env.MUNINN_OBSERVER_POLL_MS = previousObserverPollMs;
+      process.env.MUNINN_EXTRACTOR_POLL_MS = previousExtractorPollMs;
     }
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -802,9 +798,9 @@ test('run import ignores unmarked legacy codex rows', async () => {
 test('run import only deletes existing marker turns for selected codex sessions', async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), 'muninn-codex-import-marker-scope-'));
   const previousHome = process.env.MUNINN_HOME;
-  const previousObserverPollMs = process.env.MUNINN_OBSERVER_POLL_MS;
+  const previousExtractorPollMs = process.env.MUNINN_EXTRACTOR_POLL_MS;
   process.env.MUNINN_HOME = path.join(tempDir, 'muninn');
-  process.env.MUNINN_OBSERVER_POLL_MS = '60000';
+  process.env.MUNINN_EXTRACTOR_POLL_MS = '60000';
   try {
 	    await writeTestConfig(process.env.MUNINN_HOME);
 
@@ -914,10 +910,10 @@ test('run import only deletes existing marker turns for selected codex sessions'
     } else {
       process.env.MUNINN_HOME = previousHome;
     }
-    if (previousObserverPollMs === undefined) {
-      delete process.env.MUNINN_OBSERVER_POLL_MS;
+    if (previousExtractorPollMs === undefined) {
+      delete process.env.MUNINN_EXTRACTOR_POLL_MS;
     } else {
-      process.env.MUNINN_OBSERVER_POLL_MS = previousObserverPollMs;
+      process.env.MUNINN_EXTRACTOR_POLL_MS = previousExtractorPollMs;
     }
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -926,9 +922,9 @@ test('run import only deletes existing marker turns for selected codex sessions'
 test('preview does not write artifacts but run imports relative and missing attachments safely', async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), 'muninn-codex-import-preview-artifacts-'));
   const previousHome = process.env.MUNINN_HOME;
-  const previousObserverPollMs = process.env.MUNINN_OBSERVER_POLL_MS;
+  const previousExtractorPollMs = process.env.MUNINN_EXTRACTOR_POLL_MS;
   process.env.MUNINN_HOME = path.join(tempDir, 'muninn');
-  process.env.MUNINN_OBSERVER_POLL_MS = '60000';
+  process.env.MUNINN_EXTRACTOR_POLL_MS = '60000';
   try {
     await writeTestConfig(process.env.MUNINN_HOME);
     const workspaceDir = path.join(tempDir, 'workspace', 'muninn');
@@ -1015,10 +1011,10 @@ test('preview does not write artifacts but run imports relative and missing atta
     } else {
       process.env.MUNINN_HOME = previousHome;
     }
-    if (previousObserverPollMs === undefined) {
-      delete process.env.MUNINN_OBSERVER_POLL_MS;
+    if (previousExtractorPollMs === undefined) {
+      delete process.env.MUNINN_EXTRACTOR_POLL_MS;
     } else {
-      process.env.MUNINN_OBSERVER_POLL_MS = previousObserverPollMs;
+      process.env.MUNINN_EXTRACTOR_POLL_MS = previousExtractorPollMs;
     }
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -1027,9 +1023,9 @@ test('preview does not write artifacts but run imports relative and missing atta
 test('run import skips invalid data URL artifacts without failing the session', async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), 'muninn-codex-import-artifact-copy-failure-'));
   const previousHome = process.env.MUNINN_HOME;
-  const previousObserverPollMs = process.env.MUNINN_OBSERVER_POLL_MS;
+  const previousExtractorPollMs = process.env.MUNINN_EXTRACTOR_POLL_MS;
   process.env.MUNINN_HOME = path.join(tempDir, 'muninn');
-  process.env.MUNINN_OBSERVER_POLL_MS = '60000';
+  process.env.MUNINN_EXTRACTOR_POLL_MS = '60000';
   try {
     await writeTestConfig(process.env.MUNINN_HOME);
 
@@ -1080,10 +1076,10 @@ test('run import skips invalid data URL artifacts without failing the session', 
     } else {
       process.env.MUNINN_HOME = previousHome;
     }
-    if (previousObserverPollMs === undefined) {
-      delete process.env.MUNINN_OBSERVER_POLL_MS;
+    if (previousExtractorPollMs === undefined) {
+      delete process.env.MUNINN_EXTRACTOR_POLL_MS;
     } else {
-      process.env.MUNINN_OBSERVER_POLL_MS = previousObserverPollMs;
+      process.env.MUNINN_EXTRACTOR_POLL_MS = previousExtractorPollMs;
     }
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -1092,9 +1088,9 @@ test('run import skips invalid data URL artifacts without failing the session', 
 test('run import only copies artifacts for selected sessions', async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), 'muninn-codex-import-selected-artifacts-'));
   const previousHome = process.env.MUNINN_HOME;
-  const previousObserverPollMs = process.env.MUNINN_OBSERVER_POLL_MS;
+  const previousExtractorPollMs = process.env.MUNINN_EXTRACTOR_POLL_MS;
   process.env.MUNINN_HOME = path.join(tempDir, 'muninn');
-  process.env.MUNINN_OBSERVER_POLL_MS = '60000';
+  process.env.MUNINN_EXTRACTOR_POLL_MS = '60000';
   try {
     await writeTestConfig(process.env.MUNINN_HOME);
     const workspaceDir = path.join(tempDir, 'workspace', 'muninn');
@@ -1147,10 +1143,10 @@ test('run import only copies artifacts for selected sessions', async () => {
     } else {
       process.env.MUNINN_HOME = previousHome;
     }
-    if (previousObserverPollMs === undefined) {
-      delete process.env.MUNINN_OBSERVER_POLL_MS;
+    if (previousExtractorPollMs === undefined) {
+      delete process.env.MUNINN_EXTRACTOR_POLL_MS;
     } else {
-      process.env.MUNINN_OBSERVER_POLL_MS = previousObserverPollMs;
+      process.env.MUNINN_EXTRACTOR_POLL_MS = previousExtractorPollMs;
     }
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -1159,9 +1155,9 @@ test('run import only copies artifacts for selected sessions', async () => {
 test('run import stores tool image artifacts under the codex session directory', async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), 'muninn-codex-import-tool-image-'));
   const previousHome = process.env.MUNINN_HOME;
-  const previousObserverPollMs = process.env.MUNINN_OBSERVER_POLL_MS;
+  const previousExtractorPollMs = process.env.MUNINN_EXTRACTOR_POLL_MS;
   process.env.MUNINN_HOME = path.join(tempDir, 'muninn');
-  process.env.MUNINN_OBSERVER_POLL_MS = '60000';
+  process.env.MUNINN_EXTRACTOR_POLL_MS = '60000';
   try {
     await writeTestConfig(process.env.MUNINN_HOME);
 
@@ -1263,10 +1259,10 @@ test('run import stores tool image artifacts under the codex session directory',
     } else {
       process.env.MUNINN_HOME = previousHome;
     }
-    if (previousObserverPollMs === undefined) {
-      delete process.env.MUNINN_OBSERVER_POLL_MS;
+    if (previousExtractorPollMs === undefined) {
+      delete process.env.MUNINN_EXTRACTOR_POLL_MS;
     } else {
-      process.env.MUNINN_OBSERVER_POLL_MS = previousObserverPollMs;
+      process.env.MUNINN_EXTRACTOR_POLL_MS = previousExtractorPollMs;
     }
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -1275,9 +1271,9 @@ test('run import stores tool image artifacts under the codex session directory',
 test('run import captures markdown links and apply_patch files with safe conflicting names', async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), 'muninn-codex-import-doc-artifacts-'));
   const previousHome = process.env.MUNINN_HOME;
-  const previousObserverPollMs = process.env.MUNINN_OBSERVER_POLL_MS;
+  const previousExtractorPollMs = process.env.MUNINN_EXTRACTOR_POLL_MS;
   process.env.MUNINN_HOME = path.join(tempDir, 'muninn');
-  process.env.MUNINN_OBSERVER_POLL_MS = '60000';
+  process.env.MUNINN_EXTRACTOR_POLL_MS = '60000';
   try {
     await writeTestConfig(process.env.MUNINN_HOME);
 
@@ -1385,10 +1381,10 @@ test('run import captures markdown links and apply_patch files with safe conflic
     } else {
       process.env.MUNINN_HOME = previousHome;
     }
-    if (previousObserverPollMs === undefined) {
-      delete process.env.MUNINN_OBSERVER_POLL_MS;
+    if (previousExtractorPollMs === undefined) {
+      delete process.env.MUNINN_EXTRACTOR_POLL_MS;
     } else {
-      process.env.MUNINN_OBSERVER_POLL_MS = previousObserverPollMs;
+      process.env.MUNINN_EXTRACTOR_POLL_MS = previousExtractorPollMs;
     }
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -1397,9 +1393,9 @@ test('run import captures markdown links and apply_patch files with safe conflic
 test('run import replaces matching project agent session identity when raw session id is shared', async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), 'muninn-codex-import-identity-'));
   const previousHome = process.env.MUNINN_HOME;
-  const previousObserverPollMs = process.env.MUNINN_OBSERVER_POLL_MS;
+  const previousExtractorPollMs = process.env.MUNINN_EXTRACTOR_POLL_MS;
   process.env.MUNINN_HOME = path.join(tempDir, 'muninn');
-  process.env.MUNINN_OBSERVER_POLL_MS = '60000';
+  process.env.MUNINN_EXTRACTOR_POLL_MS = '60000';
   try {
     await writeTestConfig(process.env.MUNINN_HOME);
 
@@ -1507,10 +1503,10 @@ test('run import replaces matching project agent session identity when raw sessi
     } else {
       process.env.MUNINN_HOME = previousHome;
     }
-    if (previousObserverPollMs === undefined) {
-      delete process.env.MUNINN_OBSERVER_POLL_MS;
+    if (previousExtractorPollMs === undefined) {
+      delete process.env.MUNINN_EXTRACTOR_POLL_MS;
     } else {
-      process.env.MUNINN_OBSERVER_POLL_MS = previousObserverPollMs;
+      process.env.MUNINN_EXTRACTOR_POLL_MS = previousExtractorPollMs;
     }
     await rm(tempDir, { recursive: true, force: true });
   }

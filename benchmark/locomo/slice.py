@@ -80,9 +80,9 @@ def build_slice(data_file: Path, sample_id: str, max_session: int) -> SliceResul
         "qa": qas,
     }
     if "observation" in source:
-        observation = slice_session_map(source["observation"], retained_sessions)
-        if observation:
-            sample["observation"] = observation
+        sliced_original_annotations = slice_session_map(source["observation"], retained_sessions)
+        if sliced_original_annotations:
+            sample["observation"] = sliced_original_annotations
     if "session_summary" in source:
         summary = slice_session_map(source["session_summary"], retained_sessions)
         if summary:

@@ -828,7 +828,7 @@ svg {
 }
 
 .timeline-inline-citation,
-.observation-inline-citation {
+.memory-inline-citation {
   display: inline;
   margin: 0 1px;
   padding: 0;
@@ -848,8 +848,8 @@ svg {
 
 .timeline-inline-citation:hover,
 .timeline-inline-citation:focus-visible,
-.observation-inline-citation:hover,
-.observation-inline-citation:focus-visible {
+.memory-inline-citation:hover,
+.memory-inline-citation:focus-visible {
   background: transparent;
   color: #155cb0;
 }

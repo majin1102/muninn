@@ -165,7 +165,7 @@ export function ChatView({
             item,
             activeMemoryId,
             activeMessageRef,
-            documentAgent: document?.agent ?? document?.observer ?? '',
+            documentAgent: document?.agent ?? document?.extractor ?? '',
           });
         })}
         {turnWindow.afterCount > 0 || canLoadMoreAfter ? (
@@ -300,7 +300,7 @@ function entriesFromDocument(document: MemoryDocument | null): ChatTimelineEntry
   if (document.events && document.events.length > 0) {
     return entriesFromEvents(document.events, {
       memoryId: document.memoryId,
-      agent: document.agent ?? document.observer,
+      agent: document.agent ?? document.extractor,
       startedAt: document.createdAt,
       completedAt: document.updatedAt,
     });
@@ -308,7 +308,7 @@ function entriesFromDocument(document: MemoryDocument | null): ChatTimelineEntry
   if (document.prompt || document.response) {
     return entriesFromFallback({
       memoryId: document.memoryId,
-      agent: document.agent ?? document.observer,
+      agent: document.agent ?? document.extractor,
       createdAt: document.createdAt ?? document.updatedAt,
       updatedAt: document.updatedAt,
       prompt: document.prompt,
@@ -322,7 +322,7 @@ function entriesFromDocument(document: MemoryDocument | null): ChatTimelineEntry
     message: {
       ...message,
       memoryId: document.memoryId,
-      agent: document.agent ?? document.observer,
+      agent: document.agent ?? document.extractor,
       timestamp: document.updatedAt,
     },
   }));

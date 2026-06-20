@@ -19,7 +19,6 @@ class MetadataTests(unittest.TestCase):
                     "llmProvider": "default",
                     "embeddingProvider": "default_embedding",
                 },
-                "observer": {"name": "default-observer", "llmProvider": "default"},
                 "providers": {
                     "llm": {
                         "default": {
@@ -59,8 +58,8 @@ class MetadataTests(unittest.TestCase):
 
             raw = json.dumps(metadata)
             self.assertNotIn("secret", raw)
-            self.assertEqual(metadata["observer"]["provider"], "openai")
-            self.assertEqual(metadata["observer"]["model"], "doubao-seed")
+            self.assertEqual(metadata["extractor"]["provider"], "openai")
+            self.assertEqual(metadata["extractor"]["model"], "doubao-seed")
             self.assertEqual(metadata["embedding"]["dimensions"], 2048)
             self.assertEqual(metadata["config"]["providers"]["llm"]["default"]["apiKey"], "<redacted>")
             self.assertEqual(metadata["config"]["providers"]["embedding"]["default_embedding"]["apiKey"], "<redacted>")

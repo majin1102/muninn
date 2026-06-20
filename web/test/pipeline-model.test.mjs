@@ -17,8 +17,8 @@ async function loadPipelineModel() {
 function task(patch) {
   return {
     id: patch.id,
-    kind: patch.kind ?? 'observation',
-    title: patch.title ?? 'Observation',
+    kind: patch.kind ?? 'extraction',
+    title: patch.title ?? 'Extraction',
     target: patch.target ?? 'Entity: Memory',
     status: patch.status,
     statusText: patch.statusText ?? 'processing memory work',
@@ -57,15 +57,15 @@ test('filters pipeline tasks by kind, status, and time', async () => {
   const { filterPipelineTasks } = await loadPipelineModel();
   const nowMs = new Date('2026-06-04T12:00:00.000Z').getTime();
   const tasks = [
-    task({ id: 'running-observation', kind: 'observation', status: 'running', updatedAt: '2026-06-04T11:00:00.000Z' }),
-    task({ id: 'queued-observation', kind: 'observation', status: 'queued', updatedAt: '2026-06-04T10:00:00.000Z' }),
-    task({ id: 'done-observation', kind: 'observation', status: 'done', updatedAt: '2026-06-04T09:00:00.000Z' }),
-    task({ id: 'old-session', kind: 'session-observing', status: 'running', updatedAt: '2026-06-02T09:00:00.000Z' }),
+    task({ id: 'running-extraction', kind: 'extraction', status: 'running', updatedAt: '2026-06-04T11:00:00.000Z' }),
+    task({ id: 'queued-extraction', kind: 'extraction', status: 'queued', updatedAt: '2026-06-04T10:00:00.000Z' }),
+    task({ id: 'done-extraction', kind: 'extraction', status: 'done', updatedAt: '2026-06-04T09:00:00.000Z' }),
+    task({ id: 'old-wiki', kind: 'wiki-compiling', status: 'running', updatedAt: '2026-06-02T09:00:00.000Z' }),
   ];
 
   assert.deepEqual(
-    filterPipelineTasks(tasks, 'observation', 'active', 'last_24h', { from: null, to: null }, nowMs).map((item) => item.id),
-    ['running-observation', 'queued-observation'],
+    filterPipelineTasks(tasks, 'extraction', 'active', 'last_24h', { from: null, to: null }, nowMs).map((item) => item.id),
+    ['running-extraction', 'queued-extraction'],
   );
 });
 

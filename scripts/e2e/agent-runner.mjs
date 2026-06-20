@@ -84,9 +84,7 @@ async function finalizeMemory(baseUrl) {
   await waitFor(async () => {
     const watermark = await requestJson(baseUrl, '/api/v1/memory/watermark');
     return watermark.pending.turns.length === 0
-      && watermark.pending.extractions.length === 0
       && watermark.phases.extractor === 'idle'
-      && watermark.phases.observer === 'idle'
       && !watermark.error;
   }, { timeoutMs: 10000, intervalMs: 100, label: 'memory finalize' });
 }
@@ -96,8 +94,8 @@ async function runMockRound(config, workspace, server) {
   const liveSessionId = `e2e-${config.shortName}-live`;
   const afterDeleteSessionId = `e2e-${config.shortName}-after-delete`;
   const baselineRelease = {
-    prompt: `Record the Muninn E2E release policy for ${config.shortName}: npm packages must use dist-tag next until MVP1 exits beta.`,
-    response: `Remembered for ${config.shortName}: Muninn E2E package releases use npm dist-tag next before MVP1 exits beta.`,
+    prompt: `Record the Muninn E2E release policy for ${config.shortName}: npm packages must use dist-tag next until the prerelease channel closes.`,
+    response: `Remembered for ${config.shortName}: Muninn E2E package releases use npm dist-tag next before the prerelease channel closes.`,
   };
   const baselineCapture = {
     prompt: `Record the Muninn E2E capture policy for ${config.shortName}: after project deletion, Stop hooks should exit successfully and write zero turns.`,
@@ -125,11 +123,11 @@ async function runMockRound(config, workspace, server) {
     response: baselineRelease.response,
   });
   await finalizeMemory(server.baseUrl);
-  await assertRecallHit(server.baseUrl, `${config.shortName} dist-tag next MVP1 beta`, {
+  await assertRecallHit(server.baseUrl, `${config.shortName} dist-tag next prerelease channel`, {
     agent: config.agent,
     project: PROJECT_ID,
     sessionId: baselineSessionId,
-    includes: ['dist-tag next', 'MVP1 exits beta'],
+    includes: ['dist-tag next', 'prerelease channel closes'],
   });
   await assertRecallHit(server.baseUrl, `${config.shortName} Stop hooks zero turns project deletion`, {
     agent: config.agent,
@@ -178,8 +176,8 @@ async function runMockRound(config, workspace, server) {
   assert.ok(deletedProject.deletedSessions >= 1);
   assert.ok(deletedProject.deletedTurns >= 2);
   await assertProjectAbsent(server.baseUrl, PROJECT_ID);
-  await assertNoRecallHit(server.baseUrl, `${config.shortName} dist-tag next MVP1 beta`, {
-    includes: ['dist-tag next', 'MVP1 exits beta'],
+  await assertNoRecallHit(server.baseUrl, `${config.shortName} dist-tag next prerelease channel`, {
+    includes: ['dist-tag next', 'prerelease channel closes'],
   });
   log({ run: config.runId, agent: config.agent, driver: 'mock', phase: 'delete-project', status: 'ok', deletedSessions: deletedProject.deletedSessions, deletedTurns: deletedProject.deletedTurns, captureEnabled: false, recall: 'absent' });
 

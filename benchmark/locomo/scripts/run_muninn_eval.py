@@ -39,8 +39,7 @@ MATCHED_PROCESS_MARKERS = (
     "benchmark/locomo/scripts/openviking_judge.py",
     "benchmark/locomo/scripts/honcho_judge.py",
 )
-LEGACY_PENDING_RE = re.compile(r"waiting for .*?: (\d+) pending")
-WATERMARK_PENDING_RE = re.compile(r"waiting for .*?: turns=(\d+) .*?extractions=(\d+) ")
+WATERMARK_PENDING_RE = re.compile(r"waiting for .*?: turns=(\d+) ")
 
 
 @dataclass(frozen=True)
@@ -356,7 +355,6 @@ def extract_stats(result_file: Path, openviking_file: Path, honcho_file: Path) -
 
 
 INTERNAL_FATAL_PATTERNS: tuple[tuple[str, str], ...] = (
-    ("observer", "observer run failed"),
     ("extractor", "extractor run failed"),
     ("lance-merge-upsert", "ambiguous merge inserts"),
     ("lance-index", "rowaddrtreemap::from_sorted_iter"),
@@ -534,6 +532,17 @@ def read_checkpoint_snapshot(home_dir: Path) -> Any:
         return {"error": repr(exc), "path": str(files[0])}
 
 
+def read_extraction_trace_tail(home_dir: Path, limit: int = 20) -> list[str]:
+    direct = read_jsonl_tail(home_dir / "locomo-extraction-trace.jsonl", limit)
+    if direct:
+        return direct
+    home = abs_path(home_dir)
+    candidates = sorted(home.glob("*/logs/locomo-extraction-trace.jsonl"), key=lambda path: path.stat().st_mtime)
+    if not candidates:
+        return []
+    return read_jsonl_tail(rel(candidates[-1]), limit)
+
+
 def write_diagnostic(
     config: BuildConfig,
     paths: RunPaths,
@@ -554,8 +563,7 @@ def write_diagnostic(
         "stderrTail": output.splitlines()[-80:],
         "progressTail": progress.splitlines()[-80:],
         "watchdogTail": read_jsonl_tail(paths.home_dir / "watchdog.jsonl", 80),
-        "observerTraceTail": read_jsonl_tail(paths.home_dir / "locomo-observer-trace.jsonl", 20),
-        "extractorTraceTail": read_jsonl_tail(paths.home_dir / "locomo-thread-observing-trace.jsonl", 20),
+        "extractionTraceTail": read_extraction_trace_tail(paths.home_dir, 20),
         "checkpoint": read_checkpoint_snapshot(paths.home_dir),
     }
     actual = abs_path(paths.diagnostic_file)
@@ -662,9 +670,6 @@ def run_command(
 
 def parse_pending_count(line: str) -> int | None:
     match = WATERMARK_PENDING_RE.search(line)
-    if match:
-        return int(match.group(1)) + int(match.group(2))
-    match = LEGACY_PENDING_RE.search(line)
     if match:
         return int(match.group(1))
     return None

@@ -16,8 +16,6 @@ const databaseHome = resolveDatabaseHome(databaseName);
 const targetDirs = [
   'session_snapshot',
   'extraction',
-  'observation',
-  'observation_context',
   'checkpoints',
 ];
 
@@ -48,10 +46,6 @@ async function main() {
     ).length);
     await countRows('extraction rows (clear)', async () => (
       await tables.extractionTable.list({ mode: { type: 'recency', limit: 1_000_000 } })
-    ).length);
-    await countRows('observation rows (clear)', async () => (await tables.observationTable.stats())?.rowCount ?? 0);
-    await countRows('observation_context rows (clear)', async () => (
-      await tables.observationContextTable.list({})
     ).length);
   } finally {
     await tables.close();

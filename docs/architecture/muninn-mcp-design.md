@@ -15,33 +15,33 @@ Muninn MCP Server
   ▼
 Muninn Sidecar
   │
-  │  TypeScript binding
+  │  TypeScript API
   ▼
-/server memory runtime
+server memory runtime
   │
   │  native binding
   ▼
-Rust format subsystem in `format/` (typed session / observing / semantic table operations)
+Rust format subsystem in `format/` (typed turn / session snapshot / extraction table operations)
 ```
 
-### Component Responsibilities
+## 2. Component Responsibilities
 
 - MCP Server
   - 暴露 `print`、`recall`、`list`、`get_timeline`、`get_detail`
   - 只做参数校验、sidecar 调用与文本返回
-- Sidecar
+- Sidecar / HTTP server
   - 提供 HTTP 读写接口
-  - 将 `RenderedMemory` 渲染为 `MemoryHit[]`
-- `/server memory runtime`
-  - 作为 TS 业务编排层连接 sidecar 和 Rust native binding
-  - 持有 session / observer / memories / llm 的主逻辑
+  - 将 structured memory 文档渲染为 `MemoryHit[]`
+- `server` memory runtime
+  - 编排 capture、extractor、recall、session index 和 watchdog
+  - 连接 HTTP surface 与 Rust native binding
 - Rust format subsystem in `format/`
   - 提供 typed table 读写能力
-  - 维护底层存储、typed rows 与 semantic index 表操作
+  - 维护底层存储、typed rows、FTS/vector index 和 table maintenance
 
-## 2. Text-First Output
+## 3. Text-First Output
 
-当前 MCP 与 sidecar 的最终输出仍然统一为：
+当前 MCP 与 sidecar 的最终输出统一为：
 
 ```ts
 export interface MemoryHit {
@@ -54,54 +54,43 @@ export interface MemoryHit {
 
 - `content` 为 Markdown
 - MCP 直接拼接 `MemoryHit.content`
-- sidecar 是当前的 `RenderedMemory -> MemoryHit` 渲染边界
+- server 是当前 structured memory -> `MemoryHit` 的渲染边界
 
-`/server memory runtime` 当前对 sidecar 暴露的是 `RenderedMemory` 等 TS contract，但 MCP 并不直接消费它；MCP 仍通过 sidecar 的 `MemoryHit[]` 获得最终文本。
+## 4. Memory Navigation
 
-## 3. Memory Navigation
-
-统一导航键仍为 `memoryId`。
+统一导航键为 `memoryId`。
 
 当前有效语义：
 
 - `session:{row_id}`
-- `observing:{row_id}`
+- `extraction:{id}`
 
 其中：
 
-- `OBSERVING` 现在表示 observing snapshot row
-- `observing_id` 是内部 observing line 分组键，不单独暴露为 MCP memory id
+- `session` 指向 turn/session navigation point
+- `extraction` 指向 extraction memory row
+- 当前只暴露 session / extraction memory id
 
-## 4. Read Semantics
+## 5. Read Semantics
 
-MCP 暴露的结构化读能力对应 core 内部的统一读语义：
+MCP 暴露的结构化读能力对应 server 内部的统一读语义：
 
 - `list`
-  - layer 的顶层浏览接口
+  - 返回最近 session memory points
 - `detail`
-  - 单个 memory row
+  - 返回单个 session 或 extraction memory
 - `timeline`
-  - 单个 anchor row 周围的同层邻近 records
+  - 返回 session anchor 周围的邻近 turn/session memory points
+- `recall`
+  - 查询 extraction table，属于 retrieval 行为
 
-具体到当前已落地 layers：
-
-- `session`
-  - `list` 返回最近 session memory points（内部来源于 session turn rows）
-  - `timeline` 返回相邻 session memory points（内部来源于 session turn rows）
-- `observing`
-  - `list` 返回每条 observing line 的 latest snapshot row
-  - `detail` 返回单个 observing snapshot row
-  - `timeline` 返回同一 `observing_id` 下按 `snapshot_sequence` 排序的邻近 snapshot rows
-
-`recall` 继续独立于这套接口，因为它属于 retrieval，而不是基础结构化读取。
-
-## 5. MCP Boundary
+## 6. MCP Boundary
 
 当前 MCP 层故意保持很薄，不承载以下职责：
 
 - layer-specific 查询语义
 - 结构化 record 聚合
 - 文本渲染策略
-- semantic index / observer 业务逻辑
+- extraction/index/recall 业务逻辑
 
-这些职责都留在 sidecar 和 `/server memory runtime`；Rust `format/` 只负责 typed table / storage 能力。
+这些职责都留在 sidecar 和 server memory runtime；Rust `format/` 只负责 typed table / storage 能力。

@@ -6,7 +6,7 @@ import path from 'node:path';
 export function sessionKey(
   sessionId: string | undefined,
   agent: string,
-  observer: string,
+  extractor: string,
   ownership: { project: string; cwd: string } = {
     project: 'default',
     cwd: process.cwd(),
@@ -15,9 +15,9 @@ export function sessionKey(
   const normalizedSessionId = normalizeSessionId(sessionId);
   const scope = `cwd:${ownership.cwd}`;
   if (normalizedSessionId) {
-    return `${scope}|session:${normalizedSessionId}|agent:${agent}|observer:${observer}`;
+    return `${scope}|session:${normalizedSessionId}|agent:${agent}|extractor:${extractor}`;
   }
-  return `${scope}|agent:${agent}|observer:${observer}`;
+  return `${scope}|agent:${agent}|extractor:${extractor}`;
 }
 
 export function normalizeSessionId(sessionId: string | null | undefined): string | undefined {
@@ -45,13 +45,13 @@ export function readTurnRow(turn: TurnRow): TurnRow {
     project: turn.project,
     cwd: turn.cwd,
     agent: turn.agent,
-    observer: turn.observer,
+    extractor: turn.extractor,
     events: turn.events ?? [],
     artifacts: turn.artifacts,
     metadata: turn.metadata,
     prompt: turn.prompt,
     response: turn.response,
-    observingEpoch: turn.observingEpoch,
+    extractionEpoch: turn.extractionEpoch,
   } as TurnRow;
 }
 
@@ -66,13 +66,13 @@ export function serializeTurnRow(turn: TurnRow): Record<string, unknown> {
     project: turn.project,
     cwd: turn.cwd,
     agent: turn.agent,
-    observer: turn.observer,
+    extractor: turn.extractor,
     events: turn.events,
     artifacts: turn.artifacts ?? null,
     metadata: turn.metadata ?? null,
     prompt: turn.prompt ?? null,
     response: turn.response ?? null,
-    observingEpoch: turn.observingEpoch ?? null,
+    extractionEpoch: turn.extractionEpoch ?? null,
   };
 }
 
@@ -95,7 +95,7 @@ export class IngestSession {
     private readonly config: {
       sessionId?: string;
       agent: string;
-      observer: string;
+      extractor: string;
       project: string;
       cwd: string;
       recentTurns?: RecentTurn[];
@@ -105,7 +105,7 @@ export class IngestSession {
     this.config.sessionId = normalizeSessionId(this.config.sessionId);
   }
 
-  async accept(content: TurnContent, observingEpoch: number): Promise<AcceptedIngestTurn> {
+  async accept(content: TurnContent, extractionEpoch: number): Promise<AcceptedIngestTurn> {
     return this.runAcceptExclusive(async () => {
       this.touch();
       const sessionId = normalizeSessionId(content.sessionId);
@@ -133,7 +133,7 @@ export class IngestSession {
         content,
         sessionId,
         ownership,
-        observingEpoch,
+        extractionEpoch,
       );
       const rows = await this.client.turnTable.insert({
         turns: [serializeTurnRow(turn)],
@@ -148,7 +148,7 @@ export class IngestSession {
     });
   }
 
-  async acceptBatch(contents: TurnContent[], observingEpoch: number): Promise<AcceptedIngestTurn[]> {
+  async acceptBatch(contents: TurnContent[], extractionEpoch: number): Promise<AcceptedIngestTurn[]> {
     if (contents.length === 0) {
       return [];
     }
@@ -189,7 +189,7 @@ export class IngestSession {
           content,
           sessionId,
           resolveTurnOwnership(content),
-          observingEpoch,
+          extractionEpoch,
         );
         const pendingIndex = pendingTurns.push(turn) - 1;
         accepted.push({ pendingIndex });
@@ -289,11 +289,11 @@ export class IngestSession {
 }
 
 function buildTurnRow(
-  config: { sessionId?: string; agent: string; observer: string },
+  config: { sessionId?: string; agent: string; extractor: string },
   content: TurnContent,
   sessionId: string | undefined,
   ownership: { project: string; cwd: string },
-  observingEpoch: number,
+  extractionEpoch: number,
 ): TurnRow {
   const now = new Date().toISOString();
   const createdAt = content.createdAt ?? content.updatedAt ?? now;
@@ -307,7 +307,7 @@ function buildTurnRow(
     project: ownership.project,
     cwd: ownership.cwd,
     agent: config.agent,
-    observer: config.observer,
+    extractor: config.extractor,
     events: content.events.map((event) => ({ ...event })),
     artifacts: content.artifacts?.map((artifact) => ({ ...artifact })) ?? null,
     metadata: content.metadata ?? null,
@@ -315,13 +315,13 @@ function buildTurnRow(
     response: content.response,
   };
   if (isExtractable(turn)) {
-    turn.observingEpoch = observingEpoch;
+    turn.extractionEpoch = extractionEpoch;
   }
   return turn;
 }
 
 function validateTurnContent(
-  config: { sessionId?: string; agent: string; observer: string; project: string; cwd: string },
+  config: { sessionId?: string; agent: string; extractor: string; project: string; cwd: string },
   content: TurnContent,
   sessionId: string | undefined,
 ): void {
@@ -495,7 +495,7 @@ export class IngestSessionRegistry {
     const session = new IngestSession(this.client, {
       sessionId: normalizedSessionId,
       agent,
-      observer: this.extractorName,
+      extractor: this.extractorName,
       project: ownership.project,
       cwd: ownership.cwd,
       recentTurns,
@@ -518,7 +518,7 @@ export class IngestSessionRegistry {
     const session = new IngestSession(this.client, {
       sessionId: normalizedSessionId,
       agent: turn.agent,
-      observer: this.extractorName,
+      extractor: this.extractorName,
       project: ownership.project,
       cwd: ownership.cwd,
     });
@@ -545,7 +545,7 @@ export class IngestSessionRegistry {
         const session = new IngestSession(this.client, {
           sessionId: normalizedSessionId,
           agent,
-          observer: this.extractorName,
+          extractor: this.extractorName,
           project: ownership.project,
           cwd: ownership.cwd,
         });

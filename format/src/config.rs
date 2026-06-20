@@ -10,10 +10,6 @@ use serde::Deserialize;
 pub(crate) const CONFIG_FILE_NAME: &str = "muninn.json";
 
 const DEFAULT_EXTRACTION_DIMENSIONS: usize = 8;
-#[cfg(test)]
-#[allow(dead_code)]
-const DEFAULT_OBSERVER_NAME: &str = "default-observer";
-
 #[derive(Debug, Clone)]
 #[cfg_attr(test, allow(dead_code))]
 pub struct EmbeddingConfig {
@@ -40,12 +36,7 @@ pub struct StorageConfig {
 struct MuninnConfig {
     storage: Option<StorageFileConfig>,
     extractor: Option<ExtractorFileConfig>,
-    #[cfg(test)]
-    observer: Option<ObserverFileConfig>,
     providers: Option<ProvidersFileConfig>,
-    extraction: Option<serde_json::Value>,
-    #[serde(rename = "semanticIndex")]
-    semantic_index: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -60,14 +51,6 @@ struct ExtractorFileConfig {
 struct StorageFileConfig {
     uri: String,
     storage_options: Option<HashMap<String, String>>,
-}
-
-#[cfg(test)]
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-#[allow(dead_code)]
-struct ObserverFileConfig {
-    name: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -181,18 +164,9 @@ fn load_muninn_config() -> Result<Option<MuninnConfig>> {
 }
 
 fn parse_muninn_config(raw: &str, source: &str) -> Result<MuninnConfig> {
+    validate_top_level_config(raw, source)?;
     let parsed = serde_json::from_str::<MuninnConfig>(raw)
         .map_err(|error| Error::invalid_input(format!("invalid Muninn config {source}: {error}")))?;
-    if parsed.semantic_index.is_some() {
-        return Err(Error::invalid_input(
-            "semanticIndex is no longer supported; use extractor.embeddingProvider instead.",
-        ));
-    }
-    if parsed.extraction.is_some() {
-        return Err(Error::invalid_input(
-            "extraction is no longer supported; use extractor.embeddingProvider and extractor.recallMode instead.",
-        ));
-    }
     if parsed
         .extractor
         .as_ref()
@@ -204,6 +178,24 @@ fn parse_muninn_config(raw: &str, source: &str) -> Result<MuninnConfig> {
         ));
     }
     Ok(parsed)
+}
+
+fn validate_top_level_config(raw: &str, source: &str) -> Result<()> {
+    let value = serde_json::from_str::<serde_json::Value>(raw)
+        .map_err(|error| Error::invalid_input(format!("invalid Muninn config {source}: {error}")))?;
+    let Some(object) = value.as_object() else {
+        return Err(Error::invalid_input(format!(
+            "invalid Muninn config {source}: expected an object"
+        )));
+    };
+    for key in object.keys() {
+        if !matches!(key.as_str(), "storage" | "extractor" | "providers" | "watchdog" | "capture") {
+            return Err(Error::invalid_input(format!(
+                "unsupported top-level config key: {key}"
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn resolve_embedding_provider(config: Option<&MuninnConfig>) -> Result<Option<EmbeddingFileConfig>> {
@@ -232,14 +224,6 @@ fn resolve_embedding_provider(config: Option<&MuninnConfig>) -> Result<Option<Em
 }
 
 #[cfg(test)]
-#[allow(dead_code)]
-pub(crate) fn effective_observer_name() -> Result<String> {
-    Ok(load_muninn_config()?
-        .and_then(|config| config.observer.map(|observer| observer.name))
-        .unwrap_or_else(|| DEFAULT_OBSERVER_NAME.to_string()))
-}
-
-#[cfg(test)]
 pub(crate) fn llm_test_env_guard() -> std::sync::MutexGuard<'static, ()> {
     use std::sync::{Mutex, OnceLock};
 
@@ -254,8 +238,8 @@ pub(crate) fn llm_test_env_guard() -> std::sync::MutexGuard<'static, ()> {
     fs::write(
         isolated_home.join(CONFIG_FILE_NAME),
         r#"{
-  "observer": {
-    "name": "test-observer"
+  "extractor": {
+    "name": "test-extractor"
   }
 }"#,
     )
@@ -271,16 +255,16 @@ pub(crate) fn llm_test_env_guard() -> std::sync::MutexGuard<'static, ()> {
 #[allow(dead_code)]
 pub(crate) fn write_test_muninn_config(
     path: &Path,
-    observer_name: Option<&str>,
+    extractor_name: Option<&str>,
     extraction_provider: Option<&str>,
 ) {
     use serde_json::{Map, Value, json};
 
     let mut root = Map::<String, Value>::new();
     root.insert(
-        "observer".to_string(),
+        "extractor".to_string(),
         json!({
-            "name": observer_name.unwrap_or("test-observer"),
+            "name": extractor_name.unwrap_or("test-extractor"),
         }),
     );
 
@@ -324,18 +308,18 @@ mod tests {
     }
 
     #[test]
-    fn extraction_config_rejects_semantic_index() {
+    fn extraction_config_rejects_unknown_top_level_key() {
         let error = extraction_config_from_raw(
             r#"{
-  "semanticIndex": {
-    "embedding": {
-      "provider": "mock"
-    }
+  "unsupportedIndex": {
+    "provider": "mock"
   }
 }"#,
         )
         .unwrap_err();
-        assert!(error.to_string().contains("semanticIndex"));
+        assert!(error
+            .to_string()
+            .contains("unsupported top-level config key: unsupportedIndex"));
     }
 
     #[test]
@@ -370,7 +354,9 @@ mod tests {
 }"#,
         )
         .unwrap_err();
-        assert!(error.to_string().contains("extraction is no longer supported"));
+        assert!(error
+            .to_string()
+            .contains("unsupported top-level config key: extraction"));
     }
 
     #[test]

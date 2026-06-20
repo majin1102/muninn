@@ -181,16 +181,16 @@ export function SessionTree({
 
     updateThumb();
     scrollElement.addEventListener('scroll', updateThumb, { passive: true });
-    const observer = new ResizeObserver(updateThumb);
-    observer.observe(scrollElement);
+    const resizeWatcher = new ResizeObserver(updateThumb);
+    resizeWatcher.observe(scrollElement);
     if (scrollElement.firstElementChild) {
-      observer.observe(scrollElement.firstElementChild);
+      resizeWatcher.observe(scrollElement.firstElementChild);
     }
 
     return () => {
       window.cancelAnimationFrame(frame);
       scrollElement.removeEventListener('scroll', updateThumb);
-      observer.disconnect();
+      resizeWatcher.disconnect();
     };
   }, [canExpandSessions, expandedTurnLists, filteredProjects, openProjects, openSessions]);
 
@@ -1038,9 +1038,9 @@ function TurnSummary({ text }: { text: string }) {
     };
 
     updateText();
-    const observer = new ResizeObserver(updateText);
-    observer.observe(element);
-    return () => observer.disconnect();
+    const resizeWatcher = new ResizeObserver(updateText);
+    resizeWatcher.observe(element);
+    return () => resizeWatcher.disconnect();
   }, [text]);
 
   return (

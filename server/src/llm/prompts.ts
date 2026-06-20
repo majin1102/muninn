@@ -9,7 +9,6 @@ type PromptTemplate = {
 const promptCache = new Map<string, PromptTemplate>();
 const PROMPT_FILE_NAMES = {
   chat: 'chat',
-  thread_observing: 'observer',
   thread_extracting: 'extractor',
   memory_recaller: 'memory-recaller',
 } as const;

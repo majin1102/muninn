@@ -2,8 +2,8 @@ import {
   generateTextStreamWithConfig,
 } from '../llm/provider.js';
 import {
+  getExtractorLlmConfig,
   getNamedLlmConfig,
-  getObserverLlmConfig,
   listLlmProviderNames,
   type TextProviderConfig,
 } from '../config.js';
@@ -26,7 +26,7 @@ const SYSTEM_PROMPT = [
   "You are Muninn's recall synthesis agent.",
   '',
   'Answer the user question using only the provided Muninn search results.',
-  'The search results may contain conversation snippets, extracted observations, and wiki-like memory notes.',
+  'The search results may contain conversation snippets, extraction memory, and wiki-like memory notes.',
   '',
   'Rules:',
   '- Treat the user question as the primary task.',
@@ -115,7 +115,7 @@ function providerConfig(provider: string): TextProviderConfig | null {
     return null;
   }
   if (provider === 'default') {
-    return getNamedLlmConfig('default') ?? getObserverLlmConfig();
+    return getNamedLlmConfig('default') ?? getExtractorLlmConfig();
   }
   return getNamedLlmConfig(provider);
 }

@@ -36,16 +36,9 @@ function makeConfig(embedding) {
       embeddingProvider: 'default',
       maxAttempts: 3,
     },
-    observer: {
-      name: 'default-observer',
-      llmProvider: 'observer_llm',
-    },
     providers: {
       llm: {
         extractor_llm: {
-          type: 'mock',
-        },
-        observer_llm: {
           type: 'mock',
         },
       },

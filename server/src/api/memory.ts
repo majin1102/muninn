@@ -2,7 +2,6 @@ import type {
   ListModeInput,
   NativeTables,
   ExtractionRow as Extraction,
-  ObservationRow as Observation,
   SessionSnapshotRow,
   TurnRow,
 } from '../native.js';
@@ -68,40 +67,12 @@ export async function getExtraction(
   return rows[0] ?? null;
 }
 
-
-
-export function parseObservationMemoryId(memoryId: string): string {
-  const prefix = 'observation:';
-  if (!memoryId.startsWith(prefix)) {
-    throw new Error(`invalid observation memory id: ${memoryId}`);
-  }
-  const id = memoryId.slice(prefix.length);
-  if (!id) {
-    throw new Error(`invalid observation memory id: ${memoryId}`);
-  }
-  return id;
-}
-
-export async function getObservation(
-  client: NativeTables,
-  memoryId: string,
-): Promise<Observation | null> {
-  const id = parseObservationMemoryId(memoryId);
-  const rows = await client.observationTable.get({ ids: [id] });
-  return rows[0] ?? null;
-}
-
-
-
-export function inferRenderedMemoryKind(memoryId: string): 'turn' | 'session' | 'extraction' | 'observation' {
+export function inferRenderedMemoryKind(memoryId: string): 'turn' | 'session' | 'extraction' {
   if (memoryId.startsWith('turn:')) {
     return 'turn';
   }
   if (memoryId.startsWith('extraction:')) {
     return 'extraction';
-  }
-  if (memoryId.startsWith('observation:')) {
-    return 'observation';
   }
   return 'session';
 }
@@ -172,24 +143,6 @@ export function renderExtraction(memory: Extraction): RenderedMemory {
     createdAt: memory.createdAt,
     updatedAt: memory.createdAt,
   };
-}
-
-export function renderObservation(memory: Observation): RenderedMemory {
-  const references = memory.extractionRefs.length > 0
-    ? `References:\n${memory.extractionRefs.map((ref) => `- ${renderExtractionRef(ref)}`).join('\n')}`
-    : undefined;
-  return {
-    memoryId: `observation:${memory.id}`,
-    title: memory.text,
-    summary: memory.text,
-    detail: references,
-    createdAt: memory.createdAt,
-    updatedAt: memory.updatedAt,
-  };
-}
-
-function renderExtractionRef(ref: string): string {
-  return ref.startsWith('extraction:') ? ref : `extraction:${ref}`;
 }
 
 export function renderTurnDetail(turn: TurnRow): string | undefined {
@@ -271,12 +224,12 @@ export async function getSessionSnapshotRow(
 
 export async function listSessionSnapshotRows(
   client: NativeTables,
-  params: { mode: ListModeInput; observer?: string },
+  params: { mode: ListModeInput; extractor?: string },
 ): Promise<SessionSnapshotRow[]> {
   const rows = await client.sessionTable.listSnapshots({
-    observer: params.observer,
+    extractor: params.extractor,
   });
-  return applyObservingListMode(rows, params.mode);
+  return applySessionSnapshotListMode(rows, params.mode);
 }
 
 export async function timelineSessionSnapshotRows(
@@ -304,7 +257,7 @@ export async function timelineSessionSnapshotRows(
   return snapshots.slice(start, end);
 }
 
-function applyObservingListMode(rows: SessionSnapshotRow[], mode: ListModeInput): SessionSnapshotRow[] {
+function applySessionSnapshotListMode(rows: SessionSnapshotRow[], mode: ListModeInput): SessionSnapshotRow[] {
   const latestBySessionId = new Map<string, SessionSnapshotRow>();
   for (const row of rows) {
     const current = latestBySessionId.get(row.sessionId);
@@ -364,7 +317,7 @@ export async function recallMemoryContext(input: MemoryRecallInput): Promise<Mem
   let lastError: unknown;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     try {
-      const raw = await generateText('observer', {
+      const raw = await generateText('extractor', {
         system: template.system,
         prompt,
       });
@@ -447,13 +400,8 @@ type RecallOptions = {
   mode?: RecallMode;
   budget?: number;
   queryLimit?: number;
-  includeObservations?: boolean;
   embed?: (text: string) => Promise<number[]>;
   recallMemory?: (input: MemoryRecallInput) => Promise<MemoryRecallResult>;
-};
-
-type RouteHit = RecallHit & {
-  route: 'curated' | 'raw';
 };
 
 export async function recallMemories(
@@ -481,85 +429,22 @@ export async function recallMemories(
   const vector = mode === 'fts'
     ? []
     : await (options.embed ?? embedText)(trimmed);
-  const includeObservations = options.includeObservations !== false;
-  const leafObservationIds = includeObservations ? await loadLeafObservationIds(client) : null;
-  const observationLimit = leafObservationIds ? queryLimit * 4 : queryLimit;
-  const [observationRows, extractionRows] = await Promise.all([
-    includeObservations
-      ? client.observationTable.search({
-        query: trimmed,
-        vector,
-        limit: observationLimit,
-        mode,
-      })
-      : Promise.resolve([]),
-    client.extractionTable.search({
-      query: trimmed,
-      vector,
-      limit: queryLimit,
-      mode,
-    }),
-  ]);
-  const filteredObservationRows = leafObservationIds
-    ? observationRows.filter((row) => leafObservationIds.has(row.id))
-    : observationRows;
-  const observationRefs = await loadObservationContextRefs(client, filteredObservationRows.map((row) => row.id));
-  const observationReferences = new Map(filteredObservationRows.map((row) => [
-    row.id,
-    observationRefs.get(row.id) ?? row.extractionRefs,
-  ]));
-  const extractionDetails = await loadExtractionDetails(
-    client,
-    Array.from(observationReferences.values()).flat(),
-  );
-  const curatedHits: RouteHit[] = await Promise.all(filteredObservationRows.map(async (row) => {
-    const references = observationReferences.get(row.id) ?? row.extractionRefs;
-    return {
-      route: 'curated' as const,
-      memoryId: `observation:${row.id}`,
-      title: row.text,
-      summary: row.text,
-      content: renderObservationHit(row.text, references, extractionDetails),
-      references,
-      createdAt: row.createdAt,
-      updatedAt: row.updatedAt,
-      ...await ownershipFromExtractionRefs(client, references, extractionDetails),
-    };
-  }));
-  const rawHits = await Promise.all(extractionRows.map(async (row) => ({
-    ...(await extractionHit(client, row)),
-    route: 'raw' as const,
-  })));
-  const merged = mergeRoutes(curatedHits, rawHits, budget > 0 ? queryLimit : limit);
+  const extractionRows = await client.extractionTable.search({
+    query: trimmed,
+    vector,
+    limit: queryLimit,
+    mode,
+  });
+  const hits = await Promise.all(extractionRows.map((row) => extractionHit(client, row)));
   if (budget > 0) {
-    if (merged.length === 0) {
+    if (hits.length === 0) {
       return [];
     }
-    const extractionById = new Map(extractionRows.map((row) => [`extraction:${row.id}`, row]));
-    const observationById = new Map(observationRows.map((row) => [`observation:${row.id}`, row]));
-    const hitById = new Map(merged.map((hit) => [hit.memoryId, hit]));
-    const candidates = merged.map((hit) => {
-      if (hit.route === 'curated') {
-        const row = observationById.get(hit.memoryId);
-        if (!row) {
-          throw new Error(`missing recalled observation row: ${hit.memoryId}`);
-        }
-        return {
-          memoryId: hit.memoryId,
-          content: hitById.get(hit.memoryId)?.content ?? row.text,
-          refs: hit.references,
-        };
-      }
-      const row = extractionById.get(hit.memoryId);
-      if (!row) {
-        throw new Error(`missing recalled extraction row: ${hit.memoryId}`);
-      }
-      return {
-        memoryId: hit.memoryId,
-        content: row.content,
-        refs: row.turnRefs,
-      };
-    });
+    const candidates = extractionRows.map((row) => ({
+      memoryId: `extraction:${row.id}`,
+      content: row.content,
+      refs: row.turnRefs,
+    }));
     const input = {
       query: trimmed,
       budget,
@@ -573,34 +458,12 @@ export async function recallMemories(
       memoryId: 'recalled:memory',
       content: recalled.content,
       references: uniqueRefs(candidates.flatMap((candidate) => candidate.refs ?? [])),
-      ...hitMetadata(merged.find((hit) => hasSessionMetadata(hit))),
+      ...hitMetadata(hits.find((hit) => hasSessionMetadata(hit))),
     }];
   }
-  return merged.slice(0, limit).map(({ route: _route, ...hit }) => hit);
+  return hits.slice(0, limit);
 }
 
-
-type ExtractionDetail = {
-  id: string;
-  title: string;
-  summary: string;
-  content: string;
-  turnRefs: string[];
-  createdAt: string;
-  updatedAt: string;
-};
-
-async function loadExtractionDetails(
-  client: NativeTables,
-  refs: string[],
-): Promise<Map<string, ExtractionDetail>> {
-  const ids = uniqueRefs(refs.map((ref) => extractionRowId(ref)).filter((id): id is string => Boolean(id)));
-  if (ids.length === 0 || typeof client.extractionTable.get !== 'function') {
-    return new Map();
-  }
-  const rows = await client.extractionTable.get({ ids });
-  return new Map(rows.map((row) => [row.id, row]));
-}
 
 async function extractionHit(client: NativeTables, row: Extraction): Promise<RecallHit> {
   return {
@@ -613,18 +476,6 @@ async function extractionHit(client: NativeTables, row: Extraction): Promise<Rec
     updatedAt: row.updatedAt,
     ...await ownershipFromTurnRefs(client, row.turnRefs),
   };
-}
-
-async function ownershipFromExtractionRefs(
-  client: NativeTables,
-  refs: string[],
-  details: Map<string, ExtractionDetail>,
-): Promise<Partial<RecallHit>> {
-  const turnRefs = uniqueRefs(refs.flatMap((ref) => {
-    const id = extractionRowId(ref);
-    return id ? details.get(id)?.turnRefs ?? [] : [];
-  }));
-  return ownershipFromTurnRefs(client, turnRefs);
 }
 
 async function ownershipFromTurnRefs(client: NativeTables, refs: string[]): Promise<Partial<RecallHit>> {
@@ -641,7 +492,7 @@ async function ownershipFromTurnRefs(client: NativeTables, refs: string[]): Prom
         sessionId: turn.sessionId ?? undefined,
         agent: turn.agent,
         cwd: turn.cwd,
-        sessionKey: buildSessionKey(turn.sessionId ?? undefined, turn.agent, turn.observer, {
+        sessionKey: buildSessionKey(turn.sessionId ?? undefined, turn.agent, turn.extractor, {
           project: turn.project,
           cwd: turn.cwd,
         }),
@@ -667,7 +518,7 @@ async function displaySession(client: NativeTables, turn: TurnRow): Promise<stri
   return normalizeText(newest?.title) ?? displayTitle(sessionId);
 }
 
-function hitMetadata(hit: RouteHit | undefined): Partial<RecallHit> {
+function hitMetadata(hit: RecallHit | undefined): Partial<RecallHit> {
   if (!hit) {
     return {};
   }
@@ -681,143 +532,8 @@ function hitMetadata(hit: RouteHit | undefined): Partial<RecallHit> {
   };
 }
 
-function hasSessionMetadata(hit: RouteHit): boolean {
+function hasSessionMetadata(hit: RecallHit): boolean {
   return Boolean(hit.project && hit.agent && hit.cwd);
-}
-
-async function loadObservationContextRefs(
-  client: NativeTables,
-  ids: string[],
-): Promise<Map<string, string[]>> {
-  const uniqueIds = uniqueRefs(ids);
-  if (uniqueIds.length === 0 || typeof client.observationContextTable?.get !== 'function') {
-    return new Map();
-  }
-  const rows = await client.observationContextTable.get({ ids: uniqueIds });
-  return new Map(rows.map((row) => [
-    row.id,
-    uniqueRefs(row.sourceRefs ?? []),
-  ]));
-}
-
-function renderObservationHit(
-  text: string,
-  refs: string[],
-  details: Map<string, ExtractionDetail>,
-): string {
-  const replaced = replaceSourcePlaceholders(text, details);
-  const lines = [`OBSERVATION: ${replaced.text}`];
-  for (const ref of refs) {
-    const id = extractionRowId(ref);
-    if (id && replaced.embeddedRefs.has(id)) {
-      continue;
-    }
-    const detail = id ? details.get(id) : undefined;
-    if (!detail) {
-      continue;
-    }
-    lines.push(`EXTRACTION: ${detail.content}`);
-  }
-  return lines.join('\n');
-}
-
-function replaceSourcePlaceholders(
-  text: string,
-  details: Map<string, ExtractionDetail>,
-): { text: string; embeddedRefs: Set<string> } {
-  const lines = text.split('\n');
-  const sourceIndex = lines.findIndex((line) => /^Source extractions:\s*$/i.test(line.trim()));
-  if (sourceIndex < 0) {
-    return { text, embeddedRefs: new Set() };
-  }
-  const embeddedRefs = new Set<string>();
-  const replaced = lines.map((line, index) => (
-    index > sourceIndex ? replaceSourceLine(line, details, embeddedRefs) : line
-  )).join('\n');
-  return { text: replaced, embeddedRefs };
-}
-
-function replaceSourceLine(
-  line: string,
-  details: Map<string, ExtractionDetail>,
-  embeddedRefs: Set<string>,
-): string {
-  return line.replace(
-    /^(\s*-\s*)\[([^\]]+)\](?:[^\S\r\n]+(.*\S))?\s*$/,
-    (original, prefix: string, rawRefs: string, rewritten?: string) => {
-      if (rewritten?.trim()) {
-        return `${prefix}${rewritten.trim()}`;
-      }
-      const refs = rawRefs.split(',').map((ref) => ref.trim()).filter(Boolean);
-      if (refs.length !== 1) {
-        return original;
-      }
-      const id = extractionRowId(refs[0]!);
-      const detail = id ? details.get(id) : undefined;
-      if (!id || !detail) {
-        return original;
-      }
-      embeddedRefs.add(id);
-      const continuationPrefix = prefix.replace(/-\s*$/, '  ');
-      return `${prefix}extraction: ${formatInlineBlock(detail.content, continuationPrefix)}`;
-    },
-  );
-}
-
-function formatInlineBlock(text: string, prefix: string): string {
-  return text.trim().split('\n').map((line, index) => (
-    index === 0 ? line.trim() : `${prefix}${line.trim()}`
-  )).join('\n');
-}
-
-async function loadLeafObservationIds(client: NativeTables): Promise<Set<string> | null> {
-  try {
-    const contexts = await client.observationContextTable.list({});
-    if (contexts.length === 0) {
-      return null;
-    }
-    const parentIds = new Set(
-      contexts
-        .map((context) => context.parentId?.trim())
-        .filter((id): id is string => Boolean(id)),
-    );
-    return new Set(contexts.filter((context) => !parentIds.has(context.id)).map((context) => context.id));
-  } catch {
-    return null;
-  }
-}
-
-function curatedQuota(limit: number): number {
-  return Math.ceil(limit * 0.7);
-}
-
-function sourceExtractionIds(hits: RouteHit[]): Set<string> {
-  const sources = new Set<string>();
-  for (const hit of hits) {
-    if (hit.route !== 'curated') {
-      continue;
-    }
-    for (const ref of hit.references ?? []) {
-      const id = extractionMemoryId(ref);
-      if (id) {
-        sources.add(id);
-      }
-    }
-  }
-  return sources;
-}
-
-function extractionRowId(ref: string): string | null {
-  const trimmed = ref.trim();
-  if (!trimmed) {
-    return null;
-  }
-  return trimmed.startsWith('extraction:') ? trimmed.slice('extraction:'.length).trim() || null : trimmed;
-}
-
-function extractionMemoryId(ref: string): string | null {
-  const id = extractionRowId(ref);
-  return id ? `extraction:${id}` : null;
 }
 
 function turnMemoryId(ref: string): string | null {
@@ -840,31 +556,6 @@ function normalizeText(value: string | undefined | null): string | undefined {
   }
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
-}
-
-function mergeRoutes(curated: RouteHit[], raw: RouteHit[], limit: number): RouteHit[] {
-  if (limit <= 0) {
-    return [];
-  }
-  const firstCurated = curated.slice(0, curatedQuota(limit));
-  const sourceIds = sourceExtractionIds(firstCurated);
-  const rawFallback = raw.filter((hit) => !sourceIds.has(hit.memoryId));
-  const rawQuota = limit - firstCurated.length;
-  const selected = firstCurated.concat(rawFallback.slice(0, rawQuota));
-  if (selected.length >= limit) {
-    return selected.slice(0, limit);
-  }
-  const selectedIds = new Set(selected.map((hit) => hit.memoryId));
-  for (const hit of curated.concat(rawFallback)) {
-    if (selected.length >= limit) {
-      break;
-    }
-    if (!selectedIds.has(hit.memoryId)) {
-      selected.push(hit);
-      selectedIds.add(hit.memoryId);
-    }
-  }
-  return selected;
 }
 
 function uniqueRefs(values: string[]): string[] {
@@ -904,19 +595,15 @@ export class Memories {
 
   async listSessions(params: {
     mode: ListModeInput;
-    observer?: string;
+    extractor?: string;
   }): Promise<SessionSnapshotRow[]> {
     return listSessionSnapshotRows(this.client, params);
   }
 
   async get(memoryId: string): Promise<RenderedMemory | null> {
     if (memoryId.startsWith('extraction:')) {
-      const observation = await getExtraction(this.client, memoryId);
-      return observation ? renderExtraction(observation) : null;
-    }
-    if (memoryId.startsWith('observation:')) {
-      const observation = await getObservation(this.client, memoryId);
-      return observation ? renderObservation(observation) : null;
+      const extraction = await getExtraction(this.client, memoryId);
+      return extraction ? renderExtraction(extraction) : null;
     }
     if (memoryId.startsWith('session:')) {
       const snapshot = await getSessionSnapshotRow(this.client, memoryId);
@@ -964,7 +651,7 @@ export class Memories {
   async recall(
     query: string,
     limit?: number,
-    options?: { mode?: RecallMode; budget?: number; queryLimit?: number; includeObservations?: boolean },
+    options?: { mode?: RecallMode; budget?: number; queryLimit?: number },
   ): Promise<RecallHit[]> {
     return recallMemories(this.client, query, limit, options);
   }

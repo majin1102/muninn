@@ -883,7 +883,7 @@ Expected: commit succeeds.
 ### Task 5: Browser Verification And Visual Fixes
 
 **Files:**
-- Modify only files needed to fix observed visual defects from verification.
+- Modify only files needed to fix visible visual defects from verification.
 
 - [ ] **Step 1: Start the sidecar with Board mounted**
 

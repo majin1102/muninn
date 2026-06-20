@@ -47,13 +47,13 @@ export interface TurnRow {
   project: string;
   cwd: string;
   agent: string;
-  observer: string;
+  extractor: string;
   events: TurnEvent[];
   artifacts?: Artifact[] | null;
   metadata?: Record<string, unknown> | null;
   prompt?: string | null;
   response?: string | null;
-  observingEpoch?: number | null;
+  extractionEpoch?: number | null;
   previousTurnSummary?: string | null;
   recentContext?: import('./checkpoint.js').RecentTurn[];
 }
@@ -82,30 +82,6 @@ export type ExtractionRow = {
   cwd: string;
   vector: number[];
   turnRefs: string[];
-  observationPaths: string[];
-  createdAt: string;
-  updatedAt: string;
-};
-
-export type ObservationContextRow = {
-  id: string;
-  path: string;
-  parentId?: string | null;
-  position: number;
-  content: string;
-  sourceRefs: string[];
-  expandRefs: string[];
-  observer: string;
-  createdAt: string;
-  updatedAt: string;
-};
-
-export type ObservationRow = {
-  id: string;
-  path: string;
-  text: string;
-  vector: number[];
-  extractionRefs: string[];
   createdAt: string;
   updatedAt: string;
 };
@@ -113,8 +89,6 @@ export type ObservationRow = {
 export type Turn = TurnRow;
 export type SessionSnapshot = SessionSnapshotRow;
 export type Extraction = ExtractionRow;
-export type ObservationContext = ObservationContextRow;
-export type Observation = ObservationRow;
 
 
 type NativeCoreBinding = {
@@ -124,6 +98,7 @@ type NativeCoreBinding = {
     mode: ListModeInput;
     agent?: string;
     sessionId?: string;
+    extractor?: string;
   }): MaybePromise<Turn[]>;
   turnTimeline(params: {
     memoryId: string;
@@ -131,11 +106,11 @@ type NativeCoreBinding = {
     afterLimit?: number;
   }): MaybePromise<Turn[]>;
   turnLoadAfterEpoch(params: {
-    observer: string;
+    extractor: string;
     committedEpoch?: number | null;
   }): MaybePromise<Turn[]>;
   turnDelta(params: {
-    observer: string;
+    extractor: string;
     baselineVersion: number;
   }): MaybePromise<Turn[]>;
   turnInsert(params: {
@@ -151,11 +126,11 @@ type NativeCoreBinding = {
   }): MaybePromise<CompactResult>;
   sessionGetSnapshot(snapshotId: string): MaybePromise<SessionSnapshotRow | null>;
   sessionListSnapshots(params: {
-    observer?: string;
+    extractor?: string;
   }): MaybePromise<SessionSnapshotRow[]>;
   sessionSnapshots(sessionId: string): MaybePromise<SessionSnapshotRow[]>;
   sessionDelta(params: {
-    observer: string;
+    extractor: string;
     baselineVersion: number;
   }): MaybePromise<SessionSnapshotRow[]>;
   sessionInsert(params: {
@@ -205,49 +180,6 @@ type NativeCoreBinding = {
   extractionOptimize(params: {
     mergeCount: number;
   }): MaybePromise<CompactResult>;
-  observationContextUpsert(params: {
-    rows: ObservationContext[];
-  }): MaybePromise<void>;
-  observationContextList(params: {
-    observer?: string;
-  }): MaybePromise<ObservationContext[]>;
-  observationContextGet(params: {
-    ids: string[];
-  }): MaybePromise<ObservationContext[]>;
-  observationContextDelete(params: {
-    ids: string[];
-  }): MaybePromise<{ deleted: number }>;
-  observationContextTableStats(): MaybePromise<TableStats | null>;
-  observationContextEnsureIdIndex(): MaybePromise<EnsureVectorIndexResult>;
-  observationContextOptimize(params: {
-    mergeCount: number;
-  }): MaybePromise<CompactResult>;
-  observationUpsert(params: {
-    rows: Observation[];
-  }): MaybePromise<void>;
-  observationDelete(params: {
-    ids: string[];
-  }): MaybePromise<{ deleted: number }>;
-  observationSearch(params: {
-    query: string;
-    vector: number[];
-    limit: number;
-    mode: RecallMode;
-  }): MaybePromise<Observation[]>;
-  observationGet(params: {
-    ids: string[];
-  }): MaybePromise<Observation[]>;
-  observationTableStats(): MaybePromise<TableStats | null>;
-  observationEnsureVectorIndex(params: {
-    targetPartitionSize: number;
-  }): MaybePromise<EnsureVectorIndexResult>;
-  observationCompact(): MaybePromise<CompactResult>;
-  observationCleanup(params: {
-    floorVersion: number;
-  }): MaybePromise<CompactResult>;
-  observationOptimize(params: {
-    mergeCount: number;
-  }): MaybePromise<CompactResult>;
   describeTurnTable(): MaybePromise<TableDescription | null>;
   describeSessionTable(): MaybePromise<TableDescription | null>;
   describeExtractionTable(): MaybePromise<TableDescription | null>;
@@ -264,6 +196,7 @@ export interface TurnTableBinding {
     mode: ListModeInput;
     agent?: string;
     sessionId?: string;
+    extractor?: string;
   }): Promise<Turn[]>;
   timelineTurns(params: {
     memoryId: string;
@@ -271,11 +204,11 @@ export interface TurnTableBinding {
     afterLimit?: number;
   }): Promise<Turn[]>;
   loadTurnsAfterEpoch(params: {
-    observer: string;
+    extractor: string;
     committedEpoch?: number | null;
   }): Promise<Turn[]>;
   delta(params: {
-    observer: string;
+    extractor: string;
     baselineVersion: number;
   }): Promise<Turn[]>;
   insert(params: {
@@ -295,11 +228,11 @@ export interface TurnTableBinding {
 export interface SessionTableBinding {
   getSnapshot(snapshotId: string): Promise<SessionSnapshot | null>;
   listSnapshots(params: {
-    observer?: string;
+    extractor?: string;
   }): Promise<SessionSnapshotRow[]>;
   threadSnapshots(sessionId: string): Promise<SessionSnapshotRow[]>;
   delta(params: {
-    observer: string;
+    extractor: string;
     baselineVersion: number;
   }): Promise<SessionSnapshotRow[]>;
   insert(params: {
@@ -356,62 +289,11 @@ export interface ExtractionTableBinding {
   describe(): Promise<TableDescription | null>;
 }
 
-export interface ObservationContextTableBinding {
-  upsert(params: {
-    rows: ObservationContext[];
-  }): Promise<void>;
-  list(params: {
-    observer?: string;
-  }): Promise<ObservationContext[]>;
-  get(params: {
-    ids: string[];
-  }): Promise<ObservationContext[]>;
-  delete(params: {
-    ids: string[];
-  }): Promise<{ deleted: number }>;
-  stats(): Promise<TableStats | null>;
-  ensureIdIndex(): Promise<EnsureVectorIndexResult>;
-  optimize(params: {
-    mergeCount: number;
-  }): Promise<CompactResult>;
-}
-
-export interface ObservationTableBinding {
-  upsert(params: {
-    rows: Observation[];
-  }): Promise<void>;
-  delete(params: {
-    ids: string[];
-  }): Promise<{ deleted: number }>;
-  search(params: {
-    query: string;
-    vector: number[];
-    limit: number;
-    mode: RecallMode;
-  }): Promise<Observation[]>;
-  get(params: {
-    ids: string[];
-  }): Promise<Observation[]>;
-  stats(): Promise<TableStats | null>;
-  ensureVectorIndex(params: {
-    targetPartitionSize: number;
-  }): Promise<EnsureVectorIndexResult>;
-  compact(): Promise<CompactResult>;
-  cleanup(params: {
-    floorVersion: number;
-  }): Promise<CompactResult>;
-  optimize(params: {
-    mergeCount: number;
-  }): Promise<CompactResult>;
-}
-
 export interface NativeTables {
   close(): Promise<void>;
   turnTable: TurnTableBinding;
   sessionTable: SessionTableBinding;
   extractionTable: ExtractionTableBinding;
-  observationContextTable: ObservationContextTableBinding;
-  observationTable: ObservationTableBinding;
 }
 
 const singletons = new Map<string, NativeTables>();
@@ -512,26 +394,6 @@ function wrapBinding(native: NativeCoreBinding): NativeTables {
       optimize: async (params) => resolveNativeResult(native.extractionOptimize(params)),
       describe: async () => resolveNativeResult(native.describeExtractionTable()),
     },
-    observationContextTable: {
-      upsert: async (params) => resolveNativeResult(native.observationContextUpsert(params)),
-      list: async (params) => resolveNativeResult(native.observationContextList(params)),
-      get: async (params) => resolveNativeResult(native.observationContextGet(params)),
-      delete: async (params) => resolveNativeResult(native.observationContextDelete(params)),
-      stats: async () => resolveNativeResult(native.observationContextTableStats()),
-      ensureIdIndex: async () => resolveNativeResult(native.observationContextEnsureIdIndex()),
-      optimize: async (params) => resolveNativeResult(native.observationContextOptimize(params)),
-    },
-    observationTable: {
-      upsert: async (params) => resolveNativeResult(native.observationUpsert(params)),
-      delete: async (params) => resolveNativeResult(native.observationDelete(params)),
-      search: async (params) => resolveNativeResult(native.observationSearch(params)),
-      get: async (params) => resolveNativeResult(native.observationGet(params)),
-      stats: async () => resolveNativeResult(native.observationTableStats()),
-      ensureVectorIndex: async (params) => resolveNativeResult(native.observationEnsureVectorIndex(params)),
-      compact: async () => resolveNativeResult(native.observationCompact()),
-      cleanup: async (params) => resolveNativeResult(native.observationCleanup(params)),
-      optimize: async (params) => resolveNativeResult(native.observationOptimize(params)),
-    },
   };
 }
 
@@ -552,9 +414,7 @@ export const __testing = {
 export type TableName =
   | 'turn'
   | 'session'
-  | 'extraction'
-  | 'observationContext'
-  | 'observation';
+  | 'extraction';
 
 export class TableMutationLocks {
   private readonly queues = new Map<TableName, Promise<void>>();
@@ -603,22 +463,6 @@ export function lockNativeTables<T extends NativeTables>(tables: T, locks: Table
       compact: () => locks.with('extraction', () => tables.extractionTable.compact()),
       cleanup: (params) => locks.with('extraction', () => tables.extractionTable.cleanup(params)),
       optimize: (params) => locks.with('extraction', () => tables.extractionTable.optimize(params)),
-    },
-    observationContextTable: tables.observationContextTable && {
-      ...tables.observationContextTable,
-      upsert: (params) => locks.with('observationContext', () => tables.observationContextTable.upsert(params)),
-      delete: (params) => locks.with('observationContext', () => tables.observationContextTable.delete(params)),
-      ensureIdIndex: () => locks.with('observationContext', () => tables.observationContextTable.ensureIdIndex()),
-      optimize: (params) => locks.with('observationContext', () => tables.observationContextTable.optimize(params)),
-    },
-    observationTable: tables.observationTable && {
-      ...tables.observationTable,
-      upsert: (params) => locks.with('observation', () => tables.observationTable.upsert(params)),
-      delete: (params) => locks.with('observation', () => tables.observationTable.delete(params)),
-      ensureVectorIndex: (params) => locks.with('observation', () => tables.observationTable.ensureVectorIndex(params)),
-      compact: () => locks.with('observation', () => tables.observationTable.compact()),
-      cleanup: (params) => locks.with('observation', () => tables.observationTable.cleanup(params)),
-      optimize: (params) => locks.with('observation', () => tables.observationTable.optimize(params)),
     },
   };
 }
