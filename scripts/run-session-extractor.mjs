@@ -143,8 +143,8 @@ async function main() {
     }
     log(`touchedThreads=${touchedIds.size}`);
 
-    const extractionChanges = await indexTesting.indexTouchedExtractions(tables, threads, touchedIds);
-    log(`extractionChanges=${extractionChanges.length}`);
+    await indexTesting.indexTouchedExtractions(tables, threads, touchedIds);
+    log(`indexedThreads=${touchedIds.size}`);
 
     const sessionSnapshots = await tables.sessionTable.threadSnapshots(options.sessionId);
     const extractionRows = await tables.extractionTable.list({ limit: 1_000_000 });
