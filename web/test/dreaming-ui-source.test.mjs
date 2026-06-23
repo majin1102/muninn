@@ -20,9 +20,11 @@ test('session tree renders one top-level dreaming project with dreaming children
   assert.match(treeSource, /isProjectDreamingProject\(project\) \? \(/);
   assert.match(treeSource, /isProjectDreamingSession\(session\)[\s\S]*?<ProjectDreamingIcon \/>/);
   assert.match(treeSource, /function ProjectDreamingIcon\(\)/);
-  assert.match(treeSource, /<span className="tree-icon tree-icon-project-dreaming" aria-hidden="true">/);
-  assert.match(treeSource, /<Folder className="tree-icon-project-dreaming-folder" \/>/);
-  assert.match(treeSource, /<Moon className="tree-icon-project-dreaming-moon" \/>/);
+  assert.match(treeSource, /<svg[\s\S]*?className="tree-icon tree-icon-project-dreaming"[\s\S]*?viewBox="0 0 21 17"[\s\S]*?aria-hidden="true"/);
+  assert.match(treeSource, /<path[\s\S]*?stroke="currentColor"[\s\S]*?strokeWidth="1\.7"[\s\S]*?strokeLinecap="round"[\s\S]*?strokeLinejoin="round"/);
+  assert.match(treeSource, /<path[\s\S]*?fill="currentColor"/);
+  assert.doesNotMatch(treeSource, /tree-icon-project-dreaming-folder/);
+  assert.doesNotMatch(treeSource, /tree-icon-project-dreaming-moon/);
   assert.doesNotMatch(treeSource, /tree-icon-project-dreaming-star/);
   assert.match(treeSource, /sortProjectsWithDreamingFirst/);
   assert.match(treeSource, /isProjectDreamingProject\(left\) \? -1/);
@@ -33,10 +35,9 @@ test('session tree renders one top-level dreaming project with dreaming children
   assert.match(cssSource, /\.tree-trigger-main > span:not\(\.agent-logo-cluster\):not\(\.agent-logo-frame\):not\(\.tree-session-agent-icon\):not\(\.tree-icon-project-dreaming\)/);
   assert.match(cssSource, /\.tree-icon-project-dreaming \{[\s\S]*?width: 21px;[\s\S]*?height: 17px;/);
   assert.match(cssSource, /\.tree-icon-project-dreaming \{[\s\S]*?overflow: visible;/);
-  assert.match(cssSource, /\.tree-icon-project-dreaming-folder \{[\s\S]*?width: 15px;[\s\S]*?height: 15px;/);
-  assert.match(cssSource, /\.tree-icon-project-dreaming-moon \{[\s\S]*?right: -1px;[\s\S]*?bottom: -1px;[\s\S]*?width: 12px;[\s\S]*?height: 12px;/);
   assert.doesNotMatch(cssSource, /\.tree-icon-project-dreaming[^}]*background:/);
-  assert.doesNotMatch(cssSource, /\.tree-icon-project-dreaming-moon[^}]*#[0-9a-fA-F]{3,6}/);
+  assert.doesNotMatch(cssSource, /\.tree-icon-project-dreaming-folder/);
+  assert.doesNotMatch(cssSource, /\.tree-icon-project-dreaming-moon/);
 });
 
 test('project agent icons ignore synthetic dreaming sessions', async () => {
