@@ -10,12 +10,16 @@ import type {
   MemoryResponse,
   MemoryWatermark,
   MemoryWatermarkResponse,
+  ProjectDreamResponse,
+  ProjectDreamSignals as ApiProjectDreamSignals,
+  ProjectDreamSignalsResponse,
   TurnContent,
   TurnEvent,
 } from '@muninn/common';
 import {
   captureTurn,
   captureTurns,
+  dreaming,
   memories,
   memoryPipeline,
   turns,
@@ -114,6 +118,23 @@ function memoryWatermarkResponse(watermark: MemoryWatermark): MemoryWatermarkRes
   };
 }
 
+function projectDreamResponse(project: string, signals: ApiProjectDreamSignals | null, created?: boolean): ProjectDreamResponse {
+  return {
+    project,
+    created,
+    memorySignals: signals?.memorySignals ?? [],
+    skillSignals: signals?.skillSignals ?? [],
+    requestId: generateRequestId(),
+  };
+}
+
+function projectDreamSignalsResponse(signals: ApiProjectDreamSignals): ProjectDreamSignalsResponse {
+  return {
+    ...signals,
+    requestId: generateRequestId(),
+  };
+}
+
 function parseNonNegativeInteger(
   raw: string | undefined,
   fieldName: string,
@@ -202,6 +223,73 @@ type LocomoBridgeHit = {
   matched_text: string;
   detail?: string;
 };
+
+app.get('/api/v1/dreaming/project', async (c) => {
+  const project = c.req.query('project')?.trim();
+  const database = c.req.query('database');
+  if (!project) {
+    return c.json(errorResponse('invalidRequest', 'project is required'), 400);
+  }
+  let signals;
+  try {
+    signals = await dreaming.getProjectSignals(project, database);
+  } catch (error) {
+    const mapped = mapCoreLookupError(error);
+    return c.json(mapped.body, mapped.status as 400 | 500 | 503);
+  }
+  if (!signals) {
+    return c.json(errorResponse('notFound', 'project dream not found'), 404);
+  }
+  return c.json(projectDreamResponse(project, signals));
+});
+
+app.get('/api/v1/dreaming/project/signals', async (c) => {
+  const project = c.req.query('project')?.trim();
+  const database = c.req.query('database');
+  if (!project) {
+    return c.json(errorResponse('invalidRequest', 'project is required'), 400);
+  }
+  let signals;
+  try {
+    signals = await dreaming.getProjectSignals(project, database);
+  } catch (error) {
+    const mapped = mapCoreLookupError(error);
+    return c.json(mapped.body, mapped.status as 400 | 500 | 503);
+  }
+  if (!signals) {
+    return c.json(errorResponse('notFound', 'project dream not found'), 404);
+  }
+  return c.json(projectDreamSignalsResponse(signals));
+});
+
+app.post('/api/v1/dreaming/project', async (c) => {
+  const rawBody = await c.req.text();
+  let body: { database?: unknown; project?: unknown } = {};
+  if (rawBody.trim().length > 0) {
+    try {
+      body = JSON.parse(rawBody) as { database?: unknown; project?: unknown };
+    } catch {
+      return c.json(errorResponse('invalidRequest', 'Invalid JSON body'), 400);
+    }
+  }
+  const project = (c.req.query('project') ?? (typeof body.project === 'string' ? body.project : '')).trim();
+  const database = c.req.query('database') ?? (typeof body.database === 'string' ? body.database : undefined);
+  if (!project) {
+    return c.json(errorResponse('invalidRequest', 'project is required'), 400);
+  }
+  let result;
+  try {
+    result = await dreaming.createProject(project, database);
+  } catch (error) {
+    const mapped = mapCoreLookupError(error);
+    return c.json(mapped.body, mapped.status as 400 | 500 | 503);
+  }
+  const signals = await dreaming.getProjectSignals(project, database);
+  if (!signals) {
+    return c.json(errorResponse('notFound', 'no project signals available'), 404);
+  }
+  return c.json(projectDreamResponse(project, signals, result.created));
+});
 
 app.get('/api/v1/recall', async (c) => {
   const query = c.req.query('query');

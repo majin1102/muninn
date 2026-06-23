@@ -12,9 +12,7 @@ use super::access::{
     LanceDataset, TableAccess, TableDescription, TableOptions, TableStats, delete_by_row_ids,
     describe_dataset, escape_predicate_string,
 };
-use super::codec::{
-    record_batch_to_turns, record_batch_to_turns_with_row_ids, turns_to_reader,
-};
+use super::codec::{record_batch_to_turns, record_batch_to_turns_with_row_ids, turns_to_reader};
 use super::memory_id::{MemoryId, MemoryLayer, deserialize_memory_id, serialize_memory_id};
 use crate::maintenance::{cleanup_dataset, compact_dataset};
 
@@ -51,7 +49,9 @@ impl TurnQuery {
                 agent,
                 extractor,
             } => {
-                turn.session_id == *session_id && turn.agent == *agent && turn.extractor == *extractor
+                turn.session_id == *session_id
+                    && turn.agent == *agent
+                    && turn.extractor == *extractor
             }
         }
     }
@@ -165,6 +165,7 @@ impl Turn {
 pub(crate) enum TurnSelect {
     ById(u64),
     Filter {
+        project: Option<String>,
         agent: Option<String>,
         session_id: Option<String>,
         extractor: Option<String>,
@@ -211,15 +212,12 @@ impl TurnTable {
     pub(crate) async fn select(&self, selector: TurnSelect) -> Result<Vec<Turn>> {
         match selector {
             TurnSelect::ById(turn_id) => Ok(self.get_turn(turn_id).await?.into_iter().collect()),
-            TurnSelect::Filter { agent, session_id, extractor } => {
-                let turns = self.load_all_turns().await?;
-                Ok(filter_turns(
-                    turns,
-                    agent.as_deref(),
-                    session_id.as_deref(),
-                    extractor.as_deref(),
-                ))
-            }
+            TurnSelect::Filter {
+                project,
+                agent,
+                session_id,
+                extractor,
+            } => self.load_filtered_turns(project, agent, session_id, extractor).await,
         }
     }
 
@@ -249,7 +247,11 @@ impl TurnTable {
                 .await;
         }
         let retry_turns = turns.to_vec();
-        match self.access.write(turns_to_reader(retry_turns.clone())).await {
+        match self
+            .access
+            .write(turns_to_reader(retry_turns.clone()))
+            .await
+        {
             Ok(dataset) => self.assign_inserted_ids_from_scan(&dataset, turns).await,
             Err(Error::DatasetAlreadyExists { .. }) => {
                 let mut dataset = self.access.try_open().await?.ok_or_else(|| {
@@ -377,11 +379,7 @@ impl TurnTable {
         Ok(turns)
     }
 
-    pub async fn delta(
-        &self,
-        extractor: &str,
-        baseline_version: u64,
-    ) -> Result<Vec<Turn>> {
+    pub async fn delta(&self, extractor: &str, baseline_version: u64) -> Result<Vec<Turn>> {
         let Some(dataset) = self.access.try_open().await? else {
             return Ok(Vec::new());
         };
@@ -450,11 +448,34 @@ impl TurnTable {
         let Some(dataset) = self.access.try_open().await? else {
             return Ok(Vec::new());
         };
-        let batch = dataset
-            .scan()
-            .with_row_id()
-            .try_into_batch()
-            .await?;
+        let batch = dataset.scan().with_row_id().try_into_batch().await?;
+        if batch.num_rows() == 0 {
+            return Ok(Vec::new());
+        }
+        record_batch_to_turns(&batch)
+    }
+
+    async fn load_filtered_turns(
+        &self,
+        project: Option<String>,
+        agent: Option<String>,
+        session_id: Option<String>,
+        extractor: Option<String>,
+    ) -> Result<Vec<Turn>> {
+        let Some(dataset) = self.access.try_open().await? else {
+            return Ok(Vec::new());
+        };
+        let mut scanner = dataset.scan();
+        scanner.with_row_id();
+        if let Some(predicate) = turn_filter_predicate(
+            project.as_deref(),
+            agent.as_deref(),
+            session_id.as_deref(),
+            extractor.as_deref(),
+        ) {
+            scanner.filter(&predicate)?;
+        }
+        let batch = scanner.try_into_batch().await?;
         if batch.num_rows() == 0 {
             return Ok(Vec::new());
         }
@@ -518,6 +539,7 @@ impl TurnTable {
 
     pub async fn list_turns(
         &self,
+        project: Option<String>,
         agent: Option<String>,
         session_id: Option<String>,
         extractor: Option<String>,
@@ -525,20 +547,31 @@ impl TurnTable {
         limit: usize,
     ) -> Result<Vec<Turn>> {
         let turns = self
-            .select(TurnSelect::Filter { agent, session_id, extractor })
+            .select(TurnSelect::Filter {
+                project,
+                agent,
+                session_id,
+                extractor,
+            })
             .await?;
         Ok(apply_list_mode(turns, offset, limit, false))
     }
 
     pub async fn list_recent_turns(
         &self,
+        project: Option<String>,
         agent: Option<String>,
         session_id: Option<String>,
         extractor: Option<String>,
         limit: usize,
     ) -> Result<Vec<Turn>> {
         let turns = self
-            .select(TurnSelect::Filter { agent, session_id, extractor })
+            .select(TurnSelect::Filter {
+                project,
+                agent,
+                session_id,
+                extractor,
+            })
             .await?;
         Ok(apply_list_mode(turns, 0, limit, true))
     }
@@ -560,22 +593,37 @@ impl TurnTable {
         };
         let query = TurnQuery::from_turn(&anchor);
         let turns = self.load_session_turns(&query).await?;
-        Ok(timeline_from_source(&turns, memory_id, before_limit, after_limit, &query).unwrap_or_default())
+        Ok(
+            timeline_from_source(&turns, memory_id, before_limit, after_limit, &query)
+                .unwrap_or_default(),
+        )
     }
 }
 
-fn apply_list_mode(
-    mut turns: Vec<Turn>,
-    offset: usize,
-    limit: usize,
-    recency: bool,
-) -> Vec<Turn> {
-    turns.sort_by(|left, right| right.created_at.cmp(&left.created_at));
+fn apply_list_mode(mut turns: Vec<Turn>, offset: usize, limit: usize, recency: bool) -> Vec<Turn> {
+    turns.sort_by(|left, right| {
+        right
+            .created_at
+            .cmp(&left.created_at)
+            .then_with(|| right.updated_at.cmp(&left.updated_at))
+            .then_with(|| right.turn_id.cmp(&left.turn_id))
+    });
     if recency {
         turns.truncate(limit);
-        turns.sort_by(|left, right| left.created_at.cmp(&right.created_at));
+        turns.sort_by(|left, right| {
+            left.created_at
+                .cmp(&right.created_at)
+                .then_with(|| left.updated_at.cmp(&right.updated_at))
+                .then_with(|| left.turn_id.cmp(&right.turn_id))
+        });
         return turns;
     }
+    turns.sort_by(|left, right| {
+        left.created_at
+            .cmp(&right.created_at)
+            .then_with(|| left.updated_at.cmp(&right.updated_at))
+            .then_with(|| left.turn_id.cmp(&right.turn_id))
+    });
     turns.into_iter().skip(offset).take(limit).collect()
 }
 
@@ -599,23 +647,36 @@ fn timeline_from_source(
     Some(filtered[start..end].to_vec())
 }
 
-fn filter_turns(
-    turns: Vec<Turn>,
+fn turn_filter_predicate(
+    project: Option<&str>,
     agent: Option<&str>,
     session_id: Option<&str>,
     extractor: Option<&str>,
-) -> Vec<Turn> {
-    turns
-        .into_iter()
-        .filter(|turn| {
-            let agent_match = agent.map(|value| turn.agent == value).unwrap_or(true);
-            let session_match = session_id
-                .map(|value| turn.session_id.as_deref() == Some(value))
-                .unwrap_or(true);
-            let extractor_match = extractor.map(|value| turn.extractor == value).unwrap_or(true);
-            agent_match && session_match && extractor_match
-        })
-        .collect()
+) -> Option<String> {
+    let mut parts = Vec::new();
+    if let Some(project) = project {
+        parts.push(format!("project = '{}'", escape_predicate_string(project)));
+    }
+    if let Some(agent) = agent {
+        parts.push(format!("agent = '{}'", escape_predicate_string(agent)));
+    }
+    if let Some(session_id) = session_id {
+        parts.push(format!(
+            "session_id = '{}'",
+            escape_predicate_string(session_id)
+        ));
+    }
+    if let Some(extractor) = extractor {
+        parts.push(format!(
+            "extractor = '{}'",
+            escape_predicate_string(extractor)
+        ));
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join(" AND "))
+    }
 }
 
 fn session_query_filter(query: &TurnQuery) -> String {

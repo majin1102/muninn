@@ -8,12 +8,17 @@ const DEFAULT_DATABASE = 'main';
 const DEFAULT_EXTRACTOR_MAX_ATTEMPTS = 3;
 const DEFAULT_EXTRACTOR_ACTIVE_WINDOW_DAYS = 7;
 const DEFAULT_EXTRACTOR_CONTINUITY_HINTS = 1;
-const DEFAULT_EXTRACTOR_EPOCH_TURNS = 3;
+const DEFAULT_EXTRACTOR_MIN_EPOCH_TURNS = 8;
+const DEFAULT_EXTRACTOR_MAX_EPOCH_TURNS = 32;
+const DEFAULT_EXTRACTOR_MAX_INPUT_CHARS = 24_576;
+const DEFAULT_EXTRACTOR_SNAPSHOT_INPUT_CHARS = 16_384;
+const DEFAULT_EXTRACTOR_PREVIEW_CHARS = 800;
 const DEFAULT_EXTRACTOR_EPOCH_WINDOW_MS = 10_000;
 const DEFAULT_WATCHDOG_INTERVAL_MS = 60_000;
 const DEFAULT_WATCHDOG_COMPACT_MIN_FRAGMENTS = 8;
 const DEFAULT_WATCHDOG_TARGET_PARTITION_SIZE = 1_024;
 const DEFAULT_WATCHDOG_OPTIMIZE_MERGE_COUNT = 4;
+const DEFAULT_DREAMING_INTERVAL_MS = 1_800_000;
 const DEFAULT_EXTRACTION_DIMENSIONS = 8;
 const DEFAULT_RECALL_MODE = 'hybrid';
 
@@ -35,7 +40,11 @@ type ExtractorConfigRecord = {
   maxAttempts?: number;
   activeWindowDays?: number;
   continuityHints?: number;
-  epochTurns?: number;
+  minEpochTurns?: number;
+  maxEpochTurns?: number;
+  maxInputChars?: number;
+  snapshotInputChars?: number;
+  previewChars?: number;
   epochWindowMs?: number;
 };
 
@@ -62,6 +71,7 @@ export type MuninnConfigRecord = {
   extractor?: ExtractorConfigRecord;
   providers?: ProvidersConfigRecord;
   watchdog?: Record<string, unknown>;
+  dreaming?: Record<string, unknown>;
   capture?: CaptureConfigRecord;
 };
 
@@ -78,7 +88,11 @@ export type ExtractorLlmConfig = TextProviderConfig & {
   maxAttempts: number;
   activeWindowDays: number;
   continuityHints: number;
-  epochTurns: number;
+  minEpochTurns: number;
+  maxEpochTurns: number;
+  maxInputChars: number;
+  snapshotInputChars: number;
+  previewChars: number;
   epochWindowMs: number;
 };
 
@@ -102,6 +116,11 @@ export type WatchdogConfig = {
     targetPartitionSize: number;
     optimizeMergeCount: number;
   };
+};
+
+export type DreamingConfig = {
+  enabled: boolean;
+  intervalMs: number;
 };
 
 export type CaptureConfig = {
@@ -175,7 +194,11 @@ export function getExtractorLlmConfig(): ExtractorLlmConfig | null {
     maxAttempts: extractor.maxAttempts ?? DEFAULT_EXTRACTOR_MAX_ATTEMPTS,
     activeWindowDays: extractor.activeWindowDays ?? DEFAULT_EXTRACTOR_ACTIVE_WINDOW_DAYS,
     continuityHints: extractor.continuityHints ?? DEFAULT_EXTRACTOR_CONTINUITY_HINTS,
-    epochTurns: extractor.epochTurns ?? DEFAULT_EXTRACTOR_EPOCH_TURNS,
+    minEpochTurns: extractor.minEpochTurns ?? DEFAULT_EXTRACTOR_MIN_EPOCH_TURNS,
+    maxEpochTurns: extractor.maxEpochTurns ?? DEFAULT_EXTRACTOR_MAX_EPOCH_TURNS,
+    maxInputChars: extractor.maxInputChars ?? DEFAULT_EXTRACTOR_MAX_INPUT_CHARS,
+    snapshotInputChars: extractor.snapshotInputChars ?? DEFAULT_EXTRACTOR_SNAPSHOT_INPUT_CHARS,
+    previewChars: extractor.previewChars ?? DEFAULT_EXTRACTOR_PREVIEW_CHARS,
     epochWindowMs: extractor.epochWindowMs ?? DEFAULT_EXTRACTOR_EPOCH_WINDOW_MS,
     provider: parseLlmProvider(llm.type),
     model: llm.model,
@@ -225,6 +248,23 @@ export function getWatchdogConfig(): WatchdogConfig {
         ? extraction.optimizeMergeCount
         : DEFAULT_WATCHDOG_OPTIMIZE_MERGE_COUNT,
     },
+  };
+}
+
+export function getDreamingConfig(): DreamingConfig {
+  return getDreamingConfigFromConfig(loadMuninnConfig());
+}
+
+export function getDreamingConfigFromConfigForTests(config: MuninnConfigRecord | null): DreamingConfig {
+  return getDreamingConfigFromConfig(config);
+}
+
+function getDreamingConfigFromConfig(config: MuninnConfigRecord | null): DreamingConfig {
+  return {
+    enabled: typeof config?.dreaming?.enabled === 'boolean' ? config.dreaming.enabled : true,
+    intervalMs: typeof config?.dreaming?.intervalMs === 'number'
+      ? config.dreaming.intervalMs
+      : DEFAULT_DREAMING_INTERVAL_MS,
   };
 }
 
@@ -373,7 +413,7 @@ function parseEmbeddingProvider(provider: string): 'mock' | 'openai' {
 
 function validateTopLevelConfig(config: MuninnConfigRecord): void {
   const raw = config as Record<string, unknown>;
-  const allowedKeys = new Set(['storage', 'extractor', 'providers', 'watchdog', 'capture']);
+  const allowedKeys = new Set(['storage', 'extractor', 'providers', 'watchdog', 'capture', 'dreaming']);
   for (const key of Object.keys(raw)) {
     if (!allowedKeys.has(key)) {
       throw new Error(`unsupported top-level config key: ${key}`);
@@ -383,6 +423,7 @@ function validateTopLevelConfig(config: MuninnConfigRecord): void {
   validateExtractorConfig(config.extractor);
   validateProvidersConfig(config.providers);
   validateWatchdogConfig(config.watchdog);
+  validateDreamingConfig(config.dreaming);
   validateCaptureConfig(config.capture);
 }
 
@@ -424,7 +465,21 @@ function validateExtractorConfig(extractor: unknown): void {
   validateOptionalPositiveInteger(config.maxAttempts, 'extractor.maxAttempts');
   validateOptionalPositiveInteger(config.activeWindowDays, 'extractor.activeWindowDays');
   validateOptionalPositiveInteger(config.continuityHints, 'extractor.continuityHints');
-  validateOptionalPositiveInteger(config.epochTurns, 'extractor.epochTurns');
+  validateOptionalPositiveInteger(config.minEpochTurns, 'extractor.minEpochTurns');
+  validateOptionalPositiveInteger(config.maxEpochTurns, 'extractor.maxEpochTurns');
+  validateOptionalPositiveInteger(config.maxInputChars, 'extractor.maxInputChars');
+  validateOptionalPositiveInteger(config.snapshotInputChars, 'extractor.snapshotInputChars');
+  validateOptionalPositiveInteger(config.previewChars, 'extractor.previewChars');
+  const minEpochTurns = config.minEpochTurns ?? DEFAULT_EXTRACTOR_MIN_EPOCH_TURNS;
+  const maxEpochTurns = config.maxEpochTurns ?? DEFAULT_EXTRACTOR_MAX_EPOCH_TURNS;
+  if (maxEpochTurns < minEpochTurns) {
+    throw new Error('extractor.maxEpochTurns must be greater than or equal to extractor.minEpochTurns');
+  }
+  const maxInputChars = config.maxInputChars ?? DEFAULT_EXTRACTOR_MAX_INPUT_CHARS;
+  const previewChars = config.previewChars ?? DEFAULT_EXTRACTOR_PREVIEW_CHARS;
+  if (previewChars >= maxInputChars) {
+    throw new Error('extractor.previewChars must be smaller than extractor.maxInputChars');
+  }
   validateOptionalPositiveInteger(config.epochWindowMs, 'extractor.epochWindowMs');
 }
 
@@ -508,6 +563,15 @@ function validateWatchdogConfig(watchdog: unknown): void {
       'watchdog.extraction.optimizeMergeCount',
     );
   }
+}
+
+function validateDreamingConfig(dreaming: unknown): void {
+  if (dreaming === undefined) {
+    return;
+  }
+  const config = expectRecord(dreaming, 'dreaming');
+  validateOptionalBoolean(config.enabled, 'dreaming.enabled');
+  validateOptionalPositiveInteger(config.intervalMs, 'dreaming.intervalMs');
 }
 
 function validateCaptureConfig(capture: unknown): void {

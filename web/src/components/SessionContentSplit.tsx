@@ -38,10 +38,12 @@ type SessionContentSplitProps = {
   onActiveTimelineChange: (memoryId: string | null) => void;
   onOpenTimeline: (memoryId: string) => void;
   onLocateConversationTurn: (memoryId: string) => void;
+  onLoadTurnDetail: (memoryId: string) => Promise<ProjectTurnNode>;
   canLoadMoreAfter: boolean;
   loadingMoreAfter: boolean;
   onLoadMoreAfter: () => void;
   loading: boolean;
+  timelineLoading: boolean;
   error: string | null;
   onModeChange: (mode: SessionContentMode) => void;
 };
@@ -59,10 +61,12 @@ export function SessionContentSplit({
   onActiveTimelineChange,
   onOpenTimeline,
   onLocateConversationTurn,
+  onLoadTurnDetail,
   canLoadMoreAfter,
   loadingMoreAfter,
   onLoadMoreAfter,
   loading,
+  timelineLoading,
   error,
   onModeChange,
 }: SessionContentSplitProps) {
@@ -220,6 +224,7 @@ export function SessionContentSplit({
         </div>
         <TimelinePane
           timeline={session?.timeline ?? []}
+          loading={timelineLoading}
           activeTimelineId={activeTimelineId}
           openTimelineId={openTimelineId}
           openTimelineRequestId={openTimelineRequestId}
@@ -275,6 +280,7 @@ export function SessionContentSplit({
             canLoadMoreAfter={canLoadMoreAfter}
             loadingMoreAfter={loadingMoreAfter}
             onLoadMoreAfter={onLoadMoreAfter}
+            onLoadTurnDetail={onLoadTurnDetail}
             loading={loading}
             error={error}
           />

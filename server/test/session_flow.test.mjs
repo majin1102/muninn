@@ -44,7 +44,7 @@ function memoryWatermarkResolved(watermark) {
 
 async function waitForWatermarkResolved() {
   let resolvedBody = null;
-  for (let attempt = 0; attempt < 50; attempt += 1) {
+  for (let attempt = 0; attempt < 250; attempt += 1) {
     const response = await app.request('/api/v1/memory/watermark');
     assert.equal(response.status, 200);
     resolvedBody = await json(response);
@@ -103,6 +103,20 @@ function sessionTurnsPath(agent, sessionKey, { project = TEST_PROJECT, offset = 
   return `/app/api/session/agents/${encodeURIComponent(agent)}/sessions/${encodeURIComponent(sessionKey)}/turns?${params.toString()}`;
 }
 
+function sessionTimelinePath(agent, sessionKey, { project = TEST_PROJECT } = {}) {
+  const params = new URLSearchParams({ project });
+  return `/app/api/session/agents/${encodeURIComponent(agent)}/sessions/${encodeURIComponent(sessionKey)}/timeline?${params.toString()}`;
+}
+
+function sessionTurnPositionPath(agent, sessionKey, { project = TEST_PROJECT, turnId, limit = 10 } = {}) {
+  const params = new URLSearchParams({
+    project,
+    turnId,
+    limit: String(limit),
+  });
+  return `/app/api/session/agents/${encodeURIComponent(agent)}/sessions/${encodeURIComponent(sessionKey)}/turn-position?${params.toString()}`;
+}
+
 async function captureTurnAndGetTurn(turn) {
   const response = await captureTurn(turn);
   assert.equal(response.status, 204);
@@ -154,7 +168,8 @@ async function writeMuninnConfig(configPath, {
       llmProvider: 'test_extractor_llm',
       embeddingProvider: 'default',
       maxAttempts: 3,
-      epochTurns: 1,
+      minEpochTurns: 1,
+      maxEpochTurns: 32,
       ...(activeWindowDays === undefined ? {} : { activeWindowDays }),
     };
     providers.llm.test_extractor_llm = { type: llmProvider };
@@ -181,6 +196,8 @@ function createValidSettings({
       embeddingProvider: 'default',
       recallMode: 'hybrid',
       maxAttempts: 3,
+      minEpochTurns: 1,
+      maxEpochTurns: 32,
       activeWindowDays,
     },
     providers: {
@@ -298,10 +315,28 @@ test('turn/capture/batch writes multiple turns and updates session UI immediatel
     turnsBody.turns.map((turn) => turn.prompt),
     ['batch prompt 1', 'batch prompt 2'],
   );
+  assert.equal('segments' in turnsBody, false);
+  assert.equal('timeline' in turnsBody, false);
   assert.deepEqual(
     turnsBody.turns.map((turn) => turn.turnSequence),
     [0, 1],
   );
+
+  const timelineResponse = await app.request(sessionTimelinePath('agent-a', 'batch-session'));
+  assert.equal(timelineResponse.status, 200);
+  const timelineBody = await json(timelineResponse);
+  assert.equal(Array.isArray(timelineBody.segments), true);
+  assert.equal(Array.isArray(timelineBody.timeline), true);
+  assert.equal('turns' in timelineBody, false);
+
+  const positionResponse = await app.request(sessionTurnPositionPath('agent-a', 'batch-session', {
+    turnId: turnsBody.turns[1].memoryId,
+    limit: 1,
+  }));
+  assert.equal(positionResponse.status, 200);
+  const positionBody = await json(positionResponse);
+  assert.equal(positionBody.turnId, turnsBody.turns[1].memoryId);
+  assert.equal(positionBody.offset, 1);
 });
 
 test('turn/capture/batch reuses recent-turn duplicate detection', async (t) => {
@@ -1279,6 +1314,100 @@ test('ui session endpoints include native rows with indexed ownership fields', a
   assert.equal(turnsBody.turns[0].prompt, 'historical default prompt');
 });
 
+test('ui session turn paging skips non-previewable rows without ending early', async (t) => {
+  const { dir, homeDir, configPath } = await makeDatasetUri();
+  t.after(async () => {
+    await shutdownCoreForTests();
+    resetSessionTreeCacheForTests();
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  process.env.MUNINN_HOME = homeDir;
+  await writeMuninnConfig(configPath, {});
+  resetSessionTreeCacheForTests();
+
+  const tables = await getNativeTables(defaultStorageTarget(homeDir));
+  await tables.turnTable.insert({
+    turns: [
+      serializeTurnRow({
+        turnId: 'turn:18446744073709551615',
+        createdAt: '2026-06-03T01:00:00.000Z',
+        updatedAt: '2026-06-03T01:00:00.000Z',
+        sessionId: 'preview-session',
+        project: TEST_PROJECT,
+        cwd: TEST_CWD,
+        agent: 'agent-a',
+        extractor: 'test-extractor',
+        events: [],
+        artifacts: [],
+        prompt: null,
+        response: null,
+      }),
+      serializeTurnRow({
+        turnId: 'turn:18446744073709551615',
+        createdAt: '2026-06-03T01:01:00.000Z',
+        updatedAt: '2026-06-03T01:01:00.000Z',
+        sessionId: 'preview-session',
+        project: TEST_PROJECT,
+        cwd: TEST_CWD,
+        agent: 'agent-a',
+        extractor: 'test-extractor',
+        events: [],
+        artifacts: null,
+        prompt: 'preview prompt 1',
+        response: 'preview response 1',
+      }),
+      serializeTurnRow({
+        turnId: 'turn:18446744073709551615',
+        createdAt: '2026-06-03T01:02:00.000Z',
+        updatedAt: '2026-06-03T01:02:00.000Z',
+        sessionId: 'preview-session',
+        project: TEST_PROJECT,
+        cwd: TEST_CWD,
+        agent: 'agent-a',
+        extractor: 'test-extractor',
+        events: [],
+        artifacts: null,
+        prompt: 'preview prompt 2',
+        response: 'preview response 2',
+      }),
+    ],
+  });
+
+  const firstResponse = await app.request(sessionTurnsPath('agent-a', 'preview-session', { limit: 1 }));
+  assert.equal(firstResponse.status, 200);
+  const firstBody = await json(firstResponse);
+  assert.deepEqual(firstBody.turns.map((turn) => turn.prompt), ['preview prompt 1']);
+  assert.equal(firstBody.nextOffset, 2);
+
+  const secondResponse = await app.request(sessionTurnsPath('agent-a', 'preview-session', {
+    offset: firstBody.nextOffset,
+    limit: 1,
+  }));
+  assert.equal(secondResponse.status, 200);
+  const secondBody = await json(secondResponse);
+  assert.deepEqual(secondBody.turns.map((turn) => turn.prompt), ['preview prompt 2']);
+  assert.equal(secondBody.nextOffset, null);
+});
+
+test('ui session turn-position maps invalid turn ids to invalidRequest', async (t) => {
+  const { dir, homeDir, configPath } = await makeDatasetUri();
+  t.after(async () => {
+    await shutdownCoreForTests();
+    resetSessionTreeCacheForTests();
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  process.env.MUNINN_HOME = homeDir;
+  await writeMuninnConfig(configPath, {});
+  resetSessionTreeCacheForTests();
+
+  const response = await app.request(sessionTurnPositionPath('agent-a', 'group-a', { turnId: 'bad' }));
+  assert.equal(response.status, 400);
+  const body = await json(response);
+  assert.equal(body.errorCode, 'invalidRequest');
+});
+
 test('ui session endpoints expose session index writes immediately', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(async () => rm(dir, { recursive: true, force: true }));
@@ -1824,7 +1953,8 @@ test('ui settings config rejects embedding index dimension changes that mismatch
         llmProvider: 'test_extractor_llm',
         embeddingProvider: 'default',
         maxAttempts: 3,
-        epochTurns: 1,
+        minEpochTurns: 1,
+        maxEpochTurns: 32,
       },
       providers: {
         llm: {

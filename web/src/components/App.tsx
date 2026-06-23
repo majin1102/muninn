@@ -1,15 +1,17 @@
-import type { MemoryDocument } from '@muninn/common';
+import type { MemoryDocument, ProjectDreamView } from '@muninn/common';
 import { BookOpen, ChevronLeft, ChevronRight, FileText, Search, Settings } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType, type CSSProperties, type MouseEvent as ReactMouseEvent, type PointerEvent } from 'react';
 import logo from '../assets/muninn-raven-logo.png';
 import {
   createAppClient,
   DEFAULT_BACKEND_VERSION,
+  isProjectDreamingSession,
   resolveApiBase,
   resolveUsesDemoData,
   type PrimaryView,
   type ProjectNode,
   type ProjectSessionNode,
+  type ProjectTurnNode,
 } from '../lib/api.js';
 import {
   selectedSessionKey,
@@ -23,6 +25,7 @@ import { SessionContentSplit } from './SessionContentSplit.js';
 import { SessionTree } from './SessionTree.js';
 import { SettingsPage } from './SettingsPage.js';
 import { EmptyState } from './ui/empty-state.js';
+import { DreamingContent } from './DreamingContent.js';
 
 type RouteState = {
   view: PrimaryView;
@@ -62,6 +65,10 @@ export function App() {
   const [document, setDocument] = useState<MemoryDocument | null>(null);
   const [documentLoading, setDocumentLoading] = useState(false);
   const [documentError, setDocumentError] = useState<string | null>(null);
+  const [projectDreams, setProjectDreams] = useState<Record<string, {
+    dream: ProjectDreamView | null;
+    loading: boolean;
+  }>>({});
   const contentShellRef = useRef<HTMLDivElement>(null);
   const client = useMemo(() => createAppClient(apiBase, usesDemoData), [apiBase, usesDemoData]);
   const routeTurnMemoryId = route.memoryId ? turnMemoryIdFromTimelineMemoryId(route.memoryId) : null;
@@ -142,12 +149,21 @@ export function App() {
   }, [documentSession, route.view]);
 
   useEffect(() => {
-    if (route.view !== 'session' || !selectedSession || selectedSession.loaded || selectedSession.loading) {
+    if (route.view !== 'session' || !selectedSession) {
+      return;
+    }
+    if (isProjectDreamingSession(selectedSession)) {
+      if (!projectDreams[selectedSession.projectKey]?.loading && !projectDreams[selectedSession.projectKey]?.dream) {
+        void openProjectDream(selectedSession);
+      }
+      return;
+    }
+    if (selectedSession.loaded || selectedSession.loading) {
       return;
     }
 
     void openSession(selectedSession);
-  }, [route.view, selectedSession]);
+  }, [projectDreams, route.view, selectedSession]);
 
   useEffect(() => {
     if (route.memoryId) {
@@ -179,7 +195,14 @@ export function App() {
   }, [activeTurnSession, route.memoryId]);
 
   useEffect(() => {
-    if (route.view !== 'session' || !route.memoryId || activeTurnSession) {
+    if (
+      route.view !== 'session'
+      || !route.memoryId
+      || activeTurnSession
+      || selectedSessionId
+      || documentLoading
+      || documentSession
+    ) {
       return;
     }
 
@@ -189,7 +212,7 @@ export function App() {
     }
 
     void openSession(session);
-  }, [activeTurnSession, projects, route.memoryId, route.view]);
+  }, [activeTurnSession, documentLoading, documentSession, projects, route.memoryId, route.view, selectedSessionId]);
 
   useEffect(() => {
     if (
@@ -207,20 +230,72 @@ export function App() {
   }, [activeTurnSession, documentSession, route.view]);
 
   async function openSession(session: ProjectSessionNode) {
+    if (isProjectDreamingSession(session)) {
+      await openProjectDream(session);
+      return;
+    }
+    const timelinePromise = loadSessionTimeline(session);
     updateSession(session, { loading: true });
     try {
       const response = await client.loadSessionTurns(session);
       updateSession(session, {
         turns: response.turns,
-        segments: response.segments,
-        timeline: response.timeline,
         nextOffset: response.nextOffset,
         loading: false,
         loaded: true,
       });
+      void timelinePromise;
     } catch (error) {
       setProjectError(asErrorMessage(error));
       updateSession(session, { loading: false });
+    }
+  }
+
+  async function loadSessionTimeline(session: ProjectSessionNode) {
+    if (session.timelineLoading || session.timelineLoaded) {
+      return;
+    }
+    updateSession(session, { timelineLoading: true });
+    try {
+      const response = await client.loadSessionTimeline(session);
+      updateSession(session, {
+        segments: response.segments,
+        timeline: response.timeline,
+        timelineLoading: false,
+        timelineLoaded: true,
+      });
+    } catch (error) {
+      setProjectError(asErrorMessage(error));
+      updateSession(session, { timelineLoading: false });
+    }
+  }
+
+  async function openProjectDream(session: ProjectSessionNode) {
+    setProjectDreams((current) => ({
+      ...current,
+      [session.projectKey]: {
+        dream: current[session.projectKey]?.dream ?? null,
+        loading: true,
+      },
+    }));
+    try {
+      const dream = await client.getProjectDream(session.projectKey);
+      setProjectDreams((current) => ({
+        ...current,
+        [session.projectKey]: {
+          dream,
+          loading: false,
+        },
+      }));
+    } catch (error) {
+      setProjectError(asErrorMessage(error));
+      setProjectDreams((current) => ({
+        ...current,
+        [session.projectKey]: {
+          dream: current[session.projectKey]?.dream ?? null,
+          loading: false,
+        },
+      }));
     }
   }
 
@@ -232,9 +307,7 @@ export function App() {
     try {
       const response = await client.loadSessionTurns(session, session.nextOffset);
       updateSession(session, {
-        turns: [...session.turns, ...response.turns],
-        segments: response.segments.length > 0 ? response.segments : session.segments,
-        timeline: response.timeline.length > 0 ? response.timeline : session.timeline,
+        turns: mergeSessionTurns(session.turns, response.turns),
         nextOffset: response.nextOffset,
         loading: false,
         loaded: true,
@@ -246,37 +319,17 @@ export function App() {
   }
 
   async function loadUntilTurn(session: ProjectSessionNode, memoryId: string) {
-    if (hasTurn(session, memoryId) || session.nextOffset === null) {
+    if (hasTurn(session, memoryId)) {
       return;
     }
 
-    let turns = session.turns;
-    let segments = session.segments;
-    let timeline = session.timeline;
-    let nextOffset: number | null = session.nextOffset;
-
     updateSession(session, { loading: true });
     try {
-      while (!turns.some((turn) => turn.memoryId === memoryId) && nextOffset !== null) {
-        const response = await client.loadSessionTurns({
-          ...session,
-          turns,
-          segments,
-          timeline,
-          nextOffset,
-          loaded: true,
-          loading: true,
-        }, nextOffset);
-        turns = [...turns, ...response.turns];
-        segments = response.segments.length > 0 ? response.segments : segments;
-        timeline = response.timeline.length > 0 ? response.timeline : timeline;
-        nextOffset = response.nextOffset;
-      }
+      const offset = await client.locateSessionTurn(session, memoryId);
+      const response = await client.loadSessionTurns(session, offset);
       updateSession(session, {
-        turns,
-        segments,
-        timeline,
-        nextOffset,
+        turns: mergeSessionTurns(session.turns, response.turns),
+        nextOffset: response.nextOffset,
         loading: false,
         loaded: true,
       });
@@ -297,8 +350,17 @@ export function App() {
     setDocument(null);
     setDocumentError(null);
     window.location.hash = `#/session/s/${encodeURIComponent(selectionId)}`;
+    if (isProjectDreamingSession(session)) {
+      const currentDream = projectDreams[session.projectKey];
+      if (!currentDream?.loading && !currentDream?.dream) {
+        void openProjectDream(session);
+      }
+      return;
+    }
     if (!session.loaded && !session.loading) {
       void openSession(session);
+    } else if (!session.timelineLoaded && !session.timelineLoading) {
+      void loadSessionTimeline(session);
     }
   }
 
@@ -463,6 +525,8 @@ export function App() {
                   onLoadSession={(session) => {
                     if (!session.loaded && !session.loading) {
                       void openSession(session);
+                    } else if (!session.timelineLoaded && !session.timelineLoading) {
+                      void loadSessionTimeline(session);
                     }
                   }}
                   onOpenTurn={openTimelineFromTree}
@@ -481,7 +545,14 @@ export function App() {
                 </aside>
               ) : null}
               <section className="conversation-pane">
-                <SessionContentSplit
+                {activeSession && isProjectDreamingSession(activeSession) ? (
+                  <DreamingContent
+                    projectLabel={projectLabelForSession(projects, activeSession)}
+                    dream={projectDreams[activeSession.projectKey]?.dream ?? null}
+                    loading={projectDreams[activeSession.projectKey]?.loading ?? false}
+                  />
+                ) : (
+                  <SessionContentSplit
                   session={activeSession}
                   document={document}
                   activeTimelineId={activeTimelineId}
@@ -495,6 +566,12 @@ export function App() {
                   onActiveTimelineChange={setActiveTimelineId}
                   onOpenTimeline={openTimelineInPane}
                   onLocateConversationTurn={locateConversationTurn}
+                  onLoadTurnDetail={(memoryId) => {
+                    if (!activeSession) {
+                      return Promise.reject(new Error('No active session'));
+                    }
+                    return client.loadTurnDetail(activeSession, memoryId);
+                  }}
                   canLoadMoreAfter={Boolean(activeSession && activeSession.nextOffset !== null)}
                   loadingMoreAfter={activeSession?.loading ?? false}
                   onLoadMoreAfter={() => {
@@ -502,9 +579,11 @@ export function App() {
                       void loadMore(activeSession);
                     }
                   }}
-                  loading={documentLoading || locatingActiveTurn}
+                  loading={documentLoading || locatingActiveTurn || Boolean(activeSession?.loading && !activeSession.loaded)}
+                  timelineLoading={Boolean(activeSession?.timelineLoading && !activeSession.timelineLoaded)}
                   error={documentError}
                 />
+                )}
               </section>
             </>
           ) : (
@@ -576,12 +655,19 @@ function findSessionBySelection(projects: ProjectNode[], selection: string): Pro
 function findNextSessionToSearch(projects: ProjectNode[]): ProjectNode['sessions'][number] | null {
   for (const project of projects) {
     for (const session of project.sessions) {
+      if (isProjectDreamingSession(session)) {
+        continue;
+      }
       if (!session.loaded && !session.loading) {
         return session;
       }
     }
   }
   return null;
+}
+
+function projectLabelForSession(projects: ProjectNode[], session: ProjectSessionNode): string {
+  return projects.find((project) => project.projectKey === session.projectKey)?.label ?? session.projectKey;
 }
 
 function sameSession(left: ProjectSessionNode, right: ProjectSessionNode): boolean {
@@ -592,6 +678,24 @@ function sameSession(left: ProjectSessionNode, right: ProjectSessionNode): boole
 
 function hasTurn(session: ProjectSessionNode, memoryId: string): boolean {
   return session.turns.some((turn) => turn.memoryId === memoryId);
+}
+
+function mergeSessionTurns(existing: ProjectTurnNode[], incoming: ProjectTurnNode[]): ProjectTurnNode[] {
+  const byId = new Map<string, ProjectTurnNode>();
+  for (const turn of [...existing, ...incoming]) {
+    byId.set(turn.memoryId, turn);
+  }
+  return [...byId.values()].sort((left, right) => {
+    const created = left.createdAt.localeCompare(right.createdAt);
+    if (created !== 0) {
+      return created;
+    }
+    const updated = left.updatedAt.localeCompare(right.updatedAt);
+    if (updated !== 0) {
+      return updated;
+    }
+    return left.memoryId.localeCompare(right.memoryId);
+  });
 }
 
 function GitHubMark() {

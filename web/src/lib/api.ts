@@ -12,14 +12,21 @@ import type {
   MemoryDocument,
   MemoryDocumentResponse,
   PipelineTasksResponse,
+  ProjectDreamProjectView,
+  ProjectDreamProjectsResponse,
+  ProjectDreamView,
+  ProjectDreamViewResponse,
   RecallProvidersResponse,
   SearchResponse,
   AgentRecallStreamEvent,
   SessionAgentsResponse,
   SessionGroupsResponse,
+  SessionTurnDetailResponse,
+  SessionTimelineResponse,
   SessionNode,
   SessionSegmentPreview,
   SessionTimelineItem,
+  SessionTurnPositionResponse,
   SessionTurnsResponse,
   SettingsConfigResponse,
   TurnPreview,
@@ -66,6 +73,7 @@ export type ProjectTimelineNode = SessionTimelineItem & {
 };
 
 export type ProjectSessionNode = SessionNode & {
+  kind: 'session' | 'dreaming';
   agent: string;
   turns: ProjectTurnNode[];
   segments: ProjectSegmentNode[];
@@ -73,6 +81,8 @@ export type ProjectSessionNode = SessionNode & {
   nextOffset: number | null;
   loading: boolean;
   loaded: boolean;
+  timelineLoading: boolean;
+  timelineLoaded: boolean;
 };
 
 export type ProjectNode = {
@@ -87,12 +97,18 @@ export type AppClient = {
   usesDemoData: boolean;
   getVersion(): Promise<string>;
   getProjects(): Promise<ProjectNode[]>;
+  listProjectDreamProjects(): Promise<ProjectDreamProjectView[]>;
+  getProjectDream(project: string): Promise<ProjectDreamView>;
   loadSessionTurns(session: ProjectSessionNode, offset?: number): Promise<{
     turns: ProjectTurnNode[];
-    segments: ProjectSegmentNode[];
-    timeline: ProjectTimelineNode[];
     nextOffset: number | null;
   }>;
+  loadSessionTimeline(session: ProjectSessionNode): Promise<{
+    segments: ProjectSegmentNode[];
+    timeline: ProjectTimelineNode[];
+  }>;
+  locateSessionTurn(session: ProjectSessionNode, memoryId: string): Promise<number>;
+  loadTurnDetail(session: ProjectSessionNode, memoryId: string): Promise<ProjectTurnNode>;
   getDocument(memoryId: string): Promise<MemoryDocument>;
   searchRecall(params: {
     query: string;
@@ -125,11 +141,16 @@ export type AppClient = {
   setCapturePolicy(agent: string, project: string, enabled: boolean): Promise<void>;
 };
 
+export const PROJECT_DREAMING_PROJECT_KEY = '.dreaming';
+export const PROJECT_DREAMING_SESSION_KEY = '.dreaming';
+export const PROJECT_DREAMING_AGENT = 'dreaming';
+
 type VersionResponse = {
   version: string;
 };
 
 export const DEFAULT_BACKEND_VERSION = '0.1.0';
+const SESSION_TURN_PAGE_SIZE = 16;
 
 function desktopBootstrap(): MuninnDesktopBootstrap | undefined {
   return window.__MUNINN_DESKTOP__;
@@ -201,6 +222,14 @@ export function createAppClient(apiBase: string, usesDemoData: boolean): AppClie
     }
   }
 
+  async function loadProjectDreamProjects(): Promise<ProjectDreamProjectView[]> {
+    if (usesDemoData) {
+      return [];
+    }
+    const response = await fetchJson<ProjectDreamProjectsResponse>('/app/api/dreaming/projects');
+    return response.projects;
+  }
+
   return {
     apiBase,
     usesDemoData,
@@ -216,13 +245,14 @@ export function createAppClient(apiBase: string, usesDemoData: boolean): AppClie
       const agents = usesDemoData
         ? await getDemoSessionAgents()
         : (await fetchJson<SessionAgentsResponse>('/app/api/session/agents')).agents;
+      const dreamProjects = await loadProjectDreamProjects();
       const projects = await projectTreeFromAgents(agents, async (agent) => {
         return usesDemoData
           ? await getDemoSessionGroups(agent)
           : (await fetchJson<SessionGroupsResponse>(
             `/app/api/session/agents/${encodeURIComponent(agent)}/sessions`,
           )).sessions;
-      });
+      }, dreamProjects);
       if (!usesDemoData) {
         return projects;
       }
@@ -230,6 +260,9 @@ export function createAppClient(apiBase: string, usesDemoData: boolean): AppClie
       return Promise.all(projects.map(async (project) => ({
         ...project,
         sessions: await Promise.all(project.sessions.map(async (session) => {
+          if (isProjectDreamingSession(session)) {
+            return session;
+          }
           const response = await getDemoSessionTurns(session.agent, session.sessionKey, 0, 20);
           return {
             ...session,
@@ -257,10 +290,23 @@ export function createAppClient(apiBase: string, usesDemoData: boolean): AppClie
         })),
       })));
     },
+    async listProjectDreamProjects() {
+      return loadProjectDreamProjects();
+    },
+    async getProjectDream(project) {
+      if (usesDemoData) {
+        return emptyProjectDream(project);
+      }
+      const params = new URLSearchParams({ project });
+      const response = await fetchJson<ProjectDreamViewResponse>(
+        `/app/api/dreaming/project?${params.toString()}`,
+      );
+      return response.dream;
+    },
     async loadSessionTurns(session, offset = 0) {
       const params = new URLSearchParams({
         offset: String(offset),
-        limit: '100',
+        limit: String(SESSION_TURN_PAGE_SIZE),
       });
       params.set('project', session.projectKey);
       const response = usesDemoData
@@ -275,6 +321,17 @@ export function createAppClient(apiBase: string, usesDemoData: boolean): AppClie
           sessionKey: session.sessionKey,
           sessionLabel: session.displaySessionId,
         })),
+        nextOffset: response.nextOffset,
+      };
+    },
+    async loadSessionTimeline(session) {
+      const params = new URLSearchParams({ project: session.projectKey });
+      const response = usesDemoData
+        ? await getDemoSessionTurns(session.agent, session.sessionKey, 0, 100)
+        : await fetchJson<SessionTimelineResponse>(
+          `/app/api/session/agents/${encodeURIComponent(session.agent)}/sessions/${encodeURIComponent(session.sessionKey)}/timeline?${params.toString()}`,
+        );
+      return {
         segments: (response.segments ?? []).map((segment) => ({
           ...segment,
           agent: session.agent,
@@ -287,7 +344,49 @@ export function createAppClient(apiBase: string, usesDemoData: boolean): AppClie
           sessionKey: session.sessionKey,
           sessionLabel: session.displaySessionId,
         })),
-        nextOffset: response.nextOffset,
+      };
+    },
+    async locateSessionTurn(session, memoryId) {
+      if (usesDemoData) {
+        const response = await getDemoSessionTurns(session.agent, session.sessionKey, 0, 1_000);
+        const index = response.turns.findIndex((turn) => turn.memoryId === memoryId);
+        if (index < 0) {
+          throw new Error('turnId not found');
+        }
+        return Math.floor(index / SESSION_TURN_PAGE_SIZE) * SESSION_TURN_PAGE_SIZE;
+      }
+      const params = new URLSearchParams({
+        project: session.projectKey,
+        turnId: memoryId,
+        limit: String(SESSION_TURN_PAGE_SIZE),
+      });
+      const response = await fetchJson<SessionTurnPositionResponse>(
+        `/app/api/session/agents/${encodeURIComponent(session.agent)}/sessions/${encodeURIComponent(session.sessionKey)}/turn-position?${params.toString()}`,
+      );
+      return response.offset;
+    },
+    async loadTurnDetail(session, memoryId) {
+      if (usesDemoData) {
+        const response = await getDemoSessionTurns(session.agent, session.sessionKey, 0, 1_000);
+        const turn = response.turns.find((item) => item.memoryId === memoryId);
+        if (!turn) {
+          throw new Error('turnId not found');
+        }
+        return {
+          ...turn,
+          agent: session.agent,
+          sessionKey: session.sessionKey,
+          sessionLabel: session.displaySessionId,
+        };
+      }
+      const response = await fetchJson<SessionTurnDetailResponse>(
+        `/app/api/session/turns/${encodeURIComponent(memoryId)}/detail`,
+      );
+      return {
+        ...response.turn,
+        agent: session.agent,
+        sessionKey: session.sessionKey,
+        sessionLabel: session.displaySessionId,
       };
     },
     async getDocument(memoryId) {
@@ -594,6 +693,7 @@ function parseAgentRecallLines(
 async function projectTreeFromAgents(
   agents: AgentNode[],
   getSessions: (agent: string) => Promise<SessionNode[]>,
+  dreamProjects: ProjectDreamProjectView[] = [],
 ): Promise<ProjectNode[]> {
   const projects = new Map<string, ProjectNode>();
 
@@ -613,6 +713,7 @@ async function projectTreeFromAgents(
       }
       project.sessions.push({
         ...session,
+        kind: 'session',
         agent: agent.agent,
         turns: [],
         segments: [],
@@ -620,6 +721,8 @@ async function projectTreeFromAgents(
         nextOffset: null,
         loading: false,
         loaded: false,
+        timelineLoading: false,
+        timelineLoaded: false,
       });
       projects.set(projectKey, project);
     }
@@ -631,12 +734,74 @@ async function projectTreeFromAgents(
       sessions: project.sessions.sort((left, right) => left.latestUpdatedAt.localeCompare(right.latestUpdatedAt)),
     }))
     .sort((left, right) => left.latestUpdatedAt.localeCompare(right.latestUpdatedAt));
-  const labels = projectDisplayLabels(projectList.map((project) => project.projectKey));
+  const labels = projectDisplayLabels([
+    ...projectList.map((project) => project.projectKey),
+    ...dreamProjects.map((project) => project.project),
+  ]);
 
-  return projectList.map((project) => ({
+  const labeledProjects = projectList.map((project) => ({
     ...project,
     label: labels.get(project.projectKey) ?? projectDisplayLabel(project.projectKey),
   }));
+  const dreamingProject = createProjectDreamingProject(dreamProjects, labels);
+  return dreamingProject ? [dreamingProject, ...labeledProjects] : labeledProjects;
+}
+
+function createProjectDreamingProject(
+  dreamProjects: ProjectDreamProjectView[],
+  labels: Map<string, string>,
+): ProjectNode | null {
+  if (dreamProjects.length === 0) {
+    return null;
+  }
+  const sessions = dreamProjects
+    .map((project) => createProjectDreamingSession(project, labels.get(project.project) ?? projectDisplayLabel(project.project)))
+    .sort((left, right) => left.latestUpdatedAt.localeCompare(right.latestUpdatedAt));
+  const latestUpdatedAt = sessions.reduce((latest, session) => (
+    session.latestUpdatedAt > latest ? session.latestUpdatedAt : latest
+  ), sessions[0]!.latestUpdatedAt);
+  return {
+    projectKey: PROJECT_DREAMING_PROJECT_KEY,
+    label: PROJECT_DREAMING_PROJECT_KEY,
+    latestUpdatedAt,
+    sessions,
+  };
+}
+
+function createProjectDreamingSession(project: ProjectDreamProjectView, label: string): ProjectSessionNode {
+  return {
+    sessionKey: PROJECT_DREAMING_SESSION_KEY,
+    displaySessionId: label,
+    projectKey: project.project,
+    latestUpdatedAt: project.latestUpdatedAt,
+    kind: 'dreaming',
+    agent: PROJECT_DREAMING_AGENT,
+    turns: [],
+    segments: [],
+    timeline: [],
+    nextOffset: null,
+    loading: false,
+    loaded: true,
+    timelineLoading: false,
+    timelineLoaded: true,
+  };
+}
+
+export function isProjectDreamingProject(project: Pick<ProjectNode, 'projectKey'>): boolean {
+  return project.projectKey === PROJECT_DREAMING_PROJECT_KEY;
+}
+
+export function isProjectDreamingSession(session: Pick<ProjectSessionNode, 'kind' | 'sessionKey' | 'agent'>): boolean {
+  return session.kind === 'dreaming'
+    || (session.sessionKey === PROJECT_DREAMING_SESSION_KEY && session.agent === PROJECT_DREAMING_AGENT);
+}
+
+function emptyProjectDream(project: string): ProjectDreamView {
+  return {
+    project,
+    memorySignals: [],
+    skills: [],
+  };
 }
 
 function projectKeyFromSession(session: SessionNode): string {

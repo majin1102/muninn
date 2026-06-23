@@ -8,12 +8,16 @@ import type {
   SessionExtractionResult,
   ExtractionUnit,
   ContextRef,
+  SnapshotSignals,
 } from '../pipeline/session.js';
 import {
   parseSnapshotContent,
   parseSnapshotPatch,
   renderExtractionBlock,
   renderSnapshotContent,
+  isValidSkillName,
+  skillNamesFromSignals,
+  signalEvidenceLabels,
 } from '../pipeline/session.js';
 import {
   generateWithTools,
@@ -25,10 +29,19 @@ import {
   type LlmToolResult,
 } from './provider.js';
 import { loadPromptTemplate, renderPromptTemplate } from './prompts.js';
+import {
+  previewPolicy,
+  renderCurrentBatchTurns,
+  type RenderedBatchTurns,
+} from './extraction-input.js';
 
 const MAX_SUMMARY_CHARS = 220;
-const SNAPSHOT_VIEW_TOKEN_CAP = 10_000;
+const PROTECTED_SNAPSHOT_EXTRACTION_SUMMARIES = 16;
 const MAX_GET_EXTRACTION_CALLS = 5;
+const MAX_GET_SKILL_CALLS_PER_NAME = 1;
+const MAX_GET_TURN_CALLS = 3;
+const MAX_GET_TURN_CHARS_PER_CALL = 8_000;
+const MAX_GET_TURN_CHARS_TOTAL = 16_000;
 
 type ToolModel = (
   task: LlmTask,
@@ -63,21 +76,33 @@ export async function extractSessionMemory(
 
   const template = loadPromptTemplate('thread_extracting');
   const systemPrompt = template.system;
-  const snapshotView = buildSnapshotView(input.sessionMemory);
+  const snapshotView = buildSnapshotView(input.sessionMemory, config.snapshotInputChars);
+  const renderedTurns = renderNewTurns(input.turns, {
+    previewChars: config.previewChars,
+    stoppedBy: input.inputBudgetStoppedBy,
+  });
   const inputMarkdown = [
     snapshotView.markdown,
     '',
-    renderNewTurns(input.turns),
+    renderedTurns.markdown,
   ].join('\n').trim();
   const basePrompt = renderPromptTemplate(template.userTemplate, { input_markdown: inputMarkdown });
-  const trace = createExtractionTrace(input);
+  const trace = createExtractionTrace(input, {
+    config,
+    snapshotView,
+    renderedTurns,
+    userPromptRenderedChars: basePrompt.length,
+  });
   const database = resolveDatabaseName(deps.database);
 
   let lastError = 'extraction update returned no output';
   for (let attempt = 1; attempt <= config.maxAttempts; attempt += 1) {
     throwIfAborted(signal);
     let getExtractionCallCount = 0;
+    let getTurnCallCount = 0;
+    let getTurnReturnedChars = 0;
     const readExtractionSequences = new Set<number>();
+    const readSkillNames = new Set<string>();
     const startedAt = Date.now();
     const raw = await runToolLoop({
       messages: [
@@ -88,11 +113,11 @@ export async function extractSessionMemory(
             basePrompt,
             attempt,
             lastError,
-      'Return only a valid Markdown snapshot patch using optional `# <Session Title>`, optional `## Summary`, optional `## Extractions`, refs metadata, and `### Title`/`### Summary`/`### Content` extraction blocks.',
+      'Return only a valid Markdown snapshot patch using optional `# <Session Title>`, optional `## Summary`, optional `## Memory Signals`, optional `## Skill Signals`, optional `## Skill Details`, optional `## Extractions`, refs metadata, and `### Title`/`### Summary`/`### Content` extraction blocks.',
           ),
         },
       ],
-      tools: [getExtractionSpec()],
+      tools: [getExtractionSpec(), getSkillSpec(), getTurnSpec()],
       toolHandlers: {
         get_extraction: (args) => {
           getExtractionCallCount += 1;
@@ -106,10 +131,37 @@ export async function extractSessionMemory(
           }
           return createGetExtractionTool(input, snapshotView.visibleSequences)(args);
         },
+        get_skill: (args) => {
+          const skillName = normalizeSkillNameArg(args.skillName);
+          if (!skillName) {
+            return { error: 'skillName is required' };
+          }
+          if (MAX_GET_SKILL_CALLS_PER_NAME === 1 && readSkillNames.has(skillName)) {
+            return { skillName, error: 'skill already read' };
+          }
+          const result = createGetSkillTool(input)(args);
+          if (isGetSkillSuccess(result)) {
+            readSkillNames.add(skillName);
+          }
+          return result;
+        },
+        get_turn: (args) => {
+          getTurnCallCount += 1;
+          const result = createGetTurnTool(input, {
+            callCount: getTurnCallCount,
+            returnedChars: getTurnReturnedChars,
+            maxCalls: MAX_GET_TURN_CALLS,
+            maxCharsPerCall: MAX_GET_TURN_CHARS_PER_CALL,
+            maxCharsTotal: MAX_GET_TURN_CHARS_TOTAL,
+          })(args);
+          getTurnReturnedChars += getTurnToolReturnedChars(result);
+          trace.getTurnResults.push(result);
+          return result.publicResult;
+        },
       },
       model: deps.model ?? generateWithTools,
       signal,
-      maxSteps: MAX_GET_EXTRACTION_CALLS + 1,
+      maxSteps: MAX_GET_EXTRACTION_CALLS + MAX_GET_TURN_CALLS + (input.sessionMemory.skillSignals?.length ?? 0) + 2,
       onToolResults: (event) => {
         trace.toolCalls.push(...event.toolCalls);
         trace.toolResults.push(...event.toolResults);
@@ -128,6 +180,7 @@ export async function extractSessionMemory(
         database,
         attempt,
         durationMs,
+        readSkillNames: [...readSkillNames],
         finalText: raw,
         extractions: result.extractions,
       });
@@ -139,6 +192,7 @@ export async function extractSessionMemory(
         database,
         attempt,
         durationMs,
+        readSkillNames: [...readSkillNames],
         rawText: raw,
         validationError: lastError,
         extractions: [],
@@ -175,7 +229,7 @@ function buildMockSnapshotContent(input: SessionExtractionInput): string {
   return renderSnapshotContent(
     input.sessionMemory.title || 'Mock session memory thread',
     input.sessionMemory.summary || 'This thread tracks session conversation memory.',
-    input.sessionMemory.signals ?? '',
+    snapshotSignals(input.sessionMemory),
     extractions,
   );
 }
@@ -187,6 +241,41 @@ function isDefaultSummary(text: string): boolean {
     || /^Default session thread for session .+\.$/.test(text);
 }
 
+function snapshotSignals(content?: Partial<SessionExtractionInput['sessionMemory']>): SnapshotSignals {
+  return {
+    memorySignals: [...(content?.memorySignals ?? [])],
+    skillSignals: [...(content?.skillSignals ?? [])],
+    skillDetails: { ...(content?.skillDetails ?? {}) },
+  };
+}
+
+function applySignalPatch(
+  current: SnapshotSignals,
+  patch: ReturnType<typeof parseSnapshotPatch>,
+): SnapshotSignals {
+  const skillSignals = patch.skillSignals ?? current.skillSignals;
+  const currentSkillNames = skillNamesFromSignals(skillSignals);
+  for (const name of Object.keys(patch.skillDetails ?? {})) {
+    if (!currentSkillNames.has(name)) {
+      throw new Error(`snapshot patch ## Skill Details key lacks matching ## Skill Signals card: ${name}`);
+    }
+  }
+  const skillDetails = { ...current.skillDetails, ...(patch.skillDetails ?? {}) };
+  for (const name of patch.skillDetailsDeletes ?? []) {
+    delete skillDetails[name];
+  }
+  for (const name of Object.keys(skillDetails)) {
+    if (!currentSkillNames.has(name)) {
+      delete skillDetails[name];
+    }
+  }
+  return {
+    memorySignals: patch.memorySignals ?? current.memorySignals,
+    skillSignals,
+    skillDetails,
+  };
+}
+
 function validateSessionExtractionResult(
   result: string,
   input?: SessionExtractionInput,
@@ -196,13 +285,17 @@ function validateSessionExtractionResult(
   const validNewReferences = validSessionMemoryReferences(input);
   const current = input?.sessionMemory.extractions ?? [];
   const currentSummary = input?.sessionMemory.summary ?? '';
-  const currentSignals = input?.sessionMemory.signals ?? '';
+  const currentSignals = snapshotSignals(input?.sessionMemory);
   const currentTitle = input?.sessionMemory.title ?? '';
-  const patch = parseSnapshotPatch(result, validNewReferences);
+  const validExistingSignalLabels = new Set([
+    ...signalEvidenceLabels(currentSignals.memorySignals),
+    ...signalEvidenceLabels(currentSignals.skillSignals),
+  ]);
+  const patch = parseSnapshotPatch(result, validNewReferences, validExistingSignalLabels);
   validateUpdatedSequencesWereRead(patch, options.readExtractionSequences);
   const nextExtractions = mergePatchExtractions(current, patch, validNewReferences);
   const summary = patch.summary ?? currentSummary;
-  const signals = patch.signals ?? currentSignals;
+  const signals = applySignalPatch(currentSignals, patch);
   const title = patch.title ?? currentTitle;
   const snapshotContent = renderSnapshotContent(
     title || 'Session memory snapshot',
@@ -218,10 +311,11 @@ function validateSessionExtractionResult(
   return {
     title: parsed.title,
     summary: parsed.summary,
-    signals: parsed.signals,
+    memorySignals: parsed.memorySignals,
+    skillSignals: parsed.skillSignals,
+    skillDetails: parsed.skillDetails,
     snapshotContent: parsed.snapshotContent,
     extractions: parsed.extractions,
-    openQuestions: input?.sessionMemory.openQuestions ?? [],
     nextSteps: input?.sessionMemory.nextSteps ?? [],
     contextRefs,
   };
@@ -250,10 +344,11 @@ function validateMockSessionMemoryResult(result: string, input: SessionExtractio
   return {
     title: input.sessionMemory.title || parsed.title,
     summary: parsed.summary,
-    signals: parsed.signals,
+    memorySignals: parsed.memorySignals,
+    skillSignals: parsed.skillSignals,
+    skillDetails: parsed.skillDetails,
     snapshotContent: parsed.snapshotContent,
     extractions: parsed.extractions,
-    openQuestions: input.sessionMemory.openQuestions,
     nextSteps: input.sessionMemory.nextSteps,
     contextRefs: extractionContextRefs(input),
   };
@@ -391,13 +486,17 @@ async function runToolLoop(params: {
   throw new Error(`tool loop exceeded maxSteps=${maxSteps}`);
 }
 
-function buildSnapshotView(content: SessionExtractionInput['sessionMemory']): {
+function buildSnapshotView(content: SessionExtractionInput['sessionMemory'], snapshotInputChars: number): {
   markdown: string;
   visibleSequences: Set<number>;
+  snapshotCharsOriginal: number;
+  snapshotCharsRendered: number;
+  snapshotStoppedBy: 'none' | 'snapshot-input-chars' | 'snapshot-protected-oversize';
+  snapshotProtectedExtractionSummaries: number;
 } {
   const rawTitle = normalizeText(content.title ?? '');
   const rawSummary = normalizeText(content.summary ?? '');
-  const rawSignals = normalizeText(content.signals ?? '');
+  const rawSignals = snapshotSignals(content);
   const title = isGeneratedSnapshotTitle(rawTitle, rawSummary) ? '' : rawTitle;
   const summary = isDefaultSummary(rawSummary)
     ? ''
@@ -414,23 +513,50 @@ function buildSnapshotView(content: SessionExtractionInput['sessionMemory']): {
     ].join('\n'),
   }));
 
-  let visibleEntries = [...extractionEntries];
+  const fullMarkdown = renderSnapshotViewMarkdown(title, summary, rawSignals, extractionEntries);
+  if (fullMarkdown.length <= snapshotInputChars) {
+    return {
+      markdown: fullMarkdown,
+      visibleSequences: new Set(extractionEntries.map((entry) => entry.sequence)),
+      snapshotCharsOriginal: fullMarkdown.length,
+      snapshotCharsRendered: fullMarkdown.length,
+      snapshotStoppedBy: 'none',
+      snapshotProtectedExtractionSummaries: Math.min(PROTECTED_SNAPSHOT_EXTRACTION_SUMMARIES, extractionEntries.length),
+    };
+  }
+
+  const protectedEntries = extractionEntries.slice(-PROTECTED_SNAPSHOT_EXTRACTION_SUMMARIES);
+  let visibleEntries = [...protectedEntries];
   let markdown = renderSnapshotViewMarkdown(title, summary, rawSignals, visibleEntries);
-  while (estimateTokens(markdown) > SNAPSHOT_VIEW_TOKEN_CAP && visibleEntries.length > 0) {
-    visibleEntries = visibleEntries.slice(1);
-    markdown = renderSnapshotViewMarkdown(title, summary, rawSignals, visibleEntries);
+  if (markdown.length <= snapshotInputChars) {
+    const olderEntries = extractionEntries.slice(0, Math.max(0, extractionEntries.length - protectedEntries.length));
+    for (let index = olderEntries.length - 1; index >= 0; index -= 1) {
+      const candidate = [olderEntries[index], ...visibleEntries].sort((left, right) => left.sequence - right.sequence);
+      const candidateMarkdown = renderSnapshotViewMarkdown(title, summary, rawSignals, candidate);
+      if (candidateMarkdown.length > snapshotInputChars) {
+        break;
+      }
+      visibleEntries = candidate;
+      markdown = candidateMarkdown;
+    }
   }
 
   return {
     markdown,
     visibleSequences: new Set(visibleEntries.map((entry) => entry.sequence)),
+    snapshotCharsOriginal: fullMarkdown.length,
+    snapshotCharsRendered: markdown.length,
+    snapshotStoppedBy: markdown.length > snapshotInputChars
+      ? 'snapshot-protected-oversize'
+      : 'snapshot-input-chars',
+    snapshotProtectedExtractionSummaries: Math.min(PROTECTED_SNAPSHOT_EXTRACTION_SUMMARIES, extractionEntries.length),
   };
 }
 
 function renderSnapshotViewMarkdown(
   title: string,
   summary: string,
-  signals: string,
+  signals: SnapshotSignals,
   entries: Array<{ sequence: number; markdown: string }>,
 ): string {
   return [
@@ -441,12 +567,19 @@ function renderSnapshotViewMarkdown(
     '## Summary',
     summary || '(empty)',
     '',
-    '## Signals',
-    signals || '(empty)',
+    '## Memory Signals',
+    renderSignalList(signals.memorySignals),
+    '',
+    '## Skill Signals',
+    renderSignalList(signals.skillSignals),
     '',
     '## Extractions',
     entries.length > 0 ? entries.map((entry) => entry.markdown).join('\n\n----\n\n') : '(empty)',
   ].join('\n');
+}
+
+function renderSignalList(signals: string[]): string {
+  return signals.map((signal) => signal.trim()).filter(Boolean).join('\n') || '(empty)';
 }
 
 function isGeneratedSnapshotTitle(title: string, summary: string): boolean {
@@ -462,19 +595,11 @@ function isGeneratedSnapshotTitle(title: string, summary: string): boolean {
   return /^Session\s+\S+/.test(title) && isDefaultSummary(summary);
 }
 
-function renderNewTurns(turns: SessionExtractionInput['turns']): string {
-  return [
-    '## Current Batch Turns',
-    turns.map((turn) => [
-      `### ${turn.turnId}`,
-      labeledText('Prompt', turn.prompt),
-      labeledText('Response', turn.response),
-    ].filter(Boolean).join('\n\n')).join('\n\n') || '(empty)',
-  ].join('\n');
-}
-
-function estimateTokens(value: string): number {
-  return Math.ceil(value.length / 4);
+function renderNewTurns(
+  turns: SessionExtractionInput['turns'],
+  options: { previewChars: number; stoppedBy?: RenderedBatchTurns['stoppedBy'] } = { previewChars: 800 },
+): RenderedBatchTurns {
+  return renderCurrentBatchTurns(turns, options);
 }
 
 function getExtractionSpec(): LlmTool {
@@ -492,6 +617,42 @@ function getExtractionSpec(): LlmTool {
         },
       },
       required: ['sequences'],
+    },
+  };
+}
+
+function getSkillSpec(): LlmTool {
+  return {
+    name: 'get_skill',
+    description: 'Get hidden detail for an existing Skill Signal by skill name when deciding whether to update, merge, rename, or remove that skill.',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        skillName: {
+          type: 'string',
+          description: 'Existing Skill Signal name from the current snapshot.',
+        },
+      },
+      required: ['skillName'],
+    },
+  };
+}
+
+function getTurnSpec(): LlmTool {
+  return {
+    name: 'get_turn',
+    description: 'Get bounded prompt and response text for a current-batch turn when rendered previews omit details needed to safely update the snapshot.',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        turnId: {
+          type: 'string',
+          description: 'Raw current-batch turn row id, without a turn: prefix.',
+        },
+      },
+      required: ['turnId'],
     },
   };
 }
@@ -519,6 +680,171 @@ function createGetExtractionTool(input: SessionExtractionInput, visibleSequences
   };
 }
 
+type GetTurnToolResult = {
+  publicResult: unknown;
+  turnId?: string;
+  returnedPromptChars: number;
+  returnedResponseChars: number;
+  omittedPromptChars: number;
+  omittedResponseChars: number;
+  reason?: string;
+  error?: string;
+};
+
+function createGetTurnTool(
+  input: SessionExtractionInput,
+  budget: {
+    callCount: number;
+    returnedChars: number;
+    maxCalls: number;
+    maxCharsPerCall: number;
+    maxCharsTotal: number;
+  },
+) {
+  const turnsById = new Map(input.turns.map((turn) => [turn.turnId, turn]));
+  return (args: Record<string, unknown>): GetTurnToolResult => {
+    const turnId = typeof args.turnId === 'string' ? args.turnId.trim() : '';
+    if (!turnId) {
+      return getTurnError('', 'turnId is required');
+    }
+    if (budget.callCount > budget.maxCalls) {
+      return getTurnError(turnId, `get_turn exceeded max calls: ${budget.maxCalls}`);
+    }
+    const remainingTotal = budget.maxCharsTotal - budget.returnedChars;
+    if (remainingTotal <= 0) {
+      return getTurnError(turnId, `get_turn exceeded total returned chars: ${budget.maxCharsTotal}`);
+    }
+    const turn = turnsById.get(turnId);
+    if (!turn) {
+      return getTurnError(turnId, 'turn is not in the current extraction request');
+    }
+    const maxChars = Math.min(budget.maxCharsPerCall, remainingTotal);
+    const prompt = turn.prompt?.trim() ?? '';
+    const response = turn.response?.trim() ?? '';
+    const rendered = renderGetTurnPayload(turnId, prompt, response, maxChars);
+    return {
+      publicResult: {
+        turnId,
+        prompt: rendered.prompt,
+        response: rendered.response,
+      },
+      turnId,
+      returnedPromptChars: rendered.prompt.length,
+      returnedResponseChars: rendered.response.length,
+      omittedPromptChars: rendered.omittedPromptChars,
+      omittedResponseChars: rendered.omittedResponseChars,
+      reason: rendered.reason,
+    };
+  };
+}
+
+function getTurnError(turnId: string, error: string): GetTurnToolResult {
+  return {
+    publicResult: turnId ? { turnId, error } : { error },
+    turnId: turnId || undefined,
+    returnedPromptChars: 0,
+    returnedResponseChars: 0,
+    omittedPromptChars: 0,
+    omittedResponseChars: 0,
+    error,
+  };
+}
+
+function renderGetTurnPayload(
+  turnId: string,
+  prompt: string,
+  response: string,
+  maxChars: number,
+): {
+  prompt: string;
+  response: string;
+  omittedPromptChars: number;
+  omittedResponseChars: number;
+  reason: string;
+} {
+  if (prompt.length > maxChars) {
+    return {
+      prompt: foldToolText(
+        prompt,
+        maxChars,
+        `[prompt middle omitted; omittedChars=${prompt.length - maxChars}; full content remains stored in turn table]`,
+      ),
+      response: '',
+      omittedPromptChars: prompt.length - maxChars,
+      omittedResponseChars: response.length,
+      reason: 'prompt-over-budget',
+    };
+  }
+  const remainingForResponse = Math.max(0, maxChars - prompt.length);
+  if (response.length > remainingForResponse) {
+    return {
+      prompt,
+      response: foldToolText(
+        response,
+        remainingForResponse,
+        `[response middle omitted; omittedChars=${response.length - remainingForResponse}; full content remains stored in turn table]`,
+      ),
+      omittedPromptChars: 0,
+      omittedResponseChars: response.length - remainingForResponse,
+      reason: 'response-over-budget',
+    };
+  }
+  return {
+    prompt,
+    response,
+    omittedPromptChars: 0,
+    omittedResponseChars: 0,
+    reason: 'full',
+  };
+}
+
+function foldToolText(text: string, maxChars: number, marker: string): string {
+  if (text.length <= maxChars) {
+    return text;
+  }
+  if (maxChars <= 0) {
+    return '';
+  }
+  const available = maxChars - marker.length - 2;
+  if (available <= 0) {
+    return marker.slice(0, maxChars);
+  }
+  const headChars = Math.ceil(available * 0.6);
+  const tailChars = Math.max(0, available - headChars);
+  return [
+    text.slice(0, headChars),
+    marker,
+    tailChars > 0 ? text.slice(text.length - tailChars) : '',
+  ].filter(Boolean).join('\n');
+}
+
+function getTurnToolReturnedChars(result: GetTurnToolResult): number {
+  return result.returnedPromptChars + result.returnedResponseChars;
+}
+
+function createGetSkillTool(input: SessionExtractionInput) {
+  const skillNames = skillNamesFromSignals(input.sessionMemory.skillSignals ?? []);
+  return (args: Record<string, unknown>) => {
+    const skillName = normalizeSkillNameArg(args.skillName);
+    if (!skillName) {
+      return { error: 'skillName is required' };
+    }
+    if (!skillNames.has(skillName)) {
+      return { skillName, error: 'skill signal not found' };
+    }
+    return {
+      skillName,
+      content: input.sessionMemory.skillDetails?.[skillName] ?? '',
+    };
+  };
+}
+
+function isGetSkillSuccess(result: unknown): boolean {
+  return typeof result === 'object'
+    && result !== null
+    && !Object.prototype.hasOwnProperty.call(result, 'error');
+}
+
 function normalizeSequences(value: unknown): number[] {
   if (!Array.isArray(value)) {
     return [];
@@ -529,12 +855,64 @@ function normalizeSequences(value: unknown): number[] {
     .filter((sequence, index, values) => values.indexOf(sequence) === index);
 }
 
-function createExtractionTrace(input: SessionExtractionInput) {
+function normalizeSkillNameArg(value: unknown): string {
+  if (typeof value !== 'string') {
+    return '';
+  }
+  const skillName = value.trim();
+  return isValidSkillName(skillName) ? skillName : '';
+}
+
+function createExtractionTrace(
+  input: SessionExtractionInput,
+  params: {
+    config: {
+      maxInputChars: number;
+      snapshotInputChars: number;
+      previewChars: number;
+    };
+    snapshotView: ReturnType<typeof buildSnapshotView>;
+    renderedTurns: RenderedBatchTurns;
+    userPromptRenderedChars: number;
+  },
+) {
+  const promptCharsOriginal = input.turns.reduce((sum, turn) => sum + (turn.prompt?.trim().length ?? 0), 0);
+  const responseCharsOriginal = input.turns.reduce((sum, turn) => sum + (turn.response?.trim().length ?? 0), 0);
+  const promptCharsRendered = params.renderedTurns.turns.reduce((sum, turn) => sum + turn.promptCharsRendered, 0);
+  const responseCharsRendered = params.renderedTurns.turns.reduce((sum, turn) => sum + turn.responseCharsRendered, 0);
+  const omittedPromptPlanChars = params.renderedTurns.turns.reduce((sum, turn) => sum + turn.omittedPromptPlanChars, 0);
+  const omittedResponseCompressedChars = params.renderedTurns.turns.reduce((sum, turn) => sum + turn.omittedResponseCompressedChars, 0);
+  const omittedResponseChars = params.renderedTurns.turns.reduce((sum, turn) => sum + turn.omittedResponseChars, 0);
   return {
     input: {
       sessionMemory: input.sessionMemory,
       turns: input.turns,
     },
+    inputBudget: {
+      maxInputChars: params.config.maxInputChars,
+      snapshotInputChars: params.config.snapshotInputChars,
+      newBatchRenderedChars: params.renderedTurns.renderedChars,
+      snapshotRenderedChars: params.snapshotView.snapshotCharsRendered,
+      userPromptRenderedChars: params.userPromptRenderedChars,
+      candidateTurns: input.candidateTurnCount ?? input.turns.length,
+      includedTurns: input.turns.length,
+      deferredTurns: input.deferredTurnCount ?? 0,
+      stoppedBy: input.inputBudgetStoppedBy ?? params.renderedTurns.stoppedBy,
+      snapshotStoppedBy: params.snapshotView.snapshotStoppedBy,
+      snapshotProtectedExtractionSummaries: params.snapshotView.snapshotProtectedExtractionSummaries,
+      promptCharsOriginal,
+      promptCharsRendered,
+      omittedPromptPlanChars,
+      responseCharsOriginal,
+      responseCharsRendered,
+      omittedResponseCompressedChars,
+      snapshotCharsOriginal: params.snapshotView.snapshotCharsOriginal,
+      snapshotCharsRendered: params.snapshotView.snapshotCharsRendered,
+      omittedResponseChars,
+      previewPolicy: previewPolicy(params.config.previewChars),
+    },
+    turnBudgetRecords: params.renderedTurns.turns.flatMap((turn) => turn.records),
+    getTurnResults: [] as GetTurnToolResult[],
     toolCalls: [] as LlmToolCall[],
     toolResults: [] as Array<{
       id: string;
@@ -560,6 +938,7 @@ async function writeExtractionTrace(event: {
   durationMs: number;
   toolCalls: LlmToolCall[];
   toolResults: unknown[];
+  readSkillNames?: string[];
   finalText?: string;
   rawText?: string;
   validationError?: string;
@@ -614,6 +993,7 @@ function throwIfAborted(signal?: AbortSignal): void {
 }
 
 export const __testing = {
-  renderNewTurnsForTests: renderNewTurns,
+  renderNewTurnsForTests: (turns: SessionExtractionInput['turns']) => renderNewTurns(turns).markdown,
+  renderNewTurnsBudgetForTests: renderNewTurns,
   validateSessionExtractionResultForTests: validateSessionExtractionResult,
 };

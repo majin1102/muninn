@@ -15,6 +15,7 @@ function client({
   sessionDelta = [],
   turnVersion = 10,
   sessionVersion = 10,
+  sessionStatsVersion = sessionVersion,
 } = {}) {
   const calls = {
     listTurns: 0,
@@ -47,11 +48,19 @@ function client({
             ? snapshots.filter((snapshot) => (snapshot.extractor ?? snapshot.extractor) === query.extractor)
             : snapshots;
         },
+        listSnapshotsWithVersion: async (query = {}) => {
+          calls.listSnapshots += 1;
+          calls.listSnapshotQueries.push(query);
+          const rows = query.extractor
+            ? snapshots.filter((snapshot) => snapshot.extractor === query.extractor)
+            : snapshots;
+          return { sourceVersion: sessionVersion, rows };
+        },
         delta: async () => {
           calls.sessionDelta += 1;
-          return sessionDelta;
+          return { sourceVersion: sessionVersion, rows: sessionDelta };
         },
-        stats: async () => ({ version: sessionVersion, rowCount: snapshots.length, fragmentCount: 1 }),
+        stats: async () => ({ version: sessionStatsVersion, rowCount: snapshots.length, fragmentCount: 1 }),
       },
     },
   };
@@ -75,7 +84,7 @@ async function withTempMuninnHome(t) {
 
 function checkpoint(overrides = {}) {
   return {
-    schemaVersion: 11,
+    schemaVersion: 12,
     writtenAt: '2026-06-02T00:00:00.000Z',
     writerPid: 123,
     extractor: {
@@ -133,11 +142,15 @@ test('sessionIndex restores checkpoint and applies table deltas without full tur
       extractor: 'default-extractor',
       title: 'Snapshot title',
       summary: '',
+      memorySignals: [],
+      skillSignals: [],
+      skillDetails: '{}',
       content: '',
       references: [],
     }],
     turnVersion: 5,
     sessionVersion: 8,
+    sessionStatsVersion: 99,
   });
 
   assert.deepEqual(await index.list(fake.tables), [{
@@ -153,6 +166,7 @@ test('sessionIndex restores checkpoint and applies table deltas without full tur
   assert.equal(fake.calls.listSnapshots, 0);
   assert.equal(fake.calls.turnDelta, 1);
   assert.equal(fake.calls.sessionDelta, 1);
+  assert.equal(index.currentCheckpoint().baseline.session, 8);
 });
 
 test('sessionIndex rebuilds after dirty mark and drops removed sessions', async () => {
@@ -191,6 +205,9 @@ test('sessionIndex rebuilds after dirty mark and drops removed sessions', async 
       extractor: 'default-extractor',
       title: 'Live snapshot title',
       summary: '',
+      memorySignals: [],
+      skillSignals: [],
+      skillDetails: '{}',
       content: '',
       references: [],
     }],
@@ -247,6 +264,9 @@ test('sessionIndex rebuild filters turns and snapshots by extractor', async () =
         extractor: 'other-extractor',
         title: 'Wrong extractor title',
         summary: '',
+        memorySignals: [],
+        skillSignals: [],
+        skillDetails: '{}',
         content: '',
         references: [],
       },
@@ -262,6 +282,9 @@ test('sessionIndex rebuild filters turns and snapshots by extractor', async () =
         extractor: 'default-extractor',
         title: 'Right extractor title',
         summary: '',
+        memorySignals: [],
+        skillSignals: [],
+        skillDetails: '{}',
         content: '',
         references: [],
       },
@@ -385,6 +408,9 @@ test('sessionIndex groups entries by project agent and session id, not cwd', asy
       extractor: 'default-extractor',
       title: 'Canonical project title',
       summary: '',
+      memorySignals: [],
+      skillSignals: [],
+      skillDetails: '{}',
       content: '',
       references: [],
     }],
@@ -492,6 +518,9 @@ test('backend refreshSessionIndex rebuilds stale checkpoint entries from current
       extractor: 'default-extractor',
       title: 'Stale snapshot title',
       summary: '',
+      memorySignals: [],
+      skillSignals: [],
+      skillDetails: '{}',
       content: '',
       references: [],
     }],
@@ -499,7 +528,7 @@ test('backend refreshSessionIndex rebuilds stale checkpoint entries from current
     sessionVersion: 12,
   });
   const backend = MuninnBackend.createForTests(fake.tables, {
-    schemaVersion: 11,
+    schemaVersion: 12,
     writtenAt: '2026-06-02T00:00:00.000Z',
     writerPid: 123,
     extractor: {
@@ -547,6 +576,9 @@ test('backend refreshSessionIndex writes rebuilt sessionIndex back to an existin
       extractor: 'default-extractor',
       title: 'Stale snapshot title',
       summary: '',
+      memorySignals: [],
+      skillSignals: [],
+      skillDetails: '{}',
       content: '',
       references: [],
     }],

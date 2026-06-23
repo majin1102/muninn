@@ -127,6 +127,54 @@ test('generateWithTools sends tool result messages and parses final text', async
   });
 });
 
+test('generateWithTools defaults OpenAI tool calls to chat completions when api is omitted', async (t) => {
+  const { dir, homeDir, configPath } = await makeConfigHome();
+  process.env.MUNINN_HOME = homeDir;
+  await writeExtractorConfig(configPath, { api: undefined });
+  const originalFetch = globalThis.fetch;
+  let capturedUrl;
+  let capturedBody;
+  globalThis.fetch = async (url, init) => {
+    capturedUrl = String(url);
+    capturedBody = JSON.parse(init.body);
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        choices: [{
+          message: {
+            content: '{"ok":true}',
+          },
+        }],
+      }),
+    };
+  };
+  t.after(async () => {
+    globalThis.fetch = originalFetch;
+    delete process.env.MUNINN_HOME;
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  const result = await generateWithTools('extractor', {
+    messages: [
+      { role: 'system', content: 'system' },
+      { role: 'user', content: 'prompt' },
+    ],
+    tools: [{
+      name: 'get_turn',
+      description: 'Get a turn.',
+      parameters: { type: 'object', properties: {} },
+    }],
+  });
+
+  assert.equal(capturedUrl, 'https://example.test/api/chat/completions');
+  assert.equal(capturedBody.tools[0].function.name, 'get_turn');
+  assert.deepEqual(result, {
+    type: 'final',
+    text: '{"ok":true}',
+  });
+});
+
 async function makeConfigHome() {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'muninn-provider-tools-'));
   return {
@@ -136,7 +184,17 @@ async function makeConfigHome() {
   };
 }
 
-async function writeExtractorConfig(configPath) {
+async function writeExtractorConfig(configPath, overrides = {}) {
+  const provider = {
+    type: 'openai',
+    api: 'openai-completions',
+    apiKey: 'test-key',
+    baseUrl: 'https://example.test/api',
+    ...overrides,
+  };
+  if (provider.api === undefined) {
+    delete provider.api;
+  }
   await mkdir(path.dirname(configPath), { recursive: true });
   await writeFile(configPath, `${JSON.stringify({
     extractor: {
@@ -148,12 +206,7 @@ async function writeExtractorConfig(configPath) {
     },
     providers: {
       llm: {
-        extractor_llm: {
-          type: 'openai',
-          api: 'openai-completions',
-          apiKey: 'test-key',
-          baseUrl: 'https://example.test/api',
-        },
+        extractor_llm: provider,
       },
       embedding: {
         default: {

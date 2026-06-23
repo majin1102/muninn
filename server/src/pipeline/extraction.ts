@@ -236,14 +236,15 @@ async function indexThreadExtractions(
     const diff = applyExtractionChanges(previous?.extractions ?? [], {
       title: thread.title,
       summary: thread.summary,
-      signals: current.signals ?? '',
+      memorySignals: current.memorySignals ?? [],
+      skillSignals: current.skillSignals ?? [],
+      skillDetails: current.skillDetails ?? {},
       snapshotContent: current.snapshotContent,
       extractions: current.extractions.map((extraction) => (
         extraction.id && previousIds.has(extraction.id)
           ? extraction
           : { ...extraction, id: undefined }
       )),
-      openQuestions: current.openQuestions ?? [],
       nextSteps: current.nextSteps ?? [],
       contextRefs: current.contextRefs,
     });

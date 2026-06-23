@@ -64,7 +64,7 @@ export type SessionIndexCheckpoint = {
 };
 
 export type CheckpointContent = {
-  schemaVersion: 11;
+  schemaVersion: 12;
   extractor: ExtractorCheckpoint;
   sessionIndex: SessionIndexCheckpoint;
 };
@@ -112,7 +112,7 @@ export function parseCheckpointFile(raw: string): CheckpointFile {
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
     throw new Error('checkpoint must be a JSON object');
   }
-  if (parsed.schemaVersion !== 11) {
+  if (parsed.schemaVersion !== 12) {
     throw new Error(`unsupported checkpoint schemaVersion: ${String(parsed.schemaVersion)}`);
   }
   const extractor = parseExtractorSection(parsed.extractor);
@@ -124,7 +124,7 @@ export function parseCheckpointFile(raw: string): CheckpointFile {
     throw new Error('checkpoint sessionIndex section is invalid');
   }
   return {
-    schemaVersion: 11,
+    schemaVersion: 12,
     writtenAt: typeof parsed.writtenAt === 'string' ? parsed.writtenAt : new Date(0).toISOString(),
     writerPid: typeof parsed.writerPid === 'number' ? parsed.writerPid : 0,
     extractor,
@@ -255,7 +255,6 @@ function parseSessionIndexBaseline(value: unknown): SessionIndexCheckpoint['base
   };
 }
 
-
 function parseRecentSessions(value: unknown): RecentSessionCheckpoint[] | null {
   if (!Array.isArray(value)) {
     return null;
@@ -326,6 +325,10 @@ function parseRecentTurn(value: unknown): RecentTurn | null {
 }
 
 function isTurnSequence(value: unknown): value is number {
+  return isNonNegativeInteger(value);
+}
+
+function isNonNegativeInteger(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
 }
 

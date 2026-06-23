@@ -1,7 +1,8 @@
 import fs from 'node:fs';
+import { appendFile, mkdir } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { getExtractorLlmConfig, type TextProviderConfig } from '../config.js';
+import { getExtractorLlmConfig, resolveDatabaseLogPath, type TextProviderConfig } from '../config.js';
 
 export type LlmTask = 'extractor';
 
@@ -194,7 +195,7 @@ async function generateOpenAiWithTools(
     throw new Error('llm.apiKey is required for openai llm provider');
   }
 
-  const apiStyle = normalizeApiStyle(config.api);
+  const apiStyle = normalizeApiStyle(config.api ?? 'openai-completions');
   if (apiStyle !== 'chatCompletions') {
     throw new Error('native tool calls require openai-completions/chat_completions api style');
   }
@@ -579,7 +580,14 @@ async function generateOpenAiCodexWithTools(
       throw new Error(`openai-codex request failed with status ${response.status}: ${await response.text()}`);
     }
 
-    const stream = parseCodexStream(await response.text());
+    const raw = await response.text();
+    let stream;
+    try {
+      stream = parseCodexStream(raw);
+    } catch (error) {
+      await writeCodexProviderDiagnostic(raw, 'tool', error);
+      throw error;
+    }
     const toolCalls = stream.toolCalls;
     if (toolCalls.length > 0) {
       return { type: 'tool_calls', toolCalls };
@@ -587,7 +595,8 @@ async function generateOpenAiCodexWithTools(
 
     const text = stream.text;
     if (!text) {
-      throw new Error('openai-codex response did not contain text output or tool calls');
+      await writeCodexProviderDiagnostic(raw, 'tool');
+      throw new Error('openai-codex response did not contain text output or tool calls; empty parsed codex response; see provider diagnostic log');
     }
     return { type: 'final', text };
   } finally {
@@ -652,6 +661,123 @@ function parseSseEvents(raw: string): Array<Record<string, unknown>> {
     }
   }
   return events;
+}
+
+type CodexProviderDiagnostic = {
+  ts: string;
+  provider: 'openai-codex';
+  operation: 'tool';
+  rawLength: number;
+  eventTypes: string[];
+  hasCompletedResponse: boolean;
+  completedOutputItemTypes: string[];
+  completedOutputContentTypes: string[];
+  directItemTypes: string[];
+  parseError?: {
+    name: string;
+    message: string;
+  };
+};
+
+async function writeCodexProviderDiagnostic(
+  raw: string,
+  operation: 'tool',
+  parseError?: unknown,
+): Promise<void> {
+  const diagnostic = buildCodexProviderDiagnostic(raw, operation, parseError);
+  const file = process.env.MUNINN_CODEX_PROVIDER_DIAGNOSTIC_FILE
+    ?? resolveDatabaseLogPath(undefined, 'codex-provider-diagnostics.jsonl');
+  await mkdir(path.dirname(file), { recursive: true });
+  await appendFile(file, `${JSON.stringify(diagnostic)}\n`, 'utf8');
+}
+
+function buildCodexProviderDiagnostic(
+  raw: string,
+  operation: 'tool',
+  parseError?: unknown,
+): CodexProviderDiagnostic {
+  const { events, parseError: eventParseError } = parseSseEventsForDiagnostic(raw);
+  const completedResponses = events
+    .filter((event) => event.type === 'response.completed' && event.response && typeof event.response === 'object')
+    .map((event) => event.response as Record<string, unknown>);
+  const completedOutputItems = completedResponses.flatMap((response) => (
+    Array.isArray(response.output) ? response.output : []
+  ));
+  const completedOutputObjects = completedOutputItems
+    .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object' && !Array.isArray(item));
+  const completedOutputContentItems = completedOutputObjects.flatMap((item) => (
+    Array.isArray(item.content) ? item.content : []
+  ));
+  const completedOutputContentObjects = completedOutputContentItems
+    .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object' && !Array.isArray(item));
+  const directItemObjects = events
+    .map((event) => event.item)
+    .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object' && !Array.isArray(item));
+  const normalizedParseError = parseErrorDetails(parseError) ?? eventParseError;
+  return {
+    ts: new Date().toISOString(),
+    provider: 'openai-codex',
+    operation,
+    rawLength: raw.length,
+    eventTypes: uniqueStrings(events.map((event) => stringField(event, 'type'))),
+    hasCompletedResponse: completedResponses.length > 0,
+    completedOutputItemTypes: uniqueStrings(completedOutputObjects.map((item) => stringField(item, 'type'))),
+    completedOutputContentTypes: uniqueStrings(completedOutputContentObjects.map((item) => stringField(item, 'type'))),
+    directItemTypes: uniqueStrings(directItemObjects.map((item) => stringField(item, 'type'))),
+    ...(normalizedParseError ? { parseError: normalizedParseError } : {}),
+  };
+}
+
+function parseSseEventsForDiagnostic(raw: string): {
+  events: Array<Record<string, unknown>>;
+  parseError?: { name: string; message: string };
+} {
+  const events: Array<Record<string, unknown>> = [];
+  let parseError: { name: string; message: string } | undefined;
+  for (const chunk of raw.split(/\n\n+/)) {
+    const data = chunk
+      .split(/\n/)
+      .filter((line) => line.startsWith('data:'))
+      .map((line) => line.slice('data:'.length).trim())
+      .join('\n')
+      .trim();
+    if (!data || data === '[DONE]') {
+      continue;
+    }
+    try {
+      const parsed = JSON.parse(data) as unknown;
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        events.push(parsed as Record<string, unknown>);
+      }
+    } catch (error) {
+      parseError ??= parseErrorDetails(error);
+    }
+  }
+  return { events, ...(parseError ? { parseError } : {}) };
+}
+
+function parseErrorDetails(error: unknown): { name: string; message: string } | undefined {
+  if (!error) {
+    return undefined;
+  }
+  if (error instanceof Error) {
+    return {
+      name: error.name || 'Error',
+      message: error.message,
+    };
+  }
+  return {
+    name: 'Error',
+    message: String(error),
+  };
+}
+
+function stringField(record: Record<string, unknown>, key: string): string {
+  return typeof record[key] === 'string' ? record[key] : '';
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return [...new Set(values.filter(Boolean))];
 }
 
 async function* streamResponseText(response: Response): AsyncIterable<string> {

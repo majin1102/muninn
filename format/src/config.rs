@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
 #[cfg(test)]
 use std::path::Path;
+use std::path::PathBuf;
 
 use lance::{Error, Result};
 use serde::Deserialize;
@@ -103,7 +103,9 @@ pub fn extraction_config() -> Result<EmbeddingConfig> {
         #[cfg(test)]
         api_key: embedding.as_ref().and_then(|config| config.api_key.clone()),
         #[cfg(test)]
-        base_url: embedding.as_ref().and_then(|config| config.base_url.clone()),
+        base_url: embedding
+            .as_ref()
+            .and_then(|config| config.base_url.clone()),
         dimensions: embedding
             .as_ref()
             .and_then(|config| config.dimensions)
@@ -126,7 +128,9 @@ pub fn extraction_config_from_raw(raw: &str) -> Result<EmbeddingConfig> {
         #[cfg(test)]
         api_key: embedding.as_ref().and_then(|config| config.api_key.clone()),
         #[cfg(test)]
-        base_url: embedding.as_ref().and_then(|config| config.base_url.clone()),
+        base_url: embedding
+            .as_ref()
+            .and_then(|config| config.base_url.clone()),
         dimensions: embedding
             .as_ref()
             .and_then(|config| config.dimensions)
@@ -165,8 +169,9 @@ fn load_muninn_config() -> Result<Option<MuninnConfig>> {
 
 fn parse_muninn_config(raw: &str, source: &str) -> Result<MuninnConfig> {
     validate_top_level_config(raw, source)?;
-    let parsed = serde_json::from_str::<MuninnConfig>(raw)
-        .map_err(|error| Error::invalid_input(format!("invalid Muninn config {source}: {error}")))?;
+    let parsed = serde_json::from_str::<MuninnConfig>(raw).map_err(|error| {
+        Error::invalid_input(format!("invalid Muninn config {source}: {error}"))
+    })?;
     if parsed
         .extractor
         .as_ref()
@@ -181,15 +186,19 @@ fn parse_muninn_config(raw: &str, source: &str) -> Result<MuninnConfig> {
 }
 
 fn validate_top_level_config(raw: &str, source: &str) -> Result<()> {
-    let value = serde_json::from_str::<serde_json::Value>(raw)
-        .map_err(|error| Error::invalid_input(format!("invalid Muninn config {source}: {error}")))?;
+    let value = serde_json::from_str::<serde_json::Value>(raw).map_err(|error| {
+        Error::invalid_input(format!("invalid Muninn config {source}: {error}"))
+    })?;
     let Some(object) = value.as_object() else {
         return Err(Error::invalid_input(format!(
             "invalid Muninn config {source}: expected an object"
         )));
     };
     for key in object.keys() {
-        if !matches!(key.as_str(), "storage" | "extractor" | "providers" | "watchdog" | "capture") {
+        if !matches!(
+            key.as_str(),
+            "storage" | "extractor" | "providers" | "watchdog" | "capture"
+        ) {
             return Err(Error::invalid_input(format!(
                 "unsupported top-level config key: {key}"
             )));
@@ -198,7 +207,9 @@ fn validate_top_level_config(raw: &str, source: &str) -> Result<()> {
     Ok(())
 }
 
-fn resolve_embedding_provider(config: Option<&MuninnConfig>) -> Result<Option<EmbeddingFileConfig>> {
+fn resolve_embedding_provider(
+    config: Option<&MuninnConfig>,
+) -> Result<Option<EmbeddingFileConfig>> {
     let Some(config) = config else {
         return Ok(None);
     };
@@ -317,9 +328,11 @@ mod tests {
 }"#,
         )
         .unwrap_err();
-        assert!(error
-            .to_string()
-            .contains("unsupported top-level config key: unsupportedIndex"));
+        assert!(
+            error
+                .to_string()
+                .contains("unsupported top-level config key: unsupportedIndex")
+        );
     }
 
     #[test]
@@ -354,9 +367,11 @@ mod tests {
 }"#,
         )
         .unwrap_err();
-        assert!(error
-            .to_string()
-            .contains("unsupported top-level config key: extraction"));
+        assert!(
+            error
+                .to_string()
+                .contains("unsupported top-level config key: extraction")
+        );
     }
 
     #[test]

@@ -176,7 +176,7 @@ export class Watchdog {
       };
       await this.writeCheckpointAtomically(serializeCheckpointFile(checkpoint));
       this.lastCheckpointJson = checkpointJson;
-      this.updateCheckpointFloors(exported);
+      await this.updateCheckpointFloors(exported);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.error(`[muninn:watchdog] checkpoint flush failed: ${message}`);
@@ -389,11 +389,11 @@ export class Watchdog {
       extractor: checkpoint.extractor,
       sessionIndex: checkpoint.sessionIndex,
     });
-    this.updateCheckpointFloors(checkpoint);
+    await this.updateCheckpointFloors(checkpoint);
   }
 
-  private updateCheckpointFloors(checkpoint: CheckpointContent | CheckpointFile): void {
-    const floors = checkpointFloors(checkpoint);
+  private async updateCheckpointFloors(checkpoint: CheckpointContent | CheckpointFile): Promise<void> {
+    const floors = await checkpointFloors(checkpoint, this.binding);
     for (const dataset of DATASETS) {
       const current = this.state.get(dataset);
       this.state.set(dataset, {
@@ -497,10 +497,32 @@ export class Watchdog {
   }
 }
 
-function checkpointFloors(checkpoint: CheckpointContent | CheckpointFile): Record<DatasetName, number | null> {
+async function checkpointFloors(
+  checkpoint: CheckpointContent | CheckpointFile,
+  binding: Partial<Pick<NativeTables, 'dreamingProjectTable'>>,
+): Promise<Record<DatasetName, number | null>> {
+  const dreamingProjects = await binding.dreamingProjectTable?.list() ?? [];
+  const dreamingSessionFloor = minNumber(dreamingProjects.map((entry) => entry.sessionSnapshotVersion));
+  const sessionFloor = minNumber([
+    checkpoint.extractor.baseline.session,
+    checkpoint.sessionIndex.baseline.session,
+    dreamingSessionFloor,
+  ]);
+
   return {
     turn: checkpoint.extractor.baseline.turn,
-    session: checkpoint.extractor.baseline.session,
+    session: sessionFloor,
     extraction: checkpoint.extractor.baseline.extraction,
   };
 }
+
+function minNumber(values: Array<number | null | undefined>): number | null {
+  const present = values.filter((value): value is number => (
+    typeof value === 'number'
+    && Number.isSafeInteger(value)
+    && value >= 0
+  ));
+  return present.length === 0 ? null : Math.min(...present);
+}
+
+export const __testing = { checkpointFloors };

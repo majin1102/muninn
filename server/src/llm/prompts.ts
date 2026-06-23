@@ -11,6 +11,7 @@ const PROMPT_FILE_NAMES = {
   chat: 'chat',
   thread_extracting: 'extractor',
   memory_recaller: 'memory-recaller',
+  project_dreaming: 'project-dreamer',
 } as const;
 
 export function loadPromptTemplate(name: keyof typeof PROMPT_FILE_NAMES): PromptTemplate {

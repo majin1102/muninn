@@ -32,6 +32,28 @@ function renderMemoryResponse(
   }).join('\n\n---\n\n');
 }
 
+function renderProjectSignals(result: {
+  project: string;
+  memorySignals: Array<{ score: number; text: string }>;
+  skillSignals: Array<{ score: number; name: string; summary: string }>;
+}): string {
+  return [
+    `# Project Signals`,
+    '',
+    `Project: ${result.project}`,
+    '',
+    '## Memory Signals',
+    ...result.memorySignals.map((signal) => `- [${formatSignalScore(signal.score)}] ${signal.text}`),
+    '',
+    '## Skill Signals',
+    ...result.skillSignals.map((signal) => `- [${formatSignalScore(signal.score)}] ${signal.name}: ${signal.summary}`),
+  ].join('\n').trimEnd();
+}
+
+function formatSignalScore(score: number): string {
+  return Number.isInteger(score) ? String(score) : score.toFixed(2);
+}
+
 async function writeDebugMarkdown(toolName: string, args: unknown): Promise<string> {
   const muninnHome = process.env.MUNINN_HOME ?? path.join(os.homedir(), '.muninn');
   const debugDir = path.join(muninnHome, 'debug');
@@ -169,6 +191,23 @@ async function main() {
       const result = await serverClient.getDetail(args);
       return {
         content: [{ type: 'text', text: renderMemoryResponse(result) }],
+      };
+    }
+  );
+
+  registerTool(
+    'project_signals',
+    {
+      description: 'Get top project dreaming signals for a project',
+      inputSchema: z.object({
+        project: z.string().describe('Project key/path'),
+        database: z.string().optional().describe('Muninn database name; defaults to main'),
+      }),
+    },
+    async (args: any) => {
+      const result = await serverClient.projectSignals(args);
+      return {
+        content: [{ type: 'text', text: renderProjectSignals(result) }],
       };
     }
   );

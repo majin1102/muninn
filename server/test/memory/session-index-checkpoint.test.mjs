@@ -5,7 +5,7 @@ import { parseCheckpointFile, serializeCheckpointFile } from '../../dist/checkpo
 
 function checkpoint(overrides = {}) {
   return {
-    schemaVersion: 11,
+    schemaVersion: 12,
     writtenAt: '2026-06-02T00:00:00.000Z',
     writerPid: 123,
     extractor: {
@@ -37,7 +37,7 @@ function checkpoint(overrides = {}) {
 test('checkpoint parses and serializes sessionIndex entries', () => {
   const parsed = parseCheckpointFile(JSON.stringify(checkpoint()));
 
-  assert.equal(parsed.schemaVersion, 11);
+  assert.equal(parsed.schemaVersion, 12);
   assert.deepEqual(parsed.sessionIndex, {
     baseline: { turn: 10, session: 5 },
     entries: [
@@ -65,4 +65,15 @@ test('checkpoint rejects missing sessionIndex', () => {
     () => parseCheckpointFile(JSON.stringify(content)),
     /sessionIndex section is invalid/,
   );
+});
+
+test('checkpoint ignores obsolete dreamingIndex when present', () => {
+  const parsed = parseCheckpointFile(JSON.stringify(checkpoint({
+    dreamingIndex: {
+      baseline: { dreaming: 7 },
+      entries: [],
+    },
+  })));
+
+  assert.equal('dreamingIndex' in parsed, false);
 });

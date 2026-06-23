@@ -75,23 +75,19 @@ export class SessionIndex {
     for (const turn of turnDelta) {
       this.upsertTurn(readTurnRow(turn));
     }
-    this.applySnapshots(sessionDelta);
+    this.applySnapshots(sessionDelta.rows);
 
-    const [turnStats, sessionStats] = await Promise.all([
-      client.turnTable.stats(),
-      client.sessionTable.stats(),
-    ]);
+    const turnStats = await client.turnTable.stats();
     this.baseline = {
       turn: turnStats?.version ?? this.baseline.turn,
-      session: sessionStats?.version ?? this.baseline.session,
+      session: sessionDelta.sourceVersion,
     };
   }
 
   private async rebuild(client: NativeTables): Promise<void> {
-    const [snapshotRows, turnStats, sessionStats] = await Promise.all([
-      client.sessionTable.listSnapshots(this.extractorName ? { extractor: this.extractorName } : {}),
+    const [snapshotRows, turnStats] = await Promise.all([
+      client.sessionTable.listSnapshotsWithVersion(this.extractorName ? { extractor: this.extractorName } : {}),
       client.turnTable.stats(),
-      client.sessionTable.stats(),
     ]);
     const turnRows = await this.listAllTurns(client, turnStats?.rowCount);
 
@@ -103,11 +99,11 @@ export class SessionIndex {
       }
     }
     this.applySnapshots(this.extractorName
-      ? snapshotRows.filter((snapshot) => snapshot.extractor === this.extractorName)
-      : snapshotRows);
+      ? snapshotRows.rows.filter((snapshot) => snapshot.extractor === this.extractorName)
+      : snapshotRows.rows);
     this.baseline = {
       turn: turnStats?.version ?? 0,
-      session: sessionStats?.version ?? 0,
+      session: snapshotRows.sourceVersion,
     };
     this.dirty = false;
   }

@@ -1,10 +1,11 @@
-import { Bot, Check, ChevronDown, ChevronRight, Folder, MessageSquare, Plus, Search, X } from 'lucide-react';
+import { Bot, Check, ChevronDown, ChevronRight, Folder, MessageSquare, MoonStar as DreamingIcon, Plus, Search, X } from 'lucide-react';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import type { RefObject } from 'react';
+import type { ReactNode, RefObject } from 'react';
 import { logoForAgent, type AgentLogo } from '../lib/agent-logo.js';
+import { isProjectDreamingProject, isProjectDreamingSession } from '../lib/api.js';
 import type { ProjectNode, ProjectSegmentNode, ProjectSessionNode, ProjectTurnNode } from '../lib/api.js';
 import * as SessionIdentity from '@muninn/common/session-identity';
-import { formatRelativeTime, formatTimestamp } from '../lib/utils.js';
+import { cn, formatRelativeTime, formatTimestamp } from '../lib/utils.js';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from './ui/collapsible.js';
 import { Button } from './ui/button.js';
 
@@ -85,14 +86,17 @@ export function SessionTree({
     selectedAgents,
     timeRange,
   }), [projects, query, selectedAgents, timeRange]);
-  const activePath = useMemo(() => findActivePath(filteredProjects, activeMemoryId), [activeMemoryId, filteredProjects]);
+  const activePath = useMemo(
+    () => findActivePath(filteredProjects, activeMemoryId, selectedSessionId),
+    [activeMemoryId, filteredProjects, selectedSessionId],
+  );
 
   useEffect(() => {
     setOpenProjects((current) => {
       const next = { ...current };
       for (const project of projects) {
         if (next[project.projectKey] === undefined) {
-          next[project.projectKey] = true;
+          next[project.projectKey] = false;
         }
       }
       return next;
@@ -103,7 +107,7 @@ export function SessionTree({
         for (const session of project.sessions) {
           const key = sessionKey(session);
           if (next[key] === undefined) {
-            next[key] = session.loaded && shouldAutoExpandSession(session);
+            next[key] = false;
           }
         }
       }
@@ -126,7 +130,7 @@ export function SessionTree({
       return;
     }
     setOpenProjects((current) => ({ ...current, [activePath.projectKey]: true }));
-    if (canExpandSessions) {
+    if (canExpandSessions && activePath.expandSession) {
       setOpenSessions((current) => ({ ...current, [activePath.sessionKey]: true }));
     }
     window.requestAnimationFrame(() => {
@@ -206,7 +210,13 @@ export function SessionTree({
   }, [customFromDate, customFromTime, customToDate, customToTime, selectedAgents, timePreset]);
 
   if (loading && projects.length === 0) {
-    return <div className="sidebar-empty">Loading projects...</div>;
+    return (
+      <SessionTreeLoadingState
+        className="session-tree-loading-root"
+        icon={<MessageSquare />}
+        title="loading sessions..."
+      />
+    );
   }
 
   if (error && projects.length === 0) {
@@ -423,14 +433,18 @@ export function SessionTree({
       ) : filteredProjects.map((project) => (
         <Collapsible
           key={project.projectKey}
-          open={openProjects[project.projectKey] ?? true}
+          open={openProjects[project.projectKey] ?? false}
           onOpenChange={(open) => setOpenProjects((current) => ({ ...current, [project.projectKey]: open }))}
           className="tree-group"
         >
           <CollapsibleTrigger className="tree-trigger tree-trigger-project">
             <span className="tree-trigger-main">
               <ChevronRight className="tree-chevron" />
-              <Folder className="tree-icon" />
+              {isProjectDreamingProject(project) ? (
+                <DreamingIcon className="tree-icon tree-icon-dreaming" aria-hidden="true" />
+              ) : (
+                <Folder className="tree-icon" />
+              )}
               <span>{project.label}</span>
               <AgentLogoCluster agents={projectAgents(project)} />
             </span>
@@ -442,8 +456,30 @@ export function SessionTree({
             {project.sessions.map((session) => {
               const key = sessionKey(session);
               const sessionActive = selectedSessionId === key;
+              if (isProjectDreamingSession(session)) {
+                return (
+                  <div
+                    key={key}
+                    className={[
+                      'tree-trigger tree-trigger-session tree-trigger-session-flat tree-trigger-session-dreaming',
+                      sessionActive ? 'tree-trigger-session-active' : '',
+                    ].filter(Boolean).join(' ')}
+                  >
+                    <button
+                      className="tree-session-open tree-session-open-dreaming"
+                      type="button"
+                      onClick={() => onOpenSession(session)}
+                    >
+                      <span className="tree-trigger-main">
+                        <ProjectDreamingIcon />
+                        <span>{session.displaySessionId}</span>
+                      </span>
+                    </button>
+                  </div>
+                );
+              }
               const sessionHasActiveChild = hasActiveSessionChild(session, activeMemoryId);
-              const sessionOpen = canExpandSessions && (openSessions[key] ?? session.loaded);
+              const sessionOpen = canExpandSessions && (openSessions[key] ?? false);
               return (
               <Collapsible
                 key={key}
@@ -483,7 +519,11 @@ export function SessionTree({
                 {canExpandSessions ? (
                   <CollapsibleContent className="turn-list">
                     {session.loading && session.turns.length === 0 ? (
-                      <div className="turn-empty">Loading turns...</div>
+                      <SessionTreeLoadingState
+                        className="session-tree-loading-conversation"
+                        icon={<AgentLogoIcon logo={logoForAgent(session.agent)} />}
+                        title="loading conversation..."
+                      />
                     ) : null}
                     <SessionTurnList
                       session={session}
@@ -519,6 +559,37 @@ export function SessionTree({
         ) : null}
       </div>
     </div>
+  );
+}
+
+function ProjectDreamingIcon() {
+  return (
+    <svg
+      className="tree-icon"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path
+        d="M2.75 6.05c0-1.1.9-2 2-2h4.15c.57 0 1.1.27 1.44.73l.72.99c.34.46.87.73 1.44.73h6.75c1.1 0 2 .9 2 2v1.25"
+        strokeWidth="1.8"
+      />
+      <path
+        d="M2.75 6.05v10.45c0 1.1.9 2 2 2h6.55"
+        strokeWidth="1.8"
+      />
+      <path
+        d="M4.75 18.5h6.55"
+        strokeWidth="1.8"
+      />
+      <path
+        d="M18.15 11.75a3.85 3.85 0 0 0 4.25 5.88 5.1 5.1 0 1 1-4.25-5.88"
+        strokeWidth="1.45"
+      />
+    </svg>
   );
 }
 
@@ -611,9 +682,12 @@ function filterProjects(projects: ProjectNode[], filter: ProjectFilter): Project
   const selectedAgents = new Set(filter.selectedAgents);
   const compare = (left: string, right: string) => left.localeCompare(right);
 
-  return projects.flatMap((project) => {
+  return sortProjectsWithDreamingFirst(projects.flatMap((project) => {
     const projectMatches = matchesQuery(project.label, normalizedQuery);
-    const sessions = project.sessions.flatMap((session) => {
+    if (isProjectDreamingProject(project)) {
+      return filterDreamingProject(project, normalizedQuery, projectMatches, filter.timeRange, compare);
+    }
+    const sessions = project.sessions.filter((session) => !isProjectDreamingSession(session)).flatMap((session) => {
       if (selectedAgents.size > 0 && !selectedAgents.has(session.agent)) {
         return [];
       }
@@ -658,7 +732,49 @@ function filterProjects(projects: ProjectNode[], filter: ProjectFilter): Project
       latestUpdatedAt,
       sessions,
     }];
-  }).sort((left, right) => compare(left.latestUpdatedAt, right.latestUpdatedAt));
+  }), compare);
+}
+
+function sortProjectsWithDreamingFirst(
+  projects: ProjectNode[],
+  compare: (left: string, right: string) => number,
+): ProjectNode[] {
+  return projects.sort((left, right) => {
+    if (isProjectDreamingProject(left) !== isProjectDreamingProject(right)) {
+      return isProjectDreamingProject(left) ? -1 : 1;
+    }
+    return compare(left.latestUpdatedAt, right.latestUpdatedAt);
+  });
+}
+
+function filterDreamingProject(
+  project: ProjectNode,
+  normalizedQuery: string,
+  projectMatches: boolean,
+  timeRange: TimeRange,
+  compare: (left: string, right: string) => number,
+): ProjectNode[] {
+  const sessions = project.sessions
+    .filter(isProjectDreamingSession)
+    .filter((session) => isInRange(session.latestUpdatedAt, timeRange))
+    .filter((session) => (
+      !normalizedQuery
+      || projectMatches
+      || matchesQuery(session.displaySessionId, normalizedQuery)
+      || matchesQuery(session.projectKey, normalizedQuery)
+    ))
+    .sort((left, right) => compare(left.latestUpdatedAt, right.latestUpdatedAt));
+  if (sessions.length === 0) {
+    return [];
+  }
+  const latestUpdatedAt = sessions.reduce((latest, session) => (
+    session.latestUpdatedAt > latest ? session.latestUpdatedAt : latest
+  ), sessions[0]!.latestUpdatedAt);
+  return [{
+    ...project,
+    latestUpdatedAt,
+    sessions,
+  }];
 }
 
 function matchesQuery(value: string, query: string): boolean {
@@ -684,7 +800,9 @@ function isInRange(value: string, range: TimeRange): boolean {
 }
 
 function uniqueAgents(projects: ProjectNode[]): string[] {
-  return [...new Set(projects.flatMap((project) => project.sessions.map((session) => session.agent)))]
+  return [...new Set(projects.flatMap((project) => project.sessions
+    .filter((session) => !isProjectDreamingSession(session))
+    .map((session) => session.agent)))]
     .sort((left, right) => agentLabel(left).localeCompare(agentLabel(right)));
 }
 
@@ -702,11 +820,6 @@ function hasActiveSessionChild(session: ProjectSessionNode, activeMemoryId: stri
   }
   return session.turns.some((turn) => turn.memoryId === activeMemoryId)
     || session.segments.some((segment) => segment.memoryId === activeMemoryId);
-}
-
-function shouldAutoExpandSession(session: ProjectSessionNode): boolean {
-  const itemCount = session.segments.length > 0 ? session.segments.length : session.turns.length;
-  return itemCount <= TURN_LIST_PAGE_SIZE;
 }
 
 function openVisibleProjects(current: Record<string, boolean>, projects: ProjectNode[]): Record<string, boolean> {
@@ -727,19 +840,31 @@ function openVisibleSessions(current: Record<string, boolean>, projects: Project
   return next;
 }
 
-function findActivePath(projects: ProjectNode[], activeMemoryId: string | null): { projectKey: string; sessionKey: string } | null {
-  if (!activeMemoryId) {
-    return null;
-  }
+function findActivePath(
+  projects: ProjectNode[],
+  activeMemoryId: string | null,
+  selectedSessionId: string | null,
+): { projectKey: string; sessionKey: string; expandSession: boolean } | null {
   for (const project of projects) {
     for (const session of project.sessions) {
       if (
-        session.turns.some((turn) => turn.memoryId === activeMemoryId)
-        || session.segments.some((segment) => segment.memoryId === activeMemoryId)
+        activeMemoryId
+        && (
+          session.turns.some((turn) => turn.memoryId === activeMemoryId)
+          || session.segments.some((segment) => segment.memoryId === activeMemoryId)
+        )
       ) {
         return {
           projectKey: project.projectKey,
           sessionKey: sessionKey(session),
+          expandSession: true,
+        };
+      }
+      if (selectedSessionId && sessionKey(session) === selectedSessionId) {
+        return {
+          projectKey: project.projectKey,
+          sessionKey: sessionKey(session),
+          expandSession: false,
         };
       }
     }
@@ -1054,6 +1179,9 @@ function projectAgents(project: ProjectNode): AgentLogo[] {
   const logos: AgentLogo[] = [];
   const seen = new Set<string>();
   for (const session of project.sessions) {
+    if (isProjectDreamingSession(session)) {
+      continue;
+    }
     const logo = logoForAgent(session.agent);
     if (seen.has(logo.key)) {
       continue;
@@ -1094,5 +1222,16 @@ function AgentLogoIcon({ logo }: { logo: AgentLogo }) {
         <img src={logo.src} alt={logo.label} className="agent-logo-image" />
       )}
     </span>
+  );
+}
+
+function SessionTreeLoadingState({ icon, title, className }: { icon: ReactNode; title: string; className?: string }) {
+  return (
+    <div className={cn('session-tree-loading', className)}>
+      <div className="session-tree-loading-icon" aria-hidden="true">
+        {icon}
+      </div>
+      <div className="session-tree-loading-title">{title}</div>
+    </div>
   );
 }

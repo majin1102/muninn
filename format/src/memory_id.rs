@@ -8,6 +8,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 pub enum MemoryLayer {
     Session,
     Turn,
+    Dreaming,
 }
 
 impl MemoryLayer {
@@ -15,6 +16,7 @@ impl MemoryLayer {
         match self {
             Self::Session => "session",
             Self::Turn => "turn",
+            Self::Dreaming => "dreaming",
         }
     }
 }
@@ -32,6 +34,7 @@ impl FromStr for MemoryLayer {
         match value {
             "session" => Ok(Self::Session),
             "turn" => Ok(Self::Turn),
+            "dreaming" => Ok(Self::Dreaming),
             _ => Err(Error::invalid_input(format!(
                 "invalid memory layer: {value}"
             ))),
@@ -115,6 +118,34 @@ where
     MemoryId::from_str(&value).map_err(serde::de::Error::custom)
 }
 
+pub fn serialize_optional_u64_string<S>(
+    value: &Option<u64>,
+    serializer: S,
+) -> std::result::Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    match value {
+        Some(value) => serializer.serialize_some(&value.to_string()),
+        None => serializer.serialize_none(),
+    }
+}
+
+pub fn deserialize_optional_u64_string<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<u64>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let Some(value) = Option::<String>::deserialize(deserializer)? else {
+        return Ok(None);
+    };
+    value
+        .parse::<u64>()
+        .map(Some)
+        .map_err(serde::de::Error::custom)
+}
+
 #[cfg(test)]
 mod tests {
     use std::str::FromStr;
@@ -130,6 +161,11 @@ mod tests {
         assert_eq!(MemoryLayer::Session.to_string(), "session");
         assert_eq!(MemoryLayer::from_str("turn").unwrap(), MemoryLayer::Turn);
         assert_eq!(MemoryLayer::Turn.to_string(), "turn");
+        assert_eq!(
+            MemoryLayer::from_str("dreaming").unwrap(),
+            MemoryLayer::Dreaming
+        );
+        assert_eq!(MemoryLayer::Dreaming.to_string(), "dreaming");
         assert!(MemoryLayer::from_str("thinking").is_err());
     }
 
@@ -139,6 +175,14 @@ mod tests {
         assert_eq!(parsed.memory_layer(), MemoryLayer::Turn);
         assert_eq!(parsed.memory_point(), 42);
         assert_eq!(parsed.to_string(), "turn:42");
+    }
+
+    #[test]
+    fn dreaming_memory_id_roundtrip() {
+        let parsed = MemoryId::from_str("dreaming:7").unwrap();
+        assert_eq!(parsed.memory_layer(), MemoryLayer::Dreaming);
+        assert_eq!(parsed.memory_point(), 7);
+        assert_eq!(parsed.to_string(), "dreaming:7");
     }
 
     #[test]
