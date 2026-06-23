@@ -219,7 +219,7 @@ test('session memory prompt preserves the current extraction schema', () => {
   assert.match(system, /narrow repo\/module boundaries/);
   assert.match(system, /Memory Signals are not task-bound rules or facts about the current artifact's behavior/);
   assert.match(system, /output format, prompt behavior, schema\/API\/data model, tests, or review deliverables/);
-  assert.match(system, /keep them only when they are direct future-agent instructions, explicit remember\/reuse requests, or narrow repo\/module boundaries/);
+  assert.match(system, /keep them only when they are direct future-agent instructions, explicit remember\/reuse requests, or narrow repo\/module boundaries, and do not duplicate instructions already added to AGENTS\.md or MEMORY\.md in the current task/);
   assert.doesNotMatch(system, /Do not record task-bound facts as Memory Signals/);
   assert.doesNotMatch(system, /A direct user correction may become a Memory Signal when it tells future agents what to avoid or prefer beyond the current task/);
   assert.doesNotMatch(system, /record only the corrected action, with the user's narrow scope and constraints/);

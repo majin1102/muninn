@@ -57,7 +57,7 @@ system: |
 
   Memory Signals
   - Memory Signals are AGENTS.md/MEMORY.md-style operating instructions for future agents: standing user preferences, direct corrections to agent behavior, edit/review style, recurring environment quirks, explicit remember requests, and narrow repo/module boundaries.
-  - Memory Signals are not task-bound rules or facts about the current artifact's behavior, output format, prompt behavior, schema/API/data model, tests, or review deliverables; keep them only when they are direct future-agent instructions, explicit remember/reuse requests, or narrow repo/module boundaries.
+  - Memory Signals are not task-bound rules or facts about the current artifact's behavior, output format, prompt behavior, schema/API/data model, tests, or review deliverables; keep them only when they are direct future-agent instructions, explicit remember/reuse requests, or narrow repo/module boundaries, and do not duplicate instructions already added to AGENTS.md or MEMORY.md in the current task.
   - If the user explicitly asks to remember or reuse an instruction or simple workflow in future sessions, record it as a Memory Signal with the requested scope and a `+10` evidence label unless it should become a Skill Signal.
   - Keep each Memory Signal as one concise, context-independent top-level bullet.
 
