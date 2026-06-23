@@ -32,24 +32,28 @@ export function TimelinePane({
   onLocateTurn,
 }: TimelinePaneProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
-  const [openItem, setOpenItem] = useState<string | null>(null);
+  const [openItems, setOpenItems] = useState<Set<string>>(() => new Set());
   const [scrollThumb, setScrollThumb] = useState({ height: 0, top: 0, visible: false });
   const showLoading = useDelayedBoolean(loading, 150);
   const restoreTimelineId = openTimelineId ?? activeTimelineId;
   const turnIndexById = new Map(sessionTurns.map((turn, index) => [turn.memoryId, index + 1]));
 
   useEffect(() => {
-    if (!restoreTimelineId) {
-      setOpenItem(null);
-    }
-  }, [restoreTimelineId, sessionKey]);
+    setOpenItems(new Set());
+  }, [sessionKey]);
 
   useEffect(() => {
     if (!restoreTimelineId) {
-      setOpenItem(null);
       return;
     }
-    setOpenItem(restoreTimelineId);
+    setOpenItems((current) => {
+      if (current.has(restoreTimelineId)) {
+        return current;
+      }
+      const next = new Set(current);
+      next.add(restoreTimelineId);
+      return next;
+    });
 
     window.requestAnimationFrame(() => {
       const target = scrollRef.current
@@ -101,7 +105,7 @@ export function TimelinePane({
       scrollElement.removeEventListener('scroll', updateThumb);
       resizeWatcher.disconnect();
     };
-  }, [timeline, openItem]);
+  }, [timeline, openItems]);
 
   return (
     <div className="timeline-scroll-shell">
@@ -116,7 +120,7 @@ export function TimelinePane({
           ) : (
             <div className="timeline-list">
               {timeline.map((item) => {
-                const open = openItem === item.memoryId;
+                const open = openItems.has(item.memoryId);
                 return (
                   <section
                     key={item.memoryId}
@@ -130,7 +134,15 @@ export function TimelinePane({
                     <Collapsible
                       open={open}
                       onOpenChange={(nextOpen) => {
-                        setOpenItem(nextOpen ? item.memoryId : null);
+                        setOpenItems((current) => {
+                          const next = new Set(current);
+                          if (nextOpen) {
+                            next.add(item.memoryId);
+                          } else {
+                            next.delete(item.memoryId);
+                          }
+                          return next;
+                        });
                         if (nextOpen) {
                           onActiveTimelineChange(item.memoryId);
                         } else if (item.memoryId === activeTimelineId) {
