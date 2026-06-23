@@ -81,6 +81,7 @@ export async function readCodexSession(sourcePath: string, options: { artifactSt
   let cwd = os.homedir();
   let updatedAt = fallbackUpdatedAt;
   let isSubagentSession = false;
+  let repositoryUrl: string | null = null;
   const sessionTurns: CodexTurn[] = [];
   let promptParts: string[] = [];
   let promptTimestamp: string | null = null;
@@ -124,6 +125,7 @@ export async function readCodexSession(sourcePath: string, options: { artifactSt
       sessionId = stringValue(entry.payload.id) ?? sessionId;
       cwd = stringValue(entry.payload.cwd) ?? cwd;
       updatedAt = stringValue(entry.payload.timestamp) ?? updatedAt;
+      repositoryUrl = repositoryUrlFromSessionMeta(entry.payload) ?? repositoryUrl;
       isSubagentSession = isSubagentSession || entry.payload.thread_source === 'subagent';
       isSubagentSession = isSubagentSession || hasSubagentSource(entry.payload.source);
       continue;
@@ -227,7 +229,7 @@ export async function readCodexSession(sourcePath: string, options: { artifactSt
     return null;
   }
 
-  const project = await resolveProjectIdentity(cwd);
+  const project = await resolveProjectIdentity(cwd, repositoryUrl);
   return {
     sessionId,
     cwd,
@@ -247,6 +249,7 @@ export async function readCodexSessionSummary(sourcePath: string): Promise<Codex
   let promptPreview: string | null = null;
   let sawAssistant = false;
   let isSubagentSession = false;
+  let repositoryUrl: string | null = null;
   let scanned = 0;
 
   for await (const line of readJsonlLines(sourcePath)) {
@@ -265,6 +268,7 @@ export async function readCodexSessionSummary(sourcePath: string): Promise<Codex
     if (entry.type === 'session_meta' && isRecord(entry.payload)) {
       sessionId = stringValue(entry.payload.id) ?? sessionId;
       cwd = stringValue(entry.payload.cwd) ?? cwd;
+      repositoryUrl = repositoryUrlFromSessionMeta(entry.payload) ?? repositoryUrl;
       isSubagentSession = isSubagentSession || entry.payload.thread_source === 'subagent';
       isSubagentSession = isSubagentSession || hasSubagentSource(entry.payload.source);
       continue;
@@ -290,7 +294,7 @@ export async function readCodexSessionSummary(sourcePath: string): Promise<Codex
     return null;
   }
 
-  const project = await resolveProjectIdentity(cwd);
+  const project = await resolveProjectIdentity(cwd, repositoryUrl);
   const updatedAt = await latestTranscriptTimestamp(sourcePath, fallbackUpdatedAt);
   return {
     sessionId,
@@ -372,6 +376,11 @@ async function messageFromEntry(
 
 function hasSubagentSource(source: unknown): boolean {
   return isRecord(source) && isRecord(source.subagent);
+}
+
+function repositoryUrlFromSessionMeta(payload: Record<string, unknown>): string | null {
+  const git = isRecord(payload.git) ? payload.git : null;
+  return stringValue(git?.repository_url) ?? stringValue(payload.repository_url);
 }
 
 function isContextMessage(text: string): boolean {
@@ -1139,8 +1148,19 @@ const PROJECT_CACHE_VERSION = 3;
 const projectIdentityCache = new Map<string, ProjectIdentity>();
 const projectIdentityInflight = new Map<string, Promise<ProjectIdentity>>();
 
-export async function resolveProjectIdentity(cwd: string): Promise<ProjectIdentity> {
+export async function resolveProjectIdentity(cwd: string, repositoryUrl?: string | null): Promise<ProjectIdentity> {
   const fallback = await realpathOrResolved(cwd || os.homedir());
+  const hintedProject = repositoryUrl ? githubProjectFromRemoteUrl(repositoryUrl) : null;
+  if (hintedProject) {
+    projectIdentityCache.set(fallback, { project: hintedProject });
+    try {
+      await writeProjectCache(fallback, hintedProject);
+    } catch {
+      // Cache writes are an optimization; import should continue if the local
+      // cache path is temporarily unavailable.
+    }
+    return { project: hintedProject };
+  }
   const cachedIdentity = projectIdentityCache.get(fallback);
   if (cachedIdentity) {
     return cachedIdentity;

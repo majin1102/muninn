@@ -5,6 +5,8 @@ import {
   buildSessionSegmentsForTests,
   buildSessionTimelineForTests,
   buildSessionTurnPageForTests,
+  buildTurnDetailForTests,
+  buildTurnPreviewForTests,
   resolveSessionTreeNextOffsetForTests,
   resolveSessionNodeFromIndexForTests,
 } from '../dist/web/routes.js';
@@ -125,24 +127,22 @@ test('parses extraction headings when Markdown leaves blank lines after headings
   ]);
 });
 
-test('builds snapshot timeline with summary, signals, markdown, and refs', () => {
+test('builds snapshot timeline with summary, split signals, markdown, and refs', () => {
   const snapshot = [
     '# Session title',
     '',
     '## Summary',
     'Session summary text',
     '',
-    '## Signals',
-    '### Guidance',
-    '',
+    '## Memory Signals',
     '- [2] Write in the session language.',
     '',
-    '### Skills',
+    '## Skill Signals',
+    '- [1] `prompt-review`: Review prompt wording before applying prompt changes.',
     '',
-    '- [1] Prompt review workflow:',
-    '  - Check whether the output language follows the session language.',
-    '',
-    '### Open Questions',
+    '## Skill Details',
+    '### `prompt-review`',
+    'This hidden detail should not appear in the timeline signals item.',
     '',
     '## Extractions',
     '<!-- sequence: 1; refs: [turn:1, turn:2] -->',
@@ -174,23 +174,21 @@ test('builds snapshot timeline with summary, signals, markdown, and refs', () =>
       refs: [],
     },
     {
-      memoryId: 'session:snapshot~timeline:signals',
+      memoryId: 'session:snapshot~timeline:memories',
       kind: 'signals',
-      title: 'Signals',
+      title: 'Memories',
       createdAt: '2026-06-02T09:00:00.000Z',
       updatedAt: '2026-06-02T11:00:00.000Z',
-      markdown: [
-        '### Guidance',
-        '',
-        '- [2] Write in the session language.',
-        '',
-        '### Skills',
-        '',
-        '- [1] Prompt review workflow:',
-        '  - Check whether the output language follows the session language.',
-        '',
-        '### Open Questions',
-      ].join('\n'),
+      markdown: '- [2] Write in the session language.',
+      refs: [],
+    },
+    {
+      memoryId: 'session:snapshot~timeline:skills',
+      kind: 'signals',
+      title: 'Skills',
+      createdAt: '2026-06-02T09:00:00.000Z',
+      updatedAt: '2026-06-02T11:00:00.000Z',
+      markdown: '- [1] `prompt-review`: Review prompt wording before applying prompt changes.',
       refs: [],
     },
     {
@@ -269,6 +267,53 @@ test('session turn page segments use snapshot content when available', async () 
   ]);
   assert.equal(page.turns.length, 1);
   assert.equal(page.nextOffset, 1);
+});
+
+test('session turn previews keep tool IO as bounded previews only', () => {
+  const input = 'x'.repeat(1_000);
+  const output = 'y'.repeat(1_200);
+  const preview = buildTurnPreviewForTests({
+    turnId: 'turn:tool-heavy',
+    createdAt: '2026-06-02T10:00:00.000Z',
+    updatedAt: '2026-06-02T10:01:00.000Z',
+    prompt: 'run command',
+    response: 'done',
+    events: [
+      { type: 'toolCall', id: 'call-1', name: 'exec_command', input },
+      { type: 'toolOutput', id: 'call-1', output },
+    ],
+    artifacts: [],
+  });
+
+  assert.equal(preview.toolCalls, undefined);
+  assert.equal(preview.events[0].input, undefined);
+  assert.equal(preview.events[0].inputPreview.length < input.length, true);
+  assert.equal(preview.events[0].inputBytes, Buffer.byteLength(input));
+  assert.equal(preview.events[1].output, undefined);
+  assert.equal(preview.events[1].outputPreview.length < output.length, true);
+  assert.equal(preview.events[1].outputBytes, Buffer.byteLength(output));
+});
+
+test('session turn detail preserves full tool IO', () => {
+  const input = 'x'.repeat(1_000);
+  const output = 'y'.repeat(1_200);
+  const detail = buildTurnDetailForTests({
+    turnId: 'turn:tool-heavy',
+    createdAt: '2026-06-02T10:00:00.000Z',
+    updatedAt: '2026-06-02T10:01:00.000Z',
+    prompt: 'run command',
+    response: 'done',
+    events: [
+      { type: 'toolCall', id: 'call-1', name: 'exec_command', input },
+      { type: 'toolOutput', id: 'call-1', output },
+    ],
+    artifacts: [],
+  });
+
+  assert.equal(detail.events[0].input, input);
+  assert.equal(detail.events[1].output, output);
+  assert.equal(detail.toolCalls[0].input, input);
+  assert.equal(detail.toolCalls[0].output, output);
 });
 
 test('session tree pagination follows turn pages even when snapshot segments exist', () => {

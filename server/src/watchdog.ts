@@ -176,7 +176,7 @@ export class Watchdog {
       };
       await this.writeCheckpointAtomically(serializeCheckpointFile(checkpoint));
       this.lastCheckpointJson = checkpointJson;
-      this.updateCheckpointFloors(exported);
+      await this.updateCheckpointFloors(exported);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.error(`[muninn:watchdog] checkpoint flush failed: ${message}`);
@@ -388,13 +388,12 @@ export class Watchdog {
       schemaVersion: checkpoint.schemaVersion,
       extractor: checkpoint.extractor,
       sessionIndex: checkpoint.sessionIndex,
-      dreamingIndex: checkpoint.dreamingIndex,
     });
-    this.updateCheckpointFloors(checkpoint);
+    await this.updateCheckpointFloors(checkpoint);
   }
 
-  private updateCheckpointFloors(checkpoint: CheckpointContent | CheckpointFile): void {
-    const floors = checkpointFloors(checkpoint);
+  private async updateCheckpointFloors(checkpoint: CheckpointContent | CheckpointFile): Promise<void> {
+    const floors = await checkpointFloors(checkpoint, this.binding);
     for (const dataset of DATASETS) {
       const current = this.state.get(dataset);
       this.state.set(dataset, {
@@ -498,8 +497,12 @@ export class Watchdog {
   }
 }
 
-function checkpointFloors(checkpoint: CheckpointContent | CheckpointFile): Record<DatasetName, number | null> {
-  const dreamingSessionFloor = minNumber(checkpoint.dreamingIndex.entries.map((entry) => entry.sessionSnapshotVersion));
+async function checkpointFloors(
+  checkpoint: CheckpointContent | CheckpointFile,
+  binding: Partial<Pick<NativeTables, 'dreamingProjectTable'>>,
+): Promise<Record<DatasetName, number | null>> {
+  const dreamingProjects = await binding.dreamingProjectTable?.list() ?? [];
+  const dreamingSessionFloor = minNumber(dreamingProjects.map((entry) => entry.sessionSnapshotVersion));
   const sessionFloor = minNumber([
     checkpoint.extractor.baseline.session,
     checkpoint.sessionIndex.baseline.session,

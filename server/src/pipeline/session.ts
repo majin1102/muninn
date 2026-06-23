@@ -2,6 +2,7 @@ import type { TurnRow } from '../native.js';
 import { Memories } from '../api/memory.js';
 import type { NativeTables } from '../native.js';
 import { extractSessionMemory } from '../llm/extractor.js';
+import { chunkTurnsByInputBudget } from '../llm/extraction-input.js';
 import { applyExtractionChanges } from './extraction.js';
 import type { SealedEpoch } from './epoch.js';
 import {
@@ -9,7 +10,9 @@ import {
   type ContextRef,
   type ExtractionChange,
   type ExtractionUnit,
+  type SkillDetails,
   type SnapshotContent,
+  type SnapshotSignals,
   type SnapshotThreadKind,
 } from './snapshot.js';
 
@@ -19,6 +22,10 @@ export {
   parseSnapshotContentUnits,
   renderSnapshotContent,
   renderExtractionBlock,
+  isValidSkillName,
+  skillNamesFromSignals,
+  signalEvidenceLabels,
+  signalEvidenceTurnIds,
   stripMarkdownFence,
 } from './snapshot.js';
 
@@ -28,7 +35,9 @@ export type {
   ExtractionUnit,
   ParsedSnapshotContent,
   ParsedSnapshotPatch,
+  SkillDetails,
   SnapshotContent,
+  SnapshotSignals,
 } from './snapshot.js';
 
 export type SessionThreadKind = SnapshotThreadKind;
@@ -66,7 +75,9 @@ export type SessionSnapshot = {
   extractor: string;
   title: string;
   summary: string;
-  signals: string;
+  memorySignals: string[];
+  skillSignals: string[];
+  skillDetails: string;
   content: string;
   references: string[];
 };
@@ -85,25 +96,30 @@ export type TurnInput = {
 export type SessionMemory = {
   title: string;
   summary: string;
-  signals?: string;
+  memorySignals: string[];
+  skillSignals: string[];
+  skillDetails: SkillDetails;
   snapshotContent?: string;
   extractions: ExtractionUnit[];
-  openQuestions: string[];
   nextSteps: string[];
 };
 
 export type SessionExtractionInput = {
   sessionMemory: SessionMemory;
   turns: TurnInput[];
+  inputBudgetStoppedBy?: 'none' | 'max-input-chars' | 'max-epoch-turns' | 'single-turn-oversize';
+  candidateTurnCount?: number;
+  deferredTurnCount?: number;
 };
 
 export type SessionExtractionResult = {
   title: string;
   summary: string;
-  signals: string;
+  memorySignals: string[];
+  skillSignals: string[];
+  skillDetails: SkillDetails;
   snapshotContent: string;
   extractions: ExtractionUnit[];
-  openQuestions: string[];
   nextSteps: string[];
   contextRefs: ContextRef[];
 };
@@ -184,7 +200,9 @@ export function cloneSessionThread(thread: SessionThread): SessionThread {
       cwd: snapshot.cwd ?? thread.cwd,
       agent: snapshot.agent ?? thread.agent,
       snapshotContent: snapshot.snapshotContent,
-      signals: snapshot.signals ?? '',
+      memorySignals: [...(snapshot.memorySignals ?? [])],
+      skillSignals: [...(snapshot.skillSignals ?? [])],
+      skillDetails: { ...(snapshot.skillDetails ?? {}) },
       extractions: snapshot.extractions.map((extraction) => ({
         id: extraction.id ?? null,
         title: extraction.title ?? null,
@@ -194,7 +212,6 @@ export function cloneSessionThread(thread: SessionThread): SessionThread {
         updatedMemory: extraction.updatedMemory ?? null,
       })),
       contextRefs: snapshot.contextRefs.map((reference) => ({ ...reference })),
-      openQuestions: [...(snapshot.openQuestions ?? [])],
       nextSteps: [...(snapshot.nextSteps ?? [])],
       extractionChanges: (snapshot.extractionChanges ?? []).map((change) => ({ ...change })),
     })),
@@ -303,10 +320,11 @@ export function currentSessionMemory(thread: SessionThread): SessionMemory {
   return {
     title: thread.title,
     summary: thread.summary,
-    signals: snapshot.signals ?? '',
+    memorySignals: [...(snapshot.memorySignals ?? [])],
+    skillSignals: [...(snapshot.skillSignals ?? [])],
+    skillDetails: { ...(snapshot.skillDetails ?? {}) },
     snapshotContent: snapshot.snapshotContent,
     extractions: snapshot.extractions,
-    openQuestions: snapshot.openQuestions ?? [],
     nextSteps: snapshot.nextSteps ?? [],
   };
 }
@@ -333,13 +351,14 @@ export function applyExtraction(
     cwd: thread.cwd,
     agent: thread.agent,
     snapshotContent: result.snapshotContent ?? '',
-    signals: result.signals ?? '',
+    memorySignals: [...(result.memorySignals ?? [])],
+    skillSignals: [...(result.skillSignals ?? [])],
+    skillDetails: { ...(result.skillDetails ?? {}) },
     extractions: patched.extractions,
     contextRefs: mergeContextRefs(
       current.contextRefs,
       result.contextRefs,
     ),
-    openQuestions: result.openQuestions,
     nextSteps: result.nextSteps,
     extractionChanges: patched.extractionChanges,
   });
@@ -360,20 +379,29 @@ export function toSessionSnapshot(thread: SessionThread): SessionSnapshot {
   if (thread.snapshots.length === 0) {
     throw new Error(`missing snapshots for session memory thread ${thread.threadId}`);
   }
-  const snapshot = latestSnapshot(thread)!;
+  return toSessionSnapshotAt(thread, thread.snapshots.length - 1);
+}
+
+function toSessionSnapshotAt(thread: SessionThread, snapshotSequence: number): SessionSnapshot {
+  const snapshot = thread.snapshots[snapshotSequence];
+  if (!snapshot) {
+    throw new Error(`missing snapshot for session memory thread ${thread.threadId} at sequence ${snapshotSequence}`);
+  }
   return {
-    snapshotId: thread.snapshotId ?? PENDING_SNAPSHOT_ID,
+    snapshotId: thread.snapshotIds[snapshotSequence] ?? PENDING_SNAPSHOT_ID,
     sessionId: thread.sessionId ?? thread.threadId,
     project: thread.project,
     cwd: thread.cwd,
     agent: thread.agent,
-    snapshotSequence: thread.snapshots.length - 1,
+    snapshotSequence,
     createdAt: thread.updatedAt,
     updatedAt: thread.updatedAt,
     extractor: thread.extractor,
     title: thread.title,
     summary: thread.summary,
-    signals: snapshot.signals ?? '',
+    memorySignals: [...(snapshot.memorySignals ?? [])],
+    skillSignals: [...(snapshot.skillSignals ?? [])],
+    skillDetails: JSON.stringify(snapshot.skillDetails ?? {}),
     content: snapshot.snapshotContent,
     references: snapshot.contextRefs.map((reference) => reference.turnId),
   };
@@ -451,13 +479,38 @@ function deserializeSnapshot(row: SessionSnapshot): SnapshotContent {
     cwd: row.cwd,
     agent: row.agent,
     snapshotContent: parsed.snapshotContent,
-    signals: row.signals,
+    memorySignals: [...row.memorySignals],
+    skillSignals: [...row.skillSignals],
+    skillDetails: parseSkillDetailsJson(row.skillDetails),
     extractions: parsed.extractions,
     contextRefs: row.references.map((turnId) => ({ turnId, summary: turnId })),
-    openQuestions: [],
     nextSteps: [],
     extractionChanges: [],
   };
+}
+
+function parseSkillDetailsJson(value: string): SkillDetails {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return {};
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch (error) {
+    throw new Error(`invalid session snapshot skillDetails JSON: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('session snapshot skillDetails JSON must be an object');
+  }
+  const details: SkillDetails = {};
+  for (const [key, detail] of Object.entries(parsed)) {
+    if (typeof detail !== 'string') {
+      throw new Error(`session snapshot skillDetails value must be a string: ${key}`);
+    }
+    details[key] = detail;
+  }
+  return details;
 }
 
 function emptySnapshot(): SnapshotContent {
@@ -468,10 +521,11 @@ function emptySnapshot(): SnapshotContent {
     cwd: process.cwd(),
     agent: 'unknown',
     snapshotContent: '',
-    signals: '',
+    memorySignals: [],
+    skillSignals: [],
+    skillDetails: {},
     extractions: [],
     contextRefs: [],
-    openQuestions: [],
     nextSteps: [],
     extractionChanges: [],
   };
@@ -526,6 +580,9 @@ type ExtractSessionThreadParams = {
   database?: string;
   memories?: Pick<Memories, 'get'>;
   sessionExtractionImpl?: SessionExtractionImpl;
+  inputBudgetStoppedBy?: SessionExtractionInput['inputBudgetStoppedBy'];
+  candidateTurnCount?: number;
+  deferredTurnCount?: number;
 };
 
 export async function extractEpoch(params: {
@@ -534,6 +591,9 @@ export async function extractEpoch(params: {
   activeWindowDays: number;
   threads: SessionThread[];
   sealedEpoch: SealedEpoch;
+  maxEpochTurns?: number;
+  maxInputChars?: number;
+  previewChars?: number;
   signal?: AbortSignal;
   database?: string;
   sessionExtractionImpl?: SessionExtractionImpl;
@@ -545,6 +605,18 @@ export async function extractEpoch(params: {
   );
   const memories = new Memories(params.client);
   const touchedIds = new Set<string>();
+  const maxEpochTurns = params.maxEpochTurns ?? Number.POSITIVE_INFINITY;
+  if (maxEpochTurns !== Number.POSITIVE_INFINITY && (!Number.isInteger(maxEpochTurns) || maxEpochTurns <= 0)) {
+    throw new Error('maxEpochTurns must be a positive integer');
+  }
+  const maxInputChars = params.maxInputChars ?? Number.POSITIVE_INFINITY;
+  if (maxInputChars !== Number.POSITIVE_INFINITY && (!Number.isInteger(maxInputChars) || maxInputChars <= 0)) {
+    throw new Error('maxInputChars must be a positive integer');
+  }
+  const previewChars = params.previewChars ?? 800;
+  if (!Number.isInteger(previewChars) || previewChars <= 0) {
+    throw new Error('previewChars must be a positive integer');
+  }
   for (const turns of groupTurnsBySession(params.sealedEpoch.turns)) {
     const thread = getOrCreateSessionThread(
       params.threads,
@@ -552,17 +624,29 @@ export async function extractEpoch(params: {
       turns,
       params.sealedEpoch.epoch,
     );
-    const groupTouchedIds = await extractSessionThread({
-      thread,
-      pendingTurns: turns,
-      extractionEpoch: params.sealedEpoch.epoch,
-      signal: params.signal,
-      database: params.database,
-      memories,
-      sessionExtractionImpl: params.sessionExtractionImpl,
+    const chunks = chunkTurnsByInputBudget(turns, {
+      maxEpochTurns,
+      maxInputChars,
+      previewChars,
     });
-    for (const touchedId of groupTouchedIds) {
-      touchedIds.add(touchedId);
+    let consumedTurns = 0;
+    for (const chunk of chunks) {
+      const groupTouchedIds = await extractSessionThread({
+        thread,
+        pendingTurns: chunk.turns,
+        extractionEpoch: params.sealedEpoch.epoch,
+        signal: params.signal,
+        database: params.database,
+        memories,
+        sessionExtractionImpl: params.sessionExtractionImpl,
+        inputBudgetStoppedBy: chunk.stoppedBy,
+        candidateTurnCount: turns.length,
+        deferredTurnCount: Math.max(0, turns.length - consumedTurns - chunk.turns.length),
+      });
+      consumedTurns += chunk.turns.length;
+      for (const touchedId of groupTouchedIds) {
+        touchedIds.add(touchedId);
+      }
     }
   }
   await flushThreads(params.client, params.threads, touchedIds);
@@ -684,6 +768,9 @@ async function extractSessionThread(params: ExtractSessionThreadParams): Promise
     signal,
     memories,
     sessionExtractionImpl = extractSessionMemory,
+    inputBudgetStoppedBy,
+    candidateTurnCount,
+    deferredTurnCount,
   } = params;
   throwIfAborted(signal);
   const touchedIds = new Set<string>();
@@ -704,6 +791,9 @@ async function extractSessionThread(params: ExtractSessionThreadParams): Promise
   const result = await sessionExtractionImpl({
     sessionMemory: currentSessionMemory(thread),
     turns,
+    inputBudgetStoppedBy,
+    candidateTurnCount,
+    deferredTurnCount,
   }, signal, { memories, database: params.database });
   applyExtraction(thread, result, extractionEpoch, applyExtractionChanges);
   touchedIds.add(threadIdentityKey(thread));
@@ -715,15 +805,21 @@ async function flushThreads(
   threads: SessionThread[],
   touchedIds: Set<string>,
 ): Promise<void> {
-  const touched = threads
+  const snapshots = threads
     .filter((thread) => touchedIds.has(threadIdentityKey(thread)))
-    .filter((thread) => thread.snapshots.length > 0);
-  if (touched.length === 0) {
+    .flatMap((thread) => {
+      const rows: SessionSnapshot[] = [];
+      for (let index = thread.snapshotIds.length; index < thread.snapshots.length; index += 1) {
+        rows.push(toSessionSnapshotAt(thread, index));
+      }
+      return rows;
+    });
+  if (snapshots.length === 0) {
     return;
   }
 
   const persistedRows = await client.sessionTable.insert({
-    snapshots: touched.map(toSessionSnapshot),
+    snapshots,
   });
   updateThreadsFromRows(threads, persistedRows);
 }
@@ -732,18 +828,26 @@ function updateThreadsFromRows(
   threads: SessionThread[],
   rows: SessionSnapshot[],
 ): void {
-  const rowsById = new Map(rows.map((row) => [threadIdentityKey(row), row]));
-  for (const thread of threads) {
-    const row = rowsById.get(threadIdentityKey(thread));
-    if (!row) {
+  const threadsById = new Map(threads.map((thread) => [threadIdentityKey(thread), thread]));
+  const ordered = [...rows].sort((left, right) => left.snapshotSequence - right.snapshotSequence);
+  for (const row of ordered) {
+    const thread = threadsById.get(threadIdentityKey(row));
+    if (!thread) {
       continue;
     }
-    thread.snapshotId = row.snapshotId;
-    if (thread.snapshotIds[thread.snapshotIds.length - 1] !== row.snapshotId) {
-      thread.snapshotIds.push(row.snapshotId);
+    if (row.snapshotSequence > thread.snapshotIds.length) {
+      throw new Error(`unexpected persisted snapshot gap for session memory thread ${thread.threadId}`);
     }
-    thread.references = [...row.references];
-    thread.updatedAt = row.updatedAt;
+    const existingId = thread.snapshotIds[row.snapshotSequence];
+    if (existingId && existingId !== row.snapshotId) {
+      throw new Error(`conflicting snapshot id for session memory thread ${thread.threadId} at sequence ${row.snapshotSequence}`);
+    }
+    thread.snapshotIds[row.snapshotSequence] = row.snapshotId;
+    if (row.snapshotSequence === thread.snapshots.length - 1) {
+      thread.snapshotId = row.snapshotId;
+      thread.references = [...row.references];
+      thread.updatedAt = row.updatedAt;
+    }
   }
 }
 

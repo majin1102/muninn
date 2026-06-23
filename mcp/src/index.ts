@@ -34,26 +34,24 @@ function renderMemoryResponse(
 
 function renderProjectSignals(result: {
   project: string;
-  memoryId: string;
-  guidance: string[];
-  skills: string[];
-  openQuestions: string[];
+  memorySignals: Array<{ score: number; text: string }>;
+  skillSignals: Array<{ score: number; name: string; summary: string }>;
 }): string {
   return [
     `# Project Signals`,
     '',
     `Project: ${result.project}`,
-    `Memory ID: ${result.memoryId}`,
     '',
-    '## Guidance',
-    ...result.guidance,
+    '## Memory Signals',
+    ...result.memorySignals.map((signal) => `- [${formatSignalScore(signal.score)}] ${signal.text}`),
     '',
-    '## Skills',
-    ...result.skills,
-    '',
-    '## Open Questions',
-    ...result.openQuestions,
+    '## Skill Signals',
+    ...result.skillSignals.map((signal) => `- [${formatSignalScore(signal.score)}] ${signal.name}: ${signal.summary}`),
   ].join('\n').trimEnd();
+}
+
+function formatSignalScore(score: number): string {
+  return Number.isInteger(score) ? String(score) : score.toFixed(2);
 }
 
 async function writeDebugMarkdown(toolName: string, args: unknown): Promise<string> {

@@ -3,12 +3,12 @@ use std::path::{Path as FsPath, PathBuf};
 use std::sync::Arc;
 
 use arrow_array::RecordBatchReader;
-use serde::{Deserialize, Serialize};
 use lance::dataset::builder::DatasetBuilder;
 use lance::dataset::{ROW_ID, WriteParams};
 use lance::io::{ObjectStoreParams, StorageOptionsAccessor};
 use lance::{Error, Result};
 use object_store::path::Path;
+use serde::{Deserialize, Serialize};
 
 use crate::config::{current_storage_config, muninn_home};
 
@@ -138,9 +138,8 @@ impl TableOptions {
 
 fn resolve_local_root(root_path: &FsPath, create: bool) -> Result<PathBuf> {
     if create {
-        std::fs::create_dir_all(root_path).map_err(|error| {
-            Error::io(format!("create storage root {:?}: {error}", root_path))
-        })?;
+        std::fs::create_dir_all(root_path)
+            .map_err(|error| Error::io(format!("create storage root {:?}: {error}", root_path)))?;
     }
 
     let absolute = if root_path.is_absolute() {

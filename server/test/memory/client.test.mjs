@@ -132,6 +132,28 @@ function makeTurnContent(overrides = {}) {
   };
 }
 
+function sessionSnapshotRow(overrides = {}) {
+  const now = overrides.updatedAt ?? '2026-06-18T00:00:00Z';
+  return {
+    snapshotId: overrides.snapshotId ?? 'session:18446744073709551615',
+    sessionId: overrides.sessionId ?? 's1',
+    project: overrides.project ?? '/repo/muninn',
+    cwd: overrides.cwd ?? '/repo/muninn',
+    agent: overrides.agent ?? 'codex',
+    snapshotSequence: overrides.snapshotSequence ?? 0,
+    createdAt: overrides.createdAt ?? now,
+    updatedAt: now,
+    extractor: overrides.extractor ?? 'test-extractor',
+    title: overrides.title ?? 'Session',
+    summary: overrides.summary ?? 'Session summary',
+    memorySignals: overrides.memorySignals ?? [],
+    skillSignals: overrides.skillSignals ?? [],
+    skillDetails: overrides.skillDetails ?? '{}',
+    content: overrides.content ?? '# Session\n\n## Summary\n\nSession summary',
+    references: overrides.references ?? [],
+  };
+}
+
 function normalizeTestSessionId(sessionId) {
   return typeof sessionId === 'string' ? sessionId.trim() : sessionId;
 }
@@ -190,7 +212,11 @@ async function writeMuninnConfig(configPath, {
   watchdog,
   activeWindowDays,
   continuityHints,
-  epochTurns = 1,
+  minEpochTurns = 1,
+  maxEpochTurns,
+  maxInputChars,
+  snapshotInputChars,
+  previewChars,
   epochWindowMs,
   omitEpochSealSettings = false,
 } = {}) {
@@ -210,7 +236,11 @@ async function writeMuninnConfig(configPath, {
       maxAttempts: 3,
       ...(activeWindowDays === undefined ? {} : { activeWindowDays }),
       ...(continuityHints === undefined ? {} : { continuityHints }),
-      ...(omitEpochSealSettings || epochTurns === undefined ? {} : { epochTurns }),
+      ...(omitEpochSealSettings || minEpochTurns === undefined ? {} : { minEpochTurns }),
+      ...(omitEpochSealSettings || maxEpochTurns === undefined ? {} : { maxEpochTurns }),
+      ...(maxInputChars === undefined ? {} : { maxInputChars }),
+      ...(snapshotInputChars === undefined ? {} : { snapshotInputChars }),
+      ...(previewChars === undefined ? {} : { previewChars }),
       ...(omitEpochSealSettings || epochWindowMs === undefined ? {} : { epochWindowMs }),
     };
     providers.llm.test_extractor_llm = { type: llmProvider };
@@ -289,22 +319,46 @@ test('extractor config defaults activeWindowDays, continuityHints, and epoch sea
   assert.ok(extractorConfig);
   assert.equal(extractorConfig.activeWindowDays, 7);
   assert.equal(extractorConfig.continuityHints, 1);
-  assert.equal(extractorConfig.epochTurns, 3);
+  assert.equal(extractorConfig.minEpochTurns, 8);
+  assert.equal(extractorConfig.maxEpochTurns, 32);
+  assert.equal(extractorConfig.maxInputChars, 24_576);
+  assert.equal(extractorConfig.snapshotInputChars, 16_384);
+  assert.equal(extractorConfig.previewChars, 800);
   assert.equal(extractorConfig.epochWindowMs, 10_000);
 
   await writeMuninnConfig(configPath, {
     llmProvider: 'mock',
     activeWindowDays: 14,
     continuityHints: 3,
-    epochTurns: 5,
+    minEpochTurns: 5,
+    maxEpochTurns: 12,
+    maxInputChars: 2048,
+    snapshotInputChars: 1024,
+    previewChars: 512,
     epochWindowMs: 2_500,
   });
   extractorConfig = getExtractorLlmConfig();
   assert.ok(extractorConfig);
   assert.equal(extractorConfig.activeWindowDays, 14);
   assert.equal(extractorConfig.continuityHints, 3);
-  assert.equal(extractorConfig.epochTurns, 5);
+  assert.equal(extractorConfig.minEpochTurns, 5);
+  assert.equal(extractorConfig.maxEpochTurns, 12);
+  assert.equal(extractorConfig.maxInputChars, 2048);
+  assert.equal(extractorConfig.snapshotInputChars, 1024);
+  assert.equal(extractorConfig.previewChars, 512);
   assert.equal(extractorConfig.epochWindowMs, 2_500);
+
+  await writeMuninnConfig(configPath, {
+    observerProvider: 'mock',
+    omitEpochSealSettings: true,
+  });
+  const oldConfig = JSON.parse(await readFile(configPath, 'utf8'));
+  oldConfig.extractor.epochTurns = 99;
+  await writeFile(configPath, `${JSON.stringify(oldConfig, null, 2)}\n`, 'utf8');
+  extractorConfig = getExtractorLlmConfig();
+  assert.ok(extractorConfig);
+  assert.equal(extractorConfig.minEpochTurns, 8);
+  assert.equal(extractorConfig.maxEpochTurns, 32);
 });
 
 test('captureTurn and turns.get roundtrip through the native binding', async (t) => {
@@ -795,9 +849,17 @@ test('validateSettings rejects invalid extractor epoch seal settings', async (t)
   await writeFile(configPath, '{\n  "storage": {\n    "uri": ""\n  }\n}\n', 'utf8');
 
   for (const [key, value] of [
-    ['epochTurns', 0],
+    ['minEpochTurns', 0],
+    ['maxEpochTurns', 0],
+    ['maxInputChars', 0],
+    ['snapshotInputChars', 0],
+    ['previewChars', 0],
     ['epochWindowMs', 0],
-    ['epochTurns', 1.5],
+    ['minEpochTurns', 1.5],
+    ['maxEpochTurns', 1.5],
+    ['maxInputChars', 1.5],
+    ['snapshotInputChars', 1.5],
+    ['previewChars', 1.5],
     ['epochWindowMs', 1.5],
   ]) {
     await assert.rejects(
@@ -807,6 +869,26 @@ test('validateSettings rejects invalid extractor epoch seal settings', async (t)
       new RegExp(`extractor\\.${key} must be a positive integer`, 'i'),
     );
   }
+
+  await assert.rejects(
+    () => validateSettings(JSON.stringify(validSettings({
+      extractor: {
+        minEpochTurns: 8,
+        maxEpochTurns: 7,
+      },
+    }), null, 2)),
+    /extractor\.maxEpochTurns must be greater than or equal to extractor\.minEpochTurns/i,
+  );
+
+  await assert.rejects(
+    () => validateSettings(JSON.stringify(validSettings({
+      extractor: {
+        maxInputChars: 800,
+        previewChars: 800,
+      },
+    }), null, 2)),
+    /extractor\.previewChars must be smaller than extractor\.maxInputChars/i,
+  );
 });
 
 test('validateSettings rejects missing providers config', async (t) => {
@@ -1110,6 +1192,95 @@ test('validateSettings rejects extraction dimension changes when the table exist
   );
 });
 
+test('native dreaming update preserves stable row id and nested support turns', async (t) => {
+  const { dir, homeDir, configPath } = await makeDatasetUri();
+  t.after(cleanupDataset(dir));
+
+  process.env.MUNINN_HOME = homeDir;
+  await writeMuninnConfig(configPath, { llmProvider: 'mock' });
+
+  const binding = await getNativeTables(defaultStorageTarget(homeDir));
+  const inserted = await binding.dreamingTable.append({
+    row: {
+      dreamingId: 'dreaming:18446744073709551615',
+      project: '/repo/muninn',
+      createdAt: '2026-06-18T00:00:00Z',
+      updatedAt: '2026-06-18T00:00:00Z',
+      content: '## Memory Signal\nPrefer minimal changes.',
+      supportTurns: [{
+        turnId: 'turn:1',
+        createdAt: '2026-06-18T00:00:00Z',
+        contribution: 1,
+      }],
+    },
+  });
+
+  assert.match(inserted.dreamingId, /^dreaming:\d+$/);
+  const updated = await binding.dreamingTable.update({
+    row: {
+      ...inserted,
+      updatedAt: '2026-06-19T00:00:00Z',
+      content: '## Memory Signal\nPrefer subtractive changes.',
+      supportTurns: [
+        ...inserted.supportTurns,
+        {
+          turnId: 'turn:2',
+          createdAt: '2026-06-19T00:00:00Z',
+          contribution: 10,
+        },
+      ],
+    },
+  });
+
+  assert.equal(updated.dreamingId, inserted.dreamingId);
+  const reloaded = await binding.dreamingTable.get(inserted.dreamingId);
+  assert.ok(reloaded);
+  assert.equal(reloaded.dreamingId, inserted.dreamingId);
+  assert.equal(reloaded.content, '## Memory Signal\nPrefer subtractive changes.');
+  assert.deepEqual(reloaded.supportTurns.map((turn) => [turn.turnId, turn.contribution]), [
+    ['turn:1', 1],
+    ['turn:2', 10],
+  ]);
+});
+
+test('native session snapshots can be listed at a historical version', async (t) => {
+  const { dir, homeDir, configPath } = await makeDatasetUri();
+  t.after(cleanupDataset(dir));
+
+  process.env.MUNINN_HOME = homeDir;
+  await writeMuninnConfig(configPath, { llmProvider: 'mock' });
+
+  const binding = await getNativeTables(defaultStorageTarget(homeDir));
+  await binding.sessionTable.insert({
+    snapshots: [sessionSnapshotRow({
+      snapshotId: 'session:18446744073709551615',
+      sessionId: 's1',
+      snapshotSequence: 0,
+      memorySignals: ['- [turn:1 +1] Prefer minimal changes.'],
+    })],
+  });
+  const baseline = await binding.sessionTable.listSnapshotsWithVersion({ extractor: 'test-extractor' });
+
+  await binding.sessionTable.insert({
+    snapshots: [sessionSnapshotRow({
+      snapshotId: 'session:18446744073709551615',
+      sessionId: 's1',
+      snapshotSequence: 1,
+      memorySignals: ['- [turn:1 +1, turn:2 +1] Prefer minimal changes.'],
+    })],
+  });
+  const current = await binding.sessionTable.listSnapshotsWithVersion({ extractor: 'test-extractor' });
+  const historical = await binding.sessionTable.listSnapshotsWithVersion({
+    extractor: 'test-extractor',
+    version: baseline.sourceVersion,
+  });
+
+  assert.equal(baseline.rows.length, 1);
+  assert.equal(current.rows.length, 2);
+  assert.equal(historical.sourceVersion, baseline.sourceVersion);
+  assert.deepEqual(historical.rows.map((row) => row.snapshotSequence), [0]);
+});
+
 test('validateSettings checks the pending storage target instead of the current config storage', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(cleanupDataset(dir));
@@ -1234,7 +1405,7 @@ test('memoryPipeline.flushPending drains the current extraction batch without fi
   process.env.MUNINN_HOME = homeDir;
   await writeMuninnConfig(configPath, {
     llmProvider: 'mock',
-    epochTurns: 10,
+    minEpochTurns: 10,
     epochWindowMs: 60_000,
   });
 

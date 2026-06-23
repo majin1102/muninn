@@ -25,31 +25,64 @@ export interface ErrorResponse {
   requestId: string;
 }
 
-export interface ProjectDreamDocument {
-  memoryId: string;
-  project: string;
-  parentId?: string | null;
-  createdAt: string;
-  sessionSnapshotVersion: number;
-  content: string;
-}
-
 export interface ProjectDreamResponse {
-  dream: ProjectDreamDocument;
+  project: string;
   created?: boolean;
+  memorySignals: ProjectDreamSignalViewRow[];
+  skillSignals: ProjectDreamSkillViewRow[];
   requestId: string;
 }
 
 export interface ProjectDreamSignals {
-  memoryId: string;
   project: string;
-  createdAt: string;
-  guidance: string[];
-  skills: string[];
-  openQuestions: string[];
+  memorySignals: ProjectDreamSignalViewRow[];
+  skillSignals: ProjectDreamSkillViewRow[];
 }
 
 export interface ProjectDreamSignalsResponse extends ProjectDreamSignals {
+  requestId: string;
+}
+
+export interface ProjectDreamSignalViewRow {
+  score: number;
+  text: string;
+  updatedAt: string | null;
+  supportTurns: ProjectDreamSupportTurnViewRow[];
+}
+
+export interface ProjectDreamSupportTurnViewRow {
+  turnId: string;
+  content?: string;
+  createdAt: string;
+  contribution: number;
+  score: number;
+}
+
+export interface ProjectDreamSkillViewRow {
+  score: number;
+  name: string;
+  summary: string;
+  detail: string;
+}
+
+export interface ProjectDreamView {
+  project: string;
+  memorySignals: ProjectDreamSignalViewRow[];
+  skills: ProjectDreamSkillViewRow[];
+}
+
+export interface ProjectDreamViewResponse {
+  dream: ProjectDreamView;
+  requestId: string;
+}
+
+export interface ProjectDreamProjectView {
+  project: string;
+  latestUpdatedAt: string;
+}
+
+export interface ProjectDreamProjectsResponse {
+  projects: ProjectDreamProjectView[];
   requestId: string;
 }
 
@@ -133,12 +166,19 @@ export type TurnEvent =
       id?: string;
       name: string;
       input?: string;
+      inputPreview?: string;
+      inputBytes?: number;
+      inputTruncated?: boolean;
       timestamp?: string;
     }
   | {
       type: 'toolOutput';
       id?: string;
       output?: string;
+      outputPreview?: string;
+      outputBytes?: number;
+      outputTruncated?: boolean;
+      artifactCount?: number;
       timestamp?: string;
       artifacts?: Artifact[];
     };
@@ -148,6 +188,13 @@ export interface ToolCall {
   name: string;
   input?: string;
   output?: string;
+  inputPreview?: string;
+  inputBytes?: number;
+  inputTruncated?: boolean;
+  outputPreview?: string;
+  outputBytes?: number;
+  outputTruncated?: boolean;
+  artifactCount?: number;
 }
 
 export interface TurnContent {
@@ -239,6 +286,11 @@ export interface SessionTurnsResponse {
   segments: SessionSegmentPreview[];
   timeline: SessionTimelineItem[];
   nextOffset: number | null;
+  requestId: string;
+}
+
+export interface SessionTurnDetailResponse {
+  turn: TurnPreview;
   requestId: string;
 }
 

@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import { assetRoutes } from './assets.js';
+import { dreamingRoutes } from './dreaming.js';
 import { importRoutes } from './import-routes.js';
 import { pipelineRoutes } from './pipelines.js';
 import { recallRoutes } from './recall-routes.js';
@@ -11,6 +12,8 @@ export {
   buildSessionSegmentsForTests,
   buildSessionTimelineForTests,
   buildSessionTurnPageForTests,
+  buildTurnDetailForTests,
+  buildTurnPreviewForTests,
   getSessionTreeLoadCountForTests,
   invalidateSessionTreeCache,
   resetSessionTreeCacheForTests,
@@ -23,6 +26,7 @@ export const webRoutes = new Hono();
 
 webRoutes.route('/', sessionRoutes);
 webRoutes.route('/', recallRoutes);
+webRoutes.route('/', dreamingRoutes);
 webRoutes.route('/', pipelineRoutes);
 webRoutes.route('/', settingsRoutes);
 webRoutes.route('/', importRoutes);

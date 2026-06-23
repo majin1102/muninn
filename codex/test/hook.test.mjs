@@ -289,6 +289,39 @@ test('readCodexSession resolves repo subdirectories to the GitHub project identi
   assert.equal(session.project, 'github.com/majin1102/muninn');
 });
 
+test('readCodexSession resolves deleted worktrees from transcript GitHub repository metadata', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'codex-archived-worktree-project-'));
+  process.env.MUNINN_HOME = path.join(root, 'muninn-home');
+  const deletedWorktree = path.join(os.homedir(), '.codex', 'worktrees', '40fd', 'muninn');
+  const transcript = path.join(root, 'archived-worktree-session.jsonl');
+  const lines = [
+    {
+      type: 'session_meta',
+      payload: {
+        id: 'archived-worktree-session',
+        cwd: deletedWorktree,
+        timestamp: '2026-06-10T03:00:00.000Z',
+        git: {
+          commit_hash: '5036899f54a71ee61074416f32392863a6111349',
+          repository_url: 'https://github.com/majin1102/muninn',
+        },
+      },
+    },
+    { type: 'response_item', timestamp: '2026-06-10T03:00:01.000Z', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'check archived worktree' }] } },
+    { type: 'response_item', timestamp: '2026-06-10T03:00:02.000Z', payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'ok' }] } },
+  ];
+  await writeFile(transcript, lines.map((line) => JSON.stringify(line)).join('\n'));
+
+  const session = await readCodexSession(transcript, { artifactStore: path.join(root, 'artifacts'), artifactMode: 'preview' });
+  const summary = await readCodexSessionSummary(transcript);
+
+  assert.ok(session);
+  assert.equal(session.cwd, deletedWorktree);
+  assert.equal(session.project, 'github.com/majin1102/muninn');
+  assert.ok(summary);
+  assert.equal(summary.project, 'github.com/majin1102/muninn');
+});
+
 test('readCodexSessionSummary skips injected context when deriving the title', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'codex-summary-title-'));
   process.env.MUNINN_HOME = path.join(root, 'muninn-home');

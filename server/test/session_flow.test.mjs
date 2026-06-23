@@ -44,7 +44,7 @@ function memoryWatermarkResolved(watermark) {
 
 async function waitForWatermarkResolved() {
   let resolvedBody = null;
-  for (let attempt = 0; attempt < 50; attempt += 1) {
+  for (let attempt = 0; attempt < 250; attempt += 1) {
     const response = await app.request('/api/v1/memory/watermark');
     assert.equal(response.status, 200);
     resolvedBody = await json(response);
@@ -154,7 +154,8 @@ async function writeMuninnConfig(configPath, {
       llmProvider: 'test_extractor_llm',
       embeddingProvider: 'default',
       maxAttempts: 3,
-      epochTurns: 1,
+      minEpochTurns: 1,
+      maxEpochTurns: 32,
       ...(activeWindowDays === undefined ? {} : { activeWindowDays }),
     };
     providers.llm.test_extractor_llm = { type: llmProvider };
@@ -181,6 +182,8 @@ function createValidSettings({
       embeddingProvider: 'default',
       recallMode: 'hybrid',
       maxAttempts: 3,
+      minEpochTurns: 1,
+      maxEpochTurns: 32,
       activeWindowDays,
     },
     providers: {
@@ -1824,7 +1827,8 @@ test('ui settings config rejects embedding index dimension changes that mismatch
         llmProvider: 'test_extractor_llm',
         embeddingProvider: 'default',
         maxAttempts: 3,
-        epochTurns: 1,
+        minEpochTurns: 1,
+        maxEpochTurns: 32,
       },
       providers: {
         llm: {

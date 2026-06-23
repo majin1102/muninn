@@ -17,6 +17,7 @@ import {
   resolveDatabaseName,
   resolveStorageTarget,
   getEmbeddingConfig,
+  getDreamingConfig,
   getExtractorLlmConfig,
   getWatchdogConfig,
   validateMuninnConfigInput,
@@ -37,10 +38,10 @@ import { readTurnRow } from './pipeline/ingest.js';
 import { Watchdog } from './watchdog.js';
 import { writeMuninnLog } from './logging.js';
 import { SessionIndex } from './session-index.js';
-import { DreamingIndex } from './dreaming/index.js';
 import { ProjectDreamingService, type ProjectDreamCreateResult } from './dreaming/service.js';
+import { ProjectDreamingScheduler } from './dreaming/scheduler.js';
 import type { ProjectDreamSignals } from './dreaming/content.js';
-import type { TurnContent } from '@muninn/common';
+import type { ProjectDreamProjectView, TurnContent } from '@muninn/common';
 
 export type Turn = TurnRow;
 export type SessionSnapshot = SessionSnapshotRow;
@@ -163,8 +164,8 @@ export class MuninnBackend {
   private extractor: Extractor | null = null;
   private sessionRegistry: IngestSessionRegistry | null = null;
   private readonly sessionIndex: SessionIndex;
-  private readonly dreamingIndex: DreamingIndex;
   private readonly projectDreaming: ProjectDreamingService;
+  private dreamingScheduler: ProjectDreamingScheduler | null = null;
   private watchdog: Watchdog | null = null;
   private watchdogClient: NativeTables | null = null;
   private finalizeDrainPromise: Promise<void> | null = null;
@@ -178,8 +179,7 @@ export class MuninnBackend {
     this.checkpointLock = new AsyncCheckpointLock();
     const extractorName = loadMuninnConfig()?.extractor?.name;
     this.sessionIndex = new SessionIndex(checkpoint?.sessionIndex ?? null, extractorName ?? null);
-    this.dreamingIndex = new DreamingIndex(checkpoint?.dreamingIndex ?? null);
-    this.projectDreaming = new ProjectDreamingService(client, this.dreamingIndex, extractorName ?? null);
+    this.projectDreaming = new ProjectDreamingService(client, extractorName ?? null);
     this.sessionRegistry = extractorName
       ? new IngestSessionRegistry(client, extractorName)
       : null;
@@ -198,7 +198,6 @@ export class MuninnBackend {
           schemaVersion: checkpoint.schemaVersion,
           extractor: checkpoint.extractor,
           sessionIndex: checkpoint.sessionIndex,
-          dreamingIndex: checkpoint.dreamingIndex,
         })
         : null;
       const watchdogClient = lockNativeTables(
@@ -215,6 +214,16 @@ export class MuninnBackend {
         databaseName,
       );
       backend.watchdog.start();
+    }
+    const dreamingConfig = getDreamingConfig();
+    if (dreamingConfig.enabled) {
+      backend.dreamingScheduler = new ProjectDreamingScheduler({
+        intervalMs: dreamingConfig.intervalMs,
+        listProjects: () => backend.projectDreaming.projectsWithSignals(),
+        createProject: (project) => backend.projectDreaming.create(project),
+        log: (level, event, details) => writeMuninnLog(databaseName, level, 'dreaming', event, details),
+      });
+      backend.dreamingScheduler.start();
     }
     return backend;
   }
@@ -274,12 +283,16 @@ export class MuninnBackend {
     });
   }
 
-  async latestProjectDream(project: string): Promise<DreamingRow | null> {
+  async latestProjectDream(project: string) {
     return this.checkpointLock.shared(async () => this.projectDreaming.latest(project));
   }
 
-  async latestProjectSignals(project: string): Promise<ProjectDreamSignals | null> {
-    return this.checkpointLock.shared(async () => this.projectDreaming.signals(project, 5));
+  async listProjectDreams(): Promise<ProjectDreamProjectView[]> {
+    return this.checkpointLock.shared(async () => this.projectDreaming.projects());
+  }
+
+  async latestProjectSignals(project: string, limit = 5): Promise<ProjectDreamSignals | null> {
+    return this.checkpointLock.shared(async () => this.projectDreaming.signals(project, limit));
   }
 
   async createProjectDream(project: string): Promise<ProjectDreamCreateResult> {
@@ -353,10 +366,9 @@ export class MuninnBackend {
         runs: extractorCheckpoint.runs,
       };
       return {
-        schemaVersion: 11,
+        schemaVersion: 12,
         extractor: extractorSection,
         sessionIndex: await this.sessionIndex.exportCheckpoint(this.client),
-        dreamingIndex: await this.dreamingIndex.exportCheckpoint(this.client),
       };
     });
   }
@@ -368,10 +380,14 @@ export class MuninnBackend {
     if (this.watchdog) {
       await this.watchdog.stop({ flushCheckpoint: true });
     }
+    if (this.dreamingScheduler) {
+      await this.dreamingScheduler.stop();
+    }
     if (this.watchdogClient) {
       await this.watchdogClient.close();
     }
     this.watchdog = null;
+    this.dreamingScheduler = null;
     this.watchdogClient = null;
     this.extractor = null;
     this.finalizeDrainPromise = null;
@@ -647,16 +663,22 @@ export const memoryPipeline = {
 };
 
 export const dreaming = {
+  async listProjects(database?: string | null): Promise<ProjectDreamProjectView[]> {
+    const databaseName = resolveDatabaseName(database);
+    await writeMuninnLog(databaseName, 'info', 'detail', 'project_dream_projects', {});
+    return (await getBackend(databaseName)).listProjectDreams();
+  },
+
   async getProject(project: string, database?: string | null): Promise<DreamingRow | null> {
     const databaseName = resolveDatabaseName(database);
     await writeMuninnLog(databaseName, 'info', 'detail', 'project_dream_get', { project });
     return (await getBackend(databaseName)).latestProjectDream(project);
   },
 
-  async getProjectSignals(project: string, database?: string | null): Promise<ProjectDreamSignals | null> {
+  async getProjectSignals(project: string, database?: string | null, limit = 5): Promise<ProjectDreamSignals | null> {
     const databaseName = resolveDatabaseName(database);
     await writeMuninnLog(databaseName, 'info', 'detail', 'project_dream_signals', { project });
-    return (await getBackend(databaseName)).latestProjectSignals(project);
+    return (await getBackend(databaseName)).latestProjectSignals(project, limit);
   },
 
   async createProject(project: string, database?: string | null): Promise<ProjectDreamCreateResult> {

@@ -1,12 +1,15 @@
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { ChevronRight } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import type { ProjectTimelineNode, ProjectTurnNode } from '../lib/api.js';
 import { cn } from '../lib/utils.js';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from './ui/collapsible.js';
 import { ScrollArea } from './ui/scroll-area.js';
 
 type TimelinePaneProps = {
   timeline: ProjectTimelineNode[];
+  loading: boolean;
   activeTimelineId: string | null;
   openTimelineId: string | null;
   openTimelineRequestId: number;
@@ -18,6 +21,7 @@ type TimelinePaneProps = {
 
 export function TimelinePane({
   timeline,
+  loading,
   activeTimelineId,
   openTimelineId,
   openTimelineRequestId,
@@ -27,14 +31,23 @@ export function TimelinePane({
   onLocateTurn,
 }: TimelinePaneProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const [openItem, setOpenItem] = useState<string | null>(null);
   const [scrollThumb, setScrollThumb] = useState({ height: 0, top: 0, visible: false });
   const restoreTimelineId = openTimelineId ?? activeTimelineId;
   const turnIndexById = new Map(sessionTurns.map((turn, index) => [turn.memoryId, index + 1]));
 
   useEffect(() => {
     if (!restoreTimelineId) {
+      setOpenItem(null);
+    }
+  }, [restoreTimelineId, sessionKey]);
+
+  useEffect(() => {
+    if (!restoreTimelineId) {
+      setOpenItem(null);
       return;
     }
+    setOpenItem(restoreTimelineId);
 
     window.requestAnimationFrame(() => {
       const target = scrollRef.current
@@ -86,73 +99,85 @@ export function TimelinePane({
       scrollElement.removeEventListener('scroll', updateThumb);
       resizeWatcher.disconnect();
     };
-  }, [timeline]);
+  }, [timeline, openItem]);
 
   return (
     <div className="timeline-scroll-shell">
       <ScrollArea ref={scrollRef} className="timeline-scroll">
         <div className="timeline-pane-content">
-          {timeline.length === 0 ? (
+          {loading ? (
+            <div className="timeline-empty">Loading session...</div>
+          ) : timeline.length === 0 ? (
             <div className="timeline-empty">No timeline for this session.</div>
           ) : (
             <div className="timeline-list">
-              {timeline.map((item) => (
-                <section
-                  key={item.memoryId}
-                  data-timeline-id={item.memoryId}
-                  className={cn(
-                    'timeline-item',
-                    `timeline-item-${item.kind}`,
-                    item.memoryId === activeTimelineId && 'timeline-item-active',
-                  )}
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => onActiveTimelineChange(item.memoryId)}
-                  onKeyDown={(event) => {
-                    if (event.key !== 'Enter' && event.key !== ' ') {
-                      return;
-                    }
-                    event.preventDefault();
-                    onActiveTimelineChange(item.memoryId);
-                  }}
-                >
-                  <div className="timeline-item-title">{item.title}</div>
-                  <div className="timeline-markdown">
-                    <ReactMarkdown
-                      remarkPlugins={[remarkGfm]}
-                      components={{
-                        a: ({ href, children }) => {
-                          const turnId = href?.startsWith(TURN_CITATION_HREF_PREFIX)
-                            ? decodeURIComponent(href.slice(TURN_CITATION_HREF_PREFIX.length))
-                            : null;
-                          if (!turnId) {
-                            return <a href={href}>{children}</a>;
-                          }
-                          const turnNumber = turnIndexById.get(turnId);
-                          const label = turnNumber
-                            ? `detail: turn ${turnNumber}`
-                            : `detail: ${turnId.replace(/^turn:/, 'turn ')}`;
-                          return (
-                            <button
-                              className="timeline-inline-citation"
-                              type="button"
-                              title={turnNumber ? `Go to turn #${turnNumber}` : 'Go to referenced turn'}
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                onLocateTurn(turnId);
-                              }}
-                            >
-                              [{label}]
-                            </button>
-                          );
-                        },
+              {timeline.map((item) => {
+                const open = openItem === item.memoryId;
+                return (
+                  <section
+                    key={item.memoryId}
+                    data-timeline-id={item.memoryId}
+                    className={cn(
+                      'timeline-item',
+                      `timeline-item-${item.kind}`,
+                      item.memoryId === activeTimelineId && 'timeline-item-active',
+                    )}
+                  >
+                    <Collapsible
+                      open={open}
+                      onOpenChange={(nextOpen) => {
+                        setOpenItem(nextOpen ? item.memoryId : null);
+                        if (nextOpen) {
+                          onActiveTimelineChange(item.memoryId);
+                        } else if (item.memoryId === activeTimelineId) {
+                          onActiveTimelineChange(null);
+                        }
                       }}
                     >
-                      {displayTimelineMarkdown(item.markdown)}
-                    </ReactMarkdown>
-                  </div>
-                </section>
-              ))}
+                      <CollapsibleTrigger className="timeline-trigger">
+                        <span className="timeline-title">{item.title}</span>
+                        <ChevronRight className="timeline-chevron" />
+                      </CollapsibleTrigger>
+                      <CollapsibleContent>
+                        <div className="timeline-markdown">
+                          <ReactMarkdown
+                            remarkPlugins={[remarkGfm]}
+                            components={{
+                              a: ({ href, children }) => {
+                                const turnId = href?.startsWith(TURN_CITATION_HREF_PREFIX)
+                                  ? decodeURIComponent(href.slice(TURN_CITATION_HREF_PREFIX.length))
+                                  : null;
+                                if (!turnId) {
+                                  return <a href={href}>{children}</a>;
+                                }
+                                const turnNumber = turnIndexById.get(turnId);
+                                const label = turnNumber
+                                  ? `detail: turn ${turnNumber}`
+                                  : `detail: ${turnId.replace(/^turn:/, 'turn ')}`;
+                                return (
+                                  <button
+                                    className="timeline-inline-citation"
+                                    type="button"
+                                    title={turnNumber ? `Go to turn #${turnNumber}` : 'Go to referenced turn'}
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      onLocateTurn(turnId);
+                                    }}
+                                  >
+                                    [{label}]
+                                  </button>
+                                );
+                              },
+                            }}
+                          >
+                            {displayTimelineMarkdown(item.markdown)}
+                          </ReactMarkdown>
+                        </div>
+                      </CollapsibleContent>
+                    </Collapsible>
+                  </section>
+                );
+              })}
             </div>
           )}
         </div>
@@ -176,6 +201,9 @@ const TURN_CITATION_HREF_PREFIX = '#muninn-turn=';
 
 function displayTimelineMarkdown(markdown: string): string {
   return markdown
+    .split('\n')
+    .filter((line) => !/^###\s+(Summary|Content)\s*$/i.test(line.trim()))
+    .join('\n')
     .replace(/@\[turn:([^\]]+)\]/g, (_, turnId: string) => {
       const normalizedTurnId = `turn:${turnId.trim().replace(/^turn:/, '')}`;
       return `[detail: ${normalizedTurnId.replace(':', ' ')}](${TURN_CITATION_HREF_PREFIX}${encodeURIComponent(normalizedTurnId)})`;

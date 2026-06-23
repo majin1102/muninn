@@ -126,6 +126,9 @@ export function entriesFromEvents(events: TurnEvent[], context: TimelineContext)
         id: event.id,
         name: event.name,
         input: event.input,
+        inputPreview: event.inputPreview,
+        inputBytes: event.inputBytes,
+        inputTruncated: event.inputTruncated,
         startedAt: event.timestamp,
       });
       if (event.id) {
@@ -142,6 +145,10 @@ export function entriesFromEvents(events: TurnEvent[], context: TimelineContext)
         pendingToolCalls[index] = {
           ...pendingToolCalls[index],
           output: event.output,
+          outputPreview: event.outputPreview,
+          outputBytes: event.outputBytes,
+          outputTruncated: event.outputTruncated,
+          artifactCount: event.artifactCount,
           completedAt: event.timestamp,
           artifacts: event.artifacts,
         };
@@ -150,6 +157,21 @@ export function entriesFromEvents(events: TurnEvent[], context: TimelineContext)
           id: event.id,
           name: 'tool_output',
           output: event.output,
+          outputPreview: event.outputPreview,
+          outputBytes: event.outputBytes,
+          outputTruncated: event.outputTruncated,
+          artifactCount: event.artifactCount,
+          completedAt: event.timestamp,
+          artifacts: event.artifacts,
+        });
+      } else if (event.outputPreview) {
+        pendingToolCalls.push({
+          id: event.id,
+          name: 'tool_output',
+          outputPreview: event.outputPreview,
+          outputBytes: event.outputBytes,
+          outputTruncated: event.outputTruncated,
+          artifactCount: event.artifactCount,
           completedAt: event.timestamp,
           artifacts: event.artifacts,
         });

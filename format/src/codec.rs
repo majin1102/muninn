@@ -1,9 +1,11 @@
 use std::sync::Arc;
 
-use arrow_array::builder::{ListBuilder, StringBuilder};
+use arrow_array::builder::{
+    Int32Builder, ListBuilder, StringBuilder, StructBuilder, TimestampMicrosecondBuilder,
+};
 use arrow_array::{
-    Array, FixedSizeListArray, Float32Array, Int64Array, ListArray, RecordBatch,
-    RecordBatchIterator, StringArray, TimestampMicrosecondArray, UInt64Array,
+    Array, FixedSizeListArray, Float32Array, Int32Array, Int64Array, ListArray, RecordBatch,
+    RecordBatchIterator, StringArray, StructArray, TimestampMicrosecondArray, UInt64Array,
 };
 use arrow_schema::{ArrowError, DataType, Field};
 use chrono::{TimeZone, Utc};
@@ -11,9 +13,11 @@ use lance::dataset::ROW_ID;
 use lance::{Error, Result};
 use serde_json::{Map, Value};
 
-use super::schema::{dreaming_schema, extraction_schema, session_schema, turn_schema};
+use super::schema::{
+    dreaming_project_schema, dreaming_schema, extraction_schema, session_schema, turn_schema,
+};
 use crate::config::extraction_config;
-use crate::dreaming::Dreaming;
+use crate::dreaming::{Dreaming, DreamingProject, DreamingSupportTurn};
 use crate::extraction::Extraction;
 use crate::memory_id::{MemoryId, MemoryLayer};
 use crate::session::SessionSnapshot;
@@ -350,10 +354,20 @@ pub(crate) fn session_snapshots_to_record_batch(
             .iter()
             .map(|session_snapshot| session_snapshot.summary.as_str()),
     );
-    let signals = StringArray::from_iter_values(
+    let memory_signals = build_string_list_array(
         session_snapshots
             .iter()
-            .map(|session_snapshot| session_snapshot.signals.as_str()),
+            .map(|session_snapshot| Some(&session_snapshot.memory_signals)),
+    );
+    let skill_signals = build_string_list_array(
+        session_snapshots
+            .iter()
+            .map(|session_snapshot| Some(&session_snapshot.skill_signals)),
+    );
+    let skill_details = StringArray::from_iter_values(
+        session_snapshots
+            .iter()
+            .map(|session_snapshot| session_snapshot.skill_details.as_str()),
     );
     let content = StringArray::from_iter_values(
         session_snapshots
@@ -379,7 +393,9 @@ pub(crate) fn session_snapshots_to_record_batch(
             Arc::new(extractor),
             Arc::new(title),
             Arc::new(summary),
-            Arc::new(signals),
+            Arc::new(memory_signals),
+            Arc::new(skill_signals),
+            Arc::new(skill_details),
             Arc::new(content),
             Arc::new(references),
         ],
@@ -455,18 +471,28 @@ pub(crate) fn record_batch_to_session_snapshots_with_row_ids(
         .as_any()
         .downcast_ref::<StringArray>()
         .unwrap();
-    let signals = batch
+    let memory_signals = batch
         .column(10)
+        .as_any()
+        .downcast_ref::<ListArray>()
+        .unwrap();
+    let skill_signals = batch
+        .column(11)
+        .as_any()
+        .downcast_ref::<ListArray>()
+        .unwrap();
+    let skill_details = batch
+        .column(12)
         .as_any()
         .downcast_ref::<StringArray>()
         .unwrap();
     let content = batch
-        .column(11)
+        .column(13)
         .as_any()
         .downcast_ref::<StringArray>()
         .unwrap();
     let references = batch
-        .column(12)
+        .column(14)
         .as_any()
         .downcast_ref::<ListArray>()
         .unwrap();
@@ -491,7 +517,9 @@ pub(crate) fn record_batch_to_session_snapshots_with_row_ids(
                 extractor: extractor.value(index).to_string(),
                 title: title.value(index).to_string(),
                 summary: summary.value(index).to_string(),
-                signals: signals.value(index).to_string(),
+                memory_signals: optional_string_list(memory_signals, index).unwrap_or_default(),
+                skill_signals: optional_string_list(skill_signals, index).unwrap_or_default(),
+                skill_details: skill_details.value(index).to_string(),
                 content: content.value(index).to_string(),
                 references: optional_string_list(references, index).unwrap_or_default(),
             })
@@ -504,27 +532,25 @@ pub(crate) fn dreamings_to_record_batch(
     rows: &[Dreaming],
 ) -> std::result::Result<RecordBatch, ArrowError> {
     let project = StringArray::from_iter_values(rows.iter().map(|row| row.project.as_str()));
-    let parent_id = UInt64Array::from(
-        rows.iter()
-            .map(|row| row.parent_id)
-            .collect::<Vec<Option<u64>>>(),
-    );
     let created_at = TimestampMicrosecondArray::from_iter_values(
         rows.iter().map(|row| row.created_at.timestamp_micros()),
     )
     .with_timezone("UTC");
-    let session_snapshot_version =
-        UInt64Array::from_iter_values(rows.iter().map(|row| row.session_snapshot_version));
+    let updated_at = TimestampMicrosecondArray::from_iter_values(
+        rows.iter().map(|row| row.updated_at.timestamp_micros()),
+    )
+    .with_timezone("UTC");
     let content = StringArray::from_iter_values(rows.iter().map(|row| row.content.as_str()));
+    let support_turns = build_support_turns_array(rows.iter().map(|row| &row.support_turns));
 
     Ok(RecordBatch::try_new(
         Arc::new(dreaming_schema()),
         vec![
             Arc::new(project),
-            Arc::new(parent_id),
             Arc::new(created_at),
-            Arc::new(session_snapshot_version),
+            Arc::new(updated_at),
             Arc::new(content),
+            Arc::new(support_turns),
         ],
     )?)
 }
@@ -535,6 +561,66 @@ pub(crate) fn dreamings_to_reader(
     let schema = Arc::new(dreaming_schema());
     let batch = dreamings_to_record_batch(&rows);
     RecordBatchIterator::new(vec![batch].into_iter(), schema)
+}
+
+pub(crate) fn dreaming_projects_to_record_batch(
+    rows: &[DreamingProject],
+) -> std::result::Result<RecordBatch, ArrowError> {
+    let project = StringArray::from_iter_values(rows.iter().map(|row| row.project.as_str()));
+    let session_snapshot_version =
+        UInt64Array::from_iter_values(rows.iter().map(|row| row.session_snapshot_version));
+    let updated_at = TimestampMicrosecondArray::from_iter_values(
+        rows.iter().map(|row| row.updated_at.timestamp_micros()),
+    )
+    .with_timezone("UTC");
+
+    Ok(RecordBatch::try_new(
+        Arc::new(dreaming_project_schema()),
+        vec![
+            Arc::new(project),
+            Arc::new(session_snapshot_version),
+            Arc::new(updated_at),
+        ],
+    )?)
+}
+
+pub(crate) fn dreaming_projects_to_reader(
+    rows: Vec<DreamingProject>,
+) -> RecordBatchIterator<impl Iterator<Item = std::result::Result<RecordBatch, ArrowError>>> {
+    let schema = Arc::new(dreaming_project_schema());
+    let batch = dreaming_projects_to_record_batch(&rows);
+    RecordBatchIterator::new(vec![batch].into_iter(), schema)
+}
+
+pub(crate) fn record_batch_to_dreaming_projects(
+    batch: &RecordBatch,
+) -> Result<Vec<DreamingProject>> {
+    let project = batch
+        .column(0)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap();
+    let session_snapshot_version = batch
+        .column(1)
+        .as_any()
+        .downcast_ref::<UInt64Array>()
+        .unwrap();
+    let updated_at = batch
+        .column(2)
+        .as_any()
+        .downcast_ref::<TimestampMicrosecondArray>()
+        .unwrap();
+
+    Ok((0..batch.num_rows())
+        .map(|index| DreamingProject {
+            project: project.value(index).to_string(),
+            session_snapshot_version: session_snapshot_version.value(index),
+            updated_at: Utc
+                .timestamp_micros(updated_at.value(index))
+                .single()
+                .unwrap(),
+        })
+        .collect())
 }
 
 pub(crate) fn record_batch_to_dreamings(batch: &RecordBatch) -> Result<Vec<Dreaming>> {
@@ -551,41 +637,127 @@ pub(crate) fn record_batch_to_dreamings_with_row_ids(
         .as_any()
         .downcast_ref::<StringArray>()
         .unwrap();
-    let parent_id = batch
+    let created_at = batch
         .column(1)
         .as_any()
-        .downcast_ref::<UInt64Array>()
+        .downcast_ref::<TimestampMicrosecondArray>()
         .unwrap();
-    let created_at = batch
+    let updated_at = batch
         .column(2)
         .as_any()
         .downcast_ref::<TimestampMicrosecondArray>()
         .unwrap();
-    let session_snapshot_version = batch
+    let content = batch
         .column(3)
         .as_any()
-        .downcast_ref::<UInt64Array>()
+        .downcast_ref::<StringArray>()
         .unwrap();
-    let content = batch
+    let support_turns = batch
         .column(4)
         .as_any()
-        .downcast_ref::<StringArray>()
+        .downcast_ref::<ListArray>()
         .unwrap();
 
     let rows = (0..batch.num_rows())
         .map(|index| Dreaming {
             dreaming_id: MemoryId::new(MemoryLayer::Dreaming, row_ids[index]),
             project: project.value(index).to_string(),
-            parent_id: optional_u64(parent_id, index),
             created_at: Utc
                 .timestamp_micros(created_at.value(index))
                 .single()
                 .unwrap(),
-            session_snapshot_version: session_snapshot_version.value(index),
+            updated_at: Utc
+                .timestamp_micros(updated_at.value(index))
+                .single()
+                .unwrap(),
             content: content.value(index).to_string(),
+            support_turns: support_turns_at(support_turns, index),
         })
         .collect();
     Ok(rows)
+}
+
+fn support_turn_fields() -> Vec<Field> {
+    vec![
+        Field::new("turn_id", arrow_schema::DataType::Utf8, false),
+        Field::new(
+            "created_at",
+            arrow_schema::DataType::Timestamp(
+                arrow_schema::TimeUnit::Microsecond,
+                Some("UTC".into()),
+            ),
+            false,
+        ),
+        Field::new("contribution", arrow_schema::DataType::Int32, false),
+    ]
+}
+
+fn build_support_turns_array<'a>(
+    values: impl Iterator<Item = &'a Vec<DreamingSupportTurn>>,
+) -> ListArray {
+    let fields = support_turn_fields();
+    let struct_builder = StructBuilder::new(
+        fields,
+        vec![
+            Box::new(StringBuilder::new()),
+            Box::new(TimestampMicrosecondBuilder::new().with_timezone("UTC")),
+            Box::new(Int32Builder::new()),
+        ],
+    );
+    let mut builder = ListBuilder::new(struct_builder);
+    for turns in values {
+        for turn in turns {
+            let values = builder.values();
+            values
+                .field_builder::<StringBuilder>(0)
+                .unwrap()
+                .append_value(&turn.turn_id);
+            values
+                .field_builder::<TimestampMicrosecondBuilder>(1)
+                .unwrap()
+                .append_value(turn.created_at.timestamp_micros());
+            values
+                .field_builder::<Int32Builder>(2)
+                .unwrap()
+                .append_value(turn.contribution);
+            values.append(true);
+        }
+        builder.append(true);
+    }
+    builder.finish()
+}
+
+fn support_turns_at(array: &ListArray, index: usize) -> Vec<DreamingSupportTurn> {
+    if array.is_null(index) {
+        return Vec::new();
+    }
+    let values = array.value(index);
+    let values = values.as_any().downcast_ref::<StructArray>().unwrap();
+    let turn_id = values
+        .column(0)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap();
+    let created_at = values
+        .column(1)
+        .as_any()
+        .downcast_ref::<TimestampMicrosecondArray>()
+        .unwrap();
+    let contribution = values
+        .column(2)
+        .as_any()
+        .downcast_ref::<Int32Array>()
+        .unwrap();
+    (0..values.len())
+        .map(|idx| DreamingSupportTurn {
+            turn_id: turn_id.value(idx).to_string(),
+            created_at: Utc
+                .timestamp_micros(created_at.value(idx))
+                .single()
+                .unwrap(),
+            contribution: contribution.value(idx),
+        })
+        .collect()
 }
 
 pub(crate) fn batch_row_ids(batch: &RecordBatch) -> Result<Vec<u64>> {

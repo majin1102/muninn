@@ -33,7 +33,9 @@ pub struct SessionSnapshot {
     pub extractor: String,
     pub title: String,
     pub summary: String,
-    pub signals: String,
+    pub memory_signals: Vec<String>,
+    pub skill_signals: Vec<String>,
+    pub skill_details: String,
     pub content: String,
     pub references: Vec<String>,
 }
@@ -153,6 +155,39 @@ impl SessionTable {
         }
         Ok(SourceRows {
             source_version,
+            rows,
+        })
+    }
+
+    pub async fn list_at_version(
+        &self,
+        extractor: Option<&str>,
+        version: u64,
+    ) -> Result<SourceRows<SessionSnapshot>> {
+        if version == 0 {
+            return Ok(SourceRows {
+                source_version: 0,
+                rows: Vec::new(),
+            });
+        }
+        let Some(dataset) = self.access.try_open().await? else {
+            return Ok(SourceRows {
+                source_version: 0,
+                rows: Vec::new(),
+            });
+        };
+        let dataset = dataset.checkout_version(version).await?;
+        let batch = dataset.scan().with_row_id().try_into_batch().await?;
+        let mut rows = if batch.num_rows() == 0 {
+            Vec::new()
+        } else {
+            record_batch_to_session_snapshots(&batch)?
+        };
+        if let Some(extractor) = extractor {
+            rows.retain(|snapshot| snapshot.extractor == extractor);
+        }
+        Ok(SourceRows {
+            source_version: dataset.version().version,
             rows,
         })
     }
@@ -376,7 +411,9 @@ mod tests {
             extractor: "extractor-a".to_string(),
             title: "Session Title".to_string(),
             summary: "Session summary".to_string(),
-            signals: String::new(),
+            memory_signals: Vec::new(),
+            skill_signals: Vec::new(),
+            skill_details: "{}".to_string(),
             content: "{\"memories\":[]}".to_string(),
             references: vec!["turn:7".to_string()],
         };
@@ -400,7 +437,9 @@ mod tests {
             extractor: "extractor-a".to_string(),
             title: "Session Title".to_string(),
             summary: "Session summary".to_string(),
-            signals: String::new(),
+            memory_signals: Vec::new(),
+            skill_signals: Vec::new(),
+            skill_details: "{}".to_string(),
             content: "{\"memories\":[]}".to_string(),
             references: vec!["turn:7".to_string()],
         }];
@@ -421,7 +460,9 @@ mod tests {
                 extractor: "extractor-a".to_string(),
                 title: "Session Title".to_string(),
                 summary: "Session summary".to_string(),
-                signals: String::new(),
+                memory_signals: Vec::new(),
+                skill_signals: Vec::new(),
+                skill_details: "{}".to_string(),
                 content: "{\"memories\":[]}".to_string(),
                 references: vec!["turn:7".to_string()],
             }])
@@ -434,7 +475,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn session_signals_roundtrip_and_delta_returns_source_version() {
+    async fn session_signal_fields_roundtrip_and_delta_returns_source_version() {
         let dir = tempfile::tempdir().unwrap();
         let table = SessionTable::new(TableOptions::local(dir.path()).unwrap());
         let mut rows = vec![SessionSnapshot {
@@ -446,11 +487,13 @@ mod tests {
             snapshot_sequence: 0,
             created_at: Utc::now(),
             updated_at: Utc::now(),
-            extractor: "default-observer".to_string(),
+            extractor: "default-extractor".to_string(),
             title: "Session Title".to_string(),
             summary: "Session summary".to_string(),
-            signals: "- [2] Keep schemas minimal.".to_string(),
-            content: "# Session Title\n\n## Summary\nSession summary\n\n## Signals\n- [2] Keep schemas minimal.".to_string(),
+            memory_signals: vec!["Keep schemas minimal.".to_string()],
+            skill_signals: vec!["Prefer focused Rust codec tests.".to_string()],
+            skill_details: "{\"skills\":[\"schema-codec\"]}".to_string(),
+            content: "# Session Title\n\n## Summary\nSession summary\n\n## Memory Signals\n- Keep schemas minimal.".to_string(),
             references: vec!["turn:7".to_string()],
         }];
 
@@ -460,15 +503,28 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(loaded.signals, "- [2] Keep schemas minimal.");
+        assert_eq!(loaded.memory_signals, vec!["Keep schemas minimal."]);
+        assert_eq!(
+            loaded.skill_signals,
+            vec!["Prefer focused Rust codec tests."]
+        );
+        assert_eq!(loaded.skill_details, "{\"skills\":[\"schema-codec\"]}");
 
-        let delta = table.delta("default-observer", 0).await.unwrap();
+        let delta = table.delta("default-extractor", 0).await.unwrap();
         assert_eq!(delta.rows.len(), 1);
-        assert_eq!(delta.rows[0].signals, "- [2] Keep schemas minimal.");
+        assert_eq!(delta.rows[0].memory_signals, vec!["Keep schemas minimal."]);
+        assert_eq!(
+            delta.rows[0].skill_signals,
+            vec!["Prefer focused Rust codec tests."]
+        );
+        assert_eq!(
+            delta.rows[0].skill_details,
+            "{\"skills\":[\"schema-codec\"]}"
+        );
         assert!(delta.source_version > 0);
 
         let scanned = table
-            .list_with_version(Some("default-observer"))
+            .list_with_version(Some("default-extractor"))
             .await
             .unwrap();
         assert_eq!(scanned.rows.len(), 1);

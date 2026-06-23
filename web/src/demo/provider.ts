@@ -253,8 +253,6 @@ export async function getDemoSessionTurns(
         '- [1] Demo sessions keep lightweight signals for UI preview.',
         '',
         '### Skills',
-        '',
-        '### Open Questions',
       ].join('\n'),
       refs: [],
     });

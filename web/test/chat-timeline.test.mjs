@@ -70,6 +70,38 @@ test('groups consecutive tool calls before the next message', () => {
   assert.equal(entries[2].group.toolCalls[1].output, 'README.md');
 });
 
+test('keeps session preview tool IO separate from full detail fields', async () => {
+  const { entriesFromEvents } = await loadSourceChatTimeline();
+  const entries = entriesFromEvents([
+    {
+      type: 'toolCall',
+      id: 'call-1',
+      name: 'exec_command',
+      inputPreview: '{"cmd":"make test"}',
+      inputBytes: 10_000,
+      inputTruncated: true,
+    },
+    {
+      type: 'toolOutput',
+      id: 'call-1',
+      outputPreview: 'failed after 120s',
+      outputBytes: 20_000,
+      outputTruncated: true,
+    },
+  ], {
+    memoryId: 'turn:preview',
+    agent: 'codex',
+  });
+
+  const toolCall = entries[0].group.toolCalls[0];
+  assert.equal(toolCall.input, undefined);
+  assert.equal(toolCall.output, undefined);
+  assert.equal(toolCall.inputPreview, '{"cmd":"make test"}');
+  assert.equal(toolCall.outputPreview, 'failed after 120s');
+  assert.equal(toolCall.inputBytes, 10_000);
+  assert.equal(toolCall.outputBytes, 20_000);
+});
+
 test('attaches tool output artifacts to the matching timeline tool call', async () => {
   const { entriesFromEvents } = await loadSourceChatTimeline();
   const entries = entriesFromEvents([

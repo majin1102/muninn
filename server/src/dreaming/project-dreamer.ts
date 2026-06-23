@@ -1,26 +1,34 @@
 import { getExtractorLlmConfig } from '../config.js';
-import { generateText } from '../llm/provider.js';
+import {
+  generateWithTools,
+  type LlmTask,
+  type LlmToolRequest,
+  type LlmToolResult,
+} from '../llm/provider.js';
 import { loadPromptTemplate, renderPromptTemplate } from '../llm/prompts.js';
-import { normalizeProjectDreamContent, validateProjectDreamContent } from './content.js';
+import {
+  normalizeProjectDreamContent,
+  type ProjectDreamLabelSet,
+} from './content.js';
 
 export type ProjectDreamInput = {
   project: string;
-  parentDream: string;
-  incrementalSignals: string;
+  existingProjectSignals: string;
+  incrementalSessionSignals: string;
+  labels?: ProjectDreamLabelSet;
 };
 
-export type ProjectDreamModel = (request: {
-  system: string;
-  prompt: string;
-  signal?: AbortSignal;
-}) => Promise<string | null>;
+export type ProjectDreamModel = (
+  task: LlmTask,
+  request: LlmToolRequest,
+) => Promise<LlmToolResult | null>;
 
 export function buildProjectDreamPrompt(input: ProjectDreamInput): string {
   const template = loadPromptTemplate('project_dreaming');
   return renderPromptTemplate(template.userTemplate, {
     project: input.project,
-    parent_dream: input.parentDream || '(none)',
-    incremental_signals: input.incrementalSignals,
+    existing_project_signals: input.existingProjectSignals.trim() || '(none)',
+    incremental_session_signals: input.incrementalSessionSignals.trim() || '(none)',
   });
 }
 
@@ -34,34 +42,37 @@ export async function mergeProjectDream(input: ProjectDreamInput & {
     throw new Error('extraction update is not configured');
   }
   if (config.provider === 'mock') {
-    const dream = mockProjectDream(input);
-    validateProjectDreamContent(dream);
-    return dream;
+    return mockProjectDream(input);
   }
 
-  const model = input.model ?? ((request) => generateText('extractor', request));
+  const model = input.model ?? generateWithTools;
+  const system = renderPromptTemplate(template.system, { project: input.project });
   const basePrompt = buildProjectDreamPrompt(input);
-  let lastError = new Error('project dream merge returned no output');
+  let lastError = new Error('project signal merge returned no output');
 
   for (let attempt = 1; attempt <= config.maxAttempts; attempt += 1) {
     throwIfAborted(input.signal);
     const prompt = attempt === 1
       ? basePrompt
-      : `${basePrompt}\n\nPrevious output was invalid. Validation error: ${lastError.message} Return only a valid project dream Markdown document.`;
-    const raw = await model({
-      system: template.system,
-      prompt,
-      signal: input.signal,
-    });
-    if (!raw) {
-      lastError = new Error('project dream merge returned no output');
-      continue;
-    }
+      : `${basePrompt}\n\nPrevious output was invalid. Validation error: ${lastError.message} Return only a valid project signal Markdown document.`;
     try {
-      const dream = normalizeProjectDreamContent(raw);
-      validateProjectDreamContent(dream);
-      return dream;
+      const raw = await model('extractor', {
+        messages: [
+          { role: 'system', content: system },
+          { role: 'user', content: prompt },
+        ],
+        tools: [],
+        signal: input.signal,
+      });
+      if (!raw || raw.type !== 'final' || !raw.text.trim()) {
+        lastError = new Error('project signal merge returned no output');
+        continue;
+      }
+      return normalizeProjectDreamContent(raw.text, input.labels);
     } catch (error) {
+      if (isFatalModelError(error, input.signal)) {
+        throw error;
+      }
       lastError = error instanceof Error ? error : new Error(String(error));
     }
   }
@@ -70,29 +81,16 @@ export async function mergeProjectDream(input: ProjectDreamInput & {
 }
 
 function mockProjectDream(input: ProjectDreamInput): string {
-  const incremental = input.incrementalSignals.trim();
-  const parent = input.parentDream.trim();
-  if (parent && parent !== '(none)') {
-    const dream = incremental
-      ? appendGuidance(normalizeProjectDreamContent(parent), incremental)
-      : normalizeProjectDreamContent(parent);
-    validateProjectDreamContent(dream);
-    return dream;
-  }
-  const dream = [
-    '# Project Dream',
+  const text = [
+    '# Project Signals',
     '',
-    '## Signals',
+    input.existingProjectSignals.trim(),
     '',
-    '### Guidance',
-    incremental,
-    '',
-    '### Skills',
-    '',
-    '### Open Questions',
-  ].join('\n').trim();
-  validateProjectDreamContent(dream);
-  return dream;
+    input.incrementalSessionSignals.trim(),
+  ]
+    .join('\n')
+    .trim();
+  return normalizeProjectDreamContent(text === '# Project Signals' ? '# Project Signals' : text, input.labels);
 }
 
 function throwIfAborted(signal?: AbortSignal): void {
@@ -101,33 +99,10 @@ function throwIfAborted(signal?: AbortSignal): void {
   }
 }
 
-function appendGuidance(parent: string, incremental: string): string {
-  const lines = parent.split('\n');
-  const guidance = lines.findIndex((line) => line === '### Guidance');
-  const nextSection = lines.findIndex((line, index) => index > guidance && line.startsWith('### '));
-  const insertAt = nextSection < 0 ? lines.length : nextSection;
-  const before = trimTrailingBlank(lines.slice(0, insertAt));
-  const after = trimLeadingBlank(lines.slice(insertAt));
-  return [
-    ...before,
-    ...incremental.split('\n'),
-    '',
-    ...after,
-  ].join('\n').trim();
-}
-
-function trimTrailingBlank(lines: string[]): string[] {
-  const next = [...lines];
-  while (next.length > 0 && next[next.length - 1].trim() === '') {
-    next.pop();
+function isFatalModelError(error: unknown, signal?: AbortSignal): boolean {
+  if (signal?.aborted) {
+    return true;
   }
-  return next;
-}
-
-function trimLeadingBlank(lines: string[]): string[] {
-  const next = [...lines];
-  while (next.length > 0 && next[0].trim() === '') {
-    next.shift();
-  }
-  return next;
+  const message = error instanceof Error ? error.message : String(error);
+  return /\bllm (?:tool )?request failed\b/i.test(message);
 }

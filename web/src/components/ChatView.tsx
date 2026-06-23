@@ -2,12 +2,17 @@ import type { MemoryDocument } from '@muninn/common';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Bot, CircleAlert, MessageSquare } from 'lucide-react';
-import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import userAvatarUrl from '../assets/user-avatar.png';
 import { logoForAgent, type AgentLogo } from '../lib/agent-logo.js';
 import type { ProjectTurnNode } from '../lib/api.js';
 import { chatTimelineItems, type ChatTimelineItem } from '../lib/chat-timeline-items.js';
-import { CHAT_CONTEXT_STEP, INITIAL_CHAT_CONTEXT_RADIUS, chatTurnWindow } from '../lib/chat-window.js';
+import {
+  CHAT_CONTEXT_STEP,
+  DEFAULT_CHAT_INITIAL_TURN_COUNT,
+  INITIAL_CHAT_CONTEXT_RADIUS,
+  chatTurnWindow,
+} from '../lib/chat-window.js';
 import { transcriptMessages, type TranscriptMessage } from '../lib/transcript.js';
 import { cn } from '../lib/utils.js';
 import {
@@ -33,6 +38,7 @@ type ChatViewProps = {
   canLoadMoreAfter?: boolean;
   loadingMoreAfter?: boolean;
   onLoadMoreAfter?: () => void;
+  onLoadTurnDetail?: (memoryId: string) => Promise<ProjectTurnNode>;
   loading: boolean;
   error: string | null;
 };
@@ -49,26 +55,68 @@ export function ChatView({
   canLoadMoreAfter = false,
   loadingMoreAfter = false,
   onLoadMoreAfter,
+  onLoadTurnDetail,
   loading,
   error,
 }: ChatViewProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const activeMessageRef = useRef<HTMLElement>(null);
   const [beforeLimit, setBeforeLimit] = useState(INITIAL_CHAT_CONTEXT_RADIUS);
-  const [afterLimit, setAfterLimit] = useState(INITIAL_CHAT_CONTEXT_RADIUS);
+  const [afterLimit, setAfterLimit] = useState(DEFAULT_CHAT_INITIAL_TURN_COUNT);
+  const [turnDetails, setTurnDetails] = useState<Record<string, ProjectTurnNode>>({});
+  const [turnDetailLoading, setTurnDetailLoading] = useState<Record<string, boolean>>({});
+  const [turnDetailErrors, setTurnDetailErrors] = useState<Record<string, string>>({});
+  const sessionDetailKey = sessionTurns[0]
+    ? `${sessionTurns[0].agent}:${sessionTurns[0].sessionKey}`
+    : document?.memoryId ?? 'empty';
+  const displayTurns = useMemo(() => sessionTurns.map((turn) => (
+    turn.memoryId && turnDetails[turn.memoryId] ? { ...turn, ...turnDetails[turn.memoryId] } : turn
+  )), [sessionTurns, turnDetails]);
   const turnWindow = useMemo(
-    () => chatTurnWindow(sessionTurns, focusMemoryId, beforeLimit, afterLimit),
-    [afterLimit, beforeLimit, focusMemoryId, sessionTurns],
+    () => chatTurnWindow(displayTurns, focusMemoryId, beforeLimit, afterLimit),
+    [afterLimit, beforeLimit, displayTurns, focusMemoryId],
   );
+  const laterTurnCount = turnWindow.afterCount > 0
+    ? Math.min(CHAT_CONTEXT_STEP, turnWindow.afterCount)
+    : CHAT_CONTEXT_STEP;
   const entries = useMemo(() => (
-    sessionTurns.length > 0 ? entriesFromTurns(turnWindow.turns) : entriesFromDocument(document)
-  ), [document, sessionTurns.length, turnWindow.turns]);
+    displayTurns.length > 0 ? entriesFromTurns(turnWindow.turns) : entriesFromDocument(document)
+  ), [displayTurns.length, document, turnWindow.turns]);
   const timelineItems = useMemo(() => chatTimelineItems(entries, TIME_SEPARATOR_GAP_MS), [entries]);
+
+  const ensureTurnDetail = useCallback(async (memoryId: string | undefined) => {
+    if (!memoryId || !onLoadTurnDetail || turnDetails[memoryId] || turnDetailLoading[memoryId]) {
+      return;
+    }
+    setTurnDetailLoading((current) => ({ ...current, [memoryId]: true }));
+    setTurnDetailErrors((current) => {
+      const next = { ...current };
+      delete next[memoryId];
+      return next;
+    });
+    try {
+      const detail = await onLoadTurnDetail(memoryId);
+      setTurnDetails((current) => ({ ...current, [memoryId]: detail }));
+    } catch (error) {
+      setTurnDetailErrors((current) => ({
+        ...current,
+        [memoryId]: error instanceof Error ? error.message : String(error),
+      }));
+    } finally {
+      setTurnDetailLoading((current) => ({ ...current, [memoryId]: false }));
+    }
+  }, [onLoadTurnDetail, turnDetailLoading, turnDetails]);
 
   useEffect(() => {
     setBeforeLimit(INITIAL_CHAT_CONTEXT_RADIUS);
-    setAfterLimit(INITIAL_CHAT_CONTEXT_RADIUS);
+    setAfterLimit(focusMemoryId ? INITIAL_CHAT_CONTEXT_RADIUS : DEFAULT_CHAT_INITIAL_TURN_COUNT);
   }, [focusMemoryId, focusRequestId]);
+
+  useEffect(() => {
+    setTurnDetails({});
+    setTurnDetailLoading({});
+    setTurnDetailErrors({});
+  }, [sessionDetailKey]);
 
   useEffect(() => {
     if (!focusMemoryId) {
@@ -166,6 +214,10 @@ export function ChatView({
             activeMemoryId,
             activeMessageRef,
             documentAgent: document?.agent ?? document?.extractor ?? '',
+            onLoadTurnDetail: ensureTurnDetail,
+            turnDetailLoading,
+            turnDetailErrors,
+            loadedTurnDetails: turnDetails,
           });
         })}
         {turnWindow.afterCount > 0 || canLoadMoreAfter ? (
@@ -183,7 +235,7 @@ export function ChatView({
               onLoadMoreAfter?.();
             }}
           >
-            {loadingMoreAfter ? 'Loading...' : `Show ${Math.min(CHAT_CONTEXT_STEP, Math.max(turnWindow.afterCount, CHAT_CONTEXT_STEP))} later turns`}
+            {loadingMoreAfter ? 'Loading...' : `Show ${laterTurnCount} later turns`}
           </Button>
         ) : null}
       </div>
@@ -215,8 +267,21 @@ function renderTimelineEntry(params: {
   activeMemoryId: string | null;
   activeMessageRef: React.RefObject<HTMLElement | null>;
   documentAgent: string;
+  onLoadTurnDetail: (memoryId: string | undefined) => void;
+  turnDetailLoading: Record<string, boolean>;
+  turnDetailErrors: Record<string, string>;
+  loadedTurnDetails: Record<string, ProjectTurnNode>;
 }) {
-  const { item, activeMemoryId, activeMessageRef, documentAgent } = params;
+  const {
+    item,
+    activeMemoryId,
+    activeMessageRef,
+    documentAgent,
+    onLoadTurnDetail,
+    turnDetailLoading,
+    turnDetailErrors,
+    loadedTurnDetails,
+  } = params;
   if (item.entry.type === 'toolGroup') {
     const { group } = item.entry;
     return (
@@ -235,6 +300,11 @@ function renderTimelineEntry(params: {
           <ToolCallList
             toolCalls={group.toolCalls}
             agent={group.agent ?? documentAgent}
+            memoryId={group.memoryId}
+            loadingDetail={group.memoryId ? Boolean(turnDetailLoading[group.memoryId]) : false}
+            detailError={group.memoryId ? turnDetailErrors[group.memoryId] : undefined}
+            hasFullDetail={group.memoryId ? Boolean(loadedTurnDetails[group.memoryId]) : false}
+            onLoadTurnDetail={onLoadTurnDetail}
             startedAt={group.startedAt}
             completedAt={group.completedAt}
             totalStartedAt={item.totalTime?.startedAt}
@@ -414,6 +484,11 @@ function ChatTimeMetaRow({
 function ToolCallList({
   toolCalls,
   agent,
+  memoryId,
+  loadingDetail,
+  detailError,
+  hasFullDetail,
+  onLoadTurnDetail,
   startedAt,
   completedAt,
   totalStartedAt,
@@ -421,48 +496,78 @@ function ToolCallList({
 }: {
   toolCalls: ChatToolCall[];
   agent?: string;
+  memoryId?: string;
+  loadingDetail: boolean;
+  detailError?: string;
+  hasFullDetail: boolean;
+  onLoadTurnDetail: (memoryId: string | undefined) => void;
   startedAt?: string;
   completedAt?: string;
   totalStartedAt?: string;
   totalCompletedAt?: string;
 }) {
+  const [groupOpen, setGroupOpen] = useState(false);
+  const [openRows, setOpenRows] = useState<Record<string, boolean>>({});
   const summary = toolCallSummary(toolCalls);
   const artifacts = toolCalls.flatMap((toolCall) => toolCall.artifacts ?? []);
   return (
     <>
-      <details className="chat-tool-call-group">
+      <details
+        className="chat-tool-call-group"
+        open={groupOpen}
+        onToggle={(event) => setGroupOpen(event.currentTarget.open)}
+      >
         <summary className="chat-tool-call-group-summary">
           <span className="chat-tool-call-chevron">›</span>
           <span className="chat-tool-call-title">Tool calls: {toolCalls.length}</span>
           <span className="chat-tool-call-meta">{summary}</span>
         </summary>
-        <div className="chat-tool-call-panel">
-          {toolCalls.map((toolCall, index) => (
-            <details key={toolCall.id ?? `${toolCall.name}-${index}`} className="chat-tool-call-row">
-              <summary className="chat-tool-call-row-summary">
-                <span className="chat-tool-call-chevron">›</span>
-                <span className="chat-tool-call-name">{toolCall.name}</span>
-                <span className="chat-tool-call-arg">{toolCallInputSummary(toolCall)}</span>
-                <span className="chat-tool-call-state">{toolCall.output ? 'output' : 'input'}</span>
-              </summary>
-              <div className="chat-tool-call-io">
-                {toolCall.input ? (
-                  <div className="chat-tool-call-section">
-                    <div className="chat-tool-call-label">Input</div>
-                    <pre>{toolCall.input}</pre>
-                  </div>
-                ) : null}
-                {toolCall.output ? (
-                  <div className="chat-tool-call-section">
-                    <div className="chat-tool-call-label">Output</div>
-                    <pre>{toolCall.output}</pre>
-                  </div>
-                ) : null}
-                <ChatTimeMeta label="time" startedAt={toolCall.startedAt} completedAt={toolCall.completedAt} />
-              </div>
-            </details>
-          ))}
-        </div>
+        {groupOpen ? (
+          <div className="chat-tool-call-panel">
+            {toolCalls.map((toolCall, index) => {
+              const key = toolCall.id ?? `${toolCall.name}-${index}`;
+              const rowOpen = Boolean(openRows[key]);
+              return (
+                <details
+                  key={key}
+                  className="chat-tool-call-row"
+                  open={rowOpen}
+                  onToggle={(event) => {
+                    const nextOpen = event.currentTarget.open;
+                    setOpenRows((current) => ({ ...current, [key]: nextOpen }));
+                    if (nextOpen && hasPreviewOnlyToolIo(toolCall) && !hasFullDetail) {
+                      onLoadTurnDetail(memoryId);
+                    }
+                  }}
+                >
+                  <summary className="chat-tool-call-row-summary">
+                    <span className="chat-tool-call-chevron">›</span>
+                    <span className="chat-tool-call-name">{toolCall.name}</span>
+                    <span className="chat-tool-call-arg">{toolCallInputSummary(toolCall)}</span>
+                    <span className="chat-tool-call-state">{toolCall.output || toolCall.outputPreview ? 'output' : 'input'}</span>
+                  </summary>
+                  {rowOpen ? (
+                    <div className="chat-tool-call-io">
+                      {loadingDetail && hasPreviewOnlyToolIo(toolCall) && !hasFullDetail ? (
+                        <div className="chat-tool-call-section">
+                          <div className="chat-tool-call-label">Loading full tool details...</div>
+                        </div>
+                      ) : null}
+                      {detailError && hasPreviewOnlyToolIo(toolCall) && !hasFullDetail ? (
+                        <div className="chat-tool-call-section">
+                          <div className="chat-tool-call-label">{detailError}</div>
+                        </div>
+                      ) : null}
+                      <ToolCallIoSection label="Input" value={toolCall.input} preview={toolCall.inputPreview} bytes={toolCall.inputBytes} />
+                      <ToolCallIoSection label="Output" value={toolCall.output} preview={toolCall.outputPreview} bytes={toolCall.outputBytes} />
+                      <ChatTimeMeta label="time" startedAt={toolCall.startedAt} completedAt={toolCall.completedAt} />
+                    </div>
+                  ) : null}
+                </details>
+              );
+            })}
+          </div>
+        ) : null}
       </details>
       {artifacts.length > 0 ? (
         <ArtifactList artifacts={artifacts} agent={agent} />
@@ -477,8 +582,35 @@ function ToolCallList({
   );
 }
 
+function ToolCallIoSection({
+  label,
+  value,
+  preview,
+  bytes,
+}: {
+  label: string;
+  value?: string;
+  preview?: string;
+  bytes?: number;
+}) {
+  const display = value ?? preview;
+  if (!display) {
+    return null;
+  }
+  return (
+    <div className="chat-tool-call-section">
+      <div className="chat-tool-call-label">{value ? label : `${label} preview${bytes ? ` (${formatBytes(bytes)})` : ''}`}</div>
+      <pre>{display}</pre>
+    </div>
+  );
+}
+
+function hasPreviewOnlyToolIo(toolCall: ChatToolCall): boolean {
+  return Boolean((toolCall.inputPreview && !toolCall.input) || (toolCall.outputPreview && !toolCall.output));
+}
+
 function toolCallInputSummary(toolCall: ChatToolCall): string {
-  const input = toolCall.input?.trim();
+  const input = (toolCall.input ?? toolCall.inputPreview)?.trim();
   if (!input) {
     return '';
   }
@@ -525,6 +657,16 @@ function toolCallSummary(toolCalls: ChatToolCall[]): string {
   return [...counts.entries()]
     .map(([name, count]) => `${name} x${count}`)
     .join(', ');
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) {
+    return `${bytes} B`;
+  }
+  if (bytes < 1024 * 1024) {
+    return `${Math.round(bytes / 1024)} KB`;
+  }
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
 function compactText(value: string): string {

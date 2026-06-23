@@ -7,6 +7,7 @@ import { access, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/p
 import core from '../../dist/backend.js';
 import { __testing } from '../../dist/backend.js';
 import {
+  getDreamingConfigFromConfigForTests,
   getExtractorLlmConfig,
   validateMuninnConfigInput,
 } from '../../dist/config.js';
@@ -30,9 +31,17 @@ const { __testing: indexTesting } = extractionIndexModule;
 const { __testing: sessionTesting } = sessionModule;
 const { __testing: threadTesting } = sessionModule;
 const { __testing: extractorLlmTesting } = extractorLlmModule;
-const { createSessionThread, getPendingIndex, getPendingIndexUpTo, loadThreads, toSessionSnapshot } = sessionModule;
+const {
+  createSessionThread,
+  getPendingIndex,
+  getPendingIndexUpTo,
+  loadThreads,
+  parseSnapshotContent,
+  renderSnapshotContent,
+  toSessionSnapshot,
+} = sessionModule;
 const { captureTurn, memoryPipeline: memoryPipelineApi, shutdownCoreForTests } = core;
-const CHECKPOINT_SCHEMA_VERSION = 11;
+const CHECKPOINT_SCHEMA_VERSION = 12;
 let defaultConfigDir = null;
 
 function createCheckpointBackend(exported = null) {
@@ -70,10 +79,6 @@ function makeCheckpointContent(overrides = {}) {
       baseline: { turn: 10, session: 21 },
       entries: [],
     },
-    dreamingIndex: overrides.dreamingIndex ?? {
-      baseline: { dreaming: 0 },
-      entries: [],
-    },
   };
 }
 
@@ -94,7 +99,8 @@ async function makeConfigHome() {
 
 async function writeExtractorConfig(configPath, {
   activeWindowDays = 3650,
-  epochTurns,
+  minEpochTurns,
+  maxEpochTurns,
   epochWindowMs,
   name = 'default-extractor',
 } = {}) {
@@ -106,7 +112,8 @@ async function writeExtractorConfig(configPath, {
       embeddingProvider: 'default',
       maxAttempts: 3,
       activeWindowDays,
-      ...(epochTurns === undefined ? {} : { epochTurns }),
+      ...(minEpochTurns === undefined ? {} : { minEpochTurns }),
+      ...(maxEpochTurns === undefined ? {} : { maxEpochTurns }),
       ...(epochWindowMs === undefined ? {} : { epochWindowMs }),
     },
     providers: {
@@ -180,8 +187,43 @@ test('config reads extraction embedding config and rejects unknown top-level key
   })), /unsupported top-level config key: unsupportedIndex/);
 });
 
-test('native bindings expose turn session and extraction tables', async () => {
+test('dreaming scheduler defaults to enabled thirty minute interval and validates positive integer', () => {
+  const config = {
+    storage: { uri: 'file:///tmp/muninn-test' },
+    extractor: { name: 'default-extractor', llmProvider: 'extractor_llm', embeddingProvider: 'default' },
+    providers: {
+      llm: {
+        extractor_llm: { type: 'mock' },
+      },
+      embedding: {
+        default: { type: 'mock' },
+      },
+    },
+  };
+  assert.deepEqual(getDreamingConfigFromConfigForTests(config), {
+    enabled: true,
+    intervalMs: 1_800_000,
+  });
+  assert.deepEqual(getDreamingConfigFromConfigForTests({
+    ...config,
+    dreaming: { enabled: false, intervalMs: 60_000 },
+  }), {
+    enabled: false,
+    intervalMs: 60_000,
+  });
+  assert.throws(() => validateMuninnConfigInput(JSON.stringify({
+    ...config,
+    dreaming: { intervalMs: 0 },
+  })), /dreaming\.intervalMs must be a positive integer/);
+});
+
+test('native bindings expose turn session dreaming and extraction tables', async () => {
   const tables = await getNativeTables();
+  assert.equal(typeof tables.turnTable.listTurns, 'function');
+  assert.equal(typeof tables.sessionTable.listSnapshots, 'function');
+  assert.equal(typeof tables.dreamingTable.list, 'function');
+  assert.equal(typeof tables.dreamingTable.append, 'function');
+  assert.equal(typeof tables.dreamingTable.update, 'function');
   assert.equal(typeof tables.extractionTable.list, 'function');
   assert.equal(typeof tables.extractionTable.delta, 'function');
   assert.equal(typeof tables.extractionTable.upsert, 'function');
@@ -381,20 +423,42 @@ function extractionContent(title, summary, content = '') {
 function snapshotContentFixture(units, {
   title = 'Painting Memory',
   summary = 'This thread tracks durable painting memory.',
-  signals = '',
+  memorySignals = [],
+  skillSignals = [],
+  skillDetails = {},
 } = {}) {
+  const detailEntries = Object.entries(skillDetails)
+    .map(([name, detail]) => [
+      `### ${name}`,
+      detail.trim(),
+    ].join('\n').trimEnd())
+    .join('\n\n');
   return [
     `# ${title}`,
     '',
     '## Summary',
     summary,
     '',
-    '## Signals',
-    signals,
+    '## Memory Signals',
+    memorySignals.join('\n'),
+    '',
+    '## Skill Signals',
+    skillSignals.join('\n'),
+    '',
+    '## Skill Details',
+    detailEntries,
     '',
     '## Extractions',
     typeof units === 'string' ? units : units.join('\n'),
   ].join('\n');
+}
+
+function emptySnapshotSignals() {
+  return {
+    memorySignals: [],
+    skillSignals: [],
+    skillDetails: '{}',
+  };
 }
 
 function makePersistedTurn(turnId, text = turnId) {
@@ -1265,7 +1329,6 @@ test('checkpoint preserves session runs', async () => {
       }],
     },
     sessionIndex: { baseline: { turn: 1, session: 1 }, entries: [] },
-    dreamingIndex: { baseline: { dreaming: 0 }, entries: [] },
   };
 
   const parsed = parseCheckpointFile(serializeCheckpointFile(file));
@@ -1333,8 +1396,8 @@ test('getPendingIndex returns the unindexed snapshot range', () => {
     title: 'Title',
     summary: 'Summary',
     snapshots: [
-      { extractions: [], contextRefs: [], openQuestions: [], nextSteps: [], extractionDelta: { before: [], after: [] } },
-      { extractions: [], contextRefs: [], openQuestions: [], nextSteps: [], extractionDelta: { before: [], after: [] } },
+      { extractions: [], contextRefs: [], nextSteps: [], extractionDelta: { before: [], after: [] } },
+      { extractions: [], contextRefs: [], nextSteps: [], extractionDelta: { before: [], after: [] } },
     ],
     snapshotIds: ['snapshot-0', 'snapshot-1'],
     indexedSnapshotSequence: 0,
@@ -1356,9 +1419,9 @@ test('getPendingIndexUpTo only reports snapshots at or before the barrier epoch'
     title: 'Title',
     summary: 'Summary',
     snapshots: [
-      { extractions: [], contextRefs: [], openQuestions: [], nextSteps: [], extractionDelta: { before: [], after: [] } },
-      { extractions: [], contextRefs: [], openQuestions: [], nextSteps: [], extractionDelta: { before: [], after: [] } },
-      { extractions: [], contextRefs: [], openQuestions: [], nextSteps: [], extractionDelta: { before: [], after: [] } },
+      { extractions: [], contextRefs: [], nextSteps: [], extractionDelta: { before: [], after: [] } },
+      { extractions: [], contextRefs: [], nextSteps: [], extractionDelta: { before: [], after: [] } },
+      { extractions: [], contextRefs: [], nextSteps: [], extractionDelta: { before: [], after: [] } },
     ],
     snapshotIds: ['snapshot-0', 'snapshot-1', 'snapshot-2'],
     snapshotEpochs: [6, 7, 8],
@@ -1390,7 +1453,7 @@ test('loadThreads filters snapshots by the configured active window', () => {
       extractor: 'default-extractor',
       title: 'Fresh thread',
       summary: 'Fresh summary',
-      signals: '',
+      ...emptySnapshotSignals(),
       content: snapshotContentFixture('', { title: 'Fresh thread', summary: 'Fresh summary' }),
       references: [],
     },
@@ -1406,7 +1469,7 @@ test('loadThreads filters snapshots by the configured active window', () => {
       extractor: 'default-extractor',
       title: 'Stale thread',
       summary: 'Stale summary',
-      signals: '',
+      ...emptySnapshotSignals(),
       content: snapshotContentFixture('', { title: 'Stale thread', summary: 'Stale summary' }),
       references: [],
     },
@@ -1434,7 +1497,7 @@ test('loadThreads keeps full history for active threads', () => {
       extractor: 'default-extractor',
       title: 'Thread',
       summary: 'Summary',
-      signals: '',
+      ...emptySnapshotSignals(),
       content: snapshotContentFixture('', { title: 'Thread', summary: 'Summary' }),
       references: [],
     },
@@ -1450,7 +1513,7 @@ test('loadThreads keeps full history for active threads', () => {
       extractor: 'default-extractor',
       title: 'Thread',
       summary: 'Summary',
-      signals: '',
+      ...emptySnapshotSignals(),
       content: snapshotContentFixture('', { title: 'Thread', summary: 'Summary' }),
       references: [],
     },
@@ -1504,8 +1567,8 @@ test('extractor.watermark stays unresolved when only extraction index work is pe
       title: 'Title',
       summary: 'Summary',
       snapshots: [
-        { extractions: [], contextRefs: [], openQuestions: [], nextSteps: [], extractionDelta: { before: [], after: [] } },
-        { extractions: [], contextRefs: [], openQuestions: [], nextSteps: [], extractionDelta: { before: [], after: [] } },
+        { extractions: [], contextRefs: [], nextSteps: [], extractionDelta: { before: [], after: [] } },
+        { extractions: [], contextRefs: [], nextSteps: [], extractionDelta: { before: [], after: [] } },
       ],
       references: [],
       indexedSnapshotSequence: 0,
@@ -1544,7 +1607,7 @@ test('extractor checkpoint export omits threads outside the active window', asyn
       extractionEpoch: 1,
       title: 'Fresh',
       summary: 'Fresh',
-      snapshots: [{ extractions: [], contextRefs: [], openQuestions: [], nextSteps: [], extractionDelta: { before: [], after: [] } }],
+      snapshots: [{ extractions: [], contextRefs: [], nextSteps: [], extractionDelta: { before: [], after: [] } }],
       references: [],
       indexedSnapshotSequence: 0,
       extractor: 'default-extractor',
@@ -1558,7 +1621,7 @@ test('extractor checkpoint export omits threads outside the active window', asyn
       extractionEpoch: 1,
       title: 'Stale',
       summary: 'Stale',
-      snapshots: [{ extractions: [], contextRefs: [], openQuestions: [], nextSteps: [], extractionDelta: { before: [], after: [] } }],
+      snapshots: [{ extractions: [], contextRefs: [], nextSteps: [], extractionDelta: { before: [], after: [] } }],
       references: [],
       indexedSnapshotSequence: 0,
       extractor: 'default-extractor',
@@ -1610,7 +1673,7 @@ test('extractor bootstrap without checkpoint derives committedEpoch from session
       extractor: 'default-extractor',
       title: 'Thread',
       summary: 'Summary',
-      signals: '',
+      ...emptySnapshotSignals(),
       content: snapshotContentFixture('', { title: 'Thread', summary: 'Summary' }),
       references: ['turn-13'],
     },
@@ -1626,7 +1689,7 @@ test('extractor bootstrap without checkpoint derives committedEpoch from session
       extractor: 'default-extractor',
       title: 'Thread',
       summary: 'Summary',
-      signals: '',
+      ...emptySnapshotSignals(),
       content: snapshotContentFixture('', { title: 'Thread', summary: 'Summary' }),
       references: ['turn-13', 'turn-14'],
     },
@@ -1753,7 +1816,7 @@ test('extractor bootstrap restores committed state from checkpoint when baseline
             extractor: 'default-extractor',
             title: 'Thread',
             summary: 'Summary',
-            signals: '',
+            ...emptySnapshotSignals(),
             content: snapshotContentFixture('', { title: 'Thread', summary: 'Summary' }),
             references: [],
           },
@@ -1769,7 +1832,7 @@ test('extractor bootstrap restores committed state from checkpoint when baseline
             extractor: 'default-extractor',
             title: 'Thread',
             summary: 'Summary',
-            signals: '',
+            ...emptySnapshotSignals(),
             content: snapshotContentFixture('', { title: 'Thread', summary: 'Summary' }),
             references: [],
           },
@@ -1861,7 +1924,7 @@ test('extractor checkpoint restore keeps full history for active threads', async
             extractor: 'default-extractor',
             title: 'Thread',
             summary: 'Summary',
-            signals: '',
+            ...emptySnapshotSignals(),
             content: snapshotContentFixture('', { title: 'Thread', summary: 'Summary' }),
             references: [],
           },
@@ -1877,7 +1940,7 @@ test('extractor checkpoint restore keeps full history for active threads', async
             extractor: 'default-extractor',
             title: 'Thread',
             summary: 'Summary',
-            signals: '',
+            ...emptySnapshotSignals(),
             content: snapshotContentFixture('', { title: 'Thread', summary: 'Summary' }),
             references: [],
           },
@@ -1950,7 +2013,7 @@ test('extractor restore advances committedEpoch and excludes extracted turns fro
             extractor: 'default-extractor',
             title: 'Thread',
             summary: 'Summary',
-            signals: '',
+            ...emptySnapshotSignals(),
             content: snapshotContentFixture('', { title: 'Thread', summary: 'Summary' }),
             references: ['turn-13'],
           },
@@ -1966,7 +2029,7 @@ test('extractor restore advances committedEpoch and excludes extracted turns fro
             extractor: 'default-extractor',
             title: 'Thread',
             summary: 'Summary',
-            signals: '',
+            ...emptySnapshotSignals(),
             content: snapshotContentFixture('', { title: 'Thread', summary: 'Summary' }),
             references: ['turn-13', 'turn-14'],
           },
@@ -1985,7 +2048,7 @@ test('extractor restore advances committedEpoch and excludes extracted turns fro
           extractor: 'default-extractor',
           title: 'Thread',
           summary: 'Summary',
-          signals: '',
+          ...emptySnapshotSignals(),
           content: snapshotContentFixture('', { title: 'Thread', summary: 'Summary' }),
           references: [],
         },
@@ -2001,7 +2064,7 @@ test('extractor restore advances committedEpoch and excludes extracted turns fro
           extractor: 'default-extractor',
           title: 'Thread',
           summary: 'Summary',
-          signals: '',
+          ...emptySnapshotSignals(),
           content: snapshotContentFixture('', { title: 'Thread', summary: 'Summary' }),
           references: ['turn-13'],
         },
@@ -2017,7 +2080,7 @@ test('extractor restore advances committedEpoch and excludes extracted turns fro
           extractor: 'default-extractor',
           title: 'Thread',
           summary: 'Summary',
-          signals: '',
+          ...emptySnapshotSignals(),
           content: snapshotContentFixture('', { title: 'Thread', summary: 'Summary' }),
           references: ['turn-13', 'turn-14'],
         },
@@ -2077,7 +2140,7 @@ test('extractor restore falls back when session delta refs are missing turn epoc
             extractor: 'default-extractor',
             title: 'Thread',
             summary: 'Summary',
-            signals: '',
+            ...emptySnapshotSignals(),
             content: snapshotContentFixture('', { title: 'Thread', summary: 'Summary' }),
             references: ['missing-turn'],
           },
@@ -2096,7 +2159,7 @@ test('extractor restore falls back when session delta refs are missing turn epoc
           extractor: 'default-extractor',
           title: 'Thread',
           summary: 'Summary',
-          signals: '',
+          ...emptySnapshotSignals(),
           content: snapshotContentFixture('', { title: 'Thread', summary: 'Summary' }),
           references: [],
         },
@@ -2138,7 +2201,7 @@ test('extractor restore skips stale threads resource only from session delta', a
     extractor: 'default-extractor',
     title: 'Stale Thread',
     summary: 'Summary',
-    signals: '',
+    ...emptySnapshotSignals(),
     content: snapshotContentFixture('', { title: 'Thread', summary: 'Summary' }),
     references: ['turn-13'],
   };
@@ -2188,7 +2251,7 @@ test('extractor restore rebuilds delta-only threads from full history', async (t
     extractor: 'default-extractor',
     title: 'Extraction Thread',
     summary: `Summary ${index}`,
-    signals: '',
+    ...emptySnapshotSignals(),
     content: snapshotContentFixture('', { title: 'Thread', summary: 'Summary' }),
     references: Array.from({ length: index + 1 }, (_, turnIndex) => `turn-${turnIndex + 1}`),
   }));
@@ -2329,7 +2392,7 @@ test('extractor exportCheckpoint keeps the last committed snapshot while extract
     title: 'Existing title',
     summary: 'Existing summary',
     snapshots: [
-      { extractions: [], contextRefs: [], openQuestions: [], nextSteps: [], extractionDelta: { before: [], after: [] } },
+      { extractions: [], contextRefs: [], nextSteps: [], extractionDelta: { before: [], after: [] } },
     ],
     references: ['session:existing'],
     indexedSnapshotSequence: 0,
@@ -2437,7 +2500,7 @@ test('extractor bootstrap ignores extraction version mismatches when session bas
           extractor: 'default-extractor',
           title: 'Thread',
           summary: 'Summary',
-          signals: '',
+          ...emptySnapshotSignals(),
           content: snapshotContentFixture('', { title: 'Thread', summary: 'Summary' }),
           references: [],
         },
@@ -2453,7 +2516,7 @@ test('extractor bootstrap ignores extraction version mismatches when session bas
           extractor: 'default-extractor',
           title: 'Thread',
           summary: 'Summary',
-          signals: '',
+          ...emptySnapshotSignals(),
           content: snapshotContentFixture('', { title: 'Thread', summary: 'Summary' }),
           references: [],
         },
@@ -2486,13 +2549,7 @@ test('readCheckpointFile throws when the checkpoint section is structurally inva
     writtenAt: '2024-01-01T00:00:00Z',
     writerPid: 123,
     extractor: makeExtractorCheckpoint({
-      threads: [{
-        sessionId: 'obs-1',
-        latestSnapshotId: 'turn:42',
-        latestSnapshotSequence: 'bad-sequence',
-        indexedSnapshotSequence: 1,
-        updatedAt: '2024-01-01T00:00:01Z',
-      }],
+      baseline: { turn: 'bad-turn-version' },
     }),
   }), null, 2)}\n`, 'utf8');
 
@@ -2590,7 +2647,7 @@ test('recallMemories searches extraction routes and enriches hits', async () => 
             extractor: 'default-extractor',
             title: 'Readable session title',
             summary: 'Readable summary',
-            signals: '',
+            ...emptySnapshotSignals(),
             content: 'Readable content',
             references: ['turn:session-2'],
           }]
@@ -2641,12 +2698,7 @@ test('recallMemories searches extraction routes and enriches hits', async () => 
     limit: 3,
     mode: 'hybrid',
   });
-  assert.deepEqual(calls[1][1], {
-    query: 'What are Caroline plans?',
-    vector: [1, 0],
-    limit: 3,
-    mode: 'hybrid',
-  });
+  assert.equal(calls.length, 1);
 });
 
 test('recallMemories supports fts mode without embedding the query', async () => {
@@ -3118,7 +3170,7 @@ test('extractor.extractCurrentEpoch keeps thread state unchanged when pre-commit
       title: 'Existing title',
       summary: 'Existing summary',
       snapshots: [
-        { extractions: [], contextRefs: [], openQuestions: [], nextSteps: [], extractionDelta: { before: [], after: [] } },
+        { extractions: [], contextRefs: [], nextSteps: [], extractionDelta: { before: [], after: [] } },
       ],
       references: ['turn:existing'],
       indexedSnapshotSequence: 0,
@@ -3176,7 +3228,6 @@ test('snapshot extraction state rewrite updates and deletes extraction rows', as
       { id: 'obs-a', title: 'Career plan', text: 'updated career memory', context: 'updated context', references: ['turn:2'] },
       { title: 'Painting preference', text: 'new painting memory', context: 'new context', references: ['turn:3'] },
     ],
-    openQuestions: [],
     nextSteps: [],
     contextRefs: [],
   });
@@ -3223,7 +3274,6 @@ test('extraction state rewrite computes update add and delete changes', () => {
       { id: 'obs-a', title: 'Career plan', text: 'updated career memory', references: ['turn:1', 'turn:3'] },
       { title: 'Painting preference', text: 'new painting memory', references: ['turn:4'] },
     ],
-    openQuestions: [],
     nextSteps: [],
     contextRefs: [],
   });
@@ -3244,7 +3294,6 @@ test('extraction state rewrite rejects unknown and duplicate ids', () => {
       title: 'T',
       snapshotContent: 'S',
       extractions: [{ id: 'missing', title: 'Updated', text: 'updated', references: ['turn:1'] }],
-      openQuestions: [],
       nextSteps: [],
       contextRefs: [],
     }),
@@ -3259,7 +3308,6 @@ test('extraction state rewrite rejects unknown and duplicate ids', () => {
         { id: 'obs-a', title: 'Updated', text: 'updated', references: ['turn:1'] },
         { id: 'obs-a', title: 'Duplicate', text: 'duplicate', references: ['turn:1'] },
       ],
-      openQuestions: [],
       nextSteps: [],
       contextRefs: [],
     }),
@@ -3286,8 +3334,42 @@ test('session extraction batch input uses turn headings without horizontal rules
   assert.match(rendered, /## Current Batch Turns/);
   assert.match(rendered, /### turn:1/);
   assert.match(rendered, /### turn:2/);
+  assert.match(rendered, /Prompt \(memory signal evidence\):\nFirst prompt/);
+  assert.match(rendered, /Response \(workflow context, not memory signal evidence\):\nFirst response/);
   assert.doesNotMatch(rendered, /^----$/m);
   assert.doesNotMatch(rendered, /Summary:/);
+});
+
+test('session extraction batch input previews long responses and Codex prompt plans', () => {
+  const longPlan = `${'p'.repeat(900)}middle${'q'.repeat(900)}`;
+  const longResponse = `${'a'.repeat(900)}middle${'z'.repeat(900)}`;
+  const rendered = extractorLlmTesting.renderNewTurnsBudgetForTests([{
+    turnId: '123',
+    prompt: `before <proposed_plan>${longPlan}</proposed_plan> after`,
+    response: longResponse,
+  }], { previewChars: 800 });
+
+  assert.match(rendered.markdown, /## Current Batch Turns/);
+  assert.match(rendered.markdown, /<proposed_plan>/);
+  assert.match(rendered.markdown, /prompt plan middle omitted; omittedChars=/);
+  assert.match(rendered.markdown, /response middle omitted; omittedChars=/);
+  assert.match(rendered.markdown, /get_turn turnId=123/);
+  assert.equal(rendered.turns[0].records.some((record) => record.reason === 'prompt-proposed-plan-preview'), true);
+  assert.equal(rendered.turns[0].records.some((record) => record.reason === 'response-preview'), true);
+});
+
+test('session extraction batch input folds response code and diff fences before response preview', () => {
+  const code = `\`\`\`ts\n${'const value = 1;\n'.repeat(120)}\`\`\``;
+  const diff = `\`\`\`diff\ndiff --git a/a b/a\n${'+ changed\n'.repeat(120)}\`\`\``;
+  const rendered = extractorLlmTesting.renderNewTurnsBudgetForTests([{
+    turnId: '456',
+    prompt: 'Inspect the generated response.',
+    response: `${code}\n\n${diff}`,
+  }], { previewChars: 300 });
+
+  assert.equal(rendered.turns[0].records.some((record) => record.reason === 'code-fence'), true);
+  assert.equal(rendered.turns[0].records.some((record) => record.reason === 'diff-log-or-command-output'), true);
+  assert.equal(rendered.turns[0].records.some((record) => record.reason === 'response-preview'), true);
 });
 
 test('indexPendingExtractions surfaces extraction write failures and leaves work pending', async (t) => {
@@ -3316,7 +3398,6 @@ test('indexPendingExtractions surfaces extraction write failures and leaves work
           snapshotContent: '',
           extractions: [],
           contextRefs: [],
-          openQuestions: [],
           nextSteps: [],
           extractionChanges: [],
         },
@@ -3327,7 +3408,6 @@ test('indexPendingExtractions surfaces extraction write failures and leaves work
           snapshotContent: '',
           extractions: [{ id: 'memory-1', text: 'remember this', category: 'Fact', references: ['session:existing'], updatedMemory: null }],
           contextRefs: [],
-          openQuestions: [],
           nextSteps: [],
           extractionChanges: [{
             type: 'update',
@@ -3397,7 +3477,6 @@ test('extractor validation derives extractions from titled snapshot content', ()
         title: 'Painting',
         summary: '',
         extractions: [],
-        openQuestions: [],
         nextSteps: [],
       },
       turns: [{
@@ -3466,25 +3545,21 @@ test('extractor validation preserves session-level signals in snapshot content',
     ].join('\n'), {
       title: 'Extractor Signals',
       summary: 'Extractor prompt design refined durable signal handling.',
-      signals: [
-        '### Guidance',
-        '',
-        '- [2] The user prefers concise Markdown signals under named subsections.',
-        '',
-        '### Skills',
-        '',
-        '- [1] Extractor signal prompt review:',
-        '  - Confirm parser support before asking the model to emit a new Markdown section.',
-        '',
-        '### Open Questions',
-      ].join('\n'),
+      memorySignals: [
+        '- [turn:13 +1] The user prefers concise Markdown signals under named subsections.',
+      ],
+      skillSignals: [
+        '- [turn:13 +1] Extractor signal review: Confirm parser support before asking the model to emit a new Markdown section.',
+      ],
+      skillDetails: {
+        'Extractor signal review': 'Confirm parser support before asking the model to emit a new Markdown section.',
+      },
     }),
     {
       sessionMemory: {
         title: 'Extractor Signals',
         summary: '',
         extractions: [],
-        openQuestions: [],
         nextSteps: [],
       },
       turns: [{
@@ -3494,22 +3569,226 @@ test('extractor validation preserves session-level signals in snapshot content',
     },
   );
 
-  assert.equal(result.signals, [
-    '### Guidance',
-    '',
-    '- [2] The user prefers concise Markdown signals under named subsections.',
-    '',
-    '### Skills',
-    '',
-    '- [1] Extractor signal prompt review:',
-    '  - Confirm parser support before asking the model to emit a new Markdown section.',
-    '',
-    '### Open Questions',
-  ].join('\n'));
+  assert.deepEqual(result.memorySignals, [
+    '- [turn:13 +1] The user prefers concise Markdown signals under named subsections.',
+  ]);
+  assert.deepEqual(result.skillSignals, [
+    '- [turn:13 +1] Extractor signal review: Confirm parser support before asking the model to emit a new Markdown section.',
+  ]);
+  assert.equal('openQuestions' in result, false);
+  assert.deepEqual(result.skillDetails, {
+    'Extractor signal review': 'Confirm parser support before asking the model to emit a new Markdown section.',
+  });
   assert.equal(result.extractions[0]?.context, '- Keep the signal recall-ready without a rigid pseudo-schema.');
-  assert.match(result.snapshotContent, /## Signals\n### Guidance/);
-  assert.match(result.snapshotContent, /\[2\] The user prefers concise Markdown signals/);
+  assert.match(result.snapshotContent, /## Memory Signals\n- \[turn:13 \+1\] The user prefers/);
+  assert.match(result.snapshotContent, /## Skill Signals\n- \[turn:13 \+1\] Extractor signal review:/);
+  assert.match(result.snapshotContent, /## Skill Details\n### Extractor signal review/);
+  assert.match(result.snapshotContent, /\[turn:13 \+1\] The user prefers concise Markdown signals/);
   assert.match(result.snapshotContent, /### Content\n- Keep the signal recall-ready/);
+});
+
+test('snapshot content round-trips split signal sections and skill details', () => {
+  const signals = {
+    memorySignals: [
+      '- [turn:13 +1] Keep TypeScript session state aligned with native snapshot rows.',
+    ],
+    skillSignals: [
+      '- [turn:13 +1] TypeScript native: Update native contracts and session snapshot state.',
+    ],
+    skillDetails: {
+      'TypeScript native': [
+        'Native rows expose split signal state.',
+        '',
+        'Session snapshots persist skill details as JSON.',
+      ].join('\n'),
+    },
+  };
+  const rendered = renderSnapshotContent(
+    'TypeScript Native Contracts',
+    'The TypeScript snapshot layer tracks split signal categories.',
+    signals,
+    [{
+      title: 'Native contract shape',
+      text: 'Session snapshots use split signal fields instead of a monolithic signals string.',
+      context: null,
+      references: ['turn:13'],
+    }],
+  );
+
+  assert.match(rendered, /## Memory Signals\n- \[turn:13 \+1\] Keep TypeScript session state/);
+  assert.match(rendered, /## Skill Signals\n- \[turn:13 \+1\] TypeScript native:/);
+  assert.doesNotMatch(rendered, /## Open Questions/);
+  assert.match(rendered, /## Skill Details\n### TypeScript native/);
+
+  const parsed = parseSnapshotContent(rendered, new Set(['turn:13']));
+  assert.deepEqual(parsed.memorySignals, signals.memorySignals);
+  assert.deepEqual(parsed.skillSignals, signals.skillSignals);
+  assert.equal('openQuestions' in parsed, false);
+  assert.deepEqual(parsed.skillDetails, signals.skillDetails);
+});
+
+test('snapshot content rejects removed Open Questions section', () => {
+  assert.throws(
+    () => parseSnapshotContent([
+      '# Parser Boundaries',
+      '',
+      '## Summary',
+      'Summary.',
+      '',
+      '## Memory Signals',
+      '',
+      '## Skill Signals',
+      '',
+      '## Open Questions',
+      '- [1] Should old signal sections be rejected?',
+      '',
+      '## Skill Details',
+      '',
+      '## Extractions',
+    ].join('\n'), new Set()),
+    /unsupported snapshot content document heading: ## Open Questions/i,
+  );
+});
+
+test('snapshot parser treats skill details and extractions as section boundaries', () => {
+  const signals = {
+    memorySignals: [],
+    skillSignals: [
+      '- [turn:13 +1] TypeScript native: Preserve headings inside detail bodies.',
+    ],
+    skillDetails: {
+      'TypeScript native': [
+        'Skill detail can mention a heading-like line.',
+        '',
+        '## Summary',
+        'This belongs to the skill detail body.',
+      ].join('\n'),
+    },
+  };
+  const rendered = renderSnapshotContent(
+    'Parser Boundaries',
+    'The parser keeps nested heading-like content inside the owning section.',
+    signals,
+    [{
+      title: 'Extraction heading content',
+      text: 'Extraction content can contain heading-like Markdown.',
+      context: [
+        'Context can mention a snapshot heading.',
+        '',
+        '## Memory Signals',
+        'This belongs to extraction content.',
+      ].join('\n'),
+      references: ['turn:13'],
+    }],
+  );
+
+  const parsed = parseSnapshotContent(rendered, new Set(['turn:13']));
+  assert.equal(parsed.skillDetails['TypeScript native'], signals.skillDetails['TypeScript native']);
+  assert.equal(parsed.extractions[0].context, [
+    'Context can mention a snapshot heading.',
+    '',
+    '## Memory Signals',
+    'This belongs to extraction content.',
+  ].join('\n'));
+});
+
+test('snapshot parser rejects unknown top-level sections before extractions', () => {
+  assert.throws(
+    () => parseSnapshotContent([
+      '# Parser Boundaries',
+      '',
+      '## Summary',
+      'The parser rejects legacy signal sections.',
+      '',
+      '## Signals',
+      '- [2] Legacy signal section.',
+      '',
+      '## Extractions',
+      '<!-- refs: [turn:13] -->',
+      '### Title',
+      'Parser boundary',
+      '',
+      '### Summary',
+      'Legacy signal sections are not accepted.',
+    ].join('\n'), new Set(['turn:13'])),
+    /unsupported snapshot content document heading: ## Signals/i,
+  );
+
+  assert.throws(
+    () => extractorLlmTesting.validateSessionExtractionResultForTests([
+      '## Signals',
+      '- [2] Legacy signal section.',
+    ].join('\n'), {
+      sessionMemory: {
+        title: 'Parser Boundaries',
+        summary: 'The parser rejects legacy signal sections.',
+        extractions: [],
+        nextSteps: [],
+      },
+      turns: [{ turnId: 'turn:13', summary: 'The user requested current schema only.' }],
+    }),
+    /unsupported snapshot patch heading: ## Signals/i,
+  );
+});
+
+test('snapshot parser rejects invalid skill signal and unmatched skill detail names', () => {
+  assert.throws(
+    () => parseSnapshotContent(snapshotContentFixture('', {
+      title: 'Skill Signals',
+      summary: 'Skill signal names are validated.',
+    skillSignals: [
+      '- [turn:13 +1] `Invalid Skill`: Skill names should not be wrapped in backticks.',
+    ],
+    }), new Set(['turn:13'])),
+    /invalid skill signal name: `Invalid Skill`/i,
+  );
+
+  assert.throws(
+    () => parseSnapshotContent(snapshotContentFixture('', {
+      title: 'Skill Details',
+      summary: 'Skill details must match skill signal names.',
+      skillSignals: [
+        '- [turn:13 +1] TypeScript native: Valid skill signal.',
+      ],
+      skillDetails: {
+        'TypeScript parser': 'This detail does not have a matching Skill Signal card.',
+      },
+    }), new Set(['turn:13'])),
+    /Skill Details key lacks matching ## Skill Signals card: TypeScript parser/i,
+  );
+});
+
+test('session snapshot deserialization rejects invalid skillDetails JSON', () => {
+  const row = (skillDetails) => ({
+    snapshotId: 'snapshot-invalid-skill-details',
+    sessionId: 'session-invalid-skill-details',
+    project: 'project-a',
+    cwd: '/workspace/project-a',
+    agent: 'agent-a',
+    snapshotSequence: 0,
+    createdAt: '2024-01-01T00:00:00Z',
+    updatedAt: '2024-01-01T00:00:00Z',
+    extractor: 'default-extractor',
+    title: 'Invalid skill details',
+    summary: 'Skill details JSON is validated.',
+    memorySignals: [],
+    skillSignals: [],
+    skillDetails,
+    content: snapshotContentFixture('', {
+      title: 'Invalid skill details',
+      summary: 'Skill details JSON is validated.',
+    }),
+    references: [],
+  });
+
+  assert.throws(
+    () => loadThreads([row('[]')], 'default-extractor', 7),
+    /skillDetails JSON must be an object/i,
+  );
+  assert.throws(
+    () => loadThreads([row('{"TypeScript native":1}')], 'default-extractor', 7),
+    /skillDetails value must be a string: TypeScript native/i,
+  );
 });
 
 test('snapshot patch can preserve, replace, and clear session-level signals', () => {
@@ -3517,17 +3796,16 @@ test('snapshot patch can preserve, replace, and clear session-level signals', ()
     sessionMemory: {
       title: 'Extractor Signals',
       summary: 'Extractor prompt design.',
-      signals: [
-        '### Guidance',
-        '',
-        '- [2] Keep signal bullets under named subsections.',
-        '',
-        '### Skills',
-        '',
-        '### Open Questions',
-      ].join('\n'),
+      memorySignals: [
+        '- [turn:13 +1] Keep signal bullets under named subsections.',
+      ],
+      skillSignals: [
+        '- [turn:13 +1] Extractor signal review: Preserve parser support notes.',
+      ],
+      skillDetails: {
+        'Extractor signal review': 'Preserve parser support notes.',
+      },
       extractions: [],
-      openQuestions: [],
       nextSteps: [],
     },
     turns: [{
@@ -3540,41 +3818,101 @@ test('snapshot patch can preserve, replace, and clear session-level signals', ()
     '## Summary',
     'Extractor prompt design continues.',
   ].join('\n'), baseInput);
-  assert.equal(preserved.signals, [
-    '### Guidance',
-    '',
-    '- [2] Keep signal bullets under named subsections.',
-    '',
-    '### Skills',
-    '',
-    '### Open Questions',
-  ].join('\n'));
+  assert.deepEqual(preserved.memorySignals, [
+    '- [turn:13 +1] Keep signal bullets under named subsections.',
+  ]);
+  assert.deepEqual(preserved.skillSignals, [
+    '- [turn:13 +1] Extractor signal review: Preserve parser support notes.',
+  ]);
+  assert.equal('openQuestions' in preserved, false);
+  assert.deepEqual(preserved.skillDetails, {
+    'Extractor signal review': 'Preserve parser support notes.',
+  });
 
   const replaced = extractorLlmTesting.validateSessionExtractionResultForTests([
-    '## Signals',
-    '### Guidance',
+    '## Memory Signals',
+    '- [turn:13 +1] Signals are session-level state.',
     '',
-    '- [2] Signals are session-level state.',
+    '## Skill Signals',
+    '- [turn:13 +1] Extractor patch: Patch parsing replaces signal state.',
     '',
-    '### Skills',
-    '',
-    '### Open Questions',
+    '## Skill Details',
+    '### Extractor patch',
+    'Patch parsing replaces signal state.',
   ].join('\n'), baseInput);
-  assert.equal(replaced.signals, [
-    '### Guidance',
-    '',
-    '- [2] Signals are session-level state.',
-    '',
-    '### Skills',
-    '',
-    '### Open Questions',
-  ].join('\n'));
+  assert.deepEqual(replaced.memorySignals, [
+    '- [turn:13 +1] Signals are session-level state.',
+  ]);
+  assert.deepEqual(replaced.skillSignals, [
+    '- [turn:13 +1] Extractor patch: Patch parsing replaces signal state.',
+  ]);
+  assert.equal('openQuestions' in replaced, false);
+  assert.deepEqual(replaced.skillDetails, {
+    'Extractor patch': 'Patch parsing replaces signal state.',
+  });
 
   const cleared = extractorLlmTesting.validateSessionExtractionResultForTests([
-    '## Signals',
+    '## Memory Signals',
+    '',
+    '## Skill Signals',
     '',
   ].join('\n'), baseInput);
-  assert.equal(cleared.signals, '');
+  assert.deepEqual(cleared.memorySignals, []);
+  assert.deepEqual(cleared.skillSignals, []);
+  assert.deepEqual(cleared.skillDetails, {});
+
+  assert.throws(
+    () => extractorLlmTesting.validateSessionExtractionResultForTests([
+      '## Open Questions',
+      '- [1] Should old signal sections be rejected?',
+    ].join('\n'), baseInput),
+    /unsupported snapshot patch heading: ## Open Questions/i,
+  );
+
+  const deleted = extractorLlmTesting.validateSessionExtractionResultForTests([
+    '## Skill Details',
+    '### Extractor signal review',
+  ].join('\n'), baseInput);
+  assert.deepEqual(deleted.skillDetails, {});
+
+  assert.throws(
+    () => extractorLlmTesting.validateSessionExtractionResultForTests([
+      '## Skill Details',
+      '### Missing skill',
+      'Patch-provided detail must not be silently dropped.',
+    ].join('\n'), baseInput),
+    /Skill Details key lacks matching ## Skill Signals card: Missing skill/i,
+  );
+
+  const existingEvidenceInput = {
+    ...baseInput,
+    sessionMemory: {
+      ...baseInput.sessionMemory,
+      memorySignals: [
+        '- [turn:12 +1] Preserve exact existing evidence contribution.',
+      ],
+      skillSignals: [],
+      skillDetails: {},
+    },
+    turns: [{
+      turnId: 'turn:13',
+      summary: 'The user refined extractor signal handling.',
+    }],
+  };
+  assert.deepEqual(
+    extractorLlmTesting.validateSessionExtractionResultForTests([
+      '## Memory Signals',
+      '- [turn:12 +1] Preserve exact existing evidence contribution.',
+    ].join('\n'), existingEvidenceInput).memorySignals,
+    ['- [turn:12 +1] Preserve exact existing evidence contribution.'],
+  );
+  assert.throws(
+    () => extractorLlmTesting.validateSessionExtractionResultForTests([
+      '## Memory Signals',
+      '- [turn:12 +10] Preserve exact existing evidence contribution.',
+    ].join('\n'), existingEvidenceInput),
+    /referenced unknown evidence turn id: turn:12/i,
+  );
 });
 
 test('extractor validation keeps independent refs per snapshot content unit', () => {
@@ -3604,7 +3942,6 @@ test('extractor validation keeps independent refs per snapshot content unit', ()
         title: 'IngestSession',
         summary: '',
         extractions: [],
-        openQuestions: [],
         nextSteps: [],
       },
       turns: [
@@ -3646,7 +3983,6 @@ test('extractor validation splits adjacent metadata snapshot units without separ
         title: 'IngestSession',
         summary: '',
         extractions: [],
-        openQuestions: [],
         nextSteps: [],
       },
       turns: [
@@ -3676,8 +4012,8 @@ test('session extraction turn input omits turn summary when prompt and response 
   }]);
 
   assert.match(markdown, /## Current Batch Turns/);
-  assert.match(markdown, /Prompt:\nUser asked whether app session rows should use snapshot titles\./);
-  assert.match(markdown, /Response:\nAgent confirmed the session index should cache the latest snapshot title\./);
+  assert.match(markdown, /Prompt \(memory signal evidence\):\nUser asked whether app session rows should use snapshot titles\./);
+  assert.match(markdown, /Response \(workflow context, not memory signal evidence\):\nAgent confirmed the session index should cache the latest snapshot title\./);
   assert.doesNotMatch(markdown, /Summary:/);
   assert.doesNotMatch(markdown, /This old turn summary repeats/);
 });
@@ -3705,7 +4041,6 @@ test('extractor validation accepts markdown fenced snapshot content', () => {
         title: 'Painting',
         summary: '',
         extractions: [],
-        openQuestions: [],
         nextSteps: [],
       },
       turns: [{ turnId: 'turn:13', summary: 'Melanie discussed painting.' }],
@@ -3719,75 +4054,37 @@ test('extractor validation accepts markdown fenced snapshot content', () => {
   assert.deepEqual(result.extractions[0].references, ['turn:13']);
 });
 
-test('extractor validation rejects session signals after extractions', () => {
-  assert.throws(
-    () => extractorLlmTesting.validateSessionExtractionResultForTests([
-      '# Painting Memory',
-      '',
-      '## Summary',
-      'Melanie discussed a lake sunrise painting.',
-      '',
-      '## Extractions',
-      '<!-- refs: [turn:13] -->',
-      '### Title',
-      'Lake sunrise painting',
-      '',
-      '### Summary',
-      'Melanie painted a lake sunrise in 2022.',
-      '',
-      '## Signals',
-      '### Guidance',
-      '',
-      '- [2] Keep signals before extractions.',
-      '',
-      '### Skills',
-      '',
-      '### Open Questions',
-    ].join('\n'), {
-      sessionMemory: {
-        title: 'Painting',
-        summary: '',
-        extractions: [],
-        openQuestions: [],
-        nextSteps: [],
-      },
-      turns: [{ turnId: 'turn:13', summary: 'Melanie discussed painting.' }],
-    }),
-    /order ## Signals before ## Extractions/i,
-  );
-});
+test('snapshot patch allows signal-like headings inside extraction content', () => {
+  const result = extractorLlmTesting.validateSessionExtractionResultForTests([
+    '## Extractions',
+    '<!-- refs: [turn:13] -->',
+    '### Title',
+    'Lake sunrise painting',
+    '',
+    '### Summary',
+    'Melanie painted a lake sunrise in 2022.',
+    '',
+    '### Content',
+    'The extraction context can include a heading-like line.',
+    '',
+    '## Memory Signals',
+    'This is extraction content, not a snapshot signal section.',
+  ].join('\n'), {
+    sessionMemory: {
+      title: 'Painting',
+      summary: '',
+      extractions: [],
+      nextSteps: [],
+    },
+    turns: [{ turnId: 'turn:13', summary: 'Melanie discussed painting.' }],
+  });
 
-test('snapshot patch rejects session signals after extractions', () => {
-  assert.throws(
-    () => extractorLlmTesting.validateSessionExtractionResultForTests([
-      '## Extractions',
-      '<!-- refs: [turn:13] -->',
-      '### Title',
-      'Lake sunrise painting',
-      '',
-      '### Summary',
-      'Melanie painted a lake sunrise in 2022.',
-      '',
-      '## Signals',
-      '### Guidance',
-      '',
-      '- [2] Keep signals before extractions.',
-      '',
-      '### Skills',
-      '',
-      '### Open Questions',
-    ].join('\n'), {
-      sessionMemory: {
-        title: 'Painting',
-        summary: '',
-        extractions: [],
-        openQuestions: [],
-        nextSteps: [],
-      },
-      turns: [{ turnId: 'turn:13', summary: 'Melanie discussed painting.' }],
-    }),
-    /order ## Signals before ## Extractions/i,
-  );
+  assert.equal(result.extractions[0].context, [
+    'The extraction context can include a heading-like line.',
+    '',
+    '## Memory Signals',
+    'This is extraction content, not a snapshot signal section.',
+  ].join('\n'));
 });
 
 test('extractor validation rejects snapshot content units without metadata', () => {
@@ -3799,7 +4096,6 @@ test('extractor validation rejects snapshot content units without metadata', () 
           title: 'Painting',
           summary: '',
           extractions: [],
-          openQuestions: [],
           nextSteps: [],
         },
         turns: [{ turnId: 'turn:13', summary: 'Melanie discussed painting.' }],
@@ -3818,7 +4114,6 @@ test('extractor validation rejects legacy snapshot content format', () => {
           title: 'Painting',
           summary: '',
           extractions: [],
-          openQuestions: [],
           nextSteps: [],
         },
         turns: [{ turnId: 'turn:13', summary: 'Melanie discussed painting.' }],
@@ -3837,7 +4132,6 @@ test('extractor validation rejects snapshot content units without title', () => 
           title: 'Painting',
           summary: '',
           extractions: [],
-          openQuestions: [],
           nextSteps: [],
         },
         turns: [{ turnId: 'turn:13', summary: 'Melanie discussed painting.' }],
@@ -3856,7 +4150,6 @@ test('extractor validation rejects unknown snapshot content refs', () => {
           title: 'Painting',
           summary: '',
           extractions: [],
-          openQuestions: [],
           nextSteps: [],
         },
         turns: [{ turnId: 'turn:13', summary: 'Melanie discussed painting.' }],
@@ -3875,7 +4168,6 @@ test('extractor validation rejects snapshot content units without refs metadata'
           title: 'Painting',
           summary: '',
           extractions: [],
-          openQuestions: [],
           nextSteps: [],
         },
         turns: [{ turnId: 'turn:13', summary: 'Melanie discussed painting.' }],
@@ -3890,7 +4182,6 @@ test('extractor validation rejects JSON output', () => {
     () => extractorLlmTesting.validateSessionExtractionResultForTests(JSON.stringify({
       title: 'Painting',
       snapshotContent: '<!-- refs: [turn:13] -->\n### Title\nPainting\n\n### Summary\nMelanie painted a lake sunrise.',
-      openQuestions: [],
       nextSteps: [],
       contextRefs: [],
     })),
@@ -3904,7 +4195,7 @@ test('extractor validation accepts long titles without runtime length rejection'
       `<!-- refs: [turn:13] -->\n### Title\n${'x'.repeat(81)}\n\n### Summary\nMelanie painted a lake sunrise in 2022.`,
     ),
     {
-      sessionMemory: { title: 'Painting', summary: '', extractions: [], openQuestions: [], nextSteps: [] },
+      sessionMemory: { title: 'Painting', summary: '', extractions: [], nextSteps: [] },
       turns: [{ turnId: 'turn:13', summary: 'Melanie discussed painting.' }],
     },
   );
@@ -3920,7 +4211,6 @@ test('extractor validation rejects snapshot content units without summary', () =
           title: 'Painting',
           summary: '',
           extractions: [],
-          openQuestions: [],
           nextSteps: [],
         },
         turns: [{ turnId: 'turn:13', summary: 'Melanie discussed painting.' }],
@@ -3972,7 +4262,6 @@ test('thread session get_extraction expands visible extraction sequences only', 
         category: 'Other',
         references: ['turn:0'],
       }],
-      openQuestions: [],
       nextSteps: [],
     },
     turns: [{
@@ -4024,7 +4313,9 @@ test('thread session get_extraction expands visible extraction sequences only', 
   assert.match(firstUserMessage.content, /## Current Snapshot/);
   assert.match(firstUserMessage.content, /# Caroline support group/);
   assert.match(firstUserMessage.content, /## Summary/);
-  assert.match(firstUserMessage.content, /## Signals\n\(empty\)/);
+  assert.match(firstUserMessage.content, /## Memory Signals\n\(empty\)/);
+  assert.match(firstUserMessage.content, /## Skill Signals\n\(empty\)/);
+  assert.doesNotMatch(firstUserMessage.content, /## Open Questions/);
   assert.match(firstUserMessage.content, /## Extractions/);
   assert.match(firstUserMessage.content, /### Title/);
   assert.match(firstUserMessage.content, /### Summary/);
@@ -4052,6 +4343,269 @@ test('thread session get_extraction expands visible extraction sequences only', 
   assert.equal(trace.extractions[0].text, 'Caroline attended an LGBTQ support group on 7 May 2023.');
   assert.match(trace.finalText, /## Summary/);
   assert.match(trace.finalText, /Caroline attended an LGBTQ support group on 7 May 2023/);
+});
+
+test('thread session get_skill reads hidden skill details once per skill name', async (t) => {
+  const { dir, homeDir, configPath } = await makeConfigHome();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+
+  process.env.MUNINN_HOME = homeDir;
+  await writeOpenAiExtractorConfig(configPath);
+  const tracePath = path.join(dir, 'thread-session-skill-trace.jsonl');
+  process.env.MUNINN_SESSION_MEMORY_TRACE_FILE = tracePath;
+  t.after(() => {
+    delete process.env.MUNINN_SESSION_MEMORY_TRACE_FILE;
+  });
+
+  const skillDetail = [
+    '# Report export triage',
+    '',
+    '## When to Use',
+    'Use when report export jobs fail.',
+    '',
+    '## Procedure',
+    '- Check job logs before object storage permissions.',
+  ].join('\n');
+  const requests = [];
+  const result = await extractorLlmModule.extractSessionMemory({
+    sessionMemory: {
+      title: 'Report exports',
+      summary: 'Report export failures use reusable triage guidance.',
+      memorySignals: [],
+      skillSignals: [
+        '- [turn:1 +1] Report export triage: Triage report export failures by checking job logs before object storage permissions.',
+      ],
+      skillDetails: {
+        'Report export triage': skillDetail,
+      },
+      extractions: [],
+      nextSteps: [],
+    },
+    turns: [{
+      turnId: 'turn:1',
+      prompt: 'Rename the report export triage skill only if its hidden detail still supports the new name.',
+      response: 'I will inspect the hidden skill detail before deciding whether to rename it.',
+    }],
+  }, undefined, {
+    model: async (_task, request) => {
+      requests.push(request);
+      if (requests.length === 1) {
+        return {
+          type: 'tool_calls',
+          toolCalls: [{
+            id: 'call-1',
+            name: 'get_skill',
+            arguments: { skillName: 'Report export triage' },
+          }, {
+            id: 'call-2',
+            name: 'get_skill',
+            arguments: { skillName: 'Report export triage' },
+          }],
+        };
+      }
+      return {
+        type: 'final',
+        text: [
+          '## Summary',
+          'Report export failures continue to use reusable triage guidance.',
+        ].join('\n'),
+      };
+    },
+  });
+
+  assert.deepEqual(requests[0].tools.map((tool) => tool.name), ['get_extraction', 'get_skill', 'get_turn']);
+  const getSkillSpec = requests[0].tools.find((tool) => tool.name === 'get_skill');
+  assert.ok(getSkillSpec);
+  assert.match(getSkillSpec.description, /hidden detail/i);
+  assert.equal(getSkillSpec.parameters.properties.skillName.type, 'string');
+
+  const firstUserMessage = requests[0].messages.find((message) => message.role === 'user');
+  assert.ok(firstUserMessage);
+  assert.match(firstUserMessage.content, /## Skill Signals\n- \[turn:1 \+1\] Report export triage:/);
+  assert.doesNotMatch(firstUserMessage.content, /## Skill Details/);
+  assert.doesNotMatch(firstUserMessage.content, /Check job logs before object storage permissions/);
+
+  const toolMessages = requests[1].messages.filter((message) => message.role === 'tool');
+  assert.equal(toolMessages.length, 2);
+  assert.deepEqual(JSON.parse(toolMessages[0].content), {
+    skillName: 'Report export triage',
+    content: skillDetail,
+  });
+  assert.deepEqual(JSON.parse(toolMessages[1].content), {
+    skillName: 'Report export triage',
+    error: 'skill already read',
+  });
+  assert.deepEqual(result.skillDetails, {
+    'Report export triage': skillDetail,
+  });
+
+  const trace = JSON.parse(await readFile(tracePath, 'utf8'));
+  assert.deepEqual(trace.readSkillNames, ['Report export triage']);
+  assert.equal(trace.toolCalls[0].name, 'get_skill');
+});
+
+test('thread session get_turn reads only current batch prompt and response with bounded result shape', async (t) => {
+  const { dir, homeDir, configPath } = await makeConfigHome();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+
+  process.env.MUNINN_HOME = homeDir;
+  await writeOpenAiExtractorConfig(configPath);
+  const tracePath = path.join(dir, 'thread-session-turn-trace.jsonl');
+  process.env.MUNINN_SESSION_MEMORY_TRACE_FILE = tracePath;
+  t.after(() => {
+    delete process.env.MUNINN_SESSION_MEMORY_TRACE_FILE;
+  });
+
+  const requests = [];
+  await extractorLlmModule.extractSessionMemory({
+    sessionMemory: {
+      title: 'Turn lookup',
+      summary: 'Turn lookup test.',
+      memorySignals: [],
+      skillSignals: [],
+      skillDetails: {},
+      extractions: [],
+      nextSteps: [],
+    },
+    turns: [{
+      turnId: '123',
+      prompt: '用户说这个方案需要看完整 prompt。',
+      response: '这里是完整 response。',
+    }],
+  }, undefined, {
+    model: async (_task, request) => {
+      requests.push(request);
+      if (requests.length === 1) {
+        return {
+          type: 'tool_calls',
+          toolCalls: [{
+            id: 'call-1',
+            name: 'get_turn',
+            arguments: { turnId: '123' },
+          }, {
+            id: 'call-2',
+            name: 'get_turn',
+            arguments: { turnId: '999' },
+          }],
+        };
+      }
+      return {
+        type: 'final',
+        text: [
+          '## Summary',
+          'Turn lookup stays available for omitted prompt or response details.',
+        ].join('\n'),
+      };
+    },
+  });
+
+  const getTurnSpec = requests[0].tools.find((tool) => tool.name === 'get_turn');
+  assert.ok(getTurnSpec);
+  assert.match(getTurnSpec.description, /current-batch turn/i);
+  assert.equal(getTurnSpec.parameters.properties.turnId.type, 'string');
+
+  const toolMessages = requests[1].messages.filter((message) => message.role === 'tool');
+  assert.deepEqual(JSON.parse(toolMessages[0].content), {
+    turnId: '123',
+    prompt: '用户说这个方案需要看完整 prompt。',
+    response: '这里是完整 response。',
+  });
+  assert.deepEqual(JSON.parse(toolMessages[1].content), {
+    turnId: '999',
+    error: 'turn is not in the current extraction request',
+  });
+  assert.equal(Object.prototype.hasOwnProperty.call(JSON.parse(toolMessages[0].content), 'omittedPromptChars'), false);
+
+  const trace = JSON.parse(await readFile(tracePath, 'utf8'));
+  assert.equal(trace.getTurnResults[0].turnId, '123');
+  assert.equal(trace.getTurnResults[0].returnedPromptChars > 0, true);
+  assert.equal(trace.getTurnResults[1].error, 'turn is not in the current extraction request');
+});
+
+test('thread session get_skill does not mark missing or invalid skills as read', async (t) => {
+  const { dir, homeDir, configPath } = await makeConfigHome();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+
+  process.env.MUNINN_HOME = homeDir;
+  await writeOpenAiExtractorConfig(configPath);
+  const tracePath = path.join(dir, 'thread-session-missing-skill-trace.jsonl');
+  process.env.MUNINN_SESSION_MEMORY_TRACE_FILE = tracePath;
+  t.after(() => {
+    delete process.env.MUNINN_SESSION_MEMORY_TRACE_FILE;
+  });
+
+  const requests = [];
+  await extractorLlmModule.extractSessionMemory({
+    sessionMemory: {
+      title: 'Report exports',
+      summary: 'Report export failures use reusable triage guidance.',
+      memorySignals: [],
+      skillSignals: [
+        '- [turn:1 +1] Report export triage: Triage report export failures by checking job logs before object storage permissions.',
+      ],
+      skillDetails: {},
+      extractions: [],
+      nextSteps: [],
+    },
+    turns: [{
+      turnId: 'turn:1',
+      prompt: 'Check hidden skill detail only when it exists.',
+      response: 'Missing skill names should not count as read.',
+    }],
+  }, undefined, {
+    model: async (_task, request) => {
+      requests.push(request);
+      if (requests.length === 1) {
+        return {
+          type: 'tool_calls',
+          toolCalls: [{
+            id: 'call-1',
+            name: 'get_skill',
+            arguments: { skillName: 'missing.skill' },
+          }, {
+            id: 'call-2',
+            name: 'get_skill',
+            arguments: { skillName: 'missing.skill' },
+          }, {
+            id: 'call-3',
+            name: 'get_skill',
+            arguments: { skillName: 'Invalid: Skill' },
+          }, {
+            id: 'call-4',
+            name: 'get_skill',
+            arguments: {},
+          }],
+        };
+      }
+      return {
+        type: 'final',
+        text: [
+          '## Summary',
+          'Report export failures use reusable triage guidance.',
+        ].join('\n'),
+      };
+    },
+  });
+
+  const toolMessages = requests[1].messages.filter((message) => message.role === 'tool');
+  assert.equal(toolMessages.length, 4);
+  assert.deepEqual(JSON.parse(toolMessages[0].content), {
+    skillName: 'missing.skill',
+    error: 'skill signal not found',
+  });
+  assert.deepEqual(JSON.parse(toolMessages[1].content), {
+    skillName: 'missing.skill',
+    error: 'skill signal not found',
+  });
+  assert.deepEqual(JSON.parse(toolMessages[2].content), {
+    error: 'skillName is required',
+  });
+  assert.deepEqual(JSON.parse(toolMessages[3].content), {
+    error: 'skillName is required',
+  });
+
+  const trace = JSON.parse(await readFile(tracePath, 'utf8'));
+  assert.deepEqual(trace.readSkillNames, []);
 });
 
 test('thread session can create unrelated extraction without get_extraction', async (t) => {
@@ -4088,7 +4642,6 @@ test('thread session can create unrelated extraction without get_extraction', as
         category: 'Other',
         references: ['turn:0'],
       }],
-      openQuestions: [],
       nextSteps: [],
     },
     turns: [{
@@ -4145,7 +4698,6 @@ test('thread session requires get_extraction before updating an existing sequenc
         category: 'Other',
         references: ['turn:0'],
       }],
-      openQuestions: [],
       nextSteps: [],
     },
     turns: [{
@@ -4222,7 +4774,6 @@ test('thread session allows at most five get_extraction calls', async (t) => {
           category: 'Other',
           references: ['turn:0'],
         }],
-        openQuestions: [],
         nextSteps: [],
       },
       turns: [{
@@ -4262,7 +4813,6 @@ test('thread session omits generated default session title from memory input', a
       summary: 'Default session memory thread for session group-a.',
       snapshotContent: '',
       extractions: [],
-      openQuestions: [],
       nextSteps: [],
     },
     turns: [{
@@ -4310,7 +4860,6 @@ test('thread session traces invalid markdown attempts without JSON retry instruc
       title: 'Caroline support group',
       summary: '',
       extractions: [],
-      openQuestions: [],
       nextSteps: [],
     },
     turns: [{
@@ -4350,6 +4899,10 @@ test('thread session traces invalid markdown attempts without JSON retry instruc
   assert.ok(retryUserMessage);
   assert.match(retryUserMessage.content, /Previous output was invalid/);
   assert.match(retryUserMessage.content, /Return only a valid Markdown snapshot patch/);
+  assert.match(retryUserMessage.content, /optional `## Memory Signals`/);
+  assert.match(retryUserMessage.content, /optional `## Skill Signals`/);
+  assert.doesNotMatch(retryUserMessage.content, /optional `## Open Questions`/);
+  assert.match(retryUserMessage.content, /optional `## Skill Details`/);
   assert.doesNotMatch(retryUserMessage.content, /Return one JSON object only/);
 
   const traceLines = (await readFile(tracePath, 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
@@ -4374,7 +4927,6 @@ test('thread session omits default session summary from memory input', async (t)
       title: 'Session locomo',
       summary: 'Default session thread for session locomo:conv-26:session_1.',
       extractions: [],
-      openQuestions: [],
       nextSteps: [],
     },
     turns: [{
@@ -4422,7 +4974,6 @@ test('thread session inlines chat memory categories', async (t) => {
       title: 'Caroline support group',
       summary: 'Caroline discussed a support group.',
       extractions: [],
-      openQuestions: [],
       nextSteps: [],
     },
     turns: [{
@@ -4473,7 +5024,6 @@ test('session snapshots keep complete cumulative context refs', () => {
     title: 'Career',
     snapshotContent: '',
     extractions: [],
-    openQuestions: [],
     nextSteps: [],
     contextRefs: [{ turnId, summary }],
   });
@@ -4529,7 +5079,6 @@ test('session context refs update duplicate turn summaries without duplicates', 
     title: 'Career',
     snapshotContent: '',
     extractions: [],
-    openQuestions: [],
     nextSteps: [],
     contextRefs: [{ turnId: 'turn:1', summary }],
   });
@@ -4585,14 +5134,15 @@ test('session snapshot persists markdown content with parsed title and summary',
     {
       title: 'Melanie Painting',
       summary: 'Melanie painted a lake sunrise and considers it special.',
-      signals: 'Melanie values art that captures important personal moments.',
+      memorySignals: ['- [turn:1 +1] Melanie values art that captures important personal moments.'],
+      skillSignals: [],
+      skillDetails: {},
       snapshotContent: markdown,
       extractions: [{
         text: 'Melanie painted a lake sunrise in 2022.',
         category: 'Fact',
         references: ['turn:1'],
       }],
-      openQuestions: [],
       nextSteps: [],
       contextRefs: [{ turnId: 'turn:1', summary: 'Melanie discussed a lake sunrise painting.' }],
     },
@@ -4604,7 +5154,10 @@ test('session snapshot persists markdown content with parsed title and summary',
   const snapshot = toSessionSnapshot(thread);
   assert.equal(snapshot.title, 'Melanie Painting');
   assert.equal(snapshot.summary, 'Melanie painted a lake sunrise and considers it special.');
-  assert.equal(snapshot.signals, 'Melanie values art that captures important personal moments.');
+  assert.deepEqual(snapshot.memorySignals, ['- [turn:1 +1] Melanie values art that captures important personal moments.']);
+  assert.deepEqual(snapshot.skillSignals, []);
+  assert.equal('openQuestions' in snapshot, false);
+  assert.equal(snapshot.skillDetails, '{}');
   assert.equal(snapshot.content, markdown);
   assert.doesNotMatch(snapshot.content, /^\s*\{/);
 });
@@ -4642,7 +5195,6 @@ test('extractSessionThread passes raw turns to extractor', async () => {
         },
       ),
       extractions: [],
-      openQuestions: [],
       nextSteps: [],
       contextRefs: [{
         turnId: 'turn:13',
@@ -4698,7 +5250,6 @@ test('extracted turns without extractor context refs are not persisted as refere
     title: 'Career',
     snapshotContent: '',
     extractions: [],
-    openQuestions: [],
     nextSteps: [],
     contextRefs: [],
   });
@@ -4762,7 +5313,6 @@ test('raw-turn session only updates the session thread', async () => {
         },
       ),
       extractions: [],
-      openQuestions: [],
       nextSteps: [],
       contextRefs: [{
         turnId: 'turn:12',
@@ -4818,7 +5368,6 @@ test('extractEpoch groups mixed session turns before session', async () => {
       title: input.sessionMemory.title,
       snapshotContent: '',
       extractions: [],
-      openQuestions: [],
       nextSteps: [],
       contextRefs: input.turns.map((turn) => ({
         turnId: turn.turnId,
@@ -4851,6 +5400,122 @@ test('extractEpoch groups mixed session turns before session', async () => {
   assert.equal(snapshotRows.length, 2);
 });
 
+test('extractEpoch chunks same-session turns by maxEpochTurns', async () => {
+  const threads = [];
+  const extractionInputs = [];
+  const snapshotRows = [];
+  const client = {
+    sessionTable: {
+      insert: async ({ snapshots }) => {
+        snapshotRows.push(...snapshots);
+        return snapshots.map((snapshot, index) => ({
+          ...snapshot,
+          snapshotId: `snapshot-${index + 1}`,
+        }));
+      },
+    },
+  };
+  const sessionExtractionImpl = async (input) => {
+    extractionInputs.push(input);
+    return {
+      title: input.sessionMemory.title,
+      snapshotContent: '',
+      extractions: [],
+      nextSteps: [],
+      contextRefs: input.turns.map((turn) => ({
+        turnId: turn.turnId,
+        summary: `${turn.turnId} relevant content`,
+      })),
+    };
+  };
+
+  const turns = Array.from({ length: 70 }, (_, index) => makeExtractableTurn(`session:turn-${index + 1}`, 2, `turn ${index + 1}`));
+
+  const result = await sessionTesting.extractEpoch({
+    client,
+    extractorName: 'default-extractor',
+    activeWindowDays: 3650,
+    maxEpochTurns: 32,
+    threads,
+    sealedEpoch: {
+      epoch: 2,
+      turns,
+    },
+    sessionExtractionImpl,
+  });
+
+  assert.deepEqual(extractionInputs.map((input) => input.turns.length), [32, 32, 6]);
+  assert.deepEqual(extractionInputs[0].turns.map((turn) => turn.turnId).slice(0, 2), ['session:turn-1', 'session:turn-2']);
+  assert.deepEqual(extractionInputs[2].turns.map((turn) => turn.turnId), [
+    'session:turn-65',
+    'session:turn-66',
+    'session:turn-67',
+    'session:turn-68',
+    'session:turn-69',
+    'session:turn-70',
+  ]);
+  assert.equal(result.touchedIds.size, 1);
+  assert.equal(snapshotRows.length, 3);
+  assert.deepEqual(snapshotRows.map((snapshot) => snapshot.snapshotSequence), [0, 1, 2]);
+  assert.deepEqual(snapshotRows.map((snapshot) => snapshot.references.length), [32, 64, 70]);
+  assert.deepEqual(result.threads[0].snapshotIds, ['snapshot-1', 'snapshot-2', 'snapshot-3']);
+});
+
+test('extractEpoch chunks same-session turns by rendered maxInputChars', async () => {
+  const threads = [];
+  const extractionInputs = [];
+  const snapshotRows = [];
+  const client = {
+    sessionTable: {
+      insert: async ({ snapshots }) => {
+        snapshotRows.push(...snapshots);
+        return snapshots.map((snapshot, index) => ({
+          ...snapshot,
+          snapshotId: `snapshot-${index + 1}`,
+        }));
+      },
+    },
+  };
+  const sessionExtractionImpl = async (input) => {
+    extractionInputs.push(input);
+    return {
+      title: input.sessionMemory.title,
+      snapshotContent: '',
+      extractions: [],
+      nextSteps: [],
+      contextRefs: input.turns.map((turn) => ({
+        turnId: turn.turnId,
+        summary: `${turn.turnId} relevant content`,
+      })),
+    };
+  };
+
+  const turns = Array.from({ length: 4 }, (_, index) => ({
+    ...makeExtractableTurn(`session:budget-${index + 1}`, 2, `turn ${index + 1}`),
+    response: 'x'.repeat(180),
+  }));
+
+  await sessionTesting.extractEpoch({
+    client,
+    extractorName: 'default-extractor',
+    activeWindowDays: 3650,
+    maxEpochTurns: 32,
+    maxInputChars: 900,
+    previewChars: 800,
+    threads,
+    sealedEpoch: {
+      epoch: 2,
+      turns,
+    },
+    sessionExtractionImpl,
+  });
+
+  assert.deepEqual(extractionInputs.map((input) => input.turns.length), [2, 2]);
+  assert.deepEqual(extractionInputs.map((input) => input.inputBudgetStoppedBy), ['max-input-chars', 'none']);
+  assert.deepEqual(extractionInputs.map((input) => input.deferredTurnCount), [2, 0]);
+  assert.equal(snapshotRows.length, 2);
+});
+
 test('extractEpoch routes missing sessionId turns to default session thread', async () => {
   const threads = [];
   const extractionInputs = [];
@@ -4868,7 +5533,6 @@ test('extractEpoch routes missing sessionId turns to default session thread', as
       title: input.sessionMemory.title,
       snapshotContent: '',
       extractions: [],
-      openQuestions: [],
       nextSteps: [],
       contextRefs: input.turns.map((turn) => ({
         turnId: turn.turnId,
@@ -4946,7 +5610,6 @@ test('indexTouchedExtractions immediately advances extraction index for touched 
         agent: 'codex',
         extractions: [],
         contextRefs: [],
-        openQuestions: [],
         nextSteps: [],
         extractionChanges: [],
       },
@@ -4956,7 +5619,6 @@ test('indexTouchedExtractions immediately advances extraction index for touched 
         agent: 'codex',
         extractions: [{ id: 'memory-1', text: 'remember this', category: 'Fact', references: ['turn:existing'], updatedMemory: null }],
         contextRefs: [],
-        openQuestions: [],
         nextSteps: [],
         extractionChanges: [{
             type: 'update',
@@ -5035,7 +5697,7 @@ test('extractor.retrySnapshotIndexing refreshes the committed checkpoint snapsho
     title: 'Existing title',
     summary: 'Existing summary',
     snapshots: [
-      { project: 'alpha', cwd: '/workspace/alpha', agent: 'codex', snapshotContent: '', extractions: [], contextRefs: [], openQuestions: [], nextSteps: [], extractionChanges: [] },
+      { project: 'alpha', cwd: '/workspace/alpha', agent: 'codex', snapshotContent: '', extractions: [], contextRefs: [], nextSteps: [], extractionChanges: [] },
       {
         project: 'alpha',
         cwd: '/workspace/alpha',
@@ -5043,7 +5705,6 @@ test('extractor.retrySnapshotIndexing refreshes the committed checkpoint snapsho
         snapshotContent: '',
         extractions: [{ id: 'memory-1', text: 'remember this', category: 'Fact', references: ['session:existing'], updatedMemory: null }],
         contextRefs: [],
-        openQuestions: [],
         nextSteps: [],
         extractionChanges: [{
           type: 'update',
@@ -5117,7 +5778,7 @@ test('extractor.extractCurrentEpoch commits session rows before retrying extract
     title: 'Existing title',
     summary: 'Existing summary',
     snapshots: [
-      { extractions: [], contextRefs: [], openQuestions: [], nextSteps: [], extractionDelta: { before: [], after: [] } },
+      { extractions: [], contextRefs: [], nextSteps: [], extractionDelta: { before: [], after: [] } },
     ],
     references: ['session:existing'],
     indexedSnapshotSequence: 0,
@@ -5184,7 +5845,6 @@ test('extractor.run retries pending extraction index before queued epochs when d
           snapshotContent: '',
           extractions: [],
           contextRefs: [],
-          openQuestions: [],
           nextSteps: [],
           extractionChanges: [],
         },
@@ -5195,7 +5855,6 @@ test('extractor.run retries pending extraction index before queued epochs when d
           snapshotContent: '',
           extractions: [],
           contextRefs: [],
-          openQuestions: [],
           nextSteps: [],
           extractionChanges: [{ type: 'add', text: 'remember this', references: ['session:existing'], reason: 'adds memory' }],
         },
@@ -5282,7 +5941,6 @@ test('extractor.watermark exposes extraction index retry failures', async (t) =>
         snapshotContent: '',
         extractions: [],
         contextRefs: [],
-        openQuestions: [],
         nextSteps: [],
         extractionChanges: [],
       },
@@ -5293,7 +5951,6 @@ test('extractor.watermark exposes extraction index retry failures', async (t) =>
         snapshotContent: '',
         extractions: [{ id: 'memory-1', text: 'remember this', category: 'Fact', references: ['session:existing'], updatedMemory: null }],
         contextRefs: [],
-        openQuestions: [],
         nextSteps: [],
         extractionChanges: [{
           type: 'update',
@@ -5320,12 +5977,12 @@ test('extractor.watermark exposes extraction index retry failures', async (t) =>
   });
 });
 
-test('extractor.accept keeps a partial epoch open until epochTurns is reached', async (t) => {
+test('extractor.accept keeps a partial epoch open until minEpochTurns is reached', async (t) => {
   const { dir, homeDir, configPath } = await makeConfigHome();
   t.after(async () => rm(dir, { recursive: true, force: true }));
 
   process.env.MUNINN_HOME = homeDir;
-  await writeExtractorConfig(configPath, { epochTurns: 3, epochWindowMs: 10_000 });
+  await writeExtractorConfig(configPath, { minEpochTurns: 3, epochWindowMs: 10_000 });
 
   const extractor = new Extractor(makeExtractorClient());
   extractor.bootstrapped = true;
@@ -5367,7 +6024,7 @@ test('extractor.accept seals a partial epoch when the epoch window expires', asy
   t.after(async () => rm(dir, { recursive: true, force: true }));
 
   process.env.MUNINN_HOME = homeDir;
-  await writeExtractorConfig(configPath, { epochTurns: 3, epochWindowMs: 20 });
+  await writeExtractorConfig(configPath, { minEpochTurns: 3, epochWindowMs: 20 });
 
   const extractor = new Extractor(makeExtractorClient());
   extractor.bootstrapped = true;
@@ -5397,7 +6054,7 @@ test('extractor.accept does not start the epoch window for non-extractable turns
   t.after(async () => rm(dir, { recursive: true, force: true }));
 
   process.env.MUNINN_HOME = homeDir;
-  await writeExtractorConfig(configPath, { epochTurns: 3, epochWindowMs: 20 });
+  await writeExtractorConfig(configPath, { minEpochTurns: 3, epochWindowMs: 20 });
 
   const extractor = new Extractor(makeExtractorClient());
   extractor.bootstrapped = true;
@@ -5695,7 +6352,6 @@ test('flushThreads persists session state without inline ref or index builders',
           snapshotContent: '',
           extractions: [],
           contextRefs: [],
-          openQuestions: [],
           nextSteps: [],
           extractionChanges: [],
         },
@@ -5752,7 +6408,6 @@ test('flushThreads keeps same raw session id isolated by cwd', async (t) => {
         snapshotContent: '',
         extractions: [],
         contextRefs: [],
-        openQuestions: [],
         nextSteps: [],
         extractionChanges: [],
       },

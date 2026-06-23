@@ -5,7 +5,7 @@ import { parseCheckpointFile, serializeCheckpointFile } from '../../dist/checkpo
 
 function checkpoint(overrides = {}) {
   return {
-    schemaVersion: 11,
+    schemaVersion: 12,
     writtenAt: '2026-06-02T00:00:00.000Z',
     writerPid: 123,
     extractor: {
@@ -30,18 +30,6 @@ function checkpoint(overrides = {}) {
         },
       ],
     },
-    dreamingIndex: {
-      baseline: { dreaming: 7 },
-      entries: [
-        {
-          project: '/Users/Nathan/workspace/muninn',
-          dreamingId: 'dreaming:12',
-          parentId: 'dreaming:8',
-          createdAt: '2026-06-02T13:00:00.000Z',
-          sessionSnapshotVersion: 5,
-        },
-      ],
-    },
     ...overrides,
   };
 }
@@ -49,7 +37,7 @@ function checkpoint(overrides = {}) {
 test('checkpoint parses and serializes sessionIndex entries', () => {
   const parsed = parseCheckpointFile(JSON.stringify(checkpoint()));
 
-  assert.equal(parsed.schemaVersion, 11);
+  assert.equal(parsed.schemaVersion, 12);
   assert.deepEqual(parsed.sessionIndex, {
     baseline: { turn: 10, session: 5 },
     entries: [
@@ -67,7 +55,6 @@ test('checkpoint parses and serializes sessionIndex entries', () => {
 
   const reparsed = parseCheckpointFile(serializeCheckpointFile(parsed));
   assert.deepEqual(reparsed.sessionIndex, parsed.sessionIndex);
-  assert.deepEqual(reparsed.dreamingIndex, parsed.dreamingIndex);
 });
 
 test('checkpoint rejects missing sessionIndex', () => {
@@ -80,31 +67,13 @@ test('checkpoint rejects missing sessionIndex', () => {
   );
 });
 
-test('checkpoint rejects missing dreamingIndex', () => {
-  const content = checkpoint();
-  delete content.dreamingIndex;
+test('checkpoint ignores obsolete dreamingIndex when present', () => {
+  const parsed = parseCheckpointFile(JSON.stringify(checkpoint({
+    dreamingIndex: {
+      baseline: { dreaming: 7 },
+      entries: [],
+    },
+  })));
 
-  assert.throws(
-    () => parseCheckpointFile(JSON.stringify(content)),
-    /dreamingIndex section is invalid/,
-  );
-});
-
-test('checkpoint rejects invalid dreamingIndex values', () => {
-  for (const mutate of [
-    (content) => { content.dreamingIndex.baseline.dreaming = -1; },
-    (content) => { content.dreamingIndex.baseline.dreaming = 1.5; },
-    (content) => { content.dreamingIndex.entries[0].dreamingId = 'turn:12'; },
-    (content) => { content.dreamingIndex.entries[0].parentId = 'session:8'; },
-    (content) => { content.dreamingIndex.entries[0].sessionSnapshotVersion = -1; },
-    (content) => { content.dreamingIndex.entries[0].sessionSnapshotVersion = 1.5; },
-  ]) {
-    const content = checkpoint();
-    mutate(content);
-
-    assert.throws(
-      () => parseCheckpointFile(JSON.stringify(content)),
-      /dreamingIndex section is invalid/,
-    );
-  }
+  assert.equal('dreamingIndex' in parsed, false);
 });

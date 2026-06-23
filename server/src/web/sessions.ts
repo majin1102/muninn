@@ -10,6 +10,7 @@ import type {
   SessionSegmentPreview,
   SessionSnapshotListResponse,
   SessionTimelineItem,
+  SessionTurnDetailResponse,
   SessionTurnsResponse,
   TurnPreview,
 } from '@muninn/common';
@@ -23,6 +24,7 @@ const EXTRACTOR_DEFAULT_SESSION_PREFIX = '__extractor_default__:';
 const INTERNAL_SESSION_SUFFIX = /-?[0-9a-f]{8}$/i;
 const DEFAULT_AUTO_EXPAND_TURN_LIMIT = 20;
 const SESSION_TREE_PAGE_LIMIT = 1_000_000;
+const TOOL_IO_PREVIEW_CHARS = 600;
 
 export const SESSION_SNAPSHOTS_ROUTE = '/app/api/session/snapshots';
 
@@ -234,6 +236,21 @@ function toTurnPreview(turn: AppSessionTurn): TurnPreview {
     preview: turnPreviewText(turn),
     prompt: turn.prompt ?? undefined,
     response: turn.response ?? undefined,
+    events: events.length > 0 ? previewTurnEvents(events) : undefined,
+    artifacts: turn.artifacts ?? undefined,
+  };
+}
+
+function toTurnDetail(turn: AppSessionTurn): TurnPreview {
+  const events = turnEvents(turn);
+  return {
+    memoryId: turn.turnId,
+    createdAt: turn.createdAt,
+    updatedAt: turn.updatedAt,
+    turnSequence: turn.turnSequence ?? undefined,
+    preview: turnPreviewText(turn),
+    prompt: turn.prompt ?? undefined,
+    response: turn.response ?? undefined,
     events: events.length > 0 ? events : undefined,
     artifacts: turn.artifacts ?? undefined,
     toolCalls: toolCallsFromEvents(events),
@@ -280,6 +297,56 @@ function toolCallsFromEvents(events: NonNullable<AppSessionTurn['events']>): Tur
     }
   }
   return toolCalls.length > 0 ? toolCalls : undefined;
+}
+
+function previewTurnEvents(events: NonNullable<AppSessionTurn['events']>): NonNullable<TurnPreview['events']> {
+  return events.map((event) => {
+    if (event.type === 'toolCall') {
+      const input = previewPayload(event.input);
+      return {
+        type: 'toolCall',
+        id: event.id,
+        name: event.name,
+        timestamp: event.timestamp,
+        ...(input ? {
+          inputPreview: input.preview,
+          inputBytes: input.bytes,
+          inputTruncated: input.truncated,
+        } : {}),
+      };
+    }
+
+    if (event.type === 'toolOutput') {
+      const output = previewPayload(event.output);
+      const artifactCount = event.artifacts?.length ?? 0;
+      return {
+        type: 'toolOutput',
+        id: event.id,
+        timestamp: event.timestamp,
+        ...(output ? {
+          outputPreview: output.preview,
+          outputBytes: output.bytes,
+          outputTruncated: output.truncated,
+        } : {}),
+        ...(artifactCount > 0 ? { artifactCount } : {}),
+        artifacts: event.artifacts,
+      };
+    }
+
+    return event;
+  });
+}
+
+function previewPayload(value: string | undefined): { preview: string; bytes: number; truncated: boolean } | null {
+  if (value === undefined) {
+    return null;
+  }
+  const truncated = value.length > TOOL_IO_PREVIEW_CHARS;
+  return {
+    preview: truncated ? `${value.slice(0, TOOL_IO_PREVIEW_CHARS).trimEnd()}...` : value,
+    bytes: Buffer.byteLength(value),
+    truncated,
+  };
 }
 
 async function enrichMemoryDocument(
@@ -455,20 +522,36 @@ function buildSessionTimeline(
       refs: [],
     });
   }
-  const signals = sections.get('signals')?.trim();
-  if (signals) {
+  items.push(...buildTimelineSignalItems(sections, snapshot));
+  const extractions = buildTimelineExtractions(sections.get('extractions'), snapshot, turnPreviews);
+  return [...items, ...extractions];
+}
+
+function buildTimelineSignalItems(
+  sections: Map<string, string>,
+  snapshot: SessionSnapshotContent,
+): SessionTimelineItem[] {
+  const definitions = [
+    { heading: 'Memory Signals', title: 'Memories', suffix: 'memories' },
+    { heading: 'Skill Signals', title: 'Skills', suffix: 'skills' },
+  ];
+  const items: SessionTimelineItem[] = [];
+  for (const { heading, title, suffix } of definitions) {
+    const body = sections.get(heading.toLowerCase())?.trim();
+    if (!body) {
+      continue;
+    }
     items.push({
-      memoryId: `${snapshot.snapshotId}~timeline:signals`,
+      memoryId: `${snapshot.snapshotId}~timeline:${suffix}`,
       kind: 'signals',
-      title: 'Signals',
+      title,
       createdAt: snapshot.createdAt,
       updatedAt: snapshot.updatedAt,
-      markdown: signals,
+      markdown: body,
       refs: [],
     });
   }
-  const extractions = buildTimelineExtractions(sections.get('extractions'), snapshot, turnPreviews);
-  return [...items, ...extractions];
+  return items;
 }
 
 function snapshotSections(snapshotContent: string): Map<string, string> {
@@ -621,6 +704,14 @@ export function buildSessionTurnPageForTests(params: {
   return buildSessionTurnPage(params);
 }
 
+export function buildTurnPreviewForTests(turn: AppSessionTurn): TurnPreview {
+  return toTurnPreview(turn);
+}
+
+export function buildTurnDetailForTests(turn: AppSessionTurn): TurnPreview {
+  return toTurnDetail(turn);
+}
+
 async function loadSnapshotReferences(references: string[]): Promise<MemoryReference[]> {
   const resolved = await Promise.all(
     references.map(async (memoryId) => {
@@ -741,6 +832,30 @@ sessionRoutes.get('/app/api/session/agents/:agent/sessions/:sessionKey/turns', a
     segments: page.segments,
     timeline: page.timeline,
     nextOffset: page.nextOffset,
+    requestId: generateRequestId(),
+  };
+
+  return c.json(response);
+});
+
+sessionRoutes.get('/app/api/session/turns/:turnId/detail', async (c) => {
+  const turnId = decodeURIComponent(c.req.param('turnId'));
+  console.log('[APP_UI_SESSION_TURN_DETAIL] turnId:', turnId);
+
+  let turn: Awaited<ReturnType<typeof turns.get>>;
+  try {
+    turn = await turns.get(turnId);
+  } catch (error) {
+    const mapped = mapCoreLookupError(error);
+    return c.json(mapped.body, mapped.status as 400 | 500);
+  }
+
+  if (!turn) {
+    return c.json(errorResponse('notFound', 'turnId not found'), 404);
+  }
+
+  const response: SessionTurnDetailResponse = {
+    turn: toTurnDetail(turn),
     requestId: generateRequestId(),
   };
 

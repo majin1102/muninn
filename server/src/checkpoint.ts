@@ -63,24 +63,10 @@ export type SessionIndexCheckpoint = {
   entries: SessionIndexEntry[];
 };
 
-export type DreamingIndexEntry = {
-  project: string;
-  dreamingId: string;
-  parentId?: string;
-  createdAt: string;
-  sessionSnapshotVersion: number;
-};
-
-export type DreamingIndexCheckpoint = {
-  baseline: { dreaming: number };
-  entries: DreamingIndexEntry[];
-};
-
 export type CheckpointContent = {
-  schemaVersion: 11;
+  schemaVersion: 12;
   extractor: ExtractorCheckpoint;
   sessionIndex: SessionIndexCheckpoint;
-  dreamingIndex: DreamingIndexCheckpoint;
 };
 
 export type CheckpointFile = CheckpointContent & {
@@ -126,28 +112,23 @@ export function parseCheckpointFile(raw: string): CheckpointFile {
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
     throw new Error('checkpoint must be a JSON object');
   }
-  if (parsed.schemaVersion !== 11) {
+  if (parsed.schemaVersion !== 12) {
     throw new Error(`unsupported checkpoint schemaVersion: ${String(parsed.schemaVersion)}`);
   }
   const extractor = parseExtractorSection(parsed.extractor);
   const sessionIndex = parseSessionIndexSection(parsed.sessionIndex);
-  const dreamingIndex = parseDreamingIndexSection(parsed.dreamingIndex);
   if (!extractor) {
     throw new Error('checkpoint extractor section is invalid');
   }
   if (!sessionIndex) {
     throw new Error('checkpoint sessionIndex section is invalid');
   }
-  if (!dreamingIndex) {
-    throw new Error('checkpoint dreamingIndex section is invalid');
-  }
   return {
-    schemaVersion: 11,
+    schemaVersion: 12,
     writtenAt: typeof parsed.writtenAt === 'string' ? parsed.writtenAt : new Date(0).toISOString(),
     writerPid: typeof parsed.writerPid === 'number' ? parsed.writerPid : 0,
     extractor,
     sessionIndex,
-    dreamingIndex,
   };
 }
 
@@ -274,48 +255,6 @@ function parseSessionIndexBaseline(value: unknown): SessionIndexCheckpoint['base
   };
 }
 
-function parseDreamingIndexSection(value: unknown): DreamingIndexCheckpoint | null {
-  if (!isObjectRecord(value) || !Array.isArray(value.entries)) {
-    return null;
-  }
-  const baseline = parseDreamingIndexBaseline(value.baseline);
-  if (!baseline) {
-    return null;
-  }
-  const entries: DreamingIndexEntry[] = [];
-  for (const entry of value.entries) {
-    if (
-      !isObjectRecord(entry)
-      || typeof entry.project !== 'string'
-      || typeof entry.dreamingId !== 'string'
-      || !isDreamingId(entry.dreamingId)
-      || (entry.parentId != null && typeof entry.parentId !== 'string')
-      || (entry.parentId != null && !isDreamingId(entry.parentId))
-      || typeof entry.createdAt !== 'string'
-      || !isNonNegativeInteger(entry.sessionSnapshotVersion)
-    ) {
-      return null;
-    }
-    entries.push({
-      project: entry.project,
-      dreamingId: entry.dreamingId,
-      ...(entry.parentId != null ? { parentId: entry.parentId } : {}),
-      createdAt: entry.createdAt,
-      sessionSnapshotVersion: entry.sessionSnapshotVersion,
-    });
-  }
-  return { baseline, entries };
-}
-
-function parseDreamingIndexBaseline(value: unknown): DreamingIndexCheckpoint['baseline'] | null {
-  if (!isObjectRecord(value) || !isNonNegativeInteger(value.dreaming)) {
-    return null;
-  }
-  return {
-    dreaming: value.dreaming,
-  };
-}
-
 function parseRecentSessions(value: unknown): RecentSessionCheckpoint[] | null {
   if (!Array.isArray(value)) {
     return null;
@@ -391,10 +330,6 @@ function isTurnSequence(value: unknown): value is number {
 
 function isNonNegativeInteger(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
-}
-
-function isDreamingId(value: string): boolean {
-  return /^dreaming:\d+$/.test(value);
 }
 
 function parseThreads(value: unknown): ThreadRef[] | null {

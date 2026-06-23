@@ -46,7 +46,10 @@ const noopCheckpointLock: CheckpointLock = {
 export class Extractor {
   name: string;
   private readonly activeWindowDays: number;
-  private readonly epochTurns: number;
+  private readonly minEpochTurns: number;
+  private readonly maxEpochTurns: number;
+  private readonly maxInputChars: number;
+  private readonly previewChars: number;
   private readonly epochWindowMs: number;
   private committedEpoch?: number;
   private openEpoch!: OpenEpoch;
@@ -84,7 +87,10 @@ export class Extractor {
     }
     this.name = config.name;
     this.activeWindowDays = config.activeWindowDays;
-    this.epochTurns = config.epochTurns;
+    this.minEpochTurns = config.minEpochTurns;
+    this.maxEpochTurns = config.maxEpochTurns;
+    this.maxInputChars = config.maxInputChars;
+    this.previewChars = config.previewChars;
     this.epochWindowMs = config.epochWindowMs;
     this.checkpointRuns = checkpoint?.runs.filter((run) => run.status === 'running').map(cloneExtractorRun) ?? [];
   }
@@ -407,6 +413,9 @@ export class Extractor {
         activeWindowDays: this.activeWindowDays,
         threads,
         sealedEpoch: this.currentEpoch!,
+        maxEpochTurns: this.maxEpochTurns,
+        maxInputChars: this.maxInputChars,
+        previewChars: this.previewChars,
         signal: this.shutdownController.signal,
         database: this.database,
       });
@@ -447,7 +456,7 @@ export class Extractor {
     if (this.shuttingDown || this.openEpoch !== openEpoch || !openEpoch.hasStagedTurns()) {
       return;
     }
-    if (openEpoch.stagedTurnCount() >= this.epochTurns) {
+    if (openEpoch.stagedTurnCount() >= this.minEpochTurns) {
       this.sealOpenEpoch(openEpoch);
       return;
     }

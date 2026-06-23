@@ -6,21 +6,31 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 
 import { buildProjectDreamPrompt, mergeProjectDream } from '../../dist/dreaming/project-dreamer.js';
 
-test('buildProjectDreamPrompt omits session ids and includes parent plus incremental signals', () => {
+test('buildProjectDreamPrompt renders existing rows and incremental evidence labels', () => {
   const prompt = buildProjectDreamPrompt({
     project: '/repo/muninn',
-    parentDream: '# Project Dream\n\n## Signals\n\n### Guidance\n- [2] Keep schemas minimal.\n\n### Skills\n\n### Open Questions',
-    incrementalSignals: '- [1] Keep schemas small.',
+    existingProjectSignals: [
+      '[signal:101]',
+      '## Memory Signal',
+      'Prefer minimal prompt changes.',
+    ].join('\n'),
+    incrementalSessionSignals: [
+      '[turn:256 +1]',
+      '## Memory Signal',
+      'Prefer subtractive prompt changes.',
+    ].join('\n'),
   });
-  assert.match(prompt, /## Parent Dream/);
-  assert.match(prompt, /Keep schemas minimal/);
-  assert.match(prompt, /## Incremental Signals/);
-  assert.match(prompt, /Keep schemas small/);
-  assert.doesNotMatch(prompt, /session:<rowid>/);
-  assert.doesNotMatch(prompt, /### session:/);
+
+  assert.match(prompt, /## Existing Project Signals/);
+  assert.match(prompt, /\[signal:101\]/);
+  assert.match(prompt, /Prefer minimal prompt changes/);
+  assert.match(prompt, /## Incremental Session Signals/);
+  assert.match(prompt, /\[turn:256 \+1\]/);
+  assert.match(prompt, /Prefer subtractive prompt changes/);
+  assert.doesNotMatch(prompt, /get_skill|Parent Dream|session:<rowid>/);
 });
 
-test('mergeProjectDream validates and retries LLM Markdown output', async (t) => {
+test('mergeProjectDream validates and retries labeled signal output without tools', async (t) => {
   await withTempMuninnHome(t, {
     providers: {
       llm: { dreamer: { type: 'openai', apiKey: 'test-key' } },
@@ -30,73 +40,138 @@ test('mergeProjectDream validates and retries LLM Markdown output', async (t) =>
   const prompts = [];
   const result = await mergeProjectDream({
     project: '/repo/muninn',
-    parentDream: '(none)',
-    incrementalSignals: '- [1] Keep schemas minimal.',
-    model: async (request) => {
-      prompts.push(request.prompt);
+    existingProjectSignals: '',
+    incrementalSessionSignals: [
+      '[turn:256 +1]',
+      '## Memory Signal',
+      'Prefer subtractive prompt changes.',
+    ].join('\n'),
+    labels: {
+      turnLabels: ['turn:256 +1'],
+    },
+    model: async (task, request) => {
+      assert.equal(task, 'extractor');
+      assert.deepEqual(request.tools, []);
+      prompts.push(lastUserMessage(request.messages));
       return prompts.length === 1
-        ? '# Not A Project Dream'
-        : '```markdown\n# Project Dream\n\n## Signals\n\n### Guidance\n- [1] Keep schemas minimal.\n\n### Skills\n\n### Open Questions\n```';
+        ? { type: 'final', text: '# Project Dream: /repo/muninn' }
+        : {
+          type: 'final',
+          text: [
+            '```markdown',
+            '# Project Signals',
+            '',
+            '[turn:256 +1]',
+            '## Memory Signal',
+            'Prefer subtractive prompt changes.',
+            '```',
+          ].join('\n'),
+        };
     },
   });
-  assert.match(result, /# Project Dream/);
-  assert.match(result, /Keep schemas minimal/);
+
+  assert.match(result, /# Project Signals/);
+  assert.match(result, /\[turn:256 \+1\]/);
   assert.doesNotMatch(result, /```/);
   assert.equal(prompts.length, 2);
-  assert.match(prompts[1], /Previous output was invalid\. Validation error: project dream content must start with # Project Dream/);
+  assert.match(prompts[1], /Previous output was invalid\. Validation error: project dreamer output must start with # Project Signals/);
 });
 
-test('mergeProjectDream mock provider appends incremental signals to parent dream', async (t) => {
+test('mergeProjectDream filters unknown labels through validation', async (t) => {
+  await withTempMuninnHome(t, {
+    providers: {
+      llm: { dreamer: { type: 'openai', apiKey: 'test-key' } },
+      embedding: { mock: { type: 'mock', dimensions: 8 } },
+    },
+  });
+  const result = await mergeProjectDream({
+    project: '/repo/muninn',
+    existingProjectSignals: '[signal:101]\n## Memory Signal\nExisting.',
+    incrementalSessionSignals: '[turn:300 +10]\n## Memory Signal\nPinned.',
+    labels: {
+      signalLabels: ['signal:101'],
+      turnLabels: ['turn:300 +10'],
+    },
+    model: async () => ({
+      type: 'final',
+      text: [
+        '# Project Signals',
+        '',
+        '[signal:101, signal:999, turn:300 +10]',
+        '## Memory Signal',
+        'Pinned.',
+      ].join('\n'),
+    }),
+  });
+
+  assert.match(result, /\[signal:101, signal:999, turn:300 \+10\]/);
+});
+
+test('mergeProjectDream mock provider returns project signal set', async (t) => {
   await withTempMuninnHome(t, {
     providers: {
       llm: { dreamer: { type: 'mock' } },
       embedding: { mock: { type: 'mock', dimensions: 8 } },
     },
   });
-
   const result = await mergeProjectDream({
     project: '/repo/muninn',
-    parentDream: '# Project Dream\n\n## Signals\n\n### Guidance\n- [2] Keep schemas minimal.\n\n### Skills\n\n### Open Questions',
-    incrementalSignals: '- [1] Keep schemas small.',
+    existingProjectSignals: [
+      '[signal:101]',
+      '## Memory Signal',
+      'Existing.',
+    ].join('\n'),
+    incrementalSessionSignals: [
+      '[turn:256 +1]',
+      '## Skill Signal',
+      '### 记忆清库验证',
+      '',
+      'Validate memory prompt changes with a clean rerun.',
+    ].join('\n'),
+    labels: {
+      signalLabels: ['signal:101'],
+      turnLabels: ['turn:256 +1'],
+    },
   });
 
-  assert.match(result, /Keep schemas minimal/);
-  assert.match(result, /Keep schemas small/);
-  assert.match(result, /### Skills/);
+  assert.match(result, /^# Project Signals/);
+  assert.match(result, /\[signal:101\]/);
+  assert.match(result, /\[turn:256 \+1\]/);
+  assert.match(result, /### 记忆清库验证/);
 });
 
-async function withTempMuninnHome(t, overrides = {}) {
-  const previousHome = process.env.MUNINN_HOME;
-  const dir = await mkdtemp(path.join(os.tmpdir(), 'muninn-project-dreamer-'));
-  const homeDir = path.join(dir, 'muninn');
-  await mkdir(homeDir, { recursive: true });
-  await writeFile(path.join(homeDir, 'muninn.json'), JSON.stringify(config(overrides), null, 2));
-  process.env.MUNINN_HOME = homeDir;
-  t.after(async () => {
-    if (previousHome === undefined) {
-      delete process.env.MUNINN_HOME;
-    } else {
-      process.env.MUNINN_HOME = previousHome;
+function lastUserMessage(messages) {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message.role === 'user') {
+      return message.content;
     }
-    await rm(dir, { recursive: true, force: true });
-  });
+  }
+  return '';
 }
 
-function config(overrides = {}) {
-  return {
+async function withTempMuninnHome(t, config) {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'muninn-project-dreamer-'));
+  await mkdir(root, { recursive: true });
+  await writeFile(path.join(root, 'muninn.json'), JSON.stringify({
     extractor: {
-      name: 'extractor',
+      name: 'locomo-extractor',
+      maxAttempts: 2,
       llmProvider: 'dreamer',
       embeddingProvider: 'mock',
-      maxAttempts: 2,
+      minEpochTurns: 8,
+      maxEpochTurns: 32,
     },
-    observer: {
-      enabled: false,
-    },
-    providers: {
-      llm: { dreamer: { type: 'openai', apiKey: 'test-key' } },
-      embedding: { mock: { type: 'mock', dimensions: 8 } },
-    },
-    ...overrides,
-  };
+    providers: config.providers,
+  }, null, 2));
+  const previous = process.env.MUNINN_HOME;
+  process.env.MUNINN_HOME = root;
+  t.after(async () => {
+    if (previous === undefined) {
+      delete process.env.MUNINN_HOME;
+    } else {
+      process.env.MUNINN_HOME = previous;
+    }
+    await rm(root, { recursive: true, force: true });
+  });
 }

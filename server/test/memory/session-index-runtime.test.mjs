@@ -51,8 +51,8 @@ function client({
         listSnapshotsWithVersion: async (query = {}) => {
           calls.listSnapshots += 1;
           calls.listSnapshotQueries.push(query);
-          const rows = query.observer
-            ? snapshots.filter((snapshot) => snapshot.extractor === query.observer)
+          const rows = query.extractor
+            ? snapshots.filter((snapshot) => snapshot.extractor === query.extractor)
             : snapshots;
           return { sourceVersion: sessionVersion, rows };
         },
@@ -84,7 +84,7 @@ async function withTempMuninnHome(t) {
 
 function checkpoint(overrides = {}) {
   return {
-    schemaVersion: 11,
+    schemaVersion: 12,
     writtenAt: '2026-06-02T00:00:00.000Z',
     writerPid: 123,
     extractor: {
@@ -104,10 +104,6 @@ function checkpoint(overrides = {}) {
         cwd: '/Users/Nathan/workspace/muninn',
         latestUpdatedAt: '2026-06-02T10:00:00.000Z',
       }],
-    },
-    dreamingIndex: {
-      baseline: { dreaming: 0 },
-      entries: [],
     },
     ...overrides,
   };
@@ -146,7 +142,9 @@ test('sessionIndex restores checkpoint and applies table deltas without full tur
       extractor: 'default-extractor',
       title: 'Snapshot title',
       summary: '',
-      signals: '',
+      memorySignals: [],
+      skillSignals: [],
+      skillDetails: '{}',
       content: '',
       references: [],
     }],
@@ -207,7 +205,9 @@ test('sessionIndex rebuilds after dirty mark and drops removed sessions', async 
       extractor: 'default-extractor',
       title: 'Live snapshot title',
       summary: '',
-      signals: '',
+      memorySignals: [],
+      skillSignals: [],
+      skillDetails: '{}',
       content: '',
       references: [],
     }],
@@ -264,7 +264,9 @@ test('sessionIndex rebuild filters turns and snapshots by extractor', async () =
         extractor: 'other-extractor',
         title: 'Wrong extractor title',
         summary: '',
-        signals: '',
+        memorySignals: [],
+        skillSignals: [],
+        skillDetails: '{}',
         content: '',
         references: [],
       },
@@ -280,7 +282,9 @@ test('sessionIndex rebuild filters turns and snapshots by extractor', async () =
         extractor: 'default-extractor',
         title: 'Right extractor title',
         summary: '',
-        signals: '',
+        memorySignals: [],
+        skillSignals: [],
+        skillDetails: '{}',
         content: '',
         references: [],
       },
@@ -404,7 +408,9 @@ test('sessionIndex groups entries by project agent and session id, not cwd', asy
       extractor: 'default-extractor',
       title: 'Canonical project title',
       summary: '',
-      signals: '',
+      memorySignals: [],
+      skillSignals: [],
+      skillDetails: '{}',
       content: '',
       references: [],
     }],
@@ -512,7 +518,9 @@ test('backend refreshSessionIndex rebuilds stale checkpoint entries from current
       extractor: 'default-extractor',
       title: 'Stale snapshot title',
       summary: '',
-      signals: '',
+      memorySignals: [],
+      skillSignals: [],
+      skillDetails: '{}',
       content: '',
       references: [],
     }],
@@ -520,7 +528,7 @@ test('backend refreshSessionIndex rebuilds stale checkpoint entries from current
     sessionVersion: 12,
   });
   const backend = MuninnBackend.createForTests(fake.tables, {
-    schemaVersion: 11,
+    schemaVersion: 12,
     writtenAt: '2026-06-02T00:00:00.000Z',
     writerPid: 123,
     extractor: {
@@ -540,10 +548,6 @@ test('backend refreshSessionIndex rebuilds stale checkpoint entries from current
         cwd: '/Users/Nathan/workspace/muninn',
         latestUpdatedAt: '2026-06-02T10:00:00.000Z',
       }],
-    },
-    dreamingIndex: {
-      baseline: { dreaming: 0 },
-      entries: [],
     },
   });
 
@@ -572,7 +576,9 @@ test('backend refreshSessionIndex writes rebuilt sessionIndex back to an existin
       extractor: 'default-extractor',
       title: 'Stale snapshot title',
       summary: '',
-      signals: '',
+      memorySignals: [],
+      skillSignals: [],
+      skillDetails: '{}',
       content: '',
       references: [],
     }],

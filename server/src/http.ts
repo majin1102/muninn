@@ -10,7 +10,6 @@ import type {
   MemoryResponse,
   MemoryWatermark,
   MemoryWatermarkResponse,
-  ProjectDreamDocument,
   ProjectDreamResponse,
   ProjectDreamSignals as ApiProjectDreamSignals,
   ProjectDreamSignalsResponse,
@@ -26,9 +25,7 @@ import {
   turns,
 } from './backend.js';
 import type { RecallMode } from './backend.js';
-import type { DreamingRow } from './native.js';
 import type { RenderedMemory } from './api/memory.js';
-import { parseProjectDreamSignals } from './dreaming/content.js';
 import { isCaptureEnabled } from './api/capture.js';
 import { renderRecallHit, renderRenderedMemoryHit } from './web/render.js';
 import { invalidateSessionTreeCache, webRoutes } from './web/routes.js';
@@ -121,21 +118,12 @@ function memoryWatermarkResponse(watermark: MemoryWatermark): MemoryWatermarkRes
   };
 }
 
-function projectDreamDocument(dream: DreamingRow): ProjectDreamDocument {
+function projectDreamResponse(project: string, signals: ApiProjectDreamSignals | null, created?: boolean): ProjectDreamResponse {
   return {
-    memoryId: dream.dreamingId,
-    project: dream.project,
-    parentId: dream.parentId == null ? null : `dreaming:${dream.parentId}`,
-    createdAt: dream.createdAt,
-    sessionSnapshotVersion: dream.sessionSnapshotVersion,
-    content: dream.content,
-  };
-}
-
-function projectDreamResponse(dream: DreamingRow, created?: boolean): ProjectDreamResponse {
-  return {
-    dream: projectDreamDocument(dream),
+    project,
     created,
+    memorySignals: signals?.memorySignals ?? [],
+    skillSignals: signals?.skillSignals ?? [],
     requestId: generateRequestId(),
   };
 }
@@ -242,17 +230,17 @@ app.get('/api/v1/dreaming/project', async (c) => {
   if (!project) {
     return c.json(errorResponse('invalidRequest', 'project is required'), 400);
   }
-  let dream;
+  let signals;
   try {
-    dream = await dreaming.getProject(project, database);
+    signals = await dreaming.getProjectSignals(project, database);
   } catch (error) {
     const mapped = mapCoreLookupError(error);
     return c.json(mapped.body, mapped.status as 400 | 500 | 503);
   }
-  if (!dream) {
+  if (!signals) {
     return c.json(errorResponse('notFound', 'project dream not found'), 404);
   }
-  return c.json(projectDreamResponse(dream));
+  return c.json(projectDreamResponse(project, signals));
 });
 
 app.get('/api/v1/dreaming/project/signals', async (c) => {
@@ -261,29 +249,17 @@ app.get('/api/v1/dreaming/project/signals', async (c) => {
   if (!project) {
     return c.json(errorResponse('invalidRequest', 'project is required'), 400);
   }
-  let dream;
-  try {
-    dream = await dreaming.getProject(project, database);
-  } catch (error) {
-    const mapped = mapCoreLookupError(error);
-    return c.json(mapped.body, mapped.status as 400 | 500 | 503);
-  }
-  if (!dream) {
-    return c.json(errorResponse('notFound', 'project dream not found'), 404);
-  }
   let signals;
   try {
-    signals = parseProjectDreamSignals(dream.content, 5);
+    signals = await dreaming.getProjectSignals(project, database);
   } catch (error) {
     const mapped = mapCoreLookupError(error);
     return c.json(mapped.body, mapped.status as 400 | 500 | 503);
   }
-  return c.json(projectDreamSignalsResponse({
-    memoryId: dream.dreamingId,
-    project: dream.project,
-    createdAt: dream.createdAt,
-    ...signals,
-  }));
+  if (!signals) {
+    return c.json(errorResponse('notFound', 'project dream not found'), 404);
+  }
+  return c.json(projectDreamSignalsResponse(signals));
 });
 
 app.post('/api/v1/dreaming/project', async (c) => {
@@ -308,10 +284,11 @@ app.post('/api/v1/dreaming/project', async (c) => {
     const mapped = mapCoreLookupError(error);
     return c.json(mapped.body, mapped.status as 400 | 500 | 503);
   }
-  if (!result.dream) {
+  const signals = await dreaming.getProjectSignals(project, database);
+  if (!signals) {
     return c.json(errorResponse('notFound', 'no project signals available'), 404);
   }
-  return c.json(projectDreamResponse(result.dream, result.created));
+  return c.json(projectDreamResponse(project, signals, result.created));
 });
 
 app.get('/api/v1/recall', async (c) => {

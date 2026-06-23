@@ -3,11 +3,11 @@ import assert from 'node:assert/strict';
 
 import { __testing as watchdogTesting } from '../../dist/watchdog.js';
 
-function checkpoint(dreamingEntries) {
+function checkpoint() {
   return {
-    schemaVersion: 11,
+    schemaVersion: 12,
     extractor: {
-      baseline: { turn: 30, session: 20, extraction: 10, observation: 9 },
+      baseline: { turn: 30, session: 20, extraction: 10 },
       committedEpoch: 1,
       nextEpoch: 2,
       recentSessions: [],
@@ -15,35 +15,38 @@ function checkpoint(dreamingEntries) {
       runs: [],
       pendingExtractionChanges: [],
     },
-    observer: { baseline: { observationContext: 8, observation: 9 }, observeQueue: { cwdBuckets: [] } },
     sessionIndex: { baseline: { turn: 30, session: 20 }, entries: [] },
-    dreamingIndex: {
-      baseline: { dreaming: 7 },
-      entries: dreamingEntries,
+  };
+}
+
+function binding(rows) {
+  return {
+    dreamingProjectTable: {
+      list: async () => rows,
     },
   };
 }
 
-test('checkpointFloors uses min dreaming sessionSnapshotVersion for session cleanup', () => {
-  const floors = watchdogTesting.checkpointFloors(checkpoint([
-    { project: '/repo/a', dreamingId: 'dreaming:1', createdAt: '2026-06-18T00:00:00Z', sessionSnapshotVersion: 15 },
-    { project: '/repo/b', dreamingId: 'dreaming:2', createdAt: '2026-06-18T00:00:00Z', sessionSnapshotVersion: 12 },
+test('checkpointFloors uses min dreaming project sessionSnapshotVersion for session cleanup', async () => {
+  const floors = await watchdogTesting.checkpointFloors(checkpoint(), binding([
+    { project: '/repo/a', updatedAt: '2026-06-18T00:00:00Z', sessionSnapshotVersion: 15 },
+    { project: '/repo/b', updatedAt: '2026-06-18T00:00:00Z', sessionSnapshotVersion: 12 },
   ]));
   assert.equal(floors.session, 12);
 });
 
-test('checkpointFloors keeps session baseline when dreaming index is empty', () => {
-  const floors = watchdogTesting.checkpointFloors(checkpoint([]));
+test('checkpointFloors keeps session baseline when dreaming project table is empty', async () => {
+  const floors = await watchdogTesting.checkpointFloors(checkpoint(), binding([]));
   assert.equal(floors.session, 20);
 });
 
-test('checkpointFloors ignores invalid numeric floors', () => {
-  const floors = watchdogTesting.checkpointFloors(checkpoint([
-    { project: '/repo/a', dreamingId: 'dreaming:1', createdAt: '2026-06-18T00:00:00Z', sessionSnapshotVersion: Number.NaN },
-    { project: '/repo/b', dreamingId: 'dreaming:2', createdAt: '2026-06-18T00:00:00Z', sessionSnapshotVersion: Number.POSITIVE_INFINITY },
-    { project: '/repo/c', dreamingId: 'dreaming:3', createdAt: '2026-06-18T00:00:00Z', sessionSnapshotVersion: -1 },
-    { project: '/repo/d', dreamingId: 'dreaming:4', createdAt: '2026-06-18T00:00:00Z', sessionSnapshotVersion: 1.5 },
-    { project: '/repo/e', dreamingId: 'dreaming:5', createdAt: '2026-06-18T00:00:00Z', sessionSnapshotVersion: 18 },
+test('checkpointFloors ignores invalid numeric floors', async () => {
+  const floors = await watchdogTesting.checkpointFloors(checkpoint(), binding([
+    { project: '/repo/a', updatedAt: '2026-06-18T00:00:00Z', sessionSnapshotVersion: Number.NaN },
+    { project: '/repo/b', updatedAt: '2026-06-18T00:00:00Z', sessionSnapshotVersion: Number.POSITIVE_INFINITY },
+    { project: '/repo/c', updatedAt: '2026-06-18T00:00:00Z', sessionSnapshotVersion: -1 },
+    { project: '/repo/d', updatedAt: '2026-06-18T00:00:00Z', sessionSnapshotVersion: 1.5 },
+    { project: '/repo/e', updatedAt: '2026-06-18T00:00:00Z', sessionSnapshotVersion: 18 },
   ]));
   assert.equal(floors.session, 18);
 });

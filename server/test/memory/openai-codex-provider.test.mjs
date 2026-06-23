@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 
 import { validateMuninnConfigInput } from '../../dist/config.js';
 import { generateText, generateWithTools } from '../../dist/llm/provider.js';
@@ -72,6 +72,7 @@ async function setupCodexRun(t, {
 
   process.env.MUNINN_HOME = muninnHome;
   process.env.CODEX_HOME = codexHome;
+  return { dir, muninnHome, codexHome };
 }
 
 test.beforeEach(() => {
@@ -263,6 +264,73 @@ test('generateWithTools dedupes openai-codex streaming function call skeletons',
       arguments: { memoryIds: ['session:1'] },
     }],
   });
+});
+
+test('generateWithTools writes sanitized diagnostics when openai-codex response parses empty', async (t) => {
+  const { muninnHome } = await setupCodexRun(t);
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(codexSse(
+    {
+      type: 'response.output_item.added',
+      item: {
+        type: 'reasoning',
+        summary: [{ type: 'summary_text', text: 'raw-secret-summary' }],
+      },
+    },
+    {
+      type: 'response.completed',
+      response: {
+        output: [{
+          type: 'reasoning',
+          content: [{ type: 'summary_text', text: 'raw-secret-content' }],
+        }],
+      },
+    },
+  ));
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  await assert.rejects(
+    () => generateWithTools('extractor', {
+      messages: [
+        { role: 'system', content: 'system prompt secret' },
+        { role: 'user', content: 'user prompt secret' },
+      ],
+      tools: [{
+        name: 'memory-get',
+        description: 'Get memory details.',
+        parameters: {
+          type: 'object',
+          properties: {
+            memoryIds: { type: 'array', items: { type: 'string' } },
+          },
+          required: ['memoryIds'],
+        },
+      }],
+    }),
+    /empty parsed codex response; see provider diagnostic log/,
+  );
+
+  const diagnosticsPath = path.join(muninnHome, 'main', 'logs', 'codex-provider-diagnostics.jsonl');
+  const [line] = (await readFile(diagnosticsPath, 'utf8')).trim().split('\n');
+  const diagnostic = JSON.parse(line);
+  assert.equal(diagnostic.provider, 'openai-codex');
+  assert.equal(diagnostic.operation, 'tool');
+  assert.equal(diagnostic.rawLength > 0, true);
+  assert.deepEqual(diagnostic.eventTypes, [
+    'response.output_item.added',
+    'response.completed',
+  ]);
+  assert.equal(diagnostic.hasCompletedResponse, true);
+  assert.deepEqual(diagnostic.completedOutputItemTypes, ['reasoning']);
+  assert.deepEqual(diagnostic.completedOutputContentTypes, ['summary_text']);
+  assert.deepEqual(diagnostic.directItemTypes, ['reasoning']);
+  const serialized = JSON.stringify(diagnostic);
+  assert.equal(serialized.includes('system prompt secret'), false);
+  assert.equal(serialized.includes('user prompt secret'), false);
+  assert.equal(serialized.includes('raw-secret-summary'), false);
+  assert.equal(serialized.includes('raw-secret-content'), false);
 });
 
 test('generateText normalizes Codex backend baseUrl and parses output fragments', async (t) => {

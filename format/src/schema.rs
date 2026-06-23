@@ -49,7 +49,17 @@ pub fn session_schema() -> Schema {
         Field::new("extractor", DataType::Utf8, false),
         Field::new("title", DataType::Utf8, false),
         Field::new("summary", DataType::Utf8, false),
-        Field::new("signals", DataType::Utf8, false),
+        Field::new(
+            "memory_signals",
+            DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+            false,
+        ),
+        Field::new(
+            "skill_signals",
+            DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+            false,
+        ),
+        Field::new("skill_details", DataType::Utf8, false),
         Field::new("content", DataType::Utf8, false),
         Field::new(
             "references",
@@ -60,16 +70,48 @@ pub fn session_schema() -> Schema {
 }
 
 pub fn dreaming_schema() -> Schema {
+    let support_turn = DataType::Struct(
+        vec![
+            Field::new("turn_id", DataType::Utf8, false),
+            Field::new(
+                "created_at",
+                DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+                false,
+            ),
+            Field::new("contribution", DataType::Int32, false),
+        ]
+        .into(),
+    );
     Schema::new(vec![
         Field::new("project", DataType::Utf8, false),
-        Field::new("parent_id", DataType::UInt64, true),
         Field::new(
             "created_at",
             DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
             false,
         ),
-        Field::new("session_snapshot_version", DataType::UInt64, false),
+        Field::new(
+            "updated_at",
+            DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+            false,
+        ),
         Field::new("content", DataType::Utf8, false),
+        Field::new(
+            "support_turns",
+            DataType::List(Arc::new(Field::new("item", support_turn, true))),
+            false,
+        ),
+    ])
+}
+
+pub fn dreaming_project_schema() -> Schema {
+    Schema::new(vec![
+        Field::new("project", DataType::Utf8, false),
+        Field::new("session_snapshot_version", DataType::UInt64, false),
+        Field::new(
+            "updated_at",
+            DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+            false,
+        ),
     ])
 }
 
@@ -176,12 +218,36 @@ mod tests {
     }
 
     #[test]
-    fn session_schema_has_signals_field() {
+    fn session_schema_has_signal_fields() {
         let schema = session_schema();
-        assert!(schema.field_with_name("signals").is_ok());
-        assert_eq!(
-            schema.field_with_name("signals").unwrap().data_type(),
-            &DataType::Utf8
-        );
+        assert_eq!(schema.index_of("memory_signals").unwrap(), 10);
+        assert_eq!(schema.index_of("skill_signals").unwrap(), 11);
+        assert_eq!(schema.index_of("skill_details").unwrap(), 12);
+        assert_eq!(schema.index_of("content").unwrap(), 13);
+        assert_eq!(schema.index_of("references").unwrap(), 14);
+
+        assert_string_list_field(&schema, 10, "memory_signals");
+        assert_string_list_field(&schema, 11, "skill_signals");
+        assert!(schema.field_with_name("open_questions").is_err());
+
+        let skill_details = schema.field(12);
+        assert_eq!(skill_details.name(), "skill_details");
+        assert_eq!(skill_details.data_type(), &DataType::Utf8);
+        assert!(!skill_details.is_nullable());
+        assert!(schema.field_with_name("signals").is_err());
+    }
+
+    fn assert_string_list_field(schema: &Schema, index: usize, name: &str) {
+        let field = schema.field(index);
+        assert_eq!(field.name(), name);
+        assert!(!field.is_nullable());
+        match field.data_type() {
+            DataType::List(item) => {
+                assert_eq!(item.name(), "item");
+                assert_eq!(item.data_type(), &DataType::Utf8);
+                assert!(item.is_nullable());
+            }
+            other => panic!("expected {name} to be List<Utf8>, got {other:?}"),
+        }
     }
 }

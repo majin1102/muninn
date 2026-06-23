@@ -32,7 +32,7 @@ body,
 
 body {
   background: var(--background);
-  color: #24272b;
+  color: #1a1c1f;
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif;
 }
 
@@ -95,7 +95,7 @@ svg {
 
 .brand-name {
   overflow: hidden;
-  color: #24272b;
+  color: #1a1c1f;
   font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
   font-size: 20px;
   font-weight: 600;
@@ -576,6 +576,405 @@ svg {
     visibility 0s linear 120ms;
 }
 
+.dreaming-content {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  background: var(--card);
+  overflow: hidden;
+}
+
+.dreaming-header {
+  min-width: 0;
+  padding: 12px 18px 8px;
+  border-bottom: 1px solid #ececec;
+}
+
+.dreaming-tabs {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.dreaming-tab {
+  min-height: 28px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #5f6062;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0;
+  line-height: 1;
+}
+
+.dreaming-tab:hover {
+  background: #fafafa;
+  color: #1a1c1f;
+}
+
+.dreaming-tab-active {
+  background: #f0f0f0;
+  color: #1a1c1f;
+  font-weight: 600;
+}
+
+.dreaming-scroll {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+.dreaming-memories {
+  display: grid;
+  gap: 28px;
+  padding: 24px 28px 40px;
+}
+
+.dreaming-section {
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.dreaming-table {
+  width: 100%;
+  min-width: 680px;
+  border-collapse: separate;
+  table-layout: fixed;
+  overflow: hidden;
+  border: 1px solid #ececec;
+  border-radius: 8px;
+  border-spacing: 0;
+  color: #1a1c1f;
+  line-height: 1.55;
+}
+
+.dreaming-expand-col {
+  width: 44px;
+}
+
+.dreaming-signal-col {
+  width: auto;
+}
+
+.dreaming-score-col {
+  width: 104px;
+}
+
+.dreaming-time-col {
+  width: 96px;
+}
+
+.dreaming-table,
+.dreaming-table button,
+.dreaming-table time {
+  font-family: inherit;
+  font-size: 13px;
+  letter-spacing: 0;
+}
+
+.dreaming-table th {
+  height: 46px;
+  padding: 0 16px;
+  border-bottom: 1px solid #ececec;
+  background: #fbfbfc;
+  color: #1a1c1f;
+  font-weight: 600;
+  line-height: 1;
+  text-align: left;
+}
+
+.dreaming-table td {
+  padding: 14px 16px;
+  border-bottom: 1px solid #ececec;
+  font-weight: 400;
+  line-height: 1.55;
+  vertical-align: top;
+}
+
+.dreaming-table tr:last-child td {
+  border-bottom: 0;
+}
+
+.dreaming-table .dreaming-expand-column,
+.dreaming-table .dreaming-expand-cell {
+  width: 44px;
+  padding: 0 10px 0 18px;
+  vertical-align: middle;
+}
+
+.dreaming-table .dreaming-expand-column + th,
+.dreaming-table .dreaming-signal-cell {
+  padding-left: 0;
+}
+
+.dreaming-time-column,
+.dreaming-time-cell {
+  padding-left: 12px;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.dreaming-score-column,
+.dreaming-score-cell {
+  padding-left: 12px;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.dreaming-signal-cell {
+  min-width: 0;
+  overflow-wrap: break-word;
+  word-break: normal;
+}
+
+.dreaming-time-cell {
+  color: #1a1c1f;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+
+.dreaming-score-cell {
+  color: #1a1c1f;
+  font-variant-numeric: tabular-nums;
+}
+
+.dreaming-signal-row:hover td {
+  background: #fafafa;
+}
+
+.dreaming-signal-row-expanded td {
+  background: #fafafa;
+}
+
+.dreaming-memory-signal-toggle {
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #8f9195;
+  cursor: pointer;
+  vertical-align: middle;
+}
+
+.dreaming-memory-signal-toggle[aria-expanded="true"] .tree-chevron {
+  transform: rotate(90deg);
+}
+
+.dreaming-memory-signal-toggle-placeholder {
+  width: 16px;
+  height: 16px;
+  display: inline-block;
+}
+
+.dreaming-support-row td {
+  background: #fbfbfc;
+  color: #5f6062;
+  padding-top: 10px;
+  padding-bottom: 10px;
+}
+
+.dreaming-support-row .dreaming-score-cell {
+  color: #5f6062;
+}
+
+.dreaming-support-row .dreaming-time-cell {
+  color: #1a1c1f;
+}
+
+.dreaming-support-cell {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.dreaming-support-content {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: -webkit-box;
+  overflow: hidden;
+  padding-right: 3ch;
+  color: #5f6062;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  white-space: normal;
+}
+
+.dreaming-empty-time {
+  color: #8f9195;
+}
+
+.dreaming-skills {
+  width: 100%;
+  min-height: 100%;
+  display: grid;
+  grid-template-columns: minmax(260px, 320px) minmax(0, 1fr);
+}
+
+.dreaming-skill-list {
+  min-width: 0;
+  padding: 16px 12px 32px;
+  border-right: 1px solid #ececec;
+}
+
+.dreaming-skill-row {
+  width: 100%;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 4px;
+  margin-bottom: 6px;
+  padding: 10px 12px;
+  border: 1px solid #ececec;
+  border-radius: 8px;
+  background: transparent;
+  color: #1a1c1f;
+  cursor: pointer;
+  text-align: left;
+  transition: background-color 120ms ease, border-color 120ms ease;
+}
+
+.dreaming-skill-row:hover {
+  border-color: #e4e4e7;
+  background: #fafafa;
+}
+
+.dreaming-skill-row-active {
+  background: #f0f0f0;
+  color: #1a1c1f;
+  border-color: #e4e4e7;
+}
+
+.dreaming-skill-weight {
+  color: #1a1c1f;
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.35;
+}
+
+.dreaming-skill-main {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.dreaming-skill-heading,
+.dreaming-skill-detail-heading h2 {
+  min-width: 0;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.dreaming-skill-name {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dreaming-skill-summary {
+  min-width: 0;
+  display: -webkit-box;
+  overflow: hidden;
+  padding-right: 3ch;
+  color: #5f6062;
+  font-size: 12px;
+  line-height: 1.45;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  text-overflow: ellipsis;
+  white-space: normal;
+}
+
+.dreaming-skill-detail {
+  min-width: 0;
+  padding: 20px 24px 36px;
+  overflow: hidden;
+}
+
+.dreaming-skill-detail-inner {
+  max-width: 900px;
+}
+
+.dreaming-skill-detail-heading {
+  padding-bottom: 16px;
+  border-bottom: 1px solid #ececec;
+}
+
+.dreaming-skill-detail-heading h2 {
+  margin: 0 0 8px;
+  color: #1a1c1f;
+  font-size: 16px;
+  font-weight: 650;
+  letter-spacing: 0;
+  line-height: 1.35;
+}
+
+.dreaming-skill-detail-heading p {
+  margin: 0;
+  color: #1a1c1f;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.dreaming-skill-markdown {
+  max-width: 900px;
+  color: #1a1c1f;
+  font-size: 13px;
+  line-height: 1.58;
+}
+
+.dreaming-skill-section-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 18px 0 8px;
+  padding-top: 16px;
+  border-top: 1px solid #ececec;
+  color: #1a1c1f;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0;
+  line-height: 1.35;
+}
+
+.dreaming-skill-section-icon {
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  color: #5f6062;
+}
+
+.dreaming-skill-section-icon svg {
+  width: 16px;
+  height: 16px;
+  stroke-width: 2;
+}
+
 .timeline-scroll-shell {
   position: relative;
   width: 100%;
@@ -646,25 +1045,16 @@ svg {
 
 .timeline-list {
   display: grid;
-  gap: 10px;
+  gap: 6px;
 }
 
 .timeline-item {
   min-width: 0;
-  padding: 8px 6px 10px;
   border-radius: 8px;
-  cursor: pointer;
-  outline: none;
-  transition: background-color 120ms ease;
 }
 
-.timeline-item:hover,
-.timeline-item:focus-visible {
-  background: #fafafa;
-}
-
-.timeline-item-active {
-  background: #f5f6f8;
+.timeline-item-active > .ui-collapsible > .timeline-trigger {
+  background: #f1f2f4;
   color: #20242a;
 }
 
@@ -672,7 +1062,7 @@ svg {
   min-width: 0;
   margin-bottom: 6px;
   overflow: hidden;
-  color: #25292f;
+  color: #1a1c1f;
   font-size: 12px;
   font-weight: 650;
   line-height: 1.35;
@@ -682,7 +1072,7 @@ svg {
 
 .timeline-item-summary .timeline-item-title,
 .timeline-item-signals .timeline-item-title {
-  color: #555b64;
+  color: #1a1c1f;
 }
 
 .timeline-trigger {
@@ -696,7 +1086,7 @@ svg {
   border: 0;
   border-radius: 8px;
   background: #f7f7f8;
-  color: #565a60;
+  color: #1a1c1f;
   cursor: pointer;
   font-size: 13px;
   text-align: left;
@@ -742,7 +1132,7 @@ svg {
   padding: 0 8px;
   border-radius: 8px;
   background: #f7f7f8;
-  color: #20242a;
+  color: #1a1c1f;
   font-size: 13px;
 }
 
@@ -767,7 +1157,7 @@ svg {
   margin: 4px 0 12px;
   padding: 2px 4px;
   border-left: 0;
-  color: #373a3f;
+  color: #1a1c1f;
   font-size: 13px;
   line-height: 1.65;
   overflow-wrap: anywhere;
@@ -791,7 +1181,7 @@ svg {
 .timeline-markdown h3,
 .timeline-detail-markdown h3 {
   margin: 10px 0 5px;
-  color: #2b2e33;
+  color: #1a1c1f;
   font-size: 12px;
   font-weight: 650;
 }
@@ -1688,12 +2078,12 @@ svg {
 }
 
 .tree-trigger-project {
-  color: #6f7277;
+  color: #24272b;
   font-weight: 400;
 }
 
 .tree-trigger-session {
-  color: #3f4246;
+  color: #24272b;
   font-weight: 400;
   grid-template-columns: 20px minmax(0, 1fr);
   gap: 0;
@@ -1754,7 +2144,7 @@ svg {
   gap: 7px;
 }
 
-.tree-trigger-main > span:not(.agent-logo-cluster):not(.agent-logo-frame):not(.tree-session-agent-icon) {
+.tree-trigger-main > span:not(.agent-logo-cluster):not(.agent-logo-frame):not(.tree-session-agent-icon):not(.tree-icon-project-dreaming) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1776,6 +2166,17 @@ svg {
   height: 15px;
   color: currentColor;
   stroke-width: 1.8;
+}
+
+.tree-icon-dreaming {
+  color: #626872;
+}
+
+.tree-icon-project-dreaming {
+  width: 21px;
+  height: 17px;
+  overflow: visible;
+  color: currentColor;
 }
 
 .tree-meta {

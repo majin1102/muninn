@@ -86,7 +86,7 @@ export class SessionIndex {
 
   private async rebuild(client: NativeTables): Promise<void> {
     const [snapshotRows, turnStats] = await Promise.all([
-      client.sessionTable.listSnapshotsWithVersion(this.extractorName ? { observer: this.extractorName } : {}),
+      client.sessionTable.listSnapshotsWithVersion(this.extractorName ? { extractor: this.extractorName } : {}),
       client.turnTable.stats(),
     ]);
     const turnRows = await this.listAllTurns(client, turnStats?.rowCount);
