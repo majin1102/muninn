@@ -61,7 +61,7 @@ svg {
 }
 
 .app-sidebar {
-  width: 188px;
+  width: 168px;
   height: 100%;
   min-height: 0;
   position: relative;
@@ -222,7 +222,7 @@ svg {
   flex: 0 0 16px;
 }
 
-.sidebar-version-link {
+.sidebar-date {
   min-width: 0;
   justify-content: flex-start;
   flex: 1 1 auto;
@@ -234,7 +234,7 @@ svg {
   padding: 0;
 }
 
-.app-sidebar-collapsed .sidebar-version-link {
+.app-sidebar-collapsed .sidebar-date {
   display: none;
 }
 
@@ -254,7 +254,7 @@ svg {
 .content-shell {
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(340px, var(--session-pane-width, 340px)) minmax(0, 1fr);
+  grid-template-columns: minmax(320px, var(--session-pane-width, 320px)) minmax(0, 1fr);
   gap: 0;
   padding: 0;
   transition: grid-template-columns 190ms cubic-bezier(0.2, 0, 0, 1);
@@ -406,8 +406,8 @@ svg {
   min-width: 0;
   overflow: hidden;
   color: var(--foreground);
-  font-size: 15px;
-  font-weight: 600;
+  font-size: 14px;
+  font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1026,8 +1026,8 @@ svg {
   background: #f7f7f8;
   color: #6b7077;
   cursor: pointer;
-  font-size: 12px;
-  font-weight: 600;
+  font-size: 13px;
+  font-weight: 400;
   text-align: left;
 }
 
@@ -1072,8 +1072,8 @@ svg {
   margin-bottom: 6px;
   overflow: hidden;
   color: #1a1c1f;
-  font-size: 12px;
-  font-weight: 650;
+  font-size: 13px;
+  font-weight: 400;
   line-height: 1.35;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1098,6 +1098,7 @@ svg {
   color: #1a1c1f;
   cursor: pointer;
   font-size: 13px;
+  font-weight: 400;
   text-align: left;
 }
 
@@ -1119,7 +1120,7 @@ svg {
 .timeline-title {
   min-width: 0;
   overflow: hidden;
-  font-weight: 500;
+  font-weight: 400;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1148,7 +1149,7 @@ svg {
 .timeline-detail-title span {
   min-width: 0;
   overflow: hidden;
-  font-weight: 600;
+  font-weight: 400;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1191,8 +1192,8 @@ svg {
 .timeline-detail-markdown h3 {
   margin: 10px 0 5px;
   color: #1a1c1f;
-  font-size: 12px;
-  font-weight: 650;
+  font-size: 13px;
+  font-weight: 500;
 }
 
 .timeline-markdown p,
@@ -5724,7 +5725,7 @@ button.search-menu-item:hover,
 
   .brand-name,
   .sidebar-nav-item span,
-  .sidebar-version-link {
+  .sidebar-date {
     display: none;
   }
 

@@ -4,7 +4,6 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType, 
 import logo from '../assets/muninn-raven-logo.png';
 import {
   createAppClient,
-  DEFAULT_BACKEND_VERSION,
   isProjectDreamingSession,
   resolveApiBase,
   resolveUsesDemoData,
@@ -42,7 +41,7 @@ const navItems: Array<{ view: PrimaryView; label: string; icon: ComponentType }>
 ];
 
 const REPOSITORY_URL = 'https://github.com/majin1102/muninn';
-const SESSION_PANE_MIN_WIDTH = 340;
+const SESSION_PANE_MIN_WIDTH = 320;
 const SESSION_PANE_DEFAULT_WIDTH = SESSION_PANE_MIN_WIDTH;
 
 export function App() {
@@ -52,7 +51,6 @@ export function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [sessionPaneWidth, setSessionPaneWidth] = useState(SESSION_PANE_DEFAULT_WIDTH);
   const [sessionContentMode, setSessionContentMode] = useState<SessionContentMode>('split');
-  const [version, setVersion] = useState(DEFAULT_BACKEND_VERSION);
   const [projects, setProjects] = useState<ProjectNode[]>([]);
   const [projectLoading, setProjectLoading] = useState(false);
   const [projectError, setProjectError] = useState<string | null>(null);
@@ -71,6 +69,7 @@ export function App() {
   }>>({});
   const contentShellRef = useRef<HTMLDivElement>(null);
   const client = useMemo(() => createAppClient(apiBase, usesDemoData), [apiBase, usesDemoData]);
+  const footerDate = useMemo(() => formatFooterDate(new Date()), []);
   const routeTurnMemoryId = route.memoryId ? turnMemoryIdFromTimelineMemoryId(route.memoryId) : null;
   const activeTurnSession = useMemo(() => (
     routeTurnMemoryId ? findSessionForTurn(projects, routeTurnMemoryId) : null
@@ -100,10 +99,6 @@ export function App() {
     window.addEventListener('hashchange', onHashChange);
     return () => window.removeEventListener('hashchange', onHashChange);
   }, []);
-
-  useEffect(() => {
-    void client.getVersion().then(setVersion);
-  }, [client]);
 
   const loadProjects = useCallback(() => {
     setProjectLoading(true);
@@ -498,9 +493,9 @@ export function App() {
           <a className="sidebar-footer-link sidebar-footer-icon-link" href={REPOSITORY_URL} target="_blank" rel="noreferrer" aria-label="Open GitHub repository">
             <GitHubMark />
           </a>
-          <a className="sidebar-footer-link sidebar-version-link" href={releaseUrl(version)} target="_blank" rel="noreferrer" aria-label={`Open release ${releaseTag(version)}`}>
-            v{version}
-          </a>
+          <span className="sidebar-footer-link sidebar-date" aria-label={`Version ${footerDate}`}>
+            v{footerDate}
+          </span>
         </div>
       </aside>
 
@@ -716,12 +711,11 @@ function PipelineIcon() {
   );
 }
 
-function releaseUrl(version: string): string {
-  return `${REPOSITORY_URL}/releases/tag/${encodeURIComponent(releaseTag(version))}`;
-}
-
-function releaseTag(version: string): string {
-  return version.startsWith('v') ? version : `v${version}`;
+function formatFooterDate(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}.${month}.${day}`;
 }
 
 function EmptyView({ view }: { view: PrimaryView }) {
