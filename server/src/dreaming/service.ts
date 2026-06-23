@@ -282,7 +282,7 @@ async function renderIncrementalSignals(params: {
   const blocks: string[] = [];
   for (const row of params.rows) {
     const skillDetails = parseSkillDetailsJson(row.skillDetails);
-    const baselineEvidence = snapshotEvidenceContributions(params.baselineBySession.get(dreamSessionKey(row)));
+    const baselineEvidence = snapshotEvidenceContributionsBySignal(params.baselineBySession.get(dreamSessionKey(row)));
     for (const signal of row.memorySignals) {
       const block = await renderMemorySignalBlock(signal, row, baselineEvidence, params);
       if (block) {
@@ -302,7 +302,7 @@ async function renderIncrementalSignals(params: {
 async function renderMemorySignalBlock(
   signal: string,
   row: SessionSnapshotRow,
-  baselineEvidence: Map<string, number>,
+  baselineEvidence: Map<string, Map<string, number>>,
   params: {
     client: NativeTables;
     evidence: Map<string, Evidence>;
@@ -312,7 +312,7 @@ async function renderMemorySignalBlock(
   if (!parsed) {
     return null;
   }
-  const labels = await collectNewEvidenceLabels(parsed.labels, row, baselineEvidence, params);
+  const labels = await collectNewEvidenceLabels(parsed.labels, row, baselineEvidence.get(memorySignalKey(parsed.body)) ?? new Map(), params);
   if (labels.length === 0) {
     return null;
   }
@@ -327,7 +327,7 @@ async function renderSkillSignalBlock(
   signal: string,
   row: SessionSnapshotRow,
   skillDetails: Record<string, string>,
-  baselineEvidence: Map<string, number>,
+  baselineEvidence: Map<string, Map<string, number>>,
   params: {
     client: NativeTables;
     evidence: Map<string, Evidence>;
@@ -337,7 +337,12 @@ async function renderSkillSignalBlock(
   if (!parsed) {
     return null;
   }
-  const labels = await collectNewEvidenceLabels(parsed.labels, row, baselineEvidence, params);
+  const labels = await collectNewEvidenceLabels(
+    parsed.labels,
+    row,
+    baselineEvidence.get(skillSignalKey(parsed.skillName, parsed.summary)) ?? new Map(),
+    params,
+  );
   if (labels.length === 0) {
     return null;
   }
@@ -488,24 +493,49 @@ function latestSignalsBySession(source: SourceRows<SessionSnapshotRow>, project:
   return new Map(selectedSignals(source, project).map((row) => [dreamSessionKey(row), row]));
 }
 
-function snapshotEvidenceContributions(row: SessionSnapshotRow | undefined): Map<string, number> {
+function snapshotEvidenceContributionsBySignal(row: SessionSnapshotRow | undefined): Map<string, Map<string, number>> {
   if (!row) {
     return new Map();
   }
-  const contributions = new Map<string, number>();
-  for (const signal of [...row.memorySignals, ...row.skillSignals]) {
+  const contributions = new Map<string, Map<string, number>>();
+  for (const signal of row.memorySignals) {
     const parsed = parseSnapshotSignalLine(signal);
     if (!parsed) {
       continue;
     }
-    for (const label of parsed.labels) {
-      contributions.set(
-        label.turnId,
-        Math.max(contributions.get(label.turnId) ?? 0, label.contribution),
-      );
+    addEvidenceContributions(contributions, memorySignalKey(parsed.body), parsed.labels);
+  }
+  for (const signal of row.skillSignals) {
+    const parsed = parseSnapshotSkillSignalLine(signal);
+    if (!parsed) {
+      continue;
     }
+    addEvidenceContributions(contributions, skillSignalKey(parsed.skillName, parsed.summary), parsed.labels);
   }
   return contributions;
+}
+
+function addEvidenceContributions(
+  contributions: Map<string, Map<string, number>>,
+  signalKey: string,
+  labels: Array<{ turnId: string; contribution: number }>,
+): void {
+  const signalContributions = contributions.get(signalKey) ?? new Map<string, number>();
+  for (const label of labels) {
+    signalContributions.set(
+      label.turnId,
+      Math.max(signalContributions.get(label.turnId) ?? 0, label.contribution),
+    );
+  }
+  contributions.set(signalKey, signalContributions);
+}
+
+function memorySignalKey(body: string): string {
+  return `memory:${body}`;
+}
+
+function skillSignalKey(skillName: string, summary: string): string {
+  return `skill:${skillName}:${summary}`;
 }
 
 function keepBudget(

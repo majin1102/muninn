@@ -336,6 +336,66 @@ test('incremental dream treats higher contribution from the same turn as new evi
   }]);
 });
 
+test('incremental dream treats a different signal from the same turn as new evidence', async () => {
+  const { client } = createClient({
+    watermark: {
+      project: '/repo/muninn',
+      sessionSnapshotVersion: 12,
+      updatedAt: '2026-06-10T00:00:00Z',
+    },
+    snapshotsByVersion: {
+      12: [
+        snapshot({
+          snapshotId: 'session:2',
+          sessionId: 's1',
+          memorySignals: ['- [turn:1 +10] Prefer minimal prompt changes.'],
+        }),
+      ],
+    },
+    deltaRows: [
+      snapshot({
+        snapshotId: 'session:3',
+        sessionId: 's1',
+        memorySignals: [
+          '- [turn:1 +10] Prefer minimal prompt changes.',
+          '- [turn:1 +1] Bind local dev servers to `0.0.0.0` when the user needs browser access from another machine.',
+        ],
+      }),
+    ],
+    turns: {
+      'turn:1': { turnId: 'turn:1', createdAt: '2026-06-18T00:00:00Z' },
+    },
+  });
+  const service = new ProjectDreamingService(client, 'default-extractor', {
+    now: () => new Date('2026-06-19T00:00:00Z'),
+    merge: async ({ incrementalSessionSignals, labels }) => {
+      assert.doesNotMatch(incrementalSessionSignals, /Prefer minimal prompt changes/);
+      assert.match(incrementalSessionSignals, /Bind local dev servers to `0\.0\.0\.0`/);
+      assert.deepEqual(labels, {
+        signalLabels: [],
+        turnLabels: ['turn:1 +1'],
+      });
+      return [
+        '# Project Signals',
+        '',
+        '[turn:1 +1]',
+        '## Memory Signal',
+        'Bind local dev servers to `0.0.0.0` when the user needs browser access from another machine.',
+      ].join('\n');
+    },
+  });
+
+  const result = await service.create('/repo/muninn');
+
+  assert.equal(result.created, true);
+  assert.equal(result.rows.length, 1);
+  assert.deepEqual(result.rows[0].supportTurns, [{
+    turnId: 'turn:1',
+    createdAt: '2026-06-18T00:00:00Z',
+    contribution: 1,
+  }]);
+});
+
 test('dreaming service lists projects with current snapshot signals only', async () => {
   const { client } = createClient({
     snapshots: [

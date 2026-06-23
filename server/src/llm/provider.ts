@@ -195,7 +195,7 @@ async function generateOpenAiWithTools(
     throw new Error('llm.apiKey is required for openai llm provider');
   }
 
-  const apiStyle = normalizeApiStyle(config.api);
+  const apiStyle = normalizeApiStyle(config.api ?? 'openai-completions');
   if (apiStyle !== 'chatCompletions') {
     throw new Error('native tool calls require openai-completions/chat_completions api style');
   }
