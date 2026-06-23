@@ -22,9 +22,11 @@ import type {
   SessionAgentsResponse,
   SessionGroupsResponse,
   SessionTurnDetailResponse,
+  SessionTimelineResponse,
   SessionNode,
   SessionSegmentPreview,
   SessionTimelineItem,
+  SessionTurnPositionResponse,
   SessionTurnsResponse,
   SettingsConfigResponse,
   TurnPreview,
@@ -79,6 +81,8 @@ export type ProjectSessionNode = SessionNode & {
   nextOffset: number | null;
   loading: boolean;
   loaded: boolean;
+  timelineLoading: boolean;
+  timelineLoaded: boolean;
 };
 
 export type ProjectNode = {
@@ -97,10 +101,13 @@ export type AppClient = {
   getProjectDream(project: string): Promise<ProjectDreamView>;
   loadSessionTurns(session: ProjectSessionNode, offset?: number): Promise<{
     turns: ProjectTurnNode[];
-    segments: ProjectSegmentNode[];
-    timeline: ProjectTimelineNode[];
     nextOffset: number | null;
   }>;
+  loadSessionTimeline(session: ProjectSessionNode): Promise<{
+    segments: ProjectSegmentNode[];
+    timeline: ProjectTimelineNode[];
+  }>;
+  locateSessionTurn(session: ProjectSessionNode, memoryId: string): Promise<number>;
   loadTurnDetail(session: ProjectSessionNode, memoryId: string): Promise<ProjectTurnNode>;
   getDocument(memoryId: string): Promise<MemoryDocument>;
   searchRecall(params: {
@@ -314,6 +321,17 @@ export function createAppClient(apiBase: string, usesDemoData: boolean): AppClie
           sessionKey: session.sessionKey,
           sessionLabel: session.displaySessionId,
         })),
+        nextOffset: response.nextOffset,
+      };
+    },
+    async loadSessionTimeline(session) {
+      const params = new URLSearchParams({ project: session.projectKey });
+      const response = usesDemoData
+        ? await getDemoSessionTurns(session.agent, session.sessionKey, 0, 100)
+        : await fetchJson<SessionTimelineResponse>(
+          `/app/api/session/agents/${encodeURIComponent(session.agent)}/sessions/${encodeURIComponent(session.sessionKey)}/timeline?${params.toString()}`,
+        );
+      return {
         segments: (response.segments ?? []).map((segment) => ({
           ...segment,
           agent: session.agent,
@@ -326,8 +344,26 @@ export function createAppClient(apiBase: string, usesDemoData: boolean): AppClie
           sessionKey: session.sessionKey,
           sessionLabel: session.displaySessionId,
         })),
-        nextOffset: response.nextOffset,
       };
+    },
+    async locateSessionTurn(session, memoryId) {
+      if (usesDemoData) {
+        const response = await getDemoSessionTurns(session.agent, session.sessionKey, 0, 1_000);
+        const index = response.turns.findIndex((turn) => turn.memoryId === memoryId);
+        if (index < 0) {
+          throw new Error('turnId not found');
+        }
+        return Math.floor(index / SESSION_TURN_PAGE_SIZE) * SESSION_TURN_PAGE_SIZE;
+      }
+      const params = new URLSearchParams({
+        project: session.projectKey,
+        turnId: memoryId,
+        limit: String(SESSION_TURN_PAGE_SIZE),
+      });
+      const response = await fetchJson<SessionTurnPositionResponse>(
+        `/app/api/session/agents/${encodeURIComponent(session.agent)}/sessions/${encodeURIComponent(session.sessionKey)}/turn-position?${params.toString()}`,
+      );
+      return response.offset;
     },
     async loadTurnDetail(session, memoryId) {
       if (usesDemoData) {
@@ -685,6 +721,8 @@ async function projectTreeFromAgents(
         nextOffset: null,
         loading: false,
         loaded: false,
+        timelineLoading: false,
+        timelineLoaded: false,
       });
       projects.set(projectKey, project);
     }
@@ -744,6 +782,8 @@ function createProjectDreamingSession(project: ProjectDreamProjectView, label: s
     nextOffset: null,
     loading: false,
     loaded: true,
+    timelineLoading: false,
+    timelineLoaded: true,
   };
 }
 

@@ -1,11 +1,11 @@
 import { Bot, Check, ChevronDown, ChevronRight, Folder, MessageSquare, MoonStar as DreamingIcon, Plus, Search, X } from 'lucide-react';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import type { RefObject } from 'react';
+import type { ReactNode, RefObject } from 'react';
 import { logoForAgent, type AgentLogo } from '../lib/agent-logo.js';
 import { isProjectDreamingProject, isProjectDreamingSession } from '../lib/api.js';
 import type { ProjectNode, ProjectSegmentNode, ProjectSessionNode, ProjectTurnNode } from '../lib/api.js';
 import * as SessionIdentity from '@muninn/common/session-identity';
-import { formatRelativeTime, formatTimestamp } from '../lib/utils.js';
+import { cn, formatRelativeTime, formatTimestamp } from '../lib/utils.js';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from './ui/collapsible.js';
 import { Button } from './ui/button.js';
 
@@ -210,7 +210,13 @@ export function SessionTree({
   }, [customFromDate, customFromTime, customToDate, customToTime, selectedAgents, timePreset]);
 
   if (loading && projects.length === 0) {
-    return <div className="sidebar-empty">Loading projects...</div>;
+    return (
+      <SessionTreeLoadingState
+        className="session-tree-loading-root"
+        icon={<MessageSquare />}
+        title="loading sessions..."
+      />
+    );
   }
 
   if (error && projects.length === 0) {
@@ -513,7 +519,11 @@ export function SessionTree({
                 {canExpandSessions ? (
                   <CollapsibleContent className="turn-list">
                     {session.loading && session.turns.length === 0 ? (
-                      <div className="turn-empty">Loading turns...</div>
+                      <SessionTreeLoadingState
+                        className="session-tree-loading-conversation"
+                        icon={<AgentLogoIcon logo={logoForAgent(session.agent)} />}
+                        title="loading conversation..."
+                      />
                     ) : null}
                     <SessionTurnList
                       session={session}
@@ -555,28 +565,29 @@ export function SessionTree({
 function ProjectDreamingIcon() {
   return (
     <svg
-      className="tree-icon tree-icon-project-dreaming"
-      viewBox="0 0 21 17"
+      className="tree-icon"
+      viewBox="0 0 24 24"
       fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
       aria-hidden="true"
     >
       <path
-        d="M1.5 14.2V4.9c0-.9.7-1.6 1.6-1.6h4.15l1.65 1.9h5.15c.9 0 1.6.7 1.6 1.6v2.15"
-        stroke="currentColor"
-        strokeWidth="1.7"
-        strokeLinecap="round"
-        strokeLinejoin="round"
+        d="M2.75 6.05c0-1.1.9-2 2-2h4.15c.57 0 1.1.27 1.44.73l.72.99c.34.46.87.73 1.44.73h6.75c1.1 0 2 .9 2 2v1.25"
+        strokeWidth="1.8"
       />
       <path
-        d="M1.5 14.2c0 .9.7 1.6 1.6 1.6h8.55"
-        stroke="currentColor"
-        strokeWidth="1.7"
-        strokeLinecap="round"
-        strokeLinejoin="round"
+        d="M2.75 6.05v10.45c0 1.1.9 2 2 2h6.55"
+        strokeWidth="1.8"
       />
       <path
-        d="M17.1 8.1a4.25 4.25 0 1 0 3.2 6.95 3.25 3.25 0 0 1-3.85-4.95 3.25 3.25 0 0 1 2.15-1.55 4.2 4.2 0 0 0-1.5-.45Z"
-        fill="currentColor"
+        d="M4.75 18.5h6.55"
+        strokeWidth="1.8"
+      />
+      <path
+        d="M18.15 11.75a3.85 3.85 0 0 0 4.25 5.88 5.1 5.1 0 1 1-4.25-5.88"
+        strokeWidth="1.45"
       />
     </svg>
   );
@@ -1211,5 +1222,16 @@ function AgentLogoIcon({ logo }: { logo: AgentLogo }) {
         <img src={logo.src} alt={logo.label} className="agent-logo-image" />
       )}
     </span>
+  );
+}
+
+function SessionTreeLoadingState({ icon, title, className }: { icon: ReactNode; title: string; className?: string }) {
+  return (
+    <div className={cn('session-tree-loading', className)}>
+      <div className="session-tree-loading-icon" aria-hidden="true">
+        {icon}
+      </div>
+      <div className="session-tree-loading-title">{title}</div>
+    </div>
   );
 }

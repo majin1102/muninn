@@ -37,6 +37,7 @@ enum ListModeInput {
 #[serde(rename_all = "camelCase")]
 struct TurnListParams {
     mode: ListModeInput,
+    project: Option<String>,
     agent: Option<String>,
     session_id: Option<String>,
     extractor: Option<String>,
@@ -248,13 +249,26 @@ impl CoreBinding {
             ListModeInput::Recency { limit } => {
                 resources
                     .turn_table
-                    .list_recent_turns(params.agent, params.session_id, params.extractor, limit)
+                    .list_recent_turns(
+                        params.project,
+                        params.agent,
+                        params.session_id,
+                        params.extractor,
+                        limit,
+                    )
                     .await
             }
             ListModeInput::Page { offset, limit } => {
                 resources
                     .turn_table
-                    .list_turns(params.agent, params.session_id, params.extractor, offset, limit)
+                    .list_turns(
+                        params.project,
+                        params.agent,
+                        params.session_id,
+                        params.extractor,
+                        offset,
+                        limit,
+                    )
                     .await
             }
         };

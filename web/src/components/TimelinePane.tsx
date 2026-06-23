@@ -1,10 +1,11 @@
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { ChevronRight } from 'lucide-react';
+import { ChevronRight, MessageSquare } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import type { ProjectTimelineNode, ProjectTurnNode } from '../lib/api.js';
 import { cn } from '../lib/utils.js';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from './ui/collapsible.js';
+import { EmptyState } from './ui/empty-state.js';
 import { ScrollArea } from './ui/scroll-area.js';
 
 type TimelinePaneProps = {
@@ -33,6 +34,7 @@ export function TimelinePane({
   const scrollRef = useRef<HTMLDivElement>(null);
   const [openItem, setOpenItem] = useState<string | null>(null);
   const [scrollThumb, setScrollThumb] = useState({ height: 0, top: 0, visible: false });
+  const showLoading = useDelayedBoolean(loading, 150);
   const restoreTimelineId = openTimelineId ?? activeTimelineId;
   const turnIndexById = new Map(sessionTurns.map((turn, index) => [turn.memoryId, index + 1]));
 
@@ -104,9 +106,11 @@ export function TimelinePane({
   return (
     <div className="timeline-scroll-shell">
       <ScrollArea ref={scrollRef} className="timeline-scroll">
-        <div className="timeline-pane-content">
-          {loading ? (
-            <div className="timeline-empty">Loading session...</div>
+        <div className={cn('timeline-pane-content', loading && 'timeline-pane-content-loading')}>
+          {showLoading ? (
+            <EmptyState className="timeline-loading-panel" icon={MessageSquare} title="loading timeline..." />
+          ) : loading ? (
+            null
           ) : timeline.length === 0 ? (
             <div className="timeline-empty">No timeline for this session.</div>
           ) : (
@@ -195,6 +199,22 @@ export function TimelinePane({
       ) : null}
     </div>
   );
+}
+
+function useDelayedBoolean(value: boolean, delayMs: number): boolean {
+  const [delayed, setDelayed] = useState(false);
+
+  useEffect(() => {
+    if (!value) {
+      setDelayed(false);
+      return undefined;
+    }
+
+    const timer = window.setTimeout(() => setDelayed(true), delayMs);
+    return () => window.clearTimeout(timer);
+  }, [delayMs, value]);
+
+  return value && delayed;
 }
 
 const TURN_CITATION_HREF_PREFIX = '#muninn-turn=';

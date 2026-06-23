@@ -997,6 +997,15 @@ svg {
   overflow-x: hidden;
 }
 
+.timeline-pane-content-loading {
+  min-height: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  padding: 0 20px 12vh;
+}
+
 .timeline-session-summary {
   margin-bottom: 10px;
   color: #4f5359;
@@ -1280,6 +1289,10 @@ svg {
 .timeline-empty {
   color: var(--muted-foreground);
   font-size: 13px;
+}
+
+.timeline-loading-panel {
+  padding: 20px;
 }
 
 .session-artifacts-empty {
@@ -2144,7 +2157,7 @@ svg {
   gap: 7px;
 }
 
-.tree-trigger-main > span:not(.agent-logo-cluster):not(.agent-logo-frame):not(.tree-session-agent-icon):not(.tree-icon-project-dreaming) {
+.tree-trigger-main > span:not(.agent-logo-cluster):not(.agent-logo-frame):not(.tree-session-agent-icon) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2162,21 +2175,14 @@ svg {
 }
 
 .tree-icon {
-  width: 15px;
-  height: 15px;
+  width: 1.15em;
+  height: 1.15em;
   color: currentColor;
   stroke-width: 1.8;
 }
 
 .tree-icon-dreaming {
   color: #626872;
-}
-
-.tree-icon-project-dreaming {
-  width: 21px;
-  height: 17px;
-  overflow: visible;
-  color: currentColor;
 }
 
 .tree-meta {
@@ -2264,6 +2270,55 @@ svg {
 
 .turn-list:empty {
   display: none;
+}
+
+.session-tree-loading {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--muted-foreground);
+  font-size: 13px;
+  line-height: 1.4;
+  text-align: center;
+}
+
+.session-tree-loading-root {
+  min-height: 100%;
+  height: 100%;
+  padding: 20px 20px 12vh;
+}
+
+.session-tree-loading-conversation {
+  padding: 18px 12px;
+}
+
+.session-tree-loading-icon {
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.session-tree-loading-icon > svg {
+  width: 24px;
+  height: 24px;
+  stroke-width: 1.8;
+}
+
+.session-tree-loading-icon .tree-session-agent-icon,
+.session-tree-loading-icon .tree-session-agent-icon .agent-logo-image,
+.session-tree-loading-icon .tree-session-agent-icon .agent-logo-fallback {
+  width: 20px;
+  height: 20px;
+}
+
+.session-tree-loading-title {
+  margin: 0;
+  font-weight: 500;
 }
 
 .turn-item {

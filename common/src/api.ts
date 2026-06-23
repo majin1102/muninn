@@ -283,9 +283,19 @@ export interface SessionTimelineItem {
 
 export interface SessionTurnsResponse {
   turns: TurnPreview[];
+  nextOffset: number | null;
+  requestId: string;
+}
+
+export interface SessionTimelineResponse {
   segments: SessionSegmentPreview[];
   timeline: SessionTimelineItem[];
-  nextOffset: number | null;
+  requestId: string;
+}
+
+export interface SessionTurnPositionResponse {
+  turnId: string;
+  offset: number;
   requestId: string;
 }
 

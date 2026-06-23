@@ -251,6 +251,7 @@ export interface TurnTableBinding {
   getTurn(turnId: string): Promise<Turn | null>;
   listTurns(params: {
     mode: ListModeInput;
+    project?: string;
     agent?: string;
     sessionId?: string;
     extractor?: string;

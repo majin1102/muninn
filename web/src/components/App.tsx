@@ -11,6 +11,7 @@ import {
   type PrimaryView,
   type ProjectNode,
   type ProjectSessionNode,
+  type ProjectTurnNode,
 } from '../lib/api.js';
 import {
   selectedSessionKey,
@@ -233,20 +234,39 @@ export function App() {
       await openProjectDream(session);
       return;
     }
+    const timelinePromise = loadSessionTimeline(session);
     updateSession(session, { loading: true });
     try {
       const response = await client.loadSessionTurns(session);
       updateSession(session, {
         turns: response.turns,
-        segments: response.segments,
-        timeline: response.timeline,
         nextOffset: response.nextOffset,
         loading: false,
         loaded: true,
       });
+      void timelinePromise;
     } catch (error) {
       setProjectError(asErrorMessage(error));
       updateSession(session, { loading: false });
+    }
+  }
+
+  async function loadSessionTimeline(session: ProjectSessionNode) {
+    if (session.timelineLoading || session.timelineLoaded) {
+      return;
+    }
+    updateSession(session, { timelineLoading: true });
+    try {
+      const response = await client.loadSessionTimeline(session);
+      updateSession(session, {
+        segments: response.segments,
+        timeline: response.timeline,
+        timelineLoading: false,
+        timelineLoaded: true,
+      });
+    } catch (error) {
+      setProjectError(asErrorMessage(error));
+      updateSession(session, { timelineLoading: false });
     }
   }
 
@@ -287,9 +307,7 @@ export function App() {
     try {
       const response = await client.loadSessionTurns(session, session.nextOffset);
       updateSession(session, {
-        turns: [...session.turns, ...response.turns],
-        segments: response.segments.length > 0 ? response.segments : session.segments,
-        timeline: response.timeline.length > 0 ? response.timeline : session.timeline,
+        turns: mergeSessionTurns(session.turns, response.turns),
         nextOffset: response.nextOffset,
         loading: false,
         loaded: true,
@@ -301,37 +319,17 @@ export function App() {
   }
 
   async function loadUntilTurn(session: ProjectSessionNode, memoryId: string) {
-    if (hasTurn(session, memoryId) || session.nextOffset === null) {
+    if (hasTurn(session, memoryId)) {
       return;
     }
 
-    let turns = session.turns;
-    let segments = session.segments;
-    let timeline = session.timeline;
-    let nextOffset: number | null = session.nextOffset;
-
     updateSession(session, { loading: true });
     try {
-      while (!turns.some((turn) => turn.memoryId === memoryId) && nextOffset !== null) {
-        const response = await client.loadSessionTurns({
-          ...session,
-          turns,
-          segments,
-          timeline,
-          nextOffset,
-          loaded: true,
-          loading: true,
-        }, nextOffset);
-        turns = [...turns, ...response.turns];
-        segments = response.segments.length > 0 ? response.segments : segments;
-        timeline = response.timeline.length > 0 ? response.timeline : timeline;
-        nextOffset = response.nextOffset;
-      }
+      const offset = await client.locateSessionTurn(session, memoryId);
+      const response = await client.loadSessionTurns(session, offset);
       updateSession(session, {
-        turns,
-        segments,
-        timeline,
-        nextOffset,
+        turns: mergeSessionTurns(session.turns, response.turns),
+        nextOffset: response.nextOffset,
         loading: false,
         loaded: true,
       });
@@ -353,11 +351,16 @@ export function App() {
     setDocumentError(null);
     window.location.hash = `#/session/s/${encodeURIComponent(selectionId)}`;
     if (isProjectDreamingSession(session)) {
-      void openProjectDream(session);
+      const currentDream = projectDreams[session.projectKey];
+      if (!currentDream?.loading && !currentDream?.dream) {
+        void openProjectDream(session);
+      }
       return;
     }
     if (!session.loaded && !session.loading) {
       void openSession(session);
+    } else if (!session.timelineLoaded && !session.timelineLoading) {
+      void loadSessionTimeline(session);
     }
   }
 
@@ -522,6 +525,8 @@ export function App() {
                   onLoadSession={(session) => {
                     if (!session.loaded && !session.loading) {
                       void openSession(session);
+                    } else if (!session.timelineLoaded && !session.timelineLoading) {
+                      void loadSessionTimeline(session);
                     }
                   }}
                   onOpenTurn={openTimelineFromTree}
@@ -575,6 +580,7 @@ export function App() {
                     }
                   }}
                   loading={documentLoading || locatingActiveTurn || Boolean(activeSession?.loading && !activeSession.loaded)}
+                  timelineLoading={Boolean(activeSession?.timelineLoading && !activeSession.timelineLoaded)}
                   error={documentError}
                 />
                 )}
@@ -672,6 +678,24 @@ function sameSession(left: ProjectSessionNode, right: ProjectSessionNode): boole
 
 function hasTurn(session: ProjectSessionNode, memoryId: string): boolean {
   return session.turns.some((turn) => turn.memoryId === memoryId);
+}
+
+function mergeSessionTurns(existing: ProjectTurnNode[], incoming: ProjectTurnNode[]): ProjectTurnNode[] {
+  const byId = new Map<string, ProjectTurnNode>();
+  for (const turn of [...existing, ...incoming]) {
+    byId.set(turn.memoryId, turn);
+  }
+  return [...byId.values()].sort((left, right) => {
+    const created = left.createdAt.localeCompare(right.createdAt);
+    if (created !== 0) {
+      return created;
+    }
+    const updated = left.updatedAt.localeCompare(right.updatedAt);
+    if (updated !== 0) {
+      return updated;
+    }
+    return left.memoryId.localeCompare(right.memoryId);
+  });
 }
 
 function GitHubMark() {

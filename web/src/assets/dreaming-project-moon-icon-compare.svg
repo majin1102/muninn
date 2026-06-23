@@ -1,0 +1,34 @@
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  viewBox="0 0 360 160"
+  fill="none"
+>
+  <rect width="360" height="160" rx="12" fill="#ffffff" />
+  <rect x="28" y="22" width="132" height="92" rx="10" fill="#f7f7f8" stroke="#e5e5e7" />
+  <rect x="200" y="22" width="132" height="92" rx="10" fill="#f7f7f8" stroke="#e5e5e7" />
+
+  <g transform="translate(76 44)" stroke="#626872" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9" />
+    <path d="M20 3v4" />
+    <path d="M22 5h-4" />
+  </g>
+
+  <g transform="translate(248 44)" stroke="#626872" stroke-linecap="round" stroke-linejoin="round">
+    <path
+      d="M2.75 6.05c0-1.1.9-2 2-2h4.15c.57 0 1.1.27 1.44.73l.72.99c.34.46.87.73 1.44.73h6.75c1.1 0 2 .9 2 2v1.25"
+      stroke-width="1.8"
+    />
+    <path
+      d="M2.75 6.05v10.45c0 1.1.9 2 2 2h6.5"
+      stroke-width="1.8"
+    />
+    <path d="M4.75 18.5h6.5" stroke-width="1.8" />
+    <path
+      d="M18.15 11.75a3.85 3.85 0 0 0 4.25 5.88 5.1 5.1 0 1 1-4.25-5.88"
+      stroke-width="1.45"
+    />
+  </g>
+
+  <text x="94" y="135" fill="#3f4145" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="13" text-anchor="middle">top-level .dreaming</text>
+  <text x="266" y="135" fill="#3f4145" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="13" text-anchor="middle">project dream child</text>
+</svg>

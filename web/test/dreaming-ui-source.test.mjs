@@ -20,9 +20,10 @@ test('session tree renders one top-level dreaming project with dreaming children
   assert.match(treeSource, /isProjectDreamingProject\(project\) \? \(/);
   assert.match(treeSource, /isProjectDreamingSession\(session\)[\s\S]*?<ProjectDreamingIcon \/>/);
   assert.match(treeSource, /function ProjectDreamingIcon\(\)/);
-  assert.match(treeSource, /<svg[\s\S]*?className="tree-icon tree-icon-project-dreaming"[\s\S]*?viewBox="0 0 21 17"[\s\S]*?aria-hidden="true"/);
-  assert.match(treeSource, /<path[\s\S]*?stroke="currentColor"[\s\S]*?strokeWidth="1\.7"[\s\S]*?strokeLinecap="round"[\s\S]*?strokeLinejoin="round"/);
-  assert.match(treeSource, /<path[\s\S]*?fill="currentColor"/);
+  assert.match(treeSource, /<svg[\s\S]*?className="tree-icon"[\s\S]*?viewBox="0 0 24 24"[\s\S]*?aria-hidden="true"/);
+  assert.match(treeSource, /<path[\s\S]*?strokeWidth="1\.8"/);
+  assert.match(treeSource, /d="M18\.15 11\.75a3\.85 3\.85 0 0 0 4\.25 5\.88 5\.1 5\.1 0 1 1-4\.25-5\.88"/);
+  assert.match(treeSource, /strokeWidth="1\.45"/);
   assert.doesNotMatch(treeSource, /tree-icon-project-dreaming-folder/);
   assert.doesNotMatch(treeSource, /tree-icon-project-dreaming-moon/);
   assert.doesNotMatch(treeSource, /tree-icon-project-dreaming-star/);
@@ -32,9 +33,9 @@ test('session tree renders one top-level dreaming project with dreaming children
   assert.doesNotMatch(treeSource, /const dreamingSessions = project\.sessions\.filter\(isProjectDreamingSession\)/);
 
   const cssSource = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8');
-  assert.match(cssSource, /\.tree-trigger-main > span:not\(\.agent-logo-cluster\):not\(\.agent-logo-frame\):not\(\.tree-session-agent-icon\):not\(\.tree-icon-project-dreaming\)/);
-  assert.match(cssSource, /\.tree-icon-project-dreaming \{[\s\S]*?width: 21px;[\s\S]*?height: 17px;/);
-  assert.match(cssSource, /\.tree-icon-project-dreaming \{[\s\S]*?overflow: visible;/);
+  assert.match(cssSource, /\.tree-trigger-main > span:not\(\.agent-logo-cluster\):not\(\.agent-logo-frame\):not\(\.tree-session-agent-icon\)/);
+  assert.match(cssSource, /\.tree-icon \{[\s\S]*?width: 1\.15em;[\s\S]*?height: 1\.15em;/);
+  assert.doesNotMatch(cssSource, /\.tree-icon-project-dreaming \{/);
   assert.doesNotMatch(cssSource, /\.tree-icon-project-dreaming[^}]*background:/);
   assert.doesNotMatch(cssSource, /\.tree-icon-project-dreaming-folder/);
   assert.doesNotMatch(cssSource, /\.tree-icon-project-dreaming-moon/);
@@ -58,8 +59,11 @@ test('app opens dreaming content without loading session turns', async () => {
   assert.match(apiSource, /listProjectDreamProjects\(\)/);
   assert.match(appSource, /<DreamingContent/);
   assert.match(appSource, /return;/);
+  assert.match(appSource, /const currentDream = projectDreams\[session\.projectKey\]/);
+  assert.match(appSource, /if \(!currentDream\?\.loading && !currentDream\?\.dream\)/);
   assert.match(contentSource, /Memories/);
   assert.match(contentSource, /Skills/);
+  assert.match(contentSource, /loading && !dream \? null/);
   assert.doesNotMatch(contentSource, />Memory Signals</);
   assert.doesNotMatch(contentSource, /Open Questions/);
   assert.doesNotMatch(contentSource, /Latest dream/);

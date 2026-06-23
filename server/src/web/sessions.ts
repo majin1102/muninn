@@ -11,6 +11,8 @@ import type {
   SessionSnapshotListResponse,
   SessionTimelineItem,
   SessionTurnDetailResponse,
+  SessionTimelineResponse,
+  SessionTurnPositionResponse,
   SessionTurnsResponse,
   TurnPreview,
 } from '@muninn/common';
@@ -387,31 +389,50 @@ async function loadSessionTurnPreviewsPage(params: {
   limit: number;
 }): Promise<{
   turns: TurnPreview[];
-  segments: SessionSegmentPreview[];
-  timeline: SessionTimelineItem[];
   nextOffset: number | null;
 }> {
-  const allTurns = (await turns.list({
-    mode: { type: 'page', offset: 0, limit: SESSION_TREE_PAGE_LIMIT },
-    agent: params.agent,
-    ...(isDefaultSessionKey(params.sessionKey) ? {} : { sessionId: params.sessionKey }),
-  }))
-    .filter((turn) => matchesSessionNode(turn, params.sessionKey))
-    .filter((turn) => turn.project === params.project)
-    .filter(hasTurnPreviewContent)
-    .sort((left, right) => (
-      left.createdAt.localeCompare(right.createdAt)
-      || left.updatedAt.localeCompare(right.updatedAt)
-      || left.turnId.localeCompare(right.turnId)
-    ));
-  const previews = allTurns.map(toTurnPreview);
-  const snapshot = await loadSessionSnapshotContent(params.project, params.agent, params.sessionKey);
-  return buildSessionTurnPage({
-    turns: previews,
-    snapshot,
-    offset: params.offset,
-    limit: params.limit,
-  });
+  const pageRows: AppSessionTurn[] = [];
+  const queryLimit = params.limit + 1;
+  let rawOffset = params.offset;
+  let nextOffset: number | null = null;
+
+  while (nextOffset === null) {
+    const rows = await turns.list({
+      mode: { type: 'page', offset: rawOffset, limit: queryLimit },
+      project: params.project,
+      agent: params.agent,
+      ...(isDefaultSessionKey(params.sessionKey) ? {} : { sessionId: params.sessionKey }),
+    });
+    if (rows.length === 0) {
+      break;
+    }
+
+    for (let index = 0; index < rows.length; index += 1) {
+      const turn = rows[index]!;
+      if (
+        !matchesSessionNode(turn, params.sessionKey)
+        || turn.project !== params.project
+        || !hasTurnPreviewContent(turn)
+      ) {
+        continue;
+      }
+      if (pageRows.length >= params.limit) {
+        nextOffset = rawOffset + index;
+        break;
+      }
+      pageRows.push(turn);
+    }
+
+    if (nextOffset !== null || rows.length < queryLimit) {
+      break;
+    }
+    rawOffset += rows.length;
+  }
+
+  return {
+    turns: pageRows.map(toTurnPreview),
+    nextOffset,
+  };
 }
 
 type SessionSnapshotContent = {
@@ -448,22 +469,15 @@ async function loadSessionSnapshotContent(project: string, agent: string, sessio
 
 function buildSessionTurnPage(params: {
   turns: TurnPreview[];
-  snapshot?: SessionSnapshotContent | null;
   offset: number;
   limit: number;
 }): {
   turns: TurnPreview[];
-  segments: SessionSegmentPreview[];
-  timeline: SessionTimelineItem[];
   nextOffset: number | null;
 } {
   const pageTurns = params.turns.slice(params.offset, params.offset + params.limit);
-  const timeline = buildSessionTimeline(params.snapshot, params.turns);
-  const segments = buildSessionSegments(timeline, params.turns);
   return {
     turns: pageTurns,
-    segments,
-    timeline,
     nextOffset: resolveSessionTreeNextOffset({
       offset: params.offset,
       limit: params.limit,
@@ -488,17 +502,29 @@ export function resolveSessionTreeNextOffsetForTests(params: {
   return resolveSessionTreeNextOffset(params);
 }
 
+function buildSessionTimelinePage(params: {
+  snapshot?: SessionSnapshotContent | null;
+  turnPreviews: TurnPreview[];
+}): {
+  segments: SessionSegmentPreview[];
+  timeline: SessionTimelineItem[];
+} {
+  const timeline = buildSessionTimeline(params.snapshot, params.turnPreviews);
+  return {
+    segments: buildSessionSegments(timeline),
+    timeline,
+  };
+}
+
 function buildSessionSegments(
   timeline: SessionTimelineItem[],
-  turnPreviews: TurnPreview[],
 ): SessionSegmentPreview[] {
-  const fromTimeline = timeline.filter((item) => item.kind === 'extraction').map((item) => ({
+  return timeline.filter((item) => item.kind === 'extraction').map((item) => ({
     memoryId: item.memoryId,
     title: item.title,
     createdAt: item.createdAt,
     updatedAt: item.updatedAt,
   }));
-  return fromTimeline.length > 0 ? fromTimeline : fallbackTurnSegments(turnPreviews);
 }
 
 function buildSessionTimeline(
@@ -667,20 +693,88 @@ function parseExtractionRefs(value: string | undefined): string[] {
     .filter((ref) => ref.startsWith('turn:'));
 }
 
-function fallbackTurnSegments(turnPreviews: TurnPreview[]): SessionSegmentPreview[] {
-  return turnPreviews.map((turn) => ({
-    memoryId: turn.memoryId,
-    title: turn.prompt ?? turn.preview,
-    createdAt: turn.createdAt,
-    updatedAt: turn.updatedAt,
-  }));
+function extractionRefsFromSnapshot(snapshot: SessionSnapshotContent | null | undefined): string[] {
+  const section = snapshot?.content ? snapshotSections(snapshot.content).get('extractions') : undefined;
+  if (!section) {
+    return [];
+  }
+  const refsPattern = /<!--\s*(?:sequence:\s*\d+\s*;\s*)?refs:\s*\[([^\]]*)\]\s*-->/g;
+  const refs = new Set<string>();
+  for (const match of section.matchAll(refsPattern)) {
+    for (const ref of parseExtractionRefs(match[1])) {
+      refs.add(ref);
+    }
+  }
+  return [...refs];
+}
+
+async function loadTimelineReferenceTurnPreviews(
+  snapshot: SessionSnapshotContent | null | undefined,
+): Promise<TurnPreview[]> {
+  const refs = extractionRefsFromSnapshot(snapshot);
+  const rows = await Promise.all(
+    refs.map(async (ref) => {
+      try {
+        const turn = await turns.get(ref);
+        return turn && hasTurnPreviewContent(turn) ? toTurnPreview(turn) : null;
+      } catch {
+        return null;
+      }
+    }),
+  );
+  return rows.filter((turn): turn is TurnPreview => turn !== null);
+}
+
+async function locateSessionTurnOffset(params: {
+  agent: string;
+  project: string;
+  sessionKey: string;
+  turnId: string;
+  limit: number;
+}): Promise<number | null> {
+  const target = await turns.get(params.turnId);
+  if (
+    !target
+    || target.project !== params.project
+    || target.agent !== params.agent
+    || !matchesSessionNode(target, params.sessionKey)
+    || !hasTurnPreviewContent(target)
+  ) {
+    return null;
+  }
+
+  const rows = (await turns.list({
+    mode: { type: 'page', offset: 0, limit: SESSION_TREE_PAGE_LIMIT },
+    project: params.project,
+    agent: params.agent,
+    ...(isDefaultSessionKey(params.sessionKey) ? {} : { sessionId: params.sessionKey }),
+  }))
+    .filter((turn) => matchesSessionNode(turn, params.sessionKey))
+    .filter((turn) => turn.project === params.project)
+    .filter(hasTurnPreviewContent)
+    .sort(compareTurnsForConversation);
+
+  const index = rows.findIndex((turn) => turn.turnId === params.turnId);
+  return index >= 0 ? Math.floor(index / params.limit) * params.limit : null;
+}
+
+function compareTurnsForConversation(left: AppSessionTurn, right: AppSessionTurn): number {
+  const created = left.createdAt.localeCompare(right.createdAt);
+  if (created !== 0) {
+    return created;
+  }
+  const updated = left.updatedAt.localeCompare(right.updatedAt);
+  if (updated !== 0) {
+    return updated;
+  }
+  return left.turnId.localeCompare(right.turnId);
 }
 
 export function buildSessionSegmentsForTests(
   snapshot: SessionSnapshotContent | null | undefined,
   turnPreviews: TurnPreview[],
 ): SessionSegmentPreview[] {
-  return buildSessionSegments(buildSessionTimeline(snapshot, turnPreviews), turnPreviews);
+  return buildSessionSegments(buildSessionTimeline(snapshot, turnPreviews));
 }
 
 export function buildSessionTimelineForTests(
@@ -690,18 +784,31 @@ export function buildSessionTimelineForTests(
   return buildSessionTimeline(snapshot, turnPreviews);
 }
 
+export function extractionRefsFromSnapshotForTests(
+  snapshot: SessionSnapshotContent | null | undefined,
+): string[] {
+  return extractionRefsFromSnapshot(snapshot);
+}
+
 export function buildSessionTurnPageForTests(params: {
   turns: TurnPreview[];
-  snapshot?: SessionSnapshotContent | null;
   offset: number;
   limit: number;
 }): {
   turns: TurnPreview[];
-  segments: SessionSegmentPreview[];
-  timeline: SessionTimelineItem[];
   nextOffset: number | null;
 } {
   return buildSessionTurnPage(params);
+}
+
+export function buildSessionTimelinePageForTests(params: {
+  snapshot?: SessionSnapshotContent | null;
+  turnPreviews: TurnPreview[];
+}): {
+  segments: SessionSegmentPreview[];
+  timeline: SessionTimelineItem[];
+} {
+  return buildSessionTimelinePage(params);
 }
 
 export function buildTurnPreviewForTests(turn: AppSessionTurn): TurnPreview {
@@ -829,9 +936,76 @@ sessionRoutes.get('/app/api/session/agents/:agent/sessions/:sessionKey/turns', a
 
   const response: SessionTurnsResponse = {
     turns: page.turns,
+    nextOffset: page.nextOffset,
+    requestId: generateRequestId(),
+  };
+
+  return c.json(response);
+});
+
+sessionRoutes.get('/app/api/session/agents/:agent/sessions/:sessionKey/timeline', async (c) => {
+  const agent = c.req.param('agent');
+  const sessionKey = c.req.param('sessionKey');
+  const project = normalizeText(c.req.query('project'));
+
+  console.log('[APP_UI_SESSION_TIMELINE] agent:', agent, 'project:', project, 'sessionKey:', sessionKey);
+
+  if (!project) {
+    return c.json(errorResponse('invalidRequest', 'project is required'), 400);
+  }
+
+  const snapshot = await loadSessionSnapshotContent(project, agent, sessionKey);
+  const turnPreviews = await loadTimelineReferenceTurnPreviews(snapshot);
+  const page = buildSessionTimelinePage({ snapshot, turnPreviews });
+  const response: SessionTimelineResponse = {
     segments: page.segments,
     timeline: page.timeline,
-    nextOffset: page.nextOffset,
+    requestId: generateRequestId(),
+  };
+
+  return c.json(response);
+});
+
+sessionRoutes.get('/app/api/session/agents/:agent/sessions/:sessionKey/turn-position', async (c) => {
+  const agent = c.req.param('agent');
+  const sessionKey = c.req.param('sessionKey');
+  const project = normalizeText(c.req.query('project'));
+  const turnId = normalizeText(c.req.query('turnId'));
+  const limitRaw = c.req.query('limit');
+  const limit = limitRaw ? Number(limitRaw) : 10;
+
+  console.log('[APP_UI_SESSION_TURN_POSITION] agent:', agent, 'project:', project, 'sessionKey:', sessionKey, 'turnId:', turnId, 'limit:', limit);
+
+  if (!project) {
+    return c.json(errorResponse('invalidRequest', 'project is required'), 400);
+  }
+  if (!turnId) {
+    return c.json(errorResponse('invalidRequest', 'turnId is required'), 400);
+  }
+  if (Number.isNaN(limit) || limit <= 0) {
+    return c.json(errorResponse('invalidRequest', 'limit must be a positive number'), 400);
+  }
+
+  let offset: number | null;
+  try {
+    offset = await locateSessionTurnOffset({
+      agent,
+      project,
+      sessionKey,
+      turnId,
+      limit,
+    });
+  } catch (error) {
+    const mapped = mapCoreLookupError(error);
+    return c.json(mapped.body, mapped.status as 400 | 500);
+  }
+  if (offset === null) {
+    return c.json(errorResponse('notFound', 'turnId not found'), 404);
+  }
+
+  const response: SessionTurnPositionResponse = {
+    turnId,
+    offset,
     requestId: generateRequestId(),
   };
 

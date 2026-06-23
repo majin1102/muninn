@@ -59,7 +59,7 @@ export function DreamingContent({
         </div>
       </div>
       <ScrollArea className="dreaming-scroll">
-        {loading ? null : tab === 'memories' ? (
+        {loading && !dream ? null : tab === 'memories' ? (
           <DreamingMemories
             memorySignals={dream?.memorySignals ?? []}
           />

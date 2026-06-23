@@ -179,7 +179,7 @@ export function ChatView({
   }, [onVisibleTurnIdsChange, timelineItems.length, turnWindow.turns]);
 
   if (loading) {
-    return <EmptyState className="content-empty-panel chat-empty" icon={MessageSquare} title="Loading conversation..." />;
+    return <EmptyState className="content-empty-panel chat-empty" icon={MessageSquare} title="loading conversation..." />;
   }
 
   if (error) {

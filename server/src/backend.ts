@@ -547,6 +547,7 @@ export const turns = {
 
   async list(params: {
     mode: ListModeInput;
+    project?: string;
     agent?: string;
     sessionId?: string;
     database?: string | null;
@@ -555,6 +556,7 @@ export const turns = {
     await writeMuninnLog(databaseName, 'info', 'list', 'turn_list', {
       mode: params.mode.type,
       limit: 'limit' in params.mode ? params.mode.limit : undefined,
+      project: params.project,
       agent: params.agent,
       sessionId: params.sessionId,
     });

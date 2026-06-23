@@ -43,6 +43,7 @@ type SessionContentSplitProps = {
   loadingMoreAfter: boolean;
   onLoadMoreAfter: () => void;
   loading: boolean;
+  timelineLoading: boolean;
   error: string | null;
   onModeChange: (mode: SessionContentMode) => void;
 };
@@ -65,6 +66,7 @@ export function SessionContentSplit({
   loadingMoreAfter,
   onLoadMoreAfter,
   loading,
+  timelineLoading,
   error,
   onModeChange,
 }: SessionContentSplitProps) {
@@ -222,7 +224,7 @@ export function SessionContentSplit({
         </div>
         <TimelinePane
           timeline={session?.timeline ?? []}
-          loading={loading}
+          loading={timelineLoading}
           activeTimelineId={activeTimelineId}
           openTimelineId={openTimelineId}
           openTimelineRequestId={openTimelineRequestId}

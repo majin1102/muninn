@@ -10,6 +10,7 @@ This file is the fast-path context for coding agents working in this repository.
 - PR titles must follow the `Conventional Commits` style, such as `feat: ...`, `fix: ...`, and `docs: ...`. Use a valid type prefix followed by a short summary, do not open PRs with arbitrary title formats, and when developing a new feature always start by creating a new worktree from `main` with a new branch, then use that branch to implement the work and open the PR.
 - Prefer short, context-aware names for methods and variables. Avoid sentence-like names that restate the entire workflow; both method names and variable names should stay compact when the surrounding code already provides the domain context. For example, prefer `link_refs(thread, refs)` over `resolve_pending_parent_references_after_flush(thread, refs)`, and prefer `pending_parent_id` over `pending_parent_reference_id`.
 - When a plan includes prompt changes, spell out the concrete prompt text or exact prompt diff in the plan instead of describing it vaguely.
+- Keep the user-facing Muninn demo server isolated from side-agent work. The visible server should run from the active worktree against the active `$MUNINN_HOME`; side-agent review, build, test, import, finalize, and dreaming work must use a separate worktree and an isolated `MUNINN_HOME` such as `/tmp/muninn-agent-*`.
 
 ## What This Repo Is
 

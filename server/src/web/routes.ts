@@ -9,8 +9,10 @@ import { settingsRoutes } from './settings.js';
 
 export {
   SESSION_SNAPSHOTS_ROUTE,
+  extractionRefsFromSnapshotForTests,
   buildSessionSegmentsForTests,
   buildSessionTimelineForTests,
+  buildSessionTimelinePageForTests,
   buildSessionTurnPageForTests,
   buildTurnDetailForTests,
   buildTurnPreviewForTests,

@@ -189,10 +189,11 @@ export async function getTurn(
 
 export async function listTurns(
   client: NativeTables,
-  params: { mode: ListModeInput; agent?: string; sessionId?: string },
+  params: { mode: ListModeInput; project?: string; agent?: string; sessionId?: string },
 ): Promise<TurnRow[]> {
   const turns = await client.turnTable.listTurns({
     mode: params.mode,
+    project: normalizeText(params.project),
     agent: params.agent,
     sessionId: normalizeSessionId(params.sessionId),
   });
@@ -583,6 +584,7 @@ export class Memories {
 
   async listTurns(params: {
     mode: ListModeInput;
+    project?: string;
     agent?: string;
     sessionId?: string;
   }): Promise<TurnRow[]> {
