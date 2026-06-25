@@ -840,13 +840,26 @@ function lastNonEmpty(values: string[]): string | null {
 }
 
 async function* streamResponseText(response: Response): AsyncIterable<string> {
-  if (!response.body) {
-    for (const event of parseSseEvents(await response.text())) {
+  let sawDelta = false;
+  function* textChunks(events: Array<Record<string, unknown>>): Iterable<string> {
+    for (const event of events) {
       const delta = eventTextDelta(event);
       if (delta) {
+        sawDelta = true;
         yield delta;
+        continue;
+      }
+      if (!sawDelta) {
+        const fallback = eventTextFallback(event);
+        if (fallback) {
+          yield fallback;
+        }
       }
     }
+  }
+
+  if (!response.body) {
+    yield* textChunks(parseSseEvents(await response.text()));
     return;
   }
 
@@ -863,22 +876,12 @@ async function* streamResponseText(response: Response): AsyncIterable<string> {
       const chunks = buffer.split(/\n\n+/);
       buffer = chunks.pop() ?? '';
       for (const chunk of chunks) {
-        for (const event of parseSseEvents(chunk)) {
-          const delta = eventTextDelta(event);
-          if (delta) {
-            yield delta;
-          }
-        }
+        yield* textChunks(parseSseEvents(chunk));
       }
     }
     buffer += decoder.decode();
     if (buffer.trim()) {
-      for (const event of parseSseEvents(buffer)) {
-        const delta = eventTextDelta(event);
-        if (delta) {
-          yield delta;
-        }
-      }
+      yield* textChunks(parseSseEvents(buffer));
     }
   } finally {
     reader.releaseLock();
@@ -890,6 +893,17 @@ function eventTextDelta(event: Record<string, unknown>): string | null {
   if (type.endsWith('output_text.delta') && typeof event.delta === 'string') {
     return event.delta;
   }
+  const choices = Array.isArray(event.choices)
+    ? event.choices as Array<{ delta?: { content?: unknown } }>
+    : [];
+  const chatDelta = choices
+    .map((choice) => typeof choice.delta?.content === 'string' ? choice.delta.content : '')
+    .join('');
+  return chatDelta || null;
+}
+
+function eventTextFallback(event: Record<string, unknown>): string | null {
+  const type = typeof event.type === 'string' ? event.type : '';
   if (type.endsWith('output_text.done') && typeof event.text === 'string') {
     return event.text;
   }
@@ -903,14 +917,7 @@ function eventTextDelta(event: Record<string, unknown>): string | null {
       return itemText;
     }
   }
-
-  const choices = Array.isArray(event.choices)
-    ? event.choices as Array<{ delta?: { content?: unknown } }>
-    : [];
-  const chatDelta = choices
-    .map((choice) => typeof choice.delta?.content === 'string' ? choice.delta.content : '')
-    .join('');
-  return chatDelta || null;
+  return null;
 }
 
 function codexInstructions(messages: LlmToolMessage[]): string {

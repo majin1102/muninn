@@ -5,7 +5,7 @@ import path from 'node:path';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 
 import { validateMuninnConfigInput } from '../../dist/config.js';
-import { generateText, generateWithTools } from '../../dist/llm/provider.js';
+import { generateText, generateTextStream, generateWithTools } from '../../dist/llm/provider.js';
 
 function base64UrlJson(value) {
   return Buffer.from(JSON.stringify(value), 'utf8')
@@ -134,6 +134,29 @@ test('generateText sends openai-codex requests through Codex CLI auth', async (t
       content: [{ type: 'input_text', text: 'user prompt' }],
     },
   ]);
+});
+
+test('generateTextStream does not duplicate openai-codex done text after deltas', async (t) => {
+  await setupCodexRun(t);
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(codexSse(
+    { type: 'response.output_text.delta', delta: 'Codex ' },
+    { type: 'response.output_text.delta', delta: 'answer' },
+    { type: 'response.output_text.done', text: 'Codex answer' },
+  ));
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  const chunks = [];
+  for await (const chunk of generateTextStream('extractor', {
+    system: 'system prompt',
+    prompt: 'user prompt',
+  })) {
+    chunks.push(chunk);
+  }
+
+  assert.equal(chunks.join(''), 'Codex answer');
 });
 
 test('generateWithTools sends openai-codex Responses tools and parses calls', async (t) => {

@@ -251,6 +251,7 @@ export class Extractor {
   async flushPending(): Promise<void> {
     // Explicit barrier-drain: only work that has entered the extractor before this call is guaranteed to drain.
     await this.ensureBootstrapped();
+    this.throwIfFailedEpoch();
     const barrier = this.sealOpenEpoch(this.openEpoch, true);
     if (!barrier) {
       return;
@@ -266,10 +267,12 @@ export class Extractor {
       if (this.shuttingDown) {
         return;
       }
+      this.throwIfFailedEpoch();
       if (barrierComplete()) {
         return;
       }
       const version = this.changeVersion;
+      this.throwIfFailedEpoch();
       if (barrierComplete()) {
         return;
       }
@@ -388,6 +391,15 @@ export class Extractor {
           continue;
         }
 
+        if (this.failedEpoch) {
+          const version = this.changeVersion;
+          if (this.failedEpoch) {
+            await this.waitForChange(version);
+          }
+          retryDelayMs = BASE_RETRY_DELAY_MS;
+          continue;
+        }
+
         const sealedEpoch = this.epochQueue.shift();
         if (sealedEpoch) {
           this.currentEpoch = sealedEpoch;
@@ -488,6 +500,15 @@ export class Extractor {
       this.refreshCheckpointSnapshot();
       this.notifyChange();
     });
+  }
+
+  private throwIfFailedEpoch(): void {
+    if (!this.failedEpoch || !this.lastEpochError) {
+      return;
+    }
+    throw new Error(
+      `extractor epoch ${this.failedEpoch.epoch} failed after ${this.maxAttempts} attempts: ${this.lastEpochError}`,
+    );
   }
 
   private indexCurrentEpochSnapshots(touchedIds: Set<string>): Promise<void> {
