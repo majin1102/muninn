@@ -324,7 +324,7 @@ test('extractor config defaults activeWindowDays, continuityHints, and epoch sea
   assert.equal(extractorConfig.maxInputChars, 24_576);
   assert.equal(extractorConfig.snapshotInputChars, 16_384);
   assert.equal(extractorConfig.previewChars, 800);
-  assert.equal(extractorConfig.epochWindowMs, 10_000);
+  assert.equal(extractorConfig.epochWindowMs, 600_000);
 
   await writeMuninnConfig(configPath, {
     llmProvider: 'mock',
