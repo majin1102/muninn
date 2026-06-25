@@ -5,7 +5,7 @@ import path from 'node:path';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 
 import { validateMuninnConfigInput } from '../../dist/config.js';
-import { generateText, generateWithTools } from '../../dist/llm/provider.js';
+import { generateText, generateTextStream, generateWithTools } from '../../dist/llm/provider.js';
 
 function base64UrlJson(value) {
   return Buffer.from(JSON.stringify(value), 'utf8')
@@ -136,6 +136,29 @@ test('generateText sends openai-codex requests through Codex CLI auth', async (t
   ]);
 });
 
+test('generateTextStream does not duplicate openai-codex done text after deltas', async (t) => {
+  await setupCodexRun(t);
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(codexSse(
+    { type: 'response.output_text.delta', delta: 'Codex ' },
+    { type: 'response.output_text.delta', delta: 'answer' },
+    { type: 'response.output_text.done', text: 'Codex answer' },
+  ));
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  const chunks = [];
+  for await (const chunk of generateTextStream('extractor', {
+    system: 'system prompt',
+    prompt: 'user prompt',
+  })) {
+    chunks.push(chunk);
+  }
+
+  assert.equal(chunks.join(''), 'Codex answer');
+});
+
 test('generateWithTools sends openai-codex Responses tools and parses calls', async (t) => {
   await setupCodexRun(t);
   const originalFetch = globalThis.fetch;
@@ -208,6 +231,75 @@ test('generateWithTools sends openai-codex Responses tools and parses calls', as
       name: 'memory-get',
       arguments: { memoryIds: ['extraction:1'] },
     }],
+  });
+});
+
+test('generateWithTools parses openai-codex output_text.done as final text', async (t) => {
+  await setupCodexRun(t);
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(codexSse(
+    {
+      type: 'response.output_item.added',
+      item: {
+        type: 'reasoning',
+        summary: [],
+      },
+    },
+    {
+      type: 'response.output_item.done',
+      item: {
+        type: 'message',
+        content: [],
+      },
+    },
+    {
+      type: 'response.content_part.added',
+      part: {
+        type: 'output_text',
+        text: '',
+      },
+    },
+    {
+      type: 'response.output_text.done',
+      text: 'Codex final answer',
+    },
+    {
+      type: 'response.content_part.done',
+      part: {
+        type: 'output_text',
+        text: 'Codex final answer',
+      },
+    },
+    {
+      type: 'response.completed',
+      response: {},
+    },
+  ));
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  const result = await generateWithTools('extractor', {
+    messages: [
+      { role: 'system', content: 'system prompt' },
+      { role: 'user', content: 'user prompt' },
+    ],
+    tools: [{
+      name: 'memory-get',
+      description: 'Get memory details.',
+      parameters: {
+        type: 'object',
+        properties: {
+          memoryIds: { type: 'array', items: { type: 'string' } },
+        },
+        required: ['memoryIds'],
+      },
+    }],
+  });
+
+  assert.deepEqual(result, {
+    type: 'final',
+    text: 'Codex final answer',
   });
 });
 
@@ -326,6 +418,9 @@ test('generateWithTools writes sanitized diagnostics when openai-codex response 
   assert.deepEqual(diagnostic.completedOutputItemTypes, ['reasoning']);
   assert.deepEqual(diagnostic.completedOutputContentTypes, ['summary_text']);
   assert.deepEqual(diagnostic.directItemTypes, ['reasoning']);
+  assert.deepEqual(diagnostic.outputTextDoneTextLengths, []);
+  assert.deepEqual(diagnostic.contentPartDoneTextLengths, []);
+  assert.deepEqual(diagnostic.directMessageContentTextLengths, []);
   const serialized = JSON.stringify(diagnostic);
   assert.equal(serialized.includes('system prompt secret'), false);
   assert.equal(serialized.includes('user prompt secret'), false);

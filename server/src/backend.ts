@@ -520,7 +520,11 @@ export async function captureTurn(turnContent: TurnContent, database?: string | 
     sessionId: turnContent.sessionId,
     agent: turnContent.agent,
   });
-  await (await getBackend(databaseName)).accept(turnContent);
+  const backend = await getBackend(databaseName);
+  await backend.accept(turnContent);
+  if (isHookCapture(turnContent)) {
+    await backend.memoryFinalize();
+  }
 }
 
 export async function captureTurns(turnContents: TurnContent[], database?: string | null): Promise<number> {
@@ -529,6 +533,11 @@ export async function captureTurns(turnContents: TurnContent[], database?: strin
     count: turnContents.length,
   });
   return (await getBackend(databaseName)).acceptBatch(turnContents);
+}
+
+function isHookCapture(turnContent: TurnContent): boolean {
+  return typeof turnContent.metadata?.ingest === 'string'
+    && turnContent.metadata.ingest.endsWith('-hook');
 }
 
 export async function validateSettings(content: string): Promise<void> {

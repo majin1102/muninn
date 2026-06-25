@@ -1,9 +1,10 @@
 #!/usr/bin/env node
-import { realpathSync } from 'node:fs';
+import { accessSync, constants as fsConstants, realpathSync, statSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from './args.js';
+import type { HostTarget } from './args.js';
 import type { InstallPart } from './model.js';
 import { installTargets, uninstallTargets } from './install.js';
 import { readInstallStatus } from './status.js';
@@ -13,6 +14,12 @@ const BIN_NAMES = {
   mcpCommand: 'muninn-mcp',
   codexHookCommand: 'muninn-codex-hook',
   claudeHookCommand: 'muninn-claude-hook',
+} as const;
+
+const BIN_PACKAGE_FALLBACKS = {
+  mcpCommand: { packageName: '@muninn/mcp', binPath: 'dist/index.js' },
+  codexHookCommand: { packageName: '@muninn/codex', binPath: 'dist/cli.js' },
+  claudeHookCommand: { packageName: '@muninn/claude', binPath: 'dist/claude-cli.js' },
 } as const;
 
 export async function main(argv = process.argv.slice(2)): Promise<number> {
@@ -34,7 +41,11 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
         yes: parsed.yes,
         home: os.homedir(),
         cwd: process.cwd(),
-        commands: resolveInstallCommands({ requireExecutable: parsed.command === 'install' }),
+        commands: resolveInstallCommands({
+          requireExecutable: parsed.command === 'install',
+          target: parsed.target,
+          parts,
+        }),
       });
       for (const result of results) {
         for (const line of result.summary) {
@@ -141,29 +152,60 @@ function installParts(parsed: {
 
 export function resolveInstallCommands(options: {
   requireExecutable?: boolean;
+  target?: HostTarget | 'all';
+  parts?: Set<InstallPart>;
+  envPath?: string;
+  access?: (candidate: string) => boolean;
 } = {}): {
   mcpCommand: string;
   codexHookCommand: string;
   claudeHookCommand: string;
 } {
   const extraBinDirs = packageBinDirs();
+  const target = options.target ?? 'all';
+  const targets = new Set(target === 'all' ? ['codex', 'claude'] : [target]);
+  const parts = options.parts ?? new Set<InstallPart>(['mcp', 'hook']);
+  const needsMcp = parts.has('mcp');
+  const needsCodexHook = parts.has('hook') && targets.has('codex');
+  const needsClaudeHook = parts.has('hook') && targets.has('claude');
+
   return {
-    mcpCommand: resolveBin(BIN_NAMES.mcpCommand, extraBinDirs, options),
-    codexHookCommand: resolveBin(BIN_NAMES.codexHookCommand, extraBinDirs, options),
-    claudeHookCommand: resolveBin(BIN_NAMES.claudeHookCommand, extraBinDirs, options),
+    mcpCommand: resolveBin(BIN_NAMES.mcpCommand, extraBinDirs, BIN_PACKAGE_FALLBACKS.mcpCommand, {
+      ...options,
+      requireExecutable: options.requireExecutable && needsMcp,
+    }),
+    codexHookCommand: resolveBin(BIN_NAMES.codexHookCommand, extraBinDirs, BIN_PACKAGE_FALLBACKS.codexHookCommand, {
+      ...options,
+      requireExecutable: options.requireExecutable && needsCodexHook,
+    }),
+    claudeHookCommand: resolveBin(BIN_NAMES.claudeHookCommand, extraBinDirs, BIN_PACKAGE_FALLBACKS.claudeHookCommand, {
+      ...options,
+      requireExecutable: options.requireExecutable && needsClaudeHook,
+    }),
   };
 }
 
 function resolveBin(
   name: string,
   extraBinDirs: string[],
-  options: { requireExecutable?: boolean },
+  packageFallback: { packageName: string; binPath: string },
+  options: {
+    requireExecutable?: boolean;
+    envPath?: string;
+    access?: (candidate: string) => boolean;
+  },
 ): string {
   const resolved = resolveCommand(name, {
     preferAbsolute: true,
     extraBinDirs,
+    envPath: options.envPath,
+    access: options.access,
   });
   if (!resolved.resolvedPath && options.requireExecutable) {
+    const packageBin = resolvePackageBin(packageFallback);
+    if (packageBin) {
+      return packageBin;
+    }
     throw new Error(`Unable to locate ${name}. Reinstall @muninn/cli and retry.`);
   }
   return resolved.command;
@@ -177,14 +219,39 @@ function packageBinDirs(): string[] {
   return [path.join(packageRoot, 'node_modules', '.bin')];
 }
 
+function resolvePackageBin(fallback: { packageName: string; binPath: string }): string | null {
+  const packageRoot = path.dirname(packageBinDirs()[0]);
+  const candidate = path.join(packageRoot, fallback.packageName, fallback.binPath);
+  try {
+    accessSync(candidate, fsConstants.X_OK);
+    return candidate;
+  } catch {
+    return null;
+  }
+}
+
 function isMainModule(): boolean {
   if (!process.argv[1]) {
     return false;
   }
+  const modulePath = fileURLToPath(import.meta.url);
+  const argvPath = path.resolve(process.argv[1]);
+  if (path.basename(modulePath) === 'cli.js' && path.basename(argvPath) === 'muninn') {
+    return true;
+  }
   try {
-    return realpathSync(fileURLToPath(import.meta.url)) === realpathSync(process.argv[1]);
+    const moduleStat = statSync(modulePath);
+    const argvStat = statSync(argvPath);
+    if (moduleStat.dev === argvStat.dev && moduleStat.ino === argvStat.ino) {
+      return true;
+    }
   } catch {
-    return fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
+    // Fall back to path comparisons below.
+  }
+  try {
+    return realpathSync(modulePath) === realpathSync(argvPath);
+  } catch {
+    return modulePath === argvPath;
   }
 }
 

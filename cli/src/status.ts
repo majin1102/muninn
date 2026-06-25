@@ -150,11 +150,71 @@ function objectValue(parent: Record<string, unknown>, key: string): Record<strin
 }
 
 function isManagedCommand(command: string, commandName: string): boolean {
-  return command === commandName || basename(command) === commandName;
+  const executable = shellWords(command)[0] ?? command;
+  if (executable === commandName || basename(executable) === commandName) {
+    return true;
+  }
+  return managedPackageBinSuffixes(commandName).some((suffix) => executable.endsWith(suffix));
 }
 
 function basename(value: string): string {
   return value.split('/').pop() ?? value;
+}
+
+function shellWords(value: string): string[] {
+  const words: string[] = [];
+  let current = '';
+  let quoted: '"' | "'" | null = null;
+  let escaping = false;
+
+  for (const char of value) {
+    if (escaping) {
+      current += char;
+      escaping = false;
+      continue;
+    }
+    if (quoted === '"' && char === '\\') {
+      escaping = true;
+      continue;
+    }
+    if (quoted !== null) {
+      if (char === quoted) {
+        quoted = null;
+      } else {
+        current += char;
+      }
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quoted = char;
+      continue;
+    }
+    if (/\s/.test(char)) {
+      if (current) {
+        words.push(current);
+        current = '';
+      }
+      continue;
+    }
+    current += char;
+  }
+  if (current) {
+    words.push(current);
+  }
+  return words;
+}
+
+function managedPackageBinSuffixes(commandName: string): string[] {
+  if (commandName === 'muninn-mcp') {
+    return ['/node_modules/@muninn/mcp/dist/index.js'];
+  }
+  if (commandName === 'muninn-codex-hook') {
+    return ['/node_modules/@muninn/codex/dist/cli.js'];
+  }
+  if (commandName === 'muninn-claude-hook') {
+    return ['/node_modules/@muninn/claude/dist/claude-cli.js'];
+  }
+  return [];
 }
 
 function parseTomlString(value: string): string {

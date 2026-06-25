@@ -1,5 +1,5 @@
 import { planClaudeMcpJson, planClaudeSettings } from './claude-config.js';
-import { planCodexConfig } from './codex-config.js';
+import { planCodexConfig, planCodexHookConfig } from './codex-config.js';
 import { applyChangePlan, readTextFileIfExists, type ApplyResult } from './files.js';
 import type { ChangePlan, InstallHost, InstallOptions } from './model.js';
 import { resolveHostPaths } from './paths.js';
@@ -82,7 +82,7 @@ async function createHostPlans(options: InstallRunOptions): Promise<ChangePlan[]
 
   if (options.host === 'codex') {
     const before = await readTextFileIfExists(paths.codexConfigPath);
-    return [
+    const plans = [
       planCodexConfig(before, {
         path: paths.codexConfigPath,
         action: options.action,
@@ -94,6 +94,14 @@ async function createHostPlans(options: InstallRunOptions): Promise<ChangePlan[]
         },
       }),
     ];
+    if (options.parts.has('hook')) {
+      plans.push(planCodexHookConfig(await readTextFileIfExists(paths.codexHookConfigPath), {
+        path: paths.codexHookConfigPath,
+        action: options.action,
+        serverUrl: options.serverUrl,
+      }));
+    }
+    return plans;
   }
 
   const plans: ChangePlan[] = [];

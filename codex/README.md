@@ -52,17 +52,25 @@ add the hook to `~/.codex/config.toml` (or a project-level `.codex/config.toml`)
 [[hooks.Stop.hooks]]
 type = "command"
 command = "/ABSOLUTE/PATH/TO/muninn/codex/dist/cli.js"
-timeout = 30
-statusMessage = "Syncing turn to Muninn"
+timeout = 5
+statusMessage = "Capturing conversation by muninn"
 ```
 
 Point `command` at the built `dist/cli.js` (it has a `#!/usr/bin/env node`
 shebang and is executable), or at the `muninn-codex-hook` bin if this package is
 installed on `PATH`.
 
-If the server is not on the default port, set the endpoint via env. Codex
-hooks inherit the environment of the Codex process, so export it before
-launching Codex:
+If the server is not on the default port, pass the endpoint in the hook command:
+
+```json
+// ~/.codex/muninn-hook.json, or .codex/muninn-hook.json for project scope
+{
+  "serverUrl": "http://127.0.0.1:52423"
+}
+```
+
+The hook still supports environment variables for manual runs or custom launch
+wrappers:
 
 ```sh
 export MUNINN_SERVER_BASE_URL="http://localhost:8080"   # default

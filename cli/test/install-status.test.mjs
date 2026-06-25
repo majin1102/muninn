@@ -28,10 +28,13 @@ test('installHost writes Codex config under temporary user HOME', async () => {
     commands,
   });
 
-  assert.equal(result.length, 1);
+  assert.equal(result.length, 2);
   const config = await readFile(path.join(root, '.codex', 'config.toml'), 'utf8');
+  const hookConfig = JSON.parse(await readFile(path.join(root, '.codex', 'muninn-hook.json'), 'utf8'));
   assert.match(config, /\[mcp_servers\.muninn\]/);
   assert.match(config, /muninn-codex-hook/);
+  assert.doesNotMatch(config, /--server-url/);
+  assert.deepEqual(hookConfig, { serverUrl: 'http://127.0.0.1:8080' });
 });
 
 test('installHost asks for confirmation when not dry-run and --yes is absent', async () => {
@@ -147,10 +150,11 @@ test('installTargets confirms all hosts once before writing any config', async (
   assert.deepEqual(summary, [
     'Configure Codex MCP server: muninn',
     'Configure Codex Stop hook: muninn-codex-hook',
+    'Configure Codex Stop hook endpoint: muninn',
     'Configure Claude Code MCP server: muninn',
     'Configure Claude Code Stop hook: muninn-claude-hook',
   ]);
-  assert.equal(result.length, 3);
+  assert.equal(result.length, 4);
 
   const status = await readInstallStatus({ home: root, cwd, scope: 'user' });
   assert.deepEqual(status, {
@@ -369,4 +373,50 @@ test('readInstallStatus requires Codex muninn MCP table to use managed command',
 
   const managedCommand = await readInstallStatus({ home: root, cwd, scope: 'user' });
   assert.equal(managedCommand.codex.mcp, true);
+});
+
+test('readInstallStatus accepts workspace package bin fallback paths', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'muninn-status-package-bin-'));
+  const cwd = path.join(root, 'project');
+  await mkdir(path.join(root, '.codex'), { recursive: true });
+  await mkdir(path.join(root, '.claude'), { recursive: true });
+
+  await writeFile(path.join(root, '.codex', 'config.toml'), [
+    '[mcp_servers.muninn]',
+    'command = "/repo/cli/node_modules/@muninn/mcp/dist/index.js"',
+    '',
+    '[[hooks.Stop]]',
+    '[[hooks.Stop.hooks]]',
+    'type = "command"',
+    'command = "/repo/cli/node_modules/@muninn/codex/dist/cli.js"',
+    '',
+  ].join('\n'));
+  await writeFile(path.join(root, '.claude.json'), JSON.stringify({
+    mcpServers: {
+      muninn: {
+        type: 'stdio',
+        command: '/repo/cli/node_modules/@muninn/mcp/dist/index.js',
+      },
+    },
+  }, null, 2));
+  await writeFile(path.join(root, '.claude', 'settings.json'), JSON.stringify({
+    hooks: {
+      Stop: [
+        {
+          hooks: [
+            {
+              type: 'command',
+              command: '/repo/cli/node_modules/@muninn/claude/dist/claude-cli.js',
+            },
+          ],
+        },
+      ],
+    },
+  }, null, 2));
+
+  const status = await readInstallStatus({ home: root, cwd, scope: 'user' });
+  assert.deepEqual(status, {
+    codex: { mcp: true, hook: true },
+    claude: { mcp: true, hook: true },
+  });
 });
