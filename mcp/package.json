@@ -13,7 +13,7 @@
     "muninn-mcp": "./dist/index.js"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && chmod +x dist/index.js",
     "dev": "tsc --watch",
     "start": "node dist/index.js",
     "demo": "pnpm build && node dist/demo-client.js"

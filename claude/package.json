@@ -18,7 +18,7 @@
     "muninn-claude-hook": "./dist/claude-cli.js"
   },
   "scripts": {
-    "build": "pnpm --filter @muninn/common build && tsc -p tsconfig.json",
+    "build": "pnpm --filter @muninn/common build && tsc -p tsconfig.json && chmod +x dist/claude-cli.js",
     "test": "pnpm build && node --test test/*.test.mjs",
     "test:e2e": "pnpm --filter @muninn/server build && node test/e2e/run.mjs --driver mock",
     "test:e2e:run": "node test/e2e/run.mjs --driver mock",

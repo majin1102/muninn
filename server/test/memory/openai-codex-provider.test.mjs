@@ -211,6 +211,75 @@ test('generateWithTools sends openai-codex Responses tools and parses calls', as
   });
 });
 
+test('generateWithTools parses openai-codex output_text.done as final text', async (t) => {
+  await setupCodexRun(t);
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(codexSse(
+    {
+      type: 'response.output_item.added',
+      item: {
+        type: 'reasoning',
+        summary: [],
+      },
+    },
+    {
+      type: 'response.output_item.done',
+      item: {
+        type: 'message',
+        content: [],
+      },
+    },
+    {
+      type: 'response.content_part.added',
+      part: {
+        type: 'output_text',
+        text: '',
+      },
+    },
+    {
+      type: 'response.output_text.done',
+      text: 'Codex final answer',
+    },
+    {
+      type: 'response.content_part.done',
+      part: {
+        type: 'output_text',
+        text: 'Codex final answer',
+      },
+    },
+    {
+      type: 'response.completed',
+      response: {},
+    },
+  ));
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  const result = await generateWithTools('extractor', {
+    messages: [
+      { role: 'system', content: 'system prompt' },
+      { role: 'user', content: 'user prompt' },
+    ],
+    tools: [{
+      name: 'memory-get',
+      description: 'Get memory details.',
+      parameters: {
+        type: 'object',
+        properties: {
+          memoryIds: { type: 'array', items: { type: 'string' } },
+        },
+        required: ['memoryIds'],
+      },
+    }],
+  });
+
+  assert.deepEqual(result, {
+    type: 'final',
+    text: 'Codex final answer',
+  });
+});
+
 test('generateWithTools dedupes openai-codex streaming function call skeletons', async (t) => {
   await setupCodexRun(t);
   const originalFetch = globalThis.fetch;
@@ -326,6 +395,9 @@ test('generateWithTools writes sanitized diagnostics when openai-codex response 
   assert.deepEqual(diagnostic.completedOutputItemTypes, ['reasoning']);
   assert.deepEqual(diagnostic.completedOutputContentTypes, ['summary_text']);
   assert.deepEqual(diagnostic.directItemTypes, ['reasoning']);
+  assert.deepEqual(diagnostic.outputTextDoneTextLengths, []);
+  assert.deepEqual(diagnostic.contentPartDoneTextLengths, []);
+  assert.deepEqual(diagnostic.directMessageContentTextLengths, []);
   const serialized = JSON.stringify(diagnostic);
   assert.equal(serialized.includes('system prompt secret'), false);
   assert.equal(serialized.includes('user prompt secret'), false);

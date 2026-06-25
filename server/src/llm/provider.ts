@@ -611,6 +611,8 @@ function extractCodexStreamText(raw: string): string | null {
 function parseCodexStream(raw: string): { text: string | null; toolCalls: LlmToolCall[] } {
   const events = parseSseEvents(raw);
   const deltas: string[] = [];
+  const doneTexts: string[] = [];
+  const directTexts: string[] = [];
   let completed: Record<string, unknown> | null = null;
   const directCalls: LlmToolCall[] = [];
 
@@ -619,12 +621,25 @@ function parseCodexStream(raw: string): { text: string | null; toolCalls: LlmToo
     if (type.endsWith('output_text.delta') && typeof event.delta === 'string') {
       deltas.push(event.delta);
     }
+    if (type.endsWith('output_text.done') && typeof event.text === 'string') {
+      doneTexts.push(event.text);
+    }
+    if (type === 'response.content_part.done' && event.part && typeof event.part === 'object') {
+      const partText = extractOutputText(event.part as Record<string, unknown>);
+      if (partText) {
+        directTexts.push(partText);
+      }
+    }
     if (type === 'response.completed' && event.response && typeof event.response === 'object') {
       completed = event.response as Record<string, unknown>;
     }
     const item = event.item;
     if (item && typeof item === 'object') {
       directCalls.push(...parseCodexToolCalls([item]));
+      const itemText = extractOutputText(item as Record<string, unknown>);
+      if (itemText) {
+        directTexts.push(itemText);
+      }
     }
   }
 
@@ -638,7 +653,10 @@ function parseCodexStream(raw: string): { text: string | null; toolCalls: LlmToo
   }
 
   const completedText = completed ? extractResponsesText(completed) : null;
-  const text = completedText || deltas.join('').trim();
+  const text = completedText
+    || lastNonEmpty(doneTexts)
+    || deltas.join('').trim()
+    || directTexts.join('\n\n').trim();
   return { text: text || null, toolCalls: [] };
 }
 
@@ -673,6 +691,13 @@ type CodexProviderDiagnostic = {
   completedOutputItemTypes: string[];
   completedOutputContentTypes: string[];
   directItemTypes: string[];
+  outputTextDoneKeys: string[];
+  outputTextDoneTextTypes: string[];
+  outputTextDoneTextLengths: number[];
+  contentPartDonePartKeys: string[];
+  contentPartDoneTextLengths: number[];
+  directMessageContentTypes: string[];
+  directMessageContentTextLengths: number[];
   parseError?: {
     name: string;
     message: string;
@@ -713,6 +738,15 @@ function buildCodexProviderDiagnostic(
   const directItemObjects = events
     .map((event) => event.item)
     .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object' && !Array.isArray(item));
+  const outputTextDoneEvents = events.filter((event) => event.type === 'response.output_text.done');
+  const contentPartDoneParts = events
+    .filter((event) => event.type === 'response.content_part.done')
+    .map((event) => event.part)
+    .filter((part): part is Record<string, unknown> => Boolean(part) && typeof part === 'object' && !Array.isArray(part));
+  const directMessageContentObjects = directItemObjects
+    .filter((item) => item.type === 'message')
+    .flatMap((item) => Array.isArray(item.content) ? item.content : [])
+    .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object' && !Array.isArray(item));
   const normalizedParseError = parseErrorDetails(parseError) ?? eventParseError;
   return {
     ts: new Date().toISOString(),
@@ -724,6 +758,13 @@ function buildCodexProviderDiagnostic(
     completedOutputItemTypes: uniqueStrings(completedOutputObjects.map((item) => stringField(item, 'type'))),
     completedOutputContentTypes: uniqueStrings(completedOutputContentObjects.map((item) => stringField(item, 'type'))),
     directItemTypes: uniqueStrings(directItemObjects.map((item) => stringField(item, 'type'))),
+    outputTextDoneKeys: uniqueStrings(outputTextDoneEvents.flatMap((event) => Object.keys(event))),
+    outputTextDoneTextTypes: uniqueStrings(outputTextDoneEvents.map((event) => typeof event.text)),
+    outputTextDoneTextLengths: numericValues(outputTextDoneEvents.map((event) => stringLength(event.text))),
+    contentPartDonePartKeys: uniqueStrings(contentPartDoneParts.flatMap((part) => Object.keys(part))),
+    contentPartDoneTextLengths: numericValues(contentPartDoneParts.map((part) => stringLength(part.text))),
+    directMessageContentTypes: uniqueStrings(directMessageContentObjects.map((item) => stringField(item, 'type'))),
+    directMessageContentTextLengths: numericValues(directMessageContentObjects.map((item) => stringLength(item.text))),
     ...(normalizedParseError ? { parseError: normalizedParseError } : {}),
   };
 }
@@ -780,6 +821,24 @@ function uniqueStrings(values: string[]): string[] {
   return [...new Set(values.filter(Boolean))];
 }
 
+function numericValues(values: Array<number | null>): number[] {
+  return values.filter((value): value is number => value !== null);
+}
+
+function stringLength(value: unknown): number | null {
+  return typeof value === 'string' ? value.length : null;
+}
+
+function lastNonEmpty(values: string[]): string | null {
+  for (let index = values.length - 1; index >= 0; index -= 1) {
+    const value = values[index]?.trim();
+    if (value) {
+      return value;
+    }
+  }
+  return null;
+}
+
 async function* streamResponseText(response: Response): AsyncIterable<string> {
   if (!response.body) {
     for (const event of parseSseEvents(await response.text())) {
@@ -830,6 +889,19 @@ function eventTextDelta(event: Record<string, unknown>): string | null {
   const type = typeof event.type === 'string' ? event.type : '';
   if (type.endsWith('output_text.delta') && typeof event.delta === 'string') {
     return event.delta;
+  }
+  if (type.endsWith('output_text.done') && typeof event.text === 'string') {
+    return event.text;
+  }
+  if (type === 'response.content_part.done' && event.part && typeof event.part === 'object') {
+    return extractOutputText(event.part as Record<string, unknown>);
+  }
+  const item = event.item;
+  if (item && typeof item === 'object') {
+    const itemText = extractOutputText(item as Record<string, unknown>);
+    if (itemText) {
+      return itemText;
+    }
   }
 
   const choices = Array.isArray(event.choices)
@@ -972,6 +1044,25 @@ function extractResponsesText(payload: Record<string, unknown>): string | null {
       if (content.type === 'output_text' && typeof content.text === 'string' && content.text.trim()) {
         fragments.push(content.text);
       }
+    }
+  }
+  return fragments.length > 0 ? fragments.join('\n\n') : null;
+}
+
+function extractOutputText(record: Record<string, unknown>): string | null {
+  if (record.type === 'output_text' && typeof record.text === 'string' && record.text.trim()) {
+    return record.text;
+  }
+
+  const content = Array.isArray(record.content) ? record.content : [];
+  const fragments: string[] = [];
+  for (const item of content) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      continue;
+    }
+    const itemText = extractOutputText(item as Record<string, unknown>);
+    if (itemText) {
+      fragments.push(itemText);
     }
   }
   return fragments.length > 0 ? fragments.join('\n\n') : null;

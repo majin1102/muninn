@@ -99,6 +99,7 @@ async function makeConfigHome() {
 
 async function writeExtractorConfig(configPath, {
   activeWindowDays = 3650,
+  maxAttempts = 3,
   minEpochTurns,
   maxEpochTurns,
   epochWindowMs,
@@ -110,7 +111,7 @@ async function writeExtractorConfig(configPath, {
       name,
       llmProvider: 'extractor_llm',
       embeddingProvider: 'default',
-      maxAttempts: 3,
+      maxAttempts,
       activeWindowDays,
       ...(minEpochTurns === undefined ? {} : { minEpochTurns }),
       ...(maxEpochTurns === undefined ? {} : { maxEpochTurns }),
@@ -5975,6 +5976,69 @@ test('extractor.watermark exposes extraction index retry failures', async (t) =>
     phase: 'extractor',
     message: 'Error: extraction write failed',
   });
+});
+
+test('extractor.watermark reports terminal epoch failures after maxAttempts', async (t) => {
+  const { dir, homeDir, configPath } = await makeConfigHome();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+
+  process.env.MUNINN_HOME = homeDir;
+  await writeExtractorConfig(configPath, { maxAttempts: 2 });
+
+  const extractor = new Extractor({});
+  extractor.bootstrapped = true;
+  extractor.openEpoch = new OpenEpoch(2);
+  extractor.currentEpoch = {
+    epoch: 1,
+    turns: [makeExtractableTurn('turn-failed', 1, 'failed extraction')],
+  };
+
+  let attempts = 0;
+  const completedEpochs = [];
+  extractor.extractCurrentEpoch = async () => {
+    if (extractor.currentEpoch?.epoch === 2) {
+      completedEpochs.push(extractor.currentEpoch.epoch);
+      extractor.currentEpoch = null;
+      extractor.currentEpochAttempts = 0;
+      extractor.notifyChange();
+      return;
+    }
+    attempts += 1;
+    throw new Error('provider returned empty output');
+  };
+
+  const runPromise = extractor.run();
+  t.after(async () => {
+    extractor.shuttingDown = true;
+    extractor.notifyChange();
+    extractor.epochQueue.close();
+    await runPromise;
+  });
+
+  let watermark = await extractor.watermark();
+  for (let attempt = 0; attempt < 50 && watermark.phases.extractor !== 'error'; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    watermark = await extractor.watermark();
+  }
+
+  assert.equal(attempts, 2);
+  assert.deepEqual(watermark.pending.turns, ['turn-failed']);
+  assert.equal(watermark.phases.extractor, 'error');
+  assert.deepEqual(watermark.error, {
+    phase: 'extractor',
+    message: 'Error: provider returned empty output',
+  });
+
+  extractor.epochQueue.publishEpoch({
+    epoch: 2,
+    turns: [makeExtractableTurn('turn-next', 2, 'next extraction')],
+  });
+
+  for (let attempt = 0; attempt < 50 && completedEpochs.length === 0; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+
+  assert.deepEqual(completedEpochs, [2]);
 });
 
 test('extractor.accept keeps a partial epoch open until minEpochTurns is reached', async (t) => {

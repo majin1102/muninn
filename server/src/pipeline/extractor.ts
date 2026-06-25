@@ -51,13 +51,17 @@ export class Extractor {
   private readonly maxInputChars: number;
   private readonly previewChars: number;
   private readonly epochWindowMs: number;
+  private readonly maxAttempts: number;
   private committedEpoch?: number;
   private openEpoch!: OpenEpoch;
   private currentEpoch: SealedEpoch | null = null;
+  private currentEpochAttempts = 0;
+  private failedEpoch: SealedEpoch | null = null;
   private publishingEpochs: OpenEpoch[] = [];
   private threads: SessionThread[] = [];
   private nextIndexRetryAt?: number;
   private lastIndexError?: string;
+  private lastEpochError?: string;
   private shuttingDown = false;
   private bootstrapped = false;
   private bootstrapPromise: Promise<void> | null = null;
@@ -92,6 +96,7 @@ export class Extractor {
     this.maxInputChars = config.maxInputChars;
     this.previewChars = config.previewChars;
     this.epochWindowMs = config.epochWindowMs;
+    this.maxAttempts = config.maxAttempts;
     this.checkpointRuns = checkpoint?.runs.filter((run) => run.status === 'running').map(cloneExtractorRun) ?? [];
   }
 
@@ -181,11 +186,16 @@ export class Extractor {
     for (const turn of this.currentEpoch?.turns ?? []) {
       keepNewestTurn(pendingById, turn);
     }
+    for (const turn of this.failedEpoch?.turns ?? []) {
+      keepNewestTurn(pendingById, turn);
+    }
     const pendingTurnIds = [...pendingById.values()]
       .sort(compareTurns)
       .map((turn) => turn.turnId);
     const hasAnyUnindexedSnapshots = this.hasAnyUnindexedSnapshots();
-    const phase = this.lastIndexError && hasAnyUnindexedSnapshots
+    const phase = this.lastEpochError && this.failedEpoch
+      ? 'error'
+      : this.lastIndexError && hasAnyUnindexedSnapshots
       ? 'error'
       : this.currentEpoch || hasAnyUnindexedSnapshots
         ? 'running'
@@ -200,7 +210,12 @@ export class Extractor {
         extractor: phase,
       },
     };
-    if (this.lastIndexError && hasAnyUnindexedSnapshots) {
+    if (this.lastEpochError && this.failedEpoch) {
+      watermark.error = {
+        phase: 'extractor',
+        message: this.lastEpochError,
+      };
+    } else if (this.lastIndexError && hasAnyUnindexedSnapshots) {
       watermark.error = {
         phase: 'extractor',
         message: this.lastIndexError,
@@ -357,6 +372,10 @@ export class Extractor {
     let retryDelayMs = BASE_RETRY_DELAY_MS;
     while (true) {
       try {
+        if (this.shuttingDown) {
+          break;
+        }
+
         if (this.currentEpoch) {
           await this.extractCurrentEpoch();
           retryDelayMs = BASE_RETRY_DELAY_MS;
@@ -392,8 +411,34 @@ export class Extractor {
           break;
         }
         const message = String(error);
+        const failedEpoch = this.currentEpoch;
+        const attempt = failedEpoch ? this.currentEpochAttempts + 1 : undefined;
         console.error(`[muninn:extractor] epoch processing failed: ${message}`);
-        await writeMuninnLog(this.database, 'error', 'extractor', 'epoch_processing_failed', { message });
+        await writeMuninnLog(this.database, 'error', 'extractor', 'epoch_processing_failed', {
+          message,
+          ...(failedEpoch ? {
+            epoch: failedEpoch.epoch,
+            attempt,
+            maxAttempts: this.maxAttempts,
+          } : {}),
+        });
+        if (failedEpoch && attempt != null) {
+          this.currentEpochAttempts = attempt;
+          if (attempt >= this.maxAttempts) {
+            this.failedEpoch = failedEpoch;
+            this.currentEpoch = null;
+            this.currentEpochAttempts = 0;
+            this.lastEpochError = message;
+            await writeMuninnLog(this.database, 'error', 'extractor', 'epoch_processing_abandoned', {
+              message,
+              maxAttempts: this.maxAttempts,
+              turns: this.failedEpoch.turns.map((turn) => turn.turnId),
+            });
+            this.refreshCheckpointSnapshot();
+            this.notifyChange();
+            continue;
+          }
+        }
         await sleep(retryDelayMs);
         retryDelayMs = Math.min(retryDelayMs * 2, MAX_RETRY_DELAY_MS);
       }
@@ -420,6 +465,8 @@ export class Extractor {
         database: this.database,
       });
       this.threads = result.threads;
+      this.currentEpochAttempts = 0;
+      this.lastEpochError = undefined;
       try {
         await this.indexCurrentEpochSnapshots(result.touchedIds);
         this.lastIndexError = undefined;

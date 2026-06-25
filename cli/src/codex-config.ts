@@ -59,6 +59,28 @@ export function planCodexConfig(before: string, options: CodexConfigPlanOptions)
   };
 }
 
+export function planCodexHookConfig(before: string, options: {
+  path: string;
+  action: PlanAction;
+  serverUrl: string;
+}): ChangePlan {
+  const after = options.action === 'install'
+    ? `${JSON.stringify({ serverUrl: options.serverUrl }, null, 2)}\n`
+    : '';
+  const changed = before !== after;
+  return {
+    changed,
+    path: options.path,
+    before,
+    after,
+    summary: changed
+      ? [options.action === 'install'
+          ? 'Configure Codex Stop hook endpoint: muninn'
+          : 'Remove Codex Stop hook endpoint: muninn']
+      : [],
+  };
+}
+
 function renderMcpServer(command: string, serverUrl: string): string {
   return [
     '[mcp_servers.muninn]',
@@ -73,8 +95,8 @@ function renderStopHook(command: string): string {
     '[[hooks.Stop.hooks]]',
     'type = "command"',
     `command = ${tomlString(command)}`,
-    'timeout = 30',
-    'statusMessage = "Syncing turn to Muninn"',
+    'timeout = 5',
+    'statusMessage = "Capturing conversation by muninn"',
   ].join('\n');
 }
 
@@ -153,7 +175,8 @@ function isMuninnHook(hook: string[], hookCommand: string): boolean {
   if (command === undefined) {
     return false;
   }
-  return command === hookCommand || basename(command) === 'muninn-codex-hook';
+  const executable = shellWords(command)[0] ?? command;
+  return executable === hookCommand || basename(executable) === 'muninn-codex-hook';
 }
 
 function readCommandValue(line: string): string | null {
@@ -220,6 +243,49 @@ function stripInlineComment(value: string): string {
 
 function basename(value: string): string {
   return value.split('/').pop() ?? value;
+}
+
+function shellWords(value: string): string[] {
+  const words: string[] = [];
+  let current = '';
+  let quoted: '"' | "'" | null = null;
+  let escaping = false;
+
+  for (const char of value) {
+    if (escaping) {
+      current += char;
+      escaping = false;
+      continue;
+    }
+    if (quoted === '"' && char === '\\') {
+      escaping = true;
+      continue;
+    }
+    if (quoted !== null) {
+      if (char === quoted) {
+        quoted = null;
+      } else {
+        current += char;
+      }
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quoted = char;
+      continue;
+    }
+    if (/\s/.test(char)) {
+      if (current) {
+        words.push(current);
+        current = '';
+      }
+      continue;
+    }
+    current += char;
+  }
+  if (current) {
+    words.push(current);
+  }
+  return words;
 }
 
 function appendSection(input: string, section: string): string {

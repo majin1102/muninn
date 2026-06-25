@@ -41,6 +41,6 @@ test('CLI install writes package-local dependency bin paths for host commands', 
 
   assert.equal(result.status, 0, result.stderr);
   const config = await readFile(path.join(root, '.codex', 'config.toml'), 'utf8');
-  assert.match(config, /node_modules\/\.bin\/muninn-mcp/);
-  assert.match(config, /node_modules\/\.bin\/muninn-codex-hook/);
+  assert.match(config, /node_modules\/(?:\.bin\/muninn-mcp|@muninn\/mcp\/dist\/index\.js)/);
+  assert.match(config, /node_modules\/(?:\.bin\/muninn-codex-hook|@muninn\/codex\/dist\/cli\.js)/);
 });
