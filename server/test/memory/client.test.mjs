@@ -1431,6 +1431,41 @@ test('memoryPipeline.flushPending drains the current extraction batch without fi
   assert.equal(resolved.phases.extractor, 'idle');
 });
 
+test('hook capture seals immediately even when the default epoch window is long', async (t) => {
+  const { dir, homeDir, configPath } = await makeDatasetUri();
+  t.after(cleanupDataset(dir));
+
+  process.env.MUNINN_HOME = homeDir;
+  await writeMuninnConfig(configPath, {
+    llmProvider: 'mock',
+    minEpochTurns: 8,
+    epochWindowMs: 600_000,
+  });
+
+  await captureTurn(makeTurnContent({
+    agent: 'codex',
+    project: '/repo/muninn',
+    metadata: { ingest: 'codex-hook' },
+    prompt: 'low frequency hook prompt',
+    response: 'low frequency hook response',
+  }));
+
+  let resolved = null;
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    resolved = await memoryPipeline.watermark();
+    if (memoryWatermarkResolved(resolved)) {
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+
+  assert.ok(resolved);
+  assert.deepEqual(resolved.pending.turns, []);
+  assert.equal(resolved.phases.extractor, 'idle');
+  const hits = await memories.recall('low frequency hook prompt', 1);
+  assert.ok(hits[0]?.memoryId.startsWith('extraction:'));
+});
+
 test('captureTurn persists raw prompt and response without title or summary', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(cleanupDataset(dir));
