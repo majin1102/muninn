@@ -8,19 +8,19 @@ The user-facing skill workflows are:
 
 ```text
 muninn-capture -> HTTP capture
-muninn-import  -> MCP list + read import flow
+muninn-import  -> MCP muninn_list + muninn_read import flow
 ```
 
 The MCP server should expose four structured context tools:
 
 ```text
-recall({ query, budget?, top_k? })
-list({ query, top_k? })
-read({ context_ids })
-explain({ context_id })
+muninn_recall({ query, budget?, top_k? })
+muninn_list({ query, top_k? })
+muninn_read({ context_ids })
+muninn_explain({ context_id })
 ```
 
-The capture skill should call the Muninn server through a shared helper or CLI-backed HTTP client, not by asking the model to hand-write `curl` requests. The import skill should orchestrate MCP `list` and `read` calls. The server owns context lookup, session identity, capture policy, deletion, and all storage-side behavior.
+The capture skill should call the Muninn server through a shared helper or CLI-backed HTTP client, not by asking the model to hand-write `curl` requests. The import skill should orchestrate MCP `muninn_list` and `muninn_read` calls. The server owns context lookup, session identity, capture policy, deletion, and all storage-side behavior.
 
 Codex user entry should come from Muninn skills, not from assuming MCP tools appear as slash commands. The skill names are prefixed to avoid collisions:
 
@@ -71,13 +71,13 @@ get_detail
 Replace the previous MCP module with the four-tool context module in this spec:
 
 ```text
-recall
-list
-read
-explain
+muninn_recall
+muninn_list
+muninn_read
+muninn_explain
 ```
 
-The new `list` tool is query-scoped candidate listing. It is not a compatibility alias for the previous unscoped `list` tool.
+The new `muninn_list` tool is query-scoped candidate listing. It is not a compatibility alias for the previous unscoped `list` tool.
 
 Remove or rewrite any Muninn skill/custom-prompt entries that target the old MCP surface. The shipped Muninn user entry should be exactly these two current skills:
 
@@ -98,7 +98,7 @@ MCP tools = query recall, candidate listing, and structured context drill-down c
 Muninn server HTTP APIs = backend workflow and context operations
 ```
 
-Skills provide explicit user entries in the skill UI and encode workflow behavior such as parsing flags, choosing candidates, asking for confirmation, and deciding when drill-down is useful. The capture skill calls a shared Muninn helper that sends typed HTTP requests to the server. The import skill orchestrates MCP `list` and `read` calls.
+Skills provide explicit user entries in the skill UI and encode workflow behavior such as parsing flags, choosing candidates, asking for confirmation, and deciding when drill-down is useful. The capture skill calls a shared Muninn helper that sends typed HTTP requests to the server. The import skill orchestrates MCP `muninn_list` and `muninn_read` calls.
 
 MCP tools provide query recall, query-scoped candidate listing, and structured drill-down for `context_id` handles. They are not user-facing skills; they are available for agent-initiated recall and follow-up when past context, exact content, or provenance is needed, and workflow skills may instruct the agent to use them selectively after returning handles.
 
@@ -119,10 +119,10 @@ muninn-import
 The MCP tool names should be:
 
 ```text
-recall
-list
-read
-explain
+muninn_recall
+muninn_list
+muninn_read
+muninn_explain
 ```
 
 There should be no `recent`, `capture`, or `import` MCP tools. Those names belong to host startup or skill workflows and server HTTP routes.
@@ -136,9 +136,9 @@ session_*
 turn_*
 ```
 
-`session_*` identifies session-level context. `turn_*` identifies source conversation turn content. These prefixes route tool usage: `read` accepts `session_*` and `turn_*`; `explain` accepts `session_*` only.
+`session_*` identifies session-level context. `turn_*` identifies source conversation turn content. These prefixes route tool usage: `muninn_read` accepts `session_*` and `turn_*`; `muninn_explain` accepts `session_*` only.
 
-Agents may recognize the `session_*` and `turn_*` prefixes for tool routing, but they must treat the rest of every `context_id` as an opaque handle. They should not parse, truncate, transform, or synthesize context ids. They should pass only `context_id` values returned by Muninn back to `read` or `explain`.
+Agents may recognize the `session_*` and `turn_*` prefixes for tool routing, but they must treat the rest of every `context_id` as an opaque handle. They should not parse, truncate, transform, or synthesize context ids. They should pass only `context_id` values returned by Muninn back to `muninn_read` or `muninn_explain`.
 
 Server HTTP APIs and MCP context tools may return `context_id` values. A returned id is not a request to read or explain immediately. It is a drill-down handle for later use when the current conversation needs additional content, evidence, or origin detail.
 
@@ -173,7 +173,7 @@ Behavior:
 - Return a concise briefing that can be read directly by the agent at session start.
 - Honor `budget` as a character budget when provided; otherwise use the server default.
 
-`recent` is intentionally queryless. It answers "what should I know when starting here?" Query-shaped retrieval belongs to `recall` and `list`.
+`recent` is intentionally queryless. It answers "what should I know when starting here?" Query-shaped retrieval belongs to `muninn_recall` and `muninn_list`.
 
 `recent` should be invoked by session-start host integration or another automatic startup path. It should not be exposed as `muninn-recent`, `muninn-brief`, or `muninn skill-call recent`.
 
@@ -241,7 +241,7 @@ Current session removed from Muninn. Future turns from this session will not be 
 
 These are the only tools registered by the MCP server.
 
-### `recall`
+### `muninn_recall`
 
 Purpose: recall context that happened in past or other Muninn sessions by query, and return source context references to the original context.
 
@@ -265,8 +265,8 @@ Behavior:
 - If a host, skill, or user-facing command supports `--top <integer>`, map it to MCP `top_k`.
 - Return a concise recollection of what happened in past or other sessions.
 - Return source context references when useful. These references are `session_*` or `turn_*` `context_id` values that point back to the original context.
-- Keep query recall concise enough to choose relevant context; use `read` for original context content and `explain` for session provenance and references when needed.
-- Do not treat `query` values that look like `session_*` or `turn_*` as drill-down. Context-id drill-down belongs to `read` and `explain`.
+- Keep query recall concise enough to choose relevant context; use `muninn_read` for original context content and `muninn_explain` for session provenance and references when needed.
+- Do not treat `query` values that look like `session_*` or `turn_*` as drill-down. Context-id drill-down belongs to `muninn_read` and `muninn_explain`.
 - Do not accept `limit`, `queryLimit`, `recallMode`, or `thinkingRatio`; `top_k` is the only user-facing result-count control.
 
 Query recall output should make original source references obvious:
@@ -282,7 +282,7 @@ Query recall output should make original source references obvious:
 
 Recall results summarize remembered context from past or other sessions. The returned `context_id` values are references to original session or turn context. The agent should inspect those references only when the current conversation needs exact wording, provenance, surrounding turn detail, or stronger evidence before acting. It should not automatically read or explain every returned `context_id`.
 
-### `list`
+### `muninn_list`
 
 Purpose: list candidate Muninn session contexts by query before importing or selecting prior session context.
 
@@ -303,10 +303,10 @@ Behavior:
 - If a host, skill, or user-facing command supports `--top <integer>`, map it to MCP `top_k`.
 - Return ranked candidate sessions only; do not return generic database listings.
 - Each candidate must include a `session_*` `context_id`, title, and summary.
-- Do not return `turn_*` context ids from `list`; turn-level detail belongs to `read` after a session is selected.
+- Do not return `turn_*` context ids from `muninn_list`; turn-level detail belongs to `muninn_read` after a session is selected.
 - Do not read, import, or auto-select candidate content.
-- Use `read` after the user or agent selects candidate `session_*` context ids.
-- Use `explain` only if source provenance or references behind a selected session are needed.
+- Use `muninn_read` after the user or agent selects candidate `session_*` context ids.
+- Use `muninn_explain` only if source provenance or references behind a selected session are needed.
 - Do not accept `budget`, `limit`, `queryLimit`, `recallMode`, or `thinkingRatio`; `top_k` is the only user-facing result-count control.
 
 Candidate output should be easy to number for user choice:
@@ -323,9 +323,9 @@ Candidate output should be easy to number for user choice:
    summary: Project allowlists remain automatic capture policy...
 ```
 
-`list` is the selection surface. It returns handles, not imported content. The agent should call `read` only for selected candidates, not for every listed `context_id`.
+`muninn_list` is the selection surface. It returns handles, not imported content. The agent should call `muninn_read` only for selected candidates, not for every listed `context_id`.
 
-### `read`
+### `muninn_read`
 
 Purpose: read selected Muninn context content by `context_id` when exact content is needed.
 
@@ -341,13 +341,13 @@ Behavior:
 
 - Accept one or more `session_*` or `turn_*` `context_id` values returned by Muninn.
 - Reject unsupported context id families.
-- Use `read` selectively. A returned `context_id` is a drill-down handle, not a read request.
+- Use `muninn_read` selectively. A returned `context_id` is a drill-down handle, not a read request.
 - Read only the supplied context ids.
 - For `session_*`, return the session-level context content.
 - For `turn_*`, return the source conversation turn content.
 - Do not return provenance, references, or explanation details.
-- If the agent needs source provenance or references for a `session_*` context item, it should call `explain` with that `context_id`.
-- Do not call `explain` for `turn_*`; a turn is already source content.
+- If the agent needs source provenance or references for a `session_*` context item, it should call `muninn_explain` with that `context_id`.
+- Do not call `muninn_explain` for `turn_*`; a turn is already source content.
 - Do not accept `budget`, `query`, `refs`, `depth`, or automatic explanation parameters.
 - Return per-id errors for unknown, deleted, or unsupported context ids without hiding successful reads for other ids.
 
@@ -365,9 +365,9 @@ Output should stay content-only:
 ...
 ```
 
-The agent should not infer source provenance from read content. Source provenance inspection belongs to `explain`.
+The agent should not infer source provenance from read content. Source provenance inspection belongs to `muninn_explain`.
 
-### `explain`
+### `muninn_explain`
 
 Purpose: inspect source provenance and references for a selected Muninn `session_*` `context_id` when evidence or origin detail is needed.
 
@@ -383,13 +383,13 @@ Behavior:
 
 - Accept exactly one `session_*` `context_id` returned by Muninn.
 - Reject `turn_*` and unsupported context id families.
-- Use `explain` selectively. A returned `context_id` is a drill-down handle, not an explanation request.
+- Use `muninn_explain` selectively. A returned `context_id` is a drill-down handle, not an explanation request.
 - Return source provenance and references for that session-level context item.
 - Resolve supporting source references to `turn_*` context ids and source snippets or summaries where useful.
-- Do not return the full session context itself except when needed to orient the provenance view; use `read` for the content itself.
+- Do not return the full session context itself except when needed to orient the provenance view; use `muninn_read` for the content itself.
 - Do not return synthetic `relation` or `label` fields. The current backend has source reference arrays, not structured relation labels.
 - Do not accept `budget`, `refs`, `depth`, or recursive explanation parameters.
-- Do not explain every recalled or read context item automatically. Use `explain` only when the current conversation needs source provenance, references, or exact surrounding evidence.
+- Do not explain every recalled or read context item automatically. Use `muninn_explain` only when the current conversation needs source provenance, references, or exact surrounding evidence.
 
 Output should be a source provenance view:
 
@@ -432,11 +432,11 @@ The server workflow HTTP route is:
 POST /api/v1/skill/capture
 ```
 
-This route is not an MCP route. It exists so the capture skill has a stable local execution path while MCP remains limited to `recall`, `list`, `read`, and `explain`.
+This route is not an MCP route. It exists so the capture skill has a stable local execution path while MCP remains limited to `muninn_recall`, `muninn_list`, `muninn_read`, and `muninn_explain`.
 
 ## Skill Entries
 
-Muninn should ship two user-facing skills with clear trigger descriptions. `muninn-capture` calls the shared Muninn HTTP helper. `muninn-import` orchestrates MCP `list` and `read`. Skills may instruct the agent to use MCP `recall`, `list`, `read`, and `explain` for context recovery and selective drill-down, but those MCP tools are not separate skills.
+Muninn should ship two user-facing skills with clear trigger descriptions. `muninn-capture` calls the shared Muninn HTTP helper. `muninn-import` orchestrates MCP `muninn_list` and `muninn_read`. Skills may instruct the agent to use MCP `muninn_recall`, `muninn_list`, `muninn_read`, and `muninn_explain` for context recovery and selective drill-down, but those MCP tools are not separate skills.
 
 ### `muninn-capture`
 
@@ -474,7 +474,7 @@ description: Use when the user asks Muninn to import prior sessions or context u
 Core instruction:
 
 ```text
-Call MCP `list({ query, top_k? })` with the user's remaining text as `query`. Parse optional `--top <integer>` from the user request and pass it as `top_k` when present. Do not call an MCP `import` tool; it should not exist. Do not call `muninn skill-call import`; it should not exist. Show the numbered candidate list with session titles and summaries, then ask the user to choose by number. Keep the candidate `session_*` `context_id` values available for tool use. When the user chooses one or more candidates, map the selected numbers to `session_*` `context_id` values and call MCP `read({ context_ids })`. The read result is the imported context for the current conversation. If the user asks for source provenance or references behind a candidate, map the selected number to its candidate `session_*` `context_id` and call MCP `explain`.
+Call MCP `muninn_list({ query, top_k? })` with the user's remaining text as `query`. Parse optional `--top <integer>` from the user request and pass it as `top_k` when present. Do not call an MCP `import` tool; it should not exist. Do not call `muninn skill-call import`; it should not exist. Show the numbered candidate list with session titles and summaries, then ask the user to choose by number. Keep the candidate `session_*` `context_id` values available for tool use. When the user chooses one or more candidates, map the selected numbers to `session_*` `context_id` values and call MCP `muninn_read({ context_ids })`. The read result is the imported context for the current conversation. If the user asks for source provenance or references behind a candidate, map the selected number to its candidate `session_*` `context_id` and call MCP `muninn_explain`.
 ```
 
 Supported user form:
@@ -490,12 +490,12 @@ The server must own the behavior behind workflow HTTP APIs and MCP context tools
 
 - Resolve workspace paths to canonical project identities for `recent`.
 - Compose recent sessions and signals for `recent`.
-- Compose recalled context from past or other sessions within a budget for `recall`.
-- Search and rank candidate session contexts for `list`.
-- Include stable `session_*` and `turn_*` `context_id` values in `recent`, `recall`, `list`, `read`, and `explain` results when drill-down is useful.
-- Resolve selected `session_*` and `turn_*` `context_id` values for `read` without requiring the caller to know storage internals.
-- Return context content from `read` without synthetic refs or provenance views.
-- Resolve selected `session_*` `context_id` values for `explain` into source provenance views.
+- Compose recalled context from past or other sessions within a budget for `muninn_recall`.
+- Search and rank candidate session contexts for `muninn_list`.
+- Include stable `session_*` and `turn_*` `context_id` values in `recent`, `muninn_recall`, `muninn_list`, `muninn_read`, and `muninn_explain` results when drill-down is useful.
+- Resolve selected `session_*` and `turn_*` `context_id` values for `muninn_read` without requiring the caller to know storage internals.
+- Return context content from `muninn_read` without synthetic refs or provenance views.
+- Resolve selected `session_*` `context_id` values for `muninn_explain` into source provenance views.
 - For session context backed by extracted source references, map those source refs to their source `turn_*` rows.
 - Identify the current session for `capture` without requiring the user to type a session id.
 - Store session-level explicit capture state.
@@ -516,27 +516,27 @@ Missing pieces:
 - Hook gate that checks explicit session state before project allowlist.
 - `POST /api/v1/startup/recent` that combines recent sessions and signals for session-start host integration.
 - Shared `muninn skill-call` helper command that posts to the capture workflow HTTP route.
-- MCP `recall({ query, budget?, top_k? })` tool for recalling past or other-session context and returning source context references.
-- MCP `list({ query, top_k? })` tool for returning candidate `session_*` contexts with titles and summaries.
-- MCP `read({ context_ids })` tool for resolving selected `session_*` and `turn_*` context handles.
-- MCP `explain({ context_id })` tool for resolving selected `session_*` context handles into source provenance views.
+- MCP `muninn_recall({ query, budget?, top_k? })` tool for recalling past or other-session context and returning source context references.
+- MCP `muninn_list({ query, top_k? })` tool for returning candidate `session_*` contexts with titles and summaries.
+- MCP `muninn_read({ context_ids })` tool for resolving selected `session_*` and `turn_*` context handles.
+- MCP `muninn_explain({ context_id })` tool for resolving selected `session_*` context handles into source provenance views.
 - Removal of default MCP exposure for `print`, previous unscoped `list`, `get_timeline`, `get_detail`, `recent`, `capture`, and `import`.
 
 ## Implementation Notes
 
 - MCP request/response types can live near the MCP/server HTTP boundary; workflow helper request/response types can live near the CLI/server HTTP boundary. `common` should only receive shared contracts if multiple packages need them.
 - `capture({ enabled: false })` should be marked/described as destructive so Codex can request appropriate confirmation.
-- `muninn-import` should be a skill workflow over MCP `list` and `read`, not a server-side import route.
+- `muninn-import` should be a skill workflow over MCP `muninn_list` and `muninn_read`, not a server-side import route.
 - `recent` should be safe for automatic invocation at session start; `capture` and `import` require explicit user intent.
-- `recall` can be agent-initiated when the current conversation lacks historical context or when the user asks Muninn to remember what happened before.
-- `list` can be agent-initiated when the user or agent needs to select prior session context by query.
-- `read` can be agent-initiated only for selected `session_*` and `turn_*` `context_id` handles returned by Muninn.
-- `explain` can be agent-initiated only for selected `session_*` `context_id` handles when source provenance or references are needed.
-- `recall` and `list` may accept `top_k`; `read` and `explain` must not.
-- `read` must not accept a budget or return refs.
-- `explain` must not accept a budget, batch input, or recursive explanation option.
+- `muninn_recall` can be agent-initiated when the current conversation lacks historical context or when the user asks Muninn to remember what happened before.
+- `muninn_list` can be agent-initiated when the user or agent needs to select prior session context by query.
+- `muninn_read` can be agent-initiated only for selected `session_*` and `turn_*` `context_id` handles returned by Muninn.
+- `muninn_explain` can be agent-initiated only for selected `session_*` `context_id` handles when source provenance or references are needed.
+- `muninn_recall` and `muninn_list` may accept `top_k`; `muninn_read` and `muninn_explain` must not.
+- `muninn_read` must not accept a budget or return refs.
+- `muninn_explain` must not accept a budget, batch input, or recursive explanation option.
 - `recent` output should include suggested recall queries after recent sessions and signals.
-- `mcp/src/demo-client.ts` must be removed or rewritten so it only exercises `recall`, `list`, `read`, and `explain`.
+- `mcp/src/demo-client.ts` must be removed or rewritten so it only exercises `muninn_recall`, `muninn_list`, `muninn_read`, and `muninn_explain`.
 - `mcp/README.md` and `mcp/DEMO.md` must describe the new four-tool MCP surface only.
 - CLI docs must describe `muninn skill-call` as a helper surface for installed skills, not as the primary end-user command set.
 
@@ -602,28 +602,28 @@ function textResult(text: string): ToolResult {
 
 const tools: ToolDefinition<z.ZodTypeAny>[] = [
   {
-    name: 'recall',
+    name: 'muninn_recall',
     description: 'Recall context from past or other Muninn sessions by query and return source context references. Accepts optional top_k and budget.',
     inputSchema: RecallInput,
     annotations: { readOnlyHint: true, openWorldHint: false },
     run: (args, client) => client.recall(args),
   },
   {
-    name: 'list',
+    name: 'muninn_list',
     description: 'List candidate Muninn session contexts by query. Returns session_* context_ids with titles and summaries for selection before read.',
     inputSchema: ListInput,
     annotations: { readOnlyHint: true, openWorldHint: false },
     run: (args, client) => client.list(args),
   },
   {
-    name: 'read',
+    name: 'muninn_read',
     description: 'Read selected Muninn context content by context_id. Accepts session_* and turn_* context_ids. Use selectively when exact content is needed.',
     inputSchema: ReadInput,
     annotations: { readOnlyHint: true, openWorldHint: false },
     run: (args, client) => client.read(args),
   },
   {
-    name: 'explain',
+    name: 'muninn_explain',
     description: 'Inspect source provenance and references for a session_* context_id. Use selectively when evidence or origin detail is needed.',
     inputSchema: ExplainInput,
     annotations: { readOnlyHint: true, openWorldHint: false },
@@ -763,10 +763,10 @@ The implementation plan must choose the exact identity transport for Codex and C
 
 ```text
 muninn-import <query>
-  -> MCP list({ query, top_k? })
+  -> MCP muninn_list({ query, top_k? })
   -> show numbered session candidates
   -> user chooses one or more numbers
-  -> MCP read({ context_ids: selected session_* ids })
+  -> MCP muninn_read({ context_ids: selected session_* ids })
 ```
 
 The skill must not auto-read every listed candidate. It should read only the candidates the user selects.
