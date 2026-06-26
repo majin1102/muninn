@@ -7,7 +7,7 @@ Muninn should expose a skill-first context surface for user workflows, backed by
 The user-facing skill workflows are:
 
 ```text
-muninn-capture -> HTTP capture
+muninn-capture -> assistant magic word + host hook capture flow
 muninn-import  -> MCP muninn_list + muninn_read import flow
 ```
 
@@ -20,7 +20,7 @@ muninn_read({ context_ids })
 muninn_explain({ context_id })
 ```
 
-The capture skill should call the Muninn server through a shared helper or CLI-backed HTTP client, not by asking the model to hand-write `curl` requests. The import skill should orchestrate MCP `muninn_list` and `muninn_read` calls. The server owns context lookup, session identity, capture policy, deletion, and all storage-side behavior.
+The capture skill should make the assistant emit a strict Muninn control marker. The host Stop hook consumes that marker while it has reliable session identity, updates host-local capture policy, and uses existing server capture/delete capabilities as needed. The import skill should orchestrate MCP `muninn_list` and `muninn_read` calls. The server owns context lookup, source content, provenance, and storage-side deletion, but host integrations own session capture policy.
 
 Codex user entry should come from Muninn skills, not from assuming MCP tools appear as slash commands. The skill names are prefixed to avoid collisions:
 
@@ -41,9 +41,9 @@ muninn-import
 - Make query-scoped candidate context listing a first-class MCP capability for selecting prior sessions.
 - Keep recent startup context as a server/host integration capability rather than a slash-list skill.
 - Make context content reading and source provenance explanation first-class MCP drill-down capabilities.
-- Keep project auto-capture allowlists separate from explicit current-session capture actions.
+- Keep project auto-capture allowlists separate from host-local current-session capture actions.
 - Keep import as a single-query selection workflow that lists candidate sessions, asks the user to choose, and reads selected context.
-- Keep capture HTTP calls behind a shared helper so skills do not instruct the model to manually compose raw HTTP requests.
+- Keep capture mutation inside host hooks with reliable session identity; do not require the capture skill or MCP layer to infer the current session.
 
 ## Non-Goals
 
@@ -98,7 +98,7 @@ MCP tools = query recall, candidate listing, and structured context drill-down c
 Muninn server HTTP APIs = backend workflow and context operations
 ```
 
-Skills provide explicit user entries in the skill UI and encode workflow behavior such as parsing flags, choosing candidates, asking for confirmation, and deciding when drill-down is useful. The capture skill calls a shared Muninn helper that sends typed HTTP requests to the server. The import skill orchestrates MCP `muninn_list` and `muninn_read` calls.
+Skills provide explicit user entries in the skill UI and encode workflow behavior such as parsing flags, choosing candidates, asking for confirmation, and deciding when drill-down is useful. The capture skill emits a strict control marker that host hooks can consume. The import skill orchestrates MCP `muninn_list` and `muninn_read` calls.
 
 MCP tools provide query recall, query-scoped candidate listing, and structured drill-down for `context_id` handles. They are not user-facing skills; they are available for agent-initiated recall and follow-up when past context, exact content, or provenance is needed, and workflow skills may instruct the agent to use them selectively after returning handles.
 
@@ -144,7 +144,7 @@ Server HTTP APIs and MCP context tools may return `context_id` values. A returne
 
 ## Server HTTP APIs
 
-Server HTTP APIs back host startup context and current-session capture. They are not MCP tools.
+Server HTTP APIs back host startup context and turn capture. They are not MCP tools.
 
 ### `recent`
 
@@ -192,50 +192,49 @@ Output should be Markdown text, for example:
 - ...
 ```
 
-### `capture`
+### Host-local capture control
 
-Purpose: include or remove the current session from Muninn.
+Purpose: include or remove the current session from Muninn without asking MCP or a skill helper to infer current-session identity.
 
-Schema:
+The capture user entry is a skill, but the mutation is performed by the host Stop hook. The skill instructs the assistant to emit one strict control marker in its response:
 
-```ts
-type CaptureInput = {
-  enabled: boolean;
-};
+```xml
+<muninn:capture enabled="true" />
+```
+
+```xml
+<muninn:capture enabled="false" />
 ```
 
 Behavior:
 
-- `enabled: true` captures the current session into Muninn and allows future turns from this session to continue entering Muninn.
-- `enabled: false` removes the current session from Muninn and prevents future turns from this session from entering Muninn.
-- `enabled: false` is destructive and must be described as deletion, not pause.
+- The Stop hook reads the latest assistant turn and consumes only the strict marker forms above.
+- The Stop hook resolves the current `session_id`, transcript path, project, cwd, and agent from host-provided hook context.
+- The Stop hook stores current-session capture policy in host-local state, not server state.
+- `enabled="true"` enables host-local capture for the current session, backfills the current transcript through the existing turn capture API, and allows future turns from this session to continue entering Muninn.
+- `enabled="false"` disables host-local capture for the current session, calls the existing server-side delete-by-session capability for `{ agent, project, sessionId }`, and prevents future turns from this session from entering Muninn.
+- `enabled="false"` is destructive and must be described as deletion, not pause.
 - The operation is scoped to the current agent session, not to the project.
-- The API must not edit project auto-capture allowlists.
+- The operation must not edit project auto-capture allowlists.
+- The control marker itself must not be captured as ordinary Muninn context.
+- If the Stop hook cannot resolve reliable current-session identity, it must fail closed and perform no policy change, backfill, or deletion.
 
 Policy model:
 
 ```text
-if current session is explicitly disabled:
+if current session is explicitly disabled in host-local policy:
   skip future hook capture for this session
 
-else if current session is explicitly enabled:
+else if current session is explicitly enabled in host-local policy:
   allow hook capture for this session, even when the project is not in the auto-capture allowlist
 
 else:
   use the project auto-capture allowlist for hook capture
 ```
 
-Project allowlists remain the default automatic capture policy. Explicit session capture is a user action for the current session.
+Project allowlists remain the default automatic capture policy. Explicit session capture is a host-local user action for the current session.
 
-Return examples:
-
-```text
-Capture enabled for this session.
-```
-
-```text
-Current session removed from Muninn. Future turns from this session will not be captured.
-```
+Deletion should reuse the existing delete-by-session behavior currently used by imported-session deletion. The hook should depend on a hook-facing/internal boundary, not on a UI route such as `/app/api/import/:agent/session`.
 
 ## MCP Context Tools
 
@@ -409,34 +408,9 @@ Explained: session_01HX...
 ...
 ```
 
-## Shared Skill HTTP Helper
-
-The capture skill must call a shared helper instead of hand-writing HTTP requests. The helper is an implementation detail shipped with the Muninn CLI/runtime, but it is the stable command surface that capture skill instructions should use.
-
-Target helper command forms:
-
-```text
-muninn skill-call capture --enabled true|false
-```
-
-The helper owns:
-
-- Resolving `MUNINN_SERVER_BASE_URL` and authentication headers.
-- Posting typed JSON to the Muninn server capture workflow HTTP route.
-- Returning text-first output for the skill to show or reason over.
-- Returning actionable error text when the server is unavailable or the current session cannot be identified.
-
-The server workflow HTTP route is:
-
-```text
-POST /api/v1/skill/capture
-```
-
-This route is not an MCP route. It exists so the capture skill has a stable local execution path while MCP remains limited to `muninn_recall`, `muninn_list`, `muninn_read`, and `muninn_explain`.
-
 ## Skill Entries
 
-Muninn should ship two user-facing skills with clear trigger descriptions. `muninn-capture` calls the shared Muninn HTTP helper. `muninn-import` orchestrates MCP `muninn_list` and `muninn_read`. Skills may instruct the agent to use MCP `muninn_recall`, `muninn_list`, `muninn_read`, and `muninn_explain` for context recovery and selective drill-down, but those MCP tools are not separate skills.
+Muninn should ship two user-facing skills with clear trigger descriptions. `muninn-capture` emits a strict control marker for host hooks. `muninn-import` orchestrates MCP `muninn_list` and `muninn_read`. Skills may instruct the agent to use MCP `muninn_recall`, `muninn_list`, `muninn_read`, and `muninn_explain` for context recovery and selective drill-down, but those MCP tools are not separate skills.
 
 ### `muninn-capture`
 
@@ -451,7 +425,7 @@ description: Use when the user explicitly asks Muninn to capture, remember, remo
 Core instruction:
 
 ```text
-Run `muninn skill-call capture --enabled true|false` only for explicit user requests. Do not call an MCP `capture` tool; it should not exist. Map `+1`, "on", "enable", "capture", "remember this session", or "include this session" to `true`. Map `-1`, "off", "disable", "remove this session", "delete this session", "forget this session", or "exclude this session" to `false`. Treat `false` as destructive deletion of the current session from Muninn.
+For explicit capture-enable requests, reply with exactly `<muninn:capture enabled="true" />` and no other text. For explicit capture-disable, remove, delete, forget, or exclude requests, reply with exactly `<muninn:capture enabled="false" />` and no other text. Do not call an MCP `capture` tool; it should not exist. Do not call `muninn skill-call capture`; it should not exist. Map `+1`, "on", "enable", "capture", "remember this session", or "include this session" to `true`. Map `-1`, "off", "disable", "remove this session", "delete this session", "forget this session", or "exclude this session" to `false`. Treat `false` as destructive deletion of the current session from Muninn.
 ```
 
 Supported user forms:
@@ -497,25 +471,23 @@ The server must own the behavior behind workflow HTTP APIs and MCP context tools
 - Return context content from `muninn_read` without synthetic refs or provenance views.
 - Resolve selected `session_*` `context_id` values for `muninn_explain` into source provenance views.
 - For session context backed by extracted source references, map those source refs to their source `turn_*` rows.
-- Identify the current session for `capture` without requiring the user to type a session id.
-- Store session-level explicit capture state.
-- Delete current-session rows and related derived context for `capture({ enabled: false })`.
-- Override project auto-capture allowlists when current session state is explicit.
+- Accept captured turns from host hooks through the existing turn capture API.
+- Provide or expose a hook-facing/internal delete-by-session capability for `{ agent, project, sessionId }`.
 - Keep text rendering source-linked and useful without exposing separate navigation tools.
 
 ## Current Backend Gaps
 
-The current backend already has project auto-capture policy, but it does not yet support the target session-level capture behavior.
+The current backend already has project auto-capture policy and imported-session deletion logic, but the host integrations do not yet support the target magic-marker capture behavior.
 
 Missing pieces:
 
-- Session-level capture state keyed by current agent session.
-- `POST /api/v1/skill/capture` for `capture({ enabled })`.
-- Current-session identification in the skill helper/server call path.
-- Deletion of current-session Muninn rows and related derived records.
-- Hook gate that checks explicit session state before project allowlist.
+- Host-local session capture policy keyed by reliable current-session identity.
+- Strict magic-marker parsing in Stop hooks for `<muninn:capture enabled="true" />` and `<muninn:capture enabled="false" />`.
+- Hook-side current-session identification from host-provided `session_id`, transcript path, project, cwd, and agent.
+- Hook-side backfill of the current transcript through the existing turn capture API when capture is enabled.
+- Hook-side deletion flow that calls existing delete-by-session behavior through a hook-facing/internal boundary when capture is disabled.
+- Hook gate that checks host-local explicit session state before project allowlist.
 - `POST /api/v1/startup/recent` that combines recent sessions and signals for session-start host integration.
-- Shared `muninn skill-call` helper command that posts to the capture workflow HTTP route.
 - MCP `muninn_recall({ query, budget?, top_k? })` tool for recalling past or other-session context and returning source context references.
 - MCP `muninn_list({ query, top_k? })` tool for returning candidate `session_*` contexts with titles and summaries.
 - MCP `muninn_read({ context_ids })` tool for resolving selected `session_*` and `turn_*` context handles.
@@ -524,10 +496,14 @@ Missing pieces:
 
 ## Implementation Notes
 
-- MCP request/response types can live near the MCP/server HTTP boundary; workflow helper request/response types can live near the CLI/server HTTP boundary. `common` should only receive shared contracts if multiple packages need them.
-- `capture({ enabled: false })` should be marked/described as destructive so Codex can request appropriate confirmation.
+- MCP request/response types can live near the MCP/server HTTP boundary. Host-local capture policy contracts should live near host hook integrations unless multiple packages need them.
+- `muninn-capture` should be marked/described as destructive for disable/delete requests so Codex can request appropriate confirmation.
 - `muninn-import` should be a skill workflow over MCP `muninn_list` and `muninn_read`, not a server-side import route.
 - `recent` should be safe for automatic invocation at session start; `capture` and `import` require explicit user intent.
+- Capture policy is host-local. The server must not be the source of truth for per-session capture allow/deny state in this design.
+- Capture control markers must be parsed only from the latest assistant turn and must not be captured as ordinary Muninn context.
+- Capture enable backfills the current transcript through the existing turn capture API and enables future hook capture for this session.
+- Capture disable deletes current-session Muninn data through existing delete-by-session behavior and disables future hook capture for this session.
 - `muninn_recall` can be agent-initiated when the current conversation lacks historical context or when the user asks Muninn to remember what happened before.
 - `muninn_list` can be agent-initiated when the user or agent needs to select prior session context by query.
 - `muninn_read` can be agent-initiated only for selected `session_*` and `turn_*` `context_id` handles returned by Muninn.
@@ -724,38 +700,48 @@ export class ServerClient {
 
 The concrete implementation may move schemas into a helper module if tests need to import them, but the generated MCP runtime surface must remain the four tools above.
 
-## Target Skill Helper Shape
+## Target Host Capture Shape
 
-Implementation should add a shared CLI-backed helper for the capture skill instead of duplicating HTTP logic in the skill. The helper should be a hidden or low-level command under `@muninn/cli`, not the primary end-user command surface.
+Implementation should add host-local capture control to agent hooks instead of adding a capture MCP tool or capture skill-call helper.
 
-Target command behavior:
+Target hook behavior:
 
 ```text
-muninn skill-call capture --enabled true|false
-  -> POST /api/v1/skill/capture
-     { "enabled": true|false }
+latest assistant turn contains exactly <muninn:capture enabled="true" />
+  -> resolve current session identity from hook payload/transcript
+  -> write host-local session capture policy: enabled
+  -> backfill current transcript through existing turn capture API
+  -> skip capturing the marker turn as ordinary context
+
+latest assistant turn contains exactly <muninn:capture enabled="false" />
+  -> resolve current session identity from hook payload/transcript
+  -> write host-local session capture policy: disabled
+  -> delete existing Muninn data for { agent, project, sessionId }
+  -> skip capturing the marker turn as ordinary context
 ```
 
-The helper should:
+The host integration should:
 
-- Reuse the same server base URL and auth token resolution as the MCP server client.
-- Print successful server responses as text without wrapping them in extra JSON.
-- Print server errors as actionable text and exit non-zero.
-- Avoid exposing server-side tuning fields.
+- Store capture policy locally under `MUNINN_HOME` or the host integration's local state directory.
+- Key policy by stable session identity derived from host-provided `session_id`, project, cwd, and agent.
+- Never infer current session identity from "latest transcript file" alone for deletion.
+- Fail closed if reliable current-session identity is unavailable.
+- Reuse the same server base URL and auth token resolution as existing hook capture.
+- Reuse existing imported-session deletion logic through a hook-facing/internal boundary rather than coupling hooks to UI routes.
 
 ## Required Design Decisions For Implementation
 
 ### Current Session Identity
 
-`capture({ enabled })` intentionally does not accept `agent`, `cwd`, `project`, or `sessionId`. The implementation must provide current-session identity through the Muninn host integration or skill helper call context. The user-facing command remains "this session", not "this project" or "session id X".
+`muninn-capture` intentionally does not ask the user to type `agent`, `cwd`, `project`, `sessionId`, or `sessionKey`. The implementation must resolve current-session identity from host hook context. The user-facing command remains "this session", not "this project" or "session id X".
 
-If the skill helper/server call path cannot resolve the current session, `capture` must return an actionable error and perform no write or delete:
+If the Stop hook cannot resolve the current session, it must log an actionable error and perform no policy write, backfill, capture, or deletion:
 
 ```text
 Muninn could not identify the current session, so no capture change was made.
 ```
 
-The implementation plan must choose the exact identity transport for Codex and Claude Code before implementing `capture`.
+For Codex, the Stop hook can use hook payload `session_id` or `transcript_path`, then read the transcript to derive project, cwd, and agent ownership. Other hosts must provide an equivalently reliable identity source before supporting `muninn-capture`.
 
 ### Import Selection Flow
 
@@ -779,7 +765,7 @@ import means selecting prior session context, then reading that selected context
 
 ### Session Deletion Scope
 
-`capture({ enabled: false })` must delete the current session's Muninn data without leaving dangling references. At minimum, deletion must cover:
+`<muninn:capture enabled="false" />` must delete the current session's Muninn data without leaving dangling references. At minimum, deletion must cover:
 
 - turn rows for the current session,
 - session snapshots derived from those turns,
