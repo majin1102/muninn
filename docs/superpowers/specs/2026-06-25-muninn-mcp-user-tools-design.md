@@ -219,6 +219,14 @@ Behavior:
 - The control marker itself must not be captured as ordinary Muninn context.
 - If the Stop hook cannot resolve reliable current-session identity, it must fail closed and perform no policy change, backfill, or deletion.
 
+Policy storage:
+
+- Client capture policy is stored under the client host's local Muninn home, for example `$MUNINN_HOME/clients/codex/capture.json`; with the default home this is under `~/.muninn/clients/codex/capture.json`.
+- Client capture policy uses the same agent/project field model as the server capture policy, plus explicit session overrides written by `muninn-capture`.
+- Client capture policy defaults to disabled: absent agent, project, and session entries mean "do not capture".
+- Users may enable default client-side automatic capture by editing the local client policy file.
+- The server-side capture policy in `$MUNINN_HOME/muninn.json` remains server-local only. It must not be treated as a global policy for remote or host-client capture decisions.
+
 Policy model:
 
 ```text
@@ -226,13 +234,16 @@ if current session is explicitly disabled in host-local policy:
   skip future hook capture for this session
 
 else if current session is explicitly enabled in host-local policy:
-  allow hook capture for this session, even when the project is not in the auto-capture allowlist
+  allow hook capture for this session, even when client project auto-capture is disabled
+
+else if client policy enables the agent and project:
+  allow hook capture for this project
 
 else:
-  use the project auto-capture allowlist for hook capture
+  skip hook capture
 ```
 
-Project allowlists remain the default automatic capture policy. Explicit session capture is a host-local user action for the current session.
+Client project policy is the default automatic capture policy. Explicit session capture is a host-local user action for the current session.
 
 Deletion should reuse the existing delete-by-session behavior currently used by imported-session deletion. The hook should depend on a hook-facing/internal boundary, not on a UI route such as `/app/api/import/:agent/session`.
 
@@ -472,6 +483,7 @@ The server must own the behavior behind workflow HTTP APIs and MCP context tools
 - Resolve selected `session_*` `context_id` values for `muninn_explain` into source provenance views.
 - For session context backed by extracted source references, map those source refs to their source `turn_*` rows.
 - Accept captured turns from host hooks through the existing turn capture API.
+- Treat client hook capture policy as client-local. The server must not use its server-local project policy to reject turns that a host hook already decided to send.
 - Provide or expose a hook-facing/internal delete-by-session capability for `{ agent, project, sessionId }`.
 - Keep text rendering source-linked and useful without exposing separate navigation tools.
 
@@ -481,12 +493,14 @@ The current backend already has project auto-capture policy and imported-session
 
 Missing pieces:
 
+- Client-local capture policy file under the local Muninn home, using agent/project policy plus session overrides and defaulting to disabled.
 - Host-local session capture policy keyed by reliable current-session identity.
 - Strict magic-marker parsing in Stop hooks for `<muninn:capture enabled="true" />` and `<muninn:capture enabled="false" />`.
 - Hook-side current-session identification from host-provided `session_id`, transcript path, project, cwd, and agent.
 - Hook-side backfill of the current transcript through the existing turn capture API when capture is enabled.
 - Hook-side deletion flow that calls existing delete-by-session behavior through a hook-facing/internal boundary when capture is disabled.
-- Hook gate that checks host-local explicit session state before project allowlist.
+- Hook gate that checks host-local explicit session state before client-local agent/project policy.
+- Turn capture API behavior that accepts client-authorized hook captures without applying the server-local capture policy as an additional gate.
 - `POST /api/v1/startup/recent` that combines recent sessions and signals for session-start host integration.
 - MCP `muninn_recall({ query, budget?, top_k? })` tool for recalling past or other-session context and returning source context references.
 - MCP `muninn_list({ query, top_k? })` tool for returning candidate `session_*` contexts with titles and summaries.
@@ -501,6 +515,7 @@ Missing pieces:
 - `muninn-import` should be a skill workflow over MCP `muninn_list` and `muninn_read`, not a server-side import route.
 - `recent` should be safe for automatic invocation at session start; `capture` and `import` require explicit user intent.
 - Capture policy is host-local. The server must not be the source of truth for per-session capture allow/deny state in this design.
+- Server-local capture policy and client-local capture policy are separate files. The server policy only controls server-local capture behavior; the client policy controls host hook capture behavior and defaults to disabled.
 - Capture control markers must be parsed only from the latest assistant turn and must not be captured as ordinary Muninn context.
 - Capture enable backfills the current transcript through the existing turn capture API and enables future hook capture for this session.
 - Capture disable deletes current-session Muninn data through existing delete-by-session behavior and disables future hook capture for this session.
@@ -722,7 +737,23 @@ latest assistant turn contains exactly <muninn:capture enabled="false" />
 
 The host integration should:
 
-- Store capture policy locally under `MUNINN_HOME` or the host integration's local state directory.
+- Store capture policy locally under the client host's Muninn home, using `$MUNINN_HOME/clients/<agent>/capture.json` by default.
+- Use this file shape:
+
+```ts
+type ClientCapturePolicyFile = {
+  capture?: {
+    agents?: Record<string, boolean>;
+    projects?: Record<string, Record<string, boolean>>;
+    sessions?: Record<string, Record<string, boolean>>;
+  };
+};
+```
+
+- Treat missing `capture`, missing agent entries, missing project entries, and missing session entries as disabled.
+- Reuse the server capture policy field model for `agents` and `projects`, but do not read the server's `$MUNINN_HOME/muninn.json` as the client hook policy.
+- Store explicit `muninn-capture` decisions in `capture.sessions[agent][sessionKey]`, where `sessionKey` is a stable key derived from the resolved current-session identity.
+- Evaluate capture in this order: explicit disabled session, explicit enabled session, enabled client agent plus enabled client project, disabled.
 - Key policy by stable session identity derived from host-provided `session_id`, project, cwd, and agent.
 - Never infer current session identity from "latest transcript file" alone for deletion.
 - Fail closed if reliable current-session identity is unavailable.
