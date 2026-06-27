@@ -14,6 +14,7 @@ const DEFAULT_EXTRACTOR_MAX_INPUT_CHARS = 24_576;
 const DEFAULT_EXTRACTOR_SNAPSHOT_INPUT_CHARS = 16_384;
 const DEFAULT_EXTRACTOR_PREVIEW_CHARS = 800;
 const DEFAULT_EXTRACTOR_EPOCH_WINDOW_MS = 600_000;
+const DEFAULT_EXTRACTOR_FAILED_EPOCH_RETRY_INTERVAL_MS = 900_000;
 const DEFAULT_WATCHDOG_INTERVAL_MS = 60_000;
 const DEFAULT_WATCHDOG_COMPACT_MIN_FRAGMENTS = 8;
 const DEFAULT_WATCHDOG_TARGET_PARTITION_SIZE = 1_024;
@@ -46,6 +47,7 @@ type ExtractorConfigRecord = {
   snapshotInputChars?: number;
   previewChars?: number;
   epochWindowMs?: number;
+  failedEpochRetryIntervalMs?: number;
 };
 
 type EmbeddingConfigRecord = {
@@ -94,6 +96,7 @@ export type ExtractorLlmConfig = TextProviderConfig & {
   snapshotInputChars: number;
   previewChars: number;
   epochWindowMs: number;
+  failedEpochRetryIntervalMs: number;
 };
 
 export type EmbeddingConfig = {
@@ -200,6 +203,7 @@ export function getExtractorLlmConfig(): ExtractorLlmConfig | null {
     snapshotInputChars: extractor.snapshotInputChars ?? DEFAULT_EXTRACTOR_SNAPSHOT_INPUT_CHARS,
     previewChars: extractor.previewChars ?? DEFAULT_EXTRACTOR_PREVIEW_CHARS,
     epochWindowMs: extractor.epochWindowMs ?? DEFAULT_EXTRACTOR_EPOCH_WINDOW_MS,
+    failedEpochRetryIntervalMs: extractor.failedEpochRetryIntervalMs ?? DEFAULT_EXTRACTOR_FAILED_EPOCH_RETRY_INTERVAL_MS,
     provider: parseLlmProvider(llm.type),
     model: llm.model,
     api: llm.api,
@@ -413,7 +417,7 @@ function parseEmbeddingProvider(provider: string): 'mock' | 'openai' {
 
 function validateTopLevelConfig(config: MuninnConfigRecord): void {
   const raw = config as Record<string, unknown>;
-  const allowedKeys = new Set(['storage', 'extractor', 'providers', 'watchdog', 'capture', 'dreaming']);
+  const allowedKeys = new Set(['server', 'storage', 'extractor', 'providers', 'watchdog', 'capture', 'dreaming']);
   for (const key of Object.keys(raw)) {
     if (!allowedKeys.has(key)) {
       throw new Error(`unsupported top-level config key: ${key}`);
@@ -470,6 +474,7 @@ function validateExtractorConfig(extractor: unknown): void {
   validateOptionalPositiveInteger(config.maxInputChars, 'extractor.maxInputChars');
   validateOptionalPositiveInteger(config.snapshotInputChars, 'extractor.snapshotInputChars');
   validateOptionalPositiveInteger(config.previewChars, 'extractor.previewChars');
+  validateOptionalPositiveInteger(config.failedEpochRetryIntervalMs, 'extractor.failedEpochRetryIntervalMs');
   const minEpochTurns = config.minEpochTurns ?? DEFAULT_EXTRACTOR_MIN_EPOCH_TURNS;
   const maxEpochTurns = config.maxEpochTurns ?? DEFAULT_EXTRACTOR_MAX_EPOCH_TURNS;
   if (maxEpochTurns < minEpochTurns) {

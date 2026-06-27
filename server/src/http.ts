@@ -1,6 +1,7 @@
 import { Hono, type Context, type Next } from 'hono';
 import { cors } from 'hono/cors';
 import type {
+  AppStatusResponse,
   Artifact,
   CaptureTurnRequest,
   CaptureTurnsRequest,
@@ -26,7 +27,6 @@ import {
 } from './backend.js';
 import type { RecallMode } from './backend.js';
 import type { RenderedMemory } from './api/memory.js';
-import { isCaptureEnabled } from './api/capture.js';
 import { renderRecallHit, renderRenderedMemoryHit } from './web/render.js';
 import { invalidateSessionTreeCache, webRoutes } from './web/routes.js';
 import { generateRequestId } from './web/request.js';
@@ -96,6 +96,20 @@ app.get('/version', (c) => {
   });
 });
 
+app.get('/app/api/status', async (c) => {
+  const database = c.req.query('database');
+  const requestId = generateRequestId();
+  let watermark;
+  try {
+    watermark = await memoryPipeline.watermark(database);
+  } catch (error) {
+    const mapped = mapCoreLookupError(error);
+    return c.json(mapped.body, mapped.status as 400 | 404 | 500);
+  }
+
+  return c.json(appStatusFromWatermark(watermark, requestId));
+});
+
 function errorResponse(errorCode: string, errorMessage: string): ErrorResponse {
   return {
     errorCode,
@@ -115,6 +129,26 @@ function memoryWatermarkResponse(watermark: MemoryWatermark): MemoryWatermarkRes
   return {
     ...watermark,
     requestId: generateRequestId(),
+  };
+}
+
+export function appStatusFromWatermark(watermark: MemoryWatermark, requestId: string): AppStatusResponse {
+  const phase = watermark.phases.extractor;
+  const pendingTurns = watermark.pending.turns.length;
+  const status = watermark.error || phase === 'error'
+    ? 'error'
+    : phase === 'pending' || phase === 'running' || phase === 'draining' || pendingTurns > 0
+      ? 'warning'
+      : 'ok';
+
+  return {
+    status,
+    extractor: {
+      phase,
+      pendingTurns,
+      ...(watermark.error ? { error: watermark.error } : {}),
+    },
+    requestId,
   };
 }
 
@@ -838,22 +872,6 @@ function validateBatchTurns(turnsInput: unknown): { turns: TurnContent[] | null;
   return { turns, error: null };
 }
 
-async function filterAllowedTurns(turns: TurnContent[]): Promise<{ turns: TurnContent[]; skippedTurns: number }> {
-  const allowedTurns: TurnContent[] = [];
-  let skippedTurns = 0;
-  for (const turn of turns) {
-    const ingest = typeof turn.metadata?.ingest === 'string' ? turn.metadata.ingest : '';
-    if (ingest.endsWith('-hook') && turn.project) {
-      if (!(await isCaptureEnabled(turn.agent, turn.project))) {
-        skippedTurns += 1;
-        continue;
-      }
-    }
-    allowedTurns.push(turn);
-  }
-  return { turns: allowedTurns, skippedTurns };
-}
-
 app.post('/api/v1/turn/capture', async (c) => {
   let body: CaptureTurnRequest;
   try {
@@ -868,15 +886,6 @@ app.post('/api/v1/turn/capture', async (c) => {
   }
   if (!body.turn) {
     return c.json(errorResponse('invalidRequest', 'turn is required'), 400);
-  }
-
-  // Live hook captures are gated by the per-project capture allowlist; manual
-  // imports (ingest ending in '-import') and other writers are unaffected.
-  const ingest = typeof body.turn.metadata?.ingest === 'string' ? body.turn.metadata.ingest : '';
-  if (ingest.endsWith('-hook') && body.turn.project) {
-    if (!(await isCaptureEnabled(body.turn.agent, body.turn.project))) {
-      return c.body(null, 204);
-    }
   }
 
   try {
@@ -906,11 +915,10 @@ app.post('/api/v1/turn/capture/batch', async (c) => {
     return c.json(errorResponse('invalidRequest', validated.error ?? 'turns are required'), 400);
   }
 
-  const allowed = await filterAllowedTurns(validated.turns);
   let capturedTurns = 0;
   try {
-    if (allowed.turns.length > 0) {
-      capturedTurns = await captureTurns(allowed.turns, body.database);
+    if (validated.turns.length > 0) {
+      capturedTurns = await captureTurns(validated.turns, body.database);
     }
   } catch (error) {
     const mapped = mapCoreWriteError(error);
@@ -920,10 +928,10 @@ app.post('/api/v1/turn/capture/batch', async (c) => {
   if (capturedTurns > 0) {
     invalidateSessionTreeCache();
   }
-  const dedupedTurns = allowed.turns.length - capturedTurns;
+  const dedupedTurns = validated.turns.length - capturedTurns;
   const response: CaptureTurnsResponse = {
     capturedTurns,
-    skippedTurns: allowed.skippedTurns + dedupedTurns,
+    skippedTurns: dedupedTurns,
     requestId: generateRequestId(),
   };
   return c.json(response, 200);

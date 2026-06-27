@@ -409,6 +409,23 @@ test('generateWithTools writes sanitized diagnostics when openai-codex response 
   const diagnostic = JSON.parse(line);
   assert.equal(diagnostic.provider, 'openai-codex');
   assert.equal(diagnostic.operation, 'tool');
+  assert.deepEqual(diagnostic.request, {
+    model: 'gpt-5.4',
+    messageCount: 2,
+    toolNames: ['memory-get'],
+    messages: [
+      {
+        role: 'system',
+        contentLength: 20,
+        contentPreview: 'system prompt secret',
+      },
+      {
+        role: 'user',
+        contentLength: 18,
+        contentPreview: 'user prompt secret',
+      },
+    ],
+  });
   assert.equal(diagnostic.rawLength > 0, true);
   assert.deepEqual(diagnostic.eventTypes, [
     'response.output_item.added',
@@ -422,8 +439,8 @@ test('generateWithTools writes sanitized diagnostics when openai-codex response 
   assert.deepEqual(diagnostic.contentPartDoneTextLengths, []);
   assert.deepEqual(diagnostic.directMessageContentTextLengths, []);
   const serialized = JSON.stringify(diagnostic);
-  assert.equal(serialized.includes('system prompt secret'), false);
-  assert.equal(serialized.includes('user prompt secret'), false);
+  assert.equal(serialized.includes('system prompt secret'), true);
+  assert.equal(serialized.includes('user prompt secret'), true);
   assert.equal(serialized.includes('raw-secret-summary'), false);
   assert.equal(serialized.includes('raw-secret-content'), false);
 });

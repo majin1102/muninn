@@ -9,6 +9,7 @@ import type { InstallPart } from './model.js';
 import { installTargets, uninstallTargets } from './install.js';
 import { readInstallStatus } from './status.js';
 import { resolveCommand } from './bins.js';
+import { resolveMuninnServerBaseUrl } from '@muninn/common';
 
 const BIN_NAMES = {
   mcpCommand: 'muninn-mcp',
@@ -31,12 +32,13 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     }
     if (parsed.command === 'install' || parsed.command === 'uninstall') {
       const parts = installParts(parsed);
+      const muninnHome = process.env.MUNINN_HOME ?? path.join(os.homedir(), '.muninn');
       const results = await (parsed.command === 'install' ? installTargets : uninstallTargets)({
         action: parsed.command,
         target: parsed.target,
         parts,
         scope: parsed.scope,
-        serverUrl: parsed.serverUrl,
+        serverUrl: parsed.serverUrl ?? resolveMuninnServerBaseUrl({ home: muninnHome }),
         dryRun: parsed.dryRun,
         yes: parsed.yes,
         home: os.homedir(),

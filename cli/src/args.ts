@@ -13,7 +13,7 @@ export type ParsedArgs =
       mcpOnly: boolean;
       hookOnly: boolean;
       scope: Scope;
-      serverUrl: string;
+      serverUrl?: string;
       dryRun: boolean;
       yes: boolean;
     }
@@ -88,7 +88,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
       mcpOnly,
       hookOnly,
       scope: scopeFlag(flags) ?? 'user',
-      serverUrl: stringFlag(flags, 'server-url') ?? 'http://127.0.0.1:8080',
+      serverUrl: stringFlag(flags, 'server-url'),
       dryRun: booleanFlag(flags, 'dry-run'),
       yes: booleanFlag(flags, 'yes'),
     };

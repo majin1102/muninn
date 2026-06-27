@@ -2,7 +2,6 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  getCaptureConfigFromConfigForTests,
   isCanonicalProjectIdentity,
   validateMuninnConfigInput,
 } from '../../dist/config.js';
@@ -25,7 +24,7 @@ function makeConfig() {
   };
 }
 
-test('capture config accepts canonical project identities', () => {
+test('muninn config rejects embedded capture config', () => {
   const config = makeConfig();
   config.capture = {
     agents: {
@@ -40,31 +39,13 @@ test('capture config accepts canonical project identities', () => {
     },
   };
 
-  assert.doesNotThrow(() => validateMuninnConfigInput(JSON.stringify(config)));
-  assert.deepEqual(getCaptureConfigFromConfigForTests(config), config.capture);
-});
-
-test('capture config rejects non-canonical project keys', () => {
-  const config = makeConfig();
-  config.capture = {
-    projects: {
-      codex: {
-        amoro: true,
-      },
-    },
-  };
-
   assert.throws(
     () => validateMuninnConfigInput(JSON.stringify(config)),
-    /capture\.projects\.codex\.amoro must be a canonical project identity/i,
+    /capture is no longer supported in muninn\.json/i,
   );
 });
 
-test('capture config defaults agents on and projects off', () => {
-  assert.deepEqual(getCaptureConfigFromConfigForTests(makeConfig()), {
-    agents: {},
-    projects: {},
-  });
+test('canonical project identity accepts GitHub remotes and absolute paths', () => {
   assert.equal(isCanonicalProjectIdentity('github.com/majin1102/muninn'), true);
   assert.equal(isCanonicalProjectIdentity('/Users/Nathan/workspace/muninn'), true);
   assert.equal(isCanonicalProjectIdentity('amoro'), false);

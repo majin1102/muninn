@@ -52,6 +52,7 @@ export class Extractor {
   private readonly previewChars: number;
   private readonly epochWindowMs: number;
   private readonly maxAttempts: number;
+  private readonly failedEpochRetryIntervalMs: number;
   private committedEpoch?: number;
   private openEpoch!: OpenEpoch;
   private currentEpoch: SealedEpoch | null = null;
@@ -60,6 +61,7 @@ export class Extractor {
   private publishingEpochs: OpenEpoch[] = [];
   private threads: SessionThread[] = [];
   private nextIndexRetryAt?: number;
+  private nextFailedEpochRetryAt?: number;
   private lastIndexError?: string;
   private lastEpochError?: string;
   private shuttingDown = false;
@@ -97,6 +99,7 @@ export class Extractor {
     this.previewChars = config.previewChars;
     this.epochWindowMs = config.epochWindowMs;
     this.maxAttempts = config.maxAttempts;
+    this.failedEpochRetryIntervalMs = config.failedEpochRetryIntervalMs;
     this.checkpointRuns = checkpoint?.runs.filter((run) => run.status === 'running').map(cloneExtractorRun) ?? [];
   }
 
@@ -392,10 +395,15 @@ export class Extractor {
         }
 
         if (this.failedEpoch) {
-          const version = this.changeVersion;
-          if (this.failedEpoch) {
-            await this.waitForChange(version);
+          const retryDelay = Math.max((this.nextFailedEpochRetryAt ?? Date.now()) - Date.now(), 0);
+          if (retryDelay === 0) {
+            this.currentEpoch = this.failedEpoch;
+            this.failedEpoch = null;
+            this.nextFailedEpochRetryAt = undefined;
+            this.notifyChange();
+            continue;
           }
+          await this.waitForFailedEpochRetryOrChange(retryDelay);
           retryDelayMs = BASE_RETRY_DELAY_MS;
           continue;
         }
@@ -441,6 +449,7 @@ export class Extractor {
             this.currentEpoch = null;
             this.currentEpochAttempts = 0;
             this.lastEpochError = message;
+            this.nextFailedEpochRetryAt = Date.now() + this.failedEpochRetryIntervalMs;
             await writeMuninnLog(this.database, 'error', 'extractor', 'epoch_processing_abandoned', {
               message,
               maxAttempts: this.maxAttempts,
@@ -479,6 +488,7 @@ export class Extractor {
       this.threads = result.threads;
       this.currentEpochAttempts = 0;
       this.lastEpochError = undefined;
+      this.nextFailedEpochRetryAt = undefined;
       try {
         await this.indexCurrentEpochSnapshots(result.touchedIds);
         this.lastIndexError = undefined;
@@ -914,6 +924,14 @@ export class Extractor {
       waiter();
     }
     this.changeWaiters.clear();
+  }
+
+  private async waitForFailedEpochRetryOrChange(retryDelay: number): Promise<void> {
+    const version = this.changeVersion;
+    await Promise.race([
+      sleep(retryDelay),
+      this.waitForChange(version),
+    ]);
   }
 }
 

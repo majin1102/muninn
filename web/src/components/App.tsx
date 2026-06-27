@@ -1,5 +1,5 @@
-import type { MemoryDocument, ProjectDreamView } from '@muninn/common';
-import { BookOpen, ChevronLeft, ChevronRight, FileText, Search, Settings } from 'lucide-react';
+import type { AppStatusResponse, MemoryDocument, ProjectDreamView } from '@muninn/common';
+import { AlertTriangle, BookOpen, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, FileText, Search, Settings, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType, type CSSProperties, type MouseEvent as ReactMouseEvent, type PointerEvent } from 'react';
 import logo from '../assets/muninn-raven-logo.png';
 import {
@@ -43,6 +43,7 @@ const navItems: Array<{ view: PrimaryView; label: string; icon: ComponentType }>
 const REPOSITORY_URL = 'https://github.com/majin1102/muninn';
 const SESSION_PANE_MIN_WIDTH = 320;
 const SESSION_PANE_DEFAULT_WIDTH = SESSION_PANE_MIN_WIDTH;
+const STATUS_POLL_INTERVAL_MS = 15_000;
 
 export function App() {
   const [apiBase] = useState(resolveApiBase);
@@ -63,6 +64,9 @@ export function App() {
   const [document, setDocument] = useState<MemoryDocument | null>(null);
   const [documentLoading, setDocumentLoading] = useState(false);
   const [documentError, setDocumentError] = useState<string | null>(null);
+  const [appStatus, setAppStatus] = useState<AppStatusResponse | null>(null);
+  const [statusExpanded, setStatusExpanded] = useState(false);
+  const [dismissedStatusSignature, setDismissedStatusSignature] = useState<string | null>(null);
   const [projectDreams, setProjectDreams] = useState<Record<string, {
     dream: ProjectDreamView | null;
     loading: boolean;
@@ -99,6 +103,44 @@ export function App() {
     window.addEventListener('hashchange', onHashChange);
     return () => window.removeEventListener('hashchange', onHashChange);
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadStatus() {
+      try {
+        const nextStatus = await client.getStatus();
+        if (!cancelled) {
+          setAppStatus(nextStatus);
+        }
+      } catch {
+        if (!cancelled) {
+          setAppStatus({
+            status: 'error',
+            extractor: {
+              phase: 'error',
+              pendingTurns: 0,
+              error: {
+                phase: 'extractor',
+                message: 'Muninn server status unavailable',
+              },
+            },
+            requestId: 'status-unavailable',
+          });
+        }
+      }
+    }
+
+    void loadStatus();
+    const intervalId = window.setInterval(() => {
+      void loadStatus();
+    }, STATUS_POLL_INTERVAL_MS);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [client]);
 
   const loadProjects = useCallback(() => {
     setProjectLoading(true);
@@ -456,9 +498,26 @@ export function App() {
     window.addEventListener('mouseup', cleanup, { once: true });
   }
 
+  const statusSignature = appStatus ? appStatusSignature(appStatus) : null;
+  const visibleStatus = appStatus?.status !== 'ok' && statusSignature !== dismissedStatusSignature
+    ? appStatus
+    : null;
+
   return (
-    <div className="app-shell">
-      <aside className={sidebarCollapsed ? 'app-sidebar app-sidebar-collapsed' : 'app-sidebar'}>
+    <div className="app-root">
+      <GlobalStatusBanner
+        status={visibleStatus}
+        expanded={statusExpanded}
+        onToggleDetails={() => setStatusExpanded((current) => !current)}
+        onDismiss={() => {
+          if (statusSignature) {
+            setDismissedStatusSignature(statusSignature);
+          }
+          setStatusExpanded(false);
+        }}
+      />
+      <div className="app-shell">
+        <aside className={sidebarCollapsed ? 'app-sidebar app-sidebar-collapsed' : 'app-sidebar'}>
         <div className="sidebar-header">
           <img className="brand-logo" src={logo} alt="" aria-hidden="true" />
           <span className="brand-name">Muninn</span>
@@ -601,9 +660,83 @@ export function App() {
             </section>
           )}
         </div>
-      </main>
+        </main>
+      </div>
     </div>
   );
+}
+
+function GlobalStatusBanner({
+  status,
+  expanded,
+  onToggleDetails,
+  onDismiss,
+}: {
+  status: AppStatusResponse | null;
+  expanded: boolean;
+  onToggleDetails: () => void;
+  onDismiss: () => void;
+}) {
+  if (!status || status.status === 'ok') {
+    return null;
+  }
+
+  const message = status.extractor.error?.message;
+  const summary = status.status === 'error'
+    ? `Extractor error: ${message ?? 'Extractor is failing'}`
+    : `Extractor ${status.extractor.phase} · ${status.extractor.pendingTurns} pending turns`;
+  const DetailsIcon = expanded ? ChevronUp : ChevronDown;
+
+  return (
+    <section className={`global-status-banner global-status-banner-${status.status}`} role="status" aria-live="polite">
+      <div className="global-status-banner-main">
+        <AlertTriangle className="global-status-banner-icon" />
+        <div className="global-status-banner-copy">
+          <div className="global-status-banner-title">{summary}</div>
+        </div>
+        <div className="global-status-banner-actions">
+          <button className="global-status-banner-button" type="button" onClick={onToggleDetails}>
+            Details
+            <DetailsIcon />
+          </button>
+          <button className="global-status-banner-icon-button" type="button" aria-label="Dismiss status banner" onClick={onDismiss}>
+            <X />
+          </button>
+        </div>
+      </div>
+      {expanded ? (
+        <div className="global-status-banner-details">
+          {message ? (
+            <div className="global-status-banner-detail-row">
+              <span>Message</span>
+              <p>{message}</p>
+            </div>
+          ) : null}
+          <div className="global-status-banner-detail-row">
+            <span>Phase</span>
+            <p>{status.extractor.phase}</p>
+          </div>
+          <div className="global-status-banner-detail-row">
+            <span>Pending turns</span>
+            <p>{status.extractor.pendingTurns}</p>
+          </div>
+          <div className="global-status-banner-detail-row">
+            <span>Request</span>
+            <p>{status.requestId}</p>
+          </div>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function appStatusSignature(status: AppStatusResponse): string {
+  return [
+    status.status,
+    status.extractor.phase,
+    status.extractor.pendingTurns,
+    status.extractor.error?.message ?? '',
+  ].join('|');
 }
 
 function findSessionForTurn(projects: ProjectNode[], memoryId: string): ProjectNode['sessions'][number] | null {

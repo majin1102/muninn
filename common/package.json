@@ -20,6 +20,10 @@
     "./agent-hook": {
       "types": "./dist/agent-hook.d.ts",
       "default": "./dist/agent-hook.js"
+    },
+    "./server-url": {
+      "types": "./dist/server-url.d.ts",
+      "default": "./dist/server-url.js"
     }
   },
   "files": ["dist"],

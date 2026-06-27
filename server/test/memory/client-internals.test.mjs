@@ -103,6 +103,7 @@ async function writeExtractorConfig(configPath, {
   minEpochTurns,
   maxEpochTurns,
   epochWindowMs,
+  failedEpochRetryIntervalMs,
   name = 'default-extractor',
 } = {}) {
   await mkdir(path.dirname(configPath), { recursive: true });
@@ -116,6 +117,7 @@ async function writeExtractorConfig(configPath, {
       ...(minEpochTurns === undefined ? {} : { minEpochTurns }),
       ...(maxEpochTurns === undefined ? {} : { maxEpochTurns }),
       ...(epochWindowMs === undefined ? {} : { epochWindowMs }),
+      ...(failedEpochRetryIntervalMs === undefined ? {} : { failedEpochRetryIntervalMs }),
     },
     providers: {
       llm: {
@@ -615,7 +617,7 @@ test.after(async () => {
   delete process.env.MUNINN_HOME;
 });
 
-test('getExtractorLlmConfig defaults activeWindowDays to 7 and continuityHints to 1', async (t) => {
+test('getExtractorLlmConfig defaults activeWindowDays continuityHints and failed retry interval', async (t) => {
   const { dir, homeDir, configPath } = await makeConfigHome();
   t.after(async () => rm(dir, { recursive: true, force: true }));
   process.env.MUNINN_HOME = homeDir;
@@ -647,6 +649,7 @@ test('getExtractorLlmConfig defaults activeWindowDays to 7 and continuityHints t
   assert.ok(config);
   assert.equal(config.activeWindowDays, 7);
   assert.equal(config.continuityHints, 1);
+  assert.equal(config.failedEpochRetryIntervalMs, 900_000);
 });
 
 test('resolveNativeBindingPath points at the packaged addon', async () => {
@@ -6042,6 +6045,64 @@ test('extractor.watermark blocks later epochs after terminal epoch failures', as
   watermark = await extractor.watermark();
   assert.deepEqual(watermark.pending.turns, ['turn-failed', 'turn-next']);
   assert.equal(watermark.phases.extractor, 'error');
+});
+
+test('extractor retries terminal failed epochs after configured cooldown', async (t) => {
+  const { dir, homeDir, configPath } = await makeConfigHome();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+
+  process.env.MUNINN_HOME = homeDir;
+  await writeExtractorConfig(configPath, {
+    maxAttempts: 2,
+    failedEpochRetryIntervalMs: 25,
+  });
+
+  const extractor = new Extractor({});
+  extractor.bootstrapped = true;
+  extractor.openEpoch = new OpenEpoch(2);
+  extractor.currentEpoch = {
+    epoch: 1,
+    turns: [makeExtractableTurn('turn-retry', 1, 'retry extraction')],
+  };
+
+  let attempts = 0;
+  extractor.extractCurrentEpoch = async () => {
+    attempts += 1;
+    if (attempts <= 2) {
+      throw new Error('temporary provider outage');
+    }
+    extractor.currentEpoch = null;
+    extractor.currentEpochAttempts = 0;
+    extractor.lastEpochError = undefined;
+    extractor.notifyChange();
+  };
+
+  const runPromise = extractor.run();
+  t.after(async () => {
+    extractor.shuttingDown = true;
+    extractor.notifyChange();
+    extractor.epochQueue.close();
+    await runPromise;
+  });
+
+  let watermark = await extractor.watermark();
+  for (let attempt = 0; attempt < 50 && watermark.phases.extractor !== 'error'; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    watermark = await extractor.watermark();
+  }
+
+  assert.equal(attempts, 2);
+  assert.equal(watermark.phases.extractor, 'error');
+  assert.deepEqual(watermark.pending.turns, ['turn-retry']);
+
+  for (let attempt = 0; attempt < 50 && attempts < 3; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+
+  assert.equal(attempts, 3);
+  watermark = await extractor.watermark();
+  assert.equal(watermark.phases.extractor, 'idle');
+  assert.deepEqual(watermark.pending.turns, []);
 });
 
 test('extractor.accept keeps a partial epoch open until minEpochTurns is reached', async (t) => {

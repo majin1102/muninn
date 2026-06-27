@@ -25,18 +25,15 @@ async function main() {
   console.log('tools:', tools.tools.map((t) => t.name).sort());
 
   const result = await client.callTool({
-    name: 'print',
+    name: 'muninn-recall',
     arguments: {
-      message: 'hello from demo-client',
-      data: {
-        now: new Date().toISOString(),
-        pid: process.pid,
-      },
+      query: 'Muninn MCP demo',
+      top_k: 3,
     },
   });
   const resultAny = result as any;
   const firstBlock = Array.isArray(resultAny?.content) ? resultAny.content[0] : null;
-  console.log('print result:', firstBlock?.type === 'text' ? firstBlock.text : resultAny);
+  console.log('recall result:', firstBlock?.type === 'text' ? firstBlock.text : resultAny);
 
   await client.close();
 }

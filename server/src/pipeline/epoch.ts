@@ -45,6 +45,7 @@ export class OpenEpoch {
     // Writes entering the same open epoch are serialized so seal() can close over a complete epoch.
     const task = this.acceptChain.then(async () => {
       try {
+        validateLoadableTurn(turnContent);
         const session = await sessionRegistry.load(
           turnContent.sessionId,
           turnContent.agent,
@@ -95,6 +96,7 @@ export class OpenEpoch {
           if (!first) {
             continue;
           }
+          validateLoadableTurn(first);
           const session = await sessionRegistry.load(
             first.sessionId,
             first.agent,
@@ -152,6 +154,19 @@ function turnOwnership(turn: TurnContent): { project: string; cwd: string } {
     project: turn.project?.trim() || path.basename(cwd) || 'default',
     cwd,
   };
+}
+
+function validateLoadableTurn(turn: TurnContent): void {
+  if (!hasText(turn.sessionId)) {
+    throw new Error('turn must include sessionId');
+  }
+  if (!hasText(turn.agent)) {
+    throw new Error('turn must include agent');
+  }
+}
+
+function hasText(value: string | null | undefined): value is string {
+  return typeof value === 'string' && value.trim().length > 0;
 }
 
 function groupBySession(turns: TurnContent[]): TurnContent[][] {
