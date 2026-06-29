@@ -585,7 +585,7 @@ test('pure read APIs work without extractor bootstrap config', async (t) => {
   }
 
   const hitsBefore = await memories.recall('bootstrap-free prompt', 1);
-  assert.ok(hitsBefore[0]?.memoryId.startsWith('ext:'));
+  assert.ok(hitsBefore[0]?.memoryId.startsWith('extraction:'));
   const extractionId = hitsBefore[0].memoryId;
 
   await shutdownCoreForTests();
@@ -1537,7 +1537,7 @@ test('extractor writes atomic extractions before indexing snapshots', async (t) 
   const hits = await memories.recall('counseling programs', 5);
   const extractionRef = firstExtractionRef(hits);
   assert.ok(extractionRef);
-  const extraction = await memories.get(`ext:${extractionRef}`);
+  const extraction = await memories.get(`extraction:${extractionRef}`);
   assert.ok(extraction);
   assert.match(extraction.summary ?? extraction.title ?? '', /counseling/i);
 });
@@ -1571,9 +1571,9 @@ test('rendered memory binding returns unified turn and extraction reads', async 
   const recalled = await memories.recall('rendered', 10);
   const extractionRef = firstExtractionRef(recalled);
   assert.ok(extractionRef);
-  const extraction = await memories.get(`ext:${extractionRef}`);
+  const extraction = await memories.get(`extraction:${extractionRef}`);
   assert.ok(extraction);
-  assert.equal(extraction.memoryId, `ext:${extractionRef}`);
+  assert.equal(extraction.memoryId, `extraction:${extractionRef}`);
   assert.match(extraction.summary ?? extraction.title ?? '', /rendered prompt|rendered response/);
 });
 
@@ -1600,10 +1600,10 @@ test('recall returns extraction memory ids and detail renders references', async
   });
 
   const hits = await memories.recall('support group', 1);
-  assert.equal(hits[0].memoryId, 'ext:obs-1');
-  const detail = await memories.get('ext:obs-1');
+  assert.equal(hits[0].memoryId, 'extraction:obs-1');
+  const detail = await memories.get('extraction:obs-1');
   assert.ok(detail);
-  assert.equal(detail.memoryId, 'ext:obs-1');
+  assert.equal(detail.memoryId, 'extraction:obs-1');
   assert.match(detail.detail ?? '', /turn:1/);
 });
 

@@ -5142,9 +5142,9 @@ test('thread session inlines chat memory categories', async (t) => {
     },
   });
 
-  assert.match(requests[0].messages[0].content, /Each extraction must include `### Title`/);
-  assert.match(requests[0].messages[0].content, /`### Content` is optional/);
-  assert.match(requests[0].messages[0].content, /durable topic: a decision, requirement, preference, correction/);
+  assert.match(requests[0].messages[0].content, /Create or update extraction units for durable context/);
+  assert.match(requests[0].messages[0].content, /Treat each extraction as a semantic retrieval unit/);
+  assert.match(requests[0].messages[0].content, /Extraction block shape: metadata comment, `### Title`, `### Summary`, optional `### Content`/);
   assert.doesNotMatch(requests[0].messages[0].content, /Domain guidance/);
   assert.doesNotMatch(requests[0].messages[0].content, /domain_prompt/);
   assert.doesNotMatch(requests[0].messages[0].content, /Extraction granularity/);
