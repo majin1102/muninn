@@ -7,6 +7,7 @@ import { resolveRunEnv, type RunOptions } from './run.js';
 
 export type ServerProcessOptions = RunOptions & {
   force?: boolean;
+  startTimeoutMs?: number;
 };
 
 export type ServerProcessPaths = {
@@ -104,10 +105,15 @@ export async function startManagedServer(
     child.once('error', reject);
   });
 
-  await Promise.race([
-    waitForHealth(env.HOST, Number(env.PORT), START_TIMEOUT_MS),
-    childExit,
-  ]);
+  try {
+    await Promise.race([
+      waitForHealth(env.HOST, Number(env.PORT), options.startTimeoutMs ?? START_TIMEOUT_MS),
+      childExit,
+    ]);
+  } catch (error) {
+    await killPid(child.pid, true, STOP_TIMEOUT_MS).catch(() => undefined);
+    throw error;
+  }
 
   const state: ServerProcessState = {
     pid: child.pid,
@@ -234,13 +240,24 @@ async function waitForHealth(host: string, port: number, timeoutMs: number): Pro
   throw new Error(`Muninn server did not become healthy within ${timeoutMs}ms: ${lastError instanceof Error ? lastError.message : 'timeout'}`);
 }
 
-function checkHealth(host: string, port: number): Promise<boolean> {
+export function resolveHealthHost(host: string): string {
+  if (host === '0.0.0.0') {
+    return '127.0.0.1';
+  }
+  if (host === '::') {
+    return '::1';
+  }
+  return host;
+}
+
+export function checkHealth(host: string, port: number): Promise<boolean> {
   return new Promise((resolve, reject) => {
     const request = http.get({
-      host,
+      host: resolveHealthHost(host),
       port,
       path: '/health',
       timeout: 1_000,
+      agent: false,
     }, (response) => {
       response.resume();
       resolve((response.statusCode ?? 0) >= 200 && (response.statusCode ?? 0) < 300);
