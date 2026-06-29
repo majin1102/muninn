@@ -379,7 +379,7 @@ async function applyCaptureMarker<Session extends AgentSession>(params: {
     return false;
   }
 
-  let captured = full.turns.length > 0;
+  let captured = true;
   for (const turn of full.turns) {
     captured = await client.captureTurn({ turn }) && captured;
   }

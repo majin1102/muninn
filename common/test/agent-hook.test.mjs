@@ -70,6 +70,34 @@ test('captureFromTranscript enables current session capture from marker and capt
   ]);
 });
 
+test('captureFromTranscript advances progress for marker-only enable turn', async (t) => {
+  const { home, transcriptPath } = await writeAgentSession([
+    { prompt: '$muninn-capture +1', response: ENABLE_MARKER },
+  ]);
+  setMuninnHome(t, home);
+  const captured = [];
+
+  const ok = await captureFromTranscript({
+    transcriptPath,
+    readSession,
+    toTurnContent,
+    toTurnOptions: { agent: 'codex', ingest: 'codex-hook' },
+    label: 'test-hook',
+    client: {
+      async captureTurn(request) {
+        captured.push(request.turn);
+        return true;
+      },
+    },
+  });
+
+  const sessionKey = muninnSessionKey({ project: 'github.com/example/muninn', sessionId: 'session-a', agent: 'codex' });
+  const progress = JSON.parse(await readFile(path.join(home, 'progress.json'), 'utf8'));
+  assert.equal(ok, true);
+  assert.deepEqual(captured, []);
+  assert.equal(progress.sessions[sessionKey].nextTurnSequence, 1);
+});
+
 test('captureFromTranscript does not advance progress when marker capture fails', async (t) => {
   const { home, transcriptPath } = await writeAgentSession([
     { prompt: 'remember this', response: 'noted' },

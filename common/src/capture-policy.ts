@@ -25,4 +25,3 @@ export type CaptureProgressFile = {
     updatedAt: string;
   }>;
 };
-

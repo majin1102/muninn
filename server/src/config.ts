@@ -63,18 +63,18 @@ type ProvidersConfigRecord = {
   embedding?: Record<string, EmbeddingConfigRecord>;
 };
 
-export type CaptureConfigRecord = {
-  agents?: Record<string, boolean>;
-  projects?: Record<string, Record<string, boolean>>;
+type ServerConfigRecord = {
+  host?: string;
+  port?: number;
 };
 
 export type MuninnConfigRecord = {
+  server?: ServerConfigRecord;
   storage?: Record<string, unknown>;
   extractor?: ExtractorConfigRecord;
   providers?: ProvidersConfigRecord;
   watchdog?: Record<string, unknown>;
   dreaming?: Record<string, unknown>;
-  capture?: CaptureConfigRecord;
 };
 
 export type TextProviderConfig = {
@@ -124,11 +124,6 @@ export type WatchdogConfig = {
 export type DreamingConfig = {
   enabled: boolean;
   intervalMs: number;
-};
-
-export type CaptureConfig = {
-  agents: Record<string, boolean>;
-  projects: Record<string, Record<string, boolean>>;
 };
 
 type CoreRuntimeConfig = {
@@ -272,26 +267,6 @@ function getDreamingConfigFromConfig(config: MuninnConfigRecord | null): Dreamin
   };
 }
 
-export function getCaptureConfig(): CaptureConfig {
-  return getCaptureConfigFromConfig(loadMuninnConfig());
-}
-
-export function getCaptureConfigFromConfigForTests(config: MuninnConfigRecord | null): CaptureConfig {
-  return getCaptureConfigFromConfig(config);
-}
-
-export function getCaptureConfigFromConfig(config: MuninnConfigRecord | null): CaptureConfig {
-  return {
-    agents: { ...(config?.capture?.agents ?? {}) },
-    projects: Object.fromEntries(
-      Object.entries(config?.capture?.projects ?? {}).map(([agent, projects]) => [
-        agent,
-        { ...projects },
-      ]),
-    ),
-  };
-}
-
 export function parseMuninnConfigContent(content: string): MuninnConfigRecord {
   let parsed: unknown;
   try {
@@ -417,18 +392,21 @@ function parseEmbeddingProvider(provider: string): 'mock' | 'openai' {
 
 function validateTopLevelConfig(config: MuninnConfigRecord): void {
   const raw = config as Record<string, unknown>;
-  const allowedKeys = new Set(['server', 'storage', 'extractor', 'providers', 'watchdog', 'capture', 'dreaming']);
+  const allowedKeys = new Set(['server', 'storage', 'extractor', 'providers', 'watchdog', 'dreaming']);
   for (const key of Object.keys(raw)) {
     if (!allowedKeys.has(key)) {
+      if (key === 'capture') {
+        throw new Error('capture is no longer supported in muninn.json; use capture.json instead.');
+      }
       throw new Error(`unsupported top-level config key: ${key}`);
     }
   }
+  validateServerConfig(config.server);
   validateStorageConfig(config.storage);
   validateExtractorConfig(config.extractor);
   validateProvidersConfig(config.providers);
   validateWatchdogConfig(config.watchdog);
   validateDreamingConfig(config.dreaming);
-  validateCaptureConfig(config.capture);
 }
 
 function validateConfiguredProviders(config: MuninnConfigRecord): void {
@@ -447,6 +425,17 @@ function validateStorageConfig(storage: unknown): void {
   const config = expectRecord(storage, 'storage');
   requireNonEmptyString(config.uri, 'storage.uri');
   validateStringMap(config.storageOptions, 'storage.storageOptions');
+}
+
+function validateServerConfig(server: unknown): void {
+  if (server === undefined) {
+    return;
+  }
+  const config = expectRecord(server, 'server');
+  validateOptionalString(config.host, 'server.host');
+  if (config.port !== undefined && (!Number.isInteger(config.port) || (config.port as number) < 1 || (config.port as number) > 65_535)) {
+    throw new Error('server.port must be an integer from 1 to 65535');
+  }
 }
 
 function validateExtractorConfig(extractor: unknown): void {
@@ -580,35 +569,6 @@ function validateDreamingConfig(dreaming: unknown): void {
   const config = expectRecord(dreaming, 'dreaming');
   validateOptionalBoolean(config.enabled, 'dreaming.enabled');
   validateOptionalPositiveInteger(config.intervalMs, 'dreaming.intervalMs');
-}
-
-function validateCaptureConfig(capture: unknown): void {
-  if (capture === undefined) {
-    return;
-  }
-  const config = expectRecord(capture, 'capture');
-  if (config.agents !== undefined) {
-    const agents = expectRecord(config.agents, 'capture.agents');
-    for (const [agent, enabled] of Object.entries(agents)) {
-      if (typeof enabled !== 'boolean') {
-        throw new Error(`capture.agents.${agent} must be a boolean.`);
-      }
-    }
-  }
-  if (config.projects !== undefined) {
-    const agents = expectRecord(config.projects, 'capture.projects');
-    for (const [agent, projectsValue] of Object.entries(agents)) {
-      const projects = expectRecord(projectsValue, `capture.projects.${agent}`);
-      for (const [projectKey, enabled] of Object.entries(projects)) {
-        if (!isCanonicalProjectIdentity(projectKey)) {
-          throw new Error(`capture.projects.${agent}.${projectKey} must be a canonical project identity.`);
-        }
-        if (typeof enabled !== 'boolean') {
-          throw new Error(`capture.projects.${agent}.${projectKey} must be a boolean.`);
-        }
-      }
-    }
-  }
 }
 
 export function isCanonicalProjectIdentity(projectKey: string): boolean {
