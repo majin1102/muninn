@@ -3756,6 +3756,65 @@ test('snapshot parser rejects unknown top-level sections before extractions', ()
   );
 });
 
+test('session snapshot deserialization normalizes legacy Memory Signals heading', () => {
+  const legacyContent = [
+    '# Legacy Snapshot',
+    '',
+    '## Summary',
+    'Legacy persisted snapshots can still be restored.',
+    '',
+    '## Memory Signals',
+    '- [turn:13 +1] Keep restored instructions available.',
+    '',
+    '## Skill Signals',
+    '',
+    '## Skill Details',
+    '',
+    '## Extractions',
+    '<!-- refs: [turn:13] -->',
+    '### Title',
+    'Legacy extraction',
+    '',
+    '### Summary',
+    'Legacy extraction content can mention the old heading after the extraction section.',
+    '',
+    '### Content',
+    'This content mentions a literal heading:',
+    '',
+    '## Memory Signals',
+    'This belongs to extraction content and should not be rewritten.',
+  ].join('\n');
+
+  const [thread] = loadThreads([{
+    snapshotId: 'snapshot-legacy-memory-signals',
+    sessionId: 'session-legacy-memory-signals',
+    project: 'project-a',
+    cwd: '/workspace/project-a',
+    agent: 'agent-a',
+    snapshotSequence: 0,
+    createdAt: '2024-01-01T00:00:00Z',
+    updatedAt: '2024-01-01T00:00:00Z',
+    extractor: 'default-extractor',
+    title: 'Legacy Snapshot',
+    summary: 'Legacy persisted snapshots can still be restored.',
+    memorySignals: [
+      '- [turn:13 +1] Keep restored instructions available.',
+    ],
+    skillSignals: [],
+    skillDetails: '{}',
+    content: legacyContent,
+    references: ['turn:13'],
+  }], 'default-extractor', 3650);
+
+  assert.deepEqual(thread.snapshots[0].memorySignals, [
+    '- [turn:13 +1] Keep restored instructions available.',
+  ]);
+  const preExtractions = thread.snapshots[0].snapshotContent.split('\n## Extractions\n')[0];
+  assert.match(preExtractions, /## Instruction Signals/);
+  assert.doesNotMatch(preExtractions, /^## Memory Signals$/m);
+  assert.match(thread.snapshots[0].extractions[0].context ?? '', /## Memory Signals/);
+});
+
 test('snapshot parser rejects invalid skill signal and unmatched skill detail names', () => {
   assert.throws(
     () => parseSnapshotContent(snapshotContentFixture('', {

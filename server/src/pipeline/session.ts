@@ -471,7 +471,7 @@ export function getPendingIndexUpTo(
 }
 
 function deserializeSnapshot(row: SessionSnapshot): SnapshotContent {
-  const parsed = parseSnapshotContent(row.content, new Set(row.references));
+  const parsed = parseSnapshotContent(normalizePersistedSnapshotContent(row.content), new Set(row.references));
   return {
     threadKind: 'session',
     sessionId: row.sessionId,
@@ -487,6 +487,20 @@ function deserializeSnapshot(row: SessionSnapshot): SnapshotContent {
     nextSteps: [],
     extractionChanges: [],
   };
+}
+
+function normalizePersistedSnapshotContent(content: string): string {
+  const lines = content.split(/\r?\n/);
+  let inExtractions = false;
+  return lines.map((line) => {
+    if (line.trim() === '## Extractions') {
+      inExtractions = true;
+    }
+    if (!inExtractions && line.trim() === '## Memory Signals') {
+      return line.replace('## Memory Signals', '## Instruction Signals');
+    }
+    return line;
+  }).join('\n');
 }
 
 function parseSkillDetailsJson(value: string): SkillDetails {
