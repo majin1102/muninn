@@ -19,7 +19,7 @@ function row(overrides = {}) {
     createdAt: overrides.createdAt ?? '2026-06-18T00:00:00Z',
     updatedAt: overrides.updatedAt ?? '2026-06-18T00:00:00Z',
     content: overrides.content ?? [
-      '## Memory Signal',
+      '## Instruction Signal',
       'Prefer minimal prompt changes.',
     ].join('\n'),
     supportTurns: overrides.supportTurns ?? [{
@@ -32,12 +32,12 @@ function row(overrides = {}) {
 
 test('project signal row content parses memory and skill rows', () => {
   assert.deepEqual(parseProjectSignalContent([
-    '## Memory Signal',
+    '## Instruction Signal',
     'Prefer minimal prompt changes.',
   ].join('\n')), {
     kind: 'memory',
     content: [
-      '## Memory Signal',
+      '## Instruction Signal',
       'Prefer minimal prompt changes.',
     ].join('\n'),
   });
@@ -69,11 +69,11 @@ test('project signal row content parses memory and skill rows', () => {
 
 test('project signal row content rejects old full dream documents and refs', () => {
   for (const content of [
-    '# Project Dream: /repo/muninn\n\n## Memory Signals\n- [1] Old.',
-    '# Project Signals\n\n[turn:1 +1]\n## Memory Signal\nOld.',
+    '# Project Dream: /repo/muninn\n\n## Instruction Signals\n- [1] Old.',
+    '# Project Signals\n\n[turn:1 +1]\n## Instruction Signal\nOld.',
     '## Open Questions\n- unresolved',
-    '## Memory Signal\nUse refs: turn:1.',
-    '## Memory Signal\n- [1] Old weight.',
+    '## Instruction Signal\nUse refs: turn:1.',
+    '## Instruction Signal\n- [1] Old weight.',
   ]) {
     assert.throws(
       () => validateProjectSignalContent(content),
@@ -87,7 +87,7 @@ test('project dreamer output parses labeled current signal blocks', () => {
     '# Project Signals',
     '',
     '[signal:101, turn:300 +1]',
-    '## Memory Signal',
+    '## Instruction Signal',
     'Prefer focused fixes.',
     '',
     '[signal:102, signal:119, turn:400 +10]',
@@ -133,7 +133,7 @@ test('project dreamer output ignores unknown labels even when allowed sets are e
     '# Project Signals',
     '',
     '[signal:999, turn:300 +1]',
-    '## Memory Signal',
+    '## Instruction Signal',
     'Prefer focused fixes.',
   ].join('\n'), {
     signalLabels: [],
@@ -148,7 +148,7 @@ test('project dreamer output ignores unknown labels even when allowed sets are e
       '# Project Signals',
       '',
       '[signal:999]',
-      '## Memory Signal',
+      '## Instruction Signal',
       'Prefer focused fixes.',
     ].join('\n'), {
       signalLabels: [],
@@ -160,27 +160,27 @@ test('project dreamer output ignores unknown labels even when allowed sets are e
 
 test('project dreamer output rejects invalid labels and old document shape', () => {
   assert.throws(
-    () => validateProjectDreamContent('# Project Dream: /repo/muninn\n\n## Memory Signals\n- [1] Old.'),
+    () => validateProjectDreamContent('# Project Dream: /repo/muninn\n\n## Instruction Signals\n- [1] Old.'),
     /must start with # Project Signals/i,
   );
   assert.throws(
-    () => validateProjectDreamContent('# Project Signals: /repo/muninn\n\n[turn:1 +1]\n## Memory Signal\nA.'),
+    () => validateProjectDreamContent('# Project Signals: /repo/muninn\n\n[turn:1 +1]\n## Instruction Signal\nA.'),
     /must start with # Project Signals/i,
   );
   assert.throws(
-    () => validateProjectDreamContent('# Project Signals\n\n## Memory Signal\nMissing labels.'),
+    () => validateProjectDreamContent('# Project Signals\n\n## Instruction Signal\nMissing labels.'),
     /must start with one label list/i,
   );
   assert.throws(
-    () => validateProjectDreamContent('# Project Signals\n\n[foo]\n## Memory Signal\nA.'),
+    () => validateProjectDreamContent('# Project Signals\n\n[foo]\n## Instruction Signal\nA.'),
     /invalid project signal label/i,
   );
   assert.throws(
-    () => validateProjectDreamContent('# Project Signals\n\n[signal:1]\n## Memory Signal\nA.\n\n[signal:1]\n## Memory Signal\nB.'),
+    () => validateProjectDreamContent('# Project Signals\n\n[signal:1]\n## Instruction Signal\nA.\n\n[signal:1]\n## Instruction Signal\nB.'),
     /duplicate survivor/i,
   );
   assert.throws(
-    () => validateProjectDreamContent('# Project Signals\n\n[turn:1 +1, turn:1 +10]\n## Memory Signal\nA.'),
+    () => validateProjectDreamContent('# Project Signals\n\n[turn:1 +1, turn:1 +10]\n## Instruction Signal\nA.'),
     /duplicate turn evidence/i,
   );
   assert.throws(
@@ -202,11 +202,11 @@ test('project dreamer output rejects invalid labels and old document shape', () 
       '# Project Signals',
       '',
       '[turn:1 +1]',
-      '## Memory Signal',
+      '## Instruction Signal',
       'Prefer focused fixes.',
       '',
       '[turn:2 +1]',
-      '## Memory Signal',
+      '## Instruction Signal',
       'Prefer focused fixes.',
     ].join('\n')),
     /duplicate project signal content/i,
@@ -235,7 +235,7 @@ test('project dream signals compute score and sort by score then latest support'
   const now = new Date('2026-06-18T00:00:00Z');
   const oldNormal = row({
     dreamingId: 'dreaming:1',
-    content: '## Memory Signal\nOld normal support.',
+    content: '## Instruction Signal\nOld normal support.',
     supportTurns: [{
       turnId: 'turn:1',
       createdAt: '2026-03-20T00:00:00Z',
@@ -244,7 +244,7 @@ test('project dream signals compute score and sort by score then latest support'
   });
   const pinned = row({
     dreamingId: 'dreaming:2',
-    content: '## Memory Signal\nPinned support does not decay.',
+    content: '## Instruction Signal\nPinned support does not decay.',
     supportTurns: [{
       turnId: 'turn:2',
       createdAt: '2026-03-20T00:00:00Z',

@@ -89,6 +89,7 @@ export async function extractSessionMemory(
   const basePrompt = renderPromptTemplate(template.userTemplate, { input_markdown: inputMarkdown });
   const trace = createExtractionTrace(input, {
     config,
+    systemPromptChars: systemPrompt.length,
     snapshotView,
     renderedTurns,
     userPromptRenderedChars: basePrompt.length,
@@ -113,7 +114,7 @@ export async function extractSessionMemory(
             basePrompt,
             attempt,
             lastError,
-      'Return only a valid Markdown snapshot patch using optional `# <Session Title>`, optional `## Summary`, optional `## Memory Signals`, optional `## Skill Signals`, optional `## Skill Details`, optional `## Extractions`, refs metadata, and `### Title`/`### Summary`/`### Content` extraction blocks.',
+      'Return only a valid Markdown snapshot patch using optional `# <Session Title>`, optional `## Summary`, optional `## Instruction Signals`, optional `## Skill Signals`, optional `## Skill Details`, optional `## Extractions`, refs metadata, and `### Title`/`### Summary`/`### Content` extraction blocks.',
           ),
         },
       ],
@@ -567,7 +568,7 @@ function renderSnapshotViewMarkdown(
     '## Summary',
     summary || '(empty)',
     '',
-    '## Memory Signals',
+    '## Instruction Signals',
     renderSignalList(signals.memorySignals),
     '',
     '## Skill Signals',
@@ -867,10 +868,11 @@ function createExtractionTrace(
   input: SessionExtractionInput,
   params: {
     config: {
-      maxInputChars: number;
+      newBatchInputChars: number;
       snapshotInputChars: number;
       previewChars: number;
     };
+    systemPromptChars: number;
     snapshotView: ReturnType<typeof buildSnapshotView>;
     renderedTurns: RenderedBatchTurns;
     userPromptRenderedChars: number;
@@ -889,11 +891,16 @@ function createExtractionTrace(
       turns: input.turns,
     },
     inputBudget: {
-      maxInputChars: params.config.maxInputChars,
+      newBatchInputChars: params.config.newBatchInputChars,
       snapshotInputChars: params.config.snapshotInputChars,
+      systemPromptChars: params.systemPromptChars,
       newBatchRenderedChars: params.renderedTurns.renderedChars,
       snapshotRenderedChars: params.snapshotView.snapshotCharsRendered,
       userPromptRenderedChars: params.userPromptRenderedChars,
+      userPromptOverheadChars: params.userPromptRenderedChars
+        - params.snapshotView.snapshotCharsRendered
+        - params.renderedTurns.renderedChars,
+      initialRequestChars: params.systemPromptChars + params.userPromptRenderedChars,
       candidateTurns: input.candidateTurnCount ?? input.turns.length,
       includedTurns: input.turns.length,
       deferredTurns: input.deferredTurnCount ?? 0,

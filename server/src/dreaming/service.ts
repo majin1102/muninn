@@ -318,7 +318,7 @@ async function renderMemorySignalBlock(
   }
   return [
     `[${labels.join(', ')}]`,
-    '## Memory Signal',
+    '## Instruction Signal',
     parsed.body,
   ].join('\n');
 }

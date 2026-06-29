@@ -48,7 +48,7 @@ export class Extractor {
   private readonly activeWindowDays: number;
   private readonly minEpochTurns: number;
   private readonly maxEpochTurns: number;
-  private readonly maxInputChars: number;
+  private readonly newBatchInputChars: number;
   private readonly previewChars: number;
   private readonly epochWindowMs: number;
   private readonly maxAttempts: number;
@@ -95,7 +95,7 @@ export class Extractor {
     this.activeWindowDays = config.activeWindowDays;
     this.minEpochTurns = config.minEpochTurns;
     this.maxEpochTurns = config.maxEpochTurns;
-    this.maxInputChars = config.maxInputChars;
+    this.newBatchInputChars = config.newBatchInputChars;
     this.previewChars = config.previewChars;
     this.epochWindowMs = config.epochWindowMs;
     this.maxAttempts = config.maxAttempts;
@@ -480,7 +480,7 @@ export class Extractor {
         threads,
         sealedEpoch: this.currentEpoch!,
         maxEpochTurns: this.maxEpochTurns,
-        maxInputChars: this.maxInputChars,
+        newBatchInputChars: this.newBatchInputChars,
         previewChars: this.previewChars,
         signal: this.shutdownController.signal,
         database: this.database,

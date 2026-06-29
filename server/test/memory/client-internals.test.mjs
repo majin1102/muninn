@@ -442,7 +442,7 @@ function snapshotContentFixture(units, {
     '## Summary',
     summary,
     '',
-    '## Memory Signals',
+    '## Instruction Signals',
     memorySignals.join('\n'),
     '',
     '## Skill Signals',
@@ -3338,8 +3338,8 @@ test('session extraction batch input uses turn headings without horizontal rules
   assert.match(rendered, /## Current Batch Turns/);
   assert.match(rendered, /### turn:1/);
   assert.match(rendered, /### turn:2/);
-  assert.match(rendered, /Prompt \(memory signal evidence\):\nFirst prompt/);
-  assert.match(rendered, /Response \(workflow context, not memory signal evidence\):\nFirst response/);
+  assert.match(rendered, /Prompt \(instruction signal evidence\):\nFirst prompt/);
+  assert.match(rendered, /Response \(workflow context, not instruction signal evidence\):\nFirst response/);
   assert.doesNotMatch(rendered, /^----$/m);
   assert.doesNotMatch(rendered, /Summary:/);
 });
@@ -3584,7 +3584,7 @@ test('extractor validation preserves session-level signals in snapshot content',
     'Extractor signal review': 'Confirm parser support before asking the model to emit a new Markdown section.',
   });
   assert.equal(result.extractions[0]?.context, '- Keep the signal recall-ready without a rigid pseudo-schema.');
-  assert.match(result.snapshotContent, /## Memory Signals\n- \[turn:13 \+1\] The user prefers/);
+  assert.match(result.snapshotContent, /## Instruction Signals\n- \[turn:13 \+1\] The user prefers/);
   assert.match(result.snapshotContent, /## Skill Signals\n- \[turn:13 \+1\] Extractor signal review:/);
   assert.match(result.snapshotContent, /## Skill Details\n### Extractor signal review/);
   assert.match(result.snapshotContent, /\[turn:13 \+1\] The user prefers concise Markdown signals/);
@@ -3619,7 +3619,7 @@ test('snapshot content round-trips split signal sections and skill details', () 
     }],
   );
 
-  assert.match(rendered, /## Memory Signals\n- \[turn:13 \+1\] Keep TypeScript session state/);
+  assert.match(rendered, /## Instruction Signals\n- \[turn:13 \+1\] Keep TypeScript session state/);
   assert.match(rendered, /## Skill Signals\n- \[turn:13 \+1\] TypeScript native:/);
   assert.doesNotMatch(rendered, /## Open Questions/);
   assert.match(rendered, /## Skill Details\n### TypeScript native/);
@@ -3639,7 +3639,7 @@ test('snapshot content rejects removed Open Questions section', () => {
       '## Summary',
       'Summary.',
       '',
-      '## Memory Signals',
+      '## Instruction Signals',
       '',
       '## Skill Signals',
       '',
@@ -3679,7 +3679,7 @@ test('snapshot parser treats skill details and extractions as section boundaries
       context: [
         'Context can mention a snapshot heading.',
         '',
-        '## Memory Signals',
+        '## Instruction Signals',
         'This belongs to extraction content.',
       ].join('\n'),
       references: ['turn:13'],
@@ -3691,12 +3691,33 @@ test('snapshot parser treats skill details and extractions as section boundaries
   assert.equal(parsed.extractions[0].context, [
     'Context can mention a snapshot heading.',
     '',
-    '## Memory Signals',
+    '## Instruction Signals',
     'This belongs to extraction content.',
   ].join('\n'));
 });
 
 test('snapshot parser rejects unknown top-level sections before extractions', () => {
+  assert.throws(
+    () => parseSnapshotContent([
+      '# Parser Boundaries',
+      '',
+      '## Summary',
+      'The parser rejects legacy instruction signal sections.',
+      '',
+      '## Memory Signals',
+      '- [turn:13 +1] Legacy instruction signal section.',
+      '',
+      '## Extractions',
+      '<!-- refs: [turn:13] -->',
+      '### Title',
+      'Parser boundary',
+      '',
+      '### Summary',
+      'Legacy instruction signal sections are not accepted.',
+    ].join('\n'), new Set(['turn:13'])),
+    /unsupported snapshot content document heading: ## Memory Signals/i,
+  );
+
   assert.throws(
     () => parseSnapshotContent([
       '# Parser Boundaries',
@@ -3834,7 +3855,7 @@ test('snapshot patch can preserve, replace, and clear session-level signals', ()
   });
 
   const replaced = extractorLlmTesting.validateSessionExtractionResultForTests([
-    '## Memory Signals',
+    '## Instruction Signals',
     '- [turn:13 +1] Signals are session-level state.',
     '',
     '## Skill Signals',
@@ -3856,7 +3877,7 @@ test('snapshot patch can preserve, replace, and clear session-level signals', ()
   });
 
   const cleared = extractorLlmTesting.validateSessionExtractionResultForTests([
-    '## Memory Signals',
+    '## Instruction Signals',
     '',
     '## Skill Signals',
     '',
@@ -3905,14 +3926,14 @@ test('snapshot patch can preserve, replace, and clear session-level signals', ()
   };
   assert.deepEqual(
     extractorLlmTesting.validateSessionExtractionResultForTests([
-      '## Memory Signals',
+      '## Instruction Signals',
       '- [turn:12 +1] Preserve exact existing evidence contribution.',
     ].join('\n'), existingEvidenceInput).memorySignals,
     ['- [turn:12 +1] Preserve exact existing evidence contribution.'],
   );
   assert.throws(
     () => extractorLlmTesting.validateSessionExtractionResultForTests([
-      '## Memory Signals',
+      '## Instruction Signals',
       '- [turn:12 +10] Preserve exact existing evidence contribution.',
     ].join('\n'), existingEvidenceInput),
     /referenced unknown evidence turn id: turn:12/i,
@@ -4016,8 +4037,8 @@ test('session extraction turn input omits turn summary when prompt and response 
   }]);
 
   assert.match(markdown, /## Current Batch Turns/);
-  assert.match(markdown, /Prompt \(memory signal evidence\):\nUser asked whether app session rows should use snapshot titles\./);
-  assert.match(markdown, /Response \(workflow context, not memory signal evidence\):\nAgent confirmed the session index should cache the latest snapshot title\./);
+  assert.match(markdown, /Prompt \(instruction signal evidence\):\nUser asked whether app session rows should use snapshot titles\./);
+  assert.match(markdown, /Response \(workflow context, not instruction signal evidence\):\nAgent confirmed the session index should cache the latest snapshot title\./);
   assert.doesNotMatch(markdown, /Summary:/);
   assert.doesNotMatch(markdown, /This old turn summary repeats/);
 });
@@ -4071,7 +4092,7 @@ test('snapshot patch allows signal-like headings inside extraction content', () 
     '### Content',
     'The extraction context can include a heading-like line.',
     '',
-    '## Memory Signals',
+    '## Instruction Signals',
     'This is extraction content, not a snapshot signal section.',
   ].join('\n'), {
     sessionMemory: {
@@ -4086,7 +4107,7 @@ test('snapshot patch allows signal-like headings inside extraction content', () 
   assert.equal(result.extractions[0].context, [
     'The extraction context can include a heading-like line.',
     '',
-    '## Memory Signals',
+    '## Instruction Signals',
     'This is extraction content, not a snapshot signal section.',
   ].join('\n'));
 });
@@ -4317,7 +4338,7 @@ test('thread session get_extraction expands visible extraction sequences only', 
   assert.match(firstUserMessage.content, /## Current Snapshot/);
   assert.match(firstUserMessage.content, /# Caroline support group/);
   assert.match(firstUserMessage.content, /## Summary/);
-  assert.match(firstUserMessage.content, /## Memory Signals\n\(empty\)/);
+  assert.match(firstUserMessage.content, /## Instruction Signals\n\(empty\)/);
   assert.match(firstUserMessage.content, /## Skill Signals\n\(empty\)/);
   assert.doesNotMatch(firstUserMessage.content, /## Open Questions/);
   assert.match(firstUserMessage.content, /## Extractions/);
@@ -4343,6 +4364,15 @@ test('thread session get_extraction expands visible extraction sequences only', 
   assert.equal(result.extractions[0].category, undefined);
   assert.deepEqual(result.extractions[0].references, ['turn:0', 'turn:1']);
   const trace = JSON.parse(await readFile(tracePath, 'utf8'));
+  const systemMessage = requests[0].messages.find((message) => message.role === 'system');
+  assert.ok(systemMessage);
+  assert.equal(trace.inputBudget.newBatchInputChars, 24_576);
+  assert.equal(trace.inputBudget.systemPromptChars, systemMessage.content.length);
+  assert.equal(trace.inputBudget.initialRequestChars, systemMessage.content.length + firstUserMessage.content.length);
+  assert.equal(trace.inputBudget.userPromptOverheadChars, firstUserMessage.content.length
+    - trace.inputBudget.snapshotRenderedChars
+    - trace.inputBudget.newBatchRenderedChars);
+  assert.equal('maxInputChars' in trace.inputBudget, false);
   assert.equal(trace.toolCalls[0].name, 'get_extraction');
   assert.equal(trace.extractions[0].text, 'Caroline attended an LGBTQ support group on 7 May 2023.');
   assert.match(trace.finalText, /## Summary/);
@@ -4903,7 +4933,7 @@ test('thread session traces invalid markdown attempts without JSON retry instruc
   assert.ok(retryUserMessage);
   assert.match(retryUserMessage.content, /Previous output was invalid/);
   assert.match(retryUserMessage.content, /Return only a valid Markdown snapshot patch/);
-  assert.match(retryUserMessage.content, /optional `## Memory Signals`/);
+  assert.match(retryUserMessage.content, /optional `## Instruction Signals`/);
   assert.match(retryUserMessage.content, /optional `## Skill Signals`/);
   assert.doesNotMatch(retryUserMessage.content, /optional `## Open Questions`/);
   assert.match(retryUserMessage.content, /optional `## Skill Details`/);
@@ -5465,7 +5495,7 @@ test('extractEpoch chunks same-session turns by maxEpochTurns', async () => {
   assert.deepEqual(result.threads[0].snapshotIds, ['snapshot-1', 'snapshot-2', 'snapshot-3']);
 });
 
-test('extractEpoch chunks same-session turns by rendered maxInputChars', async () => {
+test('extractEpoch chunks same-session turns by rendered newBatchInputChars', async () => {
   const threads = [];
   const extractionInputs = [];
   const snapshotRows = [];
@@ -5504,7 +5534,7 @@ test('extractEpoch chunks same-session turns by rendered maxInputChars', async (
     extractorName: 'default-extractor',
     activeWindowDays: 3650,
     maxEpochTurns: 32,
-    maxInputChars: 900,
+    newBatchInputChars: 900,
     previewChars: 800,
     threads,
     sealedEpoch: {
@@ -5515,7 +5545,7 @@ test('extractEpoch chunks same-session turns by rendered maxInputChars', async (
   });
 
   assert.deepEqual(extractionInputs.map((input) => input.turns.length), [2, 2]);
-  assert.deepEqual(extractionInputs.map((input) => input.inputBudgetStoppedBy), ['max-input-chars', 'none']);
+  assert.deepEqual(extractionInputs.map((input) => input.inputBudgetStoppedBy), ['new-batch-input-chars', 'none']);
   assert.deepEqual(extractionInputs.map((input) => input.deferredTurnCount), [2, 0]);
   assert.equal(snapshotRows.length, 2);
 });

@@ -42,7 +42,7 @@ function renderProjectSignals(result: {
     '',
     `Project: ${result.project}`,
     '',
-    '## Memory Signals',
+    '## Instruction Signals',
     ...result.memorySignals.map((signal) => `- [${formatSignalScore(signal.score)}] ${signal.text}`),
     '',
     '## Skill Signals',

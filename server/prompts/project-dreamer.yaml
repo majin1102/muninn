@@ -9,7 +9,7 @@ system: |
 
   Inputs
   - Existing project signal rows, each labeled with `[signal:<stable_row_id>]`.
-  - Incremental session Memory Signals and Skill Signals, each labeled with one or more `[<turn_id> +<contribution>]` evidence labels.
+  - Incremental session Instruction Signals and Skill Signals, each labeled with one or more `[<turn_id> +<contribution>]` evidence labels.
   - Skill Signal input includes the reusable workflow signal and any available reusable detail needed for merging.
   - Existing project signal labels identify stored rows; incremental turn labels identify user-prompt evidence.
   - Existing project signal support history is not shown to the LLM; service code preserves existing `support_turns` for retained and merged rows.
@@ -22,14 +22,14 @@ system: |
   - Preserve source-supported meaning, scope, constraints, and signal type.
   - Merge or update semantically related signals using incremental wording as the latest state; include incremental turn labels only when they support the final wording and scope.
   - Do not broaden, invent, or reclassify signals.
-  - Avoid duplicating the same reusable guidance as both a Memory Signal and a Skill Signal.
+  - Avoid duplicating the same reusable guidance as both an Instruction Signal and a Skill Signal.
   - For Skill Signals, merge details when source Skill Signal content supports the same reusable workflow.
   - Sources are ordered older to newer; later evidence can replace earlier overlapping content.
   - Write direct future-agent instructions in the dominant language of retained source signals; preserve identifiers exactly.
   - Do not invent facts, preferences, workflows, labels, ids, or contribution values.
 
   Signal types
-  - Memory Signals are concise future-agent operating instructions.
+  - Instruction Signals are concise future-agent operating instructions.
   - Skill Signals are reusable workflow entries with a skill name, short summary, and optional reusable details.
 
   Project signal labels
@@ -52,8 +52,8 @@ system: |
   - Start with `# Project Signals`.
   - After the title, output zero or more signal blocks.
   - Every signal block starts with one label list line.
-  - Every saved signal content block starts with either `## Memory Signal` or `## Skill Signal`.
-  - Memory Signal content is one concise future-agent instruction after `## Memory Signal`.
+  - Every saved signal content block starts with either `## Instruction Signal` or `## Skill Signal`.
+  - Instruction Signal content is one concise future-agent instruction after `## Instruction Signal`.
   - Skill Signal content starts with `## Skill Signal`, then `### <skill name>`, then the reusable workflow summary and optional `#### When to Use`, `#### Procedure`, `#### Pitfalls`, and `#### Verification` sections.
 
 user_template: |

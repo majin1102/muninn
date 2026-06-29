@@ -10,7 +10,7 @@ const DEFAULT_EXTRACTOR_ACTIVE_WINDOW_DAYS = 7;
 const DEFAULT_EXTRACTOR_CONTINUITY_HINTS = 1;
 const DEFAULT_EXTRACTOR_MIN_EPOCH_TURNS = 8;
 const DEFAULT_EXTRACTOR_MAX_EPOCH_TURNS = 32;
-const DEFAULT_EXTRACTOR_MAX_INPUT_CHARS = 24_576;
+const DEFAULT_EXTRACTOR_NEW_BATCH_INPUT_CHARS = 24_576;
 const DEFAULT_EXTRACTOR_SNAPSHOT_INPUT_CHARS = 16_384;
 const DEFAULT_EXTRACTOR_PREVIEW_CHARS = 800;
 const DEFAULT_EXTRACTOR_EPOCH_WINDOW_MS = 600_000;
@@ -43,7 +43,7 @@ type ExtractorConfigRecord = {
   continuityHints?: number;
   minEpochTurns?: number;
   maxEpochTurns?: number;
-  maxInputChars?: number;
+  newBatchInputChars?: number;
   snapshotInputChars?: number;
   previewChars?: number;
   epochWindowMs?: number;
@@ -92,7 +92,7 @@ export type ExtractorLlmConfig = TextProviderConfig & {
   continuityHints: number;
   minEpochTurns: number;
   maxEpochTurns: number;
-  maxInputChars: number;
+  newBatchInputChars: number;
   snapshotInputChars: number;
   previewChars: number;
   epochWindowMs: number;
@@ -199,7 +199,7 @@ export function getExtractorLlmConfig(): ExtractorLlmConfig | null {
     continuityHints: extractor.continuityHints ?? DEFAULT_EXTRACTOR_CONTINUITY_HINTS,
     minEpochTurns: extractor.minEpochTurns ?? DEFAULT_EXTRACTOR_MIN_EPOCH_TURNS,
     maxEpochTurns: extractor.maxEpochTurns ?? DEFAULT_EXTRACTOR_MAX_EPOCH_TURNS,
-    maxInputChars: extractor.maxInputChars ?? DEFAULT_EXTRACTOR_MAX_INPUT_CHARS,
+    newBatchInputChars: extractor.newBatchInputChars ?? DEFAULT_EXTRACTOR_NEW_BATCH_INPUT_CHARS,
     snapshotInputChars: extractor.snapshotInputChars ?? DEFAULT_EXTRACTOR_SNAPSHOT_INPUT_CHARS,
     previewChars: extractor.previewChars ?? DEFAULT_EXTRACTOR_PREVIEW_CHARS,
     epochWindowMs: extractor.epochWindowMs ?? DEFAULT_EXTRACTOR_EPOCH_WINDOW_MS,
@@ -460,6 +460,9 @@ function validateExtractorConfig(extractor: unknown): void {
   if (config.defaultImportance !== undefined) {
     throw new Error('extractor.defaultImportance is not supported; extraction importance has been removed.');
   }
+  if (config.maxInputChars !== undefined) {
+    throw new Error('extractor.maxInputChars is no longer supported; use extractor.newBatchInputChars instead.');
+  }
   requireNonEmptyString(config.name, 'extractor.name');
   requireNonEmptyString(config.llmProvider, 'extractor.llmProvider');
   requireNonEmptyString(config.embeddingProvider, 'extractor.embeddingProvider');
@@ -471,7 +474,7 @@ function validateExtractorConfig(extractor: unknown): void {
   validateOptionalPositiveInteger(config.continuityHints, 'extractor.continuityHints');
   validateOptionalPositiveInteger(config.minEpochTurns, 'extractor.minEpochTurns');
   validateOptionalPositiveInteger(config.maxEpochTurns, 'extractor.maxEpochTurns');
-  validateOptionalPositiveInteger(config.maxInputChars, 'extractor.maxInputChars');
+  validateOptionalPositiveInteger(config.newBatchInputChars, 'extractor.newBatchInputChars');
   validateOptionalPositiveInteger(config.snapshotInputChars, 'extractor.snapshotInputChars');
   validateOptionalPositiveInteger(config.previewChars, 'extractor.previewChars');
   validateOptionalPositiveInteger(config.failedEpochRetryIntervalMs, 'extractor.failedEpochRetryIntervalMs');
@@ -480,10 +483,10 @@ function validateExtractorConfig(extractor: unknown): void {
   if (maxEpochTurns < minEpochTurns) {
     throw new Error('extractor.maxEpochTurns must be greater than or equal to extractor.minEpochTurns');
   }
-  const maxInputChars = config.maxInputChars ?? DEFAULT_EXTRACTOR_MAX_INPUT_CHARS;
+  const newBatchInputChars = config.newBatchInputChars ?? DEFAULT_EXTRACTOR_NEW_BATCH_INPUT_CHARS;
   const previewChars = config.previewChars ?? DEFAULT_EXTRACTOR_PREVIEW_CHARS;
-  if (previewChars >= maxInputChars) {
-    throw new Error('extractor.previewChars must be smaller than extractor.maxInputChars');
+  if (previewChars >= newBatchInputChars) {
+    throw new Error('extractor.previewChars must be smaller than extractor.newBatchInputChars');
   }
   validateOptionalPositiveInteger(config.epochWindowMs, 'extractor.epochWindowMs');
 }

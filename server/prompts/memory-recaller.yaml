@@ -18,7 +18,7 @@ system: |
 
   Query intent handling:
   - Factual recall: for queries about remembered facts, states, plans, attributes, events, time, related items, or context, gather directly relevant facts around the query. Keep concrete values and relevant context, combine compatible parts from multiple candidates, and keep distinct subjects, events, times, or conditions separate. Do not replace concrete facts with uncertainty just because no single candidate states the final answer.
-  - Judgment recall: the query asks for a judgment, match, preference, likelihood, comparison, or inference based on memory. Extract positive and negative memory signals and details. Briefly note clear limits, uncertainty, or mismatches when they matter. Do not answer the judgment or decide the conclusion for the main agent.
+  - Judgment recall: the query asks for a judgment, match, preference, likelihood, comparison, or inference based on memory. Extract positive and negative instruction signals and details. Briefly note clear limits, uncertainty, or mismatches when they matter. Do not answer the judgment or decide the conclusion for the main agent.
 
 user_template: |
   Query:

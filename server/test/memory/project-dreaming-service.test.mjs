@@ -133,7 +133,7 @@ test('first dream renders incremental evidence blocks and writes signal rows plu
     now: () => new Date('2026-06-19T00:00:00Z'),
     merge: async ({ existingProjectSignals, incrementalSessionSignals, labels }) => {
       assert.equal(existingProjectSignals, '');
-      assert.match(incrementalSessionSignals, /\[turn:10 \+1\]\n## Memory Signal\nPrefer minimal prompt changes\./);
+      assert.match(incrementalSessionSignals, /\[turn:10 \+1\]\n## Instruction Signal\nPrefer minimal prompt changes\./);
       assert.match(incrementalSessionSignals, /\[turn:11 \+10\]\n## Skill Signal\n### 记忆清库验证/);
       assert.match(incrementalSessionSignals, /#### Procedure/);
       assert.deepEqual(labels, {
@@ -144,7 +144,7 @@ test('first dream renders incremental evidence blocks and writes signal rows plu
         '# Project Signals',
         '',
         '[turn:10 +1]',
-        '## Memory Signal',
+        '## Instruction Signal',
         'Prefer minimal prompt changes.',
         '',
         '[turn:11 +10]',
@@ -178,12 +178,12 @@ test('incremental dream merges existing signal support and deletes omitted rows'
   const existing = [
     dreamingRow({
       dreamingId: 'dreaming:10',
-      content: '## Memory Signal\nPrefer minimal prompt changes.',
+      content: '## Instruction Signal\nPrefer minimal prompt changes.',
       supportTurns: [{ turnId: 'turn:1', createdAt: '2026-06-01T00:00:00Z', contribution: 1 }],
     }),
     dreamingRow({
       dreamingId: 'dreaming:11',
-      content: '## Memory Signal\nTask-local stale signal.',
+      content: '## Instruction Signal\nTask-local stale signal.',
       supportTurns: [{ turnId: 'turn:2', createdAt: '2026-06-02T00:00:00Z', contribution: 1 }],
     }),
   ];
@@ -217,7 +217,7 @@ test('incremental dream merges existing signal support and deletes omitted rows'
         '# Project Signals',
         '',
         '[signal:10, turn:3 +1]',
-        '## Memory Signal',
+        '## Instruction Signal',
         'Prefer subtractive prompt changes.',
       ].join('\n');
     },
@@ -229,7 +229,7 @@ test('incremental dream merges existing signal support and deletes omitted rows'
   assert.deepEqual(deleted, ['dreaming:11']);
   assert.equal(result.rows.length, 1);
   assert.equal(result.rows[0].dreamingId, 'dreaming:10');
-  assert.equal(result.rows[0].content, '## Memory Signal\nPrefer subtractive prompt changes.');
+  assert.equal(result.rows[0].content, '## Instruction Signal\nPrefer subtractive prompt changes.');
   assert.deepEqual(result.rows[0].supportTurns.map((turn) => turn.turnId), ['turn:1', 'turn:3']);
   assert.equal(watermarks.at(-1).sessionSnapshotVersion, 15);
 });
@@ -237,7 +237,7 @@ test('incremental dream merges existing signal support and deletes omitted rows'
 test('incremental dream skips merge when snapshots have no new evidence labels', async () => {
   const existing = [dreamingRow({
     dreamingId: 'dreaming:10',
-    content: '## Memory Signal\nPrefer minimal prompt changes.',
+    content: '## Instruction Signal\nPrefer minimal prompt changes.',
     supportTurns: [],
   })];
   const { client, watermarks } = createClient({
@@ -319,7 +319,7 @@ test('incremental dream treats higher contribution from the same turn as new evi
         '# Project Signals',
         '',
         '[turn:1 +10]',
-        '## Memory Signal',
+        '## Instruction Signal',
         'Prefer minimal prompt changes.',
       ].join('\n');
     },
@@ -379,7 +379,7 @@ test('incremental dream treats a different signal from the same turn as new evid
         '# Project Signals',
         '',
         '[turn:1 +1]',
-        '## Memory Signal',
+        '## Instruction Signal',
         'Bind local dev servers to `0.0.0.0` when the user needs browser access from another machine.',
       ].join('\n');
     },
@@ -421,13 +421,13 @@ test('dreaming service lists projects from current dreaming rows with watermark 
         dreamingId: 'dreaming:1',
         project: '/repo/a',
         updatedAt: '2026-06-19T00:00:00Z',
-        content: '## Memory Signal\nA.',
+        content: '## Instruction Signal\nA.',
       }),
       dreamingRow({
         dreamingId: 'dreaming:2',
         project: '/repo/b',
         updatedAt: '2026-06-21T00:00:00Z',
-        content: '## Memory Signal\nB.',
+        content: '## Instruction Signal\nB.',
       }),
     ],
   });

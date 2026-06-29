@@ -107,7 +107,7 @@ export type SessionMemory = {
 export type SessionExtractionInput = {
   sessionMemory: SessionMemory;
   turns: TurnInput[];
-  inputBudgetStoppedBy?: 'none' | 'max-input-chars' | 'max-epoch-turns' | 'single-turn-oversize';
+  inputBudgetStoppedBy?: 'none' | 'new-batch-input-chars' | 'max-epoch-turns' | 'single-turn-oversize';
   candidateTurnCount?: number;
   deferredTurnCount?: number;
 };
@@ -592,7 +592,7 @@ export async function extractEpoch(params: {
   threads: SessionThread[];
   sealedEpoch: SealedEpoch;
   maxEpochTurns?: number;
-  maxInputChars?: number;
+  newBatchInputChars?: number;
   previewChars?: number;
   signal?: AbortSignal;
   database?: string;
@@ -609,9 +609,9 @@ export async function extractEpoch(params: {
   if (maxEpochTurns !== Number.POSITIVE_INFINITY && (!Number.isInteger(maxEpochTurns) || maxEpochTurns <= 0)) {
     throw new Error('maxEpochTurns must be a positive integer');
   }
-  const maxInputChars = params.maxInputChars ?? Number.POSITIVE_INFINITY;
-  if (maxInputChars !== Number.POSITIVE_INFINITY && (!Number.isInteger(maxInputChars) || maxInputChars <= 0)) {
-    throw new Error('maxInputChars must be a positive integer');
+  const newBatchInputChars = params.newBatchInputChars ?? Number.POSITIVE_INFINITY;
+  if (newBatchInputChars !== Number.POSITIVE_INFINITY && (!Number.isInteger(newBatchInputChars) || newBatchInputChars <= 0)) {
+    throw new Error('newBatchInputChars must be a positive integer');
   }
   const previewChars = params.previewChars ?? 800;
   if (!Number.isInteger(previewChars) || previewChars <= 0) {
@@ -626,7 +626,7 @@ export async function extractEpoch(params: {
     );
     const chunks = chunkTurnsByInputBudget(turns, {
       maxEpochTurns,
-      maxInputChars,
+      newBatchInputChars,
       previewChars,
     });
     let consumedTurns = 0;

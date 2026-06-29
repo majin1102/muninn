@@ -68,22 +68,22 @@ export function parseProjectSignalContent(content: string): Omit<ProjectSignalBl
 
   const lines = text.split(/\r?\n/);
   const heading = lines[0]?.trim();
-  if (heading === '## Memory Signal') {
+  if (heading === '## Instruction Signal') {
     const body = lines.slice(1).join('\n').trim();
     if (!body) {
-      throw new Error('Memory Signal content must not be empty');
+      throw new Error('Instruction Signal content must not be empty');
     }
     if (/^##\s+/m.test(body)) {
-      throw new Error('Memory Signal content must contain one signal, not nested sections');
+      throw new Error('Instruction Signal content must contain one signal, not nested sections');
     }
     return {
       kind: 'memory',
-      content: ['## Memory Signal', body].join('\n'),
+      content: ['## Instruction Signal', body].join('\n'),
     };
   }
 
   if (heading !== '## Skill Signal') {
-    throw new Error('project signal content must start with ## Memory Signal or ## Skill Signal');
+    throw new Error('project signal content must start with ## Instruction Signal or ## Skill Signal');
   }
   const skillHeadingIndex = lines.findIndex((line, index) => index > 0 && line.trim().length > 0);
   if (skillHeadingIndex < 0 || !/^###\s+(.+?)\s*$/.test(lines[skillHeadingIndex]!)) {
@@ -238,7 +238,7 @@ export function parseDreamingRow(row: DreamingRow, now: Date = new Date()): Proj
       kind: 'memory',
       score,
       lastSupportedAt,
-      text: parsed.content.replace(/^## Memory Signal\s*/, '').trim(),
+      text: parsed.content.replace(/^## Instruction Signal\s*/, '').trim(),
     };
   }
   const detail = parsed.content

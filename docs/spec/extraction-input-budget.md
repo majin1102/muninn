@@ -2,7 +2,7 @@
 
 ## Goal
 
-Reduce Muninn extraction token cost and latency by bounding what enters a single extraction LLM call, without losing the user-prompt evidence needed for Memory Signals and Skill Signals.
+Reduce Muninn extraction token cost and latency by bounding what enters a single extraction LLM call, without losing the user-prompt evidence needed for Instruction Signals and Skill Signals.
 
 This spec focuses on extraction input shaping and LLM request sizing. It does not change storage schema, signal categories, project dreaming, or provider selection.
 
@@ -10,8 +10,8 @@ This spec focuses on extraction input shaping and LLM request sizing. It does no
 
 Each extraction call renders the current batch as turns with:
 
-- `Prompt (memory signal evidence)`
-- `Response (workflow context, not memory signal evidence)`
+- `Prompt (instruction signal evidence)`
+- `Response (workflow context, not instruction signal evidence)`
 
 The extraction input does not directly include raw tool events. Tool calls and tool outputs are stored on turn events, but extraction currently receives only the turn prompt and response fields. Tool details enter extraction only when the assistant response mentions them.
 
@@ -49,7 +49,7 @@ Target:
 response preview + content compression + batch/snapshot budgets:
 - response rendered/original ratio: <=70% of current baseline
 - plan-heavy response rendered/original ratio: 35%-50% of current baseline
-- current batch rendered chars: capped by maxInputChars except explicit single-turn oversize
+- current batch rendered chars: capped by newBatchInputChars except explicit single-turn oversize
 - snapshot rendered chars: capped by snapshotInputChars except explicit protected-context oversize
 ```
 
@@ -57,8 +57,8 @@ These percentages are targets for rendered response text, not guaranteed full-pr
 
 ## Design Principles
 
-- User prompts remain the primary evidence for Memory Signals and Skill Signals.
-- Assistant responses are workflow context, not memory signal evidence.
+- User prompts remain the primary evidence for Instruction Signals and Skill Signals.
+- Assistant responses are workflow context, not instruction signal evidence.
 - Do not feed raw tool input/output into the main extraction prompt.
 - Assistant responses often carry conclusions, current state, and tradeoffs; keep bounded response context instead of treating responses as disposable.
 - Tool events are evidence and provenance, not the primary knowledge input for extraction.
@@ -77,7 +77,7 @@ Recommended config and defaults:
   "extractor": {
     "minEpochTurns": 8,
     "maxEpochTurns": 32,
-    "maxInputChars": 24576,
+    "newBatchInputChars": 24576,
     "snapshotInputChars": 16384,
     "previewChars": 800
   }
@@ -88,7 +88,7 @@ Default values:
 
 - `minEpochTurns`: `8`
 - `maxEpochTurns`: `32`
-- `maxInputChars`: `24576`
+- `newBatchInputChars`: `24576`
 - `snapshotInputChars`: `16384`
 - `previewChars`: `800`
 
@@ -96,9 +96,9 @@ Validation:
 
 - `minEpochTurns` and `maxEpochTurns` must be positive integers.
 - `maxEpochTurns` must be greater than or equal to `minEpochTurns`.
-- `maxInputChars`, `snapshotInputChars`, and `previewChars` must be positive integers.
-- `previewChars` must be smaller than `maxInputChars`.
-- `snapshotInputChars` is independent from `maxInputChars`; it limits current snapshot rendering, not current batch rendering.
+- `newBatchInputChars`, `snapshotInputChars`, and `previewChars` must be positive integers.
+- `previewChars` must be smaller than `newBatchInputChars`.
+- `snapshotInputChars` is independent from `newBatchInputChars`; it limits current snapshot rendering, not current batch rendering.
 
 Character-count units:
 
@@ -112,15 +112,15 @@ Character-count units:
 
 `maxEpochTurns` remains the maximum number of turns that can enter one extraction request.
 
-`maxInputChars` is the rendered `## Current Batch Turns` markdown ceiling, not the full LLM request ceiling. It does not include the system prompt, retry wrapper text, or rendered current snapshot. During import, finalize, bootstrap/replay, and live extraction, build the current batch by adding turns in order until adding the next rendered turn would exceed `maxInputChars` or `maxEpochTurns`. The resulting request may contain fewer than `maxEpochTurns` turns. It may also contain fewer than `minEpochTurns` turns when processing already-sealed or finalized backlog. Turns deferred by `maxInputChars` or `maxEpochTurns` remain pending and must be extracted in later requests. Always include at least one turn so extraction cannot stall; if one rendered turn still exceeds `maxInputChars`, process that turn alone and record the oversize condition in trace logs.
+`newBatchInputChars` is the rendered `## Current Batch Turns` markdown ceiling, not the full LLM request ceiling. It does not include the system prompt, retry wrapper text, or rendered current snapshot. During import, finalize, bootstrap/replay, and live extraction, build the current batch by adding turns in order until adding the next rendered turn would exceed `newBatchInputChars` or `maxEpochTurns`. The resulting request may contain fewer than `maxEpochTurns` turns. It may also contain fewer than `minEpochTurns` turns when processing already-sealed or finalized backlog. Turns deferred by `newBatchInputChars` or `maxEpochTurns` remain pending and must be extracted in later requests. Always include at least one turn so extraction cannot stall; if one rendered turn still exceeds `newBatchInputChars`, process that turn alone and record the oversize condition in trace logs.
 
 `snapshotInputChars` is the rendered `## Current Snapshot` markdown budget. Default it to `16384`. Render the current snapshot independently from the new batch budget:
 
-- Build a protected snapshot block from the current title, session summary, Memory Signals, Skill Signals, and the most recent 16 extraction summaries.
+- Build a protected snapshot block from the current title, session summary, Instruction Signals, Skill Signals, and the most recent 16 extraction summaries.
 - If the full snapshot fits within `snapshotInputChars`, render the full snapshot.
 - If the full snapshot exceeds `snapshotInputChars` but the protected snapshot block fits, render the protected block first, then use remaining budget for additional newest extraction detail that fits.
 - If the protected snapshot block itself exceeds `snapshotInputChars`, render the protected block anyway and record `snapshot-protected-oversize` in trace logs.
-- Do not let snapshot trimming remove user-prompt evidence from the current batch; current batch turns remain governed by `maxInputChars`.
+- Do not let snapshot trimming remove user-prompt evidence from the current batch; current batch turns remain governed by `newBatchInputChars`.
 
 Do not use separate "last turn response" or "batch response" caps. The final turn in a batch is not semantically special enough to justify a larger response budget, and a batch response cap is less direct than a full rendered input cap.
 
@@ -159,7 +159,7 @@ Extraction output should stay compact because source turns remain available thro
 
 ## Content-Type Compression
 
-Implement targeted compression together with response previews, `maxInputChars`, `snapshotInputChars`, `get_turn`, and trace logging. Content-type compression applies to assistant responses before the current batch enters the LLM request. Prompt-side compression applies only to Codex `<proposed_plan>` blocks described in Prompt Handling.
+Implement targeted compression together with response previews, `newBatchInputChars`, `snapshotInputChars`, `get_turn`, and trace logging. Content-type compression applies to assistant responses before the current batch enters the LLM request. Prompt-side compression applies only to Codex `<proposed_plan>` blocks described in Prompt Handling.
 
 For assistant responses, apply content-type block compression first. If the response is still longer than `previewChars` after block compression, apply the normal response head/tail preview to the compressed response. Trace each operation in order; each per-turn record's rendered char count is the response length after that operation.
 
@@ -321,10 +321,9 @@ Omission counts belong in extraction trace records, not in the tool result retur
 
 Update `server/prompts/extractor.yaml` when implementing this tool:
 
-- List `get_turn` in the extractor `Inputs` section as the tool for reading omitted current-batch turn content.
-- Explain in `Tool use` that `get_turn` should be called only when the rendered prompt/response preview is insufficient to safely create or update the snapshot.
-- Show the tool call with the raw persisted turn row id, for example `get_turn({"turnId":"123"})`.
-- Keep citation syntax separate: extraction citations still use `@[turn:<turnId>]`, but `get_turn.turnId` must be the raw row id value, such as `"123"`, not `"turn:123"`.
+- List `get_turn` in `## Tool use` as the tool for reading omitted current-batch turn content.
+- Explain that `get_turn` should be called only when the rendered prompt/response preview is insufficient to safely create or update the snapshot.
+- Keep citation syntax separate: extraction citations still use `@[turn:<turnId>]`, while `get_turn.turnId` is supplied by current-batch preview markers without a `turn:` prefix.
 
 The executor must validate each call at runtime:
 
@@ -332,7 +331,7 @@ The executor must validate each call at runtime:
 - return a tool error for unknown turn ids or turn ids outside the current extraction scope
 - enforce per-call and per-extraction returned-character budgets
 - trace every call, returned prompt/response chars, and omitted chars
-- keep assistant responses as workflow context, not memory signal evidence, even when returned by `get_turn`
+- keep assistant responses as workflow context, not instruction signal evidence, even when returned by `get_turn`
 
 Default tool budgets:
 
@@ -368,15 +367,18 @@ Add per-call fields:
 ```json
 {
   "inputBudget": {
-    "maxInputChars": 24576,
+    "newBatchInputChars": 24576,
     "snapshotInputChars": 16384,
+    "systemPromptChars": 0,
     "newBatchRenderedChars": 0,
     "snapshotRenderedChars": 0,
     "userPromptRenderedChars": 0,
+    "userPromptOverheadChars": 0,
+    "initialRequestChars": 0,
     "candidateTurns": 0,
     "includedTurns": 0,
     "deferredTurns": 0,
-    "stoppedBy": "max-input-chars",
+    "stoppedBy": "new-batch-input-chars",
     "snapshotStoppedBy": "snapshot-input-chars",
     "snapshotProtectedExtractionSummaries": 16,
     "promptCharsOriginal": 0,
@@ -455,7 +457,7 @@ Allowed `snapshotStoppedBy` values:
 Allowed `stoppedBy` values:
 
 - `none`
-- `max-input-chars`
+- `new-batch-input-chars`
 - `max-epoch-turns`
 - `single-turn-oversize`
 
@@ -492,10 +494,10 @@ Rejected `get_turn` calls should also be traced:
 Add focused tests before the clean-run validation:
 
 - Config defaults and validation:
-  - default `minEpochTurns=8`, `maxEpochTurns=32`, `maxInputChars=24576`, `snapshotInputChars=16384`, and `previewChars=800`
+  - default `minEpochTurns=8`, `maxEpochTurns=32`, `newBatchInputChars=24576`, `snapshotInputChars=16384`, and `previewChars=800`
   - reject non-positive or non-integer budget values
   - reject `maxEpochTurns < minEpochTurns`
-  - reject `previewChars >= maxInputChars`
+  - reject `previewChars >= newBatchInputChars`
 - Current batch rendering:
   - assistant responses use head/tail previews when longer than `previewChars`
   - Codex `<proposed_plan>...</proposed_plan>` prompt blocks use the same head/tail preview
@@ -503,14 +505,14 @@ Add focused tests before the clean-run validation:
   - content-type compression folds assistant-generated proposed plans, drafts/specs, large code blocks, diffs, logs, and command output
   - each content-type compression reason, `proposed-plan`, `draft-or-spec`, `code-fence`, and `diff-log-or-command-output`, has a per-turn trace record with original, rendered, and omitted response chars
   - when response compression still leaves a response over `previewChars`, the normal response preview runs after compression and emits a `response-preview` trace record
-  - adding a turn that would exceed `maxInputChars` defers that turn for a later extraction request
+  - adding a turn that would exceed `newBatchInputChars` defers that turn for a later extraction request
   - a single oversized rendered turn is still processed alone and traced as oversize
 - Snapshot rendering:
   - `snapshotInputChars` limits rendered current snapshot independently from current batch rendering
-  - the protected snapshot block keeps title, session summary, Memory Signals, Skill Signals, and the most recent 16 extraction summaries
+  - the protected snapshot block keeps title, session summary, Instruction Signals, Skill Signals, and the most recent 16 extraction summaries
   - protected snapshot oversize is rendered and traced as `snapshot-protected-oversize`
 - `get_turn` tool loop:
-  - `server/prompts/extractor.yaml` lists `get_turn` in `Inputs` and `Tool use`
+  - `server/prompts/extractor.yaml` lists `get_turn` in `## Tool use`
   - runtime tool specs include `get_turn` alongside `get_extraction` and `get_skill`
   - `get_turn({"turnId":"123"})` returns only `turnId`, `prompt`, and `response`
   - `get_turn` rejects ids outside the current extraction request
@@ -530,7 +532,7 @@ max rendered user prompt chars
 retry count
 invalid extraction count
 extraction duration
-number of Memory Signals
+number of Instruction Signals
 number of Skill Signals
 get_turn call count and returned chars
 manual review of top noisy signals
@@ -539,14 +541,14 @@ manual review of top noisy signals
 Acceptance criteria:
 
 - Response rendering with preview and compression is no more than 70% of the current baseline, with plan-heavy sessions targeting 35%-50%.
-- Current batch rendering respects `maxInputChars`, except explicit single-turn oversize trace records.
+- Current batch rendering respects `newBatchInputChars`, except explicit single-turn oversize trace records.
 - Snapshot rendering respects `snapshotInputChars`, except explicit `snapshot-protected-oversize` trace records.
-- Raw user prompt size is measured and reported. Rendered current batch input must still respect `maxInputChars`, except explicit single-turn oversize trace records.
+- Raw user prompt size is measured and reported. Rendered current batch input must still respect `newBatchInputChars`, except explicit single-turn oversize trace records.
 - No raw tool input/output is added to extraction input.
 - Response previews use head/tail rendering, not prefix-only rendering.
 - `get_turn` is implemented in the extractor tool loop.
 - `get_turn` calls are scoped to the current extraction request, budgeted, and visible in trace logs.
-- Memory Signal and Skill Signal quality does not regress in a manual review of Muninn and Amoro sessions.
+- Instruction Signal and Skill Signal quality does not regress in a manual review of Muninn and Amoro sessions.
 - Trace logs explain where input was removed and why.
 
 ## Non-Goals

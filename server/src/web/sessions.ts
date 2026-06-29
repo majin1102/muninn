@@ -558,7 +558,7 @@ function buildTimelineSignalItems(
   snapshot: SessionSnapshotContent,
 ): SessionTimelineItem[] {
   const definitions = [
-    { heading: 'Memory Signals', title: 'Memories', suffix: 'memories' },
+    { heading: 'Instruction Signals', title: 'Instructions', suffix: 'instructions' },
     { heading: 'Skill Signals', title: 'Skills', suffix: 'skills' },
   ];
   const items: SessionTimelineItem[] = [];
