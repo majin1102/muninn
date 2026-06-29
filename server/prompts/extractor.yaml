@@ -78,7 +78,7 @@ system: |
   - Include only changed sections/blocks after the title; omit unchanged summary, signal sections, Skill Details, and `## Extractions`.
 
   ### Output skeleton
-  - `# <Session Title>`: required short session title; may be unchanged.
+  - `# <Session Title>`: required short semantic session title; if any extraction exists, do not use UUIDs, paths, or `Session <id>` defaults.
   - `## Summary`: optional session-level summary update.
   - `## Instruction Signals`: complete replacement list of future-agent instructions; empty section clears it.
   - `## Skill Signals`: complete replacement list of reusable workflow candidates; empty section clears it.

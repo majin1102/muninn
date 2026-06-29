@@ -103,6 +103,7 @@ test('thread session memory prompt uses generic recall-ready memory guidance', (
   assert.match(system, /Return only a Markdown snapshot patch, not a full snapshot/);
   assert.match(system, /# <Session Title>/);
   assert.match(system, /### Title/);
+  assert.match(system, /if any extraction exists, do not use UUIDs, paths, or `Session <id>` defaults/);
   assert.match(system, /Session title: usually 4-8 tokens/);
   assert.match(system, /Extraction titles are UI labels: usually 3-10 words, hard max 16 words/);
   assert.match(system, /## Summary/);
