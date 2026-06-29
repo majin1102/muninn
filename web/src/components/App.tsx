@@ -70,6 +70,7 @@ export function App() {
   const [projectDreams, setProjectDreams] = useState<Record<string, {
     dream: ProjectDreamView | null;
     loading: boolean;
+    error: string | null;
   }>>({});
   const contentShellRef = useRef<HTMLDivElement>(null);
   const client = useMemo(() => createAppClient(apiBase, usesDemoData), [apiBase, usesDemoData]);
@@ -190,7 +191,8 @@ export function App() {
       return;
     }
     if (isProjectDreamingSession(selectedSession)) {
-      if (!projectDreams[selectedSession.projectKey]?.loading && !projectDreams[selectedSession.projectKey]?.dream) {
+      const currentDream = projectDreams[selectedSession.projectKey];
+      if (!currentDream?.loading && !currentDream?.dream && !currentDream?.error) {
         void openProjectDream(selectedSession);
       }
       return;
@@ -312,6 +314,7 @@ export function App() {
       ...current,
       [session.projectKey]: {
         dream: current[session.projectKey]?.dream ?? null,
+        error: null,
         loading: true,
       },
     }));
@@ -321,15 +324,18 @@ export function App() {
         ...current,
         [session.projectKey]: {
           dream,
+          error: null,
           loading: false,
         },
       }));
     } catch (error) {
-      setProjectError(asErrorMessage(error));
+      const message = asErrorMessage(error);
+      setProjectError(message);
       setProjectDreams((current) => ({
         ...current,
         [session.projectKey]: {
           dream: current[session.projectKey]?.dream ?? null,
+          error: message,
           loading: false,
         },
       }));
@@ -389,7 +395,7 @@ export function App() {
     window.location.hash = `#/session/s/${encodeURIComponent(selectionId)}`;
     if (isProjectDreamingSession(session)) {
       const currentDream = projectDreams[session.projectKey];
-      if (!currentDream?.loading && !currentDream?.dream) {
+      if (!currentDream?.loading && !currentDream?.dream && !currentDream?.error) {
         void openProjectDream(session);
       }
       return;
@@ -603,7 +609,9 @@ export function App() {
                   <DreamingContent
                     projectLabel={projectLabelForSession(projects, activeSession)}
                     dream={projectDreams[activeSession.projectKey]?.dream ?? null}
+                    error={projectDreams[activeSession.projectKey]?.error ?? null}
                     loading={projectDreams[activeSession.projectKey]?.loading ?? false}
+                    onRetry={() => openProjectDream(activeSession)}
                   />
                 ) : (
                   <SessionContentSplit

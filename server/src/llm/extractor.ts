@@ -295,9 +295,9 @@ function validateSessionExtractionResult(
   const patch = parseSnapshotPatch(result, validNewReferences, validExistingSignalLabels);
   validateUpdatedSequencesWereRead(patch, options.readExtractionSequences);
   const nextExtractions = mergePatchExtractions(current, patch, validNewReferences);
-  const summary = patch.summary ?? currentSummary;
+  const summary = resolveSnapshotSummary(patch.summary, currentSummary);
   const signals = applySignalPatch(currentSignals, patch);
-  const title = patch.title ?? currentTitle;
+  const title = resolveSnapshotTitle(patch.title, currentTitle, currentSummary, summary, input);
   const snapshotContent = renderSnapshotContent(
     title || 'Session memory snapshot',
     summary || 'This session has no durable memory summary yet.',
@@ -320,6 +320,52 @@ function validateSessionExtractionResult(
     nextSteps: input?.sessionMemory.nextSteps ?? [],
     contextRefs,
   };
+}
+
+function resolveSnapshotTitle(
+  patchTitle: string | undefined,
+  currentTitle: string,
+  currentSummary: string,
+  nextSummary: string,
+  input: SessionExtractionInput | undefined,
+): string {
+  const patchCandidate = normalizeText(patchTitle ?? '');
+  if (isUsableSessionTitle(patchCandidate, nextSummary)) {
+    return patchCandidate;
+  }
+
+  const currentCandidate = normalizeText(currentTitle);
+  if (isUsableSessionTitle(currentCandidate, currentSummary)) {
+    return currentCandidate;
+  }
+
+  return normalizeText(firstPrompt(input), 80);
+}
+
+function resolveSnapshotSummary(patchSummary: string | undefined, currentSummary: string): string {
+  const patchCandidate = normalizeText(patchSummary ?? '');
+  if (patchSummary !== undefined) {
+    return isEmptyMarker(patchCandidate) ? '' : patchCandidate;
+  }
+
+  const currentCandidate = normalizeText(currentSummary);
+  return isDefaultSummary(currentCandidate) || isEmptyMarker(currentCandidate)
+    ? ''
+    : currentCandidate;
+}
+
+function isUsableSessionTitle(title: string, summary: string): boolean {
+  return Boolean(title)
+    && !isEmptyMarker(title)
+    && !isGeneratedSnapshotTitle(title, summary);
+}
+
+function isEmptyMarker(text: string): boolean {
+  return text.toLowerCase() === '(empty)';
+}
+
+function firstPrompt(input: SessionExtractionInput | undefined): string {
+  return input?.turns.find((turn) => normalizeText(turn.prompt ?? ''))?.prompt ?? '';
 }
 
 function validateUpdatedSequencesWereRead(

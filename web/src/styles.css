@@ -760,6 +760,72 @@ svg {
   overflow-y: auto;
 }
 
+.dreaming-error-panel {
+  width: calc(100% - 56px);
+  max-width: 980px;
+  min-height: 58px;
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 12px;
+  margin: 20px 28px 0;
+  padding: 12px 14px;
+  border: 1px solid #f0c8c8;
+  border-left: 3px solid #be3a3a;
+  border-radius: 8px;
+  background: #fff4f4;
+  color: #7f1d1d;
+}
+
+.dreaming-error-icon {
+  width: 18px;
+  height: 18px;
+  margin-top: 1px;
+  color: #be3a3a;
+}
+
+.dreaming-error-copy {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.dreaming-error-title {
+  color: #7f1d1d;
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: 0;
+  line-height: 20px;
+}
+
+.dreaming-error-message {
+  color: #8f2a2a;
+  font-size: 13px;
+  font-weight: 400;
+  letter-spacing: 0;
+  line-height: 20px;
+  overflow-wrap: anywhere;
+}
+
+.dreaming-error-action {
+  min-height: 28px;
+  padding: 0 10px;
+  border: 1px solid #e4aaaa;
+  border-radius: 6px;
+  background: #fffafa;
+  color: #7f1d1d;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0;
+  line-height: 1;
+}
+
+.dreaming-error-action:hover {
+  background: #ffecec;
+}
+
 .dreaming-memories {
   display: grid;
   gap: 28px;

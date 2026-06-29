@@ -3534,6 +3534,28 @@ test('extractor validation derives extractions from titled snapshot content', ()
   }]);
 });
 
+test('extractor validation falls back to first prompt when model returns empty title', () => {
+  const result = extractorLlmTesting.validateSessionExtractionResultForTests(
+    '# (empty)',
+    {
+      sessionMemory: {
+        title: 'Session group-a',
+        summary: 'Default session memory thread for session group-a.',
+        extractions: [],
+        nextSteps: [],
+      },
+      turns: [{
+        turnId: 'turn:13',
+        prompt: 'Run hook smoke test 3',
+        response: 'Acknowledged hook smoke test 3.',
+      }],
+    },
+  );
+
+  assert.equal(result.title, 'Run hook smoke test 3');
+  assert.equal(result.summary, 'This session has no durable memory summary yet.');
+});
+
 test('extractor validation preserves session-level signals in snapshot content', () => {
   const result = extractorLlmTesting.validateSessionExtractionResultForTests(
     snapshotContentFixture([

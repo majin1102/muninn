@@ -56,13 +56,23 @@ test('app opens dreaming content without loading session turns', async () => {
 
   assert.match(appSource, /isProjectDreamingSession\(session\)/);
   assert.match(appSource, /client\.getProjectDream\(session\.projectKey\)/);
+  assert.match(appSource, /error: null,\s*loading: true/);
+  assert.match(appSource, /const message = asErrorMessage\(error\)/);
+  assert.match(appSource, /error: message/);
   assert.match(apiSource, /listProjectDreamProjects\(\)/);
   assert.match(appSource, /<DreamingContent/);
+  assert.match(appSource, /error=\{projectDreams\[activeSession\.projectKey\]\?\.error \?\? null\}/);
+  assert.match(appSource, /onRetry=\{\(\) => openProjectDream\(activeSession\)\}/);
   assert.match(appSource, /return;/);
   assert.match(appSource, /const currentDream = projectDreams\[session\.projectKey\]/);
-  assert.match(appSource, /if \(!currentDream\?\.loading && !currentDream\?\.dream\)/);
+  assert.match(appSource, /if \(!currentDream\?\.loading && !currentDream\?\.dream && !currentDream\?\.error\)/);
   assert.match(contentSource, /Memories/);
   assert.match(contentSource, /Skills/);
+  assert.match(contentSource, /error: string \| null;/);
+  assert.match(contentSource, /onRetry: \(\) => void;/);
+  assert.match(contentSource, /dreaming-error-panel/);
+  assert.match(contentSource, /Failed to load project dreaming/);
+  assert.match(contentSource, /Retry/);
   assert.match(contentSource, /loading && !dream \? null/);
   assert.doesNotMatch(contentSource, />Memory Signals</);
   assert.doesNotMatch(contentSource, /Open Questions/);
@@ -76,6 +86,8 @@ test('dreaming content follows Muninn Web typography and tab standards', async (
 
   assert.match(contentSource, /<div className="dreaming-content" aria-label=\{projectLabel\}>/);
   assert.match(cssSource, /\.dreaming-header/);
+  assert.match(cssSource, /\.dreaming-error-panel/);
+  assert.match(cssSource, /\.dreaming-error-action/);
   assert.doesNotMatch(contentSource, /dreaming-title/);
   assert.doesNotMatch(cssSource, /\.dreaming-title/);
   assert.match(cssSource, /\.dreaming-header\s*\{[^}]*border-bottom: 1px solid #ececec;/s);
