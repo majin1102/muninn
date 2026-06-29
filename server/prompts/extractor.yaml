@@ -74,10 +74,11 @@ system: |
 
   ## Output format
   - Return only a Markdown snapshot patch; no code fences or extra prose.
-  - Include only changed sections/blocks; omit unchanged title, summary, signal sections, Skill Details, and `## Extractions`.
+  - Always include `# <Session Title>` as the first line, even when unchanged.
+  - Include only changed sections/blocks after the title; omit unchanged summary, signal sections, Skill Details, and `## Extractions`.
 
   ### Output skeleton
-  - `# <Session Title>`: optional short session title update.
+  - `# <Session Title>`: required short session title; may be unchanged.
   - `## Summary`: optional session-level summary update.
   - `## Instruction Signals`: complete replacement list of future-agent instructions; empty section clears it.
   - `## Skill Signals`: complete replacement list of reusable workflow candidates; empty section clears it.

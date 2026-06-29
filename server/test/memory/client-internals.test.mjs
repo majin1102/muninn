@@ -3816,6 +3816,52 @@ test('session snapshot deserialization rejects invalid skillDetails JSON', () =>
   );
 });
 
+test('snapshot patch with unchanged title preserves existing content', () => {
+  const baseInput = {
+    sessionMemory: {
+      title: 'Extractor Signals',
+      summary: 'Extractor prompt design.',
+      memorySignals: [
+        '- [turn:13 +1] Keep signal bullets under named subsections.',
+      ],
+      skillSignals: [
+        '- [turn:13 +1] Extractor signal review: Preserve parser support notes.',
+      ],
+      skillDetails: {
+        'Extractor signal review': 'Preserve parser support notes.',
+      },
+      extractions: [{
+        title: 'Signal handling',
+        text: 'Signal handling preserves existing parser support notes.',
+        context: null,
+        references: ['turn:13'],
+      }],
+      nextSteps: [],
+    },
+    turns: [{
+      turnId: 'turn:13',
+      summary: 'The user refined extractor signal handling.',
+    }],
+  };
+
+  const result = extractorLlmTesting.validateSessionExtractionResultForTests(
+    '# Extractor Signals',
+    baseInput,
+  );
+
+  assert.equal(result.title, 'Extractor Signals');
+  assert.equal(result.summary, 'Extractor prompt design.');
+  assert.deepEqual(result.memorySignals, baseInput.sessionMemory.memorySignals);
+  assert.deepEqual(result.skillSignals, baseInput.sessionMemory.skillSignals);
+  assert.deepEqual(result.skillDetails, baseInput.sessionMemory.skillDetails);
+  assert.deepEqual(result.extractions.map((extraction) => ({
+    title: extraction.title,
+    text: extraction.text,
+    context: extraction.context,
+    references: extraction.references,
+  })), baseInput.sessionMemory.extractions);
+});
+
 test('snapshot patch can preserve, replace, and clear session-level signals', () => {
   const baseInput = {
     sessionMemory: {
@@ -4502,7 +4548,7 @@ test('thread session get_turn reads only current batch prompt and response with 
       nextSteps: [],
     },
     turns: [{
-      turnId: '123',
+      turnId: 'turn:123',
       prompt: '用户说这个方案需要看完整 prompt。',
       response: '这里是完整 response。',
     }],
@@ -4515,11 +4561,11 @@ test('thread session get_turn reads only current batch prompt and response with 
           toolCalls: [{
             id: 'call-1',
             name: 'get_turn',
-            arguments: { turnId: '123' },
+            arguments: { turnId: 'turn:123' },
           }, {
             id: 'call-2',
             name: 'get_turn',
-            arguments: { turnId: '999' },
+            arguments: { turnId: '123' },
           }],
         };
       }
@@ -4535,23 +4581,25 @@ test('thread session get_turn reads only current batch prompt and response with 
 
   const getTurnSpec = requests[0].tools.find((tool) => tool.name === 'get_turn');
   assert.ok(getTurnSpec);
-  assert.match(getTurnSpec.description, /current-batch turn/i);
+  assert.match(getTurnSpec.description, /target conversation turn/i);
   assert.equal(getTurnSpec.parameters.properties.turnId.type, 'string');
+  assert.match(getTurnSpec.parameters.properties.turnId.description, /exact current-batch turn id/i);
+  assert.doesNotMatch(getTurnSpec.parameters.properties.turnId.description, /without a turn: prefix/i);
 
   const toolMessages = requests[1].messages.filter((message) => message.role === 'tool');
   assert.deepEqual(JSON.parse(toolMessages[0].content), {
-    turnId: '123',
+    turnId: 'turn:123',
     prompt: '用户说这个方案需要看完整 prompt。',
     response: '这里是完整 response。',
   });
   assert.deepEqual(JSON.parse(toolMessages[1].content), {
-    turnId: '999',
+    turnId: '123',
     error: 'turn is not in the current extraction request',
   });
   assert.equal(Object.prototype.hasOwnProperty.call(JSON.parse(toolMessages[0].content), 'omittedPromptChars'), false);
 
   const trace = JSON.parse(await readFile(tracePath, 'utf8'));
-  assert.equal(trace.getTurnResults[0].turnId, '123');
+  assert.equal(trace.getTurnResults[0].turnId, 'turn:123');
   assert.equal(trace.getTurnResults[0].returnedPromptChars > 0, true);
   assert.equal(trace.getTurnResults[1].error, 'turn is not in the current extraction request');
 });

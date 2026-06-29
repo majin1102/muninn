@@ -40,8 +40,8 @@ const PROTECTED_SNAPSHOT_EXTRACTION_SUMMARIES = 16;
 const MAX_GET_EXTRACTION_CALLS = 5;
 const MAX_GET_SKILL_CALLS_PER_NAME = 1;
 const MAX_GET_TURN_CALLS = 3;
-const MAX_GET_TURN_CHARS_PER_CALL = 8_000;
-const MAX_GET_TURN_CHARS_TOTAL = 16_000;
+const MAX_GET_TURN_CHARS_PER_CALL = 16_384;
+const MAX_GET_TURN_CHARS_TOTAL = 32_768;
 
 type ToolModel = (
   task: LlmTask,
@@ -643,14 +643,14 @@ function getSkillSpec(): LlmTool {
 function getTurnSpec(): LlmTool {
   return {
     name: 'get_turn',
-    description: 'Get bounded prompt and response text for a current-batch turn when rendered previews omit details needed to safely update the snapshot.',
+    description: 'Get bounded prompt and response text for a target conversation turn.',
     parameters: {
       type: 'object',
       additionalProperties: false,
       properties: {
         turnId: {
           type: 'string',
-          description: 'Raw current-batch turn row id, without a turn: prefix.',
+          description: 'Exact current-batch turn id shown in the Current Batch Turns heading.',
         },
       },
       required: ['turnId'],
