@@ -7,6 +7,8 @@ import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
+import { muninnSessionKey } from '@muninn/common/session-identity';
+
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const cliPath = path.join(repoRoot, 'codex', 'dist', 'cli.js');
 
@@ -94,6 +96,13 @@ async function writeTranscript() {
     { type: 'response_item', timestamp: '2026-06-24T01:00:02.000Z', payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'captured' }] } },
   ];
   await writeFile(transcriptPath, lines.map((line) => JSON.stringify(line)).join('\n'));
+  await writeFile(path.join(process.env.MUNINN_HOME, 'capture.json'), JSON.stringify({
+    capture: {
+      sessions: {
+        [muninnSessionKey({ project: root, agent: 'codex', sessionId: 'cli-session' })]: true,
+      },
+    },
+  }));
   return transcriptPath;
 }
 
