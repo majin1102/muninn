@@ -353,9 +353,9 @@ test('memories.get renders extraction memories', async () => {
     turnTable: { get: async () => null },
   };
   const { Memories } = await import('../../dist/api/memory.js');
-  const memory = await new Memories(client).get('extraction:ext-1');
+  const memory = await new Memories(client).get('ext:ext-1');
 
-  assert.equal(memory.memoryId, 'extraction:ext-1');
+  assert.equal(memory.memoryId, 'ext:ext-1');
   assert.equal(memory.title, 'Caroline research');
   assert.equal(memory.summary, 'Caroline researched adoption agencies.');
   assert.match(memory.detail, /References:/);
@@ -2615,6 +2615,86 @@ test('muninn.memoryFinalize triggers drain and returns pending watermark without
   assert.equal(checkpointFlushCalls, 1);
 });
 
+test('backend.memoryWatermark returns while checkpoint mutex is busy', async (t) => {
+  const muninn = MuninnBackend.createForTests({});
+  const release = deferred();
+  const blocker = muninn.checkpointMutex.run(() => release.promise);
+  muninn.extractor = {
+    watermark: async () => ({
+      pending: { turns: ['turn:pending'] },
+      phases: { extractor: 'running' },
+    }),
+    shutdown: async () => {},
+  };
+  t.after(async () => {
+    release.resolve();
+    await blocker;
+  });
+
+  const result = await Promise.race([
+    muninn.memoryWatermark(),
+    new Promise((resolve) => setTimeout(() => resolve('blocked'), 25)),
+  ]);
+
+  assert.notEqual(result, 'blocked');
+  assert.deepEqual(result.pending.turns, ['turn:pending']);
+  assert.equal(result.phases.extractor, 'running');
+});
+
+test('backend.listSessionIndex returns while checkpoint mutex is busy', async (t) => {
+  const { dir, homeDir, configPath } = await makeConfigHome();
+  const previousHome = process.env.MUNINN_HOME;
+  process.env.MUNINN_HOME = homeDir;
+  t.after(async () => {
+    if (previousHome === undefined) {
+      delete process.env.MUNINN_HOME;
+    } else {
+      process.env.MUNINN_HOME = previousHome;
+    }
+    await rm(dir, { recursive: true, force: true });
+  });
+  await writeExtractorConfig(configPath);
+
+  const checkpoint = makeCheckpointContent({
+    sessionIndex: {
+      baseline: { turn: 10, session: 21 },
+      entries: [{
+        sessionId: 'session-a',
+        agent: 'codex',
+        project: 'muninn',
+        cwd: '/workspace/muninn',
+        latestUpdatedAt: '2026-06-02T10:00:00.000Z',
+      }],
+    },
+  });
+  const client = {
+    turnTable: {
+      delta: async () => [],
+      stats: async () => ({ version: 10, rowCount: 1, fragmentCount: 1 }),
+    },
+    sessionTable: {
+      delta: async () => ({ sourceVersion: 21, rows: [] }),
+      stats: async () => ({ version: 21, rowCount: 1, fragmentCount: 1 }),
+    },
+  };
+  const muninn = MuninnBackend.createForTests(client, checkpoint);
+  const release = deferred();
+  const blocker = muninn.checkpointMutex.run(() => release.promise);
+  t.after(async () => {
+    release.resolve();
+    await blocker;
+  });
+
+  const result = await Promise.race([
+    muninn.listSessionIndex(),
+    new Promise((resolve) => setTimeout(() => resolve('blocked'), 25)),
+  ]);
+
+  assert.notEqual(result, 'blocked');
+  assert.equal(result.length, 1);
+  assert.equal(result[0].sessionId, 'session-a');
+});
+
 test('recallMemories searches extraction routes and enriches hits', async () => {
   const calls = [];
   const client = {
@@ -2681,7 +2761,7 @@ test('recallMemories searches extraction routes and enriches hits', async () => 
 
   assert.deepEqual(hits, [
     {
-      memoryId: 'extraction:raw-2',
+      memoryId: 'ext:raw-2',
       title: 'Counseling work',
       summary: 'Counseling work\n\nCaroline is interested in counseling work.',
       content: extractionContent('Counseling work', 'Caroline is interested in counseling work.'),
@@ -2787,8 +2867,8 @@ test('recallMemories returns recalled memory when budget is positive', async () 
   }]);
   assert.equal(calls[0].limit, 20);
   assert.deepEqual(seenCandidates.map((candidate) => candidate.memoryId), [
-    'extraction:ext-1',
-    'extraction:ext-2',
+    'ext:ext-1',
+    'ext:ext-2',
   ]);
 });
 
@@ -4493,7 +4573,7 @@ test('thread session get_extraction expands visible extraction sequences only', 
   const trace = JSON.parse(await readFile(tracePath, 'utf8'));
   const systemMessage = requests[0].messages.find((message) => message.role === 'system');
   assert.ok(systemMessage);
-  assert.equal(trace.inputBudget.newBatchInputChars, 24_576);
+  assert.equal(trace.inputBudget.newBatchInputChars, 16_384);
   assert.equal(trace.inputBudget.systemPromptChars, systemMessage.content.length);
   assert.equal(trace.inputBudget.initialRequestChars, systemMessage.content.length + firstUserMessage.content.length);
   assert.equal(trace.inputBudget.userPromptOverheadChars, firstUserMessage.content.length
@@ -4916,50 +4996,131 @@ test('thread session requires get_extraction before updating an existing sequenc
   assert.match(traceLines[0].validationError, /sequence 0 must be read with get_extraction/i);
 });
 
-test('thread session allows at most five get_extraction calls', async (t) => {
+test('thread session returns a tool error for repeated get_extraction sequences', async (t) => {
   const { dir, homeDir, configPath } = await makeConfigHome();
   t.after(async () => rm(dir, { recursive: true, force: true }));
 
   process.env.MUNINN_HOME = homeDir;
   await writeOpenAiExtractorConfig(configPath);
 
-  let calls = 0;
-  await assert.rejects(
-    extractorLlmModule.extractSessionMemory({
-      sessionMemory: {
-        title: 'Caroline support group',
-        summary: 'Caroline discussed a support group.',
-        extractions: [{
-          id: 'obs-1',
-          title: 'Support group attendance',
-          text: 'Existing support extraction.',
-          context: null,
-          category: 'Other',
-          references: ['turn:0'],
-        }],
-        nextSteps: [],
-      },
-      turns: [{
-        turnId: 'turn:1',
-        prompt: 'Caroline clarified more support group details.',
-        response: 'Update the support group memory.',
+  const requests = [];
+  const result = await extractorLlmModule.extractSessionMemory({
+    sessionMemory: {
+      title: 'Caroline support group',
+      summary: 'Caroline discussed a support group.',
+      extractions: [{
+        id: 'obs-1',
+        title: 'Support group attendance',
+        text: 'Existing support extraction.',
+        context: '- Existing support detail.',
+        category: 'Other',
+        references: ['turn:0'],
+      }, {
+        id: 'obs-2',
+        title: 'Support group timing',
+        text: 'Existing timing extraction.',
+        context: '- Existing timing detail.',
+        category: 'Other',
+        references: ['turn:0'],
       }],
-    }, undefined, {
-      model: async () => {
-        calls += 1;
+      nextSteps: [],
+    },
+    turns: [{
+      turnId: 'turn:1',
+      prompt: 'Caroline clarified more support group details.',
+      response: 'Update the support group memory.',
+    }],
+  }, undefined, {
+    model: async (_task, request) => {
+      requests.push(request);
+      if (requests.length === 1) {
         return {
           type: 'tool_calls',
           toolCalls: [{
-            id: `call-${calls}`,
+            id: 'call-1',
             name: 'get_extraction',
-            arguments: { sequences: [0] },
+            arguments: { sequences: [0, 1] },
           }],
         };
-      },
-    }),
-    /get_extraction exceeded max calls: 5|tool loop exceeded maxSteps=6/i,
-  );
-  assert.ok(calls >= 6);
+      }
+      if (requests.length === 2) {
+        return {
+          type: 'tool_calls',
+          toolCalls: [{
+            id: 'call-2',
+            name: 'get_extraction',
+            arguments: { sequences: [1] },
+          }],
+        };
+      }
+      const toolMessages = request.messages.filter((message) => message.role === 'tool');
+      const repeatPayload = JSON.parse(toolMessages.at(-1).content);
+      assert.match(repeatPayload.error, /already requested/i);
+      assert.deepEqual(repeatPayload.alreadyRequested, [1]);
+      return {
+        type: 'final',
+        text: '# Caroline support group',
+      };
+    },
+  });
+
+  assert.equal(result.title, 'Caroline support group');
+  assert.equal(requests.length, 3);
+});
+
+test('thread session allows at most two accepted get_extraction calls', async (t) => {
+  const { dir, homeDir, configPath } = await makeConfigHome();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+
+  process.env.MUNINN_HOME = homeDir;
+  await writeOpenAiExtractorConfig(configPath);
+
+  const requests = [];
+  const result = await extractorLlmModule.extractSessionMemory({
+    sessionMemory: {
+      title: 'Caroline support group',
+      summary: 'Caroline discussed a support group.',
+      extractions: [0, 1, 2].map((index) => ({
+        id: `obs-${index + 1}`,
+        title: `Support group detail ${index + 1}`,
+        text: `Existing support extraction ${index + 1}.`,
+        context: null,
+        category: 'Other',
+        references: ['turn:0'],
+      })),
+      nextSteps: [],
+    },
+    turns: [{
+      turnId: 'turn:1',
+      prompt: 'Caroline clarified more support group details.',
+      response: 'Update the support group memory.',
+    }],
+  }, undefined, {
+    model: async (_task, request) => {
+      requests.push(request);
+      if (requests.length <= 3) {
+        return {
+          type: 'tool_calls',
+          toolCalls: [{
+            id: `call-${requests.length}`,
+            name: 'get_extraction',
+            arguments: { sequences: [requests.length - 1] },
+          }],
+        };
+      }
+      const toolMessages = request.messages.filter((message) => message.role === 'tool');
+      const overLimitPayload = JSON.parse(toolMessages.at(-1).content);
+      assert.match(overLimitPayload.error, /exceeded max calls: 2/i);
+      assert.equal(overLimitPayload.maxCalls, 2);
+      return {
+        type: 'final',
+        text: '# Caroline support group',
+      };
+    },
+  });
+
+  assert.equal(result.title, 'Caroline support group');
+  assert.equal(requests.length, 4);
 });
 
 test('thread session omits generated default session title from memory input', async (t) => {
@@ -5077,6 +5238,117 @@ test('thread session traces invalid markdown attempts without JSON retry instruc
   assert.match(traceLines[1].finalText, /# Caroline Support Group/);
 });
 
+test('thread session retries empty final model output as invalid markdown', async (t) => {
+  const { dir, homeDir, configPath } = await makeConfigHome();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+
+  process.env.MUNINN_HOME = homeDir;
+  await writeOpenAiExtractorConfig(configPath);
+  const tracePath = path.join(dir, 'thread-session-empty-final-trace.jsonl');
+  process.env.MUNINN_SESSION_MEMORY_TRACE_FILE = tracePath;
+  t.after(() => {
+    delete process.env.MUNINN_SESSION_MEMORY_TRACE_FILE;
+  });
+
+  const requests = [];
+  await assert.rejects(
+    extractorLlmModule.extractSessionMemory({
+      sessionMemory: {
+        title: 'Empty final retry',
+        summary: '',
+        extractions: [],
+        nextSteps: [],
+      },
+      turns: [{
+        turnId: 'turn:1',
+        prompt: 'Keep a useful durable context update from this turn.',
+        response: 'The extractor should retry empty model output before failing.',
+      }],
+    }, undefined, {
+      model: async (_task, request) => {
+        requests.push(request);
+        return {
+          type: 'final',
+          text: '',
+        };
+      },
+    }),
+    /extraction update returned invalid output: extraction update returned no output/,
+  );
+
+  assert.equal(requests.length, 3);
+  const retryUserMessage = requests[1].messages.find((message) => message.role === 'user');
+  assert.ok(retryUserMessage);
+  assert.match(retryUserMessage.content, /Previous output was invalid/);
+  assert.match(retryUserMessage.content, /extraction update returned no output/);
+
+  const traceLines = (await readFile(tracePath, 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
+  assert.equal(traceLines.length, 3);
+  assert.equal(traceLines[0].rawText, '');
+  assert.match(traceLines[0].validationError, /extraction update returned no output/);
+});
+
+test('thread session retries transient tool model errors', async (t) => {
+  const { dir, homeDir, configPath } = await makeConfigHome();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+
+  process.env.MUNINN_HOME = homeDir;
+  await writeOpenAiExtractorConfig(configPath);
+  const tracePath = path.join(dir, 'thread-session-tool-error-trace.jsonl');
+  process.env.MUNINN_SESSION_MEMORY_TRACE_FILE = tracePath;
+  t.after(() => {
+    delete process.env.MUNINN_SESSION_MEMORY_TRACE_FILE;
+  });
+
+  const requests = [];
+  const result = await extractorLlmModule.extractSessionMemory({
+    sessionMemory: {
+      title: 'Tool model retry',
+      summary: '',
+      extractions: [],
+      nextSteps: [],
+    },
+    turns: [{
+      turnId: 'turn:1',
+      prompt: 'Keep this durable extractor retry behavior.',
+      response: 'The extractor should retry transient provider empty parse failures.',
+    }],
+  }, undefined, {
+    model: async (_task, request) => {
+      requests.push(request);
+      if (requests.length === 1) {
+        throw new Error('openai-codex response did not contain text output or tool calls; empty parsed codex response');
+      }
+      return {
+        type: 'final',
+        text: snapshotContentFixture(
+          [
+            '<!-- refs: [turn:1] -->',
+            '### Title',
+            'Extractor provider retry',
+            '',
+            '### Summary',
+            'The extractor retries transient provider empty parse failures before failing the epoch.',
+          ].join('\n'),
+          { title: 'Tool model retry' },
+        ),
+      };
+    },
+  });
+
+  assert.equal(requests.length, 2);
+  assert.equal(result.extractions[0].title, 'Extractor provider retry');
+  const retryUserMessage = requests[1].messages.find((message) => message.role === 'user');
+  assert.ok(retryUserMessage);
+  assert.match(retryUserMessage.content, /empty parsed codex response/);
+  assert.match(retryUserMessage.content, /Before outputting any existing `sequence: N` extraction update/);
+
+  const traceLines = (await readFile(tracePath, 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
+  assert.equal(traceLines.length, 2);
+  assert.match(traceLines[0].validationError, /empty parsed codex response/);
+  assert.equal(traceLines[1].finalText.includes('Extractor provider retry'), true);
+});
+
 test('thread session omits default session summary from memory input', async (t) => {
   const { dir, homeDir, configPath } = await makeConfigHome();
   t.after(async () => rm(dir, { recursive: true, force: true }));
@@ -5165,8 +5437,8 @@ test('thread session inlines chat memory categories', async (t) => {
   });
 
   assert.match(requests[0].messages[0].content, /Create or update extraction units for durable context/);
-  assert.match(requests[0].messages[0].content, /Treat each extraction as a semantic retrieval unit/);
-  assert.match(requests[0].messages[0].content, /Extraction block shape: metadata comment, `### Title`, `### Summary`, optional `### Content`/);
+  assert.match(requests[0].messages[0].content, /Treat each extraction as a compact semantic recall unit/);
+  assert.match(requests[0].messages[0].content, /Extraction block shape: metadata comment, literal `### Title` followed by title text/);
   assert.doesNotMatch(requests[0].messages[0].content, /Domain guidance/);
   assert.doesNotMatch(requests[0].messages[0].content, /domain_prompt/);
   assert.doesNotMatch(requests[0].messages[0].content, /Extraction granularity/);
@@ -5561,6 +5833,53 @@ test('extractEpoch groups mixed session turns before session', async () => {
   assert.deepEqual(threads.map((thread) => thread.sessionId), ['group-a', 'group-b']);
   assert.equal(result.touchedIds.size, 2);
   assert.equal(snapshotRows.length, 2);
+});
+
+test('extractEpochDraft does not persist session rows before flushThreads', async () => {
+  const threads = [];
+  let insertCalls = 0;
+  const client = {
+    sessionTable: {
+      insert: async ({ snapshots }) => {
+        insertCalls += 1;
+        return snapshots.map((snapshot, index) => ({
+          ...snapshot,
+          snapshotId: `snapshot-${index + 1}`,
+        }));
+      },
+    },
+  };
+  const sessionExtractionImpl = async (input) => ({
+    title: input.sessionMemory.title,
+    snapshotContent: '',
+    extractions: [],
+    nextSteps: [],
+    contextRefs: input.turns.map((turn) => ({
+      turnId: turn.turnId,
+      summary: `${turn.turnId} relevant content`,
+    })),
+  });
+
+  const result = await sessionTesting.extractEpochDraft({
+    client,
+    extractorName: 'default-extractor',
+    activeWindowDays: 3650,
+    threads,
+    sealedEpoch: {
+      epoch: 2,
+      turns: [makeExtractableTurn('session:a1', 2, 'a1')],
+    },
+    sessionExtractionImpl,
+  });
+
+  assert.equal(insertCalls, 0);
+  assert.equal(result.threads.length, 1);
+  assert.deepEqual(result.threads[0].snapshotIds, []);
+
+  await sessionTesting.flushThreads(client, result.threads, result.touchedIds);
+
+  assert.equal(insertCalls, 1);
+  assert.deepEqual(result.threads[0].snapshotIds, ['snapshot-1']);
 });
 
 test('extractEpoch chunks same-session turns by maxEpochTurns', async () => {

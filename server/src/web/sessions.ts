@@ -558,8 +558,8 @@ function buildTimelineSignalItems(
   snapshot: SessionSnapshotContent,
 ): SessionTimelineItem[] {
   const definitions = [
-    { heading: 'Instruction Signals', title: 'Instructions', suffix: 'instructions' },
-    { heading: 'Skill Signals', title: 'Skills', suffix: 'skills' },
+    { heading: 'Instruction Signals', title: 'Instruction Signals', suffix: 'instructions' },
+    { heading: 'Skill Signals', title: 'Skill Signals', suffix: 'skills' },
   ];
   const items: SessionTimelineItem[] = [];
   for (const { heading, title, suffix } of definitions) {
@@ -573,11 +573,25 @@ function buildTimelineSignalItems(
       title,
       createdAt: snapshot.createdAt,
       updatedAt: snapshot.updatedAt,
-      markdown: body,
+      markdown: normalizeTimelineSignalsMarkdown(body),
       refs: [],
     });
   }
   return items;
+}
+
+function normalizeTimelineSignalsMarkdown(raw: string): string {
+  return raw.replace(
+    /^(\s*[-*]\s*)\[((?:turn:[^\]\n]+?\+\d+\s*,?\s*)+)\]\s+/gm,
+    (match, bulletPrefix: string, evidence: string) => {
+      const contribution = [...evidence.matchAll(/\+(\d+)/g)]
+        .reduce((total, item) => total + Number(item[1] ?? 0), 0);
+      if (contribution <= 0) {
+        return match;
+      }
+      return `${bulletPrefix}&lt;${contribution}&gt; `;
+    },
+  );
 }
 
 function snapshotSections(snapshotContent: string): Map<string, string> {
@@ -621,7 +635,7 @@ function buildTimelineExtractions(
       .map((ref) => turnById.get(ref))
       .find((entry) => entry !== undefined);
     timeline.push({
-      memoryId: firstTurn ? `${firstTurn.turn.memoryId}~timeline:${i}` : `${snapshot.snapshotId}~timeline:extraction:${i}`,
+      memoryId: firstTurn ? `${firstTurn.turn.memoryId}~timeline:${i}` : `${snapshot.snapshotId}~timeline:ext:${i}`,
       kind: 'extraction',
       title,
       createdAt: firstTurn?.turn.createdAt ?? snapshot.createdAt,

@@ -37,7 +37,7 @@ import {
 
 const MAX_SUMMARY_CHARS = 220;
 const PROTECTED_SNAPSHOT_EXTRACTION_SUMMARIES = 16;
-const MAX_GET_EXTRACTION_CALLS = 5;
+const MAX_GET_EXTRACTION_CALLS = 2;
 const MAX_GET_SKILL_CALLS_PER_NAME = 1;
 const MAX_GET_TURN_CALLS = 3;
 const MAX_GET_TURN_CHARS_PER_CALL = 16_384;
@@ -103,74 +103,117 @@ export async function extractSessionMemory(
     let getTurnCallCount = 0;
     let getTurnReturnedChars = 0;
     const readExtractionSequences = new Set<number>();
+    const requestedExtractionSequences = new Set<number>();
     const readSkillNames = new Set<string>();
     const startedAt = Date.now();
-    const raw = await runToolLoop({
-      messages: [
-        { role: 'system', content: systemPrompt },
-        {
-          role: 'user',
-          content: buildRetryPrompt(
-            basePrompt,
-            attempt,
-            lastError,
-      'Return only a valid Markdown snapshot patch using optional `# <Session Title>`, optional `## Summary`, optional `## Instruction Signals`, optional `## Skill Signals`, optional `## Skill Details`, optional `## Extractions`, refs metadata, and `### Title`/`### Summary`/`### Content` extraction blocks.',
-          ),
-        },
-      ],
-      tools: [getExtractionSpec(), getSkillSpec(), getTurnSpec()],
-      toolHandlers: {
-        get_extraction: (args) => {
-          getExtractionCallCount += 1;
-          if (getExtractionCallCount > MAX_GET_EXTRACTION_CALLS) {
-            throw new Error(`get_extraction exceeded max calls: ${MAX_GET_EXTRACTION_CALLS}`);
-          }
-          for (const sequence of normalizeSequences(args.sequences)) {
-            if (snapshotView.visibleSequences.has(sequence)) {
-              readExtractionSequences.add(sequence);
+    let raw: string;
+    try {
+      raw = await runToolLoop({
+        messages: [
+          { role: 'system', content: systemPrompt },
+          {
+            role: 'user',
+            content: buildRetryPrompt(
+              basePrompt,
+              attempt,
+              lastError,
+              'Return only a valid Markdown snapshot patch using optional `# <Session Title>`, optional `## Summary`, optional `## Instruction Signals`, optional `## Skill Signals`, optional `## Skill Details`, optional `## Extractions`, refs metadata, and `### Title`/`### Summary`/`### Content` extraction blocks. Before outputting any existing `sequence: N` extraction update, call `get_extraction({ sequences: [N] })` in this attempt. Call `get_extraction` at most twice per attempt; batch all needed visible sequences into as few calls as possible, and never request a sequence that was already requested earlier in the same attempt.',
+            ),
+          },
+        ],
+        tools: [getExtractionSpec(), getSkillSpec(), getTurnSpec()],
+        toolHandlers: {
+          get_extraction: (args) => {
+            const sequences = normalizeSequences(args.sequences);
+            const alreadyRequested = sequences.filter((sequence) => requestedExtractionSequences.has(sequence));
+            if (alreadyRequested.length > 0) {
+              return {
+                error: `get_extraction sequences already requested in this attempt: ${alreadyRequested.join(', ')}`,
+                alreadyRequested,
+              };
             }
-          }
-          return createGetExtractionTool(input, snapshotView.visibleSequences)(args);
+            if (getExtractionCallCount >= MAX_GET_EXTRACTION_CALLS) {
+              return {
+                error: `get_extraction exceeded max calls: ${MAX_GET_EXTRACTION_CALLS}`,
+                maxCalls: MAX_GET_EXTRACTION_CALLS,
+              };
+            }
+            getExtractionCallCount += 1;
+            for (const sequence of sequences) {
+              requestedExtractionSequences.add(sequence);
+              if (snapshotView.visibleSequences.has(sequence)) {
+                readExtractionSequences.add(sequence);
+              }
+            }
+            return createGetExtractionTool(input, snapshotView.visibleSequences)(args);
+          },
+          get_skill: (args) => {
+            const skillName = normalizeSkillNameArg(args.skillName);
+            if (!skillName) {
+              return { error: 'skillName is required' };
+            }
+            if (MAX_GET_SKILL_CALLS_PER_NAME === 1 && readSkillNames.has(skillName)) {
+              return { skillName, error: 'skill already read' };
+            }
+            const result = createGetSkillTool(input)(args);
+            if (isGetSkillSuccess(result)) {
+              readSkillNames.add(skillName);
+            }
+            return result;
+          },
+          get_turn: (args) => {
+            getTurnCallCount += 1;
+            const result = createGetTurnTool(input, {
+              callCount: getTurnCallCount,
+              returnedChars: getTurnReturnedChars,
+              maxCalls: MAX_GET_TURN_CALLS,
+              maxCharsPerCall: MAX_GET_TURN_CHARS_PER_CALL,
+              maxCharsTotal: MAX_GET_TURN_CHARS_TOTAL,
+            })(args);
+            getTurnReturnedChars += getTurnToolReturnedChars(result);
+            trace.getTurnResults.push(result);
+            return result.publicResult;
+          },
         },
-        get_skill: (args) => {
-          const skillName = normalizeSkillNameArg(args.skillName);
-          if (!skillName) {
-            return { error: 'skillName is required' };
-          }
-          if (MAX_GET_SKILL_CALLS_PER_NAME === 1 && readSkillNames.has(skillName)) {
-            return { skillName, error: 'skill already read' };
-          }
-          const result = createGetSkillTool(input)(args);
-          if (isGetSkillSuccess(result)) {
-            readSkillNames.add(skillName);
-          }
-          return result;
+        model: deps.model ?? generateWithTools,
+        signal,
+        maxSteps: MAX_GET_EXTRACTION_CALLS + MAX_GET_TURN_CALLS + (input.sessionMemory.skillSignals?.length ?? 0) + 2,
+        onToolResults: (event) => {
+          trace.toolCalls.push(...event.toolCalls);
+          trace.toolResults.push(...event.toolResults);
         },
-        get_turn: (args) => {
-          getTurnCallCount += 1;
-          const result = createGetTurnTool(input, {
-            callCount: getTurnCallCount,
-            returnedChars: getTurnReturnedChars,
-            maxCalls: MAX_GET_TURN_CALLS,
-            maxCharsPerCall: MAX_GET_TURN_CHARS_PER_CALL,
-            maxCharsTotal: MAX_GET_TURN_CHARS_TOTAL,
-          })(args);
-          getTurnReturnedChars += getTurnToolReturnedChars(result);
-          trace.getTurnResults.push(result);
-          return result.publicResult;
-        },
-      },
-      model: deps.model ?? generateWithTools,
-      signal,
-      maxSteps: MAX_GET_EXTRACTION_CALLS + MAX_GET_TURN_CALLS + (input.sessionMemory.skillSignals?.length ?? 0) + 2,
-      onToolResults: (event) => {
-        trace.toolCalls.push(...event.toolCalls);
-        trace.toolResults.push(...event.toolResults);
-      },
-    });
+      });
+    } catch (error) {
+      if (isAbortError(error)) {
+        throw error;
+      }
+      lastError = String(error);
+      const durationMs = Date.now() - startedAt;
+      await writeExtractionTrace({
+        ...trace,
+        database,
+        attempt,
+        durationMs,
+        readSkillNames: [...readSkillNames],
+        validationError: lastError,
+        extractions: [],
+      });
+      continue;
+    }
     const durationMs = Date.now() - startedAt;
-    if (!raw) {
-      throw new Error('extraction update is not configured');
+    if (!raw.trim()) {
+      lastError = 'extraction update returned no output';
+      await writeExtractionTrace({
+        ...trace,
+        database,
+        attempt,
+        durationMs,
+        readSkillNames: [...readSkillNames],
+        rawText: raw,
+        validationError: lastError,
+        extractions: [],
+      });
+      continue;
     }
     throwIfAborted(signal);
 
@@ -652,7 +695,7 @@ function renderNewTurns(
 function getExtractionSpec(): LlmTool {
   return {
     name: 'get_extraction',
-    description: 'Get full extraction details by visible sequence when the compressed summary is not enough to safely update a memory unit.',
+    description: 'Get full extraction details by visible sequence when the compressed summary is not enough to safely update a context unit. Call at most twice per attempt and do not request the same sequence twice.',
     parameters: {
       type: 'object',
       additionalProperties: false,
@@ -1043,6 +1086,10 @@ function throwIfAborted(signal?: AbortSignal): void {
   const error = new Error('operation aborted');
   error.name = 'AbortError';
   throw error;
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === 'AbortError';
 }
 
 export const __testing = {

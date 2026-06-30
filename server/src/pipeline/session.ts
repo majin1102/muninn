@@ -612,6 +612,24 @@ export async function extractEpoch(params: {
   database?: string;
   sessionExtractionImpl?: SessionExtractionImpl;
 }): Promise<{ threads: SessionThread[]; touchedIds: Set<string> }> {
+  const result = await extractEpochDraft(params);
+  await flushThreads(params.client, result.threads, result.touchedIds);
+  return result;
+}
+
+export async function extractEpochDraft(params: {
+  client: NativeTables;
+  extractorName: string;
+  activeWindowDays: number;
+  threads: SessionThread[];
+  sealedEpoch: SealedEpoch;
+  maxEpochTurns?: number;
+  newBatchInputChars?: number;
+  previewChars?: number;
+  signal?: AbortSignal;
+  database?: string;
+  sessionExtractionImpl?: SessionExtractionImpl;
+}): Promise<{ threads: SessionThread[]; touchedIds: Set<string> }> {
   throwIfAborted(params.signal);
   ensureActiveThreads(
     params.threads,
@@ -663,7 +681,6 @@ export async function extractEpoch(params: {
       }
     }
   }
-  await flushThreads(params.client, params.threads, touchedIds);
   return {
     threads: params.threads,
     touchedIds,
@@ -814,7 +831,7 @@ async function extractSessionThread(params: ExtractSessionThreadParams): Promise
   return touchedIds;
 }
 
-async function flushThreads(
+export async function flushThreads(
   client: NativeTables,
   threads: SessionThread[],
   touchedIds: Set<string>,
@@ -882,5 +899,6 @@ export const __testing = {
   applyExtractionForTests: applyExtraction,
   flushThreads,
   extractEpoch,
+  extractEpochDraft,
   extractSessionThreadForTests: extractSessionThread,
 };

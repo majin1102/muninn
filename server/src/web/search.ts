@@ -73,7 +73,7 @@ function hitCandidates(
   scope: { projectKeys?: string[]; sessionKeys?: string[] },
 ): SearchCandidate[] {
   return hits.flatMap((hit, index) => {
-    if (!hit.memoryId.startsWith('extraction:')) {
+    if (!hit.memoryId.startsWith('ext:')) {
       return [];
     }
     const resolved = searchSession(hit);

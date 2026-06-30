@@ -94,14 +94,14 @@ test('thread session memory prompt uses generic recall-ready memory guidance', (
   assert.match(system, /merge repeated corrections or refinements into the same unit/);
   assert.match(system, /Split only when a unit would exceed budget and the new content can stand as an independent durable context unit/);
   assert.match(system, /## Signal/);
-  assert.match(system, /Instruction Signals are AGENTS\.md\/MEMORY\.md-style future-agent instructions/);
+  assert.match(system, /Instruction Signals are AGENTS\.md\/MEMORY\.md candidate instructions for future agents/);
   assert.match(system, /Skill Signals index reusable workflow candidates that may become `SKILL\.md`; Skill Details store procedure details for accepted Skill Signals/);
   assert.match(system, /### Signal rewrite rules/);
   assert.doesNotMatch(system, /organizes related session content for future recall/);
   assert.match(system, /You update a compact session context snapshot from new conversation turns for future recall/);
   assert.doesNotMatch(system, /existingSnapshotContent/);
   assert.match(system, /Return only a Markdown snapshot patch, not a full snapshot/);
-  const languageRule = 'Use the dominant language of current-batch user instructions (ignore quoted/pasted/drafted text) for all human-readable output; preserve technical identifiers exactly, and add spaces between Chinese and adjacent Latin words/numbers.';
+  const languageRule = 'Use the dominant language of current-batch user instructions (ignore quoted/pasted/drafted text) for all human-readable output, including all titles; preserve technical identifiers exactly, and add spaces between Chinese and adjacent Latin words/numbers.';
   assert.ok(system.includes(languageRule));
   assert.ok(system.indexOf('## Your job') < system.indexOf(languageRule));
   assert.ok(system.indexOf(languageRule) < system.indexOf('## Extraction'));
@@ -128,8 +128,12 @@ test('thread session memory prompt uses generic recall-ready memory guidance', (
   assert.doesNotMatch(system, /Keep the original remembered object in `\[Extraction\]`/);
   assert.doesNotMatch(system, /do not replace it with a broader summary or leave it only in `\[Context\]`/);
   assert.match(system, /Treat each extraction as a compact semantic recall unit/);
-  assert.match(system, /Write source content valuable for semantic retrieval or connective context into/);
-  assert.match(system, /Preserve enough background\/context to follow topic evolution without chronological recounting/);
+  assert.match(system, /Preserve enough connective context across them to follow topic evolution without chronological recounting/);
+  assert.match(system, /In `### Content`, prefer bullets to organize semantic points such as decisions, constraints, state, reasons, steps, or tradeoffs/);
+  assert.match(system, /Write source content valuable for semantic retrieval into/);
+  assert.match(system, /Use citations as drill-down handles for supporting details, provenance, or exact wording that should stay available but not copied into `### Content`/);
+  assert.match(system, /Put synthesized core meaning in the extraction for retrieval/);
+  assert.match(system, /avoid bare citations, citation-only lines, and citation clusters at bullet ends/);
   assert.match(system, /keep content dense and retrieval-oriented/i);
   assert.doesNotMatch(system, /can be remembered content when they describe something specific/);
   assert.doesNotMatch(system, /Granularity:/);
@@ -172,7 +176,7 @@ test('session memory prompt preserves the current extraction schema', () => {
   const template = loadPromptTemplate('thread_extracting');
   const system = template.system;
 
-  assert.match(system, /Extraction block shape: metadata comment, `### Title`, `### Summary`, optional `### Content`; separate blocks with `----`/);
+  assert.match(system, /Extraction block shape: metadata comment, literal `### Title` followed by title text, literal `### Summary` followed by summary text, optional literal `### Content`; separate blocks with `----`/);
   assert.match(system, /### Instruction Signals/);
   assert.match(system, /`## Instruction Signals`: complete replacement list of future-agent instructions; empty section clears it/);
   assert.match(system, /`## Skill Signals`: complete replacement list of reusable workflow candidates; empty section clears it/);
@@ -182,9 +186,14 @@ test('session memory prompt preserves the current extraction schema', () => {
   assert.match(system, /non-prompt material is reference-only/i);
   assert.match(system, /Approval-only prompts such as/);
   assert.match(system, /Write signals as direct future-agent instructions/);
-  assert.match(system, /Cover standing preferences, behavior corrections, edit\/review style, recurring environment quirks, explicit remember\/reuse requests, simple reusable workflows, and narrow repo\/module boundaries/);
-  assert.match(system, /Exclude task-bound facts about the current artifact/);
+  assert.match(system, /Instruction Signals are AGENTS\.md\/MEMORY\.md candidate instructions for future agents/);
+  assert.match(system, /Do not capture an Instruction Signal unless it would be reasonable to write into AGENTS\.md or MEMORY\.md as a reusable instruction/);
+  assert.match(system, /store durable project facts, design decisions, artifact requirements, and task-bound details as Extractions instead/);
+  assert.doesNotMatch(system, /simple reusable workflows/);
+  assert.doesNotMatch(system, /unless they are direct future-agent instructions/);
   assert.match(system, /Keep reusable guidance as an Instruction Signal when it fits in 1-3 concise sentences/);
+  assert.match(system, /Installed\/invoked\/referenced\/edited agent skills are execution context, not Skill\/Instruction Signals/);
+  assert.doesNotMatch(system, /record only user-prompt changes to the reusable workflow itself/);
   assert.match(system, /avoid PR numbers, error strings, feature codenames, today's fix\/debug task, task execution artifacts, assistant-devised plans, command history, and one-off task steps/);
   assert.match(system, /Store details under .*## Skill Details.* only for accepted Skill Signals/);
   assert.match(system, /Each signal section: max 10 top-level bullets/);
@@ -214,6 +223,7 @@ test('session memory prompt uses raw turns and returns snapshot content document
 
   assert.match(system, /Tool use/);
   assert.match(system, /get_extraction/);
+  assert.match(system, /before outputting any existing .*sequence: N.* extraction update/i);
   assert.match(system, /get_turn/);
   assert.match(system, /get_skill/);
   assert.match(system, /Syntax: `@\[turn:<turnId>\]`/);
@@ -223,7 +233,7 @@ test('session memory prompt uses raw turns and returns snapshot content document
   assert.match(system, /`## Skill Signals`: complete replacement list of reusable workflow candidates/);
   assert.match(system, /Include .*## Extractions/);
   assert.match(system, /`## Skill Details`: optional changed\/removed details for accepted Skill Signals/);
-  assert.match(system, /get_extraction.*<= 5 calls/);
+  assert.match(system, /get_extraction.*<= 2 calls/);
   assert.match(system, /get_skill.*<= 1 per skill name/);
   assert.match(system, /get_turn.*<= 3 calls/);
   assert.doesNotMatch(system, /Example input/);

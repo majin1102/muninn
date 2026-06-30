@@ -65,9 +65,8 @@ export interface MemoryWatermark {
 
 export type { TurnContent } from '@muninn/common';
 
-export interface CheckpointLock {
-  shared<T>(operation: () => Promise<T> | T): Promise<T>;
-  exclusive<T>(operation: () => Promise<T> | T): Promise<T>;
+export interface CheckpointMutex {
+  run<T>(operation: () => Promise<T> | T): Promise<T>;
 }
 
 function sleep(delayMs: number): Promise<void> {
@@ -77,79 +76,20 @@ function sleep(delayMs: number): Promise<void> {
   });
 }
 
-class AsyncCheckpointLock implements CheckpointLock {
-  private activeReaders = 0;
-  private activeWriter = false;
-  private readonly readerWaiters: Array<() => void> = [];
-  private readonly writerWaiters: Array<() => void> = [];
+class AsyncCheckpointMutex implements CheckpointMutex {
+  private tail: Promise<void> = Promise.resolve();
 
-  async shared<T>(operation: () => Promise<T> | T): Promise<T> {
-    await this.acquireShared();
+  async run<T>(operation: () => Promise<T> | T): Promise<T> {
+    const previous = this.tail;
+    let release!: () => void;
+    this.tail = new Promise((resolve) => {
+      release = resolve;
+    });
+    await previous.catch(() => undefined);
     try {
       return await operation();
     } finally {
-      this.releaseShared();
-    }
-  }
-
-  async exclusive<T>(operation: () => Promise<T> | T): Promise<T> {
-    await this.acquireExclusive();
-    try {
-      return await operation();
-    } finally {
-      this.releaseExclusive();
-    }
-  }
-
-  private acquireShared(): Promise<void> {
-    if (!this.activeWriter && this.writerWaiters.length === 0) {
-      this.activeReaders += 1;
-      return Promise.resolve();
-    }
-    return new Promise((resolve) => {
-      this.readerWaiters.push(() => {
-        this.activeReaders += 1;
-        resolve();
-      });
-    });
-  }
-
-  private releaseShared(): void {
-    this.activeReaders -= 1;
-    if (this.activeReaders === 0) {
-      this.wakeWaiters();
-    }
-  }
-
-  private acquireExclusive(): Promise<void> {
-    if (!this.activeWriter && this.activeReaders === 0) {
-      this.activeWriter = true;
-      return Promise.resolve();
-    }
-    return new Promise((resolve) => {
-      this.writerWaiters.push(() => {
-        this.activeWriter = true;
-        resolve();
-      });
-    });
-  }
-
-  private releaseExclusive(): void {
-    this.activeWriter = false;
-    this.wakeWaiters();
-  }
-
-  private wakeWaiters(): void {
-    if (this.activeWriter) {
-      return;
-    }
-    const writer = this.writerWaiters.shift();
-    if (writer) {
-      writer();
-      return;
-    }
-    while (this.readerWaiters.length > 0) {
-      this.readerWaiters.shift()?.();
+      release();
     }
   }
 }
@@ -160,7 +100,7 @@ const bootstrapPromises = new Map<string, Promise<void>>();
 
 export class MuninnBackend {
   readonly memories: Memories;
-  readonly checkpointLock: CheckpointLock;
+  readonly checkpointMutex: CheckpointMutex;
   private extractor: Extractor | null = null;
   private sessionRegistry: IngestSessionRegistry | null = null;
   private readonly sessionIndex: SessionIndex;
@@ -176,7 +116,7 @@ export class MuninnBackend {
     private readonly checkpoint: CheckpointFile | null = null,
   ) {
     this.memories = new Memories(client);
-    this.checkpointLock = new AsyncCheckpointLock();
+    this.checkpointMutex = new AsyncCheckpointMutex();
     const extractorName = loadMuninnConfig()?.extractor?.name;
     this.sessionIndex = new SessionIndex(checkpoint?.sessionIndex ?? null, extractorName ?? null);
     this.projectDreaming = new ProjectDreamingService(client, extractorName ?? null);
@@ -210,7 +150,6 @@ export class MuninnBackend {
         watchdogConfig,
         backend,
         lastCheckpointJson,
-        backend.checkpointLock,
         databaseName,
       );
       backend.watchdog.start();
@@ -233,7 +172,7 @@ export class MuninnBackend {
   }
 
   async accept(turnContent: TurnContent): Promise<void> {
-    return this.checkpointLock.shared(async () => {
+    return this.checkpointMutex.run(async () => {
       const extractor = await this.ensureExtractor();
       const registry = this.ensureSessionRegistry(extractor.name);
       await extractor.accept(turnContent, registry);
@@ -244,7 +183,7 @@ export class MuninnBackend {
     if (turnContents.length === 0) {
       return 0;
     }
-    return this.checkpointLock.shared(async () => {
+    return this.checkpointMutex.run(async () => {
       const extractor = await this.ensureExtractor();
       const registry = this.ensureSessionRegistry(extractor.name);
       return extractor.acceptBatch(turnContents, registry);
@@ -252,7 +191,7 @@ export class MuninnBackend {
   }
 
   async deleteTurns(turnIds: string[]): Promise<{ deleted: number }> {
-    return this.checkpointLock.exclusive(async () => {
+    return this.checkpointMutex.run(async () => {
       const result = await this.client.turnTable.deleteTurns({ turnIds });
       if (result.deleted > 0) {
         this.sessionIndex.markDirty();
@@ -262,16 +201,16 @@ export class MuninnBackend {
   }
 
   async listSessionIndex(): Promise<SessionIndexEntry[]> {
-    return this.checkpointLock.shared(async () => this.sessionIndex.list(this.client));
+    return this.sessionIndex.list(this.client);
   }
 
   async refreshSessionIndex(): Promise<SessionIndexEntry[]> {
-    return this.checkpointLock.exclusive(async () => {
-      this.sessionIndex.markDirty();
-      const entries = await this.sessionIndex.list(this.client);
+    this.sessionIndex.markDirty();
+    const entries = await this.sessionIndex.list(this.client);
+    await this.checkpointMutex.run(async () => {
       const checkpoint = await readCheckpointFile(this.database);
       if (!checkpoint) {
-        return entries;
+        return;
       }
       await writeCheckpointFile({
         ...checkpoint,
@@ -279,20 +218,20 @@ export class MuninnBackend {
         writerPid: process.pid,
         sessionIndex: this.sessionIndex.currentCheckpoint(),
       }, this.database);
-      return entries;
     });
+    return entries;
   }
 
   async latestProjectDream(project: string) {
-    return this.checkpointLock.shared(async () => this.projectDreaming.latest(project));
+    return this.projectDreaming.latest(project);
   }
 
   async listProjectDreams(): Promise<ProjectDreamProjectView[]> {
-    return this.checkpointLock.shared(async () => this.projectDreaming.projects());
+    return this.projectDreaming.projects();
   }
 
   async latestProjectSignals(project: string, limit = 5): Promise<ProjectDreamSignals | null> {
-    return this.checkpointLock.shared(async () => this.projectDreaming.signals(project, limit));
+    return this.projectDreaming.signals(project, limit);
   }
 
   async createProjectDream(project: string): Promise<ProjectDreamCreateResult> {
@@ -300,27 +239,19 @@ export class MuninnBackend {
   }
 
   async memoryWatermark(): Promise<MemoryWatermark> {
-    return this.checkpointLock.shared(async () => {
-      const extractor = await this.ensureExtractor();
-      return extractor.watermark();
-    });
+    const extractor = this.extractor ?? await this.checkpointMutex.run(() => this.ensureExtractor());
+    return extractor.watermark();
   }
 
   async memoryFinalize(): Promise<MemoryWatermark> {
-    const extractor = await this.checkpointLock.shared(async () => {
-      const extractor = await this.ensureExtractor();
-      return extractor;
-    });
+    const extractor = this.extractor ?? await this.checkpointMutex.run(() => this.ensureExtractor());
     const watermark = await extractor.finalize();
     this.scheduleFinalizeDrain(extractor);
     return watermark;
   }
 
   async memoryFlushPending(): Promise<MemoryWatermark> {
-    const extractor = await this.checkpointLock.shared(async () => {
-      const extractor = await this.ensureExtractor();
-      return extractor;
-    });
+    const extractor = this.extractor ?? await this.checkpointMutex.run(() => this.ensureExtractor());
     await extractor.flushPending();
     await this.watchdog?.flushCheckpoint();
     return extractor.watermark();
@@ -342,7 +273,7 @@ export class MuninnBackend {
   }
 
   async exportCheckpoint(): Promise<CheckpointContent | null> {
-    return this.checkpointLock.exclusive(async () => {
+    return this.checkpointMutex.run(async () => {
       const extractor = this.extractor;
       const extractorCheckpoint = extractor?.exportCheckpoint();
       if (!extractor || !extractorCheckpoint) {
@@ -368,7 +299,7 @@ export class MuninnBackend {
       return {
         schemaVersion: 12,
         extractor: extractorSection,
-        sessionIndex: await this.sessionIndex.exportCheckpoint(this.client),
+        sessionIndex: this.sessionIndex.currentCheckpoint(),
       };
     });
   }
@@ -425,7 +356,7 @@ export class MuninnBackend {
       this.extractor = new Extractor(
         this.client,
         checkpoint,
-        this.checkpointLock,
+        this.checkpointMutex,
         this.database,
       );
     }

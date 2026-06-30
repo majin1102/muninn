@@ -258,8 +258,7 @@ impl SessionTable {
         ))
     }
 
-    #[allow(dead_code)]
-    pub(crate) async fn delete(&self, snapshot_ids: Vec<MemoryId>) -> Result<usize> {
+    pub async fn delete(&self, snapshot_ids: Vec<MemoryId>) -> Result<usize> {
         delete_by_row_ids(
             self.access.try_open().await?,
             &snapshot_ids

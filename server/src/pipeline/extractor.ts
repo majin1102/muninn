@@ -3,7 +3,7 @@ import {
   type ExtractorRun,
   type ThreadRef,
 } from '../checkpoint.js';
-import type { CheckpointLock } from '../backend.js';
+import type { CheckpointMutex } from '../backend.js';
 import type { NativeTables } from '../native.js';
 import type { MemoryWatermark } from '../backend.js';
 import type { TurnContent } from '@muninn/common';
@@ -22,7 +22,7 @@ import {
   threadFromSnapshots,
 } from './session.js';
 import type { SessionThread } from './session.js';
-import { extractEpoch } from './session.js';
+import { extractEpochDraft, flushThreads } from './session.js';
 import { indexPendingExtractions, indexTouchedExtractions } from './extraction.js';
 import { resolveDatabaseName } from '../config.js';
 import { writeMuninnLog } from '../logging.js';
@@ -38,9 +38,8 @@ export type ExtractorCheckpointState = {
   runs: ExtractorRun[];
 };
 
-const noopCheckpointLock: CheckpointLock = {
-  shared: async (operation) => operation(),
-  exclusive: async (operation) => operation(),
+const noopCheckpointMutex: CheckpointMutex = {
+  run: async (operation) => operation(),
 };
 
 export class Extractor {
@@ -83,7 +82,7 @@ export class Extractor {
   constructor(
     private readonly client: NativeTables,
     private readonly checkpoint: ExtractorCheckpoint | null = null,
-    private readonly checkpointLock: CheckpointLock = noopCheckpointLock,
+    private readonly checkpointMutex: CheckpointMutex = noopCheckpointMutex,
     database: string = 'main',
   ) {
     this.database = resolveDatabaseName(database);
@@ -467,24 +466,30 @@ export class Extractor {
   }
 
   private async extractCurrentEpoch(): Promise<void> {
-    if (!this.currentEpoch) {
+    const currentEpoch = this.currentEpoch;
+    if (!currentEpoch) {
       return;
     }
 
-    await this.checkpointLock.shared(async () => {
-      const threads = cloneSessionThreads(this.threads);
-      const result = await extractEpoch({
-        client: this.client,
-        extractorName: this.name,
-        activeWindowDays: this.activeWindowDays,
-        threads,
-        sealedEpoch: this.currentEpoch!,
-        maxEpochTurns: this.maxEpochTurns,
-        newBatchInputChars: this.newBatchInputChars,
-        previewChars: this.previewChars,
-        signal: this.shutdownController.signal,
-        database: this.database,
-      });
+    const threads = cloneSessionThreads(this.threads);
+    const result = await extractEpochDraft({
+      client: this.client,
+      extractorName: this.name,
+      activeWindowDays: this.activeWindowDays,
+      threads,
+      sealedEpoch: currentEpoch,
+      maxEpochTurns: this.maxEpochTurns,
+      newBatchInputChars: this.newBatchInputChars,
+      previewChars: this.previewChars,
+      signal: this.shutdownController.signal,
+      database: this.database,
+    });
+
+    await this.checkpointMutex.run(async () => {
+      if (this.currentEpoch !== currentEpoch) {
+        return;
+      }
+      await flushThreads(this.client, result.threads, result.touchedIds);
       this.threads = result.threads;
       this.currentEpochAttempts = 0;
       this.lastEpochError = undefined;
@@ -505,7 +510,7 @@ export class Extractor {
         await writeMuninnLog(this.database, 'error', 'extractor', 'index_build_failed', { message });
         this.nextIndexRetryAt = Date.now() + INDEX_RETRY_DELAY_MS;
       }
-      this.committedEpoch = this.currentEpoch?.epoch;
+      this.committedEpoch = currentEpoch.epoch;
       this.currentEpoch = null;
       this.refreshCheckpointSnapshot();
       this.notifyChange();
@@ -623,7 +628,7 @@ export class Extractor {
 
   private async retrySnapshotIndexing(): Promise<void> {
     try {
-      await this.checkpointLock.shared(async () => {
+      await this.checkpointMutex.run(async () => {
         await indexPendingExtractions(this.client, this.threads, this.shutdownController.signal);
         this.lastIndexError = undefined;
         this.refreshCheckpointSnapshot();

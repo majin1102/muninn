@@ -21,6 +21,7 @@ export class SessionIndex {
   private entries = new Map<string, SessionIndexEntry>();
   private baseline: SessionIndexCheckpoint['baseline'];
   private dirty = false;
+  private refreshPromise: Promise<void> | null = null;
 
   constructor(
     checkpoint: SessionIndexCheckpoint | null,
@@ -56,11 +57,20 @@ export class SessionIndex {
   }
 
   private async ensureFresh(client: NativeTables): Promise<void> {
+    if (!this.refreshPromise) {
+      this.refreshPromise = this.refresh(client)
+        .finally(() => {
+          this.refreshPromise = null;
+        });
+    }
+    await this.refreshPromise;
+  }
+
+  private async refresh(client: NativeTables): Promise<void> {
     if (this.dirty || this.baseline.turn === 0 || this.baseline.session === 0 || !this.extractorName) {
       await this.rebuild(client);
       return;
     }
-
     const [turnDelta, sessionDelta] = await Promise.all([
       client.turnTable.delta({
         extractor: this.extractorName,

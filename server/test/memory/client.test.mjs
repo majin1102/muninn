@@ -193,9 +193,6 @@ function firstExtractionRef(hits) {
     if (ref.startsWith('ext:')) {
       return ref.slice('ext:'.length);
     }
-    if (ref.startsWith('extraction:')) {
-      return ref.slice('extraction:'.length);
-    }
     if (
       ref
       && !ref.startsWith('turn:')
@@ -324,7 +321,7 @@ test('extractor config defaults activeWindowDays, continuityHints, and epoch sea
   assert.equal(extractorConfig.continuityHints, 1);
   assert.equal(extractorConfig.minEpochTurns, 8);
   assert.equal(extractorConfig.maxEpochTurns, 32);
-  assert.equal(extractorConfig.newBatchInputChars, 24_576);
+  assert.equal(extractorConfig.newBatchInputChars, 16_384);
   assert.equal(extractorConfig.snapshotInputChars, 16_384);
   assert.equal(extractorConfig.previewChars, 800);
   assert.equal(extractorConfig.epochWindowMs, 600_000);
@@ -585,7 +582,7 @@ test('pure read APIs work without extractor bootstrap config', async (t) => {
   }
 
   const hitsBefore = await memories.recall('bootstrap-free prompt', 1);
-  assert.ok(hitsBefore[0]?.memoryId.startsWith('extraction:'));
+  assert.ok(hitsBefore[0]?.memoryId.startsWith('ext:'));
   const extractionId = hitsBefore[0].memoryId;
 
   await shutdownCoreForTests();
@@ -1475,7 +1472,7 @@ test('hook capture seals immediately even when the default epoch window is long'
   assert.deepEqual(resolved.pending.turns, []);
   assert.equal(resolved.phases.extractor, 'idle');
   const hits = await memories.recall('low frequency hook prompt', 1);
-  assert.ok(hits[0]?.memoryId.startsWith('extraction:'));
+  assert.ok(hits[0]?.memoryId.startsWith('ext:'));
 });
 
 test('captureTurn persists raw prompt and response without title or summary', async (t) => {
@@ -1537,7 +1534,7 @@ test('extractor writes atomic extractions before indexing snapshots', async (t) 
   const hits = await memories.recall('counseling programs', 5);
   const extractionRef = firstExtractionRef(hits);
   assert.ok(extractionRef);
-  const extraction = await memories.get(`extraction:${extractionRef}`);
+  const extraction = await memories.get(`ext:${extractionRef}`);
   assert.ok(extraction);
   assert.match(extraction.summary ?? extraction.title ?? '', /counseling/i);
 });
@@ -1571,9 +1568,9 @@ test('rendered memory binding returns unified turn and extraction reads', async 
   const recalled = await memories.recall('rendered', 10);
   const extractionRef = firstExtractionRef(recalled);
   assert.ok(extractionRef);
-  const extraction = await memories.get(`extraction:${extractionRef}`);
+  const extraction = await memories.get(`ext:${extractionRef}`);
   assert.ok(extraction);
-  assert.equal(extraction.memoryId, `extraction:${extractionRef}`);
+  assert.equal(extraction.memoryId, `ext:${extractionRef}`);
   assert.match(extraction.summary ?? extraction.title ?? '', /rendered prompt|rendered response/);
 });
 
@@ -1600,10 +1597,10 @@ test('recall returns extraction memory ids and detail renders references', async
   });
 
   const hits = await memories.recall('support group', 1);
-  assert.equal(hits[0].memoryId, 'extraction:obs-1');
-  const detail = await memories.get('extraction:obs-1');
+  assert.equal(hits[0].memoryId, 'ext:obs-1');
+  const detail = await memories.get('ext:obs-1');
   assert.ok(detail);
-  assert.equal(detail.memoryId, 'extraction:obs-1');
+  assert.equal(detail.memoryId, 'ext:obs-1');
   assert.match(detail.detail ?? '', /turn:1/);
 });
 

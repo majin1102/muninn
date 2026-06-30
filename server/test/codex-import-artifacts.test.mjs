@@ -389,6 +389,57 @@ test('run import stores raw session id with project cwd and metadata', async () 
   }
 });
 
+test('codex import sessions sort by session start time before capture', () => {
+  const sessions = [
+    {
+      sessionId: 'newer-updated',
+      cwd: '/workspace/muninn',
+      project: 'github.com/majin1102/muninn',
+      sourcePath: '/codex/newer-updated.jsonl',
+      updatedAt: '2026-06-03T12:00:00.000Z',
+      title: 'newer updated',
+      turns: [{
+        prompt: 'late prompt',
+        response: 'late response',
+        promptTimestamp: '2026-06-03T11:00:00.000Z',
+        responseTimestamp: '2026-06-03T11:01:00.000Z',
+        events: [],
+        artifacts: [],
+      }],
+    },
+    {
+      sessionId: 'oldest-start',
+      cwd: '/workspace/muninn',
+      project: 'github.com/majin1102/muninn',
+      sourcePath: '/codex/oldest-start.jsonl',
+      updatedAt: '2026-06-03T13:00:00.000Z',
+      title: 'oldest start',
+      turns: [{
+        prompt: 'early prompt',
+        response: 'early response',
+        promptTimestamp: '2026-06-03T09:00:00.000Z',
+        responseTimestamp: '2026-06-03T09:01:00.000Z',
+        events: [],
+        artifacts: [],
+      }],
+    },
+    {
+      sessionId: 'empty-session',
+      cwd: '/workspace/muninn',
+      project: 'github.com/majin1102/muninn',
+      sourcePath: '/codex/empty-session.jsonl',
+      updatedAt: '2026-06-03T10:00:00.000Z',
+      title: 'empty fallback',
+      turns: [],
+    },
+  ];
+
+  assert.deepEqual(
+    __testing.sortSessionsForImport(sessions).map((session) => session.sessionId),
+    ['oldest-start', 'empty-session', 'newer-updated'],
+  );
+});
+
 test('session import fails when firstTurnSequence is zero', async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), 'muninn-codex-import-already-imported-'));
   const previousHome = process.env.MUNINN_HOME;

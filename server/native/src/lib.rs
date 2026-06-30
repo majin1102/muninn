@@ -98,6 +98,12 @@ struct SessionInsertParams {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct SessionDeleteParams {
+    snapshot_ids: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct DreamingAppendParams {
     row: Dreaming,
 }
@@ -455,6 +461,23 @@ impl CoreBinding {
             .await
             .map_err(to_napi_error)?;
         to_napi_value(snapshots)
+    }
+
+    #[napi(js_name = "sessionDelete")]
+    pub async fn session_delete(&self, params: Value) -> NapiResult<Value> {
+        let params = parse_params::<SessionDeleteParams>(params)?;
+        let resources = self.resources().await?;
+        let snapshot_ids = params
+            .snapshot_ids
+            .iter()
+            .map(|snapshot_id| parse_memory_id(snapshot_id, MemoryLayer::Session))
+            .collect::<NapiResult<Vec<_>>>()?;
+        let deleted = resources
+            .session_table
+            .delete(snapshot_ids)
+            .await
+            .map_err(to_napi_error)?;
+        to_napi_value(DeletedCount { deleted })
     }
 
     #[napi(js_name = "sessionTableStats")]

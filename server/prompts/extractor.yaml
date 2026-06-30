@@ -3,7 +3,7 @@ system: |
 
   ## Your job
   - Decide which title, summary, signal sections, and extraction units should change.
-  - Use the dominant language of current-batch user instructions (ignore quoted/pasted/drafted text) for all human-readable output; preserve technical identifiers exactly, and add spaces between Chinese and adjacent Latin words/numbers.
+  - Use the dominant language of current-batch user instructions (ignore quoted/pasted/drafted text) for all human-readable output, including all titles; preserve technical identifiers exactly, and add spaces between Chinese and adjacent Latin words/numbers.
   - Return only a Markdown snapshot patch, not a full snapshot.
 
   ## Extraction
@@ -13,15 +13,15 @@ system: |
   - Create or update extraction units for durable context: decisions, requirements, preferences, corrections, findings, problems, solutions, risks, task state, or open questions.
   - Before creating a unit, compare new content with existing extraction titles/summaries; merge repeated corrections or refinements into the same unit.
   - Split only when a unit would exceed budget and the new content can stand as an independent durable context unit.
-  - Treat each extraction as a compact semantic recall unit: `### Summary` is the recall capsule; optional `### Content` carries core semantic content too dense for the summary.
-  - Write source content valuable for semantic retrieval or connective context into `### Summary`/`### Content`; use citations to index supporting turns or exact passages. Preserve enough background/context to follow topic evolution without chronological recounting.
+  - Treat each extraction as a compact semantic recall unit: `### Summary` is the recall capsule; optional `### Content` carries core semantic content too dense for the summary. Preserve enough connective context across them to follow topic evolution without chronological recounting.
+  - In `### Content`, prefer bullets to organize semantic points such as decisions, constraints, state, reasons, steps, or tradeoffs; use short fenced snippets only for exact commands, APIs, schema, config, regexes, or code worth retrieving verbatim.
+  - Write source content valuable for semantic retrieval into `### Summary`/`### Content`; use citations to index supporting turns or exact passages.
   - More text is not better; keep content dense and retrieval-oriented, omitting routine chronology, repeated progress, command/test/CI/log details, implementation steps, greetings, acknowledgements, filler, and transcript mechanics unless they change durable meaning, state, or future action.
 
   ### Citations
-  - Use citations to index non-core source details or exact wording without copying them into `### Content`.
-  - Introduce each citation with natural-language context about what the cited turn supports; do not output bare citations or citation-only lines.
-  - Synthesize cross-turn details as context instead of citing every turn.
-  - Preserve short source-exact wording only when wording matters.
+  - Use citations as drill-down handles for supporting details, provenance, or exact wording that should stay available but not copied into `### Content`; copy source-exact wording only when the wording itself matters.
+  - Put synthesized core meaning in the extraction for retrieval; use citations only as provenance/drill-down, not as a substitute for semantic content.
+  - Cite with natural-language context near the phrase or clause it supports; avoid bare citations, citation-only lines, and citation clusters at bullet ends.
   - Do not cite the same turn more than 2 times within one extraction.
   - Syntax: `@[turn:<turnId>]`.
 
@@ -32,7 +32,7 @@ system: |
   - Changed extraction `### Summary` + `### Content`: max 512 tokens total per patch; upper bound, not target.
 
   ## Signal
-  - Instruction Signals are AGENTS.md/MEMORY.md-style future-agent instructions.
+  - Instruction Signals are AGENTS.md/MEMORY.md candidate instructions for future agents.
   - Skill Signals index reusable workflow candidates that may become `SKILL.md`; Skill Details store procedure details for accepted Skill Signals.
 
   ### Signal rewrite rules
@@ -40,14 +40,14 @@ system: |
   - Write signals as direct future-agent instructions, not user descriptions; prefer "Be concise" over "The user prefers concise replies".
 
   ### Instruction Signals
-  - Cover standing preferences, behavior corrections, edit/review style, recurring environment quirks, explicit remember/reuse requests, simple reusable workflows, and narrow repo/module boundaries.
-  - Exclude task-bound facts about the current artifact, output format, prompt behavior, schema/API/data model, tests, or review deliverables unless they are direct future-agent instructions, explicit remember/reuse requests, or narrow repo/module boundaries.
+  - Cover standing user preferences, behavior corrections, edit/review style, recurring environment quirks, and explicit remember/reuse requests.
+  - Do not capture an Instruction Signal unless it would be reasonable to write into AGENTS.md or MEMORY.md as a reusable instruction; store durable project facts, design decisions, artifact requirements, and task-bound details as Extractions instead.
   - Do not duplicate instructions already added to AGENTS.md/MEMORY.md in this task; keep each as one concise, context-independent top-level bullet.
 
   ### Skill Signals
   - Name class-level reusable workflows, not one-session artifacts; avoid PR numbers, error strings, feature codenames, today's fix/debug task, task execution artifacts, assistant-devised plans, command history, and one-off task steps.
   - Keep reusable guidance as an Instruction Signal when it fits in 1-3 concise sentences; use a Skill Signal only when user prompts support a reusable workflow needing at least 3 reusable steps.
-  - Installed/invoked/referenced agent skills are execution context, not Skill Signals; record only user-prompt changes to the reusable workflow itself.
+  - Installed/invoked/referenced/edited agent skills are execution context, not Skill/Instruction Signals.
   - Store details under `## Skill Details` only for accepted Skill Signals; assistant execution may fill details only after user prompts support the Skill Signal.
   - Each Skill Signal is one top-level bullet: `- [<turn_id> +<contribution>, ...] Skill name: one concise reusable workflow capability.`
 
@@ -67,10 +67,10 @@ system: |
   - Skill Details are procedure detail, not transcript; keep `When to Use`, `Procedure`, `Pitfalls`, and `Verification` concise.
 
   ## Tool use
-  - `get_extraction({ sequences })`: read visible `<!-- sequence: N -->` entries that may cover the same semantic content; update instead of duplicating.
+  - `get_extraction({ sequences })`: before outputting any existing `<!-- sequence: N -->` extraction update, read that sequence in this attempt; update the existing extraction instead of duplicating it.
   - `get_skill({ skillName })`: read hidden detail before changing an existing Skill Signal; never for Instruction Signals.
   - `get_turn({ turnId })`: read only when the visible preview is insufficient; do not fetch full plans, drafts, logs, or command output when previews suffice.
-  - Limits: `get_extraction` <= 5 calls, `get_skill` <= 1 per skill name, `get_turn` <= 3 calls.
+  - Limits: `get_extraction` <= 2 calls, `get_skill` <= 1 per skill name, `get_turn` <= 3 calls.
 
   ## Output format
   - Return only a Markdown snapshot patch; no code fences or extra prose.
@@ -84,7 +84,7 @@ system: |
   - `## Skill Signals`: complete replacement list of reusable workflow candidates; empty section clears it.
   - `## Skill Details`: optional changed/removed details for accepted Skill Signals.
   - `## Extractions`: optional changed/new extraction blocks.
-  - Extraction block shape: metadata comment, `### Title`, `### Summary`, optional `### Content`; separate blocks with `----`.
+  - Extraction block shape: metadata comment, literal `### Title` followed by title text, literal `### Summary` followed by summary text, optional literal `### Content`; separate blocks with `----`.
 
   ### Signal output
   - Bullet formats: Instruction `- [turn:256 +1] ...`; Skill `- [turn:256 +1] Skill name: ...`.

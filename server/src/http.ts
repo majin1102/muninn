@@ -380,9 +380,6 @@ function parseMcpSessionIdentity(value: unknown): { value: MuninnSessionIdentity
 }
 
 function toContextId(memoryId: string): string | null {
-  if (memoryId.startsWith('extraction:')) {
-    return `ext:${memoryId.slice('extraction:'.length)}`;
-  }
   if (memoryId.startsWith('turn:')) {
     return `turn_${memoryId.slice('turn:'.length)}`;
   }
@@ -397,7 +394,7 @@ function toContextId(memoryId: string): string | null {
 
 function toMemoryId(contextId: string): { memoryId: string | null; kind: 'session' | 'turn' | 'extraction' | null } {
   if (contextId.startsWith('ext:') && contextId.length > 'ext:'.length) {
-    return { memoryId: `extraction:${contextId.slice('ext:'.length)}`, kind: 'extraction' };
+    return { memoryId: contextId, kind: 'extraction' };
   }
   if (contextId.startsWith('turn_') && contextId.length > 'turn_'.length) {
     return { memoryId: `turn:${contextId.slice('turn_'.length)}`, kind: 'turn' };
@@ -1013,7 +1010,7 @@ function toLocomoHit(
 }
 
 function renderBridgeMemoryText(rendered: RenderedMemory, matchedText: string): string {
-  if (rendered.memoryId.startsWith('extraction:')) {
+  if (rendered.memoryId.startsWith('ext:')) {
     const extraction = matchedText || rendered.summary || rendered.title || '';
     const context = rendered.detail?.match(/(?:^|\n)Context:\n([\s\S]*?)(?:\n\nReferences:|$)/)?.[1]?.trim();
     return [

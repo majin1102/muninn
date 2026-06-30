@@ -31,10 +31,10 @@ user_template: |
   {{candidates}}
 
   Ref rules:
-  - Return refs for the memory candidates used to write the content.
+  - Return refs for the memory candidates used to write the content, such as `ext:*` candidate ids.
 
   Return JSON only:
   {
     "content": "...",
-    "refs": ["session:1", "session:2"]
+    "refs": ["ext:abc123"]
   }
