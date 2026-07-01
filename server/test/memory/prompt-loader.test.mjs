@@ -109,11 +109,13 @@ test('thread session memory prompt uses generic recall-ready memory guidance', (
   assert.doesNotMatch(system, /Write Skill names in the dominant language/);
   assert.match(system, /# <Session Title>/);
   assert.match(system, /### Title/);
-  assert.doesNotMatch(system, /## Session metadata/);
+  assert.match(system, /## Session metadata/);
+  assert.match(system, /whole-session metadata, not extraction metadata/);
+  assert.match(system, /Summary answers what this session is about, current state, and open questions if any/);
+  assert.match(system, /Do not replace session scope with the latest topic\/fix\/extraction/);
   assert.match(system, /short broad\/stable whole-session label/);
-  assert.match(system, /synthesize current metadata, extraction summaries, and new turns/);
   assert.match(system, /avoid UUIDs, paths, `Session <id>`, or latest-topic labels/);
-  assert.match(system, /optional broad\/stable whole-session update covering main arc\/current durable state, not just current batch/);
+  assert.match(system, /optional broad\/stable whole-session update/);
   assert.doesNotMatch(system, /if any extraction exists/);
   assert.match(system, /Session title: usually 4-8 tokens/);
   assert.match(system, /Extraction titles are UI labels: usually 3-10 words, hard max 16 words/);
