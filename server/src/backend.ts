@@ -28,6 +28,7 @@ import {
   writeCheckpointFile,
   type CheckpointContent,
   type CheckpointFile,
+  type DreamingCheckpoint,
   type ExtractorCheckpoint,
   type SessionIndexEntry,
 } from './checkpoint.js';
@@ -38,7 +39,7 @@ import { readTurnRow } from './pipeline/ingest.js';
 import { Watchdog } from './watchdog.js';
 import { writeMuninnLog } from './logging.js';
 import { SessionIndex } from './session-index.js';
-import { ProjectDreamingService, type ProjectDreamCreateResult } from './dreaming/service.js';
+import { ProjectDreamingService, type DreamingWatermarkStore, type ProjectDreamCreateResult } from './dreaming/service.js';
 import { ProjectDreamingScheduler } from './dreaming/scheduler.js';
 import type { ProjectDreamSignals } from './dreaming/content.js';
 import type { ProjectDreamProjectView, TurnContent } from '@muninn/common';
@@ -105,6 +106,7 @@ export class MuninnBackend {
   private sessionRegistry: IngestSessionRegistry | null = null;
   private readonly sessionIndex: SessionIndex;
   private readonly projectDreaming: ProjectDreamingService;
+  private readonly dreamingCheckpoint: DreamingCheckpoint;
   private dreamingScheduler: ProjectDreamingScheduler | null = null;
   private watchdog: Watchdog | null = null;
   private watchdogClient: NativeTables | null = null;
@@ -119,7 +121,10 @@ export class MuninnBackend {
     this.checkpointMutex = new AsyncCheckpointMutex();
     const extractorName = loadMuninnConfig()?.extractor?.name;
     this.sessionIndex = new SessionIndex(checkpoint?.sessionIndex ?? null, extractorName ?? null);
-    this.projectDreaming = new ProjectDreamingService(client, extractorName ?? null);
+    this.dreamingCheckpoint = cloneDreamingCheckpoint(checkpoint?.dreaming ?? emptyDreamingCheckpoint());
+    this.projectDreaming = new ProjectDreamingService(client, extractorName ?? null, {
+      watermarks: this.dreamingWatermarks(),
+    });
     this.sessionRegistry = extractorName
       ? new IngestSessionRegistry(client, extractorName)
       : null;
@@ -138,6 +143,7 @@ export class MuninnBackend {
           schemaVersion: checkpoint.schemaVersion,
           extractor: checkpoint.extractor,
           sessionIndex: checkpoint.sessionIndex,
+          dreaming: checkpoint.dreaming,
         })
         : null;
       const watchdogClient = lockNativeTables(
@@ -297,9 +303,10 @@ export class MuninnBackend {
         runs: extractorCheckpoint.runs,
       };
       return {
-        schemaVersion: 12,
+        schemaVersion: 13,
         extractor: extractorSection,
         sessionIndex: this.sessionIndex.currentCheckpoint(),
+        dreaming: cloneDreamingCheckpoint(this.dreamingCheckpoint),
       };
     });
   }
@@ -398,6 +405,31 @@ export class MuninnBackend {
       this.sessionRegistry.rememberTurn(turn);
     }
   }
+
+  private dreamingWatermarks(): DreamingWatermarkStore {
+    return {
+      list: () => Object.entries(this.dreamingCheckpoint.projects)
+        .map(([project, value]) => ({ project, ...value })),
+      get: (project) => this.dreamingCheckpoint.projects[project] ?? null,
+      set: (project, sessionSnapshotVersion) => {
+        this.dreamingCheckpoint.projects[project] = { sessionSnapshotVersion };
+      },
+    };
+  }
+}
+
+function emptyDreamingCheckpoint(): DreamingCheckpoint {
+  return { projects: {} };
+}
+
+function cloneDreamingCheckpoint(checkpoint: DreamingCheckpoint): DreamingCheckpoint {
+  const projects: DreamingCheckpoint['projects'] = {};
+  for (const [project, value] of Object.entries(checkpoint.projects)) {
+    projects[project] = {
+      sessionSnapshotVersion: value.sessionSnapshotVersion,
+    };
+  }
+  return { projects };
 }
 
 async function ensureBootstrapped(database?: string | null) {
@@ -453,9 +485,6 @@ export async function captureTurn(turnContent: TurnContent, database?: string | 
   });
   const backend = await getBackend(databaseName);
   await backend.accept(turnContent);
-  if (isHookCapture(turnContent)) {
-    await backend.memoryFinalize();
-  }
 }
 
 export async function captureTurns(turnContents: TurnContent[], database?: string | null): Promise<number> {
@@ -463,12 +492,8 @@ export async function captureTurns(turnContents: TurnContent[], database?: strin
   await writeMuninnLog(databaseName, 'info', 'server', 'turn_capture_batch', {
     count: turnContents.length,
   });
-  return (await getBackend(databaseName)).acceptBatch(turnContents);
-}
-
-function isHookCapture(turnContent: TurnContent): boolean {
-  return typeof turnContent.metadata?.ingest === 'string'
-    && turnContent.metadata.ingest.endsWith('-hook');
+  const backend = await getBackend(databaseName);
+  return backend.acceptBatch(turnContents);
 }
 
 export async function validateSettings(content: string): Promise<void> {

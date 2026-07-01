@@ -24,6 +24,7 @@ import {
 import type { SessionThread } from './session.js';
 import { extractEpochDraft, flushThreads } from './session.js';
 import { indexPendingExtractions, indexTouchedExtractions } from './extraction.js';
+import { renderCurrentBatchTurns } from '../llm/extraction-input.js';
 import { resolveDatabaseName } from '../config.js';
 import { writeMuninnLog } from '../logging.js';
 
@@ -156,12 +157,38 @@ export class Extractor {
     if (this.shuttingDown) {
       throw new Error('extractor is shutting down');
     }
-    while (true) {
+    let acceptedCount = 0;
+    let offset = 0;
+    while (offset < turnContents.length) {
       const openEpoch = this.openEpoch;
+      const packed = packNextBatchGroup(
+        openEpoch.stagedTurns().map(toTurnRowPackingTurn),
+        turnContents.slice(offset).map((turn, index) => (
+          toTurnContentPackingTurn(turn, `pending:${offset + index + 1}`)
+        )),
+        {
+          maxEpochTurns: this.maxEpochTurns,
+          newBatchInputChars: this.newBatchInputChars,
+          previewChars: this.previewChars,
+        },
+      );
+
+      if (packed.shouldSealBefore) {
+        this.sealOpenEpoch(openEpoch);
+        continue;
+      }
+
+      if (packed.turns.length === 0) {
+        break;
+      }
+
       try {
-        const acceptedTurns = await openEpoch.acceptBatch(turnContents, sessionRegistry);
-        this.scheduleOpenEpochSeal(openEpoch);
-        return acceptedTurns.length;
+        const acceptedTurns = await openEpoch.acceptBatch(packed.turns, sessionRegistry);
+        acceptedCount += acceptedTurns.length;
+        offset += packed.turns.length;
+        if (offset < turnContents.length && openEpoch.hasStagedTurns()) {
+          this.sealOpenEpoch(openEpoch);
+        }
       } catch (error) {
         if (error instanceof EpochSealedError && openEpoch !== this.openEpoch) {
           continue;
@@ -169,6 +196,8 @@ export class Extractor {
         throw error;
       }
     }
+    this.scheduleOpenEpochSeal(this.openEpoch);
+    return acceptedCount;
   }
 
   async watermark(): Promise<MemoryWatermark> {
@@ -335,25 +364,7 @@ export class Extractor {
     }
 
     let nextEpoch = this.committedEpoch == null ? 0 : this.committedEpoch + 1;
-    if (pendingTurns.length > 0) {
-      const turnsByEpoch = new Map<number, TurnRow[]>();
-      for (const turn of pendingTurns) {
-        if (turn.extractionEpoch == null) {
-          throw new Error(`pending extractable turn ${turn.turnId} is missing extractionEpoch`);
-        }
-        const turns = turnsByEpoch.get(turn.extractionEpoch) ?? [];
-        turns.push(turn);
-        turnsByEpoch.set(turn.extractionEpoch, turns);
-      }
-      const epochs = [...turnsByEpoch.keys()].sort((left, right) => left - right);
-      for (const epoch of epochs) {
-        this.epochQueue.publishEpoch({
-          epoch,
-          turns: turnsByEpoch.get(epoch) ?? [],
-        });
-      }
-      nextEpoch = (epochs[epochs.length - 1] ?? nextEpoch) + 1;
-    }
+    nextEpoch = this.publishRecoveredPendingTurns(pendingTurns, nextEpoch);
 
     this.openEpoch = new OpenEpoch(nextEpoch);
     this.clearSealTimer();
@@ -365,6 +376,39 @@ export class Extractor {
     this.refreshCheckpointSnapshot();
     this.start();
     this.notifyChange();
+  }
+
+  private publishRecoveredPendingTurns(pendingTurns: TurnRow[], nextEpoch: number): number {
+    if (pendingTurns.length === 0) {
+      return nextEpoch;
+    }
+
+    const turnsByEpoch = new Map<number, TurnRow[]>();
+    for (const turn of pendingTurns) {
+      if (turn.extractionEpoch == null) {
+        throw new Error(`pending extractable turn ${turn.turnId} is missing extractionEpoch`);
+      }
+      const turns = turnsByEpoch.get(turn.extractionEpoch) ?? [];
+      turns.push(turn);
+      turnsByEpoch.set(turn.extractionEpoch, turns);
+    }
+
+    const epochs = [...turnsByEpoch.keys()].sort((left, right) => left - right);
+    for (const epoch of epochs) {
+      const chunks = packRecoveredEpochTurns(turnsByEpoch.get(epoch) ?? [], {
+        maxEpochTurns: this.maxEpochTurns,
+        newBatchInputChars: this.newBatchInputChars,
+        previewChars: this.previewChars,
+      });
+      for (let index = 0; index < chunks.length; index += 1) {
+        this.epochQueue.publishEpoch({
+          epoch,
+          ...(index < chunks.length - 1 ? { commitEpoch: null } : {}),
+          turns: chunks[index] ?? [],
+        });
+      }
+    }
+    return (epochs[epochs.length - 1] ?? nextEpoch) + 1;
   }
 
   private start(): void {
@@ -510,7 +554,9 @@ export class Extractor {
         await writeMuninnLog(this.database, 'error', 'extractor', 'index_build_failed', { message });
         this.nextIndexRetryAt = Date.now() + INDEX_RETRY_DELAY_MS;
       }
-      this.committedEpoch = currentEpoch.epoch;
+      if (currentEpoch.commitEpoch !== null) {
+        this.committedEpoch = currentEpoch.commitEpoch ?? currentEpoch.epoch;
+      }
       this.currentEpoch = null;
       this.refreshCheckpointSnapshot();
       this.notifyChange();
@@ -956,6 +1002,106 @@ function cloneExtractorRun(run: ExtractorRun): ExtractorRun {
 
 function isExtractable(turn: TurnRow): boolean {
   return Boolean(turn.response?.trim());
+}
+
+type BatchPackingTurn<T> = {
+  turn: T;
+  turnId: string;
+  prompt: string;
+  response: string;
+};
+
+type BatchPackingBudget = {
+  maxEpochTurns: number;
+  newBatchInputChars: number;
+  previewChars: number;
+};
+
+function packNextBatchGroup<T>(
+  existingTurns: BatchPackingTurn<unknown>[],
+  pendingTurns: BatchPackingTurn<T>[],
+  budget: BatchPackingBudget,
+): { turns: T[]; shouldSealBefore: boolean } {
+  if (pendingTurns.length === 0) {
+    return { turns: [], shouldSealBefore: false };
+  }
+
+  const existingBudgetTurns = existingTurns.map(({ turnId, prompt, response }) => ({
+    turnId,
+    prompt,
+    response,
+  }));
+  if (existingBudgetTurns.length >= budget.maxEpochTurns) {
+    return { turns: [], shouldSealBefore: existingBudgetTurns.length > 0 };
+  }
+
+  const selected: Array<BatchPackingTurn<T>> = [];
+  for (let index = 0; index < pendingTurns.length; index += 1) {
+    const candidate = pendingTurns[index]!;
+    const nextSelected = [...selected, candidate];
+    const rendered = renderCurrentBatchTurns([
+      ...existingBudgetTurns,
+      ...nextSelected.map(({ turnId, prompt, response }) => ({ turnId, prompt, response })),
+    ], { previewChars: budget.previewChars });
+    const exceedsTurnLimit = existingBudgetTurns.length + nextSelected.length > budget.maxEpochTurns;
+    const exceedsTextBudget = rendered.renderedChars > budget.newBatchInputChars;
+
+    if ((exceedsTurnLimit || exceedsTextBudget) && selected.length > 0) {
+      break;
+    }
+    if ((exceedsTurnLimit || exceedsTextBudget) && existingBudgetTurns.length > 0) {
+      return { turns: [], shouldSealBefore: true };
+    }
+
+    selected.push(candidate);
+    if (exceedsTurnLimit || exceedsTextBudget) {
+      break;
+    }
+  }
+
+  return {
+    turns: selected.map((candidate) => candidate.turn),
+    shouldSealBefore: false,
+  };
+}
+
+function packRecoveredEpochTurns(
+  turns: TurnRow[],
+  budget: BatchPackingBudget,
+): TurnRow[][] {
+  const chunks: TurnRow[][] = [];
+  let offset = 0;
+  while (offset < turns.length) {
+    const packed = packNextBatchGroup(
+      [],
+      turns.slice(offset).map(toTurnRowPackingTurn),
+      budget,
+    );
+    if (packed.turns.length === 0) {
+      throw new Error('failed to pack recovered pending turns');
+    }
+    chunks.push(packed.turns);
+    offset += packed.turns.length;
+  }
+  return chunks;
+}
+
+function toTurnContentPackingTurn(turn: TurnContent, turnId: string): BatchPackingTurn<TurnContent> {
+  return {
+    turn,
+    turnId,
+    prompt: turn.prompt,
+    response: turn.response,
+  };
+}
+
+function toTurnRowPackingTurn(turn: TurnRow): BatchPackingTurn<TurnRow> {
+  return {
+    turn,
+    turnId: turn.turnId,
+    prompt: turn.prompt ?? '',
+    response: turn.response ?? '',
+  };
 }
 
 function keepNewestTurn(byId: Map<string, TurnRow>, turn: TurnRow): void {

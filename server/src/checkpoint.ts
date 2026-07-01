@@ -63,10 +63,17 @@ export type SessionIndexCheckpoint = {
   entries: SessionIndexEntry[];
 };
 
+export type DreamingCheckpoint = {
+  projects: Record<string, {
+    sessionSnapshotVersion: number;
+  }>;
+};
+
 export type CheckpointContent = {
-  schemaVersion: 12;
+  schemaVersion: 13;
   extractor: ExtractorCheckpoint;
   sessionIndex: SessionIndexCheckpoint;
+  dreaming: DreamingCheckpoint;
 };
 
 export type CheckpointFile = CheckpointContent & {
@@ -112,23 +119,28 @@ export function parseCheckpointFile(raw: string): CheckpointFile {
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
     throw new Error('checkpoint must be a JSON object');
   }
-  if (parsed.schemaVersion !== 12) {
+  if (parsed.schemaVersion !== 13) {
     throw new Error(`unsupported checkpoint schemaVersion: ${String(parsed.schemaVersion)}`);
   }
   const extractor = parseExtractorSection(parsed.extractor);
   const sessionIndex = parseSessionIndexSection(parsed.sessionIndex);
+  const dreaming = parseDreamingSection(parsed.dreaming);
   if (!extractor) {
     throw new Error('checkpoint extractor section is invalid');
   }
   if (!sessionIndex) {
     throw new Error('checkpoint sessionIndex section is invalid');
   }
+  if (!dreaming) {
+    throw new Error('checkpoint dreaming section is invalid');
+  }
   return {
-    schemaVersion: 12,
+    schemaVersion: 13,
     writtenAt: typeof parsed.writtenAt === 'string' ? parsed.writtenAt : new Date(0).toISOString(),
     writerPid: typeof parsed.writerPid === 'number' ? parsed.writerPid : 0,
     extractor,
     sessionIndex,
+    dreaming,
   };
 }
 
@@ -253,6 +265,22 @@ function parseSessionIndexBaseline(value: unknown): SessionIndexCheckpoint['base
     turn: value.turn,
     session: value.session,
   };
+}
+
+function parseDreamingSection(value: unknown): DreamingCheckpoint | null {
+  if (!isObjectRecord(value) || !isObjectRecord(value.projects)) {
+    return null;
+  }
+  const projects: DreamingCheckpoint['projects'] = {};
+  for (const [project, watermark] of Object.entries(value.projects)) {
+    if (!isObjectRecord(watermark) || !isNonNegativeInteger(watermark.sessionSnapshotVersion)) {
+      return null;
+    }
+    projects[project] = {
+      sessionSnapshotVersion: watermark.sessionSnapshotVersion,
+    };
+  }
+  return { projects };
 }
 
 function parseRecentSessions(value: unknown): RecentSessionCheckpoint[] | null {

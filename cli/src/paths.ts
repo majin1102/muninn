@@ -10,7 +10,6 @@ export function resolveHostPaths(params: {
   if (params.scope === 'project') {
     return {
       codexConfigPath: path.join(params.cwd, '.codex', 'config.toml'),
-      codexHookConfigPath: path.join(params.cwd, '.codex', 'muninn-hook.json'),
       claudeSettingsPath: path.join(params.cwd, '.claude', 'settings.json'),
       claudeMcpJsonPath: path.join(params.cwd, '.mcp.json'),
     };
@@ -18,7 +17,6 @@ export function resolveHostPaths(params: {
 
   return {
     codexConfigPath: path.join(params.home, '.codex', 'config.toml'),
-    codexHookConfigPath: path.join(params.home, '.codex', 'muninn-hook.json'),
     claudeSettingsPath: path.join(params.home, '.claude', 'settings.json'),
     claudeMcpJsonPath: path.join(params.home, '.claude.json'),
   };

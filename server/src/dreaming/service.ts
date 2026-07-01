@@ -29,6 +29,17 @@ export type ProjectDreamCreateResult = {
 
 type Evidence = DreamingSupportTurn;
 
+export type DreamingWatermark = {
+  project: string;
+  sessionSnapshotVersion: number;
+};
+
+export type DreamingWatermarkStore = {
+  list(): DreamingWatermark[];
+  get(project: string): Omit<DreamingWatermark, 'project'> | null;
+  set(project: string, sessionSnapshotVersion: number): void;
+};
+
 const MEMORY_BUDGET = 100;
 const MEMORY_RECENT = 20;
 const SKILL_BUDGET = 50;
@@ -36,11 +47,16 @@ const SKILL_RECENT = 10;
 
 export class ProjectDreamingService {
   private readonly creates = new Map<string, Promise<ProjectDreamCreateResult>>();
+  private readonly fallbackWatermarks = createInMemoryWatermarks();
 
   constructor(
     private readonly client: NativeTables,
     private readonly extractorName: string | null,
-    private readonly deps: { merge?: typeof mergeProjectDream; now?: () => Date } = {},
+    private readonly deps: {
+      merge?: typeof mergeProjectDream;
+      now?: () => Date;
+      watermarks?: DreamingWatermarkStore;
+    } = {},
   ) {}
 
   async latest(project: string): Promise<DreamingRow | null> {
@@ -49,12 +65,8 @@ export class ProjectDreamingService {
   }
 
   async projects(): Promise<ProjectDreamProjectView[]> {
-    const [rows, watermarks] = await Promise.all([
-      this.client.dreamingTable.list(),
-      this.client.dreamingProjectTable.list(),
-    ]);
+    const rows = await this.client.dreamingTable.list();
     const rowProjects = new Set(rows.map((row) => row.project));
-    const watermarkByProject = new Map(watermarks.map((row) => [row.project, row]));
     const latestRowUpdate = new Map<string, string>();
     for (const row of rows) {
       const current = latestRowUpdate.get(row.project);
@@ -66,8 +78,7 @@ export class ProjectDreamingService {
       .sort((left, right) => left.localeCompare(right))
       .map((project) => ({
         project,
-        latestUpdatedAt: watermarkByProject.get(project)?.updatedAt
-          ?? latestRowUpdate.get(project)
+        latestUpdatedAt: latestRowUpdate.get(project)
           ?? new Date(0).toISOString(),
       }));
   }
@@ -111,10 +122,8 @@ export class ProjectDreamingService {
       throw new Error('extractor is not configured');
     }
 
-    const [watermark, existingRows] = await Promise.all([
-      this.client.dreamingProjectTable.get({ project }),
-      this.projectRows(project),
-    ]);
+    const watermark = this.watermarks().get(project);
+    const existingRows = await this.projectRows(project);
     const source = watermark
       ? await this.client.sessionTable.delta({
         extractor: this.extractorName,
@@ -140,13 +149,7 @@ export class ProjectDreamingService {
 
     if (!incrementalSignals.trim()) {
       if (watermark && source.sourceVersion > watermark.sessionSnapshotVersion) {
-        await this.client.dreamingProjectTable.upsert({
-          row: {
-            project,
-            sessionSnapshotVersion: source.sourceVersion,
-            updatedAt: now,
-          },
-        });
+        this.watermarks().set(project, source.sourceVersion);
       }
       return { created: false, rows: existingRows };
     }
@@ -172,13 +175,7 @@ export class ProjectDreamingService {
       now,
     });
     const trimmedRows = await this.enforceBudgets(project, nextRows);
-    await this.client.dreamingProjectTable.upsert({
-      row: {
-        project,
-        sessionSnapshotVersion: source.sourceVersion,
-        updatedAt: now,
-      },
-    });
+    this.watermarks().set(project, source.sourceVersion);
     return { created: true, rows: trimmedRows };
   }
 
@@ -252,6 +249,21 @@ export class ProjectDreamingService {
   private now(): Date {
     return this.deps.now?.() ?? new Date();
   }
+
+  private watermarks(): DreamingWatermarkStore {
+    return this.deps.watermarks ?? this.fallbackWatermarks;
+  }
+}
+
+function createInMemoryWatermarks(): DreamingWatermarkStore {
+  const projects = new Map<string, { sessionSnapshotVersion: number }>();
+  return {
+    list: () => [...projects.entries()].map(([project, value]) => ({ project, ...value })),
+    get: (project) => projects.get(project) ?? null,
+    set: (project, sessionSnapshotVersion) => {
+      projects.set(project, { sessionSnapshotVersion });
+    },
+  };
 }
 
 function selectedSignals(source: SourceRows<SessionSnapshotRow>, project: string): SessionSnapshotRow[] {

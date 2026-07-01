@@ -5,6 +5,7 @@ import path from 'node:path';
 
 export type SealedEpoch = {
   epoch: number;
+  commitEpoch?: number | null;
   turns: TurnRow[];
 };
 
@@ -195,10 +196,13 @@ export class EpochQueue {
     if (this.closed || sealedEpoch.turns.length === 0) {
       return;
     }
-    const normalized = {
+    const normalized: SealedEpoch = {
       epoch: sealedEpoch.epoch,
       turns: [...sealedEpoch.turns],
     };
+    if ('commitEpoch' in sealedEpoch) {
+      normalized.commitEpoch = sealedEpoch.commitEpoch;
+    }
     const waiter = this.waiters.shift();
     if (waiter) {
       waiter(normalized);

@@ -41,7 +41,7 @@ const {
   toSessionSnapshot,
 } = sessionModule;
 const { captureTurn, memoryPipeline: memoryPipelineApi, shutdownCoreForTests } = core;
-const CHECKPOINT_SCHEMA_VERSION = 12;
+const CHECKPOINT_SCHEMA_VERSION = 13;
 let defaultConfigDir = null;
 
 function createCheckpointBackend(exported = null) {
@@ -79,6 +79,9 @@ function makeCheckpointContent(overrides = {}) {
       baseline: { turn: 10, session: 21 },
       entries: [],
     },
+    dreaming: overrides.dreaming ?? {
+      projects: {},
+    },
   };
 }
 
@@ -102,6 +105,9 @@ async function writeExtractorConfig(configPath, {
   maxAttempts = 3,
   minEpochTurns,
   maxEpochTurns,
+  newBatchInputChars,
+  snapshotInputChars,
+  previewChars,
   epochWindowMs,
   failedEpochRetryIntervalMs,
   name = 'default-extractor',
@@ -116,6 +122,9 @@ async function writeExtractorConfig(configPath, {
       activeWindowDays,
       ...(minEpochTurns === undefined ? {} : { minEpochTurns }),
       ...(maxEpochTurns === undefined ? {} : { maxEpochTurns }),
+      ...(newBatchInputChars === undefined ? {} : { newBatchInputChars }),
+      ...(snapshotInputChars === undefined ? {} : { snapshotInputChars }),
+      ...(previewChars === undefined ? {} : { previewChars }),
       ...(epochWindowMs === undefined ? {} : { epochWindowMs }),
       ...(failedEpochRetryIntervalMs === undefined ? {} : { failedEpochRetryIntervalMs }),
     },
@@ -496,6 +505,21 @@ function makeTurnContent(prompt, response, overrides = {}) {
       { type: 'assistantMessage', text: response },
     ],
     ...overrides,
+  };
+}
+
+function makeBatchRegistry() {
+  let acceptCount = 0;
+  return {
+    load: async () => ({
+      acceptBatch: async (contents, epoch) => contents.map((content) => {
+        acceptCount += 1;
+        return {
+          turn: makeExtractableTurn(`turn-${acceptCount}`, epoch, content.response),
+          deduped: false,
+        };
+      }),
+    }),
   };
 }
 
@@ -1333,6 +1357,7 @@ test('checkpoint preserves session runs', async () => {
       }],
     },
     sessionIndex: { baseline: { turn: 1, session: 1 }, entries: [] },
+    dreaming: { projects: {} },
   };
 
   const parsed = parseCheckpointFile(serializeCheckpointFile(file));
@@ -1755,6 +1780,44 @@ test('extractor bootstrap publishes pending turns by their extractionEpoch', asy
     { epoch: 14, turnIds: ['turn-14'] },
   ]);
   assert.equal(extractor.openEpoch.epoch, 15);
+});
+
+test('extractor bootstrap repacks oversized pending epochs by maxEpochTurns', async (t) => {
+  const { dir, homeDir, configPath } = await makeConfigHome();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+  process.env.MUNINN_HOME = homeDir;
+  await writeExtractorConfig(configPath, { minEpochTurns: 3, maxEpochTurns: 4 });
+
+  const published = [];
+  const extractor = new Extractor({
+    turnTable: {
+      loadTurnsAfterEpoch: async () => Array.from({ length: 10 }, (_, index) => (
+        makeExtractableTurn(`turn-${index + 1}`, 13, `epoch13-${index + 1}`)
+      )),
+    },
+    sessionTable: {
+      listSnapshots: async () => [],
+    },
+    extractionTable: {},
+  });
+  t.after(async () => extractor.shutdown());
+
+  extractor.epochQueue.publishEpoch = (sealedEpoch) => {
+    published.push({
+      epoch: sealedEpoch.epoch,
+      commitEpoch: sealedEpoch.commitEpoch,
+      turnIds: sealedEpoch.turns.map((turn) => turn.turnId),
+    });
+  };
+
+  await extractor.ensureBootstrapped();
+
+  assert.deepEqual(published, [
+    { epoch: 13, commitEpoch: null, turnIds: ['turn-1', 'turn-2', 'turn-3', 'turn-4'] },
+    { epoch: 13, commitEpoch: null, turnIds: ['turn-5', 'turn-6', 'turn-7', 'turn-8'] },
+    { epoch: 13, commitEpoch: undefined, turnIds: ['turn-9', 'turn-10'] },
+  ]);
+  assert.equal(extractor.openEpoch.epoch, 14);
 });
 
 test('extractor bootstrap restores committed state from checkpoint when baselines match', async (t) => {
@@ -6623,6 +6686,84 @@ test('extractor.accept keeps a partial epoch open until minEpochTurns is reached
 
   assert.equal(extractor.openEpoch.epoch, 2);
   assert.deepEqual(extractor.epochQueue.pendingTurns().map((turn) => turn.turnId), ['turn-1', 'turn-2', 'turn-3']);
+});
+
+test('extractor.acceptBatch packs large batches by maxEpochTurns and leaves tail open', async (t) => {
+  const { dir, homeDir, configPath } = await makeConfigHome();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+
+  process.env.MUNINN_HOME = homeDir;
+  await writeExtractorConfig(configPath, {
+    minEpochTurns: 3,
+    maxEpochTurns: 4,
+    epochWindowMs: 10_000,
+  });
+
+  const extractor = new Extractor(makeExtractorClient());
+  extractor.bootstrapped = true;
+  extractor.openEpoch = new OpenEpoch(1);
+  t.after(async () => extractor.shutdown());
+
+  const turns = Array.from({ length: 10 }, (_, index) => (
+    makeTurnContent(`prompt ${index + 1}`, `response ${index + 1}`)
+  ));
+
+  const accepted = await extractor.acceptBatch(turns, makeBatchRegistry());
+  await extractor.publishChain;
+
+  assert.equal(accepted, 10);
+  assert.equal(extractor.openEpoch.epoch, 3);
+  assert.deepEqual(extractor.epochQueue.pendingTurns().map((turn) => turn.turnId), [
+    'turn-1',
+    'turn-2',
+    'turn-3',
+    'turn-4',
+    'turn-5',
+    'turn-6',
+    'turn-7',
+    'turn-8',
+  ]);
+  assert.deepEqual(extractor.openEpoch.stagedTurns().map((turn) => turn.turnId), [
+    'turn-9',
+    'turn-10',
+  ]);
+});
+
+test('extractor.acceptBatch packs large batches by rendered newBatchInputChars', async (t) => {
+  const { dir, homeDir, configPath } = await makeConfigHome();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+
+  process.env.MUNINN_HOME = homeDir;
+  await writeExtractorConfig(configPath, {
+    minEpochTurns: 3,
+    maxEpochTurns: 32,
+    newBatchInputChars: 900,
+    previewChars: 800,
+    epochWindowMs: 10_000,
+  });
+
+  const extractor = new Extractor(makeExtractorClient());
+  extractor.bootstrapped = true;
+  extractor.openEpoch = new OpenEpoch(1);
+  t.after(async () => extractor.shutdown());
+
+  const turns = Array.from({ length: 4 }, (_, index) => (
+    makeTurnContent(`prompt ${index + 1}`, 'x'.repeat(180))
+  ));
+
+  const accepted = await extractor.acceptBatch(turns, makeBatchRegistry());
+  await extractor.publishChain;
+
+  assert.equal(accepted, 4);
+  assert.equal(extractor.openEpoch.epoch, 2);
+  assert.deepEqual(extractor.epochQueue.pendingTurns().map((turn) => turn.turnId), [
+    'turn-1',
+    'turn-2',
+  ]);
+  assert.deepEqual(extractor.openEpoch.stagedTurns().map((turn) => turn.turnId), [
+    'turn-3',
+    'turn-4',
+  ]);
 });
 
 test('extractor.accept seals a partial epoch when the epoch window expires', async (t) => {

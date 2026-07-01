@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { planCodexConfig, planCodexHookConfig } from '../dist/codex-config.js';
+import { planCodexConfig } from '../dist/codex-config.js';
 
 const commands = {
   mcpCommand: 'muninn-mcp',
@@ -24,21 +24,8 @@ test('planCodexConfig installs mcp and hook into empty config', () => {
   assert.match(plan.after, /\[\[hooks\.Stop\]\]/);
   assert.match(plan.after, /command = "muninn-codex-hook"/);
   assert.doesNotMatch(plan.after, /--server-url/);
-  assert.match(plan.after, /timeout = 5/);
-  assert.match(plan.after, /statusMessage = "Capturing conversation by muninn"/);
-});
-
-test('planCodexHookConfig writes server URL sidecar config', () => {
-  const plan = planCodexHookConfig('', {
-    path: '/home/dev/.codex/muninn-hook.json',
-    action: 'install',
-    serverUrl: 'http://127.0.0.1:52423',
-  });
-
-  assert.equal(plan.changed, true);
-  assert.deepEqual(JSON.parse(plan.after), {
-    serverUrl: 'http://127.0.0.1:52423',
-  });
+  assert.match(plan.after, /timeout = 30/);
+  assert.match(plan.after, /statusMessage = "Syncing turn to Muninn"/);
 });
 
 test('planCodexConfig updates existing muninn mcp without duplicating it', () => {

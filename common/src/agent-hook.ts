@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdir, open, readFile, realpath, rename, stat, unlink, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, open, readFile, realpath, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import type { TurnContent } from './api';
@@ -71,7 +71,9 @@ export type FetchLike = (
 
 export type MuninnClient = {
   captureTurn(request: CaptureTurnRequest): Promise<boolean>;
+  captureTurns?(turns: TurnContent[]): Promise<boolean>;
   deleteSession?(identity: MuninnSessionIdentity): Promise<boolean>;
+  finalizeMemory?(): Promise<boolean>;
 };
 
 export type HookPayload = {
@@ -83,7 +85,9 @@ export type HookPayload = {
   turn_id?: string;
 };
 
-const DEFAULT_TIMEOUT_MS = 1500;
+export type HookDebugEvent = Record<string, unknown>;
+
+const DEFAULT_TIMEOUT_MS = 15_000;
 const TRANSCRIPT_CACHE_TAIL_BYTES = 4096;
 const LOCK_STALE_MS = 30_000;
 const LOCK_WAIT_MS = 50;
@@ -151,6 +155,25 @@ export function createMuninnClient(params: { config: HookConfig; fetchImpl?: Fet
         return false;
       }
     },
+    async captureTurns(turns) {
+      try {
+        const response = await fetchImpl(`${params.config.baseUrl}/api/v1/turn/capture/batch`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ turns }),
+          signal: AbortSignal.timeout(params.config.timeoutMs),
+        });
+        if (!response.ok) {
+          const body = await safeReadBody(response);
+          logWarn(label, `muninn batch capture failed with status ${response.status}${body ? ` body=${body}` : ''}`);
+          return false;
+        }
+        return true;
+      } catch (error) {
+        logWarn(label, 'muninn batch capture request failed', error);
+        return false;
+      }
+    },
     async deleteSession(identity) {
       try {
         const response = await fetchImpl(`${params.config.baseUrl}/app/api/import/${encodeURIComponent(identity.agent)}/session`, {
@@ -173,7 +196,45 @@ export function createMuninnClient(params: { config: HookConfig; fetchImpl?: Fet
         return false;
       }
     },
+    async finalizeMemory() {
+      try {
+        const response = await fetchImpl(`${params.config.baseUrl}/api/v1/memory/finalize`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({}),
+          signal: AbortSignal.timeout(params.config.timeoutMs),
+        });
+        if (!response.ok) {
+          const body = await safeReadBody(response);
+          logWarn(label, `muninn memory finalize failed with status ${response.status}${body ? ` body=${body}` : ''}`);
+          return false;
+        }
+        return true;
+      } catch (error) {
+        logWarn(label, 'muninn memory finalize request failed', error);
+        return false;
+      }
+    },
   };
+}
+
+export async function writeHookDebugEvent(label: string, event: HookDebugEvent): Promise<void> {
+  if (process.env.MUNINN_HOOK_DEBUG === '0') {
+    return;
+  }
+  try {
+    const logPath = hookDebugPath(label);
+    await mkdir(path.dirname(logPath), { recursive: true });
+    const record = {
+      timestamp: new Date().toISOString(),
+      label,
+      pid: process.pid,
+      ...event,
+    };
+    await appendFile(logPath, `${JSON.stringify(record)}\n`, 'utf8');
+  } catch {
+    // Debug logging must never affect hook execution.
+  }
 }
 
 export function defaultArtifactStore(): string {
@@ -189,6 +250,11 @@ export async function captureFromTranscript<Session extends AgentSession>(params
   label: string;
   client?: MuninnClient;
 }): Promise<boolean> {
+  await writeHookDebugEvent(params.label, {
+    stage: 'capture-start',
+    transcriptPath: params.transcriptPath,
+    agent: params.toTurnOptions.agent ?? CODEX_AGENT,
+  });
   try {
     const transcriptPath = await realpathOrResolved(params.transcriptPath);
     return await withFileLock(`transcript-${hashLockName(transcriptPath)}`, async () => {
@@ -200,8 +266,22 @@ export async function captureFromTranscript<Session extends AgentSession>(params
         agent: params.toTurnOptions.agent ?? CODEX_AGENT,
       });
       if (!result) {
+        await writeHookDebugEvent(params.label, {
+          stage: 'capture-skip-no-new-turns',
+          transcriptPath,
+        });
         return false;
       }
+      await writeHookDebugEvent(params.label, {
+        stage: 'capture-session-read',
+        transcriptPath,
+        sessionKey: result.sessionKey,
+        sessionId: result.progressEntry.sessionId,
+        project: result.progressEntry.project,
+        cwd: result.progressEntry.cwd,
+        turnCount: result.turns.length,
+        markerAction: result.markerAction,
+      });
       if (result.markerAction) {
         return await applyCaptureMarker({
           ...params,
@@ -211,19 +291,43 @@ export async function captureFromTranscript<Session extends AgentSession>(params
         });
       }
       if (!await isHookCaptureEnabled(result.sessionKey, result.progressEntry)) {
+        await writeHookDebugEvent(params.label, {
+          stage: 'capture-skip-policy-disabled',
+          transcriptPath,
+          sessionKey: result.sessionKey,
+          sessionId: result.progressEntry.sessionId,
+          project: result.progressEntry.project,
+          agent: result.progressEntry.agent,
+        });
         return false;
       }
       const client = params.client ?? createMuninnClient({ config: resolveHookConfig(), label: params.label });
-      let captured = result.turns.length > 0;
-      for (const turn of result.turns) {
-        captured = await client.captureTurn({ turn }) && captured;
-      }
+      const captured = result.turns.length > 0
+        ? await captureTurnsWithClient(client, result.turns)
+        : false;
+      const failedTurns = captured ? 0 : result.turns.length;
       if (captured) {
         await writeCaptureProgressEntry(result.sessionKey, result.progressEntry).catch(() => undefined);
       }
+      await writeHookDebugEvent(params.label, {
+        stage: 'capture-finished',
+        transcriptPath,
+        sessionKey: result.sessionKey,
+        sessionId: result.progressEntry.sessionId,
+        project: result.progressEntry.project,
+        turnCount: result.turns.length,
+        failedTurns,
+        captured,
+        progressWritten: captured,
+      });
       return captured;
     });
   } catch (error) {
+    await writeHookDebugEvent(params.label, {
+      stage: 'capture-error',
+      transcriptPath: params.transcriptPath,
+      error: String(error),
+    });
     process.stderr.write(`[${params.label}] failed to read transcript ${params.transcriptPath}: ${String(error)}\n`);
     return false;
   }
@@ -357,34 +461,62 @@ async function applyCaptureMarker<Session extends AgentSession>(params: {
   agent: string;
 }): Promise<boolean> {
   await setSessionCapturePolicy(params.result.sessionKey, params.result.markerAction === 'enable');
-  await removeCaptureProgressEntry(params.result.sessionKey);
+  await writeHookDebugEvent(params.label, {
+    stage: 'capture-marker-policy-applied',
+    action: params.result.markerAction,
+    sessionKey: params.result.sessionKey,
+    sessionId: params.result.progressEntry.sessionId,
+    project: params.result.progressEntry.project,
+  });
 
   const identity = progressIdentity(params.result.progressEntry);
   const client = params.client ?? createMuninnClient({ config: resolveHookConfig(), label: params.label });
   if (params.result.markerAction === 'disable') {
+    await removeCaptureProgressEntry(params.result.sessionKey);
     await client.deleteSession?.(identity);
-    return false;
-  }
-
-  const fileInfo = await transcriptFileInfo(params.transcriptPath);
-  const full = await readFullSessionTurns({
-    transcriptPath: params.transcriptPath,
-    fileInfo,
-    readSession: params.readSession,
-    toTurnContent: params.toTurnContent,
-    toTurnOptions: params.toTurnOptions,
-    agent: params.agent,
-  });
-  if (!full) {
+    await writeHookDebugEvent(params.label, {
+      stage: 'capture-marker-disable-finished',
+      sessionKey: params.result.sessionKey,
+      sessionId: params.result.progressEntry.sessionId,
+      project: params.result.progressEntry.project,
+    });
     return false;
   }
 
   let captured = true;
-  for (const turn of full.turns) {
-    captured = await client.captureTurn({ turn }) && captured;
+  if (params.result.turns.length > 0) {
+    captured = await captureTurnsWithClient(client, params.result.turns);
   }
+  const failedTurns = captured ? 0 : params.result.turns.length;
+  let finalized = false;
   if (captured) {
-    await writeCaptureProgressEntry(full.sessionKey, full.progressEntry).catch(() => undefined);
+    await writeCaptureProgressEntry(params.result.sessionKey, params.result.progressEntry).catch(() => undefined);
+    finalized = await client.finalizeMemory?.() ?? false;
+  }
+  await writeHookDebugEvent(params.label, {
+    stage: 'capture-marker-enable-finished',
+    sessionKey: params.result.sessionKey,
+    sessionId: params.result.progressEntry.sessionId,
+    project: params.result.progressEntry.project,
+    turnCount: params.result.turns.length,
+    failedTurns,
+    captured,
+    progressWritten: captured,
+    finalized,
+  });
+  return captured;
+}
+
+async function captureTurnsWithClient(client: MuninnClient, turns: TurnContent[]): Promise<boolean> {
+  if (turns.length === 0) {
+    return true;
+  }
+  if (client.captureTurns) {
+    return client.captureTurns(turns);
+  }
+  let captured = true;
+  for (const turn of turns) {
+    captured = await client.captureTurn({ turn }) && captured;
   }
   return captured;
 }
@@ -558,6 +690,15 @@ async function transcriptFileInfo(sourcePath: string): Promise<TranscriptFileInf
 
 function muninnHome(): string {
   return process.env.MUNINN_HOME ?? path.join(os.homedir(), '.muninn');
+}
+
+function hookDebugPath(label: string): string {
+  const explicit = process.env.MUNINN_HOOK_DEBUG_LOG?.trim();
+  if (explicit) {
+    return explicit;
+  }
+  const safeLabel = label.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'muninn-agent-hook';
+  return path.join(muninnHome(), 'main', 'logs', `${safeLabel}-debug.jsonl`);
 }
 
 function capturePolicyPath(): string {

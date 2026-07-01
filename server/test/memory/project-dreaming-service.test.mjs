@@ -41,6 +41,29 @@ function dreamingRow(overrides) {
   };
 }
 
+function createWatermarkStore(watermark = null) {
+  const writes = [];
+  const projects = new Map();
+  if (watermark) {
+    projects.set(watermark.project, {
+      sessionSnapshotVersion: watermark.sessionSnapshotVersion,
+    });
+  }
+  return {
+    writes,
+    store: {
+      list: () => [...projects.entries()]
+        .map(([project, value]) => ({ project, ...value })),
+      get: (project) => projects.get(project) ?? null,
+      set: (project, sessionSnapshotVersion) => {
+        const value = { sessionSnapshotVersion };
+        projects.set(project, value);
+        writes.push({ project, ...value });
+      },
+    },
+  };
+}
+
 function createClient({
   snapshots = [],
   snapshotsByVersion = {},
@@ -52,7 +75,7 @@ function createClient({
   turns = {},
 } = {}) {
   const deleted = [];
-  const watermarks = [];
+  const checkpointWatermarks = createWatermarkStore(watermark);
   let nextDreamingId = 100;
   const rows = [...dreamingRows];
   const client = {
@@ -99,19 +122,17 @@ function createClient({
       describe: async () => null,
     },
     dreamingProjectTable: {
-      list: async () => watermark ? [watermark, ...watermarks] : watermarks,
-      get: async ({ project }) => (watermark?.project === project ? watermark : null),
-      upsert: async ({ row }) => {
-        watermarks.push(row);
-      },
+      list: async () => assert.fail('runtime should read dreaming watermarks from checkpoint'),
+      get: async () => assert.fail('runtime should read dreaming watermarks from checkpoint'),
+      upsert: async () => assert.fail('runtime should write dreaming watermarks to checkpoint'),
     },
     extractionTable: {},
   };
-  return { client, rows, deleted, watermarks };
+  return { client, rows, deleted, watermarks: checkpointWatermarks.writes, watermarkStore: checkpointWatermarks.store };
 }
 
 test('first dream renders incremental evidence blocks and writes signal rows plus watermark', async () => {
-  const { client, watermarks } = createClient({
+  const { client, watermarks, watermarkStore } = createClient({
     sourceVersion: 12,
     snapshots: [
       snapshot({
@@ -130,6 +151,7 @@ test('first dream renders incremental evidence blocks and writes signal rows plu
     },
   });
   const service = new ProjectDreamingService(client, 'default-extractor', {
+    watermarks: watermarkStore,
     now: () => new Date('2026-06-19T00:00:00Z'),
     merge: async ({ existingProjectSignals, incrementalSessionSignals, labels }) => {
       assert.equal(existingProjectSignals, '');
@@ -170,7 +192,6 @@ test('first dream renders incremental evidence blocks and writes signal rows plu
   assert.deepEqual(watermarks, [{
     project: '/repo/muninn',
     sessionSnapshotVersion: 12,
-    updatedAt: '2026-06-19T00:00:00.000Z',
   }]);
 });
 
@@ -187,7 +208,7 @@ test('incremental dream merges existing signal support and deletes omitted rows'
       supportTurns: [{ turnId: 'turn:2', createdAt: '2026-06-02T00:00:00Z', contribution: 1 }],
     }),
   ];
-  const { client, deleted, watermarks } = createClient({
+  const { client, deleted, watermarks, watermarkStore } = createClient({
     watermark: {
       project: '/repo/muninn',
       sessionSnapshotVersion: 12,
@@ -208,6 +229,7 @@ test('incremental dream merges existing signal support and deletes omitted rows'
     },
   });
   const service = new ProjectDreamingService(client, 'default-extractor', {
+    watermarks: watermarkStore,
     now: () => new Date('2026-06-19T00:00:00Z'),
     merge: async ({ existingProjectSignals, incrementalSessionSignals }) => {
       assert.match(existingProjectSignals, /\[signal:10\]/);
@@ -240,7 +262,7 @@ test('incremental dream skips merge when snapshots have no new evidence labels',
     content: '## Instruction Signal\nPrefer minimal prompt changes.',
     supportTurns: [],
   })];
-  const { client, watermarks } = createClient({
+  const { client, watermarks, watermarkStore } = createClient({
     watermark: {
       project: '/repo/muninn',
       sessionSnapshotVersion: 12,
@@ -265,6 +287,7 @@ test('incremental dream skips merge when snapshots have no new evidence labels',
     ],
   });
   const service = new ProjectDreamingService(client, 'default-extractor', {
+    watermarks: watermarkStore,
     now: () => new Date('2026-06-19T00:00:00Z'),
     merge: async () => assert.fail('merge should not run without new evidence'),
   });
@@ -276,12 +299,11 @@ test('incremental dream skips merge when snapshots have no new evidence labels',
   assert.deepEqual(watermarks, [{
     project: '/repo/muninn',
     sessionSnapshotVersion: 13,
-    updatedAt: '2026-06-19T00:00:00.000Z',
   }]);
 });
 
 test('incremental dream treats higher contribution from the same turn as new evidence', async () => {
-  const { client } = createClient({
+  const { client, watermarkStore } = createClient({
     watermark: {
       project: '/repo/muninn',
       sessionSnapshotVersion: 12,
@@ -308,6 +330,7 @@ test('incremental dream treats higher contribution from the same turn as new evi
     },
   });
   const service = new ProjectDreamingService(client, 'default-extractor', {
+    watermarks: watermarkStore,
     now: () => new Date('2026-06-19T00:00:00Z'),
     merge: async ({ incrementalSessionSignals, labels }) => {
       assert.match(incrementalSessionSignals, /\[turn:1 \+10\]/);
@@ -337,7 +360,7 @@ test('incremental dream treats higher contribution from the same turn as new evi
 });
 
 test('incremental dream treats a different signal from the same turn as new evidence', async () => {
-  const { client } = createClient({
+  const { client, watermarkStore } = createClient({
     watermark: {
       project: '/repo/muninn',
       sessionSnapshotVersion: 12,
@@ -367,6 +390,7 @@ test('incremental dream treats a different signal from the same turn as new evid
     },
   });
   const service = new ProjectDreamingService(client, 'default-extractor', {
+    watermarks: watermarkStore,
     now: () => new Date('2026-06-19T00:00:00Z'),
     merge: async ({ incrementalSessionSignals, labels }) => {
       assert.doesNotMatch(incrementalSessionSignals, /Prefer minimal prompt changes/);
@@ -397,20 +421,20 @@ test('incremental dream treats a different signal from the same turn as new evid
 });
 
 test('dreaming service lists projects with current snapshot signals only', async () => {
-  const { client } = createClient({
+  const { client, watermarkStore } = createClient({
     snapshots: [
       snapshot({ snapshotId: 'session:1', sessionId: 's1', project: '/repo/a', memorySignals: ['- [turn:1 +1] Keep A.'] }),
       snapshot({ snapshotId: 'session:2', sessionId: 's2', project: '/repo/b', skillDetails: { details: 'details only' } }),
       snapshot({ snapshotId: 'session:3', sessionId: 's3', project: '/repo/c' }),
     ],
   });
-  const service = new ProjectDreamingService(client, 'default-extractor');
+  const service = new ProjectDreamingService(client, 'default-extractor', { watermarks: watermarkStore });
 
   assert.deepEqual(await service.projectsWithSignals(), ['/repo/a']);
 });
 
-test('dreaming service lists projects from current dreaming rows with watermark updatedAt', async () => {
-  const { client } = createClient({
+test('dreaming service lists projects from current dreaming rows with checkpoint watermarks', async () => {
+  const { client, watermarkStore } = createClient({
     watermark: {
       project: '/repo/a',
       sessionSnapshotVersion: 12,
@@ -431,10 +455,10 @@ test('dreaming service lists projects from current dreaming rows with watermark 
       }),
     ],
   });
-  const service = new ProjectDreamingService(client, 'default-extractor');
+  const service = new ProjectDreamingService(client, 'default-extractor', { watermarks: watermarkStore });
 
   assert.deepEqual(await service.projects(), [
-    { project: '/repo/a', latestUpdatedAt: '2026-06-20T00:00:00Z' },
+    { project: '/repo/a', latestUpdatedAt: '2026-06-19T00:00:00Z' },
     { project: '/repo/b', latestUpdatedAt: '2026-06-21T00:00:00Z' },
   ]);
 });

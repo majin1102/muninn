@@ -59,28 +59,6 @@ export function planCodexConfig(before: string, options: CodexConfigPlanOptions)
   };
 }
 
-export function planCodexHookConfig(before: string, options: {
-  path: string;
-  action: PlanAction;
-  serverUrl: string;
-}): ChangePlan {
-  const after = options.action === 'install'
-    ? `${JSON.stringify({ serverUrl: options.serverUrl }, null, 2)}\n`
-    : '';
-  const changed = before !== after;
-  return {
-    changed,
-    path: options.path,
-    before,
-    after,
-    summary: changed
-      ? [options.action === 'install'
-          ? 'Configure Codex Stop hook endpoint: muninn'
-          : 'Remove Codex Stop hook endpoint: muninn']
-      : [],
-  };
-}
-
 function renderMcpServer(command: string, serverUrl: string): string {
   return [
     '[mcp_servers.muninn]',
@@ -95,8 +73,8 @@ function renderStopHook(command: string): string {
     '[[hooks.Stop.hooks]]',
     'type = "command"',
     `command = ${tomlString(command)}`,
-    'timeout = 5',
-    'statusMessage = "Capturing conversation by muninn"',
+    'timeout = 30',
+    'statusMessage = "Syncing turn to Muninn"',
   ].join('\n');
 }
 

@@ -383,12 +383,13 @@ export class Watchdog {
       schemaVersion: checkpoint.schemaVersion,
       extractor: checkpoint.extractor,
       sessionIndex: checkpoint.sessionIndex,
+      dreaming: checkpoint.dreaming,
     });
     await this.updateCheckpointFloors(checkpoint);
   }
 
   private async updateCheckpointFloors(checkpoint: CheckpointContent | CheckpointFile): Promise<void> {
-    const floors = await checkpointFloors(checkpoint, this.binding);
+    const floors = await checkpointFloors(checkpoint);
     for (const dataset of DATASETS) {
       const current = this.state.get(dataset);
       this.state.set(dataset, {
@@ -494,10 +495,10 @@ export class Watchdog {
 
 async function checkpointFloors(
   checkpoint: CheckpointContent | CheckpointFile,
-  binding: Partial<Pick<NativeTables, 'dreamingProjectTable'>>,
 ): Promise<Record<DatasetName, number | null>> {
-  const dreamingProjects = await binding.dreamingProjectTable?.list() ?? [];
-  const dreamingSessionFloor = minNumber(dreamingProjects.map((entry) => entry.sessionSnapshotVersion));
+  const dreamingSessionFloor = minNumber(
+    Object.values(checkpoint.dreaming.projects).map((entry) => entry.sessionSnapshotVersion),
+  );
   const sessionFloor = minNumber([
     checkpoint.extractor.baseline.session,
     checkpoint.sessionIndex.baseline.session,

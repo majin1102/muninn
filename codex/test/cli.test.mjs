@@ -41,13 +41,14 @@ test('codex hook CLI uses --server-url for capture endpoint', async () => {
     assert.equal(result.code, 0);
     assert.equal(requests.length, 1);
     assert.equal(requests[0].method, 'POST');
-    assert.equal(requests[0].url, '/api/v1/turn/capture');
+    assert.equal(requests[0].url, '/api/v1/turn/capture/batch');
+    assert.equal(JSON.parse(requests[0].body).turns.length, 1);
   } finally {
     await close(server);
   }
 });
 
-test('codex hook CLI reads server URL from hook sidecar config', async () => {
+test('codex hook CLI ignores stale sidecar config and uses server URL environment', async () => {
   const requests = [];
   const server = createServer(async (request, response) => {
     let body = '';
@@ -66,20 +67,22 @@ test('codex hook CLI reads server URL from hook sidecar config', async () => {
     const transcriptPath = await writeTranscript();
     const configPath = path.join(path.dirname(transcriptPath), 'muninn-hook.json');
     await writeFile(configPath, JSON.stringify({
-      serverUrl: `http://127.0.0.1:${address.port}`,
+      serverUrl: 'http://127.0.0.1:1',
     }));
 
     const result = await runHook([], {
       hook_event_name: 'Stop',
       transcript_path: transcriptPath,
     }, {
+      MUNINN_SERVER_BASE_URL: `http://127.0.0.1:${address.port}`,
       MUNINN_CODEX_HOOK_CONFIG: configPath,
     });
 
     assert.equal(result.code, 0);
     assert.equal(requests.length, 1);
     assert.equal(requests[0].method, 'POST');
-    assert.equal(requests[0].url, '/api/v1/turn/capture');
+    assert.equal(requests[0].url, '/api/v1/turn/capture/batch');
+    assert.equal(JSON.parse(requests[0].body).turns.length, 1);
   } finally {
     await close(server);
   }
