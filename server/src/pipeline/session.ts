@@ -107,7 +107,7 @@ export type SessionMemory = {
 export type SessionExtractionInput = {
   sessionMemory: SessionMemory;
   turns: TurnInput[];
-  inputBudgetStoppedBy?: 'none' | 'max-input-chars' | 'max-epoch-turns' | 'single-turn-oversize';
+  inputBudgetStoppedBy?: 'none' | 'new-batch-input-chars' | 'max-epoch-turns' | 'single-turn-oversize';
   candidateTurnCount?: number;
   deferredTurnCount?: number;
 };
@@ -471,7 +471,7 @@ export function getPendingIndexUpTo(
 }
 
 function deserializeSnapshot(row: SessionSnapshot): SnapshotContent {
-  const parsed = parseSnapshotContent(row.content, new Set(row.references));
+  const parsed = parseSnapshotContent(normalizePersistedSnapshotContent(row.content), new Set(row.references));
   return {
     threadKind: 'session',
     sessionId: row.sessionId,
@@ -487,6 +487,20 @@ function deserializeSnapshot(row: SessionSnapshot): SnapshotContent {
     nextSteps: [],
     extractionChanges: [],
   };
+}
+
+function normalizePersistedSnapshotContent(content: string): string {
+  const lines = content.split(/\r?\n/);
+  let inExtractions = false;
+  return lines.map((line) => {
+    if (line.trim() === '## Extractions') {
+      inExtractions = true;
+    }
+    if (!inExtractions && line.trim() === '## Memory Signals') {
+      return line.replace('## Memory Signals', '## Instruction Signals');
+    }
+    return line;
+  }).join('\n');
 }
 
 function parseSkillDetailsJson(value: string): SkillDetails {
@@ -592,7 +606,25 @@ export async function extractEpoch(params: {
   threads: SessionThread[];
   sealedEpoch: SealedEpoch;
   maxEpochTurns?: number;
-  maxInputChars?: number;
+  newBatchInputChars?: number;
+  previewChars?: number;
+  signal?: AbortSignal;
+  database?: string;
+  sessionExtractionImpl?: SessionExtractionImpl;
+}): Promise<{ threads: SessionThread[]; touchedIds: Set<string> }> {
+  const result = await extractEpochDraft(params);
+  await flushThreads(params.client, result.threads, result.touchedIds);
+  return result;
+}
+
+export async function extractEpochDraft(params: {
+  client: NativeTables;
+  extractorName: string;
+  activeWindowDays: number;
+  threads: SessionThread[];
+  sealedEpoch: SealedEpoch;
+  maxEpochTurns?: number;
+  newBatchInputChars?: number;
   previewChars?: number;
   signal?: AbortSignal;
   database?: string;
@@ -609,9 +641,9 @@ export async function extractEpoch(params: {
   if (maxEpochTurns !== Number.POSITIVE_INFINITY && (!Number.isInteger(maxEpochTurns) || maxEpochTurns <= 0)) {
     throw new Error('maxEpochTurns must be a positive integer');
   }
-  const maxInputChars = params.maxInputChars ?? Number.POSITIVE_INFINITY;
-  if (maxInputChars !== Number.POSITIVE_INFINITY && (!Number.isInteger(maxInputChars) || maxInputChars <= 0)) {
-    throw new Error('maxInputChars must be a positive integer');
+  const newBatchInputChars = params.newBatchInputChars ?? Number.POSITIVE_INFINITY;
+  if (newBatchInputChars !== Number.POSITIVE_INFINITY && (!Number.isInteger(newBatchInputChars) || newBatchInputChars <= 0)) {
+    throw new Error('newBatchInputChars must be a positive integer');
   }
   const previewChars = params.previewChars ?? 800;
   if (!Number.isInteger(previewChars) || previewChars <= 0) {
@@ -626,7 +658,7 @@ export async function extractEpoch(params: {
     );
     const chunks = chunkTurnsByInputBudget(turns, {
       maxEpochTurns,
-      maxInputChars,
+      newBatchInputChars,
       previewChars,
     });
     let consumedTurns = 0;
@@ -649,7 +681,6 @@ export async function extractEpoch(params: {
       }
     }
   }
-  await flushThreads(params.client, params.threads, touchedIds);
   return {
     threads: params.threads,
     touchedIds,
@@ -800,7 +831,7 @@ async function extractSessionThread(params: ExtractSessionThreadParams): Promise
   return touchedIds;
 }
 
-async function flushThreads(
+export async function flushThreads(
   client: NativeTables,
   threads: SessionThread[],
   touchedIds: Set<string>,
@@ -868,5 +899,6 @@ export const __testing = {
   applyExtractionForTests: applyExtraction,
   flushThreads,
   extractEpoch,
+  extractEpochDraft,
   extractSessionThreadForTests: extractSessionThread,
 };

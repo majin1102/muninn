@@ -41,3 +41,6 @@ jobs:
 
       - name: Build @muninn/mcp
         run: pnpm --filter @muninn/mcp build
+
+      - name: Test @muninn/mcp
+        run: pnpm --filter @muninn/mcp test

@@ -190,8 +190,8 @@ function defaultStorageTarget(homeDir) {
 
 function firstExtractionRef(hits) {
   for (const ref of hits.flatMap((hit) => [hit.memoryId, ...(hit.references ?? [])])) {
-    if (ref.startsWith('extraction:')) {
-      return ref.slice('extraction:'.length);
+    if (ref.startsWith('ext:')) {
+      return ref.slice('ext:'.length);
     }
     if (
       ref
@@ -214,7 +214,7 @@ async function writeMuninnConfig(configPath, {
   continuityHints,
   minEpochTurns = 1,
   maxEpochTurns,
-  maxInputChars,
+  newBatchInputChars,
   snapshotInputChars,
   previewChars,
   epochWindowMs,
@@ -238,7 +238,7 @@ async function writeMuninnConfig(configPath, {
       ...(continuityHints === undefined ? {} : { continuityHints }),
       ...(omitEpochSealSettings || minEpochTurns === undefined ? {} : { minEpochTurns }),
       ...(omitEpochSealSettings || maxEpochTurns === undefined ? {} : { maxEpochTurns }),
-      ...(maxInputChars === undefined ? {} : { maxInputChars }),
+      ...(newBatchInputChars === undefined ? {} : { newBatchInputChars }),
       ...(snapshotInputChars === undefined ? {} : { snapshotInputChars }),
       ...(previewChars === undefined ? {} : { previewChars }),
       ...(omitEpochSealSettings || epochWindowMs === undefined ? {} : { epochWindowMs }),
@@ -321,7 +321,7 @@ test('extractor config defaults activeWindowDays, continuityHints, and epoch sea
   assert.equal(extractorConfig.continuityHints, 1);
   assert.equal(extractorConfig.minEpochTurns, 8);
   assert.equal(extractorConfig.maxEpochTurns, 32);
-  assert.equal(extractorConfig.maxInputChars, 24_576);
+  assert.equal(extractorConfig.newBatchInputChars, 16_384);
   assert.equal(extractorConfig.snapshotInputChars, 16_384);
   assert.equal(extractorConfig.previewChars, 800);
   assert.equal(extractorConfig.epochWindowMs, 600_000);
@@ -332,7 +332,7 @@ test('extractor config defaults activeWindowDays, continuityHints, and epoch sea
     continuityHints: 3,
     minEpochTurns: 5,
     maxEpochTurns: 12,
-    maxInputChars: 2048,
+    newBatchInputChars: 2048,
     snapshotInputChars: 1024,
     previewChars: 512,
     epochWindowMs: 2_500,
@@ -343,7 +343,7 @@ test('extractor config defaults activeWindowDays, continuityHints, and epoch sea
   assert.equal(extractorConfig.continuityHints, 3);
   assert.equal(extractorConfig.minEpochTurns, 5);
   assert.equal(extractorConfig.maxEpochTurns, 12);
-  assert.equal(extractorConfig.maxInputChars, 2048);
+  assert.equal(extractorConfig.newBatchInputChars, 2048);
   assert.equal(extractorConfig.snapshotInputChars, 1024);
   assert.equal(extractorConfig.previewChars, 512);
   assert.equal(extractorConfig.epochWindowMs, 2_500);
@@ -582,7 +582,7 @@ test('pure read APIs work without extractor bootstrap config', async (t) => {
   }
 
   const hitsBefore = await memories.recall('bootstrap-free prompt', 1);
-  assert.ok(hitsBefore[0]?.memoryId.startsWith('extraction:'));
+  assert.ok(hitsBefore[0]?.memoryId.startsWith('ext:'));
   const extractionId = hitsBefore[0].memoryId;
 
   await shutdownCoreForTests();
@@ -851,13 +851,13 @@ test('validateSettings rejects invalid extractor epoch seal settings', async (t)
   for (const [key, value] of [
     ['minEpochTurns', 0],
     ['maxEpochTurns', 0],
-    ['maxInputChars', 0],
+    ['newBatchInputChars', 0],
     ['snapshotInputChars', 0],
     ['previewChars', 0],
     ['epochWindowMs', 0],
     ['minEpochTurns', 1.5],
     ['maxEpochTurns', 1.5],
-    ['maxInputChars', 1.5],
+    ['newBatchInputChars', 1.5],
     ['snapshotInputChars', 1.5],
     ['previewChars', 1.5],
     ['epochWindowMs', 1.5],
@@ -883,11 +883,20 @@ test('validateSettings rejects invalid extractor epoch seal settings', async (t)
   await assert.rejects(
     () => validateSettings(JSON.stringify(validSettings({
       extractor: {
-        maxInputChars: 800,
+        newBatchInputChars: 800,
         previewChars: 800,
       },
     }), null, 2)),
-    /extractor\.previewChars must be smaller than extractor\.maxInputChars/i,
+    /extractor\.previewChars must be smaller than extractor\.newBatchInputChars/i,
+  );
+
+  await assert.rejects(
+    () => validateSettings(JSON.stringify(validSettings({
+      extractor: {
+        maxInputChars: 800,
+      },
+    }), null, 2)),
+    /extractor\.maxInputChars is no longer supported; use extractor\.newBatchInputChars instead/i,
   );
 });
 
@@ -1206,7 +1215,7 @@ test('native dreaming update preserves stable row id and nested support turns', 
       project: '/repo/muninn',
       createdAt: '2026-06-18T00:00:00Z',
       updatedAt: '2026-06-18T00:00:00Z',
-      content: '## Memory Signal\nPrefer minimal changes.',
+      content: '## Instruction Signal\nPrefer minimal changes.',
       supportTurns: [{
         turnId: 'turn:1',
         createdAt: '2026-06-18T00:00:00Z',
@@ -1220,7 +1229,7 @@ test('native dreaming update preserves stable row id and nested support turns', 
     row: {
       ...inserted,
       updatedAt: '2026-06-19T00:00:00Z',
-      content: '## Memory Signal\nPrefer subtractive changes.',
+      content: '## Instruction Signal\nPrefer subtractive changes.',
       supportTurns: [
         ...inserted.supportTurns,
         {
@@ -1236,7 +1245,7 @@ test('native dreaming update preserves stable row id and nested support turns', 
   const reloaded = await binding.dreamingTable.get(inserted.dreamingId);
   assert.ok(reloaded);
   assert.equal(reloaded.dreamingId, inserted.dreamingId);
-  assert.equal(reloaded.content, '## Memory Signal\nPrefer subtractive changes.');
+  assert.equal(reloaded.content, '## Instruction Signal\nPrefer subtractive changes.');
   assert.deepEqual(reloaded.supportTurns.map((turn) => [turn.turnId, turn.contribution]), [
     ['turn:1', 1],
     ['turn:2', 10],
@@ -1463,7 +1472,7 @@ test('hook capture seals immediately even when the default epoch window is long'
   assert.deepEqual(resolved.pending.turns, []);
   assert.equal(resolved.phases.extractor, 'idle');
   const hits = await memories.recall('low frequency hook prompt', 1);
-  assert.ok(hits[0]?.memoryId.startsWith('extraction:'));
+  assert.ok(hits[0]?.memoryId.startsWith('ext:'));
 });
 
 test('captureTurn persists raw prompt and response without title or summary', async (t) => {
@@ -1525,7 +1534,7 @@ test('extractor writes atomic extractions before indexing snapshots', async (t) 
   const hits = await memories.recall('counseling programs', 5);
   const extractionRef = firstExtractionRef(hits);
   assert.ok(extractionRef);
-  const extraction = await memories.get(`extraction:${extractionRef}`);
+  const extraction = await memories.get(`ext:${extractionRef}`);
   assert.ok(extraction);
   assert.match(extraction.summary ?? extraction.title ?? '', /counseling/i);
 });
@@ -1559,9 +1568,9 @@ test('rendered memory binding returns unified turn and extraction reads', async 
   const recalled = await memories.recall('rendered', 10);
   const extractionRef = firstExtractionRef(recalled);
   assert.ok(extractionRef);
-  const extraction = await memories.get(`extraction:${extractionRef}`);
+  const extraction = await memories.get(`ext:${extractionRef}`);
   assert.ok(extraction);
-  assert.equal(extraction.memoryId, `extraction:${extractionRef}`);
+  assert.equal(extraction.memoryId, `ext:${extractionRef}`);
   assert.match(extraction.summary ?? extraction.title ?? '', /rendered prompt|rendered response/);
 });
 
@@ -1588,10 +1597,10 @@ test('recall returns extraction memory ids and detail renders references', async
   });
 
   const hits = await memories.recall('support group', 1);
-  assert.equal(hits[0].memoryId, 'extraction:obs-1');
-  const detail = await memories.get('extraction:obs-1');
+  assert.equal(hits[0].memoryId, 'ext:obs-1');
+  const detail = await memories.get('ext:obs-1');
   assert.ok(detail);
-  assert.equal(detail.memoryId, 'extraction:obs-1');
+  assert.equal(detail.memoryId, 'ext:obs-1');
   assert.match(detail.detail ?? '', /turn:1/);
 });
 

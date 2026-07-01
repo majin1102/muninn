@@ -7,8 +7,9 @@ test('timeline pane keeps extraction items collapsible like the old observation 
 
   assert.match(source, /import \{ ChevronRight, MessageSquare \} from 'lucide-react';/);
   assert.match(source, /import \{ Collapsible, CollapsibleContent, CollapsibleTrigger \} from '\.\/ui\/collapsible\.js';/);
-  assert.match(source, /const \[openItem, setOpenItem\] = useState<string \| null>\(null\);/);
-  assert.match(source, /setOpenItem\(restoreTimelineId\);/);
+  assert.match(source, /const \[openItems, setOpenItems\] = useState<Set<string>>\(\(\) => new Set\(\)\);/);
+  assert.match(source, /next\.add\(restoreTimelineId\);/);
+  assert.match(source, /openItems\.has\(item\.memoryId\)/);
   assert.match(source, /<Collapsible\s+open=\{open\}/);
   assert.match(source, /<CollapsibleTrigger className="timeline-trigger">/);
   assert.match(source, /<CollapsibleContent>/);

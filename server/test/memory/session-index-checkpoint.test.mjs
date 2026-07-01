@@ -5,7 +5,7 @@ import { parseCheckpointFile, serializeCheckpointFile } from '../../dist/checkpo
 
 function checkpoint(overrides = {}) {
   return {
-    schemaVersion: 12,
+    schemaVersion: 13,
     writtenAt: '2026-06-02T00:00:00.000Z',
     writerPid: 123,
     extractor: {
@@ -30,6 +30,9 @@ function checkpoint(overrides = {}) {
         },
       ],
     },
+    dreaming: {
+      projects: {},
+    },
     ...overrides,
   };
 }
@@ -37,7 +40,7 @@ function checkpoint(overrides = {}) {
 test('checkpoint parses and serializes sessionIndex entries', () => {
   const parsed = parseCheckpointFile(JSON.stringify(checkpoint()));
 
-  assert.equal(parsed.schemaVersion, 12);
+  assert.equal(parsed.schemaVersion, 13);
   assert.deepEqual(parsed.sessionIndex, {
     baseline: { turn: 10, session: 5 },
     entries: [
@@ -64,6 +67,40 @@ test('checkpoint rejects missing sessionIndex', () => {
   assert.throws(
     () => parseCheckpointFile(JSON.stringify(content)),
     /sessionIndex section is invalid/,
+  );
+});
+
+test('checkpoint parses and serializes dreaming project watermarks', () => {
+  const parsed = parseCheckpointFile(JSON.stringify(checkpoint({
+    dreaming: {
+      projects: {
+        'majin1102/muninn': { sessionSnapshotVersion: 42 },
+        'majin1102/lance': { sessionSnapshotVersion: 7 },
+      },
+    },
+  })));
+
+  assert.deepEqual(parsed.dreaming, {
+    projects: {
+      'majin1102/muninn': { sessionSnapshotVersion: 42 },
+      'majin1102/lance': { sessionSnapshotVersion: 7 },
+    },
+  });
+
+  const reparsed = parseCheckpointFile(serializeCheckpointFile(parsed));
+  assert.deepEqual(reparsed.dreaming, parsed.dreaming);
+});
+
+test('checkpoint rejects invalid dreaming project watermarks', () => {
+  assert.throws(
+    () => parseCheckpointFile(JSON.stringify(checkpoint({
+      dreaming: {
+        projects: {
+          'majin1102/muninn': { sessionSnapshotVersion: -1 },
+        },
+      },
+    }))),
+    /dreaming section is invalid/,
   );
 });
 

@@ -1,171 +1,90 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import {
-  getCaptureConfigFromConfig,
-  isCanonicalProjectIdentity,
-  parseMuninnConfigContent,
-  resolveMuninnConfigPath,
-  type CaptureConfig,
-  type MuninnConfigRecord,
-} from '../config.js';
+import type { CapturePolicyFile } from '@muninn/common/capture-policy';
+import { isCanonicalProjectIdentity, resolveMuninnHome } from '../config.js';
 export { captureTurn, captureTurns } from '../backend.js';
 
-type JsonObject = Record<string, unknown>;
+type CaptureState = Required<NonNullable<CapturePolicyFile['capture']>>;
 
-/**
- * Per-agent, per-project capture settings. Session counts still come from
- * SessionIndex; this module only reads/writes the capture section in muninn.json.
- */
-function resolveConfigPath(): string {
-  return resolveMuninnConfigPath();
-}
-
-type MutableConfigRoot = MuninnConfigRecord & JsonObject;
-
-async function readConfigRoot(): Promise<MutableConfigRoot> {
-  try {
-    const content = await readFile(resolveConfigPath(), 'utf8');
-    return parseMuninnConfigContent(content) as MutableConfigRoot;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      return defaultConfigRoot() as MutableConfigRoot;
-    }
-    throw error;
-  }
-}
-
-async function writeConfigRoot(root: JsonObject): Promise<void> {
-  const file = resolveConfigPath();
-  await mkdir(path.dirname(file), { recursive: true });
-  await writeFile(file, `${JSON.stringify(root, null, 2)}\n`);
+function capturePolicyPath(): string {
+  return path.join(resolveMuninnHome(), 'capture.json');
 }
 
 export async function getCapturePolicy(agent: string): Promise<Record<string, boolean>> {
-  const config = await readCaptureConfig();
-  return { ...(config.projects[agent] ?? {}) };
+  const capture = await readCaptureState();
+  return { ...(capture.projects[agent] ?? {}) };
 }
 
 export async function isAgentCaptureEnabled(agent: string): Promise<boolean> {
-  const config = await readCaptureConfig();
-  return config.agents[agent] !== false;
+  const capture = await readCaptureState();
+  return capture.agents[agent] === true;
 }
 
 export async function isCaptureEnabled(agent: string, projectKey: string): Promise<boolean> {
   if (!isCanonicalProjectIdentity(projectKey)) {
     return false;
   }
-  const config = await readCaptureConfig();
-  return config.agents[agent] !== false && config.projects[agent]?.[projectKey] === true;
+  const capture = await readCaptureState();
+  return capture.agents[agent] === true && capture.projects[agent]?.[projectKey] === true;
 }
 
 export async function setAgentCaptureEnabled(agent: string, enabled: boolean): Promise<void> {
-  const root = await readConfigRoot();
-  const capture = ensureCapture(root);
-  const agents = ensureRecord(capture, 'agents');
-  agents[agent] = enabled;
-  await writeConfigRoot(root);
+  const policy = await readCapturePolicy();
+  const capture = ensureCapture(policy);
+  capture.agents[agent] = enabled;
+  await writeCapturePolicy(policy);
 }
 
 export async function setCaptureEnabled(agent: string, projectKey: string, enabled: boolean): Promise<void> {
   if (!isCanonicalProjectIdentity(projectKey)) {
     throw new Error(`project must be a canonical project identity: ${projectKey}`);
   }
-  const root = await readConfigRoot();
-  const capture = ensureCapture(root);
-  const projects = ensureRecord(capture, 'projects');
-  const forAgent = ensureRecord(projects, agent);
-  forAgent[projectKey] = enabled;
-  await writeConfigRoot(root);
+  const policy = await readCapturePolicy();
+  const capture = ensureCapture(policy);
+  capture.projects[agent] ??= {};
+  capture.projects[agent][projectKey] = enabled;
+  if (enabled && capture.agents[agent] === undefined) {
+    capture.agents[agent] = true;
+  }
+  await writeCapturePolicy(policy);
 }
 
 export async function removeCapturePolicy(agent: string, projectKey: string): Promise<void> {
-  const root = await readConfigRoot();
-  const capture = root.capture;
-  if (!isObject(capture)) {
-    return;
+  const policy = await readCapturePolicy();
+  const capture = ensureCapture(policy);
+  delete capture.projects[agent]?.[projectKey];
+  if (capture.projects[agent] && Object.keys(capture.projects[agent]).length === 0) {
+    delete capture.projects[agent];
   }
-  const projects = capture.projects;
-  if (!isObject(projects)) {
-    return;
-  }
-  const forAgent = projects[agent];
-  if (!isObject(forAgent)) {
-    return;
-  }
-  delete forAgent[projectKey];
-  if (Object.keys(forAgent).length === 0) {
-    delete projects[agent];
-  }
-  await writeConfigRoot(root);
+  await writeCapturePolicy(policy);
 }
 
-async function readCaptureConfig(): Promise<CaptureConfig> {
-  return getCaptureConfigFromConfig(await readConfigRoot());
+async function readCaptureState(): Promise<CaptureState> {
+  return ensureCapture(await readCapturePolicy());
 }
 
-function ensureCapture(root: JsonObject): JsonObject {
-  const capture = root.capture;
-  if (isObject(capture)) {
-    return capture;
+async function readCapturePolicy(): Promise<CapturePolicyFile> {
+  try {
+    const parsed = JSON.parse(await readFile(capturePolicyPath(), 'utf8')) as CapturePolicyFile;
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed;
+    }
+  } catch {
+    // Missing or malformed capture.json defaults to disabled.
   }
-  root.capture = {};
-  return root.capture as JsonObject;
+  return {};
 }
 
-function ensureRecord(parent: JsonObject, key: string): JsonObject {
-  const value = parent[key];
-  if (isObject(value)) {
-    return value;
-  }
-  parent[key] = {};
-  return parent[key] as JsonObject;
+async function writeCapturePolicy(policy: CapturePolicyFile): Promise<void> {
+  const file = capturePolicyPath();
+  await mkdir(path.dirname(file), { recursive: true });
+  await writeFile(file, `${JSON.stringify(policy, null, 2)}\n`);
 }
 
-function isObject(value: unknown): value is JsonObject {
-  return Boolean(value && typeof value === 'object' && !Array.isArray(value));
-}
-
-function defaultConfigRoot(): JsonObject {
-  return {
-    extractor: {
-      name: 'default-extractor',
-      llmProvider: 'default',
-      embeddingProvider: 'default',
-      recallMode: 'hybrid',
-      maxAttempts: 3,
-      activeWindowDays: 7,
-    },
-    providers: {
-      llm: {
-        default: {
-          type: 'mock',
-        },
-      },
-      embedding: {
-        default: {
-          type: 'mock',
-          dimensions: 8,
-        },
-      },
-    },
-    watchdog: {
-      enabled: true,
-      intervalMs: 60000,
-      compactMinFragments: 8,
-      extraction: {
-        targetPartitionSize: 1024,
-        optimizeMergeCount: 4,
-      },
-    },
-    capture: {
-      agents: {
-        codex: true,
-        'claude-code': true,
-      },
-      projects: {
-        codex: {},
-        'claude-code': {},
-      },
-    },
-  };
+function ensureCapture(policy: CapturePolicyFile): CaptureState {
+  policy.capture ??= {};
+  policy.capture.agents ??= {};
+  policy.capture.projects ??= {};
+  policy.capture.sessions ??= {};
+  return policy.capture as CaptureState;
 }

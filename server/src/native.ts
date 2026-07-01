@@ -170,6 +170,9 @@ type NativeCoreBinding = {
   sessionInsert(params: {
     snapshots: SessionSnapshotRow[];
   }): MaybePromise<SessionSnapshotRow[]>;
+  sessionDelete(params: {
+    snapshotIds: string[];
+  }): MaybePromise<{ deleted: number }>;
   sessionTableStats(): MaybePromise<TableStats | null>;
   sessionCompact(): MaybePromise<CompactResult>;
   sessionCleanup(params: {
@@ -300,6 +303,9 @@ export interface SessionTableBinding {
   insert(params: {
     snapshots: SessionSnapshotRow[];
   }): Promise<SessionSnapshotRow[]>;
+  delete(params: {
+    snapshotIds: string[];
+  }): Promise<{ deleted: number }>;
   stats(): Promise<TableStats | null>;
   compact(): Promise<CompactResult>;
   cleanup(params: {
@@ -467,6 +473,7 @@ function wrapBinding(native: NativeCoreBinding): NativeTables {
       threadSnapshots: async (sessionId) => resolveNativeResult(native.sessionSnapshots(sessionId)),
       delta: async (params) => resolveNativeResult(native.sessionDelta(params)),
       insert: async (params) => resolveNativeResult(native.sessionInsert(params)),
+      delete: async (params) => resolveNativeResult(native.sessionDelete(params)),
       stats: async () => resolveNativeResult(native.sessionTableStats()),
       compact: async () => resolveNativeResult(native.sessionCompact()),
       cleanup: async (params) => resolveNativeResult(native.sessionCleanup(params)),

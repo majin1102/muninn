@@ -6,7 +6,6 @@ export type PlanAction = 'install' | 'uninstall';
 
 export type HostPaths = {
   codexConfigPath: string;
-  codexHookConfigPath: string;
   claudeSettingsPath: string;
   claudeMcpJsonPath: string;
 };

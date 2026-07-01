@@ -1,60 +1,87 @@
-import type {
-  ErrorResponse,
-  GetDetailRequest,
-  GetTimelineRequest,
-  ListRequest,
-  MemoryResponse,
-  ProjectDreamRequest,
-  ProjectDreamSignalsResponse,
-  RecallRequest,
-} from '@muninn/common';
+import { resolveMuninnServerBaseUrl } from '@muninn/common';
+
+export type RecallInput = {
+  query: string;
+  budget?: number;
+  top_k?: number;
+};
+
+export type ListInput = {
+  query: string;
+  top_k?: number;
+};
+
+export type ReadInput = {
+  context_ids: string[];
+};
+
+export type ExplainInput = {
+  context_id: string;
+};
+
+type SessionIdentity = {
+  project: string;
+  sessionId: string;
+  agent: string;
+};
 
 export class ServerClient {
-  private baseUrl: string;
+  private readonly baseUrl: string;
 
-  constructor(baseUrl: string = process.env.MUNINN_SERVER_BASE_URL || 'http://127.0.0.1:8080') {
+  constructor(baseUrl: string = resolveMuninnServerBaseUrl()) {
     this.baseUrl = baseUrl.replace(/\/+$/, '');
   }
 
-  async recall(request: RecallRequest): Promise<MemoryResponse> {
-    return this.fetchJson<MemoryResponse, RecallRequest>('/api/v1/recall', request);
+  recall(request: RecallInput): Promise<string> {
+    return this.postText('/api/v1/mcp/recall', request);
   }
 
-  async list(request: ListRequest): Promise<MemoryResponse> {
-    return this.fetchJson<MemoryResponse, ListRequest>('/api/v1/list', request);
+  list(request: ListInput): Promise<string> {
+    return this.postText('/api/v1/mcp/list', {
+      ...request,
+      session_identity: this.currentSessionIdentity(),
+    });
   }
 
-  async getTimeline(request: GetTimelineRequest): Promise<MemoryResponse> {
-    return this.fetchJson<MemoryResponse, GetTimelineRequest>('/api/v1/timeline', request);
+  read(request: ReadInput): Promise<string> {
+    return this.postText('/api/v1/mcp/read', request);
   }
 
-  async getDetail(request: GetDetailRequest): Promise<MemoryResponse> {
-    return this.fetchJson<MemoryResponse, GetDetailRequest>('/api/v1/detail', request);
+  explain(request: ExplainInput): Promise<string> {
+    return this.postText('/api/v1/mcp/explain', request);
   }
 
-  async projectSignals(request: ProjectDreamRequest): Promise<ProjectDreamSignalsResponse> {
-    return this.fetchJson<ProjectDreamSignalsResponse, ProjectDreamRequest>('/api/v1/dreaming/project/signals', request);
-  }
-
-  private async fetchJson<TResponse, TParams extends object>(path: string, params: TParams): Promise<TResponse> {
-    const response = await fetch(this.buildUrl(path, params));
+  private async postText(path: string, body: unknown): Promise<string> {
+    const response = await fetch(`${this.baseUrl}${path}`, {
+      method: 'POST',
+      headers: this.headers(),
+      body: JSON.stringify(body),
+    });
+    const text = await response.text();
     if (!response.ok) {
-      const error = await response.json() as ErrorResponse;
-      throw new Error(`${error.errorCode}: ${error.errorMessage}`);
+      throw new Error(text.trim() || `Muninn request failed with status ${response.status}`);
     }
-
-    return response.json() as Promise<TResponse>;
+    return text;
   }
 
-  private buildUrl<T extends object>(path: string, params: T): string {
-    const url = new URL(`${this.baseUrl}${path}`);
-
-    for (const [key, value] of Object.entries(params as Record<string, unknown>)) {
-      if (value !== undefined) {
-        url.searchParams.set(key, String(value));
-      }
+  private headers(): Record<string, string> {
+    const headers: Record<string, string> = {
+      'content-type': 'application/json',
+    };
+    const token = process.env.MUNINN_DESKTOP_TOKEN;
+    if (token) {
+      headers.authorization = `Bearer ${token}`;
     }
+    return headers;
+  }
 
-    return url.toString();
+  private currentSessionIdentity(): SessionIdentity | undefined {
+    const project = process.env.MUNINN_SESSION_PROJECT;
+    const sessionId = process.env.MUNINN_SESSION_ID;
+    const agent = process.env.MUNINN_SESSION_AGENT;
+    if (!project || !sessionId || !agent) {
+      return undefined;
+    }
+    return { project, sessionId, agent };
   }
 }

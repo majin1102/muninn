@@ -107,7 +107,7 @@ type UnitMetadata = {
 
 const SNAPSHOT_SECTION_ORDER = [
   'Summary',
-  'Memory Signals',
+  'Instruction Signals',
   'Skill Signals',
   'Skill Details',
   'Extractions',
@@ -181,7 +181,7 @@ export function parseSnapshotContent(
   if (!normalizeText(summary)) {
     throw new Error('snapshot content document summary cannot be empty');
   }
-  const memorySignals = parseSignalBlocks(sectionBody(lines, sections, 'Memory Signals') ?? '', 'Memory Signals');
+  const memorySignals = parseSignalBlocks(sectionBody(lines, sections, 'Instruction Signals') ?? '', 'Instruction Signals');
   const skillSignals = parseSignalBlocks(sectionBody(lines, sections, 'Skill Signals') ?? '', 'Skill Signals');
   validateSkillSignals(skillSignals);
   const skillDetails = parseSkillDetails(sectionBody(lines, sections, 'Skill Details') ?? '');
@@ -222,8 +222,8 @@ export function parseSnapshotPatch(
   if (sections.has('Summary') && !normalizeText(summary ?? '')) {
     throw new Error('snapshot patch summary cannot be empty');
   }
-  const memorySignals = sections.has('Memory Signals')
-    ? parseSignalBlocks(sectionBody(lines, sections, 'Memory Signals') ?? '', 'Memory Signals', {
+  const memorySignals = sections.has('Instruction Signals')
+    ? parseSignalBlocks(sectionBody(lines, sections, 'Instruction Signals') ?? '', 'Instruction Signals', {
       validTurnIds: validNewReferences,
       validExistingLabels: validExistingSignalLabels,
     })
@@ -294,7 +294,7 @@ export function renderSnapshotContent(
     '## Summary',
     summary.trim(),
     '',
-    '## Memory Signals',
+    '## Instruction Signals',
     renderSignalBlocks(signals.memorySignals),
     '',
     '## Skill Signals',

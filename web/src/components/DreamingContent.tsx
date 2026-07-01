@@ -9,13 +9,17 @@ import { ScrollArea } from './ui/scroll-area.js';
 type DreamingContentProps = {
   projectLabel: string;
   dream: ProjectDreamView | null | undefined;
+  error: string | null;
   loading: boolean;
+  onRetry: () => void;
 };
 
 export function DreamingContent({
   projectLabel,
   dream,
+  error,
   loading,
+  onRetry,
 }: DreamingContentProps) {
   const [tab, setTab] = useState<'memories' | 'skills'>('memories');
   const [selectedSkillName, setSelectedSkillName] = useState<string | null>(null);
@@ -59,6 +63,9 @@ export function DreamingContent({
         </div>
       </div>
       <ScrollArea className="dreaming-scroll">
+        {error ? (
+          <DreamingError error={error} onRetry={onRetry} />
+        ) : null}
         {loading && !dream ? null : tab === 'memories' ? (
           <DreamingMemories
             memorySignals={dream?.memorySignals ?? []}
@@ -71,6 +78,27 @@ export function DreamingContent({
           />
         )}
       </ScrollArea>
+    </div>
+  );
+}
+
+function DreamingError({
+  error,
+  onRetry,
+}: {
+  error: string;
+  onRetry: () => void;
+}) {
+  return (
+    <div className="dreaming-error-panel" role="alert">
+      <AlertTriangle className="dreaming-error-icon" aria-hidden="true" />
+      <div className="dreaming-error-copy">
+        <div className="dreaming-error-title">Failed to load project dreaming</div>
+        <div className="dreaming-error-message">{error}</div>
+      </div>
+      <button className="dreaming-error-action" type="button" onClick={onRetry}>
+        Retry
+      </button>
     </div>
   );
 }

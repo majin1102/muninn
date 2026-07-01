@@ -20,6 +20,14 @@
     "./agent-hook": {
       "types": "./dist/agent-hook.d.ts",
       "default": "./dist/agent-hook.js"
+    },
+    "./capture-policy": {
+      "types": "./dist/capture-policy.d.ts",
+      "default": "./dist/capture-policy.js"
+    },
+    "./server-url": {
+      "types": "./dist/server-url.d.ts",
+      "default": "./dist/server-url.js"
     }
   },
   "files": ["dist"],

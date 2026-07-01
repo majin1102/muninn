@@ -11,12 +11,12 @@ test('buildProjectDreamPrompt renders existing rows and incremental evidence lab
     project: '/repo/muninn',
     existingProjectSignals: [
       '[signal:101]',
-      '## Memory Signal',
+      '## Instruction Signal',
       'Prefer minimal prompt changes.',
     ].join('\n'),
     incrementalSessionSignals: [
       '[turn:256 +1]',
-      '## Memory Signal',
+      '## Instruction Signal',
       'Prefer subtractive prompt changes.',
     ].join('\n'),
   });
@@ -43,7 +43,7 @@ test('mergeProjectDream validates and retries labeled signal output without tool
     existingProjectSignals: '',
     incrementalSessionSignals: [
       '[turn:256 +1]',
-      '## Memory Signal',
+      '## Instruction Signal',
       'Prefer subtractive prompt changes.',
     ].join('\n'),
     labels: {
@@ -62,7 +62,7 @@ test('mergeProjectDream validates and retries labeled signal output without tool
             '# Project Signals',
             '',
             '[turn:256 +1]',
-            '## Memory Signal',
+            '## Instruction Signal',
             'Prefer subtractive prompt changes.',
             '```',
           ].join('\n'),
@@ -86,8 +86,8 @@ test('mergeProjectDream filters unknown labels through validation', async (t) =>
   });
   const result = await mergeProjectDream({
     project: '/repo/muninn',
-    existingProjectSignals: '[signal:101]\n## Memory Signal\nExisting.',
-    incrementalSessionSignals: '[turn:300 +10]\n## Memory Signal\nPinned.',
+    existingProjectSignals: '[signal:101]\n## Instruction Signal\nExisting.',
+    incrementalSessionSignals: '[turn:300 +10]\n## Instruction Signal\nPinned.',
     labels: {
       signalLabels: ['signal:101'],
       turnLabels: ['turn:300 +10'],
@@ -98,7 +98,7 @@ test('mergeProjectDream filters unknown labels through validation', async (t) =>
         '# Project Signals',
         '',
         '[signal:101, signal:999, turn:300 +10]',
-        '## Memory Signal',
+        '## Instruction Signal',
         'Pinned.',
       ].join('\n'),
     }),
@@ -118,7 +118,7 @@ test('mergeProjectDream mock provider returns project signal set', async (t) => 
     project: '/repo/muninn',
     existingProjectSignals: [
       '[signal:101]',
-      '## Memory Signal',
+      '## Instruction Signal',
       'Existing.',
     ].join('\n'),
     incrementalSessionSignals: [

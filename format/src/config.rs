@@ -197,7 +197,7 @@ fn validate_top_level_config(raw: &str, source: &str) -> Result<()> {
     for key in object.keys() {
         if !matches!(
             key.as_str(),
-            "storage" | "extractor" | "providers" | "watchdog" | "capture"
+            "server" | "storage" | "extractor" | "providers" | "watchdog" | "capture" | "dreaming"
         ) {
             return Err(Error::invalid_input(format!(
                 "unsupported top-level config key: {key}"

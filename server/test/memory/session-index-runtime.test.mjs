@@ -84,7 +84,7 @@ async function withTempMuninnHome(t) {
 
 function checkpoint(overrides = {}) {
   return {
-    schemaVersion: 12,
+    schemaVersion: 13,
     writtenAt: '2026-06-02T00:00:00.000Z',
     writerPid: 123,
     extractor: {
@@ -104,6 +104,9 @@ function checkpoint(overrides = {}) {
         cwd: '/Users/Nathan/workspace/muninn',
         latestUpdatedAt: '2026-06-02T10:00:00.000Z',
       }],
+    },
+    dreaming: {
+      projects: {},
     },
     ...overrides,
   };
@@ -528,7 +531,7 @@ test('backend refreshSessionIndex rebuilds stale checkpoint entries from current
     sessionVersion: 12,
   });
   const backend = MuninnBackend.createForTests(fake.tables, {
-    schemaVersion: 12,
+    schemaVersion: 13,
     writtenAt: '2026-06-02T00:00:00.000Z',
     writerPid: 123,
     extractor: {
@@ -548,6 +551,9 @@ test('backend refreshSessionIndex rebuilds stale checkpoint entries from current
         cwd: '/Users/Nathan/workspace/muninn',
         latestUpdatedAt: '2026-06-02T10:00:00.000Z',
       }],
+    },
+    dreaming: {
+      projects: {},
     },
   });
 

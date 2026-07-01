@@ -585,7 +585,11 @@ async function generateOpenAiCodexWithTools(
     try {
       stream = parseCodexStream(raw);
     } catch (error) {
-      await writeCodexProviderDiagnostic(raw, 'tool', error);
+      await writeCodexProviderDiagnostic(raw, 'tool', {
+        config,
+        request,
+        parseError: error,
+      });
       throw error;
     }
     const toolCalls = stream.toolCalls;
@@ -595,7 +599,7 @@ async function generateOpenAiCodexWithTools(
 
     const text = stream.text;
     if (!text) {
-      await writeCodexProviderDiagnostic(raw, 'tool');
+      await writeCodexProviderDiagnostic(raw, 'tool', { config, request });
       throw new Error('openai-codex response did not contain text output or tool calls; empty parsed codex response; see provider diagnostic log');
     }
     return { type: 'final', text };
@@ -685,6 +689,7 @@ type CodexProviderDiagnostic = {
   ts: string;
   provider: 'openai-codex';
   operation: 'tool';
+  request?: CodexProviderRequestDiagnostic;
   rawLength: number;
   eventTypes: string[];
   hasCompletedResponse: boolean;
@@ -704,12 +709,27 @@ type CodexProviderDiagnostic = {
   };
 };
 
+type CodexProviderRequestDiagnostic = {
+  model: string;
+  messageCount: number;
+  toolNames: string[];
+  messages: Array<{
+    role: LlmToolMessage['role'];
+    contentLength: number;
+    contentPreview: string;
+  }>;
+};
+
 async function writeCodexProviderDiagnostic(
   raw: string,
   operation: 'tool',
-  parseError?: unknown,
+  context?: {
+    config?: TextProviderConfig;
+    request?: LlmToolRequest;
+    parseError?: unknown;
+  },
 ): Promise<void> {
-  const diagnostic = buildCodexProviderDiagnostic(raw, operation, parseError);
+  const diagnostic = buildCodexProviderDiagnostic(raw, operation, context);
   const file = process.env.MUNINN_CODEX_PROVIDER_DIAGNOSTIC_FILE
     ?? resolveDatabaseLogPath(undefined, 'codex-provider-diagnostics.jsonl');
   await mkdir(path.dirname(file), { recursive: true });
@@ -719,7 +739,11 @@ async function writeCodexProviderDiagnostic(
 function buildCodexProviderDiagnostic(
   raw: string,
   operation: 'tool',
-  parseError?: unknown,
+  context?: {
+    config?: TextProviderConfig;
+    request?: LlmToolRequest;
+    parseError?: unknown;
+  },
 ): CodexProviderDiagnostic {
   const { events, parseError: eventParseError } = parseSseEventsForDiagnostic(raw);
   const completedResponses = events
@@ -747,11 +771,12 @@ function buildCodexProviderDiagnostic(
     .filter((item) => item.type === 'message')
     .flatMap((item) => Array.isArray(item.content) ? item.content : [])
     .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object' && !Array.isArray(item));
-  const normalizedParseError = parseErrorDetails(parseError) ?? eventParseError;
+  const normalizedParseError = parseErrorDetails(context?.parseError) ?? eventParseError;
   return {
     ts: new Date().toISOString(),
     provider: 'openai-codex',
     operation,
+    ...(context?.request ? { request: buildCodexRequestDiagnostic(context.config, context.request) } : {}),
     rawLength: raw.length,
     eventTypes: uniqueStrings(events.map((event) => stringField(event, 'type'))),
     hasCompletedResponse: completedResponses.length > 0,
@@ -767,6 +792,52 @@ function buildCodexProviderDiagnostic(
     directMessageContentTextLengths: numericValues(directMessageContentObjects.map((item) => stringLength(item.text))),
     ...(normalizedParseError ? { parseError: normalizedParseError } : {}),
   };
+}
+
+function buildCodexRequestDiagnostic(
+  config: TextProviderConfig | undefined,
+  request: LlmToolRequest,
+): CodexProviderRequestDiagnostic {
+  return {
+    model: config?.model ?? 'gpt-5.4',
+    messageCount: request.messages.length,
+    toolNames: request.tools.map((tool) => tool.name),
+    messages: request.messages.map((message) => {
+      const content = messageContentForDiagnostic(message);
+      return {
+        role: message.role,
+        contentLength: content.length,
+        contentPreview: previewDiagnosticText(content),
+      };
+    }),
+  };
+}
+
+function messageContentForDiagnostic(message: LlmToolMessage): string {
+  if (message.role === 'assistant') {
+    return [
+      message.content ?? '',
+      ...(message.toolCalls ?? []).map((call) => `tool_call ${call.name} ${JSON.stringify(call.arguments)}`),
+    ].filter(Boolean).join('\n');
+  }
+  if (message.role === 'tool') {
+    return message.content;
+  }
+  return message.content;
+}
+
+function previewDiagnosticText(text: string): string {
+  const maxChars = 4_000;
+  if (text.length <= maxChars) {
+    return text;
+  }
+  const headChars = 2_000;
+  const tailChars = 1_500;
+  return [
+    text.slice(0, headChars),
+    `[diagnostic middle omitted; omittedChars=${text.length - headChars - tailChars}]`,
+    text.slice(text.length - tailChars),
+  ].join('\n');
 }
 
 function parseSseEventsForDiagnostic(raw: string): {

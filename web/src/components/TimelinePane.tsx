@@ -167,14 +167,12 @@ export function TimelinePane({
                                   return <a href={href}>{children}</a>;
                                 }
                                 const turnNumber = turnIndexById.get(turnId);
-                                const label = turnNumber
-                                  ? `detail: turn ${turnNumber}`
-                                  : `detail: ${turnId.replace(/^turn:/, 'turn ')}`;
+                                const label = `detail: ${turnId.replace(/^turn:/, 'turn ')}`;
                                 return (
                                   <button
                                     className="timeline-inline-citation"
                                     type="button"
-                                    title={turnNumber ? `Go to turn #${turnNumber}` : 'Go to referenced turn'}
+                                    title={turnNumber ? `Go to session turn #${turnNumber} (${turnId})` : `Go to ${turnId}`}
                                     onClick={(event) => {
                                       event.stopPropagation();
                                       onLocateTurn(turnId);

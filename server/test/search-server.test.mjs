@@ -56,9 +56,9 @@ test('groupCandidates skips over a saturated session to fill global top memories
 test('hitCandidates respects project and session scope from enriched recall metadata', async () => {
   const { __testing } = await loadSearchServer();
   const candidates = __testing.hitCandidates([
-    recallHit({ memoryId: 'extraction:1', sessionId: 'search-a', project: 'muninn', agent: 'codex' }),
-    recallHit({ memoryId: 'extraction:2', sessionId: 'search-b', project: 'muninn', agent: 'codex' }),
-    recallHit({ memoryId: 'extraction:3', sessionId: 'search-a', project: 'lance', agent: 'codex' }),
+    recallHit({ memoryId: 'ext:1', sessionId: 'search-a', project: 'muninn', agent: 'codex' }),
+    recallHit({ memoryId: 'ext:2', sessionId: 'search-b', project: 'muninn', agent: 'codex' }),
+    recallHit({ memoryId: 'ext:3', sessionId: 'search-a', project: 'lance', agent: 'codex' }),
   ], {
     projectKeys: ['muninn'],
     sessionKeys: [sessionScopeKey('muninn', 'codex', 'search-a')],
@@ -72,9 +72,9 @@ test('hitCandidates respects project and session scope from enriched recall meta
 test('hitCandidates keeps same raw session ids separate across projects and agents', async () => {
   const { __testing } = await loadSearchServer();
   const grouped = __testing.groupCandidates(__testing.hitCandidates([
-    recallHit({ memoryId: 'extraction:1', sessionId: 'same-session', project: 'muninn', agent: 'codex' }),
-    recallHit({ memoryId: 'extraction:2', sessionId: 'same-session', project: 'lance', agent: 'codex' }),
-    recallHit({ memoryId: 'extraction:3', sessionId: 'same-session', project: 'muninn', agent: 'claude' }),
+    recallHit({ memoryId: 'ext:1', sessionId: 'same-session', project: 'muninn', agent: 'codex' }),
+    recallHit({ memoryId: 'ext:2', sessionId: 'same-session', project: 'lance', agent: 'codex' }),
+    recallHit({ memoryId: 'ext:3', sessionId: 'same-session', project: 'muninn', agent: 'claude' }),
   ], {}), { sessionTopN: 3, topN: 10 });
 
   assert.deepEqual(grouped.map((result) => result.sessionKey), [
@@ -88,7 +88,7 @@ test('hitCandidates merges same project agent and raw session id across worktree
   const { __testing } = await loadSearchServer();
   const grouped = __testing.groupCandidates(__testing.hitCandidates([
     recallHit({
-      memoryId: 'extraction:1',
+      memoryId: 'ext:1',
       sessionId: 'same-session',
       project: '/workspace/muninn',
       agent: 'codex',
@@ -96,7 +96,7 @@ test('hitCandidates merges same project agent and raw session id across worktree
       references: ['turn:1'],
     }),
     recallHit({
-      memoryId: 'extraction:2',
+      memoryId: 'ext:2',
       sessionId: 'same-session',
       project: '/workspace/muninn',
       agent: 'codex',
@@ -128,11 +128,11 @@ test('hitCandidates ignores non-extraction hits for app recall', async () => {
   const { __testing } = await loadSearchServer();
   const candidates = __testing.hitCandidates([
     recallHit({ memoryId: 'session:1' }),
-    recallHit({ memoryId: 'extraction:1' }),
+    recallHit({ memoryId: 'ext:1' }),
   ], {});
 
   assert.equal(candidates.length, 1);
-  assert.equal(candidates[0].memoryId, 'extraction:1');
+  assert.equal(candidates[0].memoryId, 'ext:1');
 });
 
 test('search result items include recall turn references', async () => {
@@ -237,7 +237,7 @@ function candidate(overrides) {
 
 function recallHit(overrides) {
   return {
-    memoryId: overrides.memoryId ?? 'extraction:1',
+    memoryId: overrides.memoryId ?? 'ext:1',
     title: overrides.title ?? 'Provider routing',
     summary: overrides.summary ?? 'Provider routing summary',
     content: overrides.content ?? 'provider routing should remain visual first',

@@ -7,6 +7,8 @@ import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
+import { muninnSessionKey } from '@muninn/common/session-identity';
+
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const cliPath = path.join(repoRoot, 'codex', 'dist', 'cli.js');
 
@@ -39,13 +41,14 @@ test('codex hook CLI uses --server-url for capture endpoint', async () => {
     assert.equal(result.code, 0);
     assert.equal(requests.length, 1);
     assert.equal(requests[0].method, 'POST');
-    assert.equal(requests[0].url, '/api/v1/turn/capture');
+    assert.equal(requests[0].url, '/api/v1/turn/capture/batch');
+    assert.equal(JSON.parse(requests[0].body).turns.length, 1);
   } finally {
     await close(server);
   }
 });
 
-test('codex hook CLI reads server URL from hook sidecar config', async () => {
+test('codex hook CLI ignores stale sidecar config and uses server URL environment', async () => {
   const requests = [];
   const server = createServer(async (request, response) => {
     let body = '';
@@ -64,20 +67,22 @@ test('codex hook CLI reads server URL from hook sidecar config', async () => {
     const transcriptPath = await writeTranscript();
     const configPath = path.join(path.dirname(transcriptPath), 'muninn-hook.json');
     await writeFile(configPath, JSON.stringify({
-      serverUrl: `http://127.0.0.1:${address.port}`,
+      serverUrl: 'http://127.0.0.1:1',
     }));
 
     const result = await runHook([], {
       hook_event_name: 'Stop',
       transcript_path: transcriptPath,
     }, {
+      MUNINN_SERVER_BASE_URL: `http://127.0.0.1:${address.port}`,
       MUNINN_CODEX_HOOK_CONFIG: configPath,
     });
 
     assert.equal(result.code, 0);
     assert.equal(requests.length, 1);
     assert.equal(requests[0].method, 'POST');
-    assert.equal(requests[0].url, '/api/v1/turn/capture');
+    assert.equal(requests[0].url, '/api/v1/turn/capture/batch');
+    assert.equal(JSON.parse(requests[0].body).turns.length, 1);
   } finally {
     await close(server);
   }
@@ -94,6 +99,13 @@ async function writeTranscript() {
     { type: 'response_item', timestamp: '2026-06-24T01:00:02.000Z', payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'captured' }] } },
   ];
   await writeFile(transcriptPath, lines.map((line) => JSON.stringify(line)).join('\n'));
+  await writeFile(path.join(process.env.MUNINN_HOME, 'capture.json'), JSON.stringify({
+    capture: {
+      sessions: {
+        [muninnSessionKey({ project: root, agent: 'codex', sessionId: 'cli-session' })]: true,
+      },
+    },
+  }));
   return transcriptPath;
 }
 

@@ -25,12 +25,12 @@ export type RenderedTurnTrace = {
 export type RenderedBatchTurns = {
   markdown: string;
   renderedChars: number;
-  stoppedBy: 'none' | 'max-input-chars' | 'max-epoch-turns' | 'single-turn-oversize';
+  stoppedBy: 'none' | 'new-batch-input-chars' | 'max-epoch-turns' | 'single-turn-oversize';
   turns: RenderedTurnTrace[];
 };
 
 export type BatchBudget = {
-  maxInputChars: number;
+  newBatchInputChars: number;
   maxEpochTurns: number;
   previewChars: number;
 };
@@ -56,8 +56,8 @@ export function renderCurrentBatchTurns(
     '## Current Batch Turns',
     renderedTurns.map((turn) => [
       `### ${turn.turnId}`,
-      labeledText('Prompt (memory signal evidence)', turn.prompt),
-      labeledText('Response (workflow context, not memory signal evidence)', turn.response),
+      labeledText('Prompt (instruction signal evidence)', turn.prompt),
+      labeledText('Response (workflow context, not instruction signal evidence)', turn.response),
     ].filter(Boolean).join('\n\n')).join('\n\n') || '(empty)',
   ].join('\n');
   return {
@@ -87,12 +87,12 @@ export function chunkTurnsByInputBudget<T extends ExtractionTurnLike>(
         break;
       }
       const rendered = renderCurrentBatchTurns(candidate, { previewChars: budget.previewChars });
-      if (rendered.renderedChars > budget.maxInputChars && chunk.length > 0) {
-        stoppedBy = 'max-input-chars';
+      if (rendered.renderedChars > budget.newBatchInputChars && chunk.length > 0) {
+        stoppedBy = 'new-batch-input-chars';
         break;
       }
       chunk = candidate;
-      if (rendered.renderedChars > budget.maxInputChars) {
+      if (rendered.renderedChars > budget.newBatchInputChars) {
         stoppedBy = 'single-turn-oversize';
         break;
       }

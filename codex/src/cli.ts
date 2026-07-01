@@ -1,9 +1,7 @@
 #!/usr/bin/env node
 import { handleStop, isStopEvent, type CodexHookPayload } from './hook.js';
-import { createMuninnClient, resolveHookConfig } from '@muninn/common/agent-hook';
-import { readFile } from 'node:fs/promises';
+import { createMuninnClient, resolveHookConfig, writeHookDebugEvent } from '@muninn/common/agent-hook';
 import os from 'node:os';
-import path from 'node:path';
 
 /**
  * Entry point registered as a Codex lifecycle-hook `command`. Codex pipes the
@@ -14,7 +12,22 @@ import path from 'node:path';
 async function main(): Promise<void> {
   const options = parseCliOptions(process.argv.slice(2));
   const raw = await readStdin();
+  await writeHookDebugEvent('muninn-codex-hook', {
+    stage: 'stdin-read',
+    rawBytes: Buffer.byteLength(raw),
+    rawTrimmedBytes: Buffer.byteLength(raw.trim()),
+    argv: process.argv.slice(2),
+    processCwd: process.cwd(),
+    home: os.homedir(),
+    env: {
+      HOME: process.env.HOME,
+      MUNINN_HOME: process.env.MUNINN_HOME,
+      NODE_USE_ENV_PROXY: process.env.NODE_USE_ENV_PROXY,
+    },
+    nodeVersion: process.version,
+  });
   if (!raw.trim()) {
+    await writeHookDebugEvent('muninn-codex-hook', { stage: 'skip-empty-stdin' });
     return;
   }
 
@@ -22,17 +35,40 @@ async function main(): Promise<void> {
   try {
     payload = JSON.parse(raw) as CodexHookPayload;
   } catch (error) {
+    await writeHookDebugEvent('muninn-codex-hook', {
+      stage: 'skip-invalid-json',
+      error: String(error),
+    });
     process.stderr.write(`[muninn-codex-hook] invalid hook JSON on stdin: ${String(error)}\n`);
     return;
   }
 
+  await writeHookDebugEvent('muninn-codex-hook', {
+    stage: 'payload-read',
+    hookEventName: payload.hook_event_name,
+    isStop: isStopEvent(payload),
+    sessionId: payload.session_id,
+    transcriptPath: payload.transcript_path,
+    agentTranscriptPath: payload.agent_transcript_path,
+    cwd: payload.cwd,
+    turnId: payload.turn_id,
+  });
   if (!isStopEvent(payload)) {
+    await writeHookDebugEvent('muninn-codex-hook', {
+      stage: 'skip-non-stop',
+      hookEventName: payload.hook_event_name,
+    });
     return;
   }
 
-  const serverUrl = await resolveServerUrl(options, payload);
+  const serverUrl = resolveServerUrl(options);
+  await writeHookDebugEvent('muninn-codex-hook', {
+    stage: 'server-url-resolved',
+    serverUrl,
+    hasServerUrl: Boolean(serverUrl),
+  });
 
-  await handleStop(payload, serverUrl
+  const captured = await handleStop(payload, serverUrl
     ? {
         client: createMuninnClient({
           config: {
@@ -43,6 +79,10 @@ async function main(): Promise<void> {
         }),
       }
     : {});
+  await writeHookDebugEvent('muninn-codex-hook', {
+    stage: 'handle-stop-finished',
+    captured,
+  });
 }
 
 function parseCliOptions(argv: string[]): { serverUrl?: string } {
@@ -65,57 +105,8 @@ function parseCliOptions(argv: string[]): { serverUrl?: string } {
   return {};
 }
 
-async function resolveServerUrl(options: { serverUrl?: string }, payload: CodexHookPayload): Promise<string | undefined> {
-  if (options.serverUrl) {
-    return options.serverUrl;
-  }
-  const fromConfig = await readHookServerUrl(payload);
-  return fromConfig ?? undefined;
-}
-
-async function readHookServerUrl(payload: CodexHookPayload): Promise<string | null> {
-  for (const configPath of candidateHookConfigPaths(payload)) {
-    try {
-      const parsed: unknown = JSON.parse(await readFile(configPath, 'utf8'));
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-        const serverUrl = (parsed as { serverUrl?: unknown }).serverUrl;
-        if (typeof serverUrl === 'string' && serverUrl.trim()) {
-          return serverUrl.trim();
-        }
-      }
-    } catch {
-      // Try the next candidate.
-    }
-  }
-  return null;
-}
-
-function candidateHookConfigPaths(payload: CodexHookPayload): string[] {
-  const candidates: string[] = [];
-  const explicit = process.env.MUNINN_CODEX_HOOK_CONFIG?.trim();
-  if (explicit) {
-    candidates.push(explicit);
-  }
-  for (const root of [payload.cwd, process.cwd()]) {
-    if (typeof root === 'string' && root.trim()) {
-      candidates.push(...ancestorHookConfigs(root.trim()));
-    }
-  }
-  candidates.push(path.join(os.homedir(), '.codex', 'muninn-hook.json'));
-  return [...new Set(candidates)];
-}
-
-function ancestorHookConfigs(start: string): string[] {
-  const configs: string[] = [];
-  let current = path.resolve(start);
-  for (;;) {
-    configs.push(path.join(current, '.codex', 'muninn-hook.json'));
-    const parent = path.dirname(current);
-    if (parent === current) {
-      return configs;
-    }
-    current = parent;
-  }
+function resolveServerUrl(options: { serverUrl?: string }): string | undefined {
+  return options.serverUrl;
 }
 
 function readStdin(): Promise<string> {
@@ -140,7 +131,11 @@ function readStdin(): Promise<string> {
 }
 
 main()
-  .catch((error) => {
+  .catch(async (error) => {
+    await writeHookDebugEvent('muninn-codex-hook', {
+      stage: 'unexpected-error',
+      error: String(error),
+    });
     process.stderr.write(`[muninn-codex-hook] unexpected error: ${String(error)}\n`);
   })
   .finally(() => {

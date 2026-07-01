@@ -1,9 +1,12 @@
 import { createHash } from 'node:crypto';
-import { mkdir, open, readFile, realpath, rename, stat, unlink, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, open, readFile, realpath, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import type { TurnContent } from './api';
 import { CODEX_AGENT } from './agents';
+import type { CapturePolicyFile, CaptureProgressFile } from './capture-policy';
+import { muninnSessionKey, type MuninnSessionIdentity } from './session-identity';
+import { resolveMuninnServerBaseUrl } from './server-url';
 
 export type ArtifactMode = 'preview' | 'copy';
 
@@ -68,6 +71,9 @@ export type FetchLike = (
 
 export type MuninnClient = {
   captureTurn(request: CaptureTurnRequest): Promise<boolean>;
+  captureTurns?(turns: TurnContent[]): Promise<boolean>;
+  deleteSession?(identity: MuninnSessionIdentity): Promise<boolean>;
+  finalizeMemory?(): Promise<boolean>;
 };
 
 export type HookPayload = {
@@ -79,14 +85,17 @@ export type HookPayload = {
   turn_id?: string;
 };
 
-const DEFAULT_BASE_URL = 'http://localhost:8080';
-const DEFAULT_TIMEOUT_MS = 1500;
-const TRANSCRIPT_CACHE_VERSION = 1;
+export type HookDebugEvent = Record<string, unknown>;
+
+const DEFAULT_TIMEOUT_MS = 15_000;
 const TRANSCRIPT_CACHE_TAIL_BYTES = 4096;
 const LOCK_STALE_MS = 30_000;
 const LOCK_WAIT_MS = 50;
+const CAPTURE_MARKER_NONCE = 'muninn-capture-v1';
 
-type TranscriptCacheEntry = {
+type CaptureMarkerAction = 'enable' | 'disable';
+
+type CaptureProgressEntry = NonNullable<CaptureProgressFile['sessions']>[string] & {
   agent: string;
   project: string;
   cwd: string;
@@ -101,11 +110,6 @@ type TranscriptCacheEntry = {
   updatedAt: string;
 };
 
-type TranscriptCacheFile = {
-  version: 1;
-  transcripts: Record<string, TranscriptCacheEntry>;
-};
-
 type TranscriptFileInfo = {
   dev: number;
   ino: number;
@@ -113,16 +117,17 @@ type TranscriptFileInfo = {
   mtimeMs: number;
 };
 
-type LatestTurnResult = {
-  turn: TurnContent;
+type LatestTurnsResult = {
+  turns: TurnContent[];
   transcriptPath: string;
-  cacheEntry: TranscriptCacheEntry;
+  sessionKey: string;
+  progressEntry: CaptureProgressEntry;
+  markerAction: CaptureMarkerAction | null;
 };
 
 export function resolveHookConfig(env: NodeJS.ProcessEnv = process.env): HookConfig {
-  const raw = env.MUNINN_SERVER_BASE_URL ?? env.MUNINN_BASE_URL ?? DEFAULT_BASE_URL;
   return {
-    baseUrl: raw.trim().replace(/\/+$/, '') || DEFAULT_BASE_URL,
+    baseUrl: resolveMuninnServerBaseUrl({ env }),
     timeoutMs: resolveTimeoutMs(env.MUNINN_HOOK_TIMEOUT_MS),
   };
 }
@@ -150,7 +155,86 @@ export function createMuninnClient(params: { config: HookConfig; fetchImpl?: Fet
         return false;
       }
     },
+    async captureTurns(turns) {
+      try {
+        const response = await fetchImpl(`${params.config.baseUrl}/api/v1/turn/capture/batch`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ turns }),
+          signal: AbortSignal.timeout(params.config.timeoutMs),
+        });
+        if (!response.ok) {
+          const body = await safeReadBody(response);
+          logWarn(label, `muninn batch capture failed with status ${response.status}${body ? ` body=${body}` : ''}`);
+          return false;
+        }
+        return true;
+      } catch (error) {
+        logWarn(label, 'muninn batch capture request failed', error);
+        return false;
+      }
+    },
+    async deleteSession(identity) {
+      try {
+        const response = await fetchImpl(`${params.config.baseUrl}/app/api/import/${encodeURIComponent(identity.agent)}/session`, {
+          method: 'DELETE',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            project: identity.project,
+            sessionId: identity.sessionId,
+          }),
+          signal: AbortSignal.timeout(params.config.timeoutMs),
+        });
+        if (!response.ok) {
+          const body = await safeReadBody(response);
+          logWarn(label, `muninn delete session failed with status ${response.status}${body ? ` body=${body}` : ''}`);
+          return false;
+        }
+        return true;
+      } catch (error) {
+        logWarn(label, 'muninn delete session request failed', error);
+        return false;
+      }
+    },
+    async finalizeMemory() {
+      try {
+        const response = await fetchImpl(`${params.config.baseUrl}/api/v1/memory/finalize`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({}),
+          signal: AbortSignal.timeout(params.config.timeoutMs),
+        });
+        if (!response.ok) {
+          const body = await safeReadBody(response);
+          logWarn(label, `muninn memory finalize failed with status ${response.status}${body ? ` body=${body}` : ''}`);
+          return false;
+        }
+        return true;
+      } catch (error) {
+        logWarn(label, 'muninn memory finalize request failed', error);
+        return false;
+      }
+    },
   };
+}
+
+export async function writeHookDebugEvent(label: string, event: HookDebugEvent): Promise<void> {
+  if (process.env.MUNINN_HOOK_DEBUG === '0') {
+    return;
+  }
+  try {
+    const logPath = hookDebugPath(label);
+    await mkdir(path.dirname(logPath), { recursive: true });
+    const record = {
+      timestamp: new Date().toISOString(),
+      label,
+      pid: process.pid,
+      ...event,
+    };
+    await appendFile(logPath, `${JSON.stringify(record)}\n`, 'utf8');
+  } catch {
+    // Debug logging must never affect hook execution.
+  }
 }
 
 export function defaultArtifactStore(): string {
@@ -166,6 +250,11 @@ export async function captureFromTranscript<Session extends AgentSession>(params
   label: string;
   client?: MuninnClient;
 }): Promise<boolean> {
+  await writeHookDebugEvent(params.label, {
+    stage: 'capture-start',
+    transcriptPath: params.transcriptPath,
+    agent: params.toTurnOptions.agent ?? CODEX_AGENT,
+  });
   try {
     const transcriptPath = await realpathOrResolved(params.transcriptPath);
     return await withFileLock(`transcript-${hashLockName(transcriptPath)}`, async () => {
@@ -177,16 +266,68 @@ export async function captureFromTranscript<Session extends AgentSession>(params
         agent: params.toTurnOptions.agent ?? CODEX_AGENT,
       });
       if (!result) {
+        await writeHookDebugEvent(params.label, {
+          stage: 'capture-skip-no-new-turns',
+          transcriptPath,
+        });
+        return false;
+      }
+      await writeHookDebugEvent(params.label, {
+        stage: 'capture-session-read',
+        transcriptPath,
+        sessionKey: result.sessionKey,
+        sessionId: result.progressEntry.sessionId,
+        project: result.progressEntry.project,
+        cwd: result.progressEntry.cwd,
+        turnCount: result.turns.length,
+        markerAction: result.markerAction,
+      });
+      if (result.markerAction) {
+        return await applyCaptureMarker({
+          ...params,
+          transcriptPath,
+          result,
+          agent: params.toTurnOptions.agent ?? CODEX_AGENT,
+        });
+      }
+      if (!await isHookCaptureEnabled(result.sessionKey, result.progressEntry)) {
+        await writeHookDebugEvent(params.label, {
+          stage: 'capture-skip-policy-disabled',
+          transcriptPath,
+          sessionKey: result.sessionKey,
+          sessionId: result.progressEntry.sessionId,
+          project: result.progressEntry.project,
+          agent: result.progressEntry.agent,
+        });
         return false;
       }
       const client = params.client ?? createMuninnClient({ config: resolveHookConfig(), label: params.label });
-      const captured = await client.captureTurn({ turn: result.turn });
+      const captured = result.turns.length > 0
+        ? await captureTurnsWithClient(client, result.turns)
+        : false;
+      const failedTurns = captured ? 0 : result.turns.length;
       if (captured) {
-        await writeTranscriptCacheEntry(result.transcriptPath, result.cacheEntry).catch(() => undefined);
+        await writeCaptureProgressEntry(result.sessionKey, result.progressEntry).catch(() => undefined);
       }
+      await writeHookDebugEvent(params.label, {
+        stage: 'capture-finished',
+        transcriptPath,
+        sessionKey: result.sessionKey,
+        sessionId: result.progressEntry.sessionId,
+        project: result.progressEntry.project,
+        turnCount: result.turns.length,
+        failedTurns,
+        captured,
+        progressWritten: captured,
+      });
       return captured;
     });
   } catch (error) {
+    await writeHookDebugEvent(params.label, {
+      stage: 'capture-error',
+      transcriptPath: params.transcriptPath,
+      error: String(error),
+    });
     process.stderr.write(`[${params.label}] failed to read transcript ${params.transcriptPath}: ${String(error)}\n`);
     return false;
   }
@@ -223,54 +364,57 @@ async function readLatestTurnWithCache<Session extends AgentSession>(params: {
   toTurnContent: ToTurnContent<Session>;
   toTurnOptions: ToTurnContentOptions;
   agent: string;
-}): Promise<LatestTurnResult | null> {
+}): Promise<LatestTurnsResult | null> {
   const transcriptPath = await realpathOrResolved(params.transcriptPath);
   const fileInfo = await transcriptFileInfo(transcriptPath);
-  const cache = await readTranscriptCache();
-  const cached = validTranscriptCacheEntry(cache.transcripts[transcriptPath], params.agent);
+  const progress = await readCaptureProgress();
+  const cached = Object.values(progress.sessions ?? {})
+    .map((value) => validCaptureProgressEntry(value, params.agent, transcriptPath))
+    .find((entry): entry is CaptureProgressEntry => entry !== null);
 
   if (cached) {
     if (sameTranscriptFile(fileInfo, cached) && fileInfo.size === cached.lastByteOffset && fileInfo.mtimeMs === cached.mtimeMs) {
       return null;
     }
     if (sameTranscriptFile(fileInfo, cached) && fileInfo.size > cached.lastByteOffset && await transcriptTailMatches(transcriptPath, cached)) {
-      const incremental = await readIncrementalLatestTurn({ ...params, transcriptPath, fileInfo, cached });
+      const incremental = await readIncrementalLatestTurns({ ...params, transcriptPath, fileInfo, cached });
       return incremental ?? null;
     }
   }
 
-  return readFullLatestTurn({ ...params, transcriptPath, fileInfo });
+  return readFullSessionTurns({ ...params, transcriptPath, fileInfo });
 }
 
-async function readFullLatestTurn<Session extends AgentSession>(params: {
+async function readFullSessionTurns<Session extends AgentSession>(params: {
   transcriptPath: string;
   fileInfo: TranscriptFileInfo;
   readSession: ReadAgentSession<Session>;
   toTurnContent: ToTurnContent<Session>;
   toTurnOptions: ToTurnContentOptions;
   agent: string;
-}): Promise<LatestTurnResult | null> {
+}): Promise<LatestTurnsResult | null> {
   const session = await params.readSession(params.transcriptPath, { artifactStore: defaultArtifactStore(), artifactMode: 'copy' });
   if (!session || session.turns.length === 0) {
     return null;
   }
-  const lastIndex = session.turns.length - 1;
   return {
-    turn: params.toTurnContent(session, session.turns[lastIndex], lastIndex, params.toTurnOptions),
+    turns: captureTurnsFromSession(session, 0, params.toTurnContent, params.toTurnOptions),
     transcriptPath: params.transcriptPath,
-    cacheEntry: await cacheEntryFromSession(params.agent, session, params.transcriptPath, params.fileInfo, session.turns.length),
+    sessionKey: muninnSessionKey({ project: session.project, agent: params.agent, sessionId: session.sessionId }),
+    progressEntry: await progressEntryFromSession(params.agent, session, params.transcriptPath, params.fileInfo, session.turns.length),
+    markerAction: captureMarkerAction(session),
   };
 }
 
-async function readIncrementalLatestTurn<Session extends AgentSession>(params: {
+async function readIncrementalLatestTurns<Session extends AgentSession>(params: {
   transcriptPath: string;
   fileInfo: TranscriptFileInfo;
-  cached: TranscriptCacheEntry;
+  cached: CaptureProgressEntry;
   readSession: ReadAgentSession<Session>;
   toTurnContent: ToTurnContent<Session>;
   toTurnOptions: ToTurnContentOptions;
   agent: string;
-}): Promise<LatestTurnResult | null> {
+}): Promise<LatestTurnsResult | null> {
   const appended = await readFileRange(
     params.transcriptPath,
     params.cached.lastByteOffset,
@@ -291,25 +435,181 @@ async function readIncrementalLatestTurn<Session extends AgentSession>(params: {
     return null;
   }
 
-  const lastIndex = session.turns.length - 1;
-  const turnSequence = params.cached.nextTurnSequence + lastIndex;
   return {
-    turn: params.toTurnContent(session, session.turns[lastIndex], turnSequence, params.toTurnOptions),
+    turns: captureTurnsFromSession(session, params.cached.nextTurnSequence, params.toTurnContent, params.toTurnOptions),
     transcriptPath: params.transcriptPath,
-    cacheEntry: await cacheEntryFromSession(
+    sessionKey: muninnSessionKey({ project: session.project, agent: params.agent, sessionId: session.sessionId }),
+    progressEntry: await progressEntryFromSession(
       params.agent,
       session,
       params.transcriptPath,
       params.fileInfo,
       params.cached.nextTurnSequence + session.turns.length,
     ),
+    markerAction: captureMarkerAction(session),
   };
+}
+
+async function applyCaptureMarker<Session extends AgentSession>(params: {
+  transcriptPath: string;
+  readSession: ReadAgentSession<Session>;
+  toTurnContent: ToTurnContent<Session>;
+  toTurnOptions: ToTurnContentOptions;
+  label: string;
+  client?: MuninnClient;
+  result: LatestTurnsResult;
+  agent: string;
+}): Promise<boolean> {
+  await setSessionCapturePolicy(params.result.sessionKey, params.result.markerAction === 'enable');
+  await writeHookDebugEvent(params.label, {
+    stage: 'capture-marker-policy-applied',
+    action: params.result.markerAction,
+    sessionKey: params.result.sessionKey,
+    sessionId: params.result.progressEntry.sessionId,
+    project: params.result.progressEntry.project,
+  });
+
+  const identity = progressIdentity(params.result.progressEntry);
+  const client = params.client ?? createMuninnClient({ config: resolveHookConfig(), label: params.label });
+  if (params.result.markerAction === 'disable') {
+    await removeCaptureProgressEntry(params.result.sessionKey);
+    await client.deleteSession?.(identity);
+    await writeHookDebugEvent(params.label, {
+      stage: 'capture-marker-disable-finished',
+      sessionKey: params.result.sessionKey,
+      sessionId: params.result.progressEntry.sessionId,
+      project: params.result.progressEntry.project,
+    });
+    return false;
+  }
+
+  let captured = true;
+  if (params.result.turns.length > 0) {
+    captured = await captureTurnsWithClient(client, params.result.turns);
+  }
+  const failedTurns = captured ? 0 : params.result.turns.length;
+  let finalized = false;
+  if (captured) {
+    await writeCaptureProgressEntry(params.result.sessionKey, params.result.progressEntry).catch(() => undefined);
+    finalized = await client.finalizeMemory?.() ?? false;
+  }
+  await writeHookDebugEvent(params.label, {
+    stage: 'capture-marker-enable-finished',
+    sessionKey: params.result.sessionKey,
+    sessionId: params.result.progressEntry.sessionId,
+    project: params.result.progressEntry.project,
+    turnCount: params.result.turns.length,
+    failedTurns,
+    captured,
+    progressWritten: captured,
+    finalized,
+  });
+  return captured;
+}
+
+async function captureTurnsWithClient(client: MuninnClient, turns: TurnContent[]): Promise<boolean> {
+  if (turns.length === 0) {
+    return true;
+  }
+  if (client.captureTurns) {
+    return client.captureTurns(turns);
+  }
+  let captured = true;
+  for (const turn of turns) {
+    captured = await client.captureTurn({ turn }) && captured;
+  }
+  return captured;
+}
+
+function captureTurnsFromSession<Session extends AgentSession>(
+  session: Session,
+  startSequence: number,
+  toTurnContent: ToTurnContent<Session>,
+  options: ToTurnContentOptions,
+): TurnContent[] {
+  const turns: TurnContent[] = [];
+  session.turns.forEach((turn, index) => {
+    const sanitized = stripCaptureMarkersFromTurn(turn);
+    if (!sanitized) {
+      return;
+    }
+    turns.push(toTurnContent(session, sanitized, startSequence + index, options));
+  });
+  return turns;
+}
+
+function stripCaptureMarkersFromTurn<Turn extends AgentTurn>(turn: Turn): Turn | null {
+  const stripped = stripCaptureMarkerLines(turn.response);
+  if (stripped === turn.response) {
+    return turn;
+  }
+  if (!stripped.trim()) {
+    return null;
+  }
+  return { ...turn, response: stripped };
+}
+
+function captureMarkerAction(session: AgentSession): CaptureMarkerAction | null {
+  const lastTurn = session.turns.at(-1);
+  if (!lastTurn) {
+    return null;
+  }
+  return captureMarkerActionFromText(lastTurn.response);
+}
+
+function captureMarkerActionFromText(value: string): CaptureMarkerAction | null {
+  const actions = captureMarkerLines(value);
+  return actions.length === 1 ? actions[0] : null;
+}
+
+function stripCaptureMarkerLines(value: string): string {
+  const lines = value.split(/\r?\n/);
+  const keep: string[] = [];
+  let inFence = false;
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (trimmed.startsWith('```') || trimmed.startsWith('~~~')) {
+      inFence = !inFence;
+      keep.push(line);
+      continue;
+    }
+    if (!inFence && captureMarkerLine(trimmed)) {
+      continue;
+    }
+    keep.push(line);
+  }
+  return keep.join('\n').trim();
+}
+
+function captureMarkerLines(value: string): CaptureMarkerAction[] {
+  const actions: CaptureMarkerAction[] = [];
+  let inFence = false;
+  for (const line of value.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (trimmed.startsWith('```') || trimmed.startsWith('~~~')) {
+      inFence = !inFence;
+      continue;
+    }
+    const action = inFence ? null : captureMarkerLine(trimmed);
+    if (action) {
+      actions.push(action);
+    }
+  }
+  return actions;
+}
+
+function captureMarkerLine(value: string): CaptureMarkerAction | null {
+  const match = /^<MUNINN_CAPTURE_CURRENT_SESSION action="(enable|disable)" nonce="([^"]+)" \/>$/.exec(value);
+  if (!match || match[2] !== CAPTURE_MARKER_NONCE) {
+    return null;
+  }
+  return match[1] as CaptureMarkerAction;
 }
 
 async function readSessionFragment<Session extends AgentSession>(params: {
   content: string;
   transcriptPath: string;
-  cached: TranscriptCacheEntry;
+  cached: CaptureProgressEntry;
   readSession: ReadAgentSession<Session>;
   agent: string;
 }): Promise<Session | null> {
@@ -341,18 +641,21 @@ async function readSessionFragment<Session extends AgentSession>(params: {
   }
 }
 
-async function cacheEntryFromSession(
+async function progressEntryFromSession(
   agent: string,
   session: AgentSession,
   transcriptPath: string,
   fileInfo: TranscriptFileInfo,
   nextTurnSequence: number,
-): Promise<TranscriptCacheEntry> {
+): Promise<CaptureProgressEntry> {
   return {
     agent,
     project: session.project,
     cwd: session.cwd,
     sessionId: session.sessionId,
+    transcriptPath,
+    byteOffset: fileInfo.size,
+    lastTurnSequence: nextTurnSequence - 1,
     dev: fileInfo.dev,
     ino: fileInfo.ino,
     size: fileInfo.size,
@@ -385,48 +688,118 @@ async function transcriptFileInfo(sourcePath: string): Promise<TranscriptFileInf
   };
 }
 
-function transcriptCachePath(): string {
-  const home = process.env.MUNINN_HOME ?? path.join(os.homedir(), '.muninn');
-  return path.join(home, 'transcript-cache.json');
+function muninnHome(): string {
+  return process.env.MUNINN_HOME ?? path.join(os.homedir(), '.muninn');
 }
 
-async function readTranscriptCache(): Promise<TranscriptCacheFile> {
+function hookDebugPath(label: string): string {
+  const explicit = process.env.MUNINN_HOOK_DEBUG_LOG?.trim();
+  if (explicit) {
+    return explicit;
+  }
+  const safeLabel = label.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'muninn-agent-hook';
+  return path.join(muninnHome(), 'main', 'logs', `${safeLabel}-debug.jsonl`);
+}
+
+function capturePolicyPath(): string {
+  return path.join(muninnHome(), 'capture.json');
+}
+
+function captureProgressPath(): string {
+  const home = process.env.MUNINN_HOME ?? path.join(os.homedir(), '.muninn');
+  return path.join(home, 'progress.json');
+}
+
+async function readCapturePolicy(): Promise<CapturePolicyFile> {
   try {
-    const parsed = JSON.parse(await readFile(transcriptCachePath(), 'utf8')) as Partial<TranscriptCacheFile>;
-    if (
-      parsed
-      && typeof parsed === 'object'
-      && !Array.isArray(parsed)
-      && parsed.version === TRANSCRIPT_CACHE_VERSION
-      && parsed.transcripts
-      && typeof parsed.transcripts === 'object'
-    ) {
-      return { version: TRANSCRIPT_CACHE_VERSION, transcripts: parsed.transcripts as Record<string, TranscriptCacheEntry> };
+    const parsed = JSON.parse(await readFile(capturePolicyPath(), 'utf8')) as CapturePolicyFile;
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed;
     }
   } catch {
-    // Create a new cache below.
+    // Missing or malformed capture policy means disabled.
   }
-  return { version: TRANSCRIPT_CACHE_VERSION, transcripts: {} };
+  return {};
 }
 
-async function writeTranscriptCacheEntry(transcriptPath: string, entry: TranscriptCacheEntry): Promise<void> {
-  await withFileLock('transcript-cache', async () => {
-    const cache = await readTranscriptCache();
-    cache.transcripts[transcriptPath] = entry;
-    await atomicWriteFile(transcriptCachePath(), `${JSON.stringify(cache, null, 2)}\n`);
+async function readCaptureProgress(): Promise<CaptureProgressFile> {
+  try {
+    const parsed = JSON.parse(await readFile(captureProgressPath(), 'utf8')) as CaptureProgressFile;
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return {
+        sessions: parsed.sessions && typeof parsed.sessions === 'object' && !Array.isArray(parsed.sessions)
+          ? parsed.sessions
+          : {},
+      };
+    }
+  } catch {
+    // Create new progress below.
+  }
+  return { sessions: {} };
+}
+
+async function writeCaptureProgressEntry(sessionKey: string, entry: CaptureProgressEntry): Promise<void> {
+  await withFileLock('capture-progress', async () => {
+    const progress = await readCaptureProgress();
+    progress.sessions ??= {};
+    progress.sessions[sessionKey] = entry;
+    await atomicWriteFile(captureProgressPath(), `${JSON.stringify(progress, null, 2)}\n`);
   });
 }
 
-function validTranscriptCacheEntry(value: unknown, agent: string): TranscriptCacheEntry | null {
+async function removeCaptureProgressEntry(sessionKey: string): Promise<void> {
+  await withFileLock('capture-progress', async () => {
+    const progress = await readCaptureProgress();
+    if (progress.sessions) {
+      delete progress.sessions[sessionKey];
+    }
+    await atomicWriteFile(captureProgressPath(), `${JSON.stringify(progress, null, 2)}\n`);
+  });
+}
+
+async function setSessionCapturePolicy(sessionKey: string, enabled: boolean): Promise<void> {
+  await withFileLock('capture-policy', async () => {
+    const policy = await readCapturePolicy();
+    policy.capture ??= {};
+    policy.capture.sessions ??= {};
+    policy.capture.sessions[sessionKey] = enabled;
+    await atomicWriteFile(capturePolicyPath(), `${JSON.stringify(policy, null, 2)}\n`);
+  });
+}
+
+function progressIdentity(entry: CaptureProgressEntry): MuninnSessionIdentity {
+  return {
+    project: entry.project,
+    agent: entry.agent,
+    sessionId: entry.sessionId,
+  };
+}
+
+async function isHookCaptureEnabled(sessionKey: string, entry: CaptureProgressEntry): Promise<boolean> {
+  const policy = await readCapturePolicy();
+  const capture = policy.capture;
+  if (!capture) {
+    return false;
+  }
+  const sessionPolicy = capture.sessions?.[sessionKey];
+  if (sessionPolicy !== undefined) {
+    return sessionPolicy === true;
+  }
+  return capture.agents?.[entry.agent] === true
+    && capture.projects?.[entry.agent]?.[entry.project] === true;
+}
+
+function validCaptureProgressEntry(value: unknown, agent: string, transcriptPath: string): CaptureProgressEntry | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     return null;
   }
-  const entry = value as Partial<TranscriptCacheEntry>;
+  const entry = value as Partial<CaptureProgressEntry>;
   if (
     entry.agent !== agent
     || typeof entry.project !== 'string'
     || typeof entry.cwd !== 'string'
     || typeof entry.sessionId !== 'string'
+    || entry.transcriptPath !== transcriptPath
     || typeof entry.updatedAt !== 'string'
     || !isNonNegativeInteger(entry.dev)
     || !isNonNegativeInteger(entry.ino)
@@ -439,7 +812,7 @@ function validTranscriptCacheEntry(value: unknown, agent: string): TranscriptCac
   ) {
     return null;
   }
-  return entry as TranscriptCacheEntry;
+  return entry as CaptureProgressEntry;
 }
 
 function isNonNegativeInteger(value: unknown): value is number {
@@ -455,11 +828,11 @@ async function realpathOrResolved(value: string): Promise<string> {
   }
 }
 
-function sameTranscriptFile(fileInfo: TranscriptFileInfo, cached: TranscriptCacheEntry): boolean {
+function sameTranscriptFile(fileInfo: TranscriptFileInfo, cached: CaptureProgressEntry): boolean {
   return fileInfo.dev === cached.dev && fileInfo.ino === cached.ino;
 }
 
-async function transcriptTailMatches(transcriptPath: string, cached: TranscriptCacheEntry): Promise<boolean> {
+async function transcriptTailMatches(transcriptPath: string, cached: CaptureProgressEntry): Promise<boolean> {
   return await transcriptTailHash(transcriptPath, cached.lastByteOffset) === cached.tailHash;
 }
 

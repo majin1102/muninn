@@ -175,15 +175,26 @@ export async function importSelectedSessions(adapter: ImportAdapter, sourcePaths
     });
   }
 
-  let importedSessions = 0;
-  let importedTurns = 0;
-  const enabledProjects = new Set<string>();
+  const importableSessions: Array<{ session: CodexSession; firstTurnSequence?: number }> = [];
   for (const { sourcePath, firstTurnSequence } of importablePaths) {
     try {
       const session = await adapter.readSession(sourcePath, { artifactStore, artifactMode: 'copy' });
       if (!session || adapter.isExcluded?.(session)) {
         continue;
       }
+      importableSessions.push({ session, firstTurnSequence });
+    } catch (error) {
+      failedSessions.push({ sourcePath, errorMessage: error instanceof Error ? error.message : String(error) });
+    }
+  }
+
+  let importedSessions = 0;
+  let importedTurns = 0;
+  const enabledProjects = new Set<string>();
+  for (const { session, firstTurnSequence } of importableSessions.sort((left, right) => (
+    compareSessionsForImport(left.session, right.session)
+  ))) {
+    try {
       const seen = new Set<string>();
       const turnContents: TurnContent[] = [];
       for (const [index, turn] of session.turns.entries()) {
@@ -207,7 +218,7 @@ export async function importSelectedSessions(adapter: ImportAdapter, sourcePaths
         enabledProjects.add(session.project);
       }
     } catch (error) {
-      failedSessions.push({ sourcePath, errorMessage: error instanceof Error ? error.message : String(error) });
+      failedSessions.push({ sourcePath: session.sourcePath, errorMessage: error instanceof Error ? error.message : String(error) });
     }
   }
 
@@ -240,6 +251,7 @@ export async function deleteImportedProject(adapter: ImportAdapter, project: str
   );
   const { deleted: deletedTurns, turnIds } = await deleteProjectTurns(adapter, sessionKeys);
   await deleteRelatedMemories(turnIds);
+  await deleteSessionSnapshots(adapter, sessionKeys);
   await sessions.refreshIndex();
   await removeCapturePolicy(adapter.agent, project);
   return {
@@ -262,6 +274,7 @@ export async function deleteImportedSession(
   ));
   const { deleted: deletedTurns, turnIds } = await deleteProjectTurns(adapter, exists ? new Set([key]) : new Set());
   await deleteRelatedMemories(turnIds);
+  await deleteSessionSnapshots(adapter, exists ? new Set([key]) : new Set());
   await sessions.refreshIndex();
   return {
     deletedSessions: exists ? 1 : 0,
@@ -286,6 +299,25 @@ async function deleteProjectTurns(adapter: ImportAdapter, sessionKeys: Set<strin
     deleted += (await turns.delete({ turnIds: turnIds.slice(index, index + IMPORT_DELETE_BATCH_SIZE) })).deleted;
   }
   return { deleted, turnIds };
+}
+
+async function deleteSessionSnapshots(adapter: ImportAdapter, sessionKeys: Set<string>): Promise<void> {
+  if (sessionKeys.size === 0) {
+    return;
+  }
+  const tables = await getNativeTables(resolveStorageTarget(loadMuninnConfig() ?? {}, 'main'));
+  const snapshotIds = (await tables.sessionTable.listSnapshots({}))
+    .filter((snapshot) => (
+      snapshot.agent === adapter.agent
+      && sessionKeys.has(identityKey(adapter, {
+        project: snapshot.project,
+        sessionId: snapshot.sessionId,
+      }))
+    ))
+    .map((snapshot) => snapshot.snapshotId);
+  if (snapshotIds.length > 0) {
+    await tables.sessionTable.delete({ snapshotIds });
+  }
 }
 
 async function deleteRelatedMemories(turnIds: string[]): Promise<void> {
@@ -452,6 +484,7 @@ export async function runCodexImport(options: CodexImportOptions, requestId: str
   let deletedTurns = await deleteExistingImport(existingImportTurns);
   const failedSessions: CodexImportRunResponse['failedSessions'] = [];
 
+  const sessionsToImport: CodexSession[] = [];
   for (const previewSession of selection.sessions) {
     try {
       const session = await readCodexSession(previewSession.sourcePath, {
@@ -461,6 +494,18 @@ export async function runCodexImport(options: CodexImportOptions, requestId: str
       if (!session) {
         continue;
       }
+      sessionsToImport.push(session);
+    } catch (error) {
+      failedSessions.push({
+        sessionId: previewSession.sessionId,
+        sourcePath: previewSession.sourcePath,
+        errorMessage: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  for (const session of sortSessionsForImport(sessionsToImport)) {
+    try {
       const result = await importCodexSession(session);
       if (result.importedTurns > 0 || result.skippedTurns > 0) {
         importedSessions += 1;
@@ -469,8 +514,8 @@ export async function runCodexImport(options: CodexImportOptions, requestId: str
       skippedTurns += result.skippedTurns;
     } catch (error) {
       failedSessions.push({
-        sessionId: previewSession.sessionId,
-        sourcePath: previewSession.sourcePath,
+        sessionId: session.sessionId,
+        sourcePath: session.sourcePath,
         errorMessage: error instanceof Error ? error.message : String(error),
       });
     }
@@ -648,6 +693,22 @@ function isExcludedImportSession(session: CodexSession): boolean {
     || session.turns.length > MUNINN_E2E_SESSION_TURN_LIMIT;
 }
 
+function sessionStartAt(session: CodexSession): string {
+  return session.turns[0]?.promptTimestamp ?? session.updatedAt;
+}
+
+function compareSessionsForImport(left: CodexSession, right: CodexSession): number {
+  return sessionStartAt(left).localeCompare(sessionStartAt(right))
+    || left.updatedAt.localeCompare(right.updatedAt)
+    || left.project.localeCompare(right.project)
+    || left.sessionId.localeCompare(right.sessionId)
+    || left.sourcePath.localeCompare(right.sourcePath);
+}
+
+function sortSessionsForImport(sessions: CodexSession[]): CodexSession[] {
+  return [...sessions].sort(compareSessionsForImport);
+}
+
 function toPreviewResponse(selection: ImportSelection, requestId: string): CodexImportPreviewResponse {
   return {
     sourceRoot: selection.sourceRoot,
@@ -694,6 +755,7 @@ export const codexAdapter: ImportAdapter = {
 export const __testing = {
   readCodexSession,
   defaultArtifactStore,
+  sortSessionsForImport,
 };
 
 

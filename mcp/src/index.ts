@@ -1,88 +1,71 @@
 #!/usr/bin/env node
 
-import { mkdir, writeFile } from 'node:fs/promises';
-import os from 'node:os';
-import path from 'node:path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { ServerClient } from './server-client.js';
+import { ServerClient, type ExplainInput, type ListInput, type ReadInput, type RecallInput } from './server-client.js';
 
-function safeStringify(value: unknown): string {
-  try {
-    return JSON.stringify(value, null, 2);
-  } catch {
-    return String(value);
-  }
+type ToolSpec<TInput extends object> = {
+  name: string;
+  description: string;
+  inputSchema: z.ZodObject<z.ZodRawShape>;
+  run(args: TInput, client: ServerClient): Promise<string>;
+};
+
+const RecallInputSchema = z.object({
+  query: z.string().min(1).describe('Natural-language query for past or other-session Muninn context'),
+  budget: z.number().int().nonnegative().optional().describe('Optional character budget for composed recall context; max 20000'),
+  top_k: z.number().int().positive().optional().describe('Optional result count; max 50'),
+});
+
+const ListInputSchema = z.object({
+  query: z.string().min(1).describe('Natural-language query for candidate prior session contexts'),
+  top_k: z.number().int().positive().optional().describe('Optional candidate count; max 50'),
+});
+
+const ReadInputSchema = z.object({
+  context_ids: z.array(z.string().min(1)).min(1).describe('Selected session_*, turn_*, or ext:* context_id handles returned by Muninn'),
+});
+
+const ExplainInputSchema = z.object({
+  context_id: z.string().min(1).describe('Selected session_* context_id returned by Muninn'),
+});
+
+const tools: ToolSpec<any>[] = [
+  {
+    name: 'muninn-recall',
+    description: 'Recall context from past or other Muninn sessions by query and return source context references. Accepts optional top_k and budget.',
+    inputSchema: RecallInputSchema,
+    run: (args: RecallInput, client) => client.recall(args),
+  },
+  {
+    name: 'muninn-list',
+    description: 'List candidate Muninn session contexts by query, excluding the current session when host current-session identity is available. Returns session_* context_ids with titles and summaries for selection before read.',
+    inputSchema: ListInputSchema,
+    run: (args: ListInput, client) => client.list(args),
+  },
+  {
+    name: 'muninn-read',
+    description: 'Read selected Muninn context content by context_id. Accepts session_*, turn_*, and ext:* context_ids. Use selectively when exact content is needed.',
+    inputSchema: ReadInputSchema,
+    run: (args: ReadInput, client) => client.read(args),
+  },
+  {
+    name: 'muninn-explain',
+    description: 'Inspect source provenance and references for a session_* context_id. Use selectively when evidence or origin detail is needed.',
+    inputSchema: ExplainInputSchema,
+    run: (args: ExplainInput, client) => client.explain(args),
+  },
+];
+
+function textResult(text: string) {
+  return {
+    content: [{ type: 'text' as const, text }],
+  };
 }
 
-function renderMemoryResponse(
-  memoryResponse: { memoryHits: Array<{ memoryId: string; content: string }> },
-): string {
-  return memoryResponse.memoryHits.map((memoryHit) => {
-    if (memoryHit.content.includes(memoryHit.memoryId)) {
-      return memoryHit.content;
-    }
-
-    return [
-      `Memory ID: ${memoryHit.memoryId}`,
-      '',
-      memoryHit.content,
-    ].join('\n');
-  }).join('\n\n---\n\n');
-}
-
-function renderProjectSignals(result: {
-  project: string;
-  memorySignals: Array<{ score: number; text: string }>;
-  skillSignals: Array<{ score: number; name: string; summary: string }>;
-}): string {
-  return [
-    `# Project Signals`,
-    '',
-    `Project: ${result.project}`,
-    '',
-    '## Memory Signals',
-    ...result.memorySignals.map((signal) => `- [${formatSignalScore(signal.score)}] ${signal.text}`),
-    '',
-    '## Skill Signals',
-    ...result.skillSignals.map((signal) => `- [${formatSignalScore(signal.score)}] ${signal.name}: ${signal.summary}`),
-  ].join('\n').trimEnd();
-}
-
-function formatSignalScore(score: number): string {
-  return Number.isInteger(score) ? String(score) : score.toFixed(2);
-}
-
-async function writeDebugMarkdown(toolName: string, args: unknown): Promise<string> {
-  const muninnHome = process.env.MUNINN_HOME ?? path.join(os.homedir(), '.muninn');
-  const debugDir = path.join(muninnHome, 'debug');
-  await mkdir(debugDir, { recursive: true });
-
-  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const suffix = Math.random().toString(36).slice(2, 8);
-  const filePath = path.join(debugDir, `${timestamp}-${toolName}-${suffix}.md`);
-
-  const markdown = [
-    `# ${toolName}`,
-    '',
-    `- Time: ${new Date().toISOString()}`,
-    `- Tool: ${toolName}`,
-    '',
-    '## Arguments',
-    '',
-    '```json',
-    safeStringify(args),
-    '```',
-    '',
-  ].join('\n');
-
-  await writeFile(filePath, markdown, 'utf8');
-  return filePath;
-}
-
-async function main() {
-  const serverClient = new ServerClient();
+async function main(): Promise<void> {
+  const client = new ServerClient();
   const server = new McpServer(
     {
       name: 'muninn-mcp',
@@ -92,132 +75,28 @@ async function main() {
       capabilities: {
         tools: {},
       },
-    }
+    },
   );
 
-  // Work around TypeScript "type instantiation is excessively deep" triggered by
-  // McpServer.registerTool's generics + Zod types.
+  // Keep the cast local until SDK/Zod generic depth is no longer an issue.
   const registerTool: any = (server as any).registerTool.bind(server);
+  for (const tool of tools) {
+    registerTool(
+      tool.name,
+      {
+        description: tool.description,
+        inputSchema: tool.inputSchema,
+        annotations: { readOnlyHint: true, openWorldHint: false },
+      },
+      async (args: unknown) => textResult(await tool.run(args as never, client)),
+    );
+  }
 
-  registerTool(
-    'print',
-    {
-      description: 'Debug tool: print arguments and write a Markdown snapshot',
-      inputSchema: z.object({
-        message: z.string().optional().describe('A short message'),
-        data: z.any().optional().describe('Arbitrary JSON payload'),
-      }),
-    },
-    async (args: any) => {
-      const debugFilePath = await writeDebugMarkdown('print', args);
-      console.error('[tool:print] args:', safeStringify(args));
-      console.error('[tool:print] debug file:', debugFilePath);
-      return {
-        content: [{ type: 'text', text: `printed: ${debugFilePath}` }],
-      };
-    }
-  );
-
-  registerTool(
-    'recall',
-    {
-      description: 'Recall memories based on a query',
-      inputSchema: z.object({
-        query: z.string().describe('Search query'),
-        database: z.string().optional().describe('Muninn database name; defaults to main'),
-        limit: z.number().int().positive().optional().describe('Maximum number of results'),
-        budget: z.number().int().nonnegative().optional().describe('Character budget for recalled memory context; 0 disables recall composition'),
-        queryLimit: z.number().int().positive().optional().describe('Candidate count used before recall composition'),
-        recallMode: z.enum(['vector', 'fts', 'hybrid']).optional().describe('Recall mode'),
-        thinkingRatio: z.number().min(0).max(1).optional().describe('Ratio of thinking memories'),
-      }),
-    },
-    async (args: any) => {
-      const result = await serverClient.recall(args);
-      return {
-        content: [{ type: 'text', text: renderMemoryResponse(result) }],
-      };
-    }
-  );
-
-  registerTool(
-    'list',
-    {
-      description: 'List recent memories',
-      inputSchema: z.object({
-        mode: z.literal('recency').default('recency').describe('List mode'),
-        database: z.string().optional().describe('Muninn database name; defaults to main'),
-        limit: z.number().int().positive().optional().describe('Maximum number of results'),
-        thinkingRatio: z.number().min(0).max(1).optional().describe('Ratio of thinking memories'),
-      }),
-    },
-    async (args: any) => {
-      const result = await serverClient.list(args);
-      return {
-        content: [{ type: 'text', text: renderMemoryResponse(result) }],
-      };
-    }
-  );
-
-  registerTool(
-    'get_timeline',
-    {
-      description: 'Get the surrounding timeline for a memory',
-      inputSchema: z.object({
-        database: z.string().optional().describe('Muninn database name; defaults to main'),
-        memoryId: z.string().describe('Memory ID'),
-        beforeLimit: z.number().int().nonnegative().optional().describe('Number of items before the anchor'),
-        afterLimit: z.number().int().nonnegative().optional().describe('Number of items after the anchor'),
-      }),
-    },
-    async (args: any) => {
-      const result = await serverClient.getTimeline(args);
-      return {
-        content: [{ type: 'text', text: renderMemoryResponse(result) }],
-      };
-    }
-  );
-
-  registerTool(
-    'get_detail',
-    {
-      description: 'Get the full detail for a memory',
-      inputSchema: z.object({
-        database: z.string().optional().describe('Muninn database name; defaults to main'),
-        memoryId: z.string().describe('Memory ID'),
-      }),
-    },
-    async (args: any) => {
-      const result = await serverClient.getDetail(args);
-      return {
-        content: [{ type: 'text', text: renderMemoryResponse(result) }],
-      };
-    }
-  );
-
-  registerTool(
-    'project_signals',
-    {
-      description: 'Get top project dreaming signals for a project',
-      inputSchema: z.object({
-        project: z.string().describe('Project key/path'),
-        database: z.string().optional().describe('Muninn database name; defaults to main'),
-      }),
-    },
-    async (args: any) => {
-      const result = await serverClient.projectSignals(args);
-      return {
-        content: [{ type: 'text', text: renderProjectSignals(result) }],
-      };
-    }
-  );
-
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
-  console.error('Muninn MCP Server running on stdio');
+  await server.connect(new StdioServerTransport());
+  console.error('Muninn MCP server running on stdio');
 }
 
 main().catch((error) => {
-  console.error('Server error:', error);
+  console.error('Muninn MCP server error:', error);
   process.exit(1);
 });

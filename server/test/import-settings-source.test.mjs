@@ -69,14 +69,13 @@ test('session import writes turns in batch without synchronously flushing extrac
   assert.doesNotMatch(importSource, /extractor\.finalize\(\)/);
 });
 
-test('capture settings are stored in muninn json and ignore legacy policy files', async () => {
+test('capture settings are stored in capture json', async () => {
   const capturePolicySource = await readFile(new URL('../src/api/capture.ts', import.meta.url), 'utf8');
 
-  assert.match(capturePolicySource, /resolveConfigPath/);
-  assert.match(capturePolicySource, /getCaptureConfigFromConfig/);
+  assert.match(capturePolicySource, /capture\.json/);
   assert.match(capturePolicySource, /capture\.projects/);
   assert.doesNotMatch(capturePolicySource, /capture-policy\.json/);
-  assert.doesNotMatch(capturePolicySource, /policyPath/);
+  assert.doesNotMatch(capturePolicySource, /getCaptureConfigFromConfig/);
 });
 
 test('session import picker keeps current relative time formatting', async () => {

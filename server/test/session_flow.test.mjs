@@ -457,7 +457,7 @@ test('turn/capture/batch persists raw prompt and response without title or summa
   assert.equal(persisted[0].response, 'raw batch response');
 });
 
-test('turn/capture/batch skips disallowed hook turns and captures import turns', async (t) => {
+test('turn/capture/batch captures hook and import turns without server policy gating', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(async () => rm(dir, { recursive: true, force: true }));
 
@@ -480,15 +480,15 @@ test('turn/capture/batch skips disallowed hook turns and captures import turns',
   ]);
   assert.equal(response.status, 200);
   const body = await json(response);
-  assert.equal(body.capturedTurns, 1);
-  assert.equal(body.skippedTurns, 1);
+  assert.equal(body.capturedTurns, 2);
+  assert.equal(body.skippedTurns, 0);
 
   const persisted = await turns.list({
     mode: { type: 'page', offset: 0, limit: 20 },
     agent: 'agent-a',
     sessionId: 'batch-policy-session',
   });
-  assert.deepEqual(persisted.map((turn) => turn.prompt), ['allowed import prompt']);
+  assert.deepEqual(persisted.map((turn) => turn.prompt), ['blocked hook prompt', 'allowed import prompt']);
 });
 
 test('openclaw hook capture persists artifacts through server and native readback', async (t) => {

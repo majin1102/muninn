@@ -6,6 +6,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { promisify } from 'node:util';
 
+import { muninnSessionKey } from '@muninn/common/session-identity';
 import { handleStop, isStopEvent } from '../dist/hook.js';
 import { readCodexSession, readCodexSessionSummary, resolveProjectIdentity } from '../dist/mapping.js';
 
@@ -37,6 +38,24 @@ async function writeFixtureTranscript(lines = TRANSCRIPT_LINES) {
   const file = path.join(dir, 'rollout-2026-06-10-019eabcd-codex-session.jsonl');
   await writeFile(file, lines.map((line) => JSON.stringify(line)).join('\n'));
   return file;
+}
+
+async function allowCaptureSession(project, sessionId, agent = 'codex') {
+  const home = process.env.MUNINN_HOME;
+  assert.ok(home, 'MUNINN_HOME must be set before allowing capture');
+  await mkdir(home, { recursive: true });
+  let policy = {};
+  try {
+    policy = JSON.parse(await readFile(path.join(home, 'capture.json'), 'utf8'));
+  } catch {
+    policy = {};
+  }
+  policy.capture ??= {};
+  policy.capture.sessions ??= {};
+  policy.capture.sessions[muninnSessionKey({ project, agent, sessionId })] = true;
+  await writeFile(path.join(home, 'capture.json'), JSON.stringify({
+    capture: policy.capture,
+  }));
 }
 
 async function writeFixtureTranscriptWithTwoTurns() {
@@ -93,6 +112,7 @@ test('isStopEvent matches Stop case-insensitively and rejects others', () => {
 test('handleStop maps the latest transcript turn to TurnContent and captures it', async () => {
   const transcriptPath = await writeFixtureTranscript();
   const { captured, client } = captureClient();
+  await allowCaptureSession('/Users/dev/workspace/muninn', '019eabcd-codex-session');
 
   const ok = await handleStop(
     { hook_event_name: 'Stop', transcript_path: transcriptPath, session_id: '019eabcd-codex-session' },
@@ -127,9 +147,10 @@ test('handleStop maps the latest transcript turn to TurnContent and captures it'
   assert.equal(markerContent[LEGACY_SEQUENCE_KEY], undefined);
 });
 
-test('handleStop full parses once but captures only latest turn with turn sequence', async () => {
+test('handleStop captures full transcript from the beginning when progress is absent', async () => {
   const transcriptPath = await writeFixtureTranscriptWithTwoTurns();
   const { captured, client } = captureClient();
+  await allowCaptureSession('/Users/dev/workspace/muninn', '019eabcd-codex-session');
 
   const ok = await handleStop(
     { hook_event_name: 'Stop', transcript_path: transcriptPath, session_id: '019eabcd-codex-session' },
@@ -137,14 +158,17 @@ test('handleStop full parses once but captures only latest turn with turn sequen
   );
 
   assert.equal(ok, true);
-  assert.equal(captured.length, 1);
-  assert.equal(captured[0].turn.prompt, 'read the file');
-  assert.equal(captured[0].turn.turnSequence, 1);
+  assert.equal(captured.length, 2);
+  assert.deepEqual(captured.map(({ turn }) => [turn.prompt, turn.turnSequence]), [
+    ['list the files', 0],
+    ['read the file', 1],
+  ]);
 });
 
 test('handleStop uses transcript cache for appended turns', async () => {
   const transcriptPath = await writeFixtureTranscriptWithTwoTurns();
   const { captured, client } = captureClient();
+  await allowCaptureSession('/Users/dev/workspace/muninn', '019eabcd-codex-session');
 
   await handleStop(
     { hook_event_name: 'Stop', transcript_path: transcriptPath, session_id: '019eabcd-codex-session' },
@@ -156,10 +180,12 @@ test('handleStop uses transcript cache for appended turns', async () => {
     { client },
   );
 
-  assert.equal(captured.length, 2);
-  assert.equal(captured[0].turn.turnSequence, 1);
-  assert.equal(captured[1].turn.prompt, 'summarize it');
-  assert.equal(captured[1].turn.turnSequence, 2);
+  assert.equal(captured.length, 3);
+  assert.deepEqual(captured.map(({ turn }) => [turn.prompt, turn.turnSequence]), [
+    ['list the files', 0],
+    ['read the file', 1],
+    ['summarize it', 2],
+  ]);
 });
 
 test('handleStop returns false when transcript is missing', async () => {
@@ -188,14 +214,17 @@ test('handleStop resolves and caches multiple Codex transcript files independent
     { prompt: 'beta second prompt', response: 'beta second response' },
   ]).map((line) => JSON.stringify(line)).join('\n'));
   const { captured, client } = captureClient();
+  await allowCaptureSession('/Users/dev/workspace/alpha', 'codex-session-a');
+  await allowCaptureSession('/Users/dev/workspace/beta', 'codex-session-b');
 
   assert.equal(await handleStop({ hook_event_name: 'Stop', session_id: 'codex-session-b' }, { client, sessionsRoot }), true);
   assert.equal(await handleStop({ hook_event_name: 'Stop', session_id: 'codex-session-a' }, { client, sessionsRoot }), true);
   await appendCodexTurn(sessionA, 'alpha second prompt', 'alpha second response', 1);
   assert.equal(await handleStop({ hook_event_name: 'Stop', session_id: 'codex-session-a' }, { client, sessionsRoot }), true);
 
-  assert.equal(captured.length, 3);
+  assert.equal(captured.length, 4);
   assert.deepEqual(captured.map(({ turn }) => [turn.sessionId, turn.prompt, turn.turnSequence]), [
+    ['codex-session-b', 'beta first prompt', 0],
     ['codex-session-b', 'beta second prompt', 1],
     ['codex-session-a', 'alpha first prompt', 0],
     ['codex-session-a', 'alpha second prompt', 1],
@@ -219,6 +248,7 @@ test('handleStop resolves transcript by exact session id suffix', async () => {
     [{ prompt: 'right prompt', response: 'right response' }],
   ).map((line) => JSON.stringify(line)).join('\n'));
   const { captured, client } = captureClient();
+  await allowCaptureSession('/Users/dev/workspace/right', 'codex-session');
 
   const ok = await handleStop({ hook_event_name: 'Stop', session_id: 'codex-session' }, { client, sessionsRoot });
 

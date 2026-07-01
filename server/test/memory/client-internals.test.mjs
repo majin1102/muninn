@@ -41,7 +41,7 @@ const {
   toSessionSnapshot,
 } = sessionModule;
 const { captureTurn, memoryPipeline: memoryPipelineApi, shutdownCoreForTests } = core;
-const CHECKPOINT_SCHEMA_VERSION = 12;
+const CHECKPOINT_SCHEMA_VERSION = 13;
 let defaultConfigDir = null;
 
 function createCheckpointBackend(exported = null) {
@@ -79,6 +79,9 @@ function makeCheckpointContent(overrides = {}) {
       baseline: { turn: 10, session: 21 },
       entries: [],
     },
+    dreaming: overrides.dreaming ?? {
+      projects: {},
+    },
   };
 }
 
@@ -102,7 +105,11 @@ async function writeExtractorConfig(configPath, {
   maxAttempts = 3,
   minEpochTurns,
   maxEpochTurns,
+  newBatchInputChars,
+  snapshotInputChars,
+  previewChars,
   epochWindowMs,
+  failedEpochRetryIntervalMs,
   name = 'default-extractor',
 } = {}) {
   await mkdir(path.dirname(configPath), { recursive: true });
@@ -115,7 +122,11 @@ async function writeExtractorConfig(configPath, {
       activeWindowDays,
       ...(minEpochTurns === undefined ? {} : { minEpochTurns }),
       ...(maxEpochTurns === undefined ? {} : { maxEpochTurns }),
+      ...(newBatchInputChars === undefined ? {} : { newBatchInputChars }),
+      ...(snapshotInputChars === undefined ? {} : { snapshotInputChars }),
+      ...(previewChars === undefined ? {} : { previewChars }),
       ...(epochWindowMs === undefined ? {} : { epochWindowMs }),
+      ...(failedEpochRetryIntervalMs === undefined ? {} : { failedEpochRetryIntervalMs }),
     },
     providers: {
       llm: {
@@ -351,9 +362,9 @@ test('memories.get renders extraction memories', async () => {
     turnTable: { get: async () => null },
   };
   const { Memories } = await import('../../dist/api/memory.js');
-  const memory = await new Memories(client).get('extraction:ext-1');
+  const memory = await new Memories(client).get('ext:ext-1');
 
-  assert.equal(memory.memoryId, 'extraction:ext-1');
+  assert.equal(memory.memoryId, 'ext:ext-1');
   assert.equal(memory.title, 'Caroline research');
   assert.equal(memory.summary, 'Caroline researched adoption agencies.');
   assert.match(memory.detail, /References:/);
@@ -440,7 +451,7 @@ function snapshotContentFixture(units, {
     '## Summary',
     summary,
     '',
-    '## Memory Signals',
+    '## Instruction Signals',
     memorySignals.join('\n'),
     '',
     '## Skill Signals',
@@ -494,6 +505,21 @@ function makeTurnContent(prompt, response, overrides = {}) {
       { type: 'assistantMessage', text: response },
     ],
     ...overrides,
+  };
+}
+
+function makeBatchRegistry() {
+  let acceptCount = 0;
+  return {
+    load: async () => ({
+      acceptBatch: async (contents, epoch) => contents.map((content) => {
+        acceptCount += 1;
+        return {
+          turn: makeExtractableTurn(`turn-${acceptCount}`, epoch, content.response),
+          deduped: false,
+        };
+      }),
+    }),
   };
 }
 
@@ -615,7 +641,7 @@ test.after(async () => {
   delete process.env.MUNINN_HOME;
 });
 
-test('getExtractorLlmConfig defaults activeWindowDays to 7 and continuityHints to 1', async (t) => {
+test('getExtractorLlmConfig defaults activeWindowDays continuityHints and failed retry interval', async (t) => {
   const { dir, homeDir, configPath } = await makeConfigHome();
   t.after(async () => rm(dir, { recursive: true, force: true }));
   process.env.MUNINN_HOME = homeDir;
@@ -647,6 +673,7 @@ test('getExtractorLlmConfig defaults activeWindowDays to 7 and continuityHints t
   assert.ok(config);
   assert.equal(config.activeWindowDays, 7);
   assert.equal(config.continuityHints, 1);
+  assert.equal(config.failedEpochRetryIntervalMs, 900_000);
 });
 
 test('resolveNativeBindingPath points at the packaged addon', async () => {
@@ -1330,6 +1357,7 @@ test('checkpoint preserves session runs', async () => {
       }],
     },
     sessionIndex: { baseline: { turn: 1, session: 1 }, entries: [] },
+    dreaming: { projects: {} },
   };
 
   const parsed = parseCheckpointFile(serializeCheckpointFile(file));
@@ -1752,6 +1780,44 @@ test('extractor bootstrap publishes pending turns by their extractionEpoch', asy
     { epoch: 14, turnIds: ['turn-14'] },
   ]);
   assert.equal(extractor.openEpoch.epoch, 15);
+});
+
+test('extractor bootstrap repacks oversized pending epochs by maxEpochTurns', async (t) => {
+  const { dir, homeDir, configPath } = await makeConfigHome();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+  process.env.MUNINN_HOME = homeDir;
+  await writeExtractorConfig(configPath, { minEpochTurns: 3, maxEpochTurns: 4 });
+
+  const published = [];
+  const extractor = new Extractor({
+    turnTable: {
+      loadTurnsAfterEpoch: async () => Array.from({ length: 10 }, (_, index) => (
+        makeExtractableTurn(`turn-${index + 1}`, 13, `epoch13-${index + 1}`)
+      )),
+    },
+    sessionTable: {
+      listSnapshots: async () => [],
+    },
+    extractionTable: {},
+  });
+  t.after(async () => extractor.shutdown());
+
+  extractor.epochQueue.publishEpoch = (sealedEpoch) => {
+    published.push({
+      epoch: sealedEpoch.epoch,
+      commitEpoch: sealedEpoch.commitEpoch,
+      turnIds: sealedEpoch.turns.map((turn) => turn.turnId),
+    });
+  };
+
+  await extractor.ensureBootstrapped();
+
+  assert.deepEqual(published, [
+    { epoch: 13, commitEpoch: null, turnIds: ['turn-1', 'turn-2', 'turn-3', 'turn-4'] },
+    { epoch: 13, commitEpoch: null, turnIds: ['turn-5', 'turn-6', 'turn-7', 'turn-8'] },
+    { epoch: 13, commitEpoch: undefined, turnIds: ['turn-9', 'turn-10'] },
+  ]);
+  assert.equal(extractor.openEpoch.epoch, 14);
 });
 
 test('extractor bootstrap restores committed state from checkpoint when baselines match', async (t) => {
@@ -2612,6 +2678,86 @@ test('muninn.memoryFinalize triggers drain and returns pending watermark without
   assert.equal(checkpointFlushCalls, 1);
 });
 
+test('backend.memoryWatermark returns while checkpoint mutex is busy', async (t) => {
+  const muninn = MuninnBackend.createForTests({});
+  const release = deferred();
+  const blocker = muninn.checkpointMutex.run(() => release.promise);
+  muninn.extractor = {
+    watermark: async () => ({
+      pending: { turns: ['turn:pending'] },
+      phases: { extractor: 'running' },
+    }),
+    shutdown: async () => {},
+  };
+  t.after(async () => {
+    release.resolve();
+    await blocker;
+  });
+
+  const result = await Promise.race([
+    muninn.memoryWatermark(),
+    new Promise((resolve) => setTimeout(() => resolve('blocked'), 25)),
+  ]);
+
+  assert.notEqual(result, 'blocked');
+  assert.deepEqual(result.pending.turns, ['turn:pending']);
+  assert.equal(result.phases.extractor, 'running');
+});
+
+test('backend.listSessionIndex returns while checkpoint mutex is busy', async (t) => {
+  const { dir, homeDir, configPath } = await makeConfigHome();
+  const previousHome = process.env.MUNINN_HOME;
+  process.env.MUNINN_HOME = homeDir;
+  t.after(async () => {
+    if (previousHome === undefined) {
+      delete process.env.MUNINN_HOME;
+    } else {
+      process.env.MUNINN_HOME = previousHome;
+    }
+    await rm(dir, { recursive: true, force: true });
+  });
+  await writeExtractorConfig(configPath);
+
+  const checkpoint = makeCheckpointContent({
+    sessionIndex: {
+      baseline: { turn: 10, session: 21 },
+      entries: [{
+        sessionId: 'session-a',
+        agent: 'codex',
+        project: 'muninn',
+        cwd: '/workspace/muninn',
+        latestUpdatedAt: '2026-06-02T10:00:00.000Z',
+      }],
+    },
+  });
+  const client = {
+    turnTable: {
+      delta: async () => [],
+      stats: async () => ({ version: 10, rowCount: 1, fragmentCount: 1 }),
+    },
+    sessionTable: {
+      delta: async () => ({ sourceVersion: 21, rows: [] }),
+      stats: async () => ({ version: 21, rowCount: 1, fragmentCount: 1 }),
+    },
+  };
+  const muninn = MuninnBackend.createForTests(client, checkpoint);
+  const release = deferred();
+  const blocker = muninn.checkpointMutex.run(() => release.promise);
+  t.after(async () => {
+    release.resolve();
+    await blocker;
+  });
+
+  const result = await Promise.race([
+    muninn.listSessionIndex(),
+    new Promise((resolve) => setTimeout(() => resolve('blocked'), 25)),
+  ]);
+
+  assert.notEqual(result, 'blocked');
+  assert.equal(result.length, 1);
+  assert.equal(result[0].sessionId, 'session-a');
+});
+
 test('recallMemories searches extraction routes and enriches hits', async () => {
   const calls = [];
   const client = {
@@ -2678,7 +2824,7 @@ test('recallMemories searches extraction routes and enriches hits', async () => 
 
   assert.deepEqual(hits, [
     {
-      memoryId: 'extraction:raw-2',
+      memoryId: 'ext:raw-2',
       title: 'Counseling work',
       summary: 'Counseling work\n\nCaroline is interested in counseling work.',
       content: extractionContent('Counseling work', 'Caroline is interested in counseling work.'),
@@ -2784,8 +2930,8 @@ test('recallMemories returns recalled memory when budget is positive', async () 
   }]);
   assert.equal(calls[0].limit, 20);
   assert.deepEqual(seenCandidates.map((candidate) => candidate.memoryId), [
-    'extraction:ext-1',
-    'extraction:ext-2',
+    'ext:ext-1',
+    'ext:ext-2',
   ]);
 });
 
@@ -3335,8 +3481,8 @@ test('session extraction batch input uses turn headings without horizontal rules
   assert.match(rendered, /## Current Batch Turns/);
   assert.match(rendered, /### turn:1/);
   assert.match(rendered, /### turn:2/);
-  assert.match(rendered, /Prompt \(memory signal evidence\):\nFirst prompt/);
-  assert.match(rendered, /Response \(workflow context, not memory signal evidence\):\nFirst response/);
+  assert.match(rendered, /Prompt \(instruction signal evidence\):\nFirst prompt/);
+  assert.match(rendered, /Response \(workflow context, not instruction signal evidence\):\nFirst response/);
   assert.doesNotMatch(rendered, /^----$/m);
   assert.doesNotMatch(rendered, /Summary:/);
 });
@@ -3531,6 +3677,28 @@ test('extractor validation derives extractions from titled snapshot content', ()
   }]);
 });
 
+test('extractor validation falls back to first prompt when model returns empty title', () => {
+  const result = extractorLlmTesting.validateSessionExtractionResultForTests(
+    '# (empty)',
+    {
+      sessionMemory: {
+        title: 'Session group-a',
+        summary: 'Default session memory thread for session group-a.',
+        extractions: [],
+        nextSteps: [],
+      },
+      turns: [{
+        turnId: 'turn:13',
+        prompt: 'Run hook smoke test 3',
+        response: 'Acknowledged hook smoke test 3.',
+      }],
+    },
+  );
+
+  assert.equal(result.title, 'Run hook smoke test 3');
+  assert.equal(result.summary, 'This session has no durable memory summary yet.');
+});
+
 test('extractor validation preserves session-level signals in snapshot content', () => {
   const result = extractorLlmTesting.validateSessionExtractionResultForTests(
     snapshotContentFixture([
@@ -3581,7 +3749,7 @@ test('extractor validation preserves session-level signals in snapshot content',
     'Extractor signal review': 'Confirm parser support before asking the model to emit a new Markdown section.',
   });
   assert.equal(result.extractions[0]?.context, '- Keep the signal recall-ready without a rigid pseudo-schema.');
-  assert.match(result.snapshotContent, /## Memory Signals\n- \[turn:13 \+1\] The user prefers/);
+  assert.match(result.snapshotContent, /## Instruction Signals\n- \[turn:13 \+1\] The user prefers/);
   assert.match(result.snapshotContent, /## Skill Signals\n- \[turn:13 \+1\] Extractor signal review:/);
   assert.match(result.snapshotContent, /## Skill Details\n### Extractor signal review/);
   assert.match(result.snapshotContent, /\[turn:13 \+1\] The user prefers concise Markdown signals/);
@@ -3616,7 +3784,7 @@ test('snapshot content round-trips split signal sections and skill details', () 
     }],
   );
 
-  assert.match(rendered, /## Memory Signals\n- \[turn:13 \+1\] Keep TypeScript session state/);
+  assert.match(rendered, /## Instruction Signals\n- \[turn:13 \+1\] Keep TypeScript session state/);
   assert.match(rendered, /## Skill Signals\n- \[turn:13 \+1\] TypeScript native:/);
   assert.doesNotMatch(rendered, /## Open Questions/);
   assert.match(rendered, /## Skill Details\n### TypeScript native/);
@@ -3636,7 +3804,7 @@ test('snapshot content rejects removed Open Questions section', () => {
       '## Summary',
       'Summary.',
       '',
-      '## Memory Signals',
+      '## Instruction Signals',
       '',
       '## Skill Signals',
       '',
@@ -3676,7 +3844,7 @@ test('snapshot parser treats skill details and extractions as section boundaries
       context: [
         'Context can mention a snapshot heading.',
         '',
-        '## Memory Signals',
+        '## Instruction Signals',
         'This belongs to extraction content.',
       ].join('\n'),
       references: ['turn:13'],
@@ -3688,12 +3856,33 @@ test('snapshot parser treats skill details and extractions as section boundaries
   assert.equal(parsed.extractions[0].context, [
     'Context can mention a snapshot heading.',
     '',
-    '## Memory Signals',
+    '## Instruction Signals',
     'This belongs to extraction content.',
   ].join('\n'));
 });
 
 test('snapshot parser rejects unknown top-level sections before extractions', () => {
+  assert.throws(
+    () => parseSnapshotContent([
+      '# Parser Boundaries',
+      '',
+      '## Summary',
+      'The parser rejects legacy instruction signal sections.',
+      '',
+      '## Memory Signals',
+      '- [turn:13 +1] Legacy instruction signal section.',
+      '',
+      '## Extractions',
+      '<!-- refs: [turn:13] -->',
+      '### Title',
+      'Parser boundary',
+      '',
+      '### Summary',
+      'Legacy instruction signal sections are not accepted.',
+    ].join('\n'), new Set(['turn:13'])),
+    /unsupported snapshot content document heading: ## Memory Signals/i,
+  );
+
   assert.throws(
     () => parseSnapshotContent([
       '# Parser Boundaries',
@@ -3730,6 +3919,65 @@ test('snapshot parser rejects unknown top-level sections before extractions', ()
     }),
     /unsupported snapshot patch heading: ## Signals/i,
   );
+});
+
+test('session snapshot deserialization normalizes legacy Memory Signals heading', () => {
+  const legacyContent = [
+    '# Legacy Snapshot',
+    '',
+    '## Summary',
+    'Legacy persisted snapshots can still be restored.',
+    '',
+    '## Memory Signals',
+    '- [turn:13 +1] Keep restored instructions available.',
+    '',
+    '## Skill Signals',
+    '',
+    '## Skill Details',
+    '',
+    '## Extractions',
+    '<!-- refs: [turn:13] -->',
+    '### Title',
+    'Legacy extraction',
+    '',
+    '### Summary',
+    'Legacy extraction content can mention the old heading after the extraction section.',
+    '',
+    '### Content',
+    'This content mentions a literal heading:',
+    '',
+    '## Memory Signals',
+    'This belongs to extraction content and should not be rewritten.',
+  ].join('\n');
+
+  const [thread] = loadThreads([{
+    snapshotId: 'snapshot-legacy-memory-signals',
+    sessionId: 'session-legacy-memory-signals',
+    project: 'project-a',
+    cwd: '/workspace/project-a',
+    agent: 'agent-a',
+    snapshotSequence: 0,
+    createdAt: '2024-01-01T00:00:00Z',
+    updatedAt: '2024-01-01T00:00:00Z',
+    extractor: 'default-extractor',
+    title: 'Legacy Snapshot',
+    summary: 'Legacy persisted snapshots can still be restored.',
+    memorySignals: [
+      '- [turn:13 +1] Keep restored instructions available.',
+    ],
+    skillSignals: [],
+    skillDetails: '{}',
+    content: legacyContent,
+    references: ['turn:13'],
+  }], 'default-extractor', 3650);
+
+  assert.deepEqual(thread.snapshots[0].memorySignals, [
+    '- [turn:13 +1] Keep restored instructions available.',
+  ]);
+  const preExtractions = thread.snapshots[0].snapshotContent.split('\n## Extractions\n')[0];
+  assert.match(preExtractions, /## Instruction Signals/);
+  assert.doesNotMatch(preExtractions, /^## Memory Signals$/m);
+  assert.match(thread.snapshots[0].extractions[0].context ?? '', /## Memory Signals/);
 });
 
 test('snapshot parser rejects invalid skill signal and unmatched skill detail names', () => {
@@ -3792,6 +4040,52 @@ test('session snapshot deserialization rejects invalid skillDetails JSON', () =>
   );
 });
 
+test('snapshot patch with unchanged title preserves existing content', () => {
+  const baseInput = {
+    sessionMemory: {
+      title: 'Extractor Signals',
+      summary: 'Extractor prompt design.',
+      memorySignals: [
+        '- [turn:13 +1] Keep signal bullets under named subsections.',
+      ],
+      skillSignals: [
+        '- [turn:13 +1] Extractor signal review: Preserve parser support notes.',
+      ],
+      skillDetails: {
+        'Extractor signal review': 'Preserve parser support notes.',
+      },
+      extractions: [{
+        title: 'Signal handling',
+        text: 'Signal handling preserves existing parser support notes.',
+        context: null,
+        references: ['turn:13'],
+      }],
+      nextSteps: [],
+    },
+    turns: [{
+      turnId: 'turn:13',
+      summary: 'The user refined extractor signal handling.',
+    }],
+  };
+
+  const result = extractorLlmTesting.validateSessionExtractionResultForTests(
+    '# Extractor Signals',
+    baseInput,
+  );
+
+  assert.equal(result.title, 'Extractor Signals');
+  assert.equal(result.summary, 'Extractor prompt design.');
+  assert.deepEqual(result.memorySignals, baseInput.sessionMemory.memorySignals);
+  assert.deepEqual(result.skillSignals, baseInput.sessionMemory.skillSignals);
+  assert.deepEqual(result.skillDetails, baseInput.sessionMemory.skillDetails);
+  assert.deepEqual(result.extractions.map((extraction) => ({
+    title: extraction.title,
+    text: extraction.text,
+    context: extraction.context,
+    references: extraction.references,
+  })), baseInput.sessionMemory.extractions);
+});
+
 test('snapshot patch can preserve, replace, and clear session-level signals', () => {
   const baseInput = {
     sessionMemory: {
@@ -3831,7 +4125,7 @@ test('snapshot patch can preserve, replace, and clear session-level signals', ()
   });
 
   const replaced = extractorLlmTesting.validateSessionExtractionResultForTests([
-    '## Memory Signals',
+    '## Instruction Signals',
     '- [turn:13 +1] Signals are session-level state.',
     '',
     '## Skill Signals',
@@ -3853,7 +4147,7 @@ test('snapshot patch can preserve, replace, and clear session-level signals', ()
   });
 
   const cleared = extractorLlmTesting.validateSessionExtractionResultForTests([
-    '## Memory Signals',
+    '## Instruction Signals',
     '',
     '## Skill Signals',
     '',
@@ -3902,14 +4196,14 @@ test('snapshot patch can preserve, replace, and clear session-level signals', ()
   };
   assert.deepEqual(
     extractorLlmTesting.validateSessionExtractionResultForTests([
-      '## Memory Signals',
+      '## Instruction Signals',
       '- [turn:12 +1] Preserve exact existing evidence contribution.',
     ].join('\n'), existingEvidenceInput).memorySignals,
     ['- [turn:12 +1] Preserve exact existing evidence contribution.'],
   );
   assert.throws(
     () => extractorLlmTesting.validateSessionExtractionResultForTests([
-      '## Memory Signals',
+      '## Instruction Signals',
       '- [turn:12 +10] Preserve exact existing evidence contribution.',
     ].join('\n'), existingEvidenceInput),
     /referenced unknown evidence turn id: turn:12/i,
@@ -4013,8 +4307,8 @@ test('session extraction turn input omits turn summary when prompt and response 
   }]);
 
   assert.match(markdown, /## Current Batch Turns/);
-  assert.match(markdown, /Prompt \(memory signal evidence\):\nUser asked whether app session rows should use snapshot titles\./);
-  assert.match(markdown, /Response \(workflow context, not memory signal evidence\):\nAgent confirmed the session index should cache the latest snapshot title\./);
+  assert.match(markdown, /Prompt \(instruction signal evidence\):\nUser asked whether app session rows should use snapshot titles\./);
+  assert.match(markdown, /Response \(workflow context, not instruction signal evidence\):\nAgent confirmed the session index should cache the latest snapshot title\./);
   assert.doesNotMatch(markdown, /Summary:/);
   assert.doesNotMatch(markdown, /This old turn summary repeats/);
 });
@@ -4068,7 +4362,7 @@ test('snapshot patch allows signal-like headings inside extraction content', () 
     '### Content',
     'The extraction context can include a heading-like line.',
     '',
-    '## Memory Signals',
+    '## Instruction Signals',
     'This is extraction content, not a snapshot signal section.',
   ].join('\n'), {
     sessionMemory: {
@@ -4083,7 +4377,7 @@ test('snapshot patch allows signal-like headings inside extraction content', () 
   assert.equal(result.extractions[0].context, [
     'The extraction context can include a heading-like line.',
     '',
-    '## Memory Signals',
+    '## Instruction Signals',
     'This is extraction content, not a snapshot signal section.',
   ].join('\n'));
 });
@@ -4314,7 +4608,7 @@ test('thread session get_extraction expands visible extraction sequences only', 
   assert.match(firstUserMessage.content, /## Current Snapshot/);
   assert.match(firstUserMessage.content, /# Caroline support group/);
   assert.match(firstUserMessage.content, /## Summary/);
-  assert.match(firstUserMessage.content, /## Memory Signals\n\(empty\)/);
+  assert.match(firstUserMessage.content, /## Instruction Signals\n\(empty\)/);
   assert.match(firstUserMessage.content, /## Skill Signals\n\(empty\)/);
   assert.doesNotMatch(firstUserMessage.content, /## Open Questions/);
   assert.match(firstUserMessage.content, /## Extractions/);
@@ -4340,6 +4634,15 @@ test('thread session get_extraction expands visible extraction sequences only', 
   assert.equal(result.extractions[0].category, undefined);
   assert.deepEqual(result.extractions[0].references, ['turn:0', 'turn:1']);
   const trace = JSON.parse(await readFile(tracePath, 'utf8'));
+  const systemMessage = requests[0].messages.find((message) => message.role === 'system');
+  assert.ok(systemMessage);
+  assert.equal(trace.inputBudget.newBatchInputChars, 16_384);
+  assert.equal(trace.inputBudget.systemPromptChars, systemMessage.content.length);
+  assert.equal(trace.inputBudget.initialRequestChars, systemMessage.content.length + firstUserMessage.content.length);
+  assert.equal(trace.inputBudget.userPromptOverheadChars, firstUserMessage.content.length
+    - trace.inputBudget.snapshotRenderedChars
+    - trace.inputBudget.newBatchRenderedChars);
+  assert.equal('maxInputChars' in trace.inputBudget, false);
   assert.equal(trace.toolCalls[0].name, 'get_extraction');
   assert.equal(trace.extractions[0].text, 'Caroline attended an LGBTQ support group on 7 May 2023.');
   assert.match(trace.finalText, /## Summary/);
@@ -4469,7 +4772,7 @@ test('thread session get_turn reads only current batch prompt and response with 
       nextSteps: [],
     },
     turns: [{
-      turnId: '123',
+      turnId: 'turn:123',
       prompt: '用户说这个方案需要看完整 prompt。',
       response: '这里是完整 response。',
     }],
@@ -4482,11 +4785,11 @@ test('thread session get_turn reads only current batch prompt and response with 
           toolCalls: [{
             id: 'call-1',
             name: 'get_turn',
-            arguments: { turnId: '123' },
+            arguments: { turnId: 'turn:123' },
           }, {
             id: 'call-2',
             name: 'get_turn',
-            arguments: { turnId: '999' },
+            arguments: { turnId: '123' },
           }],
         };
       }
@@ -4502,23 +4805,25 @@ test('thread session get_turn reads only current batch prompt and response with 
 
   const getTurnSpec = requests[0].tools.find((tool) => tool.name === 'get_turn');
   assert.ok(getTurnSpec);
-  assert.match(getTurnSpec.description, /current-batch turn/i);
+  assert.match(getTurnSpec.description, /target conversation turn/i);
   assert.equal(getTurnSpec.parameters.properties.turnId.type, 'string');
+  assert.match(getTurnSpec.parameters.properties.turnId.description, /exact current-batch turn id/i);
+  assert.doesNotMatch(getTurnSpec.parameters.properties.turnId.description, /without a turn: prefix/i);
 
   const toolMessages = requests[1].messages.filter((message) => message.role === 'tool');
   assert.deepEqual(JSON.parse(toolMessages[0].content), {
-    turnId: '123',
+    turnId: 'turn:123',
     prompt: '用户说这个方案需要看完整 prompt。',
     response: '这里是完整 response。',
   });
   assert.deepEqual(JSON.parse(toolMessages[1].content), {
-    turnId: '999',
+    turnId: '123',
     error: 'turn is not in the current extraction request',
   });
   assert.equal(Object.prototype.hasOwnProperty.call(JSON.parse(toolMessages[0].content), 'omittedPromptChars'), false);
 
   const trace = JSON.parse(await readFile(tracePath, 'utf8'));
-  assert.equal(trace.getTurnResults[0].turnId, '123');
+  assert.equal(trace.getTurnResults[0].turnId, 'turn:123');
   assert.equal(trace.getTurnResults[0].returnedPromptChars > 0, true);
   assert.equal(trace.getTurnResults[1].error, 'turn is not in the current extraction request');
 });
@@ -4754,50 +5059,131 @@ test('thread session requires get_extraction before updating an existing sequenc
   assert.match(traceLines[0].validationError, /sequence 0 must be read with get_extraction/i);
 });
 
-test('thread session allows at most five get_extraction calls', async (t) => {
+test('thread session returns a tool error for repeated get_extraction sequences', async (t) => {
   const { dir, homeDir, configPath } = await makeConfigHome();
   t.after(async () => rm(dir, { recursive: true, force: true }));
 
   process.env.MUNINN_HOME = homeDir;
   await writeOpenAiExtractorConfig(configPath);
 
-  let calls = 0;
-  await assert.rejects(
-    extractorLlmModule.extractSessionMemory({
-      sessionMemory: {
-        title: 'Caroline support group',
-        summary: 'Caroline discussed a support group.',
-        extractions: [{
-          id: 'obs-1',
-          title: 'Support group attendance',
-          text: 'Existing support extraction.',
-          context: null,
-          category: 'Other',
-          references: ['turn:0'],
-        }],
-        nextSteps: [],
-      },
-      turns: [{
-        turnId: 'turn:1',
-        prompt: 'Caroline clarified more support group details.',
-        response: 'Update the support group memory.',
+  const requests = [];
+  const result = await extractorLlmModule.extractSessionMemory({
+    sessionMemory: {
+      title: 'Caroline support group',
+      summary: 'Caroline discussed a support group.',
+      extractions: [{
+        id: 'obs-1',
+        title: 'Support group attendance',
+        text: 'Existing support extraction.',
+        context: '- Existing support detail.',
+        category: 'Other',
+        references: ['turn:0'],
+      }, {
+        id: 'obs-2',
+        title: 'Support group timing',
+        text: 'Existing timing extraction.',
+        context: '- Existing timing detail.',
+        category: 'Other',
+        references: ['turn:0'],
       }],
-    }, undefined, {
-      model: async () => {
-        calls += 1;
+      nextSteps: [],
+    },
+    turns: [{
+      turnId: 'turn:1',
+      prompt: 'Caroline clarified more support group details.',
+      response: 'Update the support group memory.',
+    }],
+  }, undefined, {
+    model: async (_task, request) => {
+      requests.push(request);
+      if (requests.length === 1) {
         return {
           type: 'tool_calls',
           toolCalls: [{
-            id: `call-${calls}`,
+            id: 'call-1',
             name: 'get_extraction',
-            arguments: { sequences: [0] },
+            arguments: { sequences: [0, 1] },
           }],
         };
-      },
-    }),
-    /get_extraction exceeded max calls: 5|tool loop exceeded maxSteps=6/i,
-  );
-  assert.ok(calls >= 6);
+      }
+      if (requests.length === 2) {
+        return {
+          type: 'tool_calls',
+          toolCalls: [{
+            id: 'call-2',
+            name: 'get_extraction',
+            arguments: { sequences: [1] },
+          }],
+        };
+      }
+      const toolMessages = request.messages.filter((message) => message.role === 'tool');
+      const repeatPayload = JSON.parse(toolMessages.at(-1).content);
+      assert.match(repeatPayload.error, /already requested/i);
+      assert.deepEqual(repeatPayload.alreadyRequested, [1]);
+      return {
+        type: 'final',
+        text: '# Caroline support group',
+      };
+    },
+  });
+
+  assert.equal(result.title, 'Caroline support group');
+  assert.equal(requests.length, 3);
+});
+
+test('thread session allows at most two accepted get_extraction calls', async (t) => {
+  const { dir, homeDir, configPath } = await makeConfigHome();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+
+  process.env.MUNINN_HOME = homeDir;
+  await writeOpenAiExtractorConfig(configPath);
+
+  const requests = [];
+  const result = await extractorLlmModule.extractSessionMemory({
+    sessionMemory: {
+      title: 'Caroline support group',
+      summary: 'Caroline discussed a support group.',
+      extractions: [0, 1, 2].map((index) => ({
+        id: `obs-${index + 1}`,
+        title: `Support group detail ${index + 1}`,
+        text: `Existing support extraction ${index + 1}.`,
+        context: null,
+        category: 'Other',
+        references: ['turn:0'],
+      })),
+      nextSteps: [],
+    },
+    turns: [{
+      turnId: 'turn:1',
+      prompt: 'Caroline clarified more support group details.',
+      response: 'Update the support group memory.',
+    }],
+  }, undefined, {
+    model: async (_task, request) => {
+      requests.push(request);
+      if (requests.length <= 3) {
+        return {
+          type: 'tool_calls',
+          toolCalls: [{
+            id: `call-${requests.length}`,
+            name: 'get_extraction',
+            arguments: { sequences: [requests.length - 1] },
+          }],
+        };
+      }
+      const toolMessages = request.messages.filter((message) => message.role === 'tool');
+      const overLimitPayload = JSON.parse(toolMessages.at(-1).content);
+      assert.match(overLimitPayload.error, /exceeded max calls: 2/i);
+      assert.equal(overLimitPayload.maxCalls, 2);
+      return {
+        type: 'final',
+        text: '# Caroline support group',
+      };
+    },
+  });
+
+  assert.equal(result.title, 'Caroline support group');
+  assert.equal(requests.length, 4);
 });
 
 test('thread session omits generated default session title from memory input', async (t) => {
@@ -4900,7 +5286,7 @@ test('thread session traces invalid markdown attempts without JSON retry instruc
   assert.ok(retryUserMessage);
   assert.match(retryUserMessage.content, /Previous output was invalid/);
   assert.match(retryUserMessage.content, /Return only a valid Markdown snapshot patch/);
-  assert.match(retryUserMessage.content, /optional `## Memory Signals`/);
+  assert.match(retryUserMessage.content, /optional `## Instruction Signals`/);
   assert.match(retryUserMessage.content, /optional `## Skill Signals`/);
   assert.doesNotMatch(retryUserMessage.content, /optional `## Open Questions`/);
   assert.match(retryUserMessage.content, /optional `## Skill Details`/);
@@ -4913,6 +5299,117 @@ test('thread session traces invalid markdown attempts without JSON retry instruc
   assert.match(traceLines[0].validationError, /must return snapshot content Markdown, not JSON/);
   assert.equal(traceLines[1].attempt, 2);
   assert.match(traceLines[1].finalText, /# Caroline Support Group/);
+});
+
+test('thread session retries empty final model output as invalid markdown', async (t) => {
+  const { dir, homeDir, configPath } = await makeConfigHome();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+
+  process.env.MUNINN_HOME = homeDir;
+  await writeOpenAiExtractorConfig(configPath);
+  const tracePath = path.join(dir, 'thread-session-empty-final-trace.jsonl');
+  process.env.MUNINN_SESSION_MEMORY_TRACE_FILE = tracePath;
+  t.after(() => {
+    delete process.env.MUNINN_SESSION_MEMORY_TRACE_FILE;
+  });
+
+  const requests = [];
+  await assert.rejects(
+    extractorLlmModule.extractSessionMemory({
+      sessionMemory: {
+        title: 'Empty final retry',
+        summary: '',
+        extractions: [],
+        nextSteps: [],
+      },
+      turns: [{
+        turnId: 'turn:1',
+        prompt: 'Keep a useful durable context update from this turn.',
+        response: 'The extractor should retry empty model output before failing.',
+      }],
+    }, undefined, {
+      model: async (_task, request) => {
+        requests.push(request);
+        return {
+          type: 'final',
+          text: '',
+        };
+      },
+    }),
+    /extraction update returned invalid output: extraction update returned no output/,
+  );
+
+  assert.equal(requests.length, 3);
+  const retryUserMessage = requests[1].messages.find((message) => message.role === 'user');
+  assert.ok(retryUserMessage);
+  assert.match(retryUserMessage.content, /Previous output was invalid/);
+  assert.match(retryUserMessage.content, /extraction update returned no output/);
+
+  const traceLines = (await readFile(tracePath, 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
+  assert.equal(traceLines.length, 3);
+  assert.equal(traceLines[0].rawText, '');
+  assert.match(traceLines[0].validationError, /extraction update returned no output/);
+});
+
+test('thread session retries transient tool model errors', async (t) => {
+  const { dir, homeDir, configPath } = await makeConfigHome();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+
+  process.env.MUNINN_HOME = homeDir;
+  await writeOpenAiExtractorConfig(configPath);
+  const tracePath = path.join(dir, 'thread-session-tool-error-trace.jsonl');
+  process.env.MUNINN_SESSION_MEMORY_TRACE_FILE = tracePath;
+  t.after(() => {
+    delete process.env.MUNINN_SESSION_MEMORY_TRACE_FILE;
+  });
+
+  const requests = [];
+  const result = await extractorLlmModule.extractSessionMemory({
+    sessionMemory: {
+      title: 'Tool model retry',
+      summary: '',
+      extractions: [],
+      nextSteps: [],
+    },
+    turns: [{
+      turnId: 'turn:1',
+      prompt: 'Keep this durable extractor retry behavior.',
+      response: 'The extractor should retry transient provider empty parse failures.',
+    }],
+  }, undefined, {
+    model: async (_task, request) => {
+      requests.push(request);
+      if (requests.length === 1) {
+        throw new Error('openai-codex response did not contain text output or tool calls; empty parsed codex response');
+      }
+      return {
+        type: 'final',
+        text: snapshotContentFixture(
+          [
+            '<!-- refs: [turn:1] -->',
+            '### Title',
+            'Extractor provider retry',
+            '',
+            '### Summary',
+            'The extractor retries transient provider empty parse failures before failing the epoch.',
+          ].join('\n'),
+          { title: 'Tool model retry' },
+        ),
+      };
+    },
+  });
+
+  assert.equal(requests.length, 2);
+  assert.equal(result.extractions[0].title, 'Extractor provider retry');
+  const retryUserMessage = requests[1].messages.find((message) => message.role === 'user');
+  assert.ok(retryUserMessage);
+  assert.match(retryUserMessage.content, /empty parsed codex response/);
+  assert.match(retryUserMessage.content, /Before outputting any existing `sequence: N` extraction update/);
+
+  const traceLines = (await readFile(tracePath, 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
+  assert.equal(traceLines.length, 2);
+  assert.match(traceLines[0].validationError, /empty parsed codex response/);
+  assert.equal(traceLines[1].finalText.includes('Extractor provider retry'), true);
 });
 
 test('thread session omits default session summary from memory input', async (t) => {
@@ -5002,9 +5499,9 @@ test('thread session inlines chat memory categories', async (t) => {
     },
   });
 
-  assert.match(requests[0].messages[0].content, /Each extraction must include `### Title`/);
-  assert.match(requests[0].messages[0].content, /`### Content` is optional/);
-  assert.match(requests[0].messages[0].content, /durable topic: a decision, requirement, preference, correction/);
+  assert.match(requests[0].messages[0].content, /Create or update extraction units for durable context/);
+  assert.match(requests[0].messages[0].content, /Treat each extraction as a compact semantic recall unit/);
+  assert.match(requests[0].messages[0].content, /Extraction block shape: metadata comment, literal `### Title` followed by title text/);
   assert.doesNotMatch(requests[0].messages[0].content, /Domain guidance/);
   assert.doesNotMatch(requests[0].messages[0].content, /domain_prompt/);
   assert.doesNotMatch(requests[0].messages[0].content, /Extraction granularity/);
@@ -5401,6 +5898,53 @@ test('extractEpoch groups mixed session turns before session', async () => {
   assert.equal(snapshotRows.length, 2);
 });
 
+test('extractEpochDraft does not persist session rows before flushThreads', async () => {
+  const threads = [];
+  let insertCalls = 0;
+  const client = {
+    sessionTable: {
+      insert: async ({ snapshots }) => {
+        insertCalls += 1;
+        return snapshots.map((snapshot, index) => ({
+          ...snapshot,
+          snapshotId: `snapshot-${index + 1}`,
+        }));
+      },
+    },
+  };
+  const sessionExtractionImpl = async (input) => ({
+    title: input.sessionMemory.title,
+    snapshotContent: '',
+    extractions: [],
+    nextSteps: [],
+    contextRefs: input.turns.map((turn) => ({
+      turnId: turn.turnId,
+      summary: `${turn.turnId} relevant content`,
+    })),
+  });
+
+  const result = await sessionTesting.extractEpochDraft({
+    client,
+    extractorName: 'default-extractor',
+    activeWindowDays: 3650,
+    threads,
+    sealedEpoch: {
+      epoch: 2,
+      turns: [makeExtractableTurn('session:a1', 2, 'a1')],
+    },
+    sessionExtractionImpl,
+  });
+
+  assert.equal(insertCalls, 0);
+  assert.equal(result.threads.length, 1);
+  assert.deepEqual(result.threads[0].snapshotIds, []);
+
+  await sessionTesting.flushThreads(client, result.threads, result.touchedIds);
+
+  assert.equal(insertCalls, 1);
+  assert.deepEqual(result.threads[0].snapshotIds, ['snapshot-1']);
+});
+
 test('extractEpoch chunks same-session turns by maxEpochTurns', async () => {
   const threads = [];
   const extractionInputs = [];
@@ -5462,7 +6006,7 @@ test('extractEpoch chunks same-session turns by maxEpochTurns', async () => {
   assert.deepEqual(result.threads[0].snapshotIds, ['snapshot-1', 'snapshot-2', 'snapshot-3']);
 });
 
-test('extractEpoch chunks same-session turns by rendered maxInputChars', async () => {
+test('extractEpoch chunks same-session turns by rendered newBatchInputChars', async () => {
   const threads = [];
   const extractionInputs = [];
   const snapshotRows = [];
@@ -5501,7 +6045,7 @@ test('extractEpoch chunks same-session turns by rendered maxInputChars', async (
     extractorName: 'default-extractor',
     activeWindowDays: 3650,
     maxEpochTurns: 32,
-    maxInputChars: 900,
+    newBatchInputChars: 900,
     previewChars: 800,
     threads,
     sealedEpoch: {
@@ -5512,7 +6056,7 @@ test('extractEpoch chunks same-session turns by rendered maxInputChars', async (
   });
 
   assert.deepEqual(extractionInputs.map((input) => input.turns.length), [2, 2]);
-  assert.deepEqual(extractionInputs.map((input) => input.inputBudgetStoppedBy), ['max-input-chars', 'none']);
+  assert.deepEqual(extractionInputs.map((input) => input.inputBudgetStoppedBy), ['new-batch-input-chars', 'none']);
   assert.deepEqual(extractionInputs.map((input) => input.deferredTurnCount), [2, 0]);
   assert.equal(snapshotRows.length, 2);
 });
@@ -6044,6 +6588,64 @@ test('extractor.watermark blocks later epochs after terminal epoch failures', as
   assert.equal(watermark.phases.extractor, 'error');
 });
 
+test('extractor retries terminal failed epochs after configured cooldown', async (t) => {
+  const { dir, homeDir, configPath } = await makeConfigHome();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+
+  process.env.MUNINN_HOME = homeDir;
+  await writeExtractorConfig(configPath, {
+    maxAttempts: 2,
+    failedEpochRetryIntervalMs: 25,
+  });
+
+  const extractor = new Extractor({});
+  extractor.bootstrapped = true;
+  extractor.openEpoch = new OpenEpoch(2);
+  extractor.currentEpoch = {
+    epoch: 1,
+    turns: [makeExtractableTurn('turn-retry', 1, 'retry extraction')],
+  };
+
+  let attempts = 0;
+  extractor.extractCurrentEpoch = async () => {
+    attempts += 1;
+    if (attempts <= 2) {
+      throw new Error('temporary provider outage');
+    }
+    extractor.currentEpoch = null;
+    extractor.currentEpochAttempts = 0;
+    extractor.lastEpochError = undefined;
+    extractor.notifyChange();
+  };
+
+  const runPromise = extractor.run();
+  t.after(async () => {
+    extractor.shuttingDown = true;
+    extractor.notifyChange();
+    extractor.epochQueue.close();
+    await runPromise;
+  });
+
+  let watermark = await extractor.watermark();
+  for (let attempt = 0; attempt < 50 && watermark.phases.extractor !== 'error'; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    watermark = await extractor.watermark();
+  }
+
+  assert.equal(attempts, 2);
+  assert.equal(watermark.phases.extractor, 'error');
+  assert.deepEqual(watermark.pending.turns, ['turn-retry']);
+
+  for (let attempt = 0; attempt < 50 && attempts < 3; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+
+  assert.equal(attempts, 3);
+  watermark = await extractor.watermark();
+  assert.equal(watermark.phases.extractor, 'idle');
+  assert.deepEqual(watermark.pending.turns, []);
+});
+
 test('extractor.accept keeps a partial epoch open until minEpochTurns is reached', async (t) => {
   const { dir, homeDir, configPath } = await makeConfigHome();
   t.after(async () => rm(dir, { recursive: true, force: true }));
@@ -6084,6 +6686,84 @@ test('extractor.accept keeps a partial epoch open until minEpochTurns is reached
 
   assert.equal(extractor.openEpoch.epoch, 2);
   assert.deepEqual(extractor.epochQueue.pendingTurns().map((turn) => turn.turnId), ['turn-1', 'turn-2', 'turn-3']);
+});
+
+test('extractor.acceptBatch packs large batches by maxEpochTurns and leaves tail open', async (t) => {
+  const { dir, homeDir, configPath } = await makeConfigHome();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+
+  process.env.MUNINN_HOME = homeDir;
+  await writeExtractorConfig(configPath, {
+    minEpochTurns: 3,
+    maxEpochTurns: 4,
+    epochWindowMs: 10_000,
+  });
+
+  const extractor = new Extractor(makeExtractorClient());
+  extractor.bootstrapped = true;
+  extractor.openEpoch = new OpenEpoch(1);
+  t.after(async () => extractor.shutdown());
+
+  const turns = Array.from({ length: 10 }, (_, index) => (
+    makeTurnContent(`prompt ${index + 1}`, `response ${index + 1}`)
+  ));
+
+  const accepted = await extractor.acceptBatch(turns, makeBatchRegistry());
+  await extractor.publishChain;
+
+  assert.equal(accepted, 10);
+  assert.equal(extractor.openEpoch.epoch, 3);
+  assert.deepEqual(extractor.epochQueue.pendingTurns().map((turn) => turn.turnId), [
+    'turn-1',
+    'turn-2',
+    'turn-3',
+    'turn-4',
+    'turn-5',
+    'turn-6',
+    'turn-7',
+    'turn-8',
+  ]);
+  assert.deepEqual(extractor.openEpoch.stagedTurns().map((turn) => turn.turnId), [
+    'turn-9',
+    'turn-10',
+  ]);
+});
+
+test('extractor.acceptBatch packs large batches by rendered newBatchInputChars', async (t) => {
+  const { dir, homeDir, configPath } = await makeConfigHome();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+
+  process.env.MUNINN_HOME = homeDir;
+  await writeExtractorConfig(configPath, {
+    minEpochTurns: 3,
+    maxEpochTurns: 32,
+    newBatchInputChars: 900,
+    previewChars: 800,
+    epochWindowMs: 10_000,
+  });
+
+  const extractor = new Extractor(makeExtractorClient());
+  extractor.bootstrapped = true;
+  extractor.openEpoch = new OpenEpoch(1);
+  t.after(async () => extractor.shutdown());
+
+  const turns = Array.from({ length: 4 }, (_, index) => (
+    makeTurnContent(`prompt ${index + 1}`, 'x'.repeat(180))
+  ));
+
+  const accepted = await extractor.acceptBatch(turns, makeBatchRegistry());
+  await extractor.publishChain;
+
+  assert.equal(accepted, 4);
+  assert.equal(extractor.openEpoch.epoch, 2);
+  assert.deepEqual(extractor.epochQueue.pendingTurns().map((turn) => turn.turnId), [
+    'turn-1',
+    'turn-2',
+  ]);
+  assert.deepEqual(extractor.openEpoch.stagedTurns().map((turn) => turn.turnId), [
+    'turn-3',
+    'turn-4',
+  ]);
 });
 
 test('extractor.accept seals a partial epoch when the epoch window expires', async (t) => {

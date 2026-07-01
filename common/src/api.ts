@@ -108,6 +108,21 @@ export interface MemoryWatermarkResponse extends MemoryWatermark {
   requestId: string;
 }
 
+export type AppStatusLevel = 'ok' | 'warning' | 'error';
+
+export interface AppStatusResponse {
+  status: AppStatusLevel;
+  extractor: {
+    phase: MemoryWatermark['phases']['extractor'];
+    pendingTurns: number;
+    error?: {
+      phase: 'extractor';
+      message: string;
+    };
+  };
+  requestId: string;
+}
+
 export interface RecallRequest {
   query: string;
   database?: string;

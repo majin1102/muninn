@@ -10,7 +10,7 @@ import {
 } from './checkpoint.js';
 import { resolveDatabaseLogPath, resolveDatabaseName, type WatchdogConfig } from './config.js';
 import { writeMuninnLog } from './logging.js';
-import type { CheckpointLock, MuninnBackend } from './backend.js';
+import type { MuninnBackend } from './backend.js';
 import type { NativeTables, TableStats } from './native.js';
 
 type DatasetName = 'turn' | 'session' | 'extraction';
@@ -42,10 +42,6 @@ type DatasetState = {
 
 const WATCHDOG_LOG_FILE_NAME = 'watchdog.jsonl';
 const DATASETS: DatasetName[] = ['turn', 'session', 'extraction'];
-const noopCheckpointLock: CheckpointLock = {
-  shared: async (operation) => operation(),
-  exclusive: async (operation) => operation(),
-};
 
 export class Watchdog {
   private timer: NodeJS.Timeout | null = null;
@@ -71,7 +67,6 @@ export class Watchdog {
       exportCheckpoint: async () => null,
     },
     lastCheckpointJson: string | null = null,
-    private readonly checkpointLock: CheckpointLock = noopCheckpointLock,
     database: string = 'main',
   ) {
     this.lastCheckpointJson = lastCheckpointJson;
@@ -201,7 +196,7 @@ export class Watchdog {
   }
 
   private async maintainTurns(): Promise<void> {
-    await this.checkpointLock.shared(() => this.runDatasetMaintenance('turn', async (setVersion) => {
+    await this.runDatasetMaintenance('turn', async (setVersion) => {
       const stats = await this.binding.turnTable.stats();
       if (!stats) {
         this.resetState('turn');
@@ -228,11 +223,11 @@ export class Watchdog {
         fragmentCount: finalStats.fragmentCount,
         rowCount: finalStats.rowCount,
       });
-    }));
+    });
   }
 
   private async maintainSessions(): Promise<void> {
-    await this.checkpointLock.shared(() => this.runDatasetMaintenance('session', async (setVersion) => {
+    await this.runDatasetMaintenance('session', async (setVersion) => {
       const stats = await this.binding.sessionTable.stats();
       if (!stats) {
         this.resetState('session');
@@ -259,11 +254,11 @@ export class Watchdog {
         fragmentCount: finalStats.fragmentCount,
         rowCount: finalStats.rowCount,
       });
-    }));
+    });
   }
 
   private async maintainExtraction(): Promise<void> {
-    await this.checkpointLock.shared(() => this.runDatasetMaintenance('extraction', async (setVersion) => {
+    await this.runDatasetMaintenance('extraction', async (setVersion) => {
       const ensured = await this.binding.extractionTable.ensureVectorIndex({
         targetPartitionSize: this.config.extraction.targetPartitionSize,
       });
@@ -312,7 +307,7 @@ export class Watchdog {
         rowCount: finalStats.rowCount,
         indexCreated: ensured.created,
       });
-    }));
+    });
   }
 
   private async runDatasetMaintenance(
@@ -388,12 +383,13 @@ export class Watchdog {
       schemaVersion: checkpoint.schemaVersion,
       extractor: checkpoint.extractor,
       sessionIndex: checkpoint.sessionIndex,
+      dreaming: checkpoint.dreaming,
     });
     await this.updateCheckpointFloors(checkpoint);
   }
 
   private async updateCheckpointFloors(checkpoint: CheckpointContent | CheckpointFile): Promise<void> {
-    const floors = await checkpointFloors(checkpoint, this.binding);
+    const floors = await checkpointFloors(checkpoint);
     for (const dataset of DATASETS) {
       const current = this.state.get(dataset);
       this.state.set(dataset, {
@@ -499,10 +495,10 @@ export class Watchdog {
 
 async function checkpointFloors(
   checkpoint: CheckpointContent | CheckpointFile,
-  binding: Partial<Pick<NativeTables, 'dreamingProjectTable'>>,
 ): Promise<Record<DatasetName, number | null>> {
-  const dreamingProjects = await binding.dreamingProjectTable?.list() ?? [];
-  const dreamingSessionFloor = minNumber(dreamingProjects.map((entry) => entry.sessionSnapshotVersion));
+  const dreamingSessionFloor = minNumber(
+    Object.values(checkpoint.dreaming.projects).map((entry) => entry.sessionSnapshotVersion),
+  );
   const sessionFloor = minNumber([
     checkpoint.extractor.baseline.session,
     checkpoint.sessionIndex.baseline.session,

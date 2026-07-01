@@ -1,5 +1,6 @@
 import type {
   AgentNode,
+  AppStatusResponse,
   CodexImportPreviewResponse,
   CodexImportRunResponse,
   DeleteImportedProjectResponse,
@@ -96,6 +97,7 @@ export type AppClient = {
   apiBase: string;
   usesDemoData: boolean;
   getVersion(): Promise<string>;
+  getStatus(): Promise<AppStatusResponse>;
   getProjects(): Promise<ProjectNode[]>;
   listProjectDreamProjects(): Promise<ProjectDreamProjectView[]>;
   getProjectDream(project: string): Promise<ProjectDreamView>;
@@ -151,6 +153,14 @@ type VersionResponse = {
 
 export const DEFAULT_BACKEND_VERSION = '0.1.0';
 const SESSION_TURN_PAGE_SIZE = 16;
+const DEMO_APP_STATUS: AppStatusResponse = {
+  status: 'ok',
+  extractor: {
+    phase: 'idle',
+    pendingTurns: 0,
+  },
+  requestId: 'demo-status',
+};
 
 function desktopBootstrap(): MuninnDesktopBootstrap | undefined {
   return window.__MUNINN_DESKTOP__;
@@ -240,6 +250,12 @@ export function createAppClient(apiBase: string, usesDemoData: boolean): AppClie
       } catch {
         return DEFAULT_BACKEND_VERSION;
       }
+    },
+    getStatus() {
+      if (usesDemoData) {
+        return Promise.resolve(DEMO_APP_STATUS);
+      }
+      return fetchJson<AppStatusResponse>('/app/api/status');
     },
     async getProjects() {
       const agents = usesDemoData

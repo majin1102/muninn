@@ -52,7 +52,7 @@ export function assertMemoryIdLayer(memoryId: string, expectedLayer: 'turn' | 's
 
 export function parseExtractionMemoryId(memoryId: string): string {
   const [layer, id, extra] = memoryId.split(':');
-  if (layer !== 'extraction' || !id || extra !== undefined) {
+  if (layer !== 'ext' || !id || extra !== undefined) {
     throw new Error(`invalid extraction memory id: ${memoryId}`);
   }
   return id;
@@ -71,7 +71,7 @@ export function inferRenderedMemoryKind(memoryId: string): 'turn' | 'session' | 
   if (memoryId.startsWith('turn:')) {
     return 'turn';
   }
-  if (memoryId.startsWith('extraction:')) {
+  if (memoryId.startsWith('ext:')) {
     return 'extraction';
   }
   return 'session';
@@ -136,7 +136,7 @@ export function renderExtraction(memory: Extraction): RenderedMemory {
     : undefined;
   const detail = [content, references].filter(Boolean).join('\n\n') || undefined;
   return {
-    memoryId: `extraction:${memory.id}`,
+    memoryId: `ext:${memory.id}`,
     title: memory.title,
     summary: memory.summary,
     detail,
@@ -442,7 +442,7 @@ export async function recallMemories(
       return [];
     }
     const candidates = extractionRows.map((row) => ({
-      memoryId: `extraction:${row.id}`,
+      memoryId: `ext:${row.id}`,
       content: row.content,
       refs: row.turnRefs,
     }));
@@ -468,7 +468,7 @@ export async function recallMemories(
 
 async function extractionHit(client: NativeTables, row: Extraction): Promise<RecallHit> {
   return {
-    memoryId: `extraction:${row.id}`,
+    memoryId: `ext:${row.id}`,
     title: row.title,
     summary: row.summary,
     content: row.content,
@@ -603,7 +603,7 @@ export class Memories {
   }
 
   async get(memoryId: string): Promise<RenderedMemory | null> {
-    if (memoryId.startsWith('extraction:')) {
+    if (memoryId.startsWith('ext:')) {
       const extraction = await getExtraction(this.client, memoryId);
       return extraction ? renderExtraction(extraction) : null;
     }

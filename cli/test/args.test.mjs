@@ -62,10 +62,30 @@ test('parseArgs parses install target and common flags', () => {
   });
 });
 
+test('parseArgs leaves install serverUrl unset when flag is omitted', () => {
+  assert.deepEqual(parseArgs(['install', 'codex']), {
+    command: 'install',
+    target: 'codex',
+    mcpOnly: false,
+    hookOnly: false,
+    scope: 'user',
+    serverUrl: undefined,
+    dryRun: false,
+    yes: false,
+  });
+});
+
 test('parseArgs rejects mcp as install target', () => {
   assert.throws(
     () => parseArgs(['install', 'mcp']),
     /install target must be one of: codex, claude, all/,
+  );
+});
+
+test('parseArgs rejects removed skill-capture command', () => {
+  assert.throws(
+    () => parseArgs(['skill-capture', '+1']),
+    /unknown command: skill-capture/,
   );
 });
 

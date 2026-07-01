@@ -14,10 +14,11 @@
   },
   "files": [
     "dist",
+    "skills",
     "README.md"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "rm -rf dist && tsc -p tsconfig.json",
     "dev": "tsc -p tsconfig.json --watch",
     "test": "pnpm build && node --test test/*.test.mjs"
   },
