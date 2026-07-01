@@ -38,7 +38,7 @@ test('hook config falls back to live managed server state', async (t) => {
 test('captureFromTranscript enables current session capture from marker and captures prior turns', async (t) => {
   const { home, transcriptPath } = await writeAgentSession([
     { prompt: 'remember this', response: 'noted' },
-    { prompt: '$muninn-capture +1', response: ENABLE_MARKER },
+    { prompt: '$remember-session', response: ENABLE_MARKER },
   ]);
   setMuninnHome(t, home);
   const captured = [];
@@ -79,7 +79,7 @@ test('captureFromTranscript enables current session capture from marker and capt
 
 test('captureFromTranscript advances progress for marker-only enable turn', async (t) => {
   const { home, transcriptPath } = await writeAgentSession([
-    { prompt: '$muninn-capture +1', response: ENABLE_MARKER },
+    { prompt: '$remember-session', response: ENABLE_MARKER },
   ]);
   setMuninnHome(t, home);
   const captured = [];
@@ -172,7 +172,7 @@ test('captureFromTranscript enables current session capture without replaying ca
 test('captureFromTranscript does not advance progress when marker capture fails', async (t) => {
   const { home, transcriptPath } = await writeAgentSession([
     { prompt: 'remember this', response: 'noted' },
-    { prompt: '$muninn-capture +1', response: ENABLE_MARKER },
+    { prompt: '$remember-session', response: ENABLE_MARKER },
   ]);
   setMuninnHome(t, home);
   let finalized = 0;
@@ -205,7 +205,7 @@ test('captureFromTranscript does not advance progress when marker capture fails'
 test('captureFromTranscript disables current session capture from marker and deletes session', async (t) => {
   const { home, transcriptPath } = await writeAgentSession([
     { prompt: 'remember this', response: 'noted' },
-    { prompt: '$muninn-capture -1', response: DISABLE_MARKER },
+    { prompt: '$forget-session', response: DISABLE_MARKER },
   ]);
   setMuninnHome(t, home);
   const sessionKey = muninnSessionKey({ project: 'github.com/example/muninn', sessionId: 'session-a', agent: 'codex' });
