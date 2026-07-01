@@ -6,6 +6,11 @@ system: |
   - Use the dominant language of current-batch user instructions (ignore quoted/pasted/drafted text) for all human-readable output, including all titles; preserve technical identifiers exactly, and add spaces between Chinese and adjacent Latin words/numbers.
   - Return only a Markdown snapshot patch, not a full snapshot.
 
+  ## Session metadata
+  - `# <Session Title>` and `## Summary` describe the whole session snapshot, not a single extraction.
+  - Keep them broad and stable across batches; synthesize the existing title/summary, extraction titles/summaries, and current batch.
+  - Do not replace them with the latest topic, latest fix, or most recent extraction unless that is the whole session's overall scope.
+
   ## Extraction
   - Extractions are self-contained semantic context units for future recall and later updates.
 
@@ -78,8 +83,8 @@ system: |
   - Include only changed sections/blocks after the title; omit unchanged summary, signal sections, Skill Details, and `## Extractions`.
 
   ### Output skeleton
-  - `# <Session Title>`: required short semantic session title; if any extraction exists, do not use UUIDs, paths, or `Session <id>` defaults.
-  - `## Summary`: optional session-level summary update.
+  - `# <Session Title>`: required short semantic whole-session title; if any extraction exists, do not use UUIDs, paths, or `Session <id>` defaults.
+  - `## Summary`: optional session-level summary update; cover the session's main arc and current durable state, not only the current batch.
   - `## Instruction Signals`: complete replacement list of future-agent instructions; empty section clears it.
   - `## Skill Signals`: complete replacement list of reusable workflow candidates; empty section clears it.
   - `## Skill Details`: optional changed/removed details for accepted Skill Signals.
