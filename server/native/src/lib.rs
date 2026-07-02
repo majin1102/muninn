@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use muninn_format::{
     Dreaming, DreamingProject, DreamingProjectTable, DreamingTable, Extraction, ExtractionTable,
-    MemoryId, MemoryLayer, RecallMode, SessionSnapshot, SessionTable, TableOptions, Turn,
-    TurnTable, data_root,
+    MemoryId, MemoryLayer, RecallMode, SessionIdentity, SessionSearch, SessionSearchTable,
+    SessionSnapshot, SessionTable, TableOptions, Turn, TurnTable, data_root,
 };
 use napi::{Error, Result as NapiResult};
 use napi_derive::napi;
@@ -18,6 +18,7 @@ struct CoreResources {
     dreaming_table: DreamingTable,
     dreaming_project_table: DreamingProjectTable,
     session_table: SessionTable,
+    session_search_table: SessionSearchTable,
     turn_table: TurnTable,
     extraction_table: ExtractionTable,
 }
@@ -100,6 +101,44 @@ struct SessionInsertParams {
 #[serde(rename_all = "camelCase")]
 struct SessionDeleteParams {
     snapshot_ids: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionSearchSearchParams {
+    query: String,
+    vector: Vec<f32>,
+    limit: usize,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionSearchGetParams {
+    identities: Vec<SessionIdentity>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionSearchListParams {
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionSearchUpsertParams {
+    rows: Vec<SessionSearch>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionSearchReplaceAllParams {
+    rows: Vec<SessionSearch>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionSearchDeleteParams {
+    identities: Vec<SessionIdentity>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -515,6 +554,136 @@ impl CoreBinding {
         into_napi_value(resources.session_table.describe().await)
     }
 
+    #[napi(js_name = "sessionSearchSearch")]
+    pub async fn session_search_search(&self, params: Value) -> NapiResult<Value> {
+        let params = parse_params::<SessionSearchSearchParams>(params)?;
+        let resources = self.resources().await?;
+        into_napi_value(
+            resources
+                .session_search_table
+                .search(&params.query, &params.vector, params.limit)
+                .await,
+        )
+    }
+
+    #[napi(js_name = "sessionSearchGet")]
+    pub async fn session_search_get(&self, params: Value) -> NapiResult<Value> {
+        let params = parse_params::<SessionSearchGetParams>(params)?;
+        let resources = self.resources().await?;
+        into_napi_value(resources.session_search_table.get(&params.identities).await)
+    }
+
+    #[napi(js_name = "sessionSearchList")]
+    pub async fn session_search_list(&self, params: Value) -> NapiResult<Value> {
+        let params = parse_params::<SessionSearchListParams>(params)?;
+        let resources = self.resources().await?;
+        into_napi_value(resources.session_search_table.list(params.limit).await)
+    }
+
+    #[napi(js_name = "sessionSearchUpsert")]
+    pub async fn session_search_upsert(&self, params: Value) -> NapiResult<()> {
+        let params = parse_params::<SessionSearchUpsertParams>(params)?;
+        let resources = self.resources().await?;
+        resources
+            .session_search_table
+            .upsert(params.rows)
+            .await
+            .map_err(to_napi_error)
+    }
+
+    #[napi(js_name = "sessionSearchReplaceAll")]
+    pub async fn session_search_replace_all(&self, params: Value) -> NapiResult<()> {
+        let params = parse_params::<SessionSearchReplaceAllParams>(params)?;
+        let resources = self.resources().await?;
+        resources
+            .session_search_table
+            .replace_all(params.rows)
+            .await
+            .map_err(to_napi_error)
+    }
+
+    #[napi(js_name = "sessionSearchDelete")]
+    pub async fn session_search_delete(&self, params: Value) -> NapiResult<Value> {
+        let params = parse_params::<SessionSearchDeleteParams>(params)?;
+        let resources = self.resources().await?;
+        let deleted = resources
+            .session_search_table
+            .delete(params.identities)
+            .await
+            .map_err(to_napi_error)?;
+        to_napi_value(DeletedCount { deleted })
+    }
+
+    #[napi(js_name = "sessionSearchValidateDimensions")]
+    pub async fn session_search_validate_dimensions(&self, params: Value) -> NapiResult<()> {
+        let params = parse_params::<ExpectedDimensionsParams>(params)?;
+        let resources = self.resources().await?;
+        resources
+            .session_search_table
+            .validate_dimensions(params.expected)
+            .await
+            .map_err(to_napi_error)
+    }
+
+    #[napi(js_name = "sessionSearchTableStats")]
+    pub async fn session_search_table_stats(&self) -> NapiResult<Value> {
+        let resources = self.resources().await?;
+        into_napi_value(resources.session_search_table.stats().await)
+    }
+
+    #[napi(js_name = "sessionSearchEnsureVectorIndex")]
+    pub async fn session_search_ensure_vector_index(&self, params: Value) -> NapiResult<Value> {
+        let params = parse_params::<TargetPartitionSizeParams>(params)?;
+        let resources = self.resources().await?;
+        let created = resources
+            .session_search_table
+            .ensure_vector_index(params.target_partition_size)
+            .await
+            .map_err(to_napi_error)?;
+        to_napi_value(CreatedResult { created })
+    }
+
+    #[napi(js_name = "sessionSearchCompact")]
+    pub async fn session_search_compact(&self) -> NapiResult<Value> {
+        let resources = self.resources().await?;
+        let changed = resources
+            .session_search_table
+            .compact()
+            .await
+            .map_err(to_napi_error)?;
+        to_napi_value(ChangedResult { changed })
+    }
+
+    #[napi(js_name = "sessionSearchCleanup")]
+    pub async fn session_search_cleanup(&self, params: Value) -> NapiResult<Value> {
+        let params = parse_params::<CleanupParams>(params)?;
+        let resources = self.resources().await?;
+        let changed = resources
+            .session_search_table
+            .cleanup(params.floor_version)
+            .await
+            .map_err(to_napi_error)?;
+        to_napi_value(ChangedResult { changed })
+    }
+
+    #[napi(js_name = "sessionSearchOptimize")]
+    pub async fn session_search_optimize(&self, params: Value) -> NapiResult<Value> {
+        let params = parse_params::<OptimizeParams>(params)?;
+        let resources = self.resources().await?;
+        let changed = resources
+            .session_search_table
+            .optimize(params.merge_count)
+            .await
+            .map_err(to_napi_error)?;
+        to_napi_value(ChangedResult { changed })
+    }
+
+    #[napi(js_name = "describeSessionSearchTable")]
+    pub async fn describe_session_search_table(&self) -> NapiResult<Value> {
+        let resources = self.resources().await?;
+        into_napi_value(resources.session_search_table.describe().await)
+    }
+
     #[napi(js_name = "dreamingGet")]
     pub async fn dreaming_get(&self, dreaming_id: String) -> NapiResult<Value> {
         let resources = self.resources().await?;
@@ -786,6 +955,7 @@ pub fn create_core_binding(params: Option<Value>) -> NapiResult<CoreBinding> {
     let session_table = SessionTable::new(table_options.clone());
     let dreaming_table = DreamingTable::new(table_options.clone());
     let dreaming_project_table = DreamingProjectTable::new(table_options.clone());
+    let session_search_table = SessionSearchTable::new(table_options.clone());
     let extraction_table = ExtractionTable::new(table_options);
     Ok(CoreBinding {
         inner: Arc::new(CoreState {
@@ -794,6 +964,7 @@ pub fn create_core_binding(params: Option<Value>) -> NapiResult<CoreBinding> {
                 dreaming_project_table,
                 turn_table,
                 session_table,
+                session_search_table,
                 extraction_table,
             })),
         }),

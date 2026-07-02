@@ -82,6 +82,25 @@ export interface SessionSnapshotRow {
   references: string[];
 }
 
+export type SessionSearchIdentity = {
+  project: string;
+  agent: string;
+  sessionId: string;
+};
+
+export type SessionSearchRow = {
+  latestSnapshotId: string;
+  sessionId: string;
+  project: string;
+  cwd: string;
+  agent: string;
+  title: string;
+  summary: string;
+  searchText: string;
+  vector: number[];
+  updatedAt: string;
+};
+
 export type DreamingSupportTurn = {
   turnId: string;
   createdAt: string;
@@ -117,6 +136,7 @@ export type ExtractionRow = {
 
 export type Turn = TurnRow;
 export type SessionSnapshot = SessionSnapshotRow;
+export type SessionSearch = SessionSearchRow;
 export type Dreaming = DreamingRow;
 export type Extraction = ExtractionRow;
 
@@ -177,6 +197,40 @@ type NativeCoreBinding = {
   sessionCompact(): MaybePromise<CompactResult>;
   sessionCleanup(params: {
     floorVersion: number;
+  }): MaybePromise<CompactResult>;
+  sessionSearchSearch(params: {
+    query: string;
+    vector: number[];
+    limit: number;
+  }): MaybePromise<SessionSearch[]>;
+  sessionSearchGet(params: {
+    identities: SessionSearchIdentity[];
+  }): MaybePromise<SessionSearch[]>;
+  sessionSearchList(params: {
+    limit?: number;
+  }): MaybePromise<SessionSearch[]>;
+  sessionSearchUpsert(params: {
+    rows: SessionSearch[];
+  }): MaybePromise<void>;
+  sessionSearchReplaceAll(params: {
+    rows: SessionSearch[];
+  }): MaybePromise<void>;
+  sessionSearchDelete(params: {
+    identities: SessionSearchIdentity[];
+  }): MaybePromise<{ deleted: number }>;
+  sessionSearchValidateDimensions(params: {
+    expected: number;
+  }): MaybePromise<void>;
+  sessionSearchTableStats(): MaybePromise<TableStats | null>;
+  sessionSearchEnsureVectorIndex(params: {
+    targetPartitionSize: number;
+  }): MaybePromise<EnsureVectorIndexResult>;
+  sessionSearchCompact(): MaybePromise<CompactResult>;
+  sessionSearchCleanup(params: {
+    floorVersion: number;
+  }): MaybePromise<CompactResult>;
+  sessionSearchOptimize(params: {
+    mergeCount: number;
   }): MaybePromise<CompactResult>;
   dreamingGet(dreamingId: string): MaybePromise<DreamingRow | null>;
   dreamingList(): MaybePromise<DreamingRow[]>;
@@ -241,6 +295,7 @@ type NativeCoreBinding = {
   }): MaybePromise<CompactResult>;
   describeTurnTable(): MaybePromise<TableDescription | null>;
   describeSessionTable(): MaybePromise<TableDescription | null>;
+  describeSessionSearchTable(): MaybePromise<TableDescription | null>;
   describeDreamingTable(): MaybePromise<TableDescription | null>;
   describeExtractionTable(): MaybePromise<TableDescription | null>;
 };
@@ -343,6 +398,44 @@ export interface DreamingProjectTableBinding {
   }): Promise<void>;
 }
 
+export interface SessionSearchTableBinding {
+  search(params: {
+    query: string;
+    vector: number[];
+    limit: number;
+  }): Promise<SessionSearchRow[]>;
+  get(params: {
+    identities: SessionSearchIdentity[];
+  }): Promise<SessionSearchRow[]>;
+  list(params: {
+    limit?: number;
+  }): Promise<SessionSearchRow[]>;
+  upsert(params: {
+    rows: SessionSearchRow[];
+  }): Promise<void>;
+  replaceAll(params: {
+    rows: SessionSearchRow[];
+  }): Promise<void>;
+  delete(params: {
+    identities: SessionSearchIdentity[];
+  }): Promise<{ deleted: number }>;
+  validateDimensions(params: {
+    expected: number;
+  }): Promise<void>;
+  stats(): Promise<TableStats | null>;
+  ensureVectorIndex(params: {
+    targetPartitionSize: number;
+  }): Promise<EnsureVectorIndexResult>;
+  compact(): Promise<CompactResult>;
+  cleanup(params: {
+    floorVersion: number;
+  }): Promise<CompactResult>;
+  optimize(params: {
+    mergeCount: number;
+  }): Promise<CompactResult>;
+  describe(): Promise<TableDescription | null>;
+}
+
 export interface ExtractionTableBinding {
   nearest(params: {
     vector: number[];
@@ -392,6 +485,7 @@ export interface NativeTables {
   sessionTable: SessionTableBinding;
   dreamingTable: DreamingTableBinding;
   dreamingProjectTable: DreamingProjectTableBinding;
+  sessionSearchTable: SessionSearchTableBinding;
   extractionTable: ExtractionTableBinding;
 }
 
@@ -500,6 +594,21 @@ function wrapBinding(native: NativeCoreBinding): NativeTables {
       ),
       upsert: async (params) => resolveNativeResult(native.dreamingProjectUpsert(params)),
     },
+    sessionSearchTable: {
+      search: async (params) => resolveNativeResult(native.sessionSearchSearch(params)),
+      get: async (params) => resolveNativeResult(native.sessionSearchGet(params)),
+      list: async (params) => resolveNativeResult(native.sessionSearchList(params)),
+      upsert: async (params) => resolveNativeResult(native.sessionSearchUpsert(params)),
+      replaceAll: async (params) => resolveNativeResult(native.sessionSearchReplaceAll(params)),
+      delete: async (params) => resolveNativeResult(native.sessionSearchDelete(params)),
+      validateDimensions: async (params) => resolveNativeResult(native.sessionSearchValidateDimensions(params)),
+      stats: async () => resolveNativeResult(native.sessionSearchTableStats()),
+      ensureVectorIndex: async (params) => resolveNativeResult(native.sessionSearchEnsureVectorIndex(params)),
+      compact: async () => resolveNativeResult(native.sessionSearchCompact()),
+      cleanup: async (params) => resolveNativeResult(native.sessionSearchCleanup(params)),
+      optimize: async (params) => resolveNativeResult(native.sessionSearchOptimize(params)),
+      describe: async () => resolveNativeResult(native.describeSessionSearchTable()),
+    },
     extractionTable: {
       nearest: async (params) => resolveNativeResult(native.extractionNearest(params)),
       search: async (params) => resolveNativeResult(native.extractionSearch(params)),
@@ -537,6 +646,7 @@ export type TableName =
   | 'turn'
   | 'session'
   | 'dreaming'
+  | 'sessionSearch'
   | 'extraction';
 
 export class TableMutationLocks {
@@ -587,6 +697,16 @@ export function lockNativeTables<T extends NativeTables>(tables: T, locks: Table
     dreamingProjectTable: tables.dreamingProjectTable && {
       ...tables.dreamingProjectTable,
       upsert: (params) => locks.with('dreaming', () => tables.dreamingProjectTable.upsert(params)),
+    },
+    sessionSearchTable: tables.sessionSearchTable && {
+      ...tables.sessionSearchTable,
+      upsert: (params) => locks.with('sessionSearch', () => tables.sessionSearchTable.upsert(params)),
+      replaceAll: (params) => locks.with('sessionSearch', () => tables.sessionSearchTable.replaceAll(params)),
+      delete: (params) => locks.with('sessionSearch', () => tables.sessionSearchTable.delete(params)),
+      ensureVectorIndex: (params) => locks.with('sessionSearch', () => tables.sessionSearchTable.ensureVectorIndex(params)),
+      compact: () => locks.with('sessionSearch', () => tables.sessionSearchTable.compact()),
+      cleanup: (params) => locks.with('sessionSearch', () => tables.sessionSearchTable.cleanup(params)),
+      optimize: (params) => locks.with('sessionSearch', () => tables.sessionSearchTable.optimize(params)),
     },
     extractionTable: tables.extractionTable && {
       ...tables.extractionTable,

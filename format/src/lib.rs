@@ -7,6 +7,7 @@ pub(crate) mod maintenance;
 pub mod memory_id;
 pub mod schema;
 pub mod session;
+pub mod session_search;
 pub mod turn;
 
 pub use access::{TableDescription, TableOptions, TableStats};
@@ -17,4 +18,5 @@ pub use dreaming::{
 pub use extraction::{Extraction, ExtractionTable, RecallMode};
 pub use memory_id::{MemoryId, MemoryLayer, deserialize_memory_id, serialize_memory_id};
 pub use session::{ObservedMemory, SessionSnapshot, SessionTable, SourceRows};
+pub use session_search::{SessionIdentity, SessionSearch, SessionSearchTable};
 pub use turn::{Artifact, Turn, TurnEvent, TurnTable};

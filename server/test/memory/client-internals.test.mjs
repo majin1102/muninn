@@ -25,7 +25,7 @@ import extractorLlmModule from '../../dist/llm/extractor.js';
 import { applyExtractionChanges, applyExtractionTableChanges } from '../../dist/pipeline/extraction.js';
 import { recallMemories } from '../../dist/api/memory.js';
 import { validateMemoryRecallResult } from '../../dist/api/memory.js';
-import { getNativeTables } from '../../dist/native.js';
+import { createNativeTables, getNativeTables } from '../../dist/native.js';
 
 const { __testing: indexTesting } = extractionIndexModule;
 const { __testing: sessionTesting } = sessionModule;
@@ -229,7 +229,7 @@ test('dreaming scheduler defaults to enabled thirty minute interval and validate
   })), /dreaming\.intervalMs must be a positive integer/);
 });
 
-test('native bindings expose turn session dreaming and extraction tables', async () => {
+test('native bindings expose turn session dreaming session search and extraction tables', async () => {
   const tables = await getNativeTables();
   assert.equal(typeof tables.turnTable.listTurns, 'function');
   assert.equal(typeof tables.sessionTable.listSnapshots, 'function');
@@ -246,6 +246,87 @@ test('native bindings expose turn session dreaming and extraction tables', async
   assert.equal(typeof tables.extractionTable.compact, 'function');
   assert.equal(typeof tables.extractionTable.cleanup, 'function');
   assert.equal(typeof tables.extractionTable.optimize, 'function');
+  assert.equal(typeof tables.sessionSearchTable.search, 'function');
+  assert.equal(typeof tables.sessionSearchTable.upsert, 'function');
+  assert.equal(typeof tables.sessionSearchTable.replaceAll, 'function');
+  assert.equal(typeof tables.sessionSearchTable.delete, 'function');
+  assert.equal(typeof tables.sessionSearchTable.ensureVectorIndex, 'function');
+  assert.equal(typeof tables.sessionSearchTable.optimize, 'function');
+});
+
+test('session search native wrapper roundtrips rows with escaped identities', async (t) => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'muninn-session-search-native-'));
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+  const tables = await createNativeTables({
+    uri: `file-object-store://${path.join(dir, 'data')}`,
+  });
+  t.after(async () => tables.close());
+  const identity = {
+    project: "project 'quoted'",
+    agent: "codex 'agent'",
+    sessionId: "session 'one'",
+  };
+  const row = {
+    latestSnapshotId: 'snapshot-a',
+    ...identity,
+    cwd: "/repo/project 'quoted'",
+    title: 'Adoption agency shortlist',
+    summary: 'Caroline researched adoption agencies.',
+    searchText: 'Caroline researched adoption agencies and summer timing.',
+    vector: [1, 0, 0, 0, 0, 0, 0, 0],
+    updatedAt: '2024-01-01T00:00:00Z',
+  };
+
+  await tables.sessionSearchTable.upsert({ rows: [row] });
+  assert.deepEqual(await tables.sessionSearchTable.get({ identities: [identity] }), [row]);
+  assert.deepEqual(
+    (await tables.sessionSearchTable.search({
+      query: 'adoption agencies',
+      vector: [0, 1, 0, 0, 0, 0, 0, 0],
+      limit: 1,
+    })).map((hit) => hit.latestSnapshotId),
+    ['snapshot-a'],
+  );
+  await tables.sessionSearchTable.validateDimensions({ expected: 8 });
+  await assert.rejects(
+    () => tables.sessionSearchTable.validateDimensions({ expected: 4 }),
+    /session_search dimension mismatch/,
+  );
+
+  const replacement = {
+    latestSnapshotId: 'snapshot-b',
+    project: "project 'replacement'",
+    agent: "claude 'agent'",
+    sessionId: "session 'two'",
+    cwd: "/repo/project 'replacement'",
+    title: 'Lake painting notes',
+    summary: 'Melanie painted a lake sunrise.',
+    searchText: 'Melanie painted a lake sunrise.',
+    vector: [0, 1, 0, 0, 0, 0, 0, 0],
+    updatedAt: '2024-01-02T00:00:00Z',
+  };
+  await tables.sessionSearchTable.replaceAll({ rows: [replacement] });
+  assert.deepEqual(await tables.sessionSearchTable.get({ identities: [identity] }), []);
+  assert.deepEqual(
+    await tables.sessionSearchTable.get({
+      identities: [{
+        project: replacement.project,
+        agent: replacement.agent,
+        sessionId: replacement.sessionId,
+      }],
+    }),
+    [replacement],
+  );
+
+  const deleted = await tables.sessionSearchTable.delete({
+    identities: [{
+      project: replacement.project,
+      agent: replacement.agent,
+      sessionId: replacement.sessionId,
+    }],
+  });
+  assert.deepEqual(deleted, { deleted: 1 });
+  assert.deepEqual(await tables.sessionSearchTable.list({}), []);
 });
 
 test('table mutation locks serialize writes on the same table', async () => {
@@ -328,6 +409,47 @@ test('lockNativeTables serializes same-table mutations without locking reads', a
   await upsertEntered.promise;
   const optimize = tables.extractionTable.optimize({ mergeCount: 1 });
   await tables.extractionTable.search({ query: 'q', vector: [], limit: 1, mode: 'hybrid' });
+  assert.equal(searchCalls, 1);
+
+  const optimizeStartedEarly = await Promise.race([
+    optimizeEntered.promise.then(() => true),
+    new Promise((resolve) => setTimeout(() => resolve(false), 30)),
+  ]);
+  assert.equal(optimizeStartedEarly, false);
+
+  releaseUpsert.resolve();
+  await upsert;
+  assert.deepEqual(await optimize, { changed: true });
+});
+
+test('lockNativeTables serializes session search mutations without locking reads', async () => {
+  const { TableMutationLocks, lockNativeTables } = await import('../../dist/native.js');
+  const locks = new TableMutationLocks();
+  const upsertEntered = deferred();
+  const releaseUpsert = deferred();
+  const optimizeEntered = deferred();
+  let searchCalls = 0;
+  const tables = lockNativeTables({
+    sessionSearchTable: {
+      upsert: async () => {
+        upsertEntered.resolve();
+        await releaseUpsert.promise;
+      },
+      optimize: async () => {
+        optimizeEntered.resolve();
+        return { changed: true };
+      },
+      search: async () => {
+        searchCalls += 1;
+        return [];
+      },
+    },
+  }, locks);
+
+  const upsert = tables.sessionSearchTable.upsert({ rows: [] });
+  await upsertEntered.promise;
+  const optimize = tables.sessionSearchTable.optimize({ mergeCount: 1 });
+  await tables.sessionSearchTable.search({ query: 'q', vector: [], limit: 1 });
   assert.equal(searchCalls, 1);
 
   const optimizeStartedEarly = await Promise.race([

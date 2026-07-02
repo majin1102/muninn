@@ -14,13 +14,15 @@ use lance::{Error, Result};
 use serde_json::{Map, Value};
 
 use super::schema::{
-    dreaming_project_schema, dreaming_schema, extraction_schema, session_schema, turn_schema,
+    dreaming_project_schema, dreaming_schema, extraction_schema, session_schema,
+    session_search_schema, turn_schema,
 };
 use crate::config::extraction_config;
 use crate::dreaming::{Dreaming, DreamingProject, DreamingSupportTurn};
 use crate::extraction::Extraction;
 use crate::memory_id::{MemoryId, MemoryLayer};
 use crate::session::SessionSnapshot;
+use crate::session_search::SessionSearch;
 use crate::turn::{Artifact, Turn, TurnEvent};
 
 pub(crate) fn turns_to_record_batch(
@@ -891,6 +893,138 @@ pub(crate) fn record_batch_to_extractions(batch: &RecordBatch) -> Result<Vec<Ext
                     .timestamp_micros(created_at.value(index))
                     .single()
                     .unwrap(),
+                updated_at: Utc
+                    .timestamp_micros(updated_at.value(index))
+                    .single()
+                    .unwrap(),
+            })
+        })
+        .collect()
+}
+
+pub(crate) fn session_search_to_record_batch(rows: &[SessionSearch]) -> Result<RecordBatch> {
+    let dimensions = extraction_config()?.dimensions;
+    let latest_snapshot_id =
+        StringArray::from_iter_values(rows.iter().map(|row| row.latest_snapshot_id.as_str()));
+    let session_id = StringArray::from_iter_values(rows.iter().map(|row| row.session_id.as_str()));
+    let project = StringArray::from_iter_values(rows.iter().map(|row| row.project.as_str()));
+    let cwd = StringArray::from_iter_values(rows.iter().map(|row| row.cwd.as_str()));
+    let agent = StringArray::from_iter_values(rows.iter().map(|row| row.agent.as_str()));
+    let title = StringArray::from_iter_values(rows.iter().map(|row| row.title.as_str()));
+    let summary = StringArray::from_iter_values(rows.iter().map(|row| row.summary.as_str()));
+    let search_text =
+        StringArray::from_iter_values(rows.iter().map(|row| row.search_text.as_str()));
+    let vector = build_float32_fixed_size_list_array(
+        rows.iter().map(|row| row.vector.as_slice()),
+        dimensions,
+    )
+    .map_err(|error| Error::invalid_input(format!("invalid session_search vector: {error}")))?;
+    let updated_at = TimestampMicrosecondArray::from_iter_values(
+        rows.iter().map(|row| row.updated_at.timestamp_micros()),
+    )
+    .with_timezone("UTC");
+
+    RecordBatch::try_new(
+        Arc::new(session_search_schema(dimensions)),
+        vec![
+            Arc::new(latest_snapshot_id),
+            Arc::new(session_id),
+            Arc::new(project),
+            Arc::new(cwd),
+            Arc::new(agent),
+            Arc::new(title),
+            Arc::new(summary),
+            Arc::new(search_text),
+            Arc::new(vector),
+            Arc::new(updated_at),
+        ],
+    )
+    .map_err(|error| Error::invalid_input(format!("build session_search batch: {error}")))
+}
+
+pub(crate) fn session_search_to_reader(
+    rows: Vec<SessionSearch>,
+) -> Result<RecordBatchIterator<impl Iterator<Item = std::result::Result<RecordBatch, ArrowError>>>>
+{
+    let dimensions = extraction_config()?.dimensions;
+    let schema = Arc::new(session_search_schema(dimensions));
+    let batch = session_search_to_record_batch(&rows).map_err(arrow_error_from_lance)?;
+    Ok(RecordBatchIterator::new(
+        vec![Ok(batch)].into_iter(),
+        schema,
+    ))
+}
+
+pub(crate) fn record_batch_to_session_search(batch: &RecordBatch) -> Result<Vec<SessionSearch>> {
+    let latest_snapshot_id = batch
+        .column(0)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap();
+    let session_id = batch
+        .column(1)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap();
+    let project = batch
+        .column(2)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap();
+    let cwd = batch
+        .column(3)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap();
+    let agent = batch
+        .column(4)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap();
+    let title = batch
+        .column(5)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap();
+    let summary = batch
+        .column(6)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap();
+    let search_text = batch
+        .column(7)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap();
+    let vector = batch.column(8);
+    let updated_at = batch
+        .column(9)
+        .as_any()
+        .downcast_ref::<TimestampMicrosecondArray>()
+        .unwrap();
+
+    (0..batch.num_rows())
+        .map(|index| {
+            let vector = if let Some(vector) = vector.as_any().downcast_ref::<FixedSizeListArray>()
+            {
+                optional_float32_fixed_size_list(vector, index).unwrap_or_default()
+            } else {
+                return Err(Error::invalid_input(format!(
+                    "session_search.vector must be FixedSizeList<Float32, N>, got {:?}",
+                    vector.data_type()
+                )));
+            };
+
+            Ok(SessionSearch {
+                latest_snapshot_id: latest_snapshot_id.value(index).to_string(),
+                session_id: session_id.value(index).to_string(),
+                project: project.value(index).to_string(),
+                cwd: cwd.value(index).to_string(),
+                agent: agent.value(index).to_string(),
+                title: title.value(index).to_string(),
+                summary: summary.value(index).to_string(),
+                search_text: search_text.value(index).to_string(),
+                vector,
                 updated_at: Utc
                     .timestamp_micros(updated_at.value(index))
                     .single()
