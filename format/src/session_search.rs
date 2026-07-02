@@ -207,18 +207,8 @@ impl SessionSearchTable {
 
     pub async fn replace_all(&self, rows: Vec<SessionSearch>) -> Result<()> {
         validate_unique_identities(&rows)?;
-        let is_empty = rows.is_empty();
         let reader = session_search_to_reader(rows)?;
-        let Some(mut dataset) = self.access.try_open().await? else {
-            self.access.write(reader).await?;
-            return Ok(());
-        };
-        dataset.delete("project IS NOT NULL").await?;
-        if !is_empty {
-            dataset
-                .append(reader, self.access.options().write_params())
-                .await?;
-        }
+        self.access.overwrite(reader).await?;
         Ok(())
     }
 

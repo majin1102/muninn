@@ -69,11 +69,19 @@ export type DreamingCheckpoint = {
   }>;
 };
 
+export type SessionSearchCheckpoint = {
+  schemaVersion: 1;
+  embeddingDimensions: number;
+  sourceSessionVersion: number;
+  tableVersion: number;
+};
+
 export type CheckpointContent = {
   schemaVersion: 13;
   extractor: ExtractorCheckpoint;
   sessionIndex: SessionIndexCheckpoint;
   dreaming: DreamingCheckpoint;
+  sessionSearch: SessionSearchCheckpoint;
 };
 
 export type CheckpointFile = CheckpointContent & {
@@ -125,6 +133,7 @@ export function parseCheckpointFile(raw: string): CheckpointFile {
   const extractor = parseExtractorSection(parsed.extractor);
   const sessionIndex = parseSessionIndexSection(parsed.sessionIndex);
   const dreaming = parseDreamingSection(parsed.dreaming);
+  const sessionSearch = parseSessionSearchSection(parsed.sessionSearch);
   if (!extractor) {
     throw new Error('checkpoint extractor section is invalid');
   }
@@ -134,6 +143,9 @@ export function parseCheckpointFile(raw: string): CheckpointFile {
   if (!dreaming) {
     throw new Error('checkpoint dreaming section is invalid');
   }
+  if (!sessionSearch) {
+    throw new Error('checkpoint sessionSearch section is invalid');
+  }
   return {
     schemaVersion: 13,
     writtenAt: typeof parsed.writtenAt === 'string' ? parsed.writtenAt : new Date(0).toISOString(),
@@ -141,6 +153,7 @@ export function parseCheckpointFile(raw: string): CheckpointFile {
     extractor,
     sessionIndex,
     dreaming,
+    sessionSearch,
   };
 }
 
@@ -195,6 +208,26 @@ function parseExtractorSection(value: unknown): ExtractorCheckpoint | null {
     recentSessions,
     threads,
     runs,
+  };
+}
+
+function parseSessionSearchSection(value: unknown): SessionSearchCheckpoint | null {
+  if (!isObjectRecord(value)) {
+    return null;
+  }
+  if (
+    value.schemaVersion !== 1
+    || typeof value.embeddingDimensions !== 'number'
+    || typeof value.sourceSessionVersion !== 'number'
+    || typeof value.tableVersion !== 'number'
+  ) {
+    return null;
+  }
+  return {
+    schemaVersion: 1,
+    embeddingDimensions: value.embeddingDimensions,
+    sourceSessionVersion: value.sourceSessionVersion,
+    tableVersion: value.tableVersion,
   };
 }
 

@@ -13,7 +13,7 @@ import { writeMuninnLog } from './logging.js';
 import type { MuninnBackend } from './backend.js';
 import type { NativeTables, TableStats } from './native.js';
 
-type DatasetName = 'turn' | 'session' | 'extraction';
+type DatasetName = 'turn' | 'session' | 'sessionSearch' | 'extraction';
 type WatchdogLevel = 'info' | 'error';
 type WatchdogEvent =
   | 'failed'
@@ -41,7 +41,7 @@ type DatasetState = {
 };
 
 const WATCHDOG_LOG_FILE_NAME = 'watchdog.jsonl';
-const DATASETS: DatasetName[] = ['turn', 'session', 'extraction'];
+const DATASETS: DatasetName[] = ['turn', 'session', 'sessionSearch', 'extraction'];
 
 export class Watchdog {
   private timer: NodeJS.Timeout | null = null;
@@ -124,6 +124,7 @@ export class Watchdog {
       await Promise.all([
         this.maintainTurns(),
         this.maintainSessions(),
+        this.maintainSessionSearch(),
         this.maintainExtraction(),
       ]);
       await this.flushCheckpoint();
@@ -310,6 +311,62 @@ export class Watchdog {
     });
   }
 
+  private async maintainSessionSearch(): Promise<void> {
+    if (!this.binding.sessionSearchTable?.ensureVectorIndex) {
+      return;
+    }
+    await this.runDatasetMaintenance('sessionSearch', async (setVersion) => {
+      const ensured = await this.binding.sessionSearchTable.ensureVectorIndex({
+        targetPartitionSize: this.config.extraction.targetPartitionSize,
+      });
+      const stats = await this.binding.sessionSearchTable.stats();
+      if (!stats) {
+        this.resetState('sessionSearch');
+        return;
+      }
+
+      setVersion(stats.version);
+      const unchanged = this.versionUnchanged('sessionSearch', stats);
+      this.updateSeenState('sessionSearch', stats);
+
+      if (!ensured.created && unchanged) {
+        return;
+      }
+
+      let compactResult: { changed: boolean } | null = null;
+      if (stats.fragmentCount >= this.config.compactMinFragments) {
+        compactResult = await this.binding.sessionSearchTable.compact();
+      }
+      const optimizeResult = await this.binding.sessionSearchTable.optimize({
+        mergeCount: this.config.extraction.optimizeMergeCount,
+      });
+      const finalStats = await this.binding.sessionSearchTable.stats() ?? stats;
+      this.updateMaintainedState('sessionSearch', finalStats);
+
+      if (ensured.created) {
+        await this.logInfo('sessionSearch', 'index_created', finalStats.version, {
+          targetPartitionSize: this.config.extraction.targetPartitionSize,
+          fragmentCount: finalStats.fragmentCount,
+          rowCount: finalStats.rowCount,
+        });
+      }
+      if (compactResult) {
+        await this.logInfo('sessionSearch', 'compacted', finalStats.version, {
+          changed: compactResult.changed,
+          fragmentCount: finalStats.fragmentCount,
+          rowCount: finalStats.rowCount,
+        });
+      }
+      await this.logInfo('sessionSearch', 'optimized', finalStats.version, {
+        changed: optimizeResult.changed,
+        mergeCount: this.config.extraction.optimizeMergeCount,
+        fragmentCount: finalStats.fragmentCount,
+        rowCount: finalStats.rowCount,
+        indexCreated: ensured.created,
+      });
+    });
+  }
+
   private async runDatasetMaintenance(
     dataset: DatasetName,
     work: (setVersion: (version: number) => void) => Promise<void>,
@@ -384,6 +441,7 @@ export class Watchdog {
       extractor: checkpoint.extractor,
       sessionIndex: checkpoint.sessionIndex,
       dreaming: checkpoint.dreaming,
+      sessionSearch: checkpoint.sessionSearch,
     });
     await this.updateCheckpointFloors(checkpoint);
   }
@@ -442,6 +500,8 @@ export class Watchdog {
         return this.binding.turnTable.cleanup?.({ floorVersion }) ?? Promise.resolve({ changed: false });
       case 'session':
         return this.binding.sessionTable.cleanup?.({ floorVersion }) ?? Promise.resolve({ changed: false });
+      case 'sessionSearch':
+        return this.binding.sessionSearchTable?.cleanup?.({ floorVersion }) ?? Promise.resolve({ changed: false });
       case 'extraction':
         return this.binding.extractionTable.cleanup?.({ floorVersion }) ?? Promise.resolve({ changed: false });
     }
@@ -508,6 +568,7 @@ async function checkpointFloors(
   return {
     turn: checkpoint.extractor.baseline.turn,
     session: sessionFloor,
+    sessionSearch: checkpoint.sessionSearch.tableVersion,
     extraction: checkpoint.extractor.baseline.extraction,
   };
 }

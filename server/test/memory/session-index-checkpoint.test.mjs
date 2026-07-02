@@ -33,6 +33,12 @@ function checkpoint(overrides = {}) {
     dreaming: {
       projects: {},
     },
+    sessionSearch: {
+      schemaVersion: 1,
+      embeddingDimensions: 4,
+      sourceSessionVersion: 5,
+      tableVersion: 7,
+    },
     ...overrides,
   };
 }
@@ -40,6 +46,7 @@ function checkpoint(overrides = {}) {
 test('checkpoint parses and serializes sessionIndex entries', () => {
   const parsed = parseCheckpointFile(JSON.stringify(checkpoint()));
 
+  assert.equal(parsed.schemaVersion, 13);
   assert.equal(parsed.schemaVersion, 13);
   assert.deepEqual(parsed.sessionIndex, {
     baseline: { turn: 10, session: 5 },
@@ -113,4 +120,14 @@ test('checkpoint ignores obsolete dreamingIndex when present', () => {
   })));
 
   assert.equal('dreamingIndex' in parsed, false);
+});
+
+test('checkpoint requires sessionSearch metadata', () => {
+  const content = checkpoint();
+  delete content.sessionSearch;
+
+  assert.throws(
+    () => parseCheckpointFile(JSON.stringify(content)),
+    /sessionSearch section is invalid/,
+  );
 });

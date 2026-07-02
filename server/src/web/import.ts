@@ -6,7 +6,7 @@ import { captureTurns } from '../api/capture.js';
 import { isCanonicalProjectIdentity } from '../config.js';
 import { sessions, turns } from '../backend.js';
 import { loadMuninnConfig, resolveStorageTarget } from '../config.js';
-import { getNativeTables } from '../native.js';
+import { getNativeTables, type SessionSearchIdentity } from '../native.js';
 import {
   defaultArtifactStore,
   importMarker,
@@ -244,13 +244,12 @@ export async function importProjects(adapter: ImportAdapter, projects: string[],
 }
 
 export async function deleteImportedProject(adapter: ImportAdapter, project: string, requestId: string): Promise<DeleteImportedProjectResponse> {
-  const sessionKeys = new Set(
-    (await sessions.index())
-      .filter((entry) => entry.agent === adapter.agent && entry.project === project)
-      .map(SessionIdentityKey.sessionIdentityKey),
-  );
+  const entries = (await sessions.index())
+    .filter((entry) => entry.agent === adapter.agent && entry.project === project);
+  const sessionKeys = new Set(entries.map(SessionIdentityKey.sessionIdentityKey));
+  const identities = entries.map(sessionSearchIdentity);
   const { deleted: deletedTurns, turnIds } = await deleteProjectTurns(adapter, sessionKeys);
-  await deleteRelatedMemories(turnIds);
+  await deleteRelatedMemories(turnIds, identities);
   await deleteSessionSnapshots(adapter, sessionKeys);
   await sessions.refreshIndex();
   await removeCapturePolicy(adapter.agent, project);
@@ -267,14 +266,17 @@ export async function deleteImportedSession(
   sessionId: string,
   requestId: string,
 ): Promise<DeleteImportedSessionResponse> {
-  const key = identityKey(adapter, { project, sessionId });
-  const exists = (await sessions.index()).some((entry) => (
+  const entries = (await sessions.index()).filter((entry) => (
     entry.agent === adapter.agent
-    && SessionIdentityKey.sessionIdentityKey(entry) === key
+    && entry.project === project
+    && entry.sessionId === sessionId
   ));
-  const { deleted: deletedTurns, turnIds } = await deleteProjectTurns(adapter, exists ? new Set([key]) : new Set());
-  await deleteRelatedMemories(turnIds);
-  await deleteSessionSnapshots(adapter, exists ? new Set([key]) : new Set());
+  const exists = entries.length > 0;
+  const sessionKeys = new Set(entries.map(SessionIdentityKey.sessionIdentityKey));
+  const identities = entries.map(sessionSearchIdentity);
+  const { deleted: deletedTurns, turnIds } = await deleteProjectTurns(adapter, sessionKeys);
+  await deleteRelatedMemories(turnIds, identities);
+  await deleteSessionSnapshots(adapter, sessionKeys);
   await sessions.refreshIndex();
   return {
     deletedSessions: exists ? 1 : 0,
@@ -320,18 +322,32 @@ async function deleteSessionSnapshots(adapter: ImportAdapter, sessionKeys: Set<s
   }
 }
 
-async function deleteRelatedMemories(turnIds: string[]): Promise<void> {
+async function deleteRelatedMemories(turnIds: string[], sessionIdentities: SessionSearchIdentity[]): Promise<void> {
+  if (turnIds.length === 0 && sessionIdentities.length === 0) {
+    return;
+  }
+  const tables = await getNativeTables(resolveStorageTarget(loadMuninnConfig() ?? {}, 'main'));
+  if (sessionIdentities.length > 0) {
+    await tables.sessionSearchTable.delete({ identities: sessionIdentities });
+  }
   if (turnIds.length === 0) {
     return;
   }
   const turnIdSet = new Set(turnIds);
-  const tables = await getNativeTables(resolveStorageTarget(loadMuninnConfig() ?? {}, 'main'));
   const extractions = (await tables.extractionTable.list({}))
     .filter((row) => row.turnRefs.some((ref) => turnIdSet.has(ref)));
   const extractionIds = [...new Set(extractions.map((row) => row.id))];
   if (extractionIds.length > 0) {
     await tables.extractionTable.delete({ ids: extractionIds });
   }
+}
+
+function sessionSearchIdentity(entry: { project: string; agent: string; sessionId: string }): SessionSearchIdentity {
+  return {
+    project: entry.project,
+    agent: entry.agent,
+    sessionId: entry.sessionId,
+  };
 }
 
 async function listAgentTurns(agent: string): Promise<ImportTurn[]> {

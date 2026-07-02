@@ -42,6 +42,7 @@ import { SessionIndex } from './session-index.js';
 import { ProjectDreamingService, type DreamingWatermarkStore, type ProjectDreamCreateResult } from './dreaming/service.js';
 import { ProjectDreamingScheduler } from './dreaming/scheduler.js';
 import type { ProjectDreamSignals } from './dreaming/content.js';
+import { rebuildSessionSearch } from './pipeline/session-search.js';
 import type { ProjectDreamProjectView, TurnContent } from '@muninn/common';
 
 export type Turn = TurnRow;
@@ -136,6 +137,7 @@ export class MuninnBackend {
     const tableLocks = new TableMutationLocks();
     const backend = new MuninnBackend(lockNativeTables(client, tableLocks), databaseName, checkpoint);
     await backend.restoreCheckpointSessions();
+    await backend.ensureSessionSearchFresh();
     const watchdogConfig = getWatchdogConfig();
     if (watchdogConfig.enabled) {
       const lastCheckpointJson = checkpoint
@@ -144,6 +146,7 @@ export class MuninnBackend {
           extractor: checkpoint.extractor,
           sessionIndex: checkpoint.sessionIndex,
           dreaming: checkpoint.dreaming,
+          sessionSearch: checkpoint.sessionSearch,
         })
         : null;
       const watchdogClient = lockNativeTables(
@@ -299,11 +302,13 @@ export class MuninnBackend {
       if (!extractor || !extractorCheckpoint) {
         return null;
       }
-      const [turnStats, sessionStats, extractionStats] = await Promise.all([
+      const [turnStats, sessionStats, extractionStats, sessionSearchStats] = await Promise.all([
         this.client.turnTable.stats(),
         this.client.sessionTable.stats(),
         this.client.extractionTable.stats(),
+        this.client.sessionSearchTable.stats(),
       ]);
+      const embedding = getEmbeddingConfig();
       const extractorSection: ExtractorCheckpoint = {
         baseline: {
           turn: turnStats?.version ?? 0,
@@ -321,6 +326,12 @@ export class MuninnBackend {
         extractor: extractorSection,
         sessionIndex: this.sessionIndex.currentCheckpoint(),
         dreaming: cloneDreamingCheckpoint(this.dreamingCheckpoint),
+        sessionSearch: {
+          schemaVersion: 1,
+          embeddingDimensions: embedding.dimensions,
+          sourceSessionVersion: sessionStats?.version ?? 0,
+          tableVersion: sessionSearchStats?.version ?? 0,
+        },
       };
     });
   }
@@ -417,6 +428,34 @@ export class MuninnBackend {
         continue;
       }
       this.sessionRegistry.rememberTurn(turn);
+    }
+  }
+
+  private async ensureSessionSearchFresh(): Promise<void> {
+    if (!loadMuninnConfig()?.extractor) {
+      return;
+    }
+    const embedding = getEmbeddingConfig();
+    const sessionStats = await this.client.sessionTable.stats();
+    const sourceSessionVersion = sessionStats?.version ?? 0;
+    const checkpoint = this.checkpoint?.sessionSearch ?? null;
+    let needsRebuild = (
+      !checkpoint
+      || checkpoint.schemaVersion !== 1
+      || checkpoint.embeddingDimensions !== embedding.dimensions
+      || checkpoint.sourceSessionVersion !== sourceSessionVersion
+    );
+
+    if (!needsRebuild) {
+      try {
+        await this.client.sessionSearchTable.validateDimensions({ expected: embedding.dimensions });
+      } catch {
+        needsRebuild = true;
+      }
+    }
+
+    if (needsRebuild) {
+      await rebuildSessionSearch(this.client, this.sessionIndex);
     }
   }
 

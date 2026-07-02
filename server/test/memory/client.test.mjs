@@ -55,6 +55,19 @@ async function waitForPipelineResolved({ timeoutMs = 2_000, intervalMs = 20 } = 
   throw new Error('timed out waiting for memory pipeline watermark');
 }
 
+async function waitForBackendResolved(backend, { timeoutMs = 2_000, intervalMs = 20 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  await backend.memoryFinalize();
+  while (Date.now() < deadline) {
+    const watermark = await backend.memoryWatermark();
+    if (memoryWatermarkResolved(watermark)) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  throw new Error('timed out waiting for backend watermark');
+}
+
 async function waitForFile(filePath, { timeoutMs = 2_000, intervalMs = 20 } = {}) {
   const deadline = Date.now() + timeoutMs;
   let lastError;
@@ -721,6 +734,90 @@ test('checkpoint restore keeps recent turn dedupe within the same extractor', as
     }
   } finally {
     await firstBackend.shutdown().catch(() => undefined);
+  }
+});
+
+test('startup rebuilds session search when checkpoint is missing', async (t) => {
+  const { dir, homeDir, configPath } = await makeDatasetUri();
+  t.after(cleanupDataset(dir));
+
+  process.env.MUNINN_HOME = homeDir;
+  await writeMuninnConfig(configPath, { observerProvider: 'mock' });
+
+  const firstBackend = await MuninnBackend.create(await getNativeTables());
+  try {
+    await firstBackend.accept(makeTurnContent({
+      sessionId: 'startup-rebuild-missing',
+      agent: 'codex',
+      project: 'project-a',
+      cwd: '/workspace/project-a',
+      prompt: 'startup rebuild prompt',
+      response: 'startup rebuild response',
+    }));
+    await waitForBackendResolved(firstBackend);
+    const tables = await getNativeTables();
+    assert.ok((await tables.sessionSearchTable.list({})).some((row) => row.sessionId === 'startup-rebuild-missing'));
+    await tables.sessionSearchTable.replaceAll({ rows: [] });
+    assert.equal((await tables.sessionSearchTable.list({})).length, 0);
+  } finally {
+    await firstBackend.shutdown();
+    await shutdownCoreForTests();
+  }
+  await rm(resolveCheckpointPath(), { force: true });
+
+  const secondBackend = await MuninnBackend.create(await getNativeTables());
+  try {
+    const rows = await (await getNativeTables()).sessionSearchTable.list({});
+    assert.ok(rows.some((row) => (
+      row.sessionId === 'startup-rebuild-missing'
+      && row.project === 'project-a'
+      && row.agent === 'codex'
+    )));
+  } finally {
+    await secondBackend.shutdown();
+  }
+});
+
+test('startup rebuilds session search when embedding dimensions change', async (t) => {
+  const { dir, homeDir, configPath } = await makeDatasetUri();
+  t.after(cleanupDataset(dir));
+
+  process.env.MUNINN_HOME = homeDir;
+  await writeMuninnConfig(configPath, { observerProvider: 'mock', semanticDimensions: 4 });
+
+  const firstBackend = await MuninnBackend.create(await getNativeTables());
+  try {
+    await firstBackend.accept(makeTurnContent({
+      sessionId: 'startup-rebuild-dimensions',
+      agent: 'codex',
+      project: 'project-a',
+      cwd: '/workspace/project-a',
+      prompt: 'dimension rebuild prompt',
+      response: 'dimension rebuild response',
+    }));
+    await waitForBackendResolved(firstBackend);
+    const rows = await (await getNativeTables()).sessionSearchTable.list({});
+    assert.equal(rows.find((row) => row.sessionId === 'startup-rebuild-dimensions')?.vector.length, 4);
+    const exported = await firstBackend.exportCheckpoint();
+    assert.ok(exported);
+    await mkdir(path.dirname(resolveCheckpointPath()), { recursive: true });
+    await writeFile(resolveCheckpointPath(), `${JSON.stringify({
+      ...exported,
+      writtenAt: new Date().toISOString(),
+      writerPid: process.pid,
+    }, null, 2)}\n`, 'utf8');
+  } finally {
+    await firstBackend.shutdown();
+    await shutdownCoreForTests();
+  }
+
+  await writeMuninnConfig(configPath, { observerProvider: 'mock', semanticDimensions: 8 });
+  const secondBackend = await MuninnBackend.create(await getNativeTables());
+  try {
+    const rows = await (await getNativeTables()).sessionSearchTable.list({});
+    assert.equal(rows.find((row) => row.sessionId === 'startup-rebuild-dimensions')?.vector.length, 8);
+  } finally {
+    await secondBackend.shutdown();
   }
 });
 

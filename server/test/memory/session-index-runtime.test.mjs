@@ -108,6 +108,12 @@ function checkpoint(overrides = {}) {
     dreaming: {
       projects: {},
     },
+    sessionSearch: {
+      schemaVersion: 1,
+      embeddingDimensions: 4,
+      sourceSessionVersion: 10,
+      tableVersion: 10,
+    },
     ...overrides,
   };
 }
@@ -554,6 +560,12 @@ test('backend refreshSessionIndex rebuilds stale checkpoint entries from current
     },
     dreaming: {
       projects: {},
+    },
+    sessionSearch: {
+      schemaVersion: 1,
+      embeddingDimensions: 4,
+      sourceSessionVersion: 10,
+      tableVersion: 10,
     },
   });
 
