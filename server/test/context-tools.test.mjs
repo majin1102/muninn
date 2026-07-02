@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
+import { Buffer } from 'node:buffer';
 import test from 'node:test';
 
 import core from '../dist/backend.js';
+import { memories as backendMemories } from '../dist/backend.js';
 import { app } from '../dist/http.js';
 import {
   Memories,
@@ -29,6 +31,10 @@ test('context ids round trip through opaque prefixes', () => {
   assert.match(turnContext, /^turn_/);
   assert.doesNotMatch(turnContext, /turn:1/);
   assert.equal(parseTurnContextId(turnContext), 'turn:1');
+  assert.throws(() => turnContextId('extraction:1'), /invalid memory id layer/);
+  assert.throws(() => turnContextId('turn:not-a-number'), /invalid memory id/);
+  assert.throws(() => parseTurnContextId(rawTurnContextId('extraction:1')), /invalid memory id layer/);
+  assert.throws(() => parseTurnContextId(rawTurnContextId('not a turn id')), /invalid memory id/);
 
   assert.throws(() => parseSessionContextId(turnContext), /unsupported context id/);
   assert.throws(() => parseSessionContextId(sessionContextId({ project: ' ', agent: 'codex', sessionId: 's' })), /invalid session context id/);
@@ -90,6 +96,14 @@ test('context HTTP routes reject invalid bodies before backend lookup', async ()
   assert.equal(readBadIds.status, 400);
   assert.match((await readBadIds.json()).errorMessage, /context_ids must be a non-empty array/);
 
+  const readNonStringIds = await app.request('/api/v1/context/read', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ context_ids: [sessionContext, 123] }),
+  });
+  assert.equal(readNonStringIds.status, 400);
+  assert.match((await readNonStringIds.json()).errorMessage, /context_ids must contain only strings/);
+
   const explainBadId = await app.request('/api/v1/context/explain', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -97,6 +111,31 @@ test('context HTTP routes reject invalid bodies before backend lookup', async ()
   });
   assert.equal(explainBadId.status, 400);
   assert.match((await explainBadId.json()).errorMessage, /muninn_explain only supports session_\* context ids/);
+});
+
+test('context read HTTP allows mixed valid and invalid ids as partial success', async (t) => {
+  const originalReadContextIds = backendMemories.readContextIds;
+  t.after(() => {
+    backendMemories.readContextIds = originalReadContextIds;
+  });
+  backendMemories.readContextIds = async (contextIds) => contextIds.map((contextId) => (
+    contextId === sessionContext
+      ? { contextId, title: 'Session title', content: '# Session title\n\nSession summary' }
+      : { contextId, error: `unsupported context id: ${contextId}` }
+  ));
+
+  const response = await app.request('/api/v1/context/read', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ context_ids: [sessionContext, 'invalid_context'] }),
+  });
+
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.contexts[0].contextId, sessionContext);
+  assert.equal(body.contexts[0].content, '# Session title\n\nSession summary');
+  assert.equal(body.contexts[1].contextId, 'invalid_context');
+  assert.match(body.contexts[1].error, /unsupported context id/);
 });
 
 function makeContextClient() {
@@ -163,4 +202,8 @@ function makeContextClient() {
 
 function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function rawTurnContextId(memoryId) {
+  return `turn_${Buffer.from(memoryId).toString('base64url')}`;
 }

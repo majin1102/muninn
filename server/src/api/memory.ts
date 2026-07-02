@@ -109,9 +109,7 @@ export function parseSessionContextId(contextId: string): SessionSearchIdentity 
 }
 
 export function turnContextId(memoryId: string): string {
-  if (typeof memoryId !== 'string' || memoryId.trim().length === 0) {
-    throw new Error(`invalid turn context id memory id: ${memoryId}`);
-  }
+  assertMemoryIdLayer(memoryId, 'turn');
   return `turn_${Buffer.from(memoryId).toString('base64url')}`;
 }
 
@@ -120,9 +118,7 @@ export function parseTurnContextId(contextId: string): string {
     throw new Error(`unsupported context id: ${contextId}`);
   }
   const memoryId = Buffer.from(contextId.slice('turn_'.length), 'base64url').toString('utf8');
-  if (!memoryId.trim()) {
-    throw new Error(`invalid turn context id: ${contextId}`);
-  }
+  assertMemoryIdLayer(memoryId, 'turn');
   return memoryId;
 }
 

@@ -885,8 +885,8 @@ app.post('/api/v1/context/read', async (c) => {
   if (!Array.isArray(body.context_ids) || body.context_ids.length === 0) {
     return c.json(errorResponse('invalidRequest', 'context_ids must be a non-empty array'), 400);
   }
-  if (!body.context_ids.every((contextId) => typeof contextId === 'string' && /^(session|turn)_.+$/.test(contextId))) {
-    return c.json(errorResponse('invalidRequest', 'context_ids must contain only session_* or turn_* context ids'), 400);
+  if (!body.context_ids.every((contextId) => typeof contextId === 'string')) {
+    return c.json(errorResponse('invalidRequest', 'context_ids must contain only strings'), 400);
   }
   if (body.database !== undefined && typeof body.database !== 'string') {
     return c.json(errorResponse('invalidRequest', 'database must be a string'), 400);
