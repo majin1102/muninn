@@ -507,6 +507,7 @@ test('rebuildSessionSearch replaces rows from latest live turn-backed sessions o
       project: 'project-a',
       cwd: '/workspace/project-a',
       latestUpdatedAt: '2024-01-04T00:00:00Z',
+      snapshotId: 'session:live-new',
     }],
   };
 
@@ -521,6 +522,123 @@ test('rebuildSessionSearch replaces rows from latest live turn-backed sessions o
   assert.equal(replacedRows[0].summary, 'New live summary');
   assert.equal(replacedRows[0].searchText, 'New live title\n\nNew live summary');
   assert.equal(replacedRows[0].vector.length, 8);
+});
+
+test('rebuildSessionSearch uses the session index snapshot id instead of a higher sequence old extractor snapshot', async (t) => {
+  const previousHome = process.env.MUNINN_HOME;
+  const { dir, homeDir, configPath } = await makeConfigHome();
+  process.env.MUNINN_HOME = homeDir;
+  await writeExtractorConfig(configPath);
+  t.after(async () => {
+    await rm(dir, { recursive: true, force: true });
+    if (previousHome === undefined) {
+      delete process.env.MUNINN_HOME;
+    } else {
+      process.env.MUNINN_HOME = previousHome;
+    }
+  });
+
+  let replacedRows = null;
+  const client = {
+    sessionTable: {
+      listSnapshots: async () => [
+        makeSnapshotRow({
+          snapshotId: 'session:right',
+          sessionId: 'shared-session',
+          snapshotSequence: 2,
+          title: 'Current extractor title',
+          summary: 'Current extractor summary',
+          extractor: 'default-extractor',
+          updatedAt: '2024-01-02T00:00:00Z',
+        }),
+        makeSnapshotRow({
+          snapshotId: 'session:wrong',
+          sessionId: 'shared-session',
+          snapshotSequence: 99,
+          title: 'Old extractor title',
+          summary: 'Old extractor summary',
+          extractor: 'old-extractor',
+          updatedAt: '2024-01-03T00:00:00Z',
+        }),
+      ],
+    },
+    sessionSearchTable: {
+      replaceAll: async ({ rows }) => {
+        replacedRows = rows;
+      },
+    },
+  };
+  const sessionIndex = {
+    list: async () => [{
+      sessionId: 'shared-session',
+      agent: 'codex',
+      project: 'project-a',
+      cwd: '/workspace/project-a',
+      latestUpdatedAt: '2024-01-04T00:00:00Z',
+      snapshotId: 'session:right',
+    }],
+  };
+
+  await rebuildSessionSearch(client, sessionIndex);
+
+  assert.equal(replacedRows.length, 1);
+  assert.equal(replacedRows[0].latestSnapshotId, 'session:right');
+  assert.equal(replacedRows[0].title, 'Current extractor title');
+  assert.equal(replacedRows[0].summary, 'Current extractor summary');
+});
+
+test('rebuildSessionSearch falls back to snapshot columns when content is malformed', async (t) => {
+  const previousHome = process.env.MUNINN_HOME;
+  const { dir, homeDir, configPath } = await makeConfigHome();
+  process.env.MUNINN_HOME = homeDir;
+  await writeExtractorConfig(configPath);
+  t.after(async () => {
+    await rm(dir, { recursive: true, force: true });
+    if (previousHome === undefined) {
+      delete process.env.MUNINN_HOME;
+    } else {
+      process.env.MUNINN_HOME = previousHome;
+    }
+  });
+
+  let replacedRows = null;
+  const client = {
+    sessionTable: {
+      listSnapshots: async () => [
+        makeSnapshotRow({
+          snapshotId: 'session:malformed',
+          sessionId: 'malformed-session',
+          title: 'Fallback title',
+          summary: 'Fallback summary',
+          content: '# Bad snapshot\n\nmalformed body should not leak',
+        }),
+      ],
+    },
+    sessionSearchTable: {
+      replaceAll: async ({ rows }) => {
+        replacedRows = rows;
+      },
+    },
+  };
+  const sessionIndex = {
+    list: async () => [{
+      sessionId: 'malformed-session',
+      agent: 'codex',
+      project: 'project-a',
+      cwd: '/workspace/project-a',
+      latestUpdatedAt: '2024-01-04T00:00:00Z',
+      snapshotId: 'session:malformed',
+    }],
+  };
+
+  await rebuildSessionSearch(client, sessionIndex);
+
+  assert.equal(replacedRows.length, 1);
+  assert.equal(replacedRows[0].latestSnapshotId, 'session:malformed');
+  assert.equal(replacedRows[0].title, 'Fallback title');
+  assert.equal(replacedRows[0].summary, 'Fallback summary');
+  assert.equal(replacedRows[0].searchText, 'Fallback title\n\nFallback summary');
+  assert.doesNotMatch(replacedRows[0].searchText, /malformed body/);
 });
 
 test('backend startup rebuilds session search when matching checkpoint has no session search table stats', async (t) => {
@@ -549,6 +667,7 @@ test('backend startup rebuilds session search when matching checkpoint has no se
         project: 'project-a',
         cwd: '/workspace/project-a',
         latestUpdatedAt: '2024-01-03T00:00:00Z',
+        snapshotId: 'session:stats-null',
       }],
     },
     sessionSearch: {
