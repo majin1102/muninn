@@ -32,7 +32,7 @@ import {
   type ExtractorCheckpoint,
   type SessionIndexEntry,
 } from './checkpoint.js';
-import { Memories, type RecallHit, type RenderedMemory } from './api/memory.js';
+import { Memories, type RecallHit, type RecallPublicMode, type RenderedMemory } from './api/memory.js';
 import { Extractor } from './pipeline/extractor.js';
 import { IngestSessionRegistry } from './pipeline/ingest.js';
 import { readTurnRow } from './pipeline/ingest.js';
@@ -47,7 +47,7 @@ import type { ProjectDreamProjectView, TurnContent } from '@muninn/common';
 export type Turn = TurnRow;
 export type SessionSnapshot = SessionSnapshotRow;
 
-export type RecallMode = 'vector' | 'fts' | 'hybrid';
+export type { RecallPublicMode };
 
 export type MemoryWatermarkPhase = 'idle' | 'pending' | 'running' | 'draining' | 'error';
 
@@ -266,7 +266,7 @@ export class MuninnBackend {
   async recallMemories(
     query: string,
     limit?: number,
-    options?: { mode?: RecallMode; budget?: number; queryLimit?: number },
+    options?: { mode?: RecallPublicMode; budget?: number; queryLimit?: number; thinkingRatio?: number },
   ): Promise<RecallHit[]> {
     await writeMuninnLog(this.database, 'info', 'recall', 'query', {
       query,
@@ -611,7 +611,13 @@ export const memories = {
   async recall(
     query: string,
     limit?: number,
-    options?: { mode?: RecallMode; budget?: number; queryLimit?: number; database?: string | null },
+    options?: {
+      mode?: RecallPublicMode;
+      budget?: number;
+      queryLimit?: number;
+      thinkingRatio?: number;
+      database?: string | null;
+    },
   ): Promise<RecallHit[]> {
     return (await getBackend(options?.database)).recallMemories(query, limit, options);
   },

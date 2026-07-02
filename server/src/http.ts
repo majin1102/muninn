@@ -27,7 +27,7 @@ import {
   sessions,
   turns,
 } from './backend.js';
-import type { RecallMode, SessionSnapshot } from './backend.js';
+import type { RecallPublicMode, SessionSnapshot } from './backend.js';
 import type { RecallHit, RenderedMemory } from './api/memory.js';
 import { renderRecallHit, renderRenderedMemoryHit } from './web/render.js';
 import { invalidateSessionTreeCache, webRoutes } from './web/routes.js';
@@ -653,14 +653,28 @@ function parseNonNegativeInteger(
   return { value, error: null };
 }
 
-function parseRecallMode(raw: string | undefined): RecallMode | undefined {
+function parseRecallPublicMode(raw: string | undefined): RecallPublicMode | undefined {
   if (raw === undefined) {
     return undefined;
   }
-  if (raw === 'vector' || raw === 'fts' || raw === 'hybrid') {
+  if (raw === 'session' || raw === 'extraction') {
     return raw;
   }
-  throw new Error('recallMode must be one of: vector, fts, hybrid');
+  throw new Error('mode must be one of: session, extraction');
+}
+
+function parseThinkingRatio(raw: string | undefined): { value: number | undefined; error: string | null } {
+  if (raw === undefined) {
+    return { value: undefined, error: null };
+  }
+  if (raw.trim() === '') {
+    return { value: undefined, error: 'thinkingRatio must be a number between 0 and 1' };
+  }
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value < 0 || value > 1) {
+    return { value: undefined, error: 'thinkingRatio must be a number between 0 and 1' };
+  }
+  return { value, error: null };
 }
 
 function mapCoreLookupError(error: unknown): { status: number; body: ErrorResponse } {
@@ -790,18 +804,31 @@ app.get('/api/v1/recall', async (c) => {
   const budget = c.req.query('budget');
   const queryLimit = c.req.query('queryLimit');
   const thinkingRatio = c.req.query('thinkingRatio');
-  let recallMode: RecallMode | undefined;
+  let mode: RecallPublicMode | undefined;
 
   try {
-    recallMode = parseRecallMode(c.req.query('recallMode'));
+    if (c.req.query('recallMode') !== undefined) {
+      throw new Error('recallMode is no longer supported; use mode with session or extraction');
+    }
+    mode = parseRecallPublicMode(c.req.query('mode'));
   } catch (error) {
     return c.json(errorResponse('invalidRequest', error instanceof Error ? error.message : String(error)), 400);
   }
 
-  console.log('[RECALL] database:', database ?? 'main', 'query:', query, 'limit:', limit, 'budget:', budget, 'queryLimit:', queryLimit, 'thinkingRatio:', thinkingRatio, 'recallMode:', recallMode);
+  console.log('[RECALL] database:', database ?? 'main', 'query:', query, 'limit:', limit, 'budget:', budget, 'queryLimit:', queryLimit, 'thinkingRatio:', thinkingRatio, 'mode:', mode);
 
   if (!query) {
     return c.json(errorResponse('invalidRequest', 'query is required'), 400);
+  }
+
+  if (
+    mode === 'session'
+    && (budget !== undefined || queryLimit !== undefined || thinkingRatio !== undefined)
+  ) {
+    return c.json(errorResponse(
+      'invalidRequest',
+      'budget, queryLimit, and thinkingRatio are only supported in extraction recall mode',
+    ), 400);
   }
 
   const parsedLimit = parseNonNegativeInteger(limit, 'limit');
@@ -816,6 +843,10 @@ app.get('/api/v1/recall', async (c) => {
   if (parsedQueryLimit.error) {
     return c.json(errorResponse('invalidRequest', parsedQueryLimit.error), 400);
   }
+  const parsedThinkingRatio = parseThinkingRatio(thinkingRatio);
+  if (parsedThinkingRatio.error) {
+    return c.json(errorResponse('invalidRequest', parsedThinkingRatio.error), 400);
+  }
   if ((parsedBudget.value ?? 0) > 0 && parsedQueryLimit.value === 0) {
     return c.json(errorResponse('invalidRequest', 'queryLimit must be positive when budget is positive'), 400);
   }
@@ -824,9 +855,10 @@ app.get('/api/v1/recall', async (c) => {
   let matched;
   try {
     matched = (await memories.recall(query, maxResults, {
-      mode: recallMode,
+      mode,
       budget: parsedBudget.value,
       queryLimit: parsedQueryLimit.value,
+      thinkingRatio: parsedThinkingRatio.value,
       database,
     })).map(renderRecallHit);
   } catch (error) {
@@ -844,6 +876,8 @@ app.post('/api/v1/benchmark/locomo/recall', async (c) => {
     limit?: unknown;
     budget?: unknown;
     queryLimit?: unknown;
+    thinkingRatio?: unknown;
+    mode?: unknown;
     recallMode?: unknown;
     manifest?: unknown;
   };
@@ -855,6 +889,28 @@ app.post('/api/v1/benchmark/locomo/recall', async (c) => {
 
   if (typeof body.query !== 'string' || body.query.trim().length === 0) {
     return c.json(errorResponse('invalidRequest', 'query is required'), 400);
+  }
+  let mode: RecallPublicMode | undefined;
+  try {
+    if (body.recallMode !== undefined) {
+      throw new Error('recallMode is no longer supported; use mode with session or extraction');
+    }
+    mode = parseRecallPublicMode(typeof body.mode === 'string' ? body.mode : undefined);
+  } catch (error) {
+    return c.json(errorResponse('invalidRequest', error instanceof Error ? error.message : String(error)), 400);
+  }
+  if (
+    mode === 'session'
+    && (body.budget !== undefined || body.queryLimit !== undefined || body.thinkingRatio !== undefined)
+  ) {
+    return c.json(errorResponse(
+      'invalidRequest',
+      'budget, queryLimit, and thinkingRatio are only supported in extraction recall mode',
+    ), 400);
+  }
+  const parsedThinkingRatio = parseRequestRatio(body.thinkingRatio, 'thinkingRatio');
+  if (parsedThinkingRatio.error) {
+    return c.json(errorResponse('invalidRequest', parsedThinkingRatio.error), 400);
   }
   const parsedLimit = parseRequestInteger(body.limit, 'limit', 10, false);
   if (parsedLimit.error) {
@@ -868,12 +924,6 @@ app.post('/api/v1/benchmark/locomo/recall', async (c) => {
   if (parsedQueryLimit.error) {
     return c.json(errorResponse('invalidRequest', parsedQueryLimit.error), 400);
   }
-  let recallMode: RecallMode | undefined;
-  try {
-    recallMode = parseRecallMode(typeof body.recallMode === 'string' ? body.recallMode : undefined);
-  } catch (error) {
-    return c.json(errorResponse('invalidRequest', error instanceof Error ? error.message : String(error)), 400);
-  }
   const manifest = parseLocomoManifest(body.manifest);
   if (!manifest) {
     return c.json(errorResponse('invalidRequest', 'manifest.turns is required'), 400);
@@ -882,9 +932,10 @@ app.post('/api/v1/benchmark/locomo/recall', async (c) => {
   const database = typeof body.database === 'string' ? body.database : undefined;
   try {
     const rows = await memories.recall(body.query, parsedLimit.value ?? 10, {
-      mode: recallMode,
+      mode,
       budget: parsedBudget.value,
       queryLimit: parsedQueryLimit.value,
+      thinkingRatio: parsedThinkingRatio.value,
       database,
     });
     const hits: LocomoBridgeHit[] = [];
@@ -944,6 +995,22 @@ function parseRequestInteger(
       error: allowZero
         ? `${fieldName} must be a non-negative integer`
         : `${fieldName} must be a positive integer`,
+    };
+  }
+  return { value: raw, error: null };
+}
+
+function parseRequestRatio(
+  raw: unknown,
+  fieldName: string,
+): { value: number | undefined; error: string | null } {
+  if (raw === undefined || raw === null) {
+    return { value: undefined, error: null };
+  }
+  if (typeof raw !== 'number' || !Number.isFinite(raw) || raw < 0 || raw > 1) {
+    return {
+      value: undefined,
+      error: `${fieldName} must be a number between 0 and 1`,
     };
   }
   return { value: raw, error: null };

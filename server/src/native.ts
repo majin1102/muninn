@@ -3,9 +3,10 @@ import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
 
 import type { Artifact, TurnEvent } from '@muninn/common';
-import type { RecallMode } from './config.js';
 
 type MaybePromise<T> = Promise<T> | T;
+
+export type RecallMode = 'vector' | 'fts' | 'hybrid';
 
 export interface TableDescription {
   // describe() exposes table facts surfaced by the opened dataset. It does not

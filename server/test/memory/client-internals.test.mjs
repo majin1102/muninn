@@ -23,8 +23,17 @@ import extractionIndexModule from '../../dist/pipeline/extraction.js';
 import sessionModule from '../../dist/pipeline/session.js';
 import extractorLlmModule from '../../dist/llm/extractor.js';
 import { applyExtractionChanges, applyExtractionTableChanges } from '../../dist/pipeline/extraction.js';
-import { recallMemories } from '../../dist/api/memory.js';
+import {
+  parseSessionSearchMemoryId,
+  recallMemories,
+  sessionSearchMemoryId,
+} from '../../dist/api/memory.js';
 import { validateMemoryRecallResult } from '../../dist/api/memory.js';
+import {
+  SESSION_SEARCH_TEXT_LIMIT,
+  sessionSearchText,
+  sessionVectorText,
+} from '../../dist/pipeline/session-search.js';
 import { createNativeTables, getNativeTables } from '../../dist/native.js';
 
 const { __testing: indexTesting } = extractionIndexModule;
@@ -199,6 +208,26 @@ test('config reads extraction embedding config and rejects unknown top-level key
   })), /unsupported top-level config key: unsupportedIndex/);
 });
 
+test('config rejects obsolete extractor recall mode', () => {
+  assert.throws(() => validateMuninnConfigInput(JSON.stringify({
+    storage: { uri: 'file:///tmp/muninn-test' },
+    extractor: {
+      name: 'default-extractor',
+      llmProvider: 'extractor_llm',
+      embeddingProvider: 'default',
+      recallMode: 'hybrid',
+    },
+    providers: {
+      llm: {
+        extractor_llm: { type: 'mock' },
+      },
+      embedding: {
+        default: { type: 'mock' },
+      },
+    },
+  })), /extractor\.recallMode is no longer supported/);
+});
+
 test('dreaming scheduler defaults to enabled thirty minute interval and validates positive integer', () => {
   const config = {
     storage: { uri: 'file:///tmp/muninn-test' },
@@ -327,6 +356,39 @@ test('session search native wrapper roundtrips rows with escaped identities', as
   });
   assert.deepEqual(deleted, { deleted: 1 });
   assert.deepEqual(await tables.sessionSearchTable.list({}), []);
+});
+
+test('session search text combines session and extraction summaries', () => {
+  const snapshot = {
+    extractions: [{
+      title: 'Adoption research',
+      text: 'Caroline researched adoption agencies.',
+      context: 'Melanie asked about agency timing.',
+      references: ['turn:1'],
+    }],
+  };
+
+  const text = sessionSearchText(snapshot, 'Session title', 'Session summary');
+
+  assert.match(text, /Session title/);
+  assert.match(text, /Session summary/);
+  assert.match(text, /Adoption research/);
+  assert.match(text, /Caroline researched adoption agencies/);
+});
+
+test('session search text is capped and vector text ignores extraction detail', () => {
+  const snapshot = {
+    extractions: [{
+      title: 'Huge extraction',
+      text: 'x'.repeat(SESSION_SEARCH_TEXT_LIMIT * 2),
+      references: ['turn:1'],
+    }],
+  };
+
+  const text = sessionSearchText(snapshot, 'Title', 'Summary');
+
+  assert.equal(text.length, SESSION_SEARCH_TEXT_LIMIT);
+  assert.equal(sessionVectorText('Title', 'Summary'), 'Title\n\nSummary');
 });
 
 test('table mutation locks serialize writes on the same table', async () => {
@@ -2970,33 +3032,161 @@ test('recallMemories searches extraction routes and enriches hits', async () => 
   assert.equal(calls.length, 1);
 });
 
-test('recallMemories supports fts mode without embedding the query', async () => {
-  let embedCalls = 0;
+test('recall defaults to extraction mode', async () => {
   const calls = [];
   const client = {
+    sessionSearchTable: {
+      search: async () => {
+        throw new Error('sessionSearchTable.search should not be called by extraction recall');
+      },
+    },
     extractionTable: {
       search: async (params) => {
         calls.push(params);
+        return [{
+          id: 'raw-1',
+          title: 'Adoption planning',
+          summary: 'Caroline planned adoption research.',
+          content: extractionContent('Adoption planning', 'Caroline planned adoption research.'),
+          turnRefs: [],
+          vector: [],
+          createdAt: '2024-01-01T00:00:00Z',
+          updatedAt: '2024-01-01T00:00:00Z',
+        }];
+      },
+    },
+  };
+
+  const hits = await recallMemories(client, '  adoption agencies  ', 3, { embed: async () => [1, 0] });
+
+  assert.deepEqual(calls, [{
+    query: 'adoption agencies',
+    vector: [1, 0],
+    limit: 3,
+    mode: 'hybrid',
+  }]);
+  assert.deepEqual(hits.map((hit) => hit.memoryId), ['ext:raw-1']);
+});
+
+test('recall session mode searches sessionSearchTable only', async () => {
+  const calls = [];
+  const client = {
+    sessionSearchTable: {
+      search: async (params) => {
+        calls.push(params);
+        return [{
+          latestSnapshotId: 'session:42',
+          project: 'project-a',
+          cwd: '/workspace/project-a',
+          agent: 'codex',
+          sessionId: 'session-a',
+          title: 'Readable session title',
+          summary: 'Readable session summary',
+          searchText: 'Readable session title\n\nReadable session summary\n\nExtraction evidence text',
+          vector: [0, 1],
+          updatedAt: '2024-01-03T00:00:00Z',
+        }];
+      },
+    },
+    extractionTable: {
+      search: async () => {
+        throw new Error('extractionTable.search should not be called by session recall');
+      },
+    },
+  };
+
+  const hits = await recallMemories(client, '  readable session  ', 10, {
+    mode: 'session',
+    embed: async (text) => {
+      assert.equal(text, 'readable session');
+      return [0, 1];
+    },
+  });
+
+  assert.deepEqual(calls, [{
+    query: 'readable session',
+    vector: [0, 1],
+    limit: 10,
+  }]);
+  assert.equal(hits.length, 1);
+  assert.match(hits[0].memoryId, /^session:search:/);
+  assert.equal(hits[0].title, 'Readable session title');
+  assert.equal(hits[0].summary, 'Readable session summary');
+  assert.equal(hits[0].content, 'Readable session title\n\nReadable session summary');
+  assert.deepEqual(hits[0].references, []);
+  assert.equal(hits[0].project, 'project-a');
+  assert.equal(hits[0].agent, 'codex');
+  assert.equal(hits[0].sessionId, 'session-a');
+  assert.equal(hits[0].cwd, '/workspace/project-a');
+  assert.equal(hits[0].displaySession, 'Readable session title');
+  assert.deepEqual(parseSessionSearchMemoryId(hits[0].memoryId), {
+    project: 'project-a',
+    agent: 'codex',
+    sessionId: 'session-a',
+  });
+});
+
+test('recall session mode rejects budget queryLimit and thinkingRatio', async () => {
+  const client = {
+    sessionSearchTable: {
+      search: async () => [],
+    },
+  };
+  const message = /budget, queryLimit, and thinkingRatio are only supported in extraction recall mode/;
+
+  await assert.rejects(
+    () => recallMemories(client, 'query', 10, { mode: 'session', budget: 0 }),
+    message,
+  );
+  await assert.rejects(
+    () => recallMemories(client, 'query', 10, { mode: 'session', queryLimit: 10 }),
+    message,
+  );
+  await assert.rejects(
+    () => recallMemories(client, 'query', 10, { mode: 'session', thinkingRatio: 0.5 }),
+    message,
+  );
+});
+
+test('recall extraction mode does not search sessionSearchTable', async () => {
+  let extractionSearches = 0;
+  const client = {
+    sessionSearchTable: {
+      search: async () => {
+        throw new Error('sessionSearchTable.search should not be called by extraction recall');
+      },
+    },
+    extractionTable: {
+      search: async (params) => {
+        extractionSearches += 1;
+        assert.equal(params.mode, 'hybrid');
         return [];
       },
     },
   };
 
   await recallMemories(client, 'adoption agencies', 2, {
-    mode: 'fts',
-    embed: async () => {
-      embedCalls += 1;
-      return [1, 0];
-    },
+    mode: 'extraction',
+    embed: async () => [1, 0],
   });
 
-  assert.equal(embedCalls, 0);
-  assert.deepEqual(calls[0], {
-    query: 'adoption agencies',
-    vector: [],
-    limit: 2,
-    mode: 'fts',
-  });
+  assert.equal(extractionSearches, 1);
+});
+
+test('session search memory ids round trip identity without stored id', () => {
+  const identity = {
+    project: 'project-a',
+    agent: 'codex',
+    sessionId: 'session:with/slashes',
+  };
+
+  const memoryId = sessionSearchMemoryId(identity);
+
+  assert.match(memoryId, /^session:search:/);
+  assert.deepEqual(parseSessionSearchMemoryId(memoryId), identity);
+  assert.equal(memoryId.includes('snapshot'), false);
+  assert.equal(parseSessionSearchMemoryId('session:42'), null);
+  assert.equal(parseSessionSearchMemoryId('session:search:not-json'), null);
 });
 
 test('recallMemories returns recalled memory when budget is positive', async () => {
@@ -3055,6 +3245,43 @@ test('recallMemories returns recalled memory when budget is positive', async () 
     'ext:ext-1',
     'ext:ext-2',
   ]);
+});
+
+test('recallMemories uses candidate refs for recalled memory', async () => {
+  const client = {
+    extractionTable: {
+      search: async () => [
+        {
+          id: 'ext-1',
+          title: 'Adoption agency research',
+          summary: 'Caroline researched adoption agencies.',
+          content: extractionContent('Adoption agency research', 'Caroline researched adoption agencies.'),
+          vector: [],
+          turnRefs: ['D2:8'],
+          createdAt: '2024-01-01T00:00:00Z',
+          updatedAt: '2024-01-01T00:00:00Z',
+        },
+      ],
+    },
+  };
+
+  const hits = await recallMemories(client, 'What did Caroline research?', 1, {
+    budget: 80,
+    queryLimit: 20,
+    embed: async () => [1, 0],
+    recallMemory: async () => ({
+      content: 'Caroline researched adoption agencies.',
+      refs: ['D99:1'],
+      raw: '',
+      candidates: [],
+    }),
+  });
+
+  assert.deepEqual(hits, [{
+    memoryId: 'recalled:memory',
+    content: 'Caroline researched adoption agencies.',
+    references: ['D2:8'],
+  }]);
 });
 
 test('memory recaller validation treats budget as a soft target', () => {

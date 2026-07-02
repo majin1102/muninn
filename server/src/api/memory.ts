@@ -1,17 +1,22 @@
+import { Buffer } from 'node:buffer';
+
 import type {
   ListModeInput,
   NativeTables,
   ExtractionRow as Extraction,
+  SessionSearchRow,
   SessionSnapshotRow,
   TurnRow,
 } from '../native.js';
 import { embedText } from '../llm/embedding-provider.js';
 import { generateText } from '../llm/provider.js';
 import { loadPromptTemplate, renderPromptTemplate } from '../llm/prompts.js';
-import { getRecallConfig, parseRecallMode, type RecallMode } from '../config.js';
 import { readTurnRow, sessionKey as buildSessionKey, normalizeSessionId } from '../pipeline/ingest.js';
 
-export type { RecallMode };
+export type RecallPublicMode = 'session' | 'extraction';
+
+type SessionSearchIdentity = { project: string; agent: string; sessionId: string };
+export const SESSION_SEARCH_MEMORY_PREFIX = 'session:search:';
 
 export interface RenderedMemory {
   memoryId: string;
@@ -56,6 +61,34 @@ export function parseExtractionMemoryId(memoryId: string): string {
     throw new Error(`invalid extraction memory id: ${memoryId}`);
   }
   return id;
+}
+
+export function sessionSearchMemoryId(identity: SessionSearchIdentity): string {
+  return `${SESSION_SEARCH_MEMORY_PREFIX}${Buffer.from(JSON.stringify([
+    identity.project,
+    identity.agent,
+    identity.sessionId,
+  ])).toString('base64url')}`;
+}
+
+export function parseSessionSearchMemoryId(memoryId: string): SessionSearchIdentity | null {
+  if (!memoryId.startsWith(SESSION_SEARCH_MEMORY_PREFIX)) {
+    return null;
+  }
+  try {
+    const raw = Buffer.from(memoryId.slice(SESSION_SEARCH_MEMORY_PREFIX.length), 'base64url').toString('utf8');
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed) || parsed.length !== 3) {
+      return null;
+    }
+    const [project, agent, sessionId] = parsed;
+    if (typeof project !== 'string' || typeof agent !== 'string' || typeof sessionId !== 'string') {
+      return null;
+    }
+    return { project, agent, sessionId };
+  } catch {
+    return null;
+  }
 }
 
 export async function getExtraction(
@@ -142,6 +175,17 @@ export function renderExtraction(memory: Extraction): RenderedMemory {
     detail,
     createdAt: memory.createdAt,
     updatedAt: memory.createdAt,
+  };
+}
+
+export function renderSessionSearch(memory: SessionSearchRow): RenderedMemory {
+  return {
+    memoryId: sessionSearchMemoryId(memory),
+    title: trimText(memory.title),
+    summary: trimText(memory.summary),
+    detail: sessionSearchHitContent(memory),
+    createdAt: memory.updatedAt,
+    updatedAt: memory.updatedAt,
   };
 }
 
@@ -398,9 +442,10 @@ function uniqueStrings(values: string[]): string[] {
 
 
 type RecallOptions = {
-  mode?: RecallMode;
+  mode?: RecallPublicMode;
   budget?: number;
   queryLimit?: number;
+  thinkingRatio?: number;
   embed?: (text: string) => Promise<number[]>;
   recallMemory?: (input: MemoryRecallInput) => Promise<MemoryRecallResult>;
 };
@@ -415,6 +460,26 @@ export async function recallMemories(
   if (!trimmed) {
     return [];
   }
+  const mode = options.mode ?? 'extraction';
+  if (mode !== 'session' && mode !== 'extraction') {
+    throw new Error('recall mode must be one of: session, extraction');
+  }
+  if (mode === 'session') {
+    if (options.budget !== undefined || options.queryLimit !== undefined || options.thinkingRatio !== undefined) {
+      throw new Error('budget, queryLimit, and thinkingRatio are only supported in extraction recall mode');
+    }
+    if (limit <= 0) {
+      return [];
+    }
+    const vector = await (options.embed ?? embedText)(trimmed);
+    const rows = await client.sessionSearchTable.search({
+      query: trimmed,
+      vector,
+      limit,
+    });
+    return rows.map(sessionSearchHit);
+  }
+
   const budget = options.budget ?? 0;
   if (!Number.isSafeInteger(budget) || budget < 0) {
     throw new Error('recall budget must be a non-negative integer');
@@ -426,15 +491,12 @@ export async function recallMemories(
   if (!Number.isSafeInteger(queryLimit) || queryLimit <= 0) {
     throw new Error('recall queryLimit must be a positive integer');
   }
-  const mode = parseRecallMode(options.mode ?? getRecallConfig().mode);
-  const vector = mode === 'fts'
-    ? []
-    : await (options.embed ?? embedText)(trimmed);
+  const vector = await (options.embed ?? embedText)(trimmed);
   const extractionRows = await client.extractionTable.search({
     query: trimmed,
     vector,
     limit: queryLimit,
-    mode,
+    mode: 'hybrid',
   });
   const hits = await Promise.all(extractionRows.map((row) => extractionHit(client, row)));
   if (budget > 0) {
@@ -465,7 +527,6 @@ export async function recallMemories(
   return hits.slice(0, limit);
 }
 
-
 async function extractionHit(client: NativeTables, row: Extraction): Promise<RecallHit> {
   return {
     memoryId: `ext:${row.id}`,
@@ -477,6 +538,29 @@ async function extractionHit(client: NativeTables, row: Extraction): Promise<Rec
     updatedAt: row.updatedAt,
     ...await ownershipFromTurnRefs(client, row.turnRefs),
   };
+}
+
+function sessionSearchHit(row: SessionSearchRow): RecallHit {
+  return {
+    memoryId: sessionSearchMemoryId(row),
+    title: row.title,
+    summary: row.summary,
+    content: sessionSearchHitContent(row),
+    references: [],
+    project: row.project,
+    sessionId: row.sessionId,
+    agent: row.agent,
+    cwd: row.cwd,
+    displaySession: row.title,
+    createdAt: row.updatedAt,
+    updatedAt: row.updatedAt,
+  };
+}
+
+function sessionSearchHitContent(row: Pick<SessionSearchRow, 'latestSnapshotId' | 'title' | 'summary'>): string {
+  return [trimText(row.title), trimText(row.summary)]
+    .filter(Boolean)
+    .join('\n\n') || row.latestSnapshotId;
 }
 
 async function ownershipFromTurnRefs(client: NativeTables, refs: string[]): Promise<Partial<RecallHit>> {
@@ -603,6 +687,11 @@ export class Memories {
   }
 
   async get(memoryId: string): Promise<RenderedMemory | null> {
+    const sessionSearchIdentity = parseSessionSearchMemoryId(memoryId);
+    if (sessionSearchIdentity) {
+      const rows = await this.client.sessionSearchTable.get({ identities: [sessionSearchIdentity] });
+      return rows[0] ? renderSessionSearch(rows[0]) : null;
+    }
     if (memoryId.startsWith('ext:')) {
       const extraction = await getExtraction(this.client, memoryId);
       return extraction ? renderExtraction(extraction) : null;
@@ -653,7 +742,7 @@ export class Memories {
   async recall(
     query: string,
     limit?: number,
-    options?: { mode?: RecallMode; budget?: number; queryLimit?: number },
+    options?: { mode?: RecallPublicMode; budget?: number; queryLimit?: number; thinkingRatio?: number },
   ): Promise<RecallHit[]> {
     return recallMemories(this.client, query, limit, options);
   }

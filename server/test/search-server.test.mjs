@@ -215,6 +215,10 @@ test('searchAppMemory uses recall hits without scanning turns or building an ans
   });
 
   assert.equal('answer' in response, false);
+  assert.deepEqual(recallOptions, {
+    mode: 'extraction',
+    budget: 0,
+  });
   assert.equal(response.results.length, 1);
   assert.equal(response.results[0].sessionKey, sessionScopeKey('muninn', 'codex', 'search-a'));
   assert.equal(response.results[0].projectCwd, '/workspace/muninn');

@@ -14,6 +14,7 @@ import {
   snapshotRef,
   threadIdentityKey,
 } from './session.js';
+import { upsertSessionSearchRow } from './session-search.js';
 
 export function applyExtractionChanges(
   currentExtractions: ExtractionUnit[],
@@ -248,16 +249,14 @@ async function indexThreadExtractions(
       nextSteps: current.nextSteps ?? [],
       contextRefs: current.contextRefs,
     });
-    await applyExtractionTableChanges(
-      client,
-      {
-        ...current,
-        extractions: diff.extractions,
-        extractionChanges: diff.extractionChanges,
-      },
-      snapshotRef(thread, snapshotIndex),
-      signal,
-    );
+    const indexedSnapshot = {
+      ...current,
+      extractions: diff.extractions,
+      extractionChanges: diff.extractionChanges,
+    };
+    const snapshotId = snapshotRef(thread, snapshotIndex);
+    await upsertSessionSearchRow(client, thread, indexedSnapshot, snapshotId, signal);
+    await applyExtractionTableChanges(client, indexedSnapshot, snapshotId, signal);
     latestIndexedSequence = snapshotIndex;
   }
 
@@ -409,11 +408,11 @@ function extractionUnitKey(row: ExtractionUnit): string {
   ].join('\u0002');
 }
 
-function extractionTitle(row: ExtractionUnit): string {
+export function extractionTitle(row: ExtractionUnit): string {
   return normalizeText(row.title ?? '') || normalizeText(row.text).slice(0, 80);
 }
 
-function extractionSummary(title: string, row: ExtractionUnit): string {
+export function extractionSummary(title: string, row: ExtractionUnit): string {
   return [
     title,
     row.text,

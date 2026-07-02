@@ -4,7 +4,7 @@ import { app } from './http.js';
 
 export { app } from './http.js';
 export { probeNativeAddon } from './native.js';
-export type { RecallMode } from './backend.js';
+export type { RecallPublicMode } from './backend.js';
 
 export type StartServerOptions = {
   host?: string;

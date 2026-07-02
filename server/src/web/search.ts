@@ -37,7 +37,7 @@ export type AppSearchResult = {
 
 type SearchDeps = {
   recall: (query: string, limit?: number, options?: {
-    mode?: 'vector' | 'fts' | 'hybrid';
+    mode?: 'session' | 'extraction';
     budget?: number;
     queryLimit?: number;
   }) => Promise<RecallHit[]>;
@@ -52,7 +52,7 @@ export async function searchAppMemory(params: AppSearchParams, deps: SearchDeps)
   }
 
   const extractionHits = await deps.recall(query, Math.max(params.topN * params.sessionTopN, params.topN * 3), {
-    mode: 'hybrid',
+    mode: 'extraction',
     budget: 0,
   });
   const candidates = hitCandidates(extractionHits, {

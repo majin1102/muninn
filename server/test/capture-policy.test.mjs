@@ -19,7 +19,6 @@ function baseConfig() {
       name: 'default-extractor',
       llmProvider: 'default',
       embeddingProvider: 'default',
-      recallMode: 'hybrid',
     },
     providers: {
       llm: {

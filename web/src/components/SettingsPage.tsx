@@ -388,7 +388,6 @@ function PipelineSettings({ draft, tab: _tab }: { draft: MuninnSettingsDraft; ta
       <OptionalSettingsRow draft={draft} label="Name" description="extractor.name" path={['extractor', 'name']} />
       <OptionalSettingsRow draft={draft} label="LLM provider" description="extractor.llmProvider" path={['extractor', 'llmProvider']} />
       <OptionalSettingsRow draft={draft} label="Embedding provider" description="extractor.embeddingProvider" path={['extractor', 'embeddingProvider']} />
-      <OptionalSettingsRow draft={draft} label="Recall mode" description="extractor.recallMode" path={['extractor', 'recallMode']} />
       <OptionalSettingsRow draft={draft} label="Max attempts" description="extractor.maxAttempts" path={['extractor', 'maxAttempts']} />
       <OptionalSettingsRow draft={draft} label="Active window days" description="extractor.activeWindowDays" path={['extractor', 'activeWindowDays']} />
     </div>

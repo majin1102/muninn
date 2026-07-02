@@ -939,7 +939,6 @@ test('validateSettings accepts provider registry references', async (t) => {
         name: 'test-extractor',
         llmProvider: 'default',
         embeddingProvider: 'default',
-        recallMode: 'hybrid',
       },
     }, null, 2)),
   );

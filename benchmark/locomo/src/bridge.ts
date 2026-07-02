@@ -6,7 +6,7 @@ import http from 'node:http';
 import https from 'node:https';
 import { existsSync } from 'node:fs';
 import { access, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
-import type { RecallMode } from '@muninn/server';
+import type { RecallPublicMode } from '@muninn/server';
 
 const CONFIG_FILE_NAME = 'muninn.json';
 const WATERMARK_POLL_MS = 2_000;
@@ -224,7 +224,7 @@ async function recallCommand(options: Map<string, string>) {
   process.env.MUNINN_HOME = home;
   const query = requireOption(options, 'query');
   const limit = parsePositiveInt(requireOption(options, 'limit'), 'limit');
-  const recallMode = parseRecallMode(options.get('recall-mode'));
+  const mode = parseRecallPublicMode(options.get('mode') ?? options.get('recall-mode'));
   const budget = parseOptionalNonNegativeInt(options.get('budget'), 'budget') ?? 0;
   const queryLimit = parseOptionalPositiveInt(options.get('query-limit'), 'query-limit');
   const skipWatermark = options.has('skip-watermark');
@@ -234,7 +234,7 @@ async function recallCommand(options: Map<string, string>) {
   if (!skipWatermark) {
     await waitForImportWatermark(manifest, { database });
   }
-  const hits = await recallHits(query, limit, manifest, recallMode, budget, queryLimit);
+  const hits = await recallHits(query, limit, manifest, mode, budget, queryLimit);
   return { hits };
 }
 
@@ -242,7 +242,7 @@ async function recallBatchCommand(options: Map<string, string>) {
   const home = requireOption(options, 'muninn-home');
   process.env.MUNINN_HOME = home;
   const queriesFile = requireOption(options, 'queries-file');
-  const recallMode = parseRecallMode(options.get('recall-mode'));
+  const mode = parseRecallPublicMode(options.get('mode') ?? options.get('recall-mode'));
   const budget = parseOptionalNonNegativeInt(options.get('budget'), 'budget') ?? 0;
   const queryLimit = parseOptionalPositiveInt(options.get('query-limit'), 'query-limit');
   const skipWatermark = options.has('skip-watermark');
@@ -258,7 +258,7 @@ async function recallBatchCommand(options: Map<string, string>) {
   const queryTimeoutMs = envPositiveInt('MUNINN_LOCOMO_RECALL_QUERY_TIMEOUT_MS', RECALL_QUERY_TIMEOUT_MS);
 
   console.error(
-    `[locomo] recall_batch_start total=${queries.length} mode=${recallMode} budget=${budget} query_limit=${queryLimit ?? '(none)'} timeout_ms=${queryTimeoutMs}`
+    `[locomo] recall_batch_start total=${queries.length} mode=${mode} budget=${budget} query_limit=${queryLimit ?? '(none)'} timeout_ms=${queryTimeoutMs}`
   );
 
   for (let index = 0; index < queries.length; index += 1) {
@@ -269,7 +269,7 @@ async function recallBatchCommand(options: Map<string, string>) {
     );
     try {
       const hits = await withTimeout(
-        recallHits(item.query, item.limit, manifest, recallMode, budget, queryLimit),
+        recallHits(item.query, item.limit, manifest, mode, budget, queryLimit),
         queryTimeoutMs,
         `recall query timed out after ${queryTimeoutMs}ms: key=${item.key} query=${item.query}`
       );
@@ -497,7 +497,7 @@ async function recallHits(
   query: string,
   limit: number,
   manifest: ImportManifest,
-  mode: RecallMode,
+  mode: RecallPublicMode,
   budget = 0,
   queryLimit?: number,
 ): Promise<BridgeHit[]> {
@@ -512,11 +512,11 @@ async function recallHits(
   return payload.hits;
 }
 
-function parseRecallMode(raw: string | undefined): RecallMode {
+function parseRecallPublicMode(raw: string | undefined): RecallPublicMode {
   if (!raw) {
-    return 'hybrid';
+    return 'extraction';
   }
-  if (raw === 'vector' || raw === 'fts' || raw === 'hybrid') {
+  if (raw === 'session' || raw === 'extraction') {
     return raw;
   }
   throw new Error(`invalid recall mode: ${raw}`);
@@ -578,7 +578,7 @@ async function fetchLocomoRecall(
   query: string,
   limit: number,
   manifest: ImportManifest,
-  mode: RecallMode,
+  mode: RecallPublicMode,
   budget = 0,
   queryLimit?: number,
 ): Promise<{ hits: BridgeHit[] }> {
@@ -589,7 +589,7 @@ async function fetchLocomoRecall(
       query,
       database: manifest.sample_id,
       limit,
-      recallMode: mode,
+      mode,
       budget,
       queryLimit,
       manifest,

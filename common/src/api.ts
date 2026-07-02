@@ -123,14 +123,16 @@ export interface AppStatusResponse {
   requestId: string;
 }
 
+export type RecallPublicMode = 'session' | 'extraction';
+
 export interface RecallRequest {
   query: string;
   database?: string;
+  mode?: RecallPublicMode;
   limit?: number;
   budget?: number;
   queryLimit?: number;
   thinkingRatio?: number;
-  recallMode?: 'vector' | 'fts' | 'hybrid';
 }
 
 export interface ListRequest {

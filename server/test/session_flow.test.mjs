@@ -194,7 +194,6 @@ function createValidSettings({
       name: 'default-extractor',
       llmProvider: 'default_extractor_llm',
       embeddingProvider: 'default',
-      recallMode: 'hybrid',
       maxAttempts: 3,
       minEpochTurns: 1,
       maxEpochTurns: 32,
@@ -885,7 +884,7 @@ test('benchmark locomo capture returns turn id and recall returns body-only hits
     body: JSON.stringify({
       query: 'adoption agency',
       limit: 2,
-      recallMode: 'hybrid',
+      mode: 'extraction',
       manifest,
     }),
   });
@@ -1550,7 +1549,6 @@ test('ui settings config reads and writes muninn.json through server', async (t)
 
   const updatedConfig = createValidSettings({ includeWatchdog: true });
   updatedConfig.extractor.name = 'live-extractor';
-  updatedConfig.extractor.recallMode = 'fts';
   const writeResponse = await app.request('/app/api/settings/config', {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
@@ -1562,7 +1560,7 @@ test('ui settings config reads and writes muninn.json through server', async (t)
 
   const persisted = await readFile(configPath, 'utf8');
   assert.match(persisted, /"name": "live-extractor"/);
-  assert.match(persisted, /"recallMode": "fts"/);
+  assert.doesNotMatch(persisted, /"recallMode"/);
   assert.doesNotMatch(persisted, /"defaultImportance"/);
 });
 
