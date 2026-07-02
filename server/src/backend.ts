@@ -436,11 +436,15 @@ export class MuninnBackend {
       return;
     }
     const embedding = getEmbeddingConfig();
-    const sessionStats = await this.client.sessionTable.stats();
+    const [sessionStats, sessionSearchStats] = await Promise.all([
+      this.client.sessionTable.stats(),
+      this.client.sessionSearchTable.stats(),
+    ]);
     const sourceSessionVersion = sessionStats?.version ?? 0;
     const checkpoint = this.checkpoint?.sessionSearch ?? null;
     let needsRebuild = (
       !checkpoint
+      || !sessionSearchStats
       || checkpoint.schemaVersion !== 1
       || checkpoint.embeddingDimensions !== embedding.dimensions
       || checkpoint.sourceSessionVersion !== sourceSessionVersion

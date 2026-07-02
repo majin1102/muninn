@@ -523,6 +523,84 @@ test('rebuildSessionSearch replaces rows from latest live turn-backed sessions o
   assert.equal(replacedRows[0].vector.length, 8);
 });
 
+test('backend startup rebuilds session search when matching checkpoint has no session search table stats', async (t) => {
+  const previousHome = process.env.MUNINN_HOME;
+  const { dir, homeDir, configPath } = await makeConfigHome();
+  process.env.MUNINN_HOME = homeDir;
+  await writeExtractorConfig(configPath);
+  t.after(async () => {
+    await rm(dir, { recursive: true, force: true });
+    if (previousHome === undefined) {
+      delete process.env.MUNINN_HOME;
+    } else {
+      process.env.MUNINN_HOME = previousHome;
+    }
+  });
+
+  const checkpoint = makeCheckpointContent({
+    extractor: makeExtractorCheckpoint({
+      baseline: { turn: 4, session: 7, extraction: 0 },
+    }),
+    sessionIndex: {
+      baseline: { turn: 4, session: 7 },
+      entries: [{
+        sessionId: 'stats-null-session',
+        agent: 'codex',
+        project: 'project-a',
+        cwd: '/workspace/project-a',
+        latestUpdatedAt: '2024-01-03T00:00:00Z',
+      }],
+    },
+    sessionSearch: {
+      schemaVersion: 1,
+      embeddingDimensions: 8,
+      sourceSessionVersion: 7,
+      tableVersion: 11,
+    },
+  });
+  await mkdir(path.dirname(resolveCheckpointPath('stats-null')), { recursive: true });
+  await writeFile(resolveCheckpointPath('stats-null'), `${JSON.stringify({
+    ...checkpoint,
+    writtenAt: '2024-01-04T00:00:00Z',
+    writerPid: 123,
+  }, null, 2)}\n`, 'utf8');
+
+  let replacedRows = null;
+  const backend = await MuninnBackend.create({
+    turnTable: {
+      delta: async () => [],
+      stats: async () => ({ version: 4, fragmentCount: 1, rowCount: 1 }),
+    },
+    sessionTable: {
+      delta: async () => ({ sourceVersion: 7, rows: [] }),
+      stats: async () => ({ version: 7, fragmentCount: 1, rowCount: 1 }),
+      listSnapshots: async () => [makeSnapshotRow({
+        snapshotId: 'session:stats-null',
+        sessionId: 'stats-null-session',
+        snapshotSequence: 1,
+        title: 'Stats null title',
+        summary: 'Stats null summary',
+        updatedAt: '2024-01-03T00:00:00Z',
+      })],
+    },
+    sessionSearchTable: {
+      stats: async () => null,
+      validateDimensions: async () => undefined,
+      replaceAll: async ({ rows }) => {
+        replacedRows = rows;
+      },
+    },
+  }, 'stats-null');
+
+  try {
+    assert.equal(replacedRows.length, 1);
+    assert.equal(replacedRows[0].sessionId, 'stats-null-session');
+    assert.equal(replacedRows[0].latestSnapshotId, 'session:stats-null');
+  } finally {
+    await backend.shutdown();
+  }
+});
+
 test('indexTouchedExtractions writes session search before extraction rows', async (t) => {
   const previousHome = process.env.MUNINN_HOME;
   const { dir, homeDir, configPath } = await makeConfigHome();
