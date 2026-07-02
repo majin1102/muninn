@@ -41,7 +41,7 @@ not replace `session_snapshot`.
 
 `session` is a materialized retrieval table:
 
-- One row per current imported session.
+- One row per current captured session with live turns.
 - The row represents the latest session topic.
 - The row is updated from the latest session snapshot before extraction rows are
   written for that snapshot.
@@ -76,8 +76,9 @@ The table does not store a separate `id`, `sessionKey`, `references`, or
 `createdAt`.
 
 - `sessionKey` is derived from `{ project, agent, sessionId }`.
-- `memoryId` or MCP `context_id` is derived at the API/MCP layer from the same
-  identity.
+- `memoryId` is derived at the API layer from the same identity.
+- MCP `context_id` stays an opaque `session_*` handle derived at the MCP layer
+  from the same identity.
 - `references` are read from `latestSnapshotId` only when a caller needs
   provenance or expansion.
 - `updatedAt` is enough for recency display and tie-breaking.
@@ -121,6 +122,11 @@ The FTS side can match exact filenames, APIs, classes, modules, and terms that
 may only appear in extraction titles or summaries. Extraction content and
 context are not included in `searchText` for the MVP.
 
+The extraction titles and summaries used for `searchText` come from the latest
+parsed session snapshot content. They are not read from the `extraction`
+retrieval table. This keeps session row materialization independent from the
+later extraction table update.
+
 ## Write Path
 
 The extractor write flow becomes:
@@ -144,11 +150,33 @@ cache.
 
 ## Recall API
 
-Recall exposes two modes:
+Recall exposes two public modes:
 
 ```ts
-type RecallMode = 'session' | 'extraction';
+type RecallRequest = {
+  query: string;
+  database?: string;
+  mode?: 'session' | 'extraction';
+  limit?: number;
+  budget?: number;
+  queryLimit?: number;
+  thinkingRatio?: number;
+};
 ```
+
+The existing public `recallMode?: 'vector' | 'fts' | 'hybrid'` request field is
+removed. The recall API no longer exposes retrieval algorithm selection.
+
+`mode` defaults to `extraction` for general recall endpoints. Callers that want
+session-level candidate recall must pass `mode: 'session'` explicitly. The
+`muninn-list` MCP tool always does this internally.
+
+This design only removes the public retrieval-algorithm selector. It does not
+remove existing extraction-mode synthesis controls such as `budget`,
+`queryLimit`, or `thinkingRatio`. Those controls are valid only for
+`mode: 'extraction'`. Session mode returns session candidates and should reject
+`budget`, `queryLimit`, and `thinkingRatio` rather than silently treating them
+as session-ranking controls.
 
 Session mode:
 
@@ -164,6 +192,8 @@ Extraction mode:
 - Uses hybrid retrieval internally.
 - Preserves the current fine-grained recall use case.
 - Remains the mode used by existing app search for now.
+- Does not route through `observation` rows. Observation recall is a separate
+  cleanup topic outside this design.
 
 This design intentionally does not expose `vector`, `fts`, or `hybrid` as a
 public recall option. Those are internal retrieval details.
@@ -180,10 +210,13 @@ muninn-list({ query, top_k })
 -> muninn-read({ context_ids })
 ```
 
-`muninn-list` returns candidates with `context_id` equal to the session recall
-`memoryId`. The core table does not store a separate context id.
+`muninn-list` returns candidates with a `session_*` `context_id`, following the
+existing MCP context id contract. The MCP adapter maps that opaque handle to
+the session recall identity or memory id internally. The core table does not
+store a separate context id. MCP results must not expose internal session
+`memoryId` values as `context_id` values.
 
-`muninn-read` resolves those ids to the selected sessions and reads the
+`muninn-read` resolves those `session_*` ids to the selected sessions and reads the
 corresponding session context. If the user asks for provenance behind a
 candidate, `muninn-explain` can resolve the same session id through the latest
 snapshot references.
@@ -205,21 +238,24 @@ fingerprint. Examples:
 - The embedding model or dimensions changed.
 - The session retrieval schema changed.
 - The `searchText` construction changed.
-- The session table became inconsistent with live imported turns.
+- The session table became inconsistent with live turns.
 
 Rebuild scans live sessions from turns, picks the latest snapshot per
 `{ project, agent, sessionId }`, and rewrites session retrieval rows from those
-snapshots. Deleted imports should not reappear from old append-only snapshots.
+snapshots. Deleted sessions or projects should not reappear from old append-only
+snapshots.
 
 ## Error Handling
 
 - Empty queries return no hits.
-- `mode` must be either `session` or `extraction`.
+- When supplied, `mode` must be either `session` or `extraction`.
+- Missing `mode` defaults to `extraction`.
+- Session mode rejects `budget`, `queryLimit`, and `thinkingRatio`.
 - Session rows with both `title` and `summary` empty should not be indexed.
 - Session row write failures fail the extractor epoch and are retried.
 - Extraction row failures after a session row write remain retryable through the
   existing extraction write path.
-- Unknown session `memoryId` / `context_id` values return a normal not-found
+- Unknown session `memoryId` / `session_*` context id values return a normal not-found
   response from read/explain paths.
 
 ## Testing
@@ -246,13 +282,16 @@ Recall tests:
 
 - `mode: 'session'` searches the session table and returns session candidates.
 - `mode: 'extraction'` searches extraction rows and does not search sessions.
+- Missing `mode` uses extraction mode.
+- Session mode rejects extraction-only synthesis controls.
 - Invalid recall modes fail validation.
 - Empty queries return no hits for both modes.
 
 MCP / skill-facing tests:
 
-- `muninn-list` calls session recall and returns session candidate context ids.
-- `muninn-read` resolves selected session context ids.
+- Public recall requests accept `mode` and no longer accept `recallMode`.
+- `muninn-list` calls session recall and returns `session_*` candidate context ids.
+- `muninn-read` resolves selected `session_*` context ids.
 - `muninn-import` does not call extraction mode for candidate listing.
 - `muninn-explain` can resolve session candidate provenance through latest
   snapshot references.
