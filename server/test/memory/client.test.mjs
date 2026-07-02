@@ -1440,7 +1440,7 @@ test('memoryPipeline.flushPending drains the current extraction batch without fi
   assert.equal(resolved.phases.extractor, 'idle');
 });
 
-test('hook capture seals immediately even when the default epoch window is long', async (t) => {
+test('memoryPipeline.finalize seals hook captures even when the default epoch window is long', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(cleanupDataset(dir));
 
@@ -1458,6 +1458,7 @@ test('hook capture seals immediately even when the default epoch window is long'
     prompt: 'low frequency hook prompt',
     response: 'low frequency hook response',
   }));
+  await memoryPipeline.finalize();
 
   let resolved = null;
   for (let attempt = 0; attempt < 50; attempt += 1) {

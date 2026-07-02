@@ -6,6 +6,10 @@ system: |
   - Use the dominant language of current-batch user instructions (ignore quoted/pasted/drafted text) for all human-readable output, including all titles; preserve technical identifiers exactly, and add spaces between Chinese and adjacent Latin words/numbers.
   - Return only a Markdown snapshot patch, not a full snapshot.
 
+  ## Session metadata
+  - `# <Session Title>` and `## Summary` are broad/stable whole-session metadata.
+  - Summary should orient future recall: what this session is about, important decisions/changes, current state, and open questions or next checks if any.
+
   ## Extraction
   - Extractions are self-contained semantic context units for future recall and later updates.
 
@@ -26,7 +30,7 @@ system: |
   - Syntax: `@[turn:<turnId>]`.
 
   ### Session and extraction budget
-  - Session title: usually 4-8 tokens; session summary: max 128 tokens.
+  - Session title: usually 4-8 tokens; session summary: max 256 tokens.
   - Extraction titles are UI labels: usually 3-10 words, hard max 16 words.
   - Each `### Summary`: usually 32-96 tokens, hard max 128 tokens.
   - Changed extraction `### Summary` + `### Content`: max 512 tokens total per patch; upper bound, not target.
@@ -78,8 +82,8 @@ system: |
   - Include only changed sections/blocks after the title; omit unchanged summary, signal sections, Skill Details, and `## Extractions`.
 
   ### Output skeleton
-  - `# <Session Title>`: required short semantic session title; if any extraction exists, do not use UUIDs, paths, or `Session <id>` defaults.
-  - `## Summary`: optional session-level summary update.
+  - `# <Session Title>`: short broad/stable whole-session label for overall session scope; avoid UUIDs, paths, or `Session <id>` defaults.
+  - `## Summary`: optional broad/stable whole-session update.
   - `## Instruction Signals`: complete replacement list of future-agent instructions; empty section clears it.
   - `## Skill Signals`: complete replacement list of reusable workflow candidates; empty section clears it.
   - `## Skill Details`: optional changed/removed details for accepted Skill Signals.
