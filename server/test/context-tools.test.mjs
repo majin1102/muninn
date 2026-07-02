@@ -56,12 +56,37 @@ test('readContextIds resolves session and turn ids without source provenance', a
   assert.doesNotMatch(contexts[0].content, /Source Provenance/);
 
   assert.equal(contexts[1].contextId, turnContext);
+  assert.doesNotMatch(contexts[1].content, /^# turn:1$/m);
   assert.match(contexts[1].content, /Prompt: User asked about context ids/);
   assert.match(contexts[1].content, /Response: Assistant explained them/);
   assert.doesNotMatch(contexts[1].content, /Source Provenance/);
 
   assert.match(contexts[2].error, /unsupported context id/);
   assert.match(contexts[3].error, /not found/);
+});
+
+test('readContextIds rejects ordinary storage errors instead of returning per-id errors', async () => {
+  await assert.rejects(
+    () => new Memories({
+      sessionSearchTable: {
+        get: async () => {
+          throw new Error('storage connection failed');
+        },
+      },
+    }).readContextIds([sessionContext]),
+    /storage connection failed/,
+  );
+
+  await assert.rejects(
+    () => new Memories({
+      turnTable: {
+        getTurn: async () => {
+          throw new Error('turn table unavailable');
+        },
+      },
+    }).readContextIds([turnContext]),
+    /turn table unavailable/,
+  );
 });
 
 test('explainContextId resolves session provenance and rejects turn ids', async () => {
@@ -136,6 +161,27 @@ test('context read HTTP allows mixed valid and invalid ids as partial success', 
   assert.equal(body.contexts[0].content, '# Session title\n\nSession summary');
   assert.equal(body.contexts[1].contextId, 'invalid_context');
   assert.match(body.contexts[1].error, /unsupported context id/);
+});
+
+test('context read HTTP returns non-200 when backend read fails unexpectedly', async (t) => {
+  const originalReadContextIds = backendMemories.readContextIds;
+  t.after(() => {
+    backendMemories.readContextIds = originalReadContextIds;
+  });
+  backendMemories.readContextIds = async () => {
+    throw new Error('storage connection failed');
+  };
+
+  const response = await app.request('/api/v1/context/read', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ context_ids: [sessionContext] }),
+  });
+
+  assert.notEqual(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.errorCode, 'internalError');
+  assert.equal(body.contexts, undefined);
 });
 
 function makeContextClient() {

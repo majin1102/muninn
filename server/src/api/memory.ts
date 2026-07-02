@@ -792,9 +792,12 @@ export class Memories {
       try {
         return await this.readContextId(contextId);
       } catch (error) {
+        if (!isExpectedContextReadError(error)) {
+          throw error;
+        }
         return {
           contextId,
-          error: error instanceof Error ? error.message : String(error),
+          error: error.message,
         };
       }
     }));
@@ -902,8 +905,8 @@ export class Memories {
     }
     return {
       contextId,
-      title: rendered.title,
-      content: renderRenderedMemoryMarkdown(rendered),
+      title: contextId,
+      content: renderTurnContextMarkdown(contextId, rendered),
     };
   }
 
@@ -935,4 +938,29 @@ export class Memories {
     }
     return sections.length > 0 ? sections.join('\n\n') : '_No source turn provenance found._';
   }
+}
+
+function isExpectedContextReadError(error: unknown): error is Error {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  return [
+    'unsupported context id:',
+    'invalid session context id:',
+    'invalid memory id:',
+    'invalid memory id layer:',
+    'session context not found:',
+    'turn context not found:',
+    'turn context has no readable content:',
+  ].some((prefix) => error.message.startsWith(prefix));
+}
+
+function renderTurnContextMarkdown(contextId: string, memory: RenderedMemory): string {
+  const sections = [`# ${contextId}`];
+  sections.push('', '## Created At', '', memory.createdAt);
+  sections.push('', '## Updated At', '', memory.updatedAt);
+  if (memory.detail) {
+    sections.push('', '## Detail', '', memory.detail);
+  }
+  return sections.join('\n');
 }
