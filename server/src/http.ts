@@ -895,7 +895,10 @@ app.post('/api/v1/benchmark/locomo/recall', async (c) => {
     if (body.recallMode !== undefined) {
       throw new Error('recallMode is no longer supported; use mode with session or extraction');
     }
-    mode = parseRecallPublicMode(typeof body.mode === 'string' ? body.mode : undefined);
+    if (body.mode !== undefined && typeof body.mode !== 'string') {
+      throw new Error('mode must be one of: session, extraction');
+    }
+    mode = parseRecallPublicMode(body.mode);
   } catch (error) {
     return c.json(errorResponse('invalidRequest', error instanceof Error ? error.message : String(error)), 400);
   }

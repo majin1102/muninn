@@ -440,6 +440,13 @@ test('withTransientRetry does not retry non-transient failures', async () => {
   assert.equal(attempts, 1);
 });
 
+test('bridge recall commands read only the public mode option', async () => {
+  const source = await readFile(path.join(repoRoot, 'benchmark/locomo/src/bridge.ts'), 'utf8');
+
+  assert.match(source, /options\.get\('mode'\)/);
+  assert.doesNotMatch(source, /options\.get\('recall-mode'\)/);
+});
+
 test('bridge emits JSON error envelope for command failures', async () => {
   await assert.rejects(
     async () => {

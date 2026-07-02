@@ -224,7 +224,7 @@ async function recallCommand(options: Map<string, string>) {
   process.env.MUNINN_HOME = home;
   const query = requireOption(options, 'query');
   const limit = parsePositiveInt(requireOption(options, 'limit'), 'limit');
-  const mode = parseRecallPublicMode(options.get('mode') ?? options.get('recall-mode'));
+  const mode = parseRecallPublicMode(options.get('mode'));
   const budget = parseOptionalNonNegativeInt(options.get('budget'), 'budget') ?? 0;
   const queryLimit = parseOptionalPositiveInt(options.get('query-limit'), 'query-limit');
   const skipWatermark = options.has('skip-watermark');
@@ -242,7 +242,7 @@ async function recallBatchCommand(options: Map<string, string>) {
   const home = requireOption(options, 'muninn-home');
   process.env.MUNINN_HOME = home;
   const queriesFile = requireOption(options, 'queries-file');
-  const mode = parseRecallPublicMode(options.get('mode') ?? options.get('recall-mode'));
+  const mode = parseRecallPublicMode(options.get('mode'));
   const budget = parseOptionalNonNegativeInt(options.get('budget'), 'budget') ?? 0;
   const queryLimit = parseOptionalPositiveInt(options.get('query-limit'), 'query-limit');
   const skipWatermark = options.has('skip-watermark');

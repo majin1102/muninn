@@ -24,7 +24,7 @@ export async function recall(baseUrl, query, { limit = 5, mode } = {}) {
     limit: String(limit),
   });
   if (mode) {
-    params.set('recallMode', mode);
+    params.set('mode', mode);
   }
   return requestJson(baseUrl, `/api/v1/recall?${params.toString()}`);
 }

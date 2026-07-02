@@ -38,6 +38,14 @@ test('recall routes reject obsolete and extraction-only mode options before back
   assert.equal(locomoObsoleteResponse.status, 400);
   assert.match((await json(locomoObsoleteResponse)).errorMessage, /recallMode is no longer supported/);
 
+  const locomoNonStringModeResponse = await app.request('/api/v1/benchmark/locomo/recall', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ query: 'alpha', mode: 123 }),
+  });
+  assert.equal(locomoNonStringModeResponse.status, 400);
+  assert.equal((await json(locomoNonStringModeResponse)).errorMessage, 'mode must be one of: session, extraction');
+
   const locomoSessionBudgetResponse = await app.request('/api/v1/benchmark/locomo/recall', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },

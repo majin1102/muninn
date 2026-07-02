@@ -43,6 +43,7 @@ struct MuninnConfig {
 #[serde(rename_all = "camelCase")]
 struct ExtractorFileConfig {
     embedding_provider: Option<String>,
+    recall_mode: Option<serde_json::Value>,
     default_importance: Option<serde_json::Value>,
 }
 
@@ -175,6 +176,16 @@ fn parse_muninn_config(raw: &str, source: &str) -> Result<MuninnConfig> {
     if parsed
         .extractor
         .as_ref()
+        .and_then(|extractor| extractor.recall_mode.as_ref())
+        .is_some()
+    {
+        return Err(Error::invalid_input(
+            "extractor.recallMode is no longer supported.",
+        ));
+    }
+    if parsed
+        .extractor
+        .as_ref()
         .and_then(|extractor| extractor.default_importance.as_ref())
         .is_some()
     {
@@ -199,6 +210,16 @@ fn validate_top_level_config(raw: &str, source: &str) -> Result<()> {
             key.as_str(),
             "server" | "storage" | "extractor" | "providers" | "watchdog" | "capture" | "dreaming"
         ) {
+            if key == "semanticIndex" {
+                return Err(Error::invalid_input(
+                    "semanticIndex is no longer supported; use extractor.embeddingProvider instead.",
+                ));
+            }
+            if key == "extraction" {
+                return Err(Error::invalid_input(
+                    "extraction is no longer supported; use extractor.embeddingProvider instead.",
+                ));
+            }
             return Err(Error::invalid_input(format!(
                 "unsupported top-level config key: {key}"
             )));
@@ -367,11 +388,22 @@ mod tests {
 }"#,
         )
         .unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("unsupported top-level config key: extraction")
-        );
+        assert!(error.to_string().contains("extraction is no longer supported"));
+        assert!(!error.to_string().contains("recallMode"));
+    }
+
+    #[test]
+    fn extraction_config_rejects_extractor_recall_mode() {
+        let error = extraction_config_from_raw(
+            r#"{
+  "extractor": {
+    "embeddingProvider": "default",
+    "recallMode": "hybrid"
+  }
+}"#,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("extractor.recallMode"));
     }
 
     #[test]
