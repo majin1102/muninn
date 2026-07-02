@@ -184,6 +184,27 @@ test('context read HTTP returns non-200 when backend read fails unexpectedly', a
   assert.equal(body.contexts, undefined);
 });
 
+test('context explain HTTP maps stale session context ids to not found', async (t) => {
+  const originalExplainContextId = backendMemories.explainContextId;
+  t.after(() => {
+    backendMemories.explainContextId = originalExplainContextId;
+  });
+  backendMemories.explainContextId = async () => {
+    throw new Error(`session context not found: ${sessionContext}`);
+  };
+
+  const response = await app.request('/api/v1/context/explain', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ context_id: sessionContext }),
+  });
+
+  assert.equal(response.status, 404);
+  const body = await response.json();
+  assert.equal(body.errorCode, 'notFound');
+  assert.match(body.errorMessage, /session context not found/);
+});
+
 function makeContextClient() {
   const sessionSearchRow = {
     latestSnapshotId: 'session:1',

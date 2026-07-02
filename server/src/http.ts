@@ -677,7 +677,9 @@ function parseThinkingRatio(raw: string | undefined): { value: number | undefine
   return { value, error: null };
 }
 
-function mapCoreLookupError(error: unknown): { status: number; body: ErrorResponse } {
+type ErrorStatus = 400 | 404 | 500 | 503;
+
+function mapCoreLookupError(error: unknown): { status: ErrorStatus; body: ErrorResponse } {
   const message = error instanceof Error ? error.message : String(error);
   const lowered = message.toLowerCase();
 
@@ -691,6 +693,16 @@ function mapCoreLookupError(error: unknown): { status: number; body: ErrorRespon
     return {
       status: 400,
       body: errorResponse('invalidRequest', message),
+    };
+  }
+
+  if (
+    lowered.includes('session context not found')
+    || lowered.includes('session snapshot not found')
+  ) {
+    return {
+      status: 404,
+      body: errorResponse('notFound', message),
     };
   }
 
@@ -865,7 +877,7 @@ app.get('/api/v1/recall', async (c) => {
     })).map(renderRecallHit);
   } catch (error) {
     const mapped = mapCoreLookupError(error);
-    return c.json(mapped.body, mapped.status as 400 | 500);
+    return c.json(mapped.body, mapped.status);
   }
 
   return c.json(memoryResponse(matched));
@@ -897,7 +909,7 @@ app.post('/api/v1/context/read', async (c) => {
     return c.json({ contexts, requestId: generateRequestId() });
   } catch (error) {
     const mapped = mapCoreLookupError(error);
-    return c.json(mapped.body, mapped.status as 400 | 500);
+    return c.json(mapped.body, mapped.status);
   }
 });
 
@@ -930,7 +942,7 @@ app.post('/api/v1/context/explain', async (c) => {
     return c.json({ context, requestId: generateRequestId() });
   } catch (error) {
     const mapped = mapCoreLookupError(error);
-    return c.json(mapped.body, mapped.status as 400 | 500);
+    return c.json(mapped.body, mapped.status);
   }
 });
 
@@ -1021,7 +1033,7 @@ app.post('/api/v1/benchmark/locomo/recall', async (c) => {
     return c.json({ hits, requestId: generateRequestId() });
   } catch (error) {
     const mapped = mapCoreLookupError(error);
-    return c.json(mapped.body, mapped.status as 400 | 500);
+    return c.json(mapped.body, mapped.status);
   }
 });
 
@@ -1188,7 +1200,7 @@ app.get('/api/v1/timeline', async (c) => {
     })).map(renderRenderedMemoryHit);
   } catch (error) {
     const mapped = mapCoreLookupError(error);
-    return c.json(mapped.body, mapped.status as 400 | 500);
+    return c.json(mapped.body, mapped.status);
   }
 
   if (windowed.length === 0) {
@@ -1213,7 +1225,7 @@ app.get('/api/v1/detail', async (c) => {
     memory = await memories.get(memoryId, database);
   } catch (error) {
     const mapped = mapCoreLookupError(error);
-    return c.json(mapped.body, mapped.status as 400 | 500);
+    return c.json(mapped.body, mapped.status);
   }
 
   if (!memory) {
@@ -1230,7 +1242,7 @@ app.get('/api/v1/memory/watermark', async (c) => {
     watermark = await memoryPipeline.watermark(database);
   } catch (error) {
     const mapped = mapCoreLookupError(error);
-    return c.json(mapped.body, mapped.status as 400 | 500);
+    return c.json(mapped.body, mapped.status);
   }
 
   return c.json(memoryWatermarkResponse(watermark));
@@ -1249,7 +1261,7 @@ app.post('/api/v1/memory/finalize', async (c) => {
     watermark = await memoryPipeline.finalize(database);
   } catch (error) {
     const mapped = mapCoreLookupError(error);
-    return c.json(mapped.body, mapped.status as 400 | 500);
+    return c.json(mapped.body, mapped.status);
   }
 
   return c.json(memoryWatermarkResponse(watermark));
@@ -1339,7 +1351,7 @@ function isTimestamp(value: unknown): value is string {
   return typeof value === 'string' && !Number.isNaN(Date.parse(value));
 }
 
-function mapCoreWriteError(error: unknown): { status: number; body: ErrorResponse } {
+function mapCoreWriteError(error: unknown): { status: 400 | 500; body: ErrorResponse } {
   const message = error instanceof Error ? error.message : String(error);
   const lowered = message.toLowerCase();
 
@@ -1485,7 +1497,7 @@ app.post('/api/v1/turn/capture', async (c) => {
     await captureTurn(body.turn, body.database);
   } catch (error) {
     const mapped = mapCoreWriteError(error);
-    return c.json(mapped.body, mapped.status as 400 | 500);
+    return c.json(mapped.body, mapped.status);
   }
 
   invalidateSessionTreeCache();
@@ -1515,7 +1527,7 @@ app.post('/api/v1/turn/capture/batch', async (c) => {
     }
   } catch (error) {
     const mapped = mapCoreWriteError(error);
-    return c.json(mapped.body, mapped.status as 400 | 500);
+    return c.json(mapped.body, mapped.status);
   }
 
   if (capturedTurns > 0) {
@@ -1563,7 +1575,7 @@ app.post('/api/v1/benchmark/locomo/turn/capture', async (c) => {
       const message = error instanceof Error ? error.message : String(error);
       return c.json(errorResponse('internalError', message), 500);
     }
-    return c.json(mapped.body, mapped.status as 400 | 500);
+    return c.json(mapped.body, mapped.status);
   }
 });
 

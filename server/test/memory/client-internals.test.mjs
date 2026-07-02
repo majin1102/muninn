@@ -102,6 +102,43 @@ function makeCheckpointContent(overrides = {}) {
   };
 }
 
+function makeCheckpointExportBackend(checkpoint, indexedSnapshotId) {
+  const tableStats = (version, rowCount = 1) => ({ version, fragmentCount: 1, rowCount });
+  const client = {
+    turnTable: {
+      stats: async () => tableStats(10),
+      delta: async () => [],
+    },
+    sessionTable: {
+      stats: async () => tableStats(22),
+      delta: async () => ({ sourceVersion: 22, rows: [] }),
+    },
+    extractionTable: {
+      stats: async () => tableStats(8),
+    },
+    sessionSearchTable: {
+      stats: async () => tableStats(35),
+      get: async ({ identities }) => identities.map((identity) => ({
+        latestSnapshotId: indexedSnapshotId,
+        sessionId: identity.sessionId,
+        project: identity.project,
+        cwd: '/workspace/project-a',
+        agent: identity.agent,
+        title: 'Session title',
+        summary: 'Session summary',
+        searchText: 'Session title\n\nSession summary',
+        vector: [],
+        updatedAt: '2024-01-02T00:00:00Z',
+      })),
+    },
+  };
+  const backend = MuninnBackend.createForTests(client, checkpoint);
+  backend.extractor = {
+    exportCheckpoint: () => checkpoint.extractor,
+  };
+  return backend;
+}
+
 function makeSnapshotRow(overrides = {}) {
   const title = overrides.title ?? 'Session title';
   const summary = overrides.summary ?? 'Session summary';
@@ -3621,6 +3658,7 @@ test('recall session mode searches sessionSearchTable only', async () => {
   assert.equal(hits[0].agent, 'codex');
   assert.equal(hits[0].sessionId, 'session-a');
   assert.equal(hits[0].cwd, '/workspace/project-a');
+  assert.equal(hits[0].sessionKey, undefined);
   assert.equal(hits[0].displaySession, 'Readable session title');
   assert.deepEqual(parseSessionSearchMemoryId(hits[0].memoryId), {
     project: 'project-a',
@@ -3815,6 +3853,42 @@ test('backend exportCheckpoint returns null before extractor creation', async ()
   const exported = await backend.exportCheckpoint();
 
   assert.equal(exported, null);
+});
+
+test('backend exportCheckpoint advances session search source version only when indexed rows match session index', async (t) => {
+  const { dir, homeDir, configPath } = await makeConfigHome();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+  process.env.MUNINN_HOME = homeDir;
+  await writeExtractorConfig(configPath);
+
+  const checkpoint = makeCheckpointContent({
+    sessionIndex: {
+      baseline: { turn: 10, session: 21 },
+      entries: [{
+        sessionId: 'session-a',
+        agent: 'codex',
+        project: 'project-a',
+        cwd: '/workspace/project-a',
+        latestUpdatedAt: '2024-01-02T00:00:00Z',
+        snapshotId: 'session:2',
+        title: 'Session title',
+      }],
+    },
+    sessionSearch: {
+      schemaVersion: 1,
+      embeddingDimensions: 8,
+      sourceSessionVersion: 21,
+      tableVersion: 34,
+    },
+  });
+
+  const staleBackend = makeCheckpointExportBackend(checkpoint, 'session:1');
+  const stale = await staleBackend.exportCheckpoint();
+  assert.equal(stale.sessionSearch.sourceSessionVersion, 21);
+
+  const freshBackend = makeCheckpointExportBackend(checkpoint, 'session:2');
+  const fresh = await freshBackend.exportCheckpoint();
+  assert.equal(fresh.sessionSearch.sourceSessionVersion, 22);
 });
 
 test('session registry reuses one in-flight session load per key', async () => {

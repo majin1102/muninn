@@ -9,6 +9,7 @@ import {
   type ListModeInput,
   type DreamingRow,
   type NativeTables,
+  type SessionSearchIdentity,
   type SessionSnapshotRow,
   type TurnRow,
 } from './native.js';
@@ -321,15 +322,20 @@ export class MuninnBackend {
         threads: extractorCheckpoint.threads,
         runs: extractorCheckpoint.runs,
       };
+      const sessionIndexSection = await this.sessionIndex.exportCheckpoint(this.client);
+      const sourceSessionVersion = await this.sessionSearchSourceVersion(
+        sessionIndexSection.entries,
+        sessionStats?.version ?? 0,
+      );
       return {
         schemaVersion: 13,
         extractor: extractorSection,
-        sessionIndex: this.sessionIndex.currentCheckpoint(),
+        sessionIndex: sessionIndexSection,
         dreaming: cloneDreamingCheckpoint(this.dreamingCheckpoint),
         sessionSearch: {
           schemaVersion: 1,
           embeddingDimensions: embedding.dimensions,
-          sourceSessionVersion: sessionStats?.version ?? 0,
+          sourceSessionVersion,
           tableVersion: sessionSearchStats?.version ?? 0,
         },
       };
@@ -463,6 +469,34 @@ export class MuninnBackend {
     }
   }
 
+  private async sessionSearchSourceVersion(
+    entries: SessionIndexEntry[],
+    currentSessionVersion: number,
+  ): Promise<number> {
+    const indexedEntries = entries.filter((entry) => entry.snapshotId);
+    if (indexedEntries.length === 0) {
+      return currentSessionVersion;
+    }
+
+    const identities: SessionSearchIdentity[] = indexedEntries.map((entry) => ({
+      project: entry.project,
+      agent: entry.agent,
+      sessionId: entry.sessionId,
+    }));
+    const rows = await this.client.sessionSearchTable.get({ identities });
+    const byIdentity = new Map(rows.map((row) => [
+      sessionSearchIdentityKey(row),
+      row.latestSnapshotId,
+    ]));
+
+    const complete = indexedEntries.every((entry) => (
+      byIdentity.get(sessionSearchIdentityKey(entry)) === entry.snapshotId
+    ));
+    return complete
+      ? currentSessionVersion
+      : (this.checkpoint?.sessionSearch.sourceSessionVersion ?? 0);
+  }
+
   private dreamingWatermarks(): DreamingWatermarkStore {
     return {
       list: () => Object.entries(this.dreamingCheckpoint.projects)
@@ -473,6 +507,10 @@ export class MuninnBackend {
       },
     };
   }
+}
+
+function sessionSearchIdentityKey(identity: SessionSearchIdentity): string {
+  return JSON.stringify([identity.project, identity.agent, identity.sessionId]);
 }
 
 function emptyDreamingCheckpoint(): DreamingCheckpoint {
