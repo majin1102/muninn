@@ -1,4 +1,4 @@
-import type { DeleteImportedProjectResponse, ImportedProjectsResponse, ImportProjectsResponse, ImportSelectedResponse, ImportSessionsListResponse, PipelineTasksResponse } from '@muninn/common';
+import type { DeleteImportedProjectResponse, DeleteImportedSessionResponse, ImportedProjectsResponse, ImportProjectsResponse, ImportSelectedResponse, ImportSessionsListResponse, PipelineTasksResponse } from '@muninn/common';
 import {
   demoAgents,
   demoDocuments,
@@ -188,6 +188,24 @@ export async function deleteDemoImportedProject(agent: string, project: string):
     deletedSessions,
     deletedTurns,
     requestId: `demo-delete-${agent}`,
+  };
+}
+
+export async function deleteDemoImportedSession(agent: string, project: string, sessionId: string): Promise<DeleteImportedSessionResponse> {
+  const item = demoImportState[agent]?.projects.find((candidate) => candidate.project === project);
+  const session = item?.sessions.find((candidate) => candidate.sessionId === sessionId);
+  if (!item || !session || !session.imported) {
+    return { deletedSessions: 0, deletedTurns: 0, requestId: `demo-delete-session-${agent}` };
+  }
+
+  const deletedTurns = session.turnCount ?? 0;
+  session.imported = false;
+  item.importedCount = item.sessions.filter((candidate) => candidate.imported).length;
+  item.sessionCount = item.sessions.length;
+  return {
+    deletedSessions: 1,
+    deletedTurns,
+    requestId: `demo-delete-session-${agent}`,
   };
 }
 

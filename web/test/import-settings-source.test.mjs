@@ -91,6 +91,47 @@ test('import project delete API is wired through client and server', async () =>
   assert.match(apiSource, /DELETE/);
 });
 
+test('import session delete API is wired through client and demo provider', async () => {
+  const apiSource = await readFile(new URL('../src/lib/api.ts', import.meta.url), 'utf8');
+  const demoSource = await readFile(new URL('../src/demo/provider.ts', import.meta.url), 'utf8');
+  const typeSource = await readFile(new URL('../../common/src/api.ts', import.meta.url), 'utf8');
+  const demoDeleteStart = demoSource.indexOf('export async function deleteDemoImportedSession');
+  const demoDeleteEnd = demoSource.indexOf('export async function setDemoCapturePolicy', demoDeleteStart);
+  const demoDeleteSource = demoSource.slice(demoDeleteStart, demoDeleteEnd);
+
+  assert.match(typeSource, /export interface DeleteImportedSessionResponse/);
+  assert.match(apiSource, /DeleteImportedSessionResponse/);
+  assert.match(apiSource, /deleteImportedSession\(agent: string, project: string, sessionId: string\): Promise<DeleteImportedSessionResponse>/);
+  assert.match(apiSource, /deleteDemoImportedSession\(agent, project, sessionId\)/);
+  assert.match(apiSource, /fetchJson<DeleteImportedSessionResponse>\(`\/app\/api\/import\/\$\{agent\}\/session`/);
+  assert.match(apiSource, /body: JSON\.stringify\(\{ project, sessionId \}\)/);
+  assert.match(demoSource, /export async function deleteDemoImportedSession/);
+  assert.match(demoDeleteSource, /candidate\.sessionId === sessionId/);
+  assert.doesNotMatch(demoDeleteSource, /demoRegisteredProjects\[agent\]\?\.delete\(project\)/);
+});
+
+test('project capture exposes session-level delete actions after updated time', async () => {
+  const componentSource = await readFile(new URL('../src/components/ImportSettings.tsx', import.meta.url), 'utf8');
+  const styles = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8');
+
+  assert.match(componentSource, /const \[deleteSessionTarget, setDeleteSessionTarget\] = useState/);
+  assert.match(componentSource, /function DeleteSessionDialog/);
+  assert.match(componentSource, /onDeleteSession=\{setDeleteSessionTarget\}/);
+  assert.match(componentSource, /client\.deleteImportedSession\(target\.agent, target\.session\.project, target\.session\.sessionId\)/);
+  assert.match(componentSource, /aria-label=\{`Delete \$\{session\.title\}`\}/);
+  assert.match(componentSource, /className="import-delete-button"/);
+  assert.match(componentSource, /Local session files are not deleted\./);
+  assert.match(styles, /\.import-sess[\s\S]*grid-template-columns: minmax\(0, 1fr\) auto 18px/);
+});
+
+test('settings and pipelines share the desktop content width', async () => {
+  const styles = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8');
+
+  assert.match(styles, /--page-content-width: 980px/);
+  assert.match(styles, /\.settings-page \{[\s\S]*max-width: var\(--page-content-width\)/);
+  assert.match(styles, /\.pipelines-content \{[\s\S]*width: min\(100%, var\(--page-content-width\)\)/);
+});
+
 test('imported project list is exposed as a single aggregated API', async () => {
   const apiSource = await readFile(new URL('../src/lib/api.ts', import.meta.url), 'utf8');
   const demoSource = await readFile(new URL('../src/demo/provider.ts', import.meta.url), 'utf8');
