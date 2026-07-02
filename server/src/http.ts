@@ -685,6 +685,8 @@ function mapCoreLookupError(error: unknown): { status: number; body: ErrorRespon
     lowered.includes('invalid')
     || lowered.includes('database must')
     || lowered.includes('memory layer')
+    || lowered.includes('unsupported context id')
+    || lowered.includes('muninn_explain only supports')
   ) {
     return {
       status: 400,
@@ -867,6 +869,69 @@ app.get('/api/v1/recall', async (c) => {
   }
 
   return c.json(memoryResponse(matched));
+});
+
+app.post('/api/v1/context/read', async (c) => {
+  let body: { database?: unknown; context_ids?: unknown };
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json(errorResponse('invalidRequest', 'Invalid JSON body'), 400);
+  }
+
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    return c.json(errorResponse('invalidRequest', 'request body must be an object'), 400);
+  }
+  if (!Array.isArray(body.context_ids) || body.context_ids.length === 0) {
+    return c.json(errorResponse('invalidRequest', 'context_ids must be a non-empty array'), 400);
+  }
+  if (!body.context_ids.every((contextId) => typeof contextId === 'string' && /^(session|turn)_.+$/.test(contextId))) {
+    return c.json(errorResponse('invalidRequest', 'context_ids must contain only session_* or turn_* context ids'), 400);
+  }
+  if (body.database !== undefined && typeof body.database !== 'string') {
+    return c.json(errorResponse('invalidRequest', 'database must be a string'), 400);
+  }
+
+  try {
+    const contexts = await memories.readContextIds(body.context_ids, body.database);
+    return c.json({ contexts, requestId: generateRequestId() });
+  } catch (error) {
+    const mapped = mapCoreLookupError(error);
+    return c.json(mapped.body, mapped.status as 400 | 500);
+  }
+});
+
+app.post('/api/v1/context/explain', async (c) => {
+  let body: { database?: unknown; context_id?: unknown };
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json(errorResponse('invalidRequest', 'Invalid JSON body'), 400);
+  }
+
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    return c.json(errorResponse('invalidRequest', 'request body must be an object'), 400);
+  }
+  if (typeof body.context_id !== 'string' || body.context_id.trim().length === 0) {
+    return c.json(errorResponse('invalidRequest', 'context_id must be a non-empty string'), 400);
+  }
+  if (body.context_id.startsWith('turn_')) {
+    return c.json(errorResponse(
+      'invalidRequest',
+      'muninn_explain only supports session_* context ids',
+    ), 400);
+  }
+  if (body.database !== undefined && typeof body.database !== 'string') {
+    return c.json(errorResponse('invalidRequest', 'database must be a string'), 400);
+  }
+
+  try {
+    const context = await memories.explainContextId(body.context_id, body.database);
+    return c.json({ context, requestId: generateRequestId() });
+  } catch (error) {
+    const mapped = mapCoreLookupError(error);
+    return c.json(mapped.body, mapped.status as 400 | 500);
+  }
 });
 
 app.post('/api/v1/benchmark/locomo/recall', async (c) => {

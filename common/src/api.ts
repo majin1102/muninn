@@ -4,6 +4,7 @@ export interface MemoryHit {
   summary?: string;
   content: string;
   references?: string[];
+  contextId?: string | null;
   project?: string;
   sessionId?: string;
   agent?: string;

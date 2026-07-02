@@ -1,0 +1,166 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+
+import core from '../dist/backend.js';
+import { app } from '../dist/http.js';
+import {
+  Memories,
+  contextIdForRecallHit,
+  parseSessionContextId,
+  parseTurnContextId,
+  sessionContextId,
+  turnContextId,
+} from '../dist/api/memory.js';
+
+const sessionIdentity = { project: 'project-a', agent: 'codex', sessionId: 'session-a' };
+const sessionContext = sessionContextId(sessionIdentity);
+const turnContext = turnContextId('turn:1');
+
+test.afterEach(async () => {
+  await core.shutdownCoreForTests();
+});
+
+test('context ids round trip through opaque prefixes', () => {
+  assert.match(sessionContext, /^session_/);
+  assert.doesNotMatch(sessionContext, /project-a|codex|session-a/);
+  assert.deepEqual(parseSessionContextId(sessionContext), sessionIdentity);
+  assert.equal(contextIdForRecallHit({ memoryId: 'session:search:x', content: '', references: [], ...sessionIdentity }), sessionContext);
+
+  assert.match(turnContext, /^turn_/);
+  assert.doesNotMatch(turnContext, /turn:1/);
+  assert.equal(parseTurnContextId(turnContext), 'turn:1');
+
+  assert.throws(() => parseSessionContextId(turnContext), /unsupported context id/);
+  assert.throws(() => parseSessionContextId(sessionContextId({ project: ' ', agent: 'codex', sessionId: 's' })), /invalid session context id/);
+});
+
+test('readContextIds resolves session and turn ids without source provenance', async () => {
+  const memories = new Memories(makeContextClient());
+
+  const contexts = await memories.readContextIds([
+    sessionContext,
+    turnContext,
+    'invalid_context',
+    turnContextId('turn:2'),
+  ]);
+
+  assert.equal(contexts[0].contextId, sessionContext);
+  assert.equal(contexts[0].title, 'Session title');
+  assert.equal(contexts[0].content, '# Session title\n\nSession summary');
+  assert.doesNotMatch(contexts[0].content, /Source Provenance/);
+
+  assert.equal(contexts[1].contextId, turnContext);
+  assert.match(contexts[1].content, /Prompt: User asked about context ids/);
+  assert.match(contexts[1].content, /Response: Assistant explained them/);
+  assert.doesNotMatch(contexts[1].content, /Source Provenance/);
+
+  assert.match(contexts[2].error, /unsupported context id/);
+  assert.match(contexts[3].error, /not found/);
+});
+
+test('explainContextId resolves session provenance and rejects turn ids', async () => {
+  const memories = new Memories(makeContextClient());
+
+  const context = await memories.explainContextId(sessionContext);
+
+  assert.equal(context.contextId, sessionContext);
+  assert.equal(context.title, 'Session title');
+  assert.match(context.content, /^# Muninn Explain/);
+  assert.match(context.content, new RegExp(`Explained: ${escapeRegExp(sessionContext)}`));
+  assert.match(context.content, /## Source Provenance/);
+  assert.match(context.content, new RegExp(`### ${escapeRegExp(turnContext)}`));
+  assert.match(context.content, /Prompt: User asked about context ids/);
+
+  await assert.rejects(
+    () => memories.explainContextId(turnContext),
+    /muninn_explain only supports session_\* context ids/,
+  );
+});
+
+test('context HTTP routes reject invalid bodies before backend lookup', async () => {
+  const readMissingBody = await app.request('/api/v1/context/read', { method: 'POST' });
+  assert.equal(readMissingBody.status, 400);
+  assert.match((await readMissingBody.json()).errorMessage, /Invalid JSON body/);
+
+  const readBadIds = await app.request('/api/v1/context/read', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ context_ids: [] }),
+  });
+  assert.equal(readBadIds.status, 400);
+  assert.match((await readBadIds.json()).errorMessage, /context_ids must be a non-empty array/);
+
+  const explainBadId = await app.request('/api/v1/context/explain', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ context_id: turnContext }),
+  });
+  assert.equal(explainBadId.status, 400);
+  assert.match((await explainBadId.json()).errorMessage, /muninn_explain only supports session_\* context ids/);
+});
+
+function makeContextClient() {
+  const sessionSearchRow = {
+    latestSnapshotId: 'session:1',
+    sessionId: sessionIdentity.sessionId,
+    project: sessionIdentity.project,
+    cwd: '/workspace/project-a',
+    agent: sessionIdentity.agent,
+    title: 'Session title',
+    summary: 'Session summary',
+    searchText: 'Session title\n\nSession summary',
+    vector: [],
+    updatedAt: '2024-01-02T00:00:00Z',
+  };
+  const turn = {
+    turnId: 'turn:1',
+    createdAt: '2024-01-01T00:00:00Z',
+    updatedAt: '2024-01-01T00:00:00Z',
+    sessionId: sessionIdentity.sessionId,
+    turnSequence: 1,
+    project: sessionIdentity.project,
+    cwd: '/workspace/project-a',
+    agent: sessionIdentity.agent,
+    observer: 'default-extractor',
+    events: [{ type: 'toolCall', name: 'muninn_read' }],
+    artifacts: [],
+    metadata: null,
+    prompt: 'User asked about context ids',
+    response: 'Assistant explained them',
+  };
+  return {
+    sessionSearchTable: {
+      get: async ({ identities }) => identities.some((identity) => (
+        identity.project === sessionIdentity.project
+        && identity.agent === sessionIdentity.agent
+        && identity.sessionId === sessionIdentity.sessionId
+      )) ? [sessionSearchRow] : [],
+    },
+    sessionTable: {
+      getSnapshot: async (snapshotId) => snapshotId === 'session:1'
+        ? {
+            snapshotId: 'session:1',
+            sessionId: sessionIdentity.sessionId,
+            project: sessionIdentity.project,
+            cwd: '/workspace/project-a',
+            agent: sessionIdentity.agent,
+            snapshotSequence: 1,
+            createdAt: '2024-01-02T00:00:00Z',
+            updatedAt: '2024-01-02T00:00:00Z',
+            extractor: 'default-extractor',
+            title: 'Session title',
+            summary: 'Session summary',
+            content: 'Session content',
+            references: ['turn:1'],
+          }
+        : null,
+    },
+    turnTable: {
+      getTurn: async (turnId) => turnId === 'turn:1' ? turn : null,
+    },
+  };
+}
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}

@@ -32,7 +32,7 @@ import {
   type ExtractorCheckpoint,
   type SessionIndexEntry,
 } from './checkpoint.js';
-import { Memories, type RecallHit, type RecallPublicMode, type RenderedMemory } from './api/memory.js';
+import { Memories, type ContextReadRow, type RecallHit, type RecallPublicMode, type RenderedMemory } from './api/memory.js';
 import { Extractor } from './pipeline/extractor.js';
 import { IngestSessionRegistry } from './pipeline/ingest.js';
 import { readTurnRow } from './pipeline/ingest.js';
@@ -276,6 +276,20 @@ export class MuninnBackend {
       queryLimit: options?.queryLimit,
     });
     return this.memories.recall(query, limit, options);
+  }
+
+  async readContextIds(contextIds: string[]): Promise<ContextReadRow[]> {
+    await writeMuninnLog(this.database, 'info', 'context', 'read', {
+      count: contextIds.length,
+    });
+    return this.memories.readContextIds(contextIds);
+  }
+
+  async explainContextId(contextId: string): Promise<ContextReadRow> {
+    await writeMuninnLog(this.database, 'info', 'context', 'explain', {
+      contextId,
+    });
+    return this.memories.explainContextId(contextId);
   }
 
   async exportCheckpoint(): Promise<CheckpointContent | null> {
@@ -620,6 +634,16 @@ export const memories = {
     },
   ): Promise<RecallHit[]> {
     return (await getBackend(options?.database)).recallMemories(query, limit, options);
+  },
+
+  async readContextIds(contextIds: string[], database?: string | null): Promise<ContextReadRow[]> {
+    const databaseName = resolveDatabaseName(database);
+    return (await getBackend(databaseName)).readContextIds(contextIds);
+  },
+
+  async explainContextId(contextId: string, database?: string | null): Promise<ContextReadRow> {
+    const databaseName = resolveDatabaseName(database);
+    return (await getBackend(databaseName)).explainContextId(contextId);
   },
 };
 

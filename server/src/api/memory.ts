@@ -43,6 +43,13 @@ export interface RecallHit {
   updatedAt?: string;
 }
 
+export interface ContextReadRow {
+  contextId: string;
+  title?: string;
+  content?: string;
+  error?: string;
+}
+
 export function assertMemoryIdLayer(memoryId: string, expectedLayer: 'turn' | 'session'): void {
   const [layer, point, extra] = memoryId.split(':');
   if (!layer || !point || extra !== undefined || !/^\d+$/.test(point)) {
@@ -69,6 +76,86 @@ export function sessionSearchMemoryId(identity: SessionSearchIdentity): string {
     identity.agent,
     identity.sessionId,
   ])).toString('base64url')}`;
+}
+
+export function sessionContextId(identity: SessionSearchIdentity): string {
+  validateSessionContextIdentity(identity);
+  return `session_${Buffer.from(JSON.stringify([
+    identity.project,
+    identity.agent,
+    identity.sessionId,
+  ])).toString('base64url')}`;
+}
+
+export function parseSessionContextId(contextId: string): SessionSearchIdentity {
+  if (!contextId.startsWith('session_')) {
+    throw new Error(`unsupported context id: ${contextId}`);
+  }
+  try {
+    const parsed = JSON.parse(Buffer.from(contextId.slice('session_'.length), 'base64url').toString('utf8')) as unknown;
+    if (!Array.isArray(parsed) || parsed.length !== 3) {
+      throw new Error('payload must be a three item array');
+    }
+    const [project, agent, sessionId] = parsed;
+    const identity = { project, agent, sessionId };
+    validateSessionContextIdentity(identity);
+    return identity;
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith('invalid session context id')) {
+      throw error;
+    }
+    throw new Error(`invalid session context id: ${contextId}`);
+  }
+}
+
+export function turnContextId(memoryId: string): string {
+  if (typeof memoryId !== 'string' || memoryId.trim().length === 0) {
+    throw new Error(`invalid turn context id memory id: ${memoryId}`);
+  }
+  return `turn_${Buffer.from(memoryId).toString('base64url')}`;
+}
+
+export function parseTurnContextId(contextId: string): string {
+  if (!contextId.startsWith('turn_')) {
+    throw new Error(`unsupported context id: ${contextId}`);
+  }
+  const memoryId = Buffer.from(contextId.slice('turn_'.length), 'base64url').toString('utf8');
+  if (!memoryId.trim()) {
+    throw new Error(`invalid turn context id: ${contextId}`);
+  }
+  return memoryId;
+}
+
+export function contextIdForRecallHit(hit: Pick<RecallHit, 'project' | 'agent' | 'sessionId'>): string | null {
+  if (!hit.project || !hit.agent || !hit.sessionId) {
+    return null;
+  }
+  try {
+    return sessionContextId({
+      project: hit.project,
+      agent: hit.agent,
+      sessionId: hit.sessionId,
+    });
+  } catch {
+    return null;
+  }
+}
+
+function validateSessionContextIdentity(identity: {
+  project: unknown;
+  agent: unknown;
+  sessionId: unknown;
+}): asserts identity is SessionSearchIdentity {
+  if (
+    typeof identity.project !== 'string'
+    || identity.project.trim().length === 0
+    || typeof identity.agent !== 'string'
+    || identity.agent.trim().length === 0
+    || typeof identity.sessionId !== 'string'
+    || identity.sessionId.trim().length === 0
+  ) {
+    throw new Error('invalid session context id: project, agent, and sessionId must be non-empty strings');
+  }
 }
 
 export function parseSessionSearchMemoryId(memoryId: string): SessionSearchIdentity | null {
@@ -704,6 +791,45 @@ export class Memories {
     return turn ? renderTurn(turn) : null;
   }
 
+  async readContextIds(contextIds: string[]): Promise<ContextReadRow[]> {
+    return Promise.all(contextIds.map(async (contextId) => {
+      try {
+        return await this.readContextId(contextId);
+      } catch (error) {
+        return {
+          contextId,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    }));
+  }
+
+  async explainContextId(contextId: string): Promise<ContextReadRow> {
+    if (contextId.startsWith('turn_')) {
+      throw new Error('muninn_explain only supports session_* context ids');
+    }
+    const identity = parseSessionContextId(contextId);
+    const session = await this.getSessionSearchRow(identity);
+    const snapshot = await this.client.sessionTable.getSnapshot(session.latestSnapshotId);
+    if (!snapshot) {
+      throw new Error(`session snapshot not found: ${session.latestSnapshotId}`);
+    }
+    const provenance = await this.renderSourceProvenance(snapshot.references);
+    return {
+      contextId,
+      title: trimText(session.title),
+      content: [
+        '# Muninn Explain',
+        '',
+        `Explained: ${contextId}`,
+        '',
+        '## Source Provenance',
+        '',
+        provenance,
+      ].join('\n'),
+    };
+  }
+
   async list(params: { mode: ListModeInput }): Promise<RenderedMemory[]> {
     const sourceMode = params.mode.type === 'page'
       ? { type: 'recency', limit: params.mode.offset + params.mode.limit } as const
@@ -745,5 +871,72 @@ export class Memories {
     options?: { mode?: RecallPublicMode; budget?: number; queryLimit?: number; thinkingRatio?: number },
   ): Promise<RecallHit[]> {
     return recallMemories(this.client, query, limit, options);
+  }
+
+  private async readContextId(contextId: string): Promise<ContextReadRow> {
+    if (contextId.startsWith('session_')) {
+      return this.readSessionContextId(contextId);
+    }
+    if (contextId.startsWith('turn_')) {
+      return this.readTurnContextId(contextId);
+    }
+    throw new Error(`unsupported context id: ${contextId}`);
+  }
+
+  private async readSessionContextId(contextId: string): Promise<ContextReadRow> {
+    const session = await this.getSessionSearchRow(parseSessionContextId(contextId));
+    const title = trimText(session.title);
+    const summary = trimText(session.summary) ?? '';
+    return {
+      contextId,
+      title,
+      content: `# ${title ?? session.latestSnapshotId}\n\n${summary}`,
+    };
+  }
+
+  private async readTurnContextId(contextId: string): Promise<ContextReadRow> {
+    const memoryId = parseTurnContextId(contextId);
+    const turn = await getTurn(this.client, memoryId);
+    if (!turn) {
+      throw new Error(`turn context not found: ${contextId}`);
+    }
+    const rendered = renderTurn(turn);
+    if (!rendered) {
+      throw new Error(`turn context has no readable content: ${contextId}`);
+    }
+    return {
+      contextId,
+      title: rendered.title,
+      content: renderRenderedMemoryMarkdown(rendered),
+    };
+  }
+
+  private async getSessionSearchRow(identity: SessionSearchIdentity): Promise<SessionSearchRow> {
+    const rows = await this.client.sessionSearchTable.get({ identities: [identity] });
+    const row = rows[0];
+    if (!row) {
+      throw new Error(`session context not found: ${sessionContextId(identity)}`);
+    }
+    return row;
+  }
+
+  private async renderSourceProvenance(references: string[]): Promise<string> {
+    const sections: string[] = [];
+    for (const ref of references) {
+      const memoryId = turnMemoryId(ref);
+      if (!memoryId) {
+        continue;
+      }
+      const turn = await getTurn(this.client, memoryId);
+      if (!turn) {
+        continue;
+      }
+      sections.push([
+        `### ${turnContextId(memoryId)}`,
+        '',
+        renderTurnDetail(turn) ?? '(no readable turn content)',
+      ].join('\n'));
+    }
+    return sections.length > 0 ? sections.join('\n\n') : '_No source turn provenance found._';
   }
 }

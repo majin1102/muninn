@@ -1,4 +1,5 @@
 import {
+  contextIdForRecallHit,
   fallbackRenderedMemoryTitle,
   inferRenderedMemoryKind,
   type RecallHit,
@@ -31,6 +32,7 @@ export function renderRecallHit(record: RecallHit): MemoryHit {
     summary: record.summary,
     content: record.content,
     references: record.references,
+    contextId: contextIdForRecallHit(record),
     project: record.project,
     sessionId: record.sessionId,
     agent: record.agent,
