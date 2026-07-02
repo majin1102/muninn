@@ -17,9 +17,9 @@ def build_run_metadata(
     top_k: int,
     started_at: str,
     completed_at: str,
-    mode: str = "diagnostic",
+    run_mode: str = "diagnostic",
+    mode: str = "extraction",
     answerer: str = "llm",
-    recall_mode: str = "hybrid",
 ) -> dict[str, Any]:
     config_path = active_config_path()
     config = read_json_object(config_path)
@@ -36,9 +36,9 @@ def build_run_metadata(
         "data_file": str(data_file),
         "out_file": str(out_file),
         "top_k": top_k,
+        "run_mode": run_mode,
         "mode": mode,
         "answerer": answerer,
-        "recall_mode": recall_mode,
         "started_at": started_at,
         "completed_at": completed_at,
         "config_path": str(config_path),

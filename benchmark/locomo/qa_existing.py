@@ -39,7 +39,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--home-dir", default=None, type=Path)
     parser.add_argument("--sample-id", action="append", default=[])
     parser.add_argument("--top-k", default=3, type=int)
-    parser.add_argument("--recall-mode", choices=["vector", "fts", "hybrid"], default="hybrid")
+    parser.add_argument("--mode", choices=["session", "extraction"], default="extraction")
     parser.add_argument("--budget", default=400, type=int)
     parser.add_argument("--query-limit", default=8, type=int)
     parser.add_argument("--limit-questions", default=None, type=int)
@@ -60,7 +60,7 @@ def main() -> None:
     reporter = ProgressReporter(args.progress_file)
     reporter.start()
     started_at = monotonic()
-    model_key = build_model_key(args.top_k, args.recall_mode, args.budget, args.query_limit)
+    model_key = build_model_key(args.top_k, args.mode, args.budget, args.query_limit)
     results: list[dict[str, Any]] = []
     gateway_routes_by_sample: dict[str, dict[str, list[dict[str, Any]]]] = {}
 
@@ -78,7 +78,7 @@ def main() -> None:
             top_k_ignored=args.budget > 0,
             budget=args.budget,
             query_limit=args.query_limit,
-            recall_mode=args.recall_mode,
+            mode=args.mode,
             limit_questions=args.limit_questions,
             answerer=args.answerer,
         )
@@ -164,7 +164,7 @@ def run_sample(
         qas,
         args.top_k,
         home,
-        args.recall_mode,
+        args.mode,
         args.budget,
         args.query_limit,
         True,

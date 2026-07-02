@@ -110,7 +110,7 @@ class RunMuninnEvalTests(unittest.TestCase):
             top_k=8,
             budget=0,
             query_limit=8,
-            recall_mode="hybrid",
+            mode="extraction",
             watermark_timeout_ms=7200000,
             answerer="llm",
             keep_home=True,
@@ -147,16 +147,16 @@ class RunMuninnEvalTests(unittest.TestCase):
                 "question": "What did Alice research?",
                 "answer": "adoption agencies",
                 "category": 4,
-                "muninn_hybrid_top_8_prediction": "career options",
-                "muninn_hybrid_top_8_f1": 0.0,
-                "muninn_hybrid_top_8_recall": 0.0,
-                "muninn_hybrid_top_8_hits": [{
+                "muninn_extraction_top_8_prediction": "career options",
+                "muninn_extraction_top_8_f1": 0.0,
+                "muninn_extraction_top_8_recall": 0.0,
+                "muninn_extraction_top_8_hits": [{
                     "memory_id": "extraction:1",
                     "detail": "Alice discussed career options.",
                 }],
             }],
         }]
-        report = build_badcases_report(samples, "muninn_hybrid_top_8", {}, {})
+        report = build_badcases_report(samples, "muninn_extraction_top_8", {}, {})
 
         self.assertIn("What did Alice research?", report)
         self.assertIn("Gold: adoption agencies", report)
@@ -171,14 +171,14 @@ class RunMuninnEvalTests(unittest.TestCase):
                 "question": "What did Alice research?",
                 "answer": "adoption agencies",
                 "category": 4,
-                "muninn_hybrid_top_8_prediction": "adoption agencies",
-                "muninn_hybrid_top_8_f1": 1.0,
-                "muninn_hybrid_top_8_recall": 0.0,
-                "muninn_hybrid_top_8_hits": [],
+                "muninn_extraction_top_8_prediction": "adoption agencies",
+                "muninn_extraction_top_8_f1": 1.0,
+                "muninn_extraction_top_8_recall": 0.0,
+                "muninn_extraction_top_8_hits": [],
             }],
         }]
 
-        report = build_badcases_report(samples, "muninn_hybrid_top_8", {}, {})
+        report = build_badcases_report(samples, "muninn_extraction_top_8", {}, {})
 
         self.assertIn("No bad cases detected by F1, OpenViking, or Honcho.", report)
         self.assertNotIn("What did Alice research?", report)
@@ -189,7 +189,7 @@ class RunMuninnEvalTests(unittest.TestCase):
             top_k=8,
             budget=0,
             query_limit=8,
-            recall_mode="hybrid",
+            mode="extraction",
             watermark_timeout_ms=7200000,
             answerer="llm",
             keep_home=True,
@@ -202,6 +202,8 @@ class RunMuninnEvalTests(unittest.TestCase):
         self.assertIn("benchmark/locomo/run.py", joined)
         self.assertIn("--sample-id conv-26", joined)
         self.assertIn("--budget 0", joined)
+        self.assertIn("--mode extraction", joined)
+        self.assertNotIn("--recall-mode", joined)
         self.assertEqual(env["MUNINN_LOCOMO_WATERMARK_TIMEOUT_MS"], "7200000")
 
     def test_build_run_command_injects_persistent_server_base_url(self) -> None:
@@ -210,7 +212,7 @@ class RunMuninnEvalTests(unittest.TestCase):
             top_k=8,
             budget=0,
             query_limit=8,
-            recall_mode="hybrid",
+            mode="extraction",
             watermark_timeout_ms=7200000,
             answerer="llm",
             keep_home=True,
@@ -228,7 +230,7 @@ class RunMuninnEvalTests(unittest.TestCase):
             top_k=8,
             budget=0,
             query_limit=8,
-            recall_mode="hybrid",
+            mode="extraction",
             watermark_timeout_ms=7200000,
             answerer="llm",
             keep_home=True,
@@ -246,7 +248,7 @@ class RunMuninnEvalTests(unittest.TestCase):
                 top_k=8,
                 budget=0,
                 query_limit=8,
-                recall_mode="hybrid",
+                mode="extraction",
                 watermark_timeout_ms=7200000,
                 answerer="llm",
                 keep_home=True,
@@ -267,7 +269,7 @@ class RunMuninnEvalTests(unittest.TestCase):
                 top_k=8,
                 budget=0,
                 query_limit=8,
-                recall_mode="hybrid",
+                mode="extraction",
                 watermark_timeout_ms=7200000,
                 answerer="llm",
                 keep_home=True,
@@ -286,7 +288,7 @@ class RunMuninnEvalTests(unittest.TestCase):
             top_k=8,
             budget=0,
             query_limit=8,
-            recall_mode="hybrid",
+            mode="extraction",
             watermark_timeout_ms=7200000,
             answerer="llm",
             keep_home=True,
@@ -306,7 +308,7 @@ class RunMuninnEvalTests(unittest.TestCase):
                 top_k=8,
                 budget=0,
                 query_limit=8,
-                recall_mode="hybrid",
+                mode="extraction",
                 watermark_timeout_ms=7200000,
                 answerer="llm",
                 keep_home=True,
