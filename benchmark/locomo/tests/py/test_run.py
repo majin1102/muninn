@@ -66,6 +66,30 @@ class RunTests(unittest.TestCase):
         self.assertEqual(args.mode, "session")
         self.assertEqual(args.answerer, "heuristic")
 
+    def test_parse_args_session_mode_defaults_to_no_extraction_budget(self) -> None:
+        args = parse_args(
+            [
+                "--data-file",
+                "data.json",
+                "--out-file",
+                "out.json",
+                "--mode",
+                "session",
+            ]
+        )
+
+        self.assertEqual(args.mode, "session")
+        self.assertEqual(args.budget, 0)
+        self.assertIsNone(args.query_limit)
+
+    def test_parse_args_rejects_session_extraction_budget_options(self) -> None:
+        base = ["--data-file", "data.json", "--out-file", "out.json", "--mode", "session"]
+
+        with self.assertRaises(SystemExit):
+            parse_args([*base, "--budget", "1"])
+        with self.assertRaises(SystemExit):
+            parse_args([*base, "--query-limit", "8"])
+
     def test_run_home_name_uses_sample_for_single_and_out_file_for_multiple(self) -> None:
         self.assertEqual(
             run_home_name([{"sample_id": "conv-26"}], Path("benchmark/locomo/out/one.json")),

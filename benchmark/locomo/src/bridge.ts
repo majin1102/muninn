@@ -225,7 +225,7 @@ async function recallCommand(options: Map<string, string>) {
   const query = requireOption(options, 'query');
   const limit = parsePositiveInt(requireOption(options, 'limit'), 'limit');
   const mode = parseRecallPublicMode(options.get('mode'));
-  const budget = parseOptionalNonNegativeInt(options.get('budget'), 'budget') ?? 0;
+  const budget = parseOptionalNonNegativeInt(options.get('budget'), 'budget');
   const queryLimit = parseOptionalPositiveInt(options.get('query-limit'), 'query-limit');
   const skipWatermark = options.has('skip-watermark');
   const manifest = filterManifestBySample(await readManifest(home), options.get('sample-id'));
@@ -243,7 +243,7 @@ async function recallBatchCommand(options: Map<string, string>) {
   process.env.MUNINN_HOME = home;
   const queriesFile = requireOption(options, 'queries-file');
   const mode = parseRecallPublicMode(options.get('mode'));
-  const budget = parseOptionalNonNegativeInt(options.get('budget'), 'budget') ?? 0;
+  const budget = parseOptionalNonNegativeInt(options.get('budget'), 'budget');
   const queryLimit = parseOptionalPositiveInt(options.get('query-limit'), 'query-limit');
   const skipWatermark = options.has('skip-watermark');
   const raw = await readFile(queriesFile, 'utf8');
@@ -258,7 +258,7 @@ async function recallBatchCommand(options: Map<string, string>) {
   const queryTimeoutMs = envPositiveInt('MUNINN_LOCOMO_RECALL_QUERY_TIMEOUT_MS', RECALL_QUERY_TIMEOUT_MS);
 
   console.error(
-    `[locomo] recall_batch_start total=${queries.length} mode=${mode} budget=${budget} query_limit=${queryLimit ?? '(none)'} timeout_ms=${queryTimeoutMs}`
+    `[locomo] recall_batch_start total=${queries.length} mode=${mode} budget=${budget ?? '(none)'} query_limit=${queryLimit ?? '(none)'} timeout_ms=${queryTimeoutMs}`
   );
 
   for (let index = 0; index < queries.length; index += 1) {
@@ -498,7 +498,7 @@ async function recallHits(
   limit: number,
   manifest: ImportManifest,
   mode: RecallPublicMode,
-  budget = 0,
+  budget?: number,
   queryLimit?: number,
 ): Promise<BridgeHit[]> {
   const payload = await withTransientRetry(
@@ -579,27 +579,46 @@ async function fetchLocomoRecall(
   limit: number,
   manifest: ImportManifest,
   mode: RecallPublicMode,
-  budget = 0,
+  budget?: number,
   queryLimit?: number,
 ): Promise<{ hits: BridgeHit[] }> {
+  const body = buildLocomoRecallBody(query, limit, manifest, mode, budget, queryLimit);
   const payload = await fetchJsonObject(`${serverBaseUrl()}/api/v1/benchmark/locomo/recall`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      query,
-      database: manifest.sample_id,
-      limit,
-      mode,
-      budget,
-      queryLimit,
-      manifest,
-    }),
+    body: JSON.stringify(body),
   }, 'benchmark recall');
   const hits = payload.hits;
   if (!Array.isArray(hits)) {
     throw new Error('benchmark recall response did not include hits array');
   }
   return { hits: hits.map(parseBridgeHit) };
+}
+
+export function buildLocomoRecallBody(
+  query: string,
+  limit: number,
+  manifest: ImportManifest,
+  mode: RecallPublicMode,
+  budget?: number,
+  queryLimit?: number,
+): Record<string, unknown> {
+  const body: Record<string, unknown> = {
+    query,
+    database: manifest.sample_id,
+    limit,
+    mode,
+    manifest,
+  };
+  if (mode === 'extraction') {
+    if (budget !== undefined) {
+      body.budget = budget;
+    }
+    if (queryLimit !== undefined) {
+      body.queryLimit = queryLimit;
+    }
+  }
+  return body;
 }
 
 async function fetchJsonObject(url: string, init: RequestInit, label: string): Promise<Record<string, unknown>> {

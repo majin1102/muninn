@@ -17,7 +17,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--mode", choices=["session", "extraction"], default="extraction")
     parser.add_argument("--limit-questions", default=None, type=int)
     parser.add_argument("--answerer", choices=["llm", "heuristic"], default="llm")
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.mode == "session":
+        parser.error("budget and query_limit are only supported in extraction mode")
+    return args
 
 
 def main() -> None:

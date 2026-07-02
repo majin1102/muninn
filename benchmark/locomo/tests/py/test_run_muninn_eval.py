@@ -206,6 +206,26 @@ class RunMuninnEvalTests(unittest.TestCase):
         self.assertNotIn("--recall-mode", joined)
         self.assertEqual(env["MUNINN_LOCOMO_WATERMARK_TIMEOUT_MS"], "7200000")
 
+    def test_build_run_command_omits_budget_options_in_session_mode(self) -> None:
+        config = BuildConfig(
+            target=resolve_target("conv-26"),
+            top_k=8,
+            budget=0,
+            query_limit=None,
+            mode="session",
+            watermark_timeout_ms=7200000,
+            answerer="llm",
+            keep_home=True,
+            run_name="test-run",
+        )
+        paths = build_paths(config)
+        command, _ = build_run_command(config, paths)
+
+        joined = " ".join(command)
+        self.assertIn("--mode session", joined)
+        self.assertNotIn("--budget", command)
+        self.assertNotIn("--query-limit", command)
+
     def test_build_run_command_injects_persistent_server_base_url(self) -> None:
         config = BuildConfig(
             target=resolve_target("conv-26"),

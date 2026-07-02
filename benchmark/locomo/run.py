@@ -31,15 +31,38 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--progress-file", default=None, type=Path)
     parser.add_argument("--top-k", default=3, type=int)
     parser.add_argument("--mode", choices=["session", "extraction"], default="extraction")
-    parser.add_argument("--budget", default=400, type=int)
-    parser.add_argument("--query-limit", default=8, type=int)
+    parser.add_argument("--budget", default=None, type=int)
+    parser.add_argument("--query-limit", default=None, type=int)
     parser.add_argument("--sample-id", default=None)
     parser.add_argument("--limit-questions", default=None, type=int)
     parser.add_argument("--keep-home", action="store_true")
     parser.add_argument("--home-dir", default=None, type=Path)
     parser.add_argument("--run-mode", choices=["diagnostic", "benchmark"], default="diagnostic")
     parser.add_argument("--answerer", choices=["llm", "heuristic"], default="llm")
-    return parser.parse_args(argv)
+    return normalize_recall_args(parser, parser.parse_args(argv), default_budget=400, default_query_limit=8)
+
+
+def normalize_recall_args(
+    parser: argparse.ArgumentParser,
+    args: argparse.Namespace,
+    *,
+    default_budget: int,
+    default_query_limit: int,
+) -> argparse.Namespace:
+    if args.mode == "session":
+        if args.budget is not None and args.budget > 0:
+            parser.error("budget and query_limit are only supported in extraction mode")
+        if args.query_limit is not None:
+            parser.error("budget and query_limit are only supported in extraction mode")
+        args.budget = 0
+        args.query_limit = None
+        return args
+
+    if args.budget is None:
+        args.budget = default_budget
+    if args.query_limit is None:
+        args.query_limit = default_query_limit
+    return args
 
 
 def main() -> None:
@@ -777,7 +800,7 @@ def collect_batch_hits(
     home_dir: Path,
     mode: str = "extraction",
     budget: int = 0,
-    query_limit: int = 8,
+    query_limit: int | None = 8,
     skip_watermark: bool = False,
     sample_id: str | None = None,
 ) -> dict[int, list[RecallHit]]:

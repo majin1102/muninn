@@ -54,7 +54,7 @@ class BuildConfig:
     target: Target
     top_k: int
     budget: int
-    query_limit: int
+    query_limit: int | None
     mode: str
     watermark_timeout_ms: int
     answerer: str
@@ -210,10 +210,6 @@ def build_run_command(
         str(paths.progress_file),
         "--top-k",
         str(config.top_k),
-        "--budget",
-        str(config.budget),
-        "--query-limit",
-        str(config.query_limit),
         "--mode",
         config.mode,
         "--answerer",
@@ -221,6 +217,13 @@ def build_run_command(
         "--home-dir",
         str(paths.home_dir),
     ]
+    if config.mode == "session":
+        if config.budget > 0 or config.query_limit is not None:
+            raise ValueError("budget and query_limit are only supported in extraction mode")
+    else:
+        command.extend(["--budget", str(config.budget)])
+        if config.query_limit is not None:
+            command.extend(["--query-limit", str(config.query_limit)])
     if config.keep_home:
         command.append("--keep-home")
     if len(config.target.sample_ids) == 1 and data_file is None:
@@ -679,8 +682,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run Muninn LoCoMo benchmark with all scoring views.")
     parser.add_argument("--target", required=True)
     parser.add_argument("--top-k", type=int, default=8)
-    parser.add_argument("--budget", type=int, default=0)
-    parser.add_argument("--query-limit", type=int, default=8)
+    parser.add_argument("--budget", type=int, default=None)
+    parser.add_argument("--query-limit", type=int, default=None)
     parser.add_argument("--mode", choices=["session", "extraction"], default="extraction")
     parser.add_argument("--watermark-timeout-ms", type=int, default=7200000)
     parser.add_argument("--answerer", choices=["llm", "heuristic"], default="llm")
@@ -688,7 +691,24 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--no-progress-timeout-s", type=int, default=300)
     parser.add_argument("--no-keep-home", action="store_true")
     parser.add_argument("--no-kill-old", action="store_true")
-    return parser.parse_args(argv)
+    return normalize_args(parser, parser.parse_args(argv))
+
+
+def normalize_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> argparse.Namespace:
+    if args.mode == "session":
+        if args.budget is not None and args.budget > 0:
+            parser.error("budget and query_limit are only supported in extraction mode")
+        if args.query_limit is not None:
+            parser.error("budget and query_limit are only supported in extraction mode")
+        args.budget = 0
+        args.query_limit = None
+        return args
+
+    if args.budget is None:
+        args.budget = 0
+    if args.query_limit is None:
+        args.query_limit = 8
+    return args
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -68,7 +68,7 @@ class MuninnBridge:
         skip_watermark: bool = False,
         sample_id: str | None = None,
     ) -> list[RecallHit]:
-        validate_mode(mode)
+        validate_recall_options(mode, budget, query_limit)
         kwargs = {
             "query": query,
             "limit": str(limit),
@@ -105,7 +105,7 @@ class MuninnBridge:
         skip_watermark: bool = False,
         sample_id: str | None = None,
     ) -> dict[str, list[RecallHit]]:
-        validate_mode(mode)
+        validate_recall_options(mode, budget, query_limit)
         with tempfile.NamedTemporaryFile(
             "w",
             suffix=".json",
@@ -283,6 +283,12 @@ def node_binary() -> str:
 def validate_mode(mode: str) -> None:
     if mode not in RECALL_PUBLIC_MODES:
         raise ValueError("mode must be one of: session, extraction")
+
+
+def validate_recall_options(mode: str, budget: int, query_limit: int | None) -> None:
+    validate_mode(mode)
+    if mode == "session" and (budget > 0 or query_limit is not None):
+        raise ValueError("budget and query_limit are only supported in extraction mode")
 
 
 def format_command(args: Any) -> str:

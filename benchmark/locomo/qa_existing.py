@@ -24,6 +24,7 @@ from benchmark.locomo.run import (
     collect_batch_hits,
     ensure_selected_samples,
     load_gateway_routes,
+    normalize_recall_args,
     write_results,
     write_trace,
 )
@@ -40,11 +41,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--sample-id", action="append", default=[])
     parser.add_argument("--top-k", default=3, type=int)
     parser.add_argument("--mode", choices=["session", "extraction"], default="extraction")
-    parser.add_argument("--budget", default=400, type=int)
-    parser.add_argument("--query-limit", default=8, type=int)
+    parser.add_argument("--budget", default=None, type=int)
+    parser.add_argument("--query-limit", default=None, type=int)
     parser.add_argument("--limit-questions", default=None, type=int)
     parser.add_argument("--answerer", choices=["llm", "heuristic"], default="llm")
-    return parser.parse_args(argv)
+    return normalize_recall_args(parser, parser.parse_args(argv), default_budget=400, default_query_limit=8)
 
 
 def main() -> None:
