@@ -4,6 +4,7 @@ import type {
   CodexImportPreviewResponse,
   CodexImportRunResponse,
   DeleteImportedProjectResponse,
+  DeleteImportedSessionResponse,
   ImportLocalProjectsResponse,
   ImportProjectsResponse,
   ImportSelectedResponse,
@@ -42,6 +43,7 @@ import {
   importDemoProjects,
   importDemoSessionsByPaths,
   deleteDemoImportedProject,
+  deleteDemoImportedSession,
   setDemoAgentCapturePolicy,
   setDemoCapturePolicy,
   streamDemoAgentRecall,
@@ -139,6 +141,7 @@ export type AppClient = {
   importProjects(agent: string, projects: string[]): Promise<ImportProjectsResponse>;
   importSessionsByPaths(agent: string, sourcePaths: string[]): Promise<ImportSelectedResponse>;
   deleteImportedProject(agent: string, project: string): Promise<DeleteImportedProjectResponse>;
+  deleteImportedSession(agent: string, project: string, sessionId: string): Promise<DeleteImportedSessionResponse>;
   setAgentCapturePolicy(agent: string, enabled: boolean): Promise<void>;
   setCapturePolicy(agent: string, project: string, enabled: boolean): Promise<void>;
 };
@@ -577,6 +580,16 @@ export function createAppClient(apiBase: string, usesDemoData: boolean): AppClie
         method: 'DELETE',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ project }),
+      });
+    },
+    deleteImportedSession(agent, project, sessionId) {
+      if (usesDemoData) {
+        return deleteDemoImportedSession(agent, project, sessionId);
+      }
+      return fetchJson<DeleteImportedSessionResponse>(`/app/api/import/${agent}/session`, {
+        method: 'DELETE',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ project, sessionId }),
       });
     },
     async setAgentCapturePolicy(agent, enabled) {

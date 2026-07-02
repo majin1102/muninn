@@ -51,6 +51,7 @@ type ProjectImportCandidate = {
   agents: Array<{ agent: ImportAgentKey; project: LocalProjectCandidate }>;
 };
 type LocalProjectCandidate = ImportAgentLocalProject & { captureEnabled?: boolean };
+type SessionDeleteTarget = { agent: ImportAgentKey; session: ImportAgentSession };
 
 const IMPORT_AGENTS: Array<{ key: ImportAgentKey; label: string }> = [
   { key: 'codex', label: 'Codex' },
@@ -92,6 +93,7 @@ export function ImportSettings({ client }: { client: AppClient }) {
   const [projectPickerOpen, setProjectPickerOpen] = useState(false);
   const [sessionPicker, setSessionPicker] = useState<ProjectCaptureGroup | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<ProjectCaptureGroup | null>(null);
+  const [deleteSessionTarget, setDeleteSessionTarget] = useState<SessionDeleteTarget | null>(null);
 
   async function importPaths(agent: ImportAgentKey, sourcePaths: string[]) {
     await client.importSessionsByPaths(agent, sourcePaths);
@@ -117,6 +119,11 @@ export function ImportSettings({ client }: { client: AppClient }) {
 
   async function deleteProject(target: ProjectCaptureGroup) {
     await Promise.all(target.agents.map((entry) => client.deleteImportedProject(entry.agent, target.project)));
+    importedProjects.load();
+  }
+
+  async function deleteSession(target: SessionDeleteTarget) {
+    await client.deleteImportedSession(target.agent, target.session.project, target.session.sessionId);
     importedProjects.load();
   }
 
@@ -158,6 +165,7 @@ export function ImportSettings({ client }: { client: AppClient }) {
             setCapturePolicy={client.setCapturePolicy}
             onImportProject={setSessionPicker}
             onDeleteProject={setDeleteTarget}
+            onDeleteSession={setDeleteSessionTarget}
           />
         </div>
       </section>
@@ -191,6 +199,17 @@ export function ImportSettings({ client }: { client: AppClient }) {
           onDelete={async () => {
             await deleteProject(deleteTarget);
             setDeleteTarget(null);
+          }}
+        />
+      ) : null}
+
+      {deleteSessionTarget ? (
+        <DeleteSessionDialog
+          target={deleteSessionTarget}
+          onCancel={() => setDeleteSessionTarget(null)}
+          onDelete={async () => {
+            await deleteSession(deleteSessionTarget);
+            setDeleteSessionTarget(null);
           }}
         />
       ) : null}
@@ -313,12 +332,14 @@ function ProjectCaptureList({
   setCapturePolicy,
   onImportProject,
   onDeleteProject,
+  onDeleteSession,
 }: {
   agents: ImportAgentEntry[];
   importedProjects: ImportedProjectsState;
   setCapturePolicy: (agent: string, project: string, enabled: boolean) => Promise<void>;
   onImportProject: (group: ProjectCaptureGroup) => void;
   onDeleteProject: (group: ProjectCaptureGroup) => void;
+  onDeleteSession: (target: SessionDeleteTarget) => void;
 }) {
   const groups = useMemo(() => hydrateProjectCapture(importedProjects.data?.projects ?? [], agents), [agents, importedProjects.data]);
   const projectLabels = useMemo(() => projectDisplayLabels(groups.map((group) => group.project)), [groups]);
@@ -344,6 +365,7 @@ function ProjectCaptureList({
           reloadImportedProjects={importedProjects.load}
           onImportProject={onImportProject}
           onDeleteProject={onDeleteProject}
+          onDeleteSession={onDeleteSession}
         />
       ))}
     </>
@@ -357,6 +379,7 @@ function ProjectGroupRow({
   reloadImportedProjects,
   onImportProject,
   onDeleteProject,
+  onDeleteSession,
 }: {
   group: ProjectCaptureGroup;
   displayName: string;
@@ -364,6 +387,7 @@ function ProjectGroupRow({
   reloadImportedProjects: () => void;
   onImportProject: (group: ProjectCaptureGroup) => void;
   onDeleteProject: (group: ProjectCaptureGroup) => void;
+  onDeleteSession: (target: SessionDeleteTarget) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [capture, setCapture] = useState(group.agents.every((entry) => entry.captureEnabled ?? false));
@@ -420,7 +444,7 @@ function ProjectGroupRow({
       {open && canExpand ? (
         <div className="import-sess-list">
           {group.sessions.map(({ agent, session }) => (
-            <SessionRow key={identityKey(agent, session)} session={session} agent={agent} />
+            <SessionRow key={identityKey(agent, session)} session={session} agent={agent} onDeleteSession={onDeleteSession} />
           ))}
         </div>
       ) : null}
@@ -428,7 +452,15 @@ function ProjectGroupRow({
   );
 }
 
-function SessionRow({ session, agent }: { session: ImportAgentSession; agent: string }) {
+function SessionRow({
+  session,
+  agent,
+  onDeleteSession,
+}: {
+  session: ImportAgentSession;
+  agent: ImportAgentKey;
+  onDeleteSession: (target: SessionDeleteTarget) => void;
+}) {
   const logo = logoForAgent(agent);
 
   return (
@@ -438,6 +470,9 @@ function SessionRow({ session, agent }: { session: ImportAgentSession; agent: st
         <span>{session.title}</span>
       </span>
       <span className="tree-meta tree-time" title={formatTimestamp(session.updatedAt)}>{formatRelativeTime(session.updatedAt)}</span>
+      <button className="import-delete-button" type="button" aria-label={`Delete ${session.title}`} onClick={() => onDeleteSession({ agent, session })}>
+        <Trash2 aria-hidden="true" />
+      </button>
     </div>
   );
 }
@@ -849,6 +884,57 @@ function DeleteProjectDialog({
           <div className="import-modal-title">Delete imported project?</div>
           <div className="import-modal-sub">
             This removes imported sessions for {group.project} from Muninn. Local session files are not deleted.
+          </div>
+        </div>
+        <div className="import-modal-foot">
+          <span className="import-modal-count">{error ? <span className="import-result-error">{error}</span> : null}</span>
+          <Button variant="ghost" size="sm" onClick={onCancel} disabled={deleting}>Cancel</Button>
+          <Button
+            size="sm"
+            disabled={deleting}
+            className="import-danger-button"
+            onClick={async () => {
+              if (deleting) {
+                return;
+              }
+              setDeleting(true);
+              setError(null);
+              try {
+                await onDelete();
+              } catch (deleteFailure) {
+                setError(asErrorMessage(deleteFailure));
+              } finally {
+                setDeleting(false);
+              }
+            }}
+          >
+            {deleting ? 'Deleting...' : 'Delete'}
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DeleteSessionDialog({
+  target,
+  onCancel,
+  onDelete,
+}: {
+  target: SessionDeleteTarget;
+  onCancel: () => void;
+  onDelete: () => Promise<void>;
+}) {
+  const [deleting, setDeleting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  return (
+    <div className="import-overlay" onClick={(event) => { if (!deleting && event.target === event.currentTarget) onCancel(); }}>
+      <div className="import-modal import-confirm-modal" role="dialog" aria-label="Delete imported session">
+        <div className="import-modal-head">
+          <div className="import-modal-title">Delete imported session?</div>
+          <div className="import-modal-sub">
+            This removes {target.session.title} from Muninn. Local session files are not deleted.
           </div>
         </div>
         <div className="import-modal-foot">
