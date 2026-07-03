@@ -38,7 +38,7 @@ test('migrateCheckpointContent copies dreaming_project watermarks into checkpoin
     123,
   );
 
-  assert.equal(migrated.schemaVersion, 13);
+  assert.equal(migrated.schemaVersion, 14);
   assert.equal(migrated.writtenAt, '2026-07-01T00:00:00.000Z');
   assert.equal(migrated.writerPid, 123);
   assert.deepEqual(migrated.dreaming, {
@@ -52,7 +52,7 @@ test('migrateCheckpointContent copies dreaming_project watermarks into checkpoin
 test('migrateCheckpointContent preserves existing checkpoint dreaming projects unless table rows replace them', () => {
   const migrated = migrateCheckpointContent(
     checkpoint({
-      schemaVersion: 13,
+      schemaVersion: 14,
       dreaming: {
         projects: {
           'majin1102/muninn': { sessionSnapshotVersion: 1 },

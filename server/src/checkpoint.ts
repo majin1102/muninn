@@ -77,7 +77,7 @@ export type SessionCheckpoint = {
 };
 
 export type CheckpointContent = {
-  schemaVersion: 13;
+  schemaVersion: 14;
   extractor: ExtractorCheckpoint;
   sessionIndex: SessionIndexCheckpoint;
   dreaming: DreamingCheckpoint;
@@ -127,7 +127,7 @@ export function parseCheckpointFile(raw: string): CheckpointFile {
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
     throw new Error('checkpoint must be a JSON object');
   }
-  if (parsed.schemaVersion !== 13) {
+  if (parsed.schemaVersion !== 14) {
     throw new Error(`unsupported checkpoint schemaVersion: ${String(parsed.schemaVersion)}`);
   }
   const extractor = parseExtractorSection(parsed.extractor);
@@ -147,7 +147,7 @@ export function parseCheckpointFile(raw: string): CheckpointFile {
     throw new Error('checkpoint session section is invalid');
   }
   return {
-    schemaVersion: 13,
+    schemaVersion: 14,
     writtenAt: typeof parsed.writtenAt === 'string' ? parsed.writtenAt : new Date(0).toISOString(),
     writerPid: typeof parsed.writerPid === 'number' ? parsed.writerPid : 0,
     extractor,

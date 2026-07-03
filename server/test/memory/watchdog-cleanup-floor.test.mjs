@@ -5,7 +5,7 @@ import { __testing as watchdogTesting } from '../../dist/watchdog.js';
 
 function checkpoint(overrides = {}) {
   return {
-    schemaVersion: 13,
+    schemaVersion: 14,
     extractor: {
       baseline: { turn: 30, session: 20, extraction: 10 },
       committedEpoch: 1,
@@ -18,6 +18,12 @@ function checkpoint(overrides = {}) {
     sessionIndex: { baseline: { turn: 30, session: 20 }, entries: [] },
     dreaming: {
       projects: {},
+    },
+    session: {
+      schemaVersion: 1,
+      embeddingDimensions: 8,
+      sourceSessionVersion: 20,
+      tableVersion: 7,
     },
     ...overrides,
   };
@@ -32,12 +38,14 @@ test('checkpointFloors uses min dreaming project sessionSnapshotVersion for sess
       },
     },
   }));
-  assert.equal(floors.session, 12);
+  assert.equal(floors.sessionSnapshot, 12);
+  assert.equal(floors.session, 7);
 });
 
 test('checkpointFloors keeps session baseline when dreaming project table is empty', async () => {
   const floors = await watchdogTesting.checkpointFloors(checkpoint());
-  assert.equal(floors.session, 20);
+  assert.equal(floors.sessionSnapshot, 20);
+  assert.equal(floors.session, 7);
 });
 
 test('checkpointFloors ignores invalid numeric floors', async () => {
@@ -52,5 +60,6 @@ test('checkpointFloors ignores invalid numeric floors', async () => {
       },
     },
   }));
-  assert.equal(floors.session, 18);
+  assert.equal(floors.sessionSnapshot, 18);
+  assert.equal(floors.session, 7);
 });

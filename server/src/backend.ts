@@ -328,7 +328,7 @@ export class MuninnBackend {
         sessionSnapshotStats?.version ?? 0,
       );
       return {
-        schemaVersion: 13,
+        schemaVersion: 14,
         extractor: extractorSection,
         sessionIndex: sessionIndexSection,
         dreaming: cloneDreamingCheckpoint(this.dreamingCheckpoint),

@@ -48,7 +48,7 @@ const {
   toSessionSnapshot,
 } = sessionModule;
 const { captureTurn, memoryPipeline: memoryPipelineApi, shutdownCoreForTests } = core;
-const CHECKPOINT_SCHEMA_VERSION = 13;
+const CHECKPOINT_SCHEMA_VERSION = 14;
 let defaultConfigDir = null;
 
 function createCheckpointBackend(exported = null) {

@@ -27,7 +27,7 @@ import {
   sessions,
   turns,
 } from './backend.js';
-import type { RecallPublicMode, SessionSnapshot } from './backend.js';
+import type { RecallPublicMode } from './backend.js';
 import type { RecallHit, RenderedMemory } from './api/memory.js';
 import { renderRecallHit, renderRenderedMemoryHit } from './web/render.js';
 import { invalidateSessionTreeCache, webRoutes } from './web/routes.js';
@@ -269,7 +269,6 @@ const MCP_DEFAULT_TOP_K = 8;
 const MCP_MAX_TOP_K = 50;
 const MCP_DEFAULT_BUDGET = 4_000;
 const MCP_MAX_BUDGET = 20_000;
-const MCP_SESSION_SCAN_LIMIT = 500;
 
 type JsonRecord = Record<string, unknown>;
 
@@ -277,7 +276,6 @@ type McpSessionCandidate = {
   contextId: string;
   title: string;
   summary: string;
-  snapshot: SessionSnapshot;
 };
 
 async function readJsonRecord(c: Context): Promise<{ body: JsonRecord | null; error: string | null }> {
@@ -463,17 +461,14 @@ function renderMcpRecall(hits: RecallHit[]): string {
   return lines.filter((line) => line !== '').join('\n');
 }
 
-function sessionMatchesHit(snapshot: SessionSnapshot, hit: RecallHit): boolean {
-  return snapshot.sessionId === hit.sessionId
-    && snapshot.agent === hit.agent
-    && (snapshot.project === hit.project || snapshot.cwd === hit.cwd);
-}
-
-function sessionKeyForSnapshot(snapshot: SessionSnapshot): string {
+function sessionKeyForHit(hit: RecallHit): string | null {
+  if (!hit.project || !hit.agent || !hit.sessionId) {
+    return null;
+  }
   return muninnSessionKey({
-    project: snapshot.project,
-    agent: snapshot.agent,
-    sessionId: snapshot.sessionId,
+    project: hit.project,
+    agent: hit.agent,
+    sessionId: hit.sessionId,
   });
 }
 
@@ -483,32 +478,28 @@ async function mcpListCandidates(params: {
   currentSession?: MuninnSessionIdentity;
 }): Promise<McpSessionCandidate[]> {
   const hits = await memories.recall(params.query, params.topK * 4, {
-    budget: 0,
-    queryLimit: params.topK * 4,
+    mode: 'session',
   });
-  const snapshots = await sessions.list({ mode: { type: 'recency', limit: MCP_SESSION_SCAN_LIMIT } });
   const currentSessionKey = params.currentSession ? muninnSessionKey(params.currentSession) : undefined;
   const candidates: McpSessionCandidate[] = [];
   const seen = new Set<string>();
 
   for (const hit of hits) {
-    const snapshot = snapshots.find((candidate) => sessionMatchesHit(candidate, hit));
-    if (!snapshot || seen.has(snapshot.snapshotId)) {
+    if (seen.has(hit.memoryId)) {
       continue;
     }
-    if (currentSessionKey && sessionKeyForSnapshot(snapshot) === currentSessionKey) {
+    if (currentSessionKey && sessionKeyForHit(hit) === currentSessionKey) {
       continue;
     }
-    const contextId = toContextId(snapshot.snapshotId);
+    const contextId = toContextId(hit.memoryId);
     if (!contextId) {
       continue;
     }
-    seen.add(snapshot.snapshotId);
+    seen.add(hit.memoryId);
     candidates.push({
       contextId,
-      title: snapshot.title || hit.displaySession || hit.title || snapshot.sessionId,
-      summary: snapshot.summary || hit.summary || previewText(hit.content, 240),
-      snapshot,
+      title: hit.title || hit.displaySession || hit.sessionId || hit.memoryId,
+      summary: hit.summary || previewText(hit.content, 240),
     });
     if (candidates.length >= params.topK) {
       break;

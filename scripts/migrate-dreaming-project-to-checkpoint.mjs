@@ -63,7 +63,7 @@ export function migrateCheckpointContent(content, dreamingProjects, now = new Da
   if (!content || typeof content !== 'object' || Array.isArray(content)) {
     throw new Error('checkpoint must be a JSON object');
   }
-  if (content.schemaVersion !== 12 && content.schemaVersion !== 13) {
+  if (![12, 13, 14].includes(content.schemaVersion)) {
     throw new Error(`unsupported checkpoint schemaVersion: ${String(content.schemaVersion)}`);
   }
   if (!content.extractor || typeof content.extractor !== 'object') {
@@ -85,10 +85,11 @@ export function migrateCheckpointContent(content, dreamingProjects, now = new Da
 
   return {
     ...content,
-    schemaVersion: 13,
+    schemaVersion: 14,
     writtenAt: now.toISOString(),
     writerPid: pid,
     dreaming: { projects },
+    session: readExistingSession(content.session),
   };
 }
 
@@ -114,6 +115,26 @@ function readExistingProjects(dreaming) {
     }
   }
   return projects;
+}
+
+function readExistingSession(session) {
+  if (
+    session
+    && typeof session === 'object'
+    && !Array.isArray(session)
+    && session.schemaVersion === 1
+    && typeof session.embeddingDimensions === 'number'
+    && typeof session.sourceSessionVersion === 'number'
+    && typeof session.tableVersion === 'number'
+  ) {
+    return session;
+  }
+  return {
+    schemaVersion: 1,
+    embeddingDimensions: 0,
+    sourceSessionVersion: 0,
+    tableVersion: 0,
+  };
 }
 
 function parseDreamingProjectRow(row) {
