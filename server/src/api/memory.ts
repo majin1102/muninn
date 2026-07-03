@@ -4,7 +4,7 @@ import type {
   ListModeInput,
   NativeTables,
   ExtractionRow as Extraction,
-  SessionSearchRow,
+  SessionRow,
   SessionSnapshotRow,
   TurnRow,
 } from '../native.js';
@@ -15,8 +15,8 @@ import { readTurnRow, sessionKey as buildSessionKey, normalizeSessionId } from '
 
 export type RecallPublicMode = 'session' | 'extraction';
 
-type SessionSearchIdentity = { project: string; agent: string; sessionId: string };
-export const SESSION_SEARCH_MEMORY_PREFIX = 'session:search:';
+type SessionIdentity = { project: string; agent: string; sessionId: string };
+export const SESSION_MEMORY_PREFIX = 'session:identity:';
 
 export interface RenderedMemory {
   memoryId: string;
@@ -70,15 +70,15 @@ export function parseExtractionMemoryId(memoryId: string): string {
   return id;
 }
 
-export function sessionSearchMemoryId(identity: SessionSearchIdentity): string {
-  return `${SESSION_SEARCH_MEMORY_PREFIX}${Buffer.from(JSON.stringify([
+export function sessionMemoryId(identity: SessionIdentity): string {
+  return `${SESSION_MEMORY_PREFIX}${Buffer.from(JSON.stringify([
     identity.project,
     identity.agent,
     identity.sessionId,
   ])).toString('base64url')}`;
 }
 
-export function sessionContextId(identity: SessionSearchIdentity): string {
+export function sessionContextId(identity: SessionIdentity): string {
   validateSessionContextIdentity(identity);
   return `session_${Buffer.from(JSON.stringify([
     identity.project,
@@ -87,7 +87,7 @@ export function sessionContextId(identity: SessionSearchIdentity): string {
   ])).toString('base64url')}`;
 }
 
-export function parseSessionContextId(contextId: string): SessionSearchIdentity {
+export function parseSessionContextId(contextId: string): SessionIdentity {
   if (!contextId.startsWith('session_')) {
     throw new Error(`unsupported context id: ${contextId}`);
   }
@@ -141,7 +141,7 @@ function validateSessionContextIdentity(identity: {
   project: unknown;
   agent: unknown;
   sessionId: unknown;
-}): asserts identity is SessionSearchIdentity {
+}): asserts identity is SessionIdentity {
   if (
     typeof identity.project !== 'string'
     || identity.project.trim().length === 0
@@ -154,12 +154,12 @@ function validateSessionContextIdentity(identity: {
   }
 }
 
-export function parseSessionSearchMemoryId(memoryId: string): SessionSearchIdentity | null {
-  if (!memoryId.startsWith(SESSION_SEARCH_MEMORY_PREFIX)) {
+export function parseSessionMemoryId(memoryId: string): SessionIdentity | null {
+  if (!memoryId.startsWith(SESSION_MEMORY_PREFIX)) {
     return null;
   }
   try {
-    const raw = Buffer.from(memoryId.slice(SESSION_SEARCH_MEMORY_PREFIX.length), 'base64url').toString('utf8');
+    const raw = Buffer.from(memoryId.slice(SESSION_MEMORY_PREFIX.length), 'base64url').toString('utf8');
     const parsed = JSON.parse(raw) as unknown;
     if (!Array.isArray(parsed) || parsed.length !== 3) {
       return null;
@@ -261,12 +261,12 @@ export function renderExtraction(memory: Extraction): RenderedMemory {
   };
 }
 
-export function renderSessionSearch(memory: SessionSearchRow): RenderedMemory {
+export function renderSession(memory: SessionRow): RenderedMemory {
   return {
-    memoryId: sessionSearchMemoryId(memory),
+    memoryId: sessionMemoryId(memory),
     title: trimText(memory.title),
     summary: trimText(memory.summary),
-    detail: sessionSearchHitContent(memory),
+    detail: sessionHitContent(memory),
     createdAt: memory.updatedAt,
     updatedAt: memory.updatedAt,
   };
@@ -347,14 +347,14 @@ export async function getSessionSnapshotRow(
   memoryId: string,
 ): Promise<SessionSnapshotRow | null> {
   assertMemoryIdLayer(memoryId, 'session');
-  return client.sessionTable.getSnapshot(memoryId);
+  return client.sessionSnapshotTable.getSnapshot(memoryId);
 }
 
 export async function listSessionSnapshotRows(
   client: NativeTables,
   params: { mode: ListModeInput; extractor?: string },
 ): Promise<SessionSnapshotRow[]> {
-  const rows = await client.sessionTable.listSnapshots({
+  const rows = await client.sessionSnapshotTable.listSnapshots({
     extractor: params.extractor,
   });
   return applySessionSnapshotListMode(rows, params.mode);
@@ -369,7 +369,7 @@ export async function timelineSessionSnapshotRows(
   if (!anchor) {
     return [];
   }
-  const snapshots = await client.sessionTable.threadSnapshots(anchor.sessionId);
+  const snapshots = await client.sessionSnapshotTable.threadSnapshots(anchor.sessionId);
   snapshots.sort((left, right) => (
     left.snapshotSequence - right.snapshotSequence
     || left.createdAt.localeCompare(right.createdAt)
@@ -555,12 +555,12 @@ export async function recallMemories(
       return [];
     }
     const vector = await (options.embed ?? embedText)(trimmed);
-    const rows = await client.sessionSearchTable.search({
+    const rows = await client.sessionTable.search({
       query: trimmed,
       vector,
       limit,
     });
-    return rows.map(sessionSearchHit);
+    return rows.map(sessionHit);
   }
 
   const budget = options.budget ?? 0;
@@ -623,12 +623,12 @@ async function extractionHit(client: NativeTables, row: Extraction): Promise<Rec
   };
 }
 
-function sessionSearchHit(row: SessionSearchRow): RecallHit {
+function sessionHit(row: SessionRow): RecallHit {
   return {
-    memoryId: sessionSearchMemoryId(row),
+    memoryId: sessionMemoryId(row),
     title: row.title,
     summary: row.summary,
-    content: sessionSearchHitContent(row),
+    content: sessionHitContent(row),
     references: [],
     project: row.project,
     sessionId: row.sessionId,
@@ -640,7 +640,7 @@ function sessionSearchHit(row: SessionSearchRow): RecallHit {
   };
 }
 
-function sessionSearchHitContent(row: Pick<SessionSearchRow, 'latestSnapshotId' | 'title' | 'summary'>): string {
+function sessionHitContent(row: Pick<SessionRow, 'latestSnapshotId' | 'title' | 'summary'>): string {
   return [trimText(row.title), trimText(row.summary)]
     .filter(Boolean)
     .join('\n\n') || row.latestSnapshotId;
@@ -676,8 +676,8 @@ async function displaySession(client: NativeTables, turn: TurnRow): Promise<stri
   if (!sessionId) {
     return 'Default Session';
   }
-  const snapshots = typeof client.sessionTable?.threadSnapshots === 'function'
-    ? await client.sessionTable.threadSnapshots(sessionId).catch(() => [])
+  const snapshots = typeof client.sessionSnapshotTable?.threadSnapshots === 'function'
+    ? await client.sessionSnapshotTable.threadSnapshots(sessionId).catch(() => [])
     : [];
   const newest = snapshots
     ?.slice()
@@ -770,10 +770,10 @@ export class Memories {
   }
 
   async get(memoryId: string): Promise<RenderedMemory | null> {
-    const sessionSearchIdentity = parseSessionSearchMemoryId(memoryId);
-    if (sessionSearchIdentity) {
-      const rows = await this.client.sessionSearchTable.get({ identities: [sessionSearchIdentity] });
-      return rows[0] ? renderSessionSearch(rows[0]) : null;
+    const sessionIdentity = parseSessionMemoryId(memoryId);
+    if (sessionIdentity) {
+      const rows = await this.client.sessionTable.get({ identities: [sessionIdentity] });
+      return rows[0] ? renderSession(rows[0]) : null;
     }
     if (memoryId.startsWith('ext:')) {
       const extraction = await getExtraction(this.client, memoryId);
@@ -808,8 +808,8 @@ export class Memories {
       throw new Error('muninn_explain only supports session_* context ids');
     }
     const identity = parseSessionContextId(contextId);
-    const session = await this.getSessionSearchRow(identity);
-    const snapshot = await this.client.sessionTable.getSnapshot(session.latestSnapshotId);
+    const session = await this.getSessionRow(identity);
+    const snapshot = await this.client.sessionSnapshotTable.getSnapshot(session.latestSnapshotId);
     if (!snapshot) {
       throw new Error(`session snapshot not found: ${session.latestSnapshotId}`);
     }
@@ -883,7 +883,7 @@ export class Memories {
   }
 
   private async readSessionContextId(contextId: string): Promise<ContextReadRow> {
-    const session = await this.getSessionSearchRow(parseSessionContextId(contextId));
+    const session = await this.getSessionRow(parseSessionContextId(contextId));
     const title = trimText(session.title);
     const summary = trimText(session.summary) ?? '';
     return {
@@ -910,8 +910,8 @@ export class Memories {
     };
   }
 
-  private async getSessionSearchRow(identity: SessionSearchIdentity): Promise<SessionSearchRow> {
-    const rows = await this.client.sessionSearchTable.get({ identities: [identity] });
+  private async getSessionRow(identity: SessionIdentity): Promise<SessionRow> {
+    const rows = await this.client.sessionTable.get({ identities: [identity] });
     const row = rows[0];
     if (!row) {
       throw new Error(`session context not found: ${sessionContextId(identity)}`);

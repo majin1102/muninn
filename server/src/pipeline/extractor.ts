@@ -326,7 +326,7 @@ export class Extractor {
       this.committedEpoch = restored.committedEpoch;
       pendingTurns = restored.pendingTurns;
     } else {
-      const snapshots = await this.client.sessionTable.listSnapshots({
+      const snapshots = await this.client.sessionSnapshotTable.listSnapshots({
         extractor: this.name,
       });
       const turns = (await this.client.turnTable.loadTurnsAfterEpoch({
@@ -727,7 +727,7 @@ export class Extractor {
     if (!section) {
       return null;
     }
-    const sessionDelta = await this.client.sessionTable.delta({
+    const sessionSnapshotDelta = await this.client.sessionSnapshotTable.delta({
       extractor: this.name,
       baselineVersion: section.baseline.session,
     });
@@ -738,7 +738,7 @@ export class Extractor {
     const turnById = new Map(turns.map((turn) => [turn.turnId, turn]));
     const restored = await this.replayCheckpoint(
       section,
-      sessionDelta.rows,
+      sessionSnapshotDelta.rows,
       turnById,
     );
     if (!restored) {
@@ -777,7 +777,7 @@ export class Extractor {
       if (!isActiveThread(threadRef.updatedAt, this.activeWindowDays)) {
         continue;
       }
-      const rows = await this.client.sessionTable.threadSnapshots(threadRef.sessionId);
+      const rows = await this.client.sessionSnapshotTable.threadSnapshots(threadRef.sessionId);
       if (rows.length === 0) {
         return null;
       }
@@ -843,7 +843,7 @@ export class Extractor {
       if (!first) {
         continue;
       }
-      const fullRows = (await this.client.sessionTable.threadSnapshots(first.sessionId))
+      const fullRows = (await this.client.sessionSnapshotTable.threadSnapshots(first.sessionId))
         .sort((left, right) => left.snapshotSequence - right.snapshotSequence);
       const firstIndex = fullRows.findIndex((row) => row.snapshotId === first.snapshotId);
       if (firstIndex < 0) {

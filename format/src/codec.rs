@@ -15,14 +15,14 @@ use serde_json::{Map, Value};
 
 use super::schema::{
     dreaming_project_schema, dreaming_schema, extraction_schema, session_schema,
-    session_search_schema, turn_schema,
+    session_snapshot_schema, turn_schema,
 };
 use crate::config::extraction_config;
 use crate::dreaming::{Dreaming, DreamingProject, DreamingSupportTurn};
 use crate::extraction::Extraction;
 use crate::memory_id::{MemoryId, MemoryLayer};
-use crate::session::SessionSnapshot;
-use crate::session_search::SessionSearch;
+use crate::session::Session;
+use crate::session_snapshot::SessionSnapshot;
 use crate::turn::{Artifact, Turn, TurnEvent};
 
 pub(crate) fn turns_to_record_batch(
@@ -383,7 +383,7 @@ pub(crate) fn session_snapshots_to_record_batch(
     );
 
     Ok(RecordBatch::try_new(
-        Arc::new(session_schema()),
+        Arc::new(session_snapshot_schema()),
         vec![
             Arc::new(session_ids),
             Arc::new(project),
@@ -407,7 +407,7 @@ pub(crate) fn session_snapshots_to_record_batch(
 pub(crate) fn session_snapshots_to_reader(
     session_snapshots: Vec<SessionSnapshot>,
 ) -> RecordBatchIterator<impl Iterator<Item = std::result::Result<RecordBatch, ArrowError>>> {
-    let schema = Arc::new(session_schema());
+    let schema = Arc::new(session_snapshot_schema());
     let batch = session_snapshots_to_record_batch(&session_snapshots);
     RecordBatchIterator::new(vec![batch].into_iter(), schema)
 }
@@ -902,7 +902,7 @@ pub(crate) fn record_batch_to_extractions(batch: &RecordBatch) -> Result<Vec<Ext
         .collect()
 }
 
-pub(crate) fn session_search_to_record_batch(rows: &[SessionSearch]) -> Result<RecordBatch> {
+pub(crate) fn sessions_to_record_batch(rows: &[Session]) -> Result<RecordBatch> {
     let dimensions = extraction_config()?.dimensions;
     let latest_snapshot_id =
         StringArray::from_iter_values(rows.iter().map(|row| row.latest_snapshot_id.as_str()));
@@ -918,14 +918,14 @@ pub(crate) fn session_search_to_record_batch(rows: &[SessionSearch]) -> Result<R
         rows.iter().map(|row| row.vector.as_slice()),
         dimensions,
     )
-    .map_err(|error| Error::invalid_input(format!("invalid session_search vector: {error}")))?;
+    .map_err(|error| Error::invalid_input(format!("invalid session vector: {error}")))?;
     let updated_at = TimestampMicrosecondArray::from_iter_values(
         rows.iter().map(|row| row.updated_at.timestamp_micros()),
     )
     .with_timezone("UTC");
 
     RecordBatch::try_new(
-        Arc::new(session_search_schema(dimensions)),
+        Arc::new(session_schema(dimensions)),
         vec![
             Arc::new(latest_snapshot_id),
             Arc::new(session_id),
@@ -939,23 +939,23 @@ pub(crate) fn session_search_to_record_batch(rows: &[SessionSearch]) -> Result<R
             Arc::new(updated_at),
         ],
     )
-    .map_err(|error| Error::invalid_input(format!("build session_search batch: {error}")))
+    .map_err(|error| Error::invalid_input(format!("build session batch: {error}")))
 }
 
-pub(crate) fn session_search_to_reader(
-    rows: Vec<SessionSearch>,
+pub(crate) fn sessions_to_reader(
+    rows: Vec<Session>,
 ) -> Result<RecordBatchIterator<impl Iterator<Item = std::result::Result<RecordBatch, ArrowError>>>>
 {
     let dimensions = extraction_config()?.dimensions;
-    let schema = Arc::new(session_search_schema(dimensions));
-    let batch = session_search_to_record_batch(&rows).map_err(arrow_error_from_lance)?;
+    let schema = Arc::new(session_schema(dimensions));
+    let batch = sessions_to_record_batch(&rows).map_err(arrow_error_from_lance)?;
     Ok(RecordBatchIterator::new(
         vec![Ok(batch)].into_iter(),
         schema,
     ))
 }
 
-pub(crate) fn record_batch_to_session_search(batch: &RecordBatch) -> Result<Vec<SessionSearch>> {
+pub(crate) fn record_batch_to_sessions(batch: &RecordBatch) -> Result<Vec<Session>> {
     let latest_snapshot_id = batch
         .column(0)
         .as_any()
@@ -1010,12 +1010,12 @@ pub(crate) fn record_batch_to_session_search(batch: &RecordBatch) -> Result<Vec<
                 optional_float32_fixed_size_list(vector, index).unwrap_or_default()
             } else {
                 return Err(Error::invalid_input(format!(
-                    "session_search.vector must be FixedSizeList<Float32, N>, got {:?}",
+                    "session.vector must be FixedSizeList<Float32, N>, got {:?}",
                     vector.data_type()
                 )));
             };
 
-            Ok(SessionSearch {
+            Ok(Session {
                 latest_snapshot_id: latest_snapshot_id.value(index).to_string(),
                 session_id: session_id.value(index).to_string(),
                 project: project.value(index).to_string(),

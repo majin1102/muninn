@@ -88,7 +88,7 @@ export function App() {
   const activeSession = activeTurnSession ?? documentSession ?? selectedSession;
   const activeSessionTurns = activeSession?.turns ?? [];
   const activeSessionSelectionId = activeSession ? selectedSessionKey(activeSession) : selectedSessionId;
-  const pendingActiveSessionSearch = Boolean(
+  const pendingActiveSessionLookup = Boolean(
     route.memoryId
     && !activeTurnSession
     && findNextSessionToSearch(projects),
@@ -96,7 +96,7 @@ export function App() {
   const locatingActiveTurn = Boolean(
     route.memoryId
     && !activeTurnSession
-    && (pendingActiveSessionSearch || (documentSession && documentSession.nextOffset !== null)),
+    && (pendingActiveSessionLookup || (documentSession && documentSession.nextOffset !== null)),
   );
 
   useEffect(() => {

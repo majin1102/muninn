@@ -69,7 +69,7 @@ export type DreamingCheckpoint = {
   }>;
 };
 
-export type SessionSearchCheckpoint = {
+export type SessionCheckpoint = {
   schemaVersion: 1;
   embeddingDimensions: number;
   sourceSessionVersion: number;
@@ -81,7 +81,7 @@ export type CheckpointContent = {
   extractor: ExtractorCheckpoint;
   sessionIndex: SessionIndexCheckpoint;
   dreaming: DreamingCheckpoint;
-  sessionSearch: SessionSearchCheckpoint;
+  session: SessionCheckpoint;
 };
 
 export type CheckpointFile = CheckpointContent & {
@@ -133,7 +133,7 @@ export function parseCheckpointFile(raw: string): CheckpointFile {
   const extractor = parseExtractorSection(parsed.extractor);
   const sessionIndex = parseSessionIndexSection(parsed.sessionIndex);
   const dreaming = parseDreamingSection(parsed.dreaming);
-  const sessionSearch = parseSessionSearchSection(parsed.sessionSearch);
+  const session = parseSessionSection(parsed.session);
   if (!extractor) {
     throw new Error('checkpoint extractor section is invalid');
   }
@@ -143,8 +143,8 @@ export function parseCheckpointFile(raw: string): CheckpointFile {
   if (!dreaming) {
     throw new Error('checkpoint dreaming section is invalid');
   }
-  if (!sessionSearch) {
-    throw new Error('checkpoint sessionSearch section is invalid');
+  if (!session) {
+    throw new Error('checkpoint session section is invalid');
   }
   return {
     schemaVersion: 13,
@@ -153,7 +153,7 @@ export function parseCheckpointFile(raw: string): CheckpointFile {
     extractor,
     sessionIndex,
     dreaming,
-    sessionSearch,
+    session,
   };
 }
 
@@ -211,7 +211,7 @@ function parseExtractorSection(value: unknown): ExtractorCheckpoint | null {
   };
 }
 
-function parseSessionSearchSection(value: unknown): SessionSearchCheckpoint | null {
+function parseSessionSection(value: unknown): SessionCheckpoint | null {
   if (!isObjectRecord(value)) {
     return null;
   }

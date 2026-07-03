@@ -12,7 +12,7 @@ function client({
   turns = [],
   snapshots = [],
   turnDelta = [],
-  sessionDelta = [],
+  sessionSnapshotDelta = [],
   turnVersion = 10,
   sessionVersion = 10,
   sessionStatsVersion = sessionVersion,
@@ -21,7 +21,7 @@ function client({
     listTurns: 0,
     listSnapshots: 0,
     turnDelta: 0,
-    sessionDelta: 0,
+    sessionSnapshotDelta: 0,
     listTurnQueries: [],
     listSnapshotQueries: [],
   };
@@ -40,7 +40,7 @@ function client({
         },
         stats: async () => ({ version: turnVersion, rowCount: turns.length, fragmentCount: 1 }),
       },
-      sessionTable: {
+      sessionSnapshotTable: {
         listSnapshots: async (query = {}) => {
           calls.listSnapshots += 1;
           calls.listSnapshotQueries.push(query);
@@ -57,8 +57,8 @@ function client({
           return { sourceVersion: sessionVersion, rows };
         },
         delta: async () => {
-          calls.sessionDelta += 1;
-          return { sourceVersion: sessionVersion, rows: sessionDelta };
+          calls.sessionSnapshotDelta += 1;
+          return { sourceVersion: sessionVersion, rows: sessionSnapshotDelta };
         },
         stats: async () => ({ version: sessionStatsVersion, rowCount: snapshots.length, fragmentCount: 1 }),
       },
@@ -108,7 +108,7 @@ function checkpoint(overrides = {}) {
     dreaming: {
       projects: {},
     },
-    sessionSearch: {
+    session: {
       schemaVersion: 1,
       embeddingDimensions: 4,
       sourceSessionVersion: 10,
@@ -139,7 +139,7 @@ test('sessionIndex restores checkpoint and applies table deltas without full tur
       response: 'newer turn',
       updatedAt: '2026-06-02T11:00:00.000Z',
     }],
-    sessionDelta: [{
+    sessionSnapshotDelta: [{
       snapshotId: 'session:9',
       sessionId: 'muninn/session-a',
       project: 'muninn',
@@ -174,7 +174,7 @@ test('sessionIndex restores checkpoint and applies table deltas without full tur
   assert.equal(fake.calls.listTurns, 0);
   assert.equal(fake.calls.listSnapshots, 0);
   assert.equal(fake.calls.turnDelta, 1);
-  assert.equal(fake.calls.sessionDelta, 1);
+  assert.equal(fake.calls.sessionSnapshotDelta, 1);
   assert.equal(index.currentCheckpoint().baseline.session, 8);
 });
 
@@ -561,7 +561,7 @@ test('backend refreshSessionIndex rebuilds stale checkpoint entries from current
     dreaming: {
       projects: {},
     },
-    sessionSearch: {
+    session: {
       schemaVersion: 1,
       embeddingDimensions: 4,
       sourceSessionVersion: 10,

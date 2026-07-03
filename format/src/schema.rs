@@ -29,7 +29,7 @@ pub fn turn_schema() -> Schema {
     ])
 }
 
-pub fn session_schema() -> Schema {
+pub fn session_snapshot_schema() -> Schema {
     Schema::new(vec![
         Field::new("session_id", DataType::Utf8, false),
         Field::new("project", DataType::Utf8, false),
@@ -115,7 +115,7 @@ pub fn dreaming_project_schema() -> Schema {
     ])
 }
 
-pub fn session_search_schema(dimensions: usize) -> Schema {
+pub fn session_schema(dimensions: usize) -> Schema {
     let mut key_metadata = std::collections::HashMap::new();
     key_metadata.insert(
         "lance-schema:unenforced-primary-key".to_string(),
@@ -241,8 +241,8 @@ mod tests {
     }
 
     #[test]
-    fn session_search_schema_has_expected_fields_and_no_id() {
-        let schema = session_search_schema(4);
+    fn session_schema_has_expected_fields_and_no_id() {
+        let schema = session_schema(4);
         assert_eq!(
             schema
                 .fields()
@@ -321,7 +321,7 @@ mod tests {
 
     #[test]
     fn session_schema_tracks_project_cwd_agent_and_extractor() {
-        let schema = session_schema();
+        let schema = session_snapshot_schema();
         assert!(schema.field_with_name("session_id").is_ok());
         assert!(schema.field_with_name("project").is_ok());
         assert!(schema.field_with_name("cwd").is_ok());
@@ -332,7 +332,7 @@ mod tests {
 
     #[test]
     fn session_schema_has_signal_fields() {
-        let schema = session_schema();
+        let schema = session_snapshot_schema();
         assert_eq!(schema.index_of("memory_signals").unwrap(), 10);
         assert_eq!(schema.index_of("skill_signals").unwrap(), 11);
         assert_eq!(schema.index_of("skill_details").unwrap(), 12);

@@ -26,7 +26,7 @@ test('context ids round trip through opaque prefixes', () => {
   assert.match(sessionContext, /^session_/);
   assert.doesNotMatch(sessionContext, /project-a|codex|session-a/);
   assert.deepEqual(parseSessionContextId(sessionContext), sessionIdentity);
-  assert.equal(contextIdForRecallHit({ memoryId: 'session:search:x', content: '', references: [], ...sessionIdentity }), sessionContext);
+  assert.equal(contextIdForRecallHit({ memoryId: 'session:identity:x', content: '', references: [], ...sessionIdentity }), sessionContext);
 
   assert.match(turnContext, /^turn_/);
   assert.doesNotMatch(turnContext, /turn:1/);
@@ -68,7 +68,7 @@ test('readContextIds resolves session and turn ids without source provenance', a
 test('readContextIds rejects ordinary storage errors instead of returning per-id errors', async () => {
   await assert.rejects(
     () => new Memories({
-      sessionSearchTable: {
+      sessionTable: {
         get: async () => {
           throw new Error('storage connection failed');
         },
@@ -206,7 +206,7 @@ test('context explain HTTP maps stale session context ids to not found', async (
 });
 
 function makeContextClient() {
-  const sessionSearchRow = {
+  const sessionRow = {
     latestSnapshotId: 'session:1',
     sessionId: sessionIdentity.sessionId,
     project: sessionIdentity.project,
@@ -235,14 +235,14 @@ function makeContextClient() {
     response: 'Assistant explained them',
   };
   return {
-    sessionSearchTable: {
+    sessionTable: {
       get: async ({ identities }) => identities.some((identity) => (
         identity.project === sessionIdentity.project
         && identity.agent === sessionIdentity.agent
         && identity.sessionId === sessionIdentity.sessionId
-      )) ? [sessionSearchRow] : [],
+      )) ? [sessionRow] : [],
     },
-    sessionTable: {
+    sessionSnapshotTable: {
       getSnapshot: async (snapshotId) => snapshotId === 'session:1'
         ? {
             snapshotId: 'session:1',

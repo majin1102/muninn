@@ -9,7 +9,7 @@ import {
   type ListModeInput,
   type DreamingRow,
   type NativeTables,
-  type SessionSearchIdentity,
+  type SessionIdentity,
   type SessionSnapshotRow,
   type TurnRow,
 } from './native.js';
@@ -43,7 +43,7 @@ import { SessionIndex } from './session-index.js';
 import { ProjectDreamingService, type DreamingWatermarkStore, type ProjectDreamCreateResult } from './dreaming/service.js';
 import { ProjectDreamingScheduler } from './dreaming/scheduler.js';
 import type { ProjectDreamSignals } from './dreaming/content.js';
-import { rebuildSessionSearch } from './pipeline/session-search.js';
+import { rebuildSessionTable } from './pipeline/session-table.js';
 import type { ProjectDreamProjectView, TurnContent } from '@muninn/common';
 
 export type Turn = TurnRow;
@@ -138,7 +138,7 @@ export class MuninnBackend {
     const tableLocks = new TableMutationLocks();
     const backend = new MuninnBackend(lockNativeTables(client, tableLocks), databaseName, checkpoint);
     await backend.restoreCheckpointSessions();
-    await backend.ensureSessionSearchFresh();
+    await backend.ensureSessionFresh();
     const watchdogConfig = getWatchdogConfig();
     if (watchdogConfig.enabled) {
       const lastCheckpointJson = checkpoint
@@ -147,7 +147,7 @@ export class MuninnBackend {
           extractor: checkpoint.extractor,
           sessionIndex: checkpoint.sessionIndex,
           dreaming: checkpoint.dreaming,
-          sessionSearch: checkpoint.sessionSearch,
+          session: checkpoint.session,
         })
         : null;
       const watchdogClient = lockNativeTables(
@@ -303,17 +303,17 @@ export class MuninnBackend {
       if (!extractor || !extractorCheckpoint) {
         return null;
       }
-      const [turnStats, sessionStats, extractionStats, sessionSearchStats] = await Promise.all([
+      const [turnStats, sessionSnapshotStats, extractionStats, sessionStats] = await Promise.all([
         this.client.turnTable.stats(),
-        this.client.sessionTable.stats(),
+        this.client.sessionSnapshotTable.stats(),
         this.client.extractionTable.stats(),
-        this.client.sessionSearchTable.stats(),
+        this.client.sessionTable.stats(),
       ]);
       const embedding = getEmbeddingConfig();
       const extractorSection: ExtractorCheckpoint = {
         baseline: {
           turn: turnStats?.version ?? 0,
-          session: sessionStats?.version ?? 0,
+          session: sessionSnapshotStats?.version ?? 0,
           extraction: extractionStats?.version ?? 0,
         },
         committedEpoch: extractorCheckpoint.committedEpoch,
@@ -323,20 +323,20 @@ export class MuninnBackend {
         runs: extractorCheckpoint.runs,
       };
       const sessionIndexSection = await this.sessionIndex.exportCheckpoint(this.client);
-      const sourceSessionVersion = await this.sessionSearchSourceVersion(
+      const sourceSessionVersion = await this.sessionSourceVersion(
         sessionIndexSection.entries,
-        sessionStats?.version ?? 0,
+        sessionSnapshotStats?.version ?? 0,
       );
       return {
         schemaVersion: 13,
         extractor: extractorSection,
         sessionIndex: sessionIndexSection,
         dreaming: cloneDreamingCheckpoint(this.dreamingCheckpoint),
-        sessionSearch: {
+        session: {
           schemaVersion: 1,
           embeddingDimensions: embedding.dimensions,
           sourceSessionVersion,
-          tableVersion: sessionSearchStats?.version ?? 0,
+          tableVersion: sessionStats?.version ?? 0,
         },
       };
     });
@@ -437,20 +437,20 @@ export class MuninnBackend {
     }
   }
 
-  private async ensureSessionSearchFresh(): Promise<void> {
+  private async ensureSessionFresh(): Promise<void> {
     if (!loadMuninnConfig()?.extractor) {
       return;
     }
     const embedding = getEmbeddingConfig();
-    const [sessionStats, sessionSearchStats] = await Promise.all([
+    const [sessionSnapshotStats, sessionStats] = await Promise.all([
+      this.client.sessionSnapshotTable.stats(),
       this.client.sessionTable.stats(),
-      this.client.sessionSearchTable.stats(),
     ]);
-    const sourceSessionVersion = sessionStats?.version ?? 0;
-    const checkpoint = this.checkpoint?.sessionSearch ?? null;
+    const sourceSessionVersion = sessionSnapshotStats?.version ?? 0;
+    const checkpoint = this.checkpoint?.session ?? null;
     let needsRebuild = (
       !checkpoint
-      || !sessionSearchStats
+      || !sessionStats
       || checkpoint.schemaVersion !== 1
       || checkpoint.embeddingDimensions !== embedding.dimensions
       || checkpoint.sourceSessionVersion !== sourceSessionVersion
@@ -458,18 +458,18 @@ export class MuninnBackend {
 
     if (!needsRebuild) {
       try {
-        await this.client.sessionSearchTable.validateDimensions({ expected: embedding.dimensions });
+        await this.client.sessionTable.validateDimensions({ expected: embedding.dimensions });
       } catch {
         needsRebuild = true;
       }
     }
 
     if (needsRebuild) {
-      await rebuildSessionSearch(this.client, this.sessionIndex);
+      await rebuildSessionTable(this.client, this.sessionIndex);
     }
   }
 
-  private async sessionSearchSourceVersion(
+  private async sessionSourceVersion(
     entries: SessionIndexEntry[],
     currentSessionVersion: number,
   ): Promise<number> {
@@ -478,23 +478,23 @@ export class MuninnBackend {
       return currentSessionVersion;
     }
 
-    const identities: SessionSearchIdentity[] = indexedEntries.map((entry) => ({
+    const identities: SessionIdentity[] = indexedEntries.map((entry) => ({
       project: entry.project,
       agent: entry.agent,
       sessionId: entry.sessionId,
     }));
-    const rows = await this.client.sessionSearchTable.get({ identities });
+    const rows = await this.client.sessionTable.get({ identities });
     const byIdentity = new Map(rows.map((row) => [
-      sessionSearchIdentityKey(row),
+      sessionIdentityKey(row),
       row.latestSnapshotId,
     ]));
 
     const complete = indexedEntries.every((entry) => (
-      byIdentity.get(sessionSearchIdentityKey(entry)) === entry.snapshotId
+      byIdentity.get(sessionIdentityKey(entry)) === entry.snapshotId
     ));
     return complete
       ? currentSessionVersion
-      : (this.checkpoint?.sessionSearch.sourceSessionVersion ?? 0);
+      : (this.checkpoint?.session.sourceSessionVersion ?? 0);
   }
 
   private dreamingWatermarks(): DreamingWatermarkStore {
@@ -509,7 +509,7 @@ export class MuninnBackend {
   }
 }
 
-function sessionSearchIdentityKey(identity: SessionSearchIdentity): string {
+function sessionIdentityKey(identity: SessionIdentity): string {
   return JSON.stringify([identity.project, identity.agent, identity.sessionId]);
 }
 

@@ -6,7 +6,7 @@ import { captureTurns } from '../api/capture.js';
 import { isCanonicalProjectIdentity } from '../config.js';
 import { sessions, turns } from '../backend.js';
 import { loadMuninnConfig, resolveStorageTarget } from '../config.js';
-import { getNativeTables, type SessionSearchIdentity } from '../native.js';
+import { getNativeTables } from '../native.js';
 import {
   defaultArtifactStore,
   importMarker,
@@ -247,7 +247,7 @@ export async function deleteImportedProject(adapter: ImportAdapter, project: str
   const entries = (await sessions.index())
     .filter((entry) => entry.agent === adapter.agent && entry.project === project);
   const sessionKeys = new Set(entries.map(SessionIdentityKey.sessionIdentityKey));
-  const identities = entries.map(sessionSearchIdentity);
+  const identities = entries.map(sessionIdentity);
   const { deleted: deletedTurns, turnIds } = await deleteProjectTurns(adapter, sessionKeys);
   await deleteRelatedMemories(turnIds, identities);
   await deleteSessionSnapshots(adapter, sessionKeys);
@@ -273,7 +273,7 @@ export async function deleteImportedSession(
   ));
   const exists = entries.length > 0;
   const sessionKeys = new Set(entries.map(SessionIdentityKey.sessionIdentityKey));
-  const identities = entries.map(sessionSearchIdentity);
+  const identities = entries.map(sessionIdentity);
   const { deleted: deletedTurns, turnIds } = await deleteProjectTurns(adapter, sessionKeys);
   await deleteRelatedMemories(turnIds, identities);
   await deleteSessionSnapshots(adapter, sessionKeys);
@@ -308,7 +308,7 @@ async function deleteSessionSnapshots(adapter: ImportAdapter, sessionKeys: Set<s
     return;
   }
   const tables = await getNativeTables(resolveStorageTarget(loadMuninnConfig() ?? {}, 'main'));
-  const snapshotIds = (await tables.sessionTable.listSnapshots({}))
+  const snapshotIds = (await tables.sessionSnapshotTable.listSnapshots({}))
     .filter((snapshot) => (
       snapshot.agent === adapter.agent
       && sessionKeys.has(identityKey(adapter, {
@@ -318,17 +318,17 @@ async function deleteSessionSnapshots(adapter: ImportAdapter, sessionKeys: Set<s
     ))
     .map((snapshot) => snapshot.snapshotId);
   if (snapshotIds.length > 0) {
-    await tables.sessionTable.delete({ snapshotIds });
+    await tables.sessionSnapshotTable.delete({ snapshotIds });
   }
 }
 
-async function deleteRelatedMemories(turnIds: string[], sessionIdentities: SessionSearchIdentity[]): Promise<void> {
+async function deleteRelatedMemories(turnIds: string[], sessionIdentities: SessionIdentity[]): Promise<void> {
   if (turnIds.length === 0 && sessionIdentities.length === 0) {
     return;
   }
   const tables = await getNativeTables(resolveStorageTarget(loadMuninnConfig() ?? {}, 'main'));
   if (sessionIdentities.length > 0) {
-    await tables.sessionSearchTable.delete({ identities: sessionIdentities });
+    await tables.sessionTable.delete({ identities: sessionIdentities });
   }
   if (turnIds.length === 0) {
     return;
@@ -342,7 +342,7 @@ async function deleteRelatedMemories(turnIds: string[], sessionIdentities: Sessi
   }
 }
 
-function sessionSearchIdentity(entry: { project: string; agent: string; sessionId: string }): SessionSearchIdentity {
+function sessionIdentity(entry: { project: string; agent: string; sessionId: string }): SessionIdentity {
   return {
     project: entry.project,
     agent: entry.agent,

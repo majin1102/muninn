@@ -14,7 +14,7 @@ import {
   snapshotRef,
   threadIdentityKey,
 } from './session.js';
-import { upsertSessionSearchRow } from './session-search.js';
+import { upsertSessionRow } from './session-table.js';
 
 export function applyExtractionChanges(
   currentExtractions: ExtractionUnit[],
@@ -255,7 +255,7 @@ async function indexThreadExtractions(
       extractionChanges: diff.extractionChanges,
     };
     const snapshotId = snapshotRef(thread, snapshotIndex);
-    await upsertSessionSearchRow(client, thread, indexedSnapshot, snapshotId, signal);
+    await upsertSessionRow(client, thread, indexedSnapshot, snapshotId, signal);
     await applyExtractionTableChanges(client, indexedSnapshot, snapshotId, signal);
     latestIndexedSequence = snapshotIndex;
   }

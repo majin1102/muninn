@@ -12,8 +12,8 @@ use lance_linalg::distance::MetricType;
 pub(crate) const SEMANTIC_VECTOR_INDEX_NAME: &str = "semantic_vector_idx";
 pub(crate) const EXTRACTION_FTS_INDEX_NAME: &str = "extraction_fts_idx";
 pub(crate) const EXTRACTION_CONTENT_COLUMN: &str = "content";
-pub(crate) const SESSION_SEARCH_FTS_INDEX_NAME: &str = "session_search_fts_idx";
-pub(crate) const SESSION_SEARCH_TEXT_COLUMN: &str = "search_text";
+pub(crate) const SESSION_FTS_INDEX_NAME: &str = "session_fts_idx";
+pub(crate) const SESSION_TEXT_COLUMN: &str = "search_text";
 
 pub(crate) async fn compact_dataset(dataset: Option<Dataset>) -> Result<bool> {
     let Some(mut dataset) = dataset else {
@@ -78,8 +78,8 @@ pub(crate) async fn ensure_extraction_fts_index(dataset: &mut Dataset) -> Result
     Ok(true)
 }
 
-pub(crate) async fn ensure_session_search_fts_index(dataset: &mut Dataset) -> Result<bool> {
-    if has_index_named(dataset, SESSION_SEARCH_FTS_INDEX_NAME).await? {
+pub(crate) async fn ensure_session_fts_index(dataset: &mut Dataset) -> Result<bool> {
+    if has_index_named(dataset, SESSION_FTS_INDEX_NAME).await? {
         return Ok(false);
     }
 
@@ -89,11 +89,11 @@ pub(crate) async fn ensure_session_search_fts_index(dataset: &mut Dataset) -> Re
     }
     dataset
         .create_index_builder(
-            &[SESSION_SEARCH_TEXT_COLUMN],
+            &[SESSION_TEXT_COLUMN],
             IndexType::Inverted,
             &InvertedIndexParams::default(),
         )
-        .name(SESSION_SEARCH_FTS_INDEX_NAME.to_string())
+        .name(SESSION_FTS_INDEX_NAME.to_string())
         .await?;
     Ok(true)
 }
@@ -103,7 +103,7 @@ pub(crate) async fn ensure_extraction_id_index(dataset: &mut Dataset) -> Result<
     Ok(false)
 }
 
-pub(crate) async fn ensure_session_search_identity_index(dataset: &mut Dataset) -> Result<bool> {
+pub(crate) async fn ensure_session_identity_index(dataset: &mut Dataset) -> Result<bool> {
     let _ = dataset;
     Ok(false)
 }
@@ -124,12 +124,12 @@ pub(crate) async fn optimize_extraction(dataset: &mut Dataset, merge_count: usiz
     Ok(true)
 }
 
-pub(crate) async fn optimize_session_search(
+pub(crate) async fn optimize_session(
     dataset: &mut Dataset,
     merge_count: usize,
 ) -> Result<bool> {
     let mut names = Vec::new();
-    for name in [SEMANTIC_VECTOR_INDEX_NAME, SESSION_SEARCH_FTS_INDEX_NAME] {
+    for name in [SEMANTIC_VECTOR_INDEX_NAME, SESSION_FTS_INDEX_NAME] {
         if has_index_named(dataset, name).await? {
             names.push(name.to_string());
         }

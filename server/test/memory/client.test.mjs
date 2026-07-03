@@ -756,9 +756,9 @@ test('startup rebuilds session search when checkpoint is missing', async (t) => 
     }));
     await waitForBackendResolved(firstBackend);
     const tables = await getNativeTables();
-    assert.ok((await tables.sessionSearchTable.list({})).some((row) => row.sessionId === 'startup-rebuild-missing'));
-    await tables.sessionSearchTable.replaceAll({ rows: [] });
-    assert.equal((await tables.sessionSearchTable.list({})).length, 0);
+    assert.ok((await tables.sessionTable.list({})).some((row) => row.sessionId === 'startup-rebuild-missing'));
+    await tables.sessionTable.replaceAll({ rows: [] });
+    assert.equal((await tables.sessionTable.list({})).length, 0);
   } finally {
     await firstBackend.shutdown();
     await shutdownCoreForTests();
@@ -767,7 +767,7 @@ test('startup rebuilds session search when checkpoint is missing', async (t) => 
 
   const secondBackend = await MuninnBackend.create(await getNativeTables());
   try {
-    const rows = await (await getNativeTables()).sessionSearchTable.list({});
+    const rows = await (await getNativeTables()).sessionTable.list({});
     assert.ok(rows.some((row) => (
       row.sessionId === 'startup-rebuild-missing'
       && row.project === 'project-a'
@@ -796,7 +796,7 @@ test('startup rebuilds session search when embedding dimensions change', async (
       response: 'dimension rebuild response',
     }));
     await waitForBackendResolved(firstBackend);
-    const rows = await (await getNativeTables()).sessionSearchTable.list({});
+    const rows = await (await getNativeTables()).sessionTable.list({});
     assert.equal(rows.find((row) => row.sessionId === 'startup-rebuild-dimensions')?.vector.length, 4);
     const exported = await firstBackend.exportCheckpoint();
     assert.ok(exported);
@@ -814,7 +814,7 @@ test('startup rebuilds session search when embedding dimensions change', async (
   await writeMuninnConfig(configPath, { observerProvider: 'mock', semanticDimensions: 8 });
   const secondBackend = await MuninnBackend.create(await getNativeTables());
   try {
-    const rows = await (await getNativeTables()).sessionSearchTable.list({});
+    const rows = await (await getNativeTables()).sessionTable.list({});
     assert.equal(rows.find((row) => row.sessionId === 'startup-rebuild-dimensions')?.vector.length, 8);
   } finally {
     await secondBackend.shutdown();
@@ -1265,7 +1265,7 @@ test('validateSettings rejects extraction dimension changes when the table exist
 
   const binding = await getNativeTables(defaultStorageTarget(homeDir));
   assert.ok(typeof binding.turnTable.describe === 'function');
-  assert.ok(typeof binding.sessionTable.describe === 'function');
+  assert.ok(typeof binding.sessionSnapshotTable.describe === 'function');
   assert.ok(typeof binding.dreamingTable.describe === 'function');
   assert.ok(typeof binding.extractionTable.describe === 'function');
 
@@ -1356,7 +1356,7 @@ test('native session snapshots can be listed at a historical version', async (t)
   await writeMuninnConfig(configPath, { llmProvider: 'mock' });
 
   const binding = await getNativeTables(defaultStorageTarget(homeDir));
-  await binding.sessionTable.insert({
+  await binding.sessionSnapshotTable.insert({
     snapshots: [sessionSnapshotRow({
       snapshotId: 'session:18446744073709551615',
       sessionId: 's1',
@@ -1364,9 +1364,9 @@ test('native session snapshots can be listed at a historical version', async (t)
       memorySignals: ['- [turn:1 +1] Prefer minimal changes.'],
     })],
   });
-  const baseline = await binding.sessionTable.listSnapshotsWithVersion({ extractor: 'test-extractor' });
+  const baseline = await binding.sessionSnapshotTable.listSnapshotsWithVersion({ extractor: 'test-extractor' });
 
-  await binding.sessionTable.insert({
+  await binding.sessionSnapshotTable.insert({
     snapshots: [sessionSnapshotRow({
       snapshotId: 'session:18446744073709551615',
       sessionId: 's1',
@@ -1374,8 +1374,8 @@ test('native session snapshots can be listed at a historical version', async (t)
       memorySignals: ['- [turn:1 +1, turn:2 +1] Prefer minimal changes.'],
     })],
   });
-  const current = await binding.sessionTable.listSnapshotsWithVersion({ extractor: 'test-extractor' });
-  const historical = await binding.sessionTable.listSnapshotsWithVersion({
+  const current = await binding.sessionSnapshotTable.listSnapshotsWithVersion({ extractor: 'test-extractor' });
+  const historical = await binding.sessionSnapshotTable.listSnapshotsWithVersion({
     extractor: 'test-extractor',
     version: baseline.sourceVersion,
   });

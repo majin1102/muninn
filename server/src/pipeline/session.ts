@@ -849,7 +849,7 @@ export async function flushThreads(
     return;
   }
 
-  const persistedRows = await client.sessionTable.insert({
+  const persistedRows = await client.sessionSnapshotTable.insert({
     snapshots,
   });
   updateThreadsFromRows(threads, persistedRows);

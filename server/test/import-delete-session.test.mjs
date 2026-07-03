@@ -67,7 +67,7 @@ async function capture(turn) {
   assert.equal(response.status, 204);
 }
 
-function sessionSearchRow(sessionId, title) {
+function sessionRow(sessionId, title) {
   return {
     latestSnapshotId: `session:${sessionId}`,
     project: PROJECT,
@@ -104,10 +104,10 @@ test('delete imported session removes only one session and keeps project capture
   await capture(makeTurn('e2e-delete-session-b', 0, 'delete this session'));
   await setCaptureEnabled('codex', PROJECT, true);
   const tables = await nativeTables();
-  await tables.sessionSearchTable.upsert({
+  await tables.sessionTable.upsert({
     rows: [
-      sessionSearchRow('e2e-delete-session-a', 'keep search row'),
-      sessionSearchRow('e2e-delete-session-b', 'delete search row'),
+      sessionRow('e2e-delete-session-a', 'keep search row'),
+      sessionRow('e2e-delete-session-b', 'delete search row'),
     ],
   });
 
@@ -131,11 +131,11 @@ test('delete imported session removes only one session and keeps project capture
   assert.ok(remainingTurns.some((entry) => entry.sessionId === 'e2e-delete-session-a'));
   assert.ok(!remainingTurns.some((entry) => entry.sessionId === 'e2e-delete-session-b'));
   assert.deepEqual(
-    await tables.sessionSearchTable.get({ identities: [{ project: PROJECT, agent: 'codex', sessionId: 'e2e-delete-session-b' }] }),
+    await tables.sessionTable.get({ identities: [{ project: PROJECT, agent: 'codex', sessionId: 'e2e-delete-session-b' }] }),
     [],
   );
   assert.equal(
-    (await tables.sessionSearchTable.get({ identities: [{ project: PROJECT, agent: 'codex', sessionId: 'e2e-delete-session-a' }] })).length,
+    (await tables.sessionTable.get({ identities: [{ project: PROJECT, agent: 'codex', sessionId: 'e2e-delete-session-a' }] })).length,
     1,
   );
 
@@ -143,7 +143,7 @@ test('delete imported session removes only one session and keeps project capture
   assert.equal(policy[PROJECT], true);
 });
 
-test('delete imported project removes session search rows for the project', async (t) => {
+test('delete imported project removes session table rows for the project', async (t) => {
   const previousHome = process.env.MUNINN_HOME;
   const home = await mkdtemp(path.join(os.tmpdir(), 'muninn-delete-project-'));
   process.env.MUNINN_HOME = home;
@@ -161,10 +161,10 @@ test('delete imported project removes session search rows for the project', asyn
   await capture(makeTurn('e2e-delete-project-b', 1, 'delete project session b'));
   await setCaptureEnabled('codex', PROJECT, true);
   const tables = await nativeTables();
-  await tables.sessionSearchTable.upsert({
+  await tables.sessionTable.upsert({
     rows: [
-      sessionSearchRow('e2e-delete-project-a', 'project search row a'),
-      sessionSearchRow('e2e-delete-project-b', 'project search row b'),
+      sessionRow('e2e-delete-project-a', 'project search row a'),
+      sessionRow('e2e-delete-project-b', 'project search row b'),
     ],
   });
 
@@ -179,7 +179,7 @@ test('delete imported project removes session search rows for the project', asyn
   assert.equal(body.deletedSessions, 2);
   assert.equal(body.deletedTurns, 2);
   assert.deepEqual(
-    await tables.sessionSearchTable.get({
+    await tables.sessionTable.get({
       identities: [
         { project: PROJECT, agent: 'codex', sessionId: 'e2e-delete-project-a' },
         { project: PROJECT, agent: 'codex', sessionId: 'e2e-delete-project-b' },

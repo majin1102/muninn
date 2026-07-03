@@ -24,17 +24,17 @@ import sessionModule from '../../dist/pipeline/session.js';
 import extractorLlmModule from '../../dist/llm/extractor.js';
 import { applyExtractionChanges, applyExtractionTableChanges } from '../../dist/pipeline/extraction.js';
 import {
-  parseSessionSearchMemoryId,
+  parseSessionMemoryId,
   recallMemories,
-  sessionSearchMemoryId,
+  sessionMemoryId,
 } from '../../dist/api/memory.js';
 import { validateMemoryRecallResult } from '../../dist/api/memory.js';
 import {
-  SESSION_SEARCH_TEXT_LIMIT,
-  rebuildSessionSearch,
-  sessionSearchText,
+  SESSION_TEXT_LIMIT,
+  rebuildSessionTable,
+  sessionText,
   sessionVectorText,
-} from '../../dist/pipeline/session-search.js';
+} from '../../dist/pipeline/session-table.js';
 import { createNativeTables, getNativeTables } from '../../dist/native.js';
 
 const { __testing: indexTesting } = extractionIndexModule;
@@ -93,7 +93,7 @@ function makeCheckpointContent(overrides = {}) {
     dreaming: overrides.dreaming ?? {
       projects: {},
     },
-    sessionSearch: overrides.sessionSearch ?? {
+    session: overrides.session ?? {
       schemaVersion: 1,
       embeddingDimensions: 8,
       sourceSessionVersion: 21,
@@ -109,14 +109,14 @@ function makeCheckpointExportBackend(checkpoint, indexedSnapshotId) {
       stats: async () => tableStats(10),
       delta: async () => [],
     },
-    sessionTable: {
+    sessionSnapshotTable: {
       stats: async () => tableStats(22),
       delta: async () => ({ sourceVersion: 22, rows: [] }),
     },
     extractionTable: {
       stats: async () => tableStats(8),
     },
-    sessionSearchTable: {
+    sessionTable: {
       stats: async () => tableStats(35),
       get: async ({ identities }) => identities.map((identity) => ({
         latestSnapshotId: indexedSnapshotId,
@@ -326,7 +326,7 @@ test('dreaming scheduler defaults to enabled thirty minute interval and validate
 test('native bindings expose turn session dreaming session search and extraction tables', async () => {
   const tables = await getNativeTables();
   assert.equal(typeof tables.turnTable.listTurns, 'function');
-  assert.equal(typeof tables.sessionTable.listSnapshots, 'function');
+  assert.equal(typeof tables.sessionSnapshotTable.listSnapshots, 'function');
   assert.equal(typeof tables.dreamingTable.list, 'function');
   assert.equal(typeof tables.dreamingTable.append, 'function');
   assert.equal(typeof tables.dreamingTable.update, 'function');
@@ -340,16 +340,16 @@ test('native bindings expose turn session dreaming session search and extraction
   assert.equal(typeof tables.extractionTable.compact, 'function');
   assert.equal(typeof tables.extractionTable.cleanup, 'function');
   assert.equal(typeof tables.extractionTable.optimize, 'function');
-  assert.equal(typeof tables.sessionSearchTable.search, 'function');
-  assert.equal(typeof tables.sessionSearchTable.upsert, 'function');
-  assert.equal(typeof tables.sessionSearchTable.replaceAll, 'function');
-  assert.equal(typeof tables.sessionSearchTable.delete, 'function');
-  assert.equal(typeof tables.sessionSearchTable.ensureVectorIndex, 'function');
-  assert.equal(typeof tables.sessionSearchTable.optimize, 'function');
+  assert.equal(typeof tables.sessionTable.search, 'function');
+  assert.equal(typeof tables.sessionTable.upsert, 'function');
+  assert.equal(typeof tables.sessionTable.replaceAll, 'function');
+  assert.equal(typeof tables.sessionTable.delete, 'function');
+  assert.equal(typeof tables.sessionTable.ensureVectorIndex, 'function');
+  assert.equal(typeof tables.sessionTable.optimize, 'function');
 });
 
 test('session search native wrapper roundtrips rows with escaped identities', async (t) => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), 'muninn-session-search-native-'));
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'muninn-session-table-native-'));
   t.after(async () => rm(dir, { recursive: true, force: true }));
   const tables = await createNativeTables({
     uri: `file-object-store://${path.join(dir, 'data')}`,
@@ -371,20 +371,20 @@ test('session search native wrapper roundtrips rows with escaped identities', as
     updatedAt: '2024-01-01T00:00:00Z',
   };
 
-  await tables.sessionSearchTable.upsert({ rows: [row] });
-  assert.deepEqual(await tables.sessionSearchTable.get({ identities: [identity] }), [row]);
+  await tables.sessionTable.upsert({ rows: [row] });
+  assert.deepEqual(await tables.sessionTable.get({ identities: [identity] }), [row]);
   assert.deepEqual(
-    (await tables.sessionSearchTable.search({
+    (await tables.sessionTable.search({
       query: 'adoption agencies',
       vector: [0, 1, 0, 0, 0, 0, 0, 0],
       limit: 1,
     })).map((hit) => hit.latestSnapshotId),
     ['snapshot-a'],
   );
-  await tables.sessionSearchTable.validateDimensions({ expected: 8 });
+  await tables.sessionTable.validateDimensions({ expected: 8 });
   await assert.rejects(
-    () => tables.sessionSearchTable.validateDimensions({ expected: 4 }),
-    /session_search dimension mismatch/,
+    () => tables.sessionTable.validateDimensions({ expected: 4 }),
+    /session dimension mismatch/,
   );
 
   const replacement = {
@@ -399,10 +399,10 @@ test('session search native wrapper roundtrips rows with escaped identities', as
     vector: [0, 1, 0, 0, 0, 0, 0, 0],
     updatedAt: '2024-01-02T00:00:00Z',
   };
-  await tables.sessionSearchTable.replaceAll({ rows: [replacement] });
-  assert.deepEqual(await tables.sessionSearchTable.get({ identities: [identity] }), []);
+  await tables.sessionTable.replaceAll({ rows: [replacement] });
+  assert.deepEqual(await tables.sessionTable.get({ identities: [identity] }), []);
   assert.deepEqual(
-    await tables.sessionSearchTable.get({
+    await tables.sessionTable.get({
       identities: [{
         project: replacement.project,
         agent: replacement.agent,
@@ -412,7 +412,7 @@ test('session search native wrapper roundtrips rows with escaped identities', as
     [replacement],
   );
 
-  const deleted = await tables.sessionSearchTable.delete({
+  const deleted = await tables.sessionTable.delete({
     identities: [{
       project: replacement.project,
       agent: replacement.agent,
@@ -420,10 +420,10 @@ test('session search native wrapper roundtrips rows with escaped identities', as
     }],
   });
   assert.deepEqual(deleted, { deleted: 1 });
-  assert.deepEqual(await tables.sessionSearchTable.list({}), []);
+  assert.deepEqual(await tables.sessionTable.list({}), []);
 });
 
-test('session search text combines session and extraction summaries', () => {
+test('session text combines session and extraction summaries', () => {
   const snapshot = {
     snapshotContent: 'Session snapshot content',
     signals: '',
@@ -449,7 +449,7 @@ test('session search text combines session and extraction summaries', () => {
     extractionChanges: [],
   };
 
-  const text = sessionSearchText(snapshot, 'Session title', 'Session summary');
+  const text = sessionText(snapshot, 'Session title', 'Session summary');
 
   assert.match(text, /^Session title\n\nSession summary/);
   assert.match(text, /Adoption research/);
@@ -457,14 +457,14 @@ test('session search text combines session and extraction summaries', () => {
   assert.match(text, /Melanie scheduled a lake painting workshop/);
 });
 
-test('session search text is capped', () => {
+test('session text is capped', () => {
   const snapshot = {
     snapshotContent: '',
     signals: '',
     extractions: [{
       id: 'extraction-a',
       title: 'Long extraction',
-      text: 'x'.repeat(SESSION_SEARCH_TEXT_LIMIT * 2),
+      text: 'x'.repeat(SESSION_TEXT_LIMIT * 2),
       context: null,
       references: ['turn:1'],
     }],
@@ -474,9 +474,9 @@ test('session search text is capped', () => {
     extractionChanges: [],
   };
 
-  const text = sessionSearchText(snapshot, 'Title', 'Summary');
+  const text = sessionText(snapshot, 'Title', 'Summary');
 
-  assert.equal(text.length, SESSION_SEARCH_TEXT_LIMIT);
+  assert.equal(text.length, SESSION_TEXT_LIMIT);
   assert.match(text, /^Title\n\nSummary\n\nLong extraction/);
 });
 
@@ -487,7 +487,7 @@ test('session vector text uses only title and summary', () => {
   );
 });
 
-test('rebuildSessionSearch replaces rows from latest live turn-backed sessions only', async (t) => {
+test('rebuildSessionTable replaces rows from latest live turn-backed sessions only', async (t) => {
   const previousHome = process.env.MUNINN_HOME;
   const { dir, homeDir, configPath } = await makeConfigHome();
   process.env.MUNINN_HOME = homeDir;
@@ -503,7 +503,7 @@ test('rebuildSessionSearch replaces rows from latest live turn-backed sessions o
 
   let replacedRows = null;
   const client = {
-    sessionTable: {
+    sessionSnapshotTable: {
       listSnapshots: async () => [
         makeSnapshotRow({
           snapshotId: 'session:live-old',
@@ -531,7 +531,7 @@ test('rebuildSessionSearch replaces rows from latest live turn-backed sessions o
         }),
       ],
     },
-    sessionSearchTable: {
+    sessionTable: {
       replaceAll: async ({ rows }) => {
         replacedRows = rows;
       },
@@ -548,7 +548,7 @@ test('rebuildSessionSearch replaces rows from latest live turn-backed sessions o
     }],
   };
 
-  await rebuildSessionSearch(client, sessionIndex);
+  await rebuildSessionTable(client, sessionIndex);
 
   assert.equal(replacedRows.length, 1);
   assert.equal(replacedRows[0].latestSnapshotId, 'session:live-new');
@@ -561,7 +561,7 @@ test('rebuildSessionSearch replaces rows from latest live turn-backed sessions o
   assert.equal(replacedRows[0].vector.length, 8);
 });
 
-test('rebuildSessionSearch uses the session index snapshot id instead of a higher sequence old extractor snapshot', async (t) => {
+test('rebuildSessionTable uses the session index snapshot id instead of a higher sequence old extractor snapshot', async (t) => {
   const previousHome = process.env.MUNINN_HOME;
   const { dir, homeDir, configPath } = await makeConfigHome();
   process.env.MUNINN_HOME = homeDir;
@@ -577,7 +577,7 @@ test('rebuildSessionSearch uses the session index snapshot id instead of a highe
 
   let replacedRows = null;
   const client = {
-    sessionTable: {
+    sessionSnapshotTable: {
       listSnapshots: async () => [
         makeSnapshotRow({
           snapshotId: 'session:right',
@@ -599,7 +599,7 @@ test('rebuildSessionSearch uses the session index snapshot id instead of a highe
         }),
       ],
     },
-    sessionSearchTable: {
+    sessionTable: {
       replaceAll: async ({ rows }) => {
         replacedRows = rows;
       },
@@ -616,7 +616,7 @@ test('rebuildSessionSearch uses the session index snapshot id instead of a highe
     }],
   };
 
-  await rebuildSessionSearch(client, sessionIndex);
+  await rebuildSessionTable(client, sessionIndex);
 
   assert.equal(replacedRows.length, 1);
   assert.equal(replacedRows[0].latestSnapshotId, 'session:right');
@@ -624,7 +624,7 @@ test('rebuildSessionSearch uses the session index snapshot id instead of a highe
   assert.equal(replacedRows[0].summary, 'Current extractor summary');
 });
 
-test('rebuildSessionSearch falls back to snapshot columns when content is malformed', async (t) => {
+test('rebuildSessionTable falls back to snapshot columns when content is malformed', async (t) => {
   const previousHome = process.env.MUNINN_HOME;
   const { dir, homeDir, configPath } = await makeConfigHome();
   process.env.MUNINN_HOME = homeDir;
@@ -640,7 +640,7 @@ test('rebuildSessionSearch falls back to snapshot columns when content is malfor
 
   let replacedRows = null;
   const client = {
-    sessionTable: {
+    sessionSnapshotTable: {
       listSnapshots: async () => [
         makeSnapshotRow({
           snapshotId: 'session:malformed',
@@ -651,7 +651,7 @@ test('rebuildSessionSearch falls back to snapshot columns when content is malfor
         }),
       ],
     },
-    sessionSearchTable: {
+    sessionTable: {
       replaceAll: async ({ rows }) => {
         replacedRows = rows;
       },
@@ -668,7 +668,7 @@ test('rebuildSessionSearch falls back to snapshot columns when content is malfor
     }],
   };
 
-  await rebuildSessionSearch(client, sessionIndex);
+  await rebuildSessionTable(client, sessionIndex);
 
   assert.equal(replacedRows.length, 1);
   assert.equal(replacedRows[0].latestSnapshotId, 'session:malformed');
@@ -707,7 +707,7 @@ test('backend startup rebuilds session search when matching checkpoint has no se
         snapshotId: 'session:stats-null',
       }],
     },
-    sessionSearch: {
+    session: {
       schemaVersion: 1,
       embeddingDimensions: 8,
       sourceSessionVersion: 7,
@@ -727,7 +727,7 @@ test('backend startup rebuilds session search when matching checkpoint has no se
       delta: async () => [],
       stats: async () => ({ version: 4, fragmentCount: 1, rowCount: 1 }),
     },
-    sessionTable: {
+    sessionSnapshotTable: {
       delta: async () => ({ sourceVersion: 7, rows: [] }),
       stats: async () => ({ version: 7, fragmentCount: 1, rowCount: 1 }),
       listSnapshots: async () => [makeSnapshotRow({
@@ -739,7 +739,7 @@ test('backend startup rebuilds session search when matching checkpoint has no se
         updatedAt: '2024-01-03T00:00:00Z',
       })],
     },
-    sessionSearchTable: {
+    sessionTable: {
       stats: async () => null,
       validateDimensions: async () => undefined,
       replaceAll: async ({ rows }) => {
@@ -773,9 +773,9 @@ test('indexTouchedExtractions writes session search before extraction rows', asy
 
   const events = [];
   const client = {
-    sessionSearchTable: {
+    sessionTable: {
       upsert: async ({ rows }) => {
-        events.push({ table: 'session_search', row: rows[0] });
+        events.push({ table: 'session', row: rows[0] });
       },
     },
     extractionTable: {
@@ -825,7 +825,7 @@ test('indexTouchedExtractions writes session search before extraction rows', asy
 
   await indexTesting.indexTouchedExtractions(client, [thread], new Set([threadIdentityKey(thread)]));
 
-  assert.deepEqual(events.map((event) => event.table), ['session_search', 'extraction']);
+  assert.deepEqual(events.map((event) => event.table), ['session', 'extraction']);
   assert.equal(events[0].row.latestSnapshotId, 'session:1');
   assert.equal(events[0].row.project, 'project-a');
   assert.equal(events[0].row.agent, 'codex');
@@ -937,7 +937,7 @@ test('lockNativeTables serializes session search mutations without locking reads
   const optimizeEntered = deferred();
   let searchCalls = 0;
   const tables = lockNativeTables({
-    sessionSearchTable: {
+    sessionTable: {
       upsert: async () => {
         upsertEntered.resolve();
         await releaseUpsert.promise;
@@ -953,10 +953,10 @@ test('lockNativeTables serializes session search mutations without locking reads
     },
   }, locks);
 
-  const upsert = tables.sessionSearchTable.upsert({ rows: [] });
+  const upsert = tables.sessionTable.upsert({ rows: [] });
   await upsertEntered.promise;
-  const optimize = tables.sessionSearchTable.optimize({ mergeCount: 1 });
-  await tables.sessionSearchTable.search({ query: 'q', vector: [], limit: 1 });
+  const optimize = tables.sessionTable.optimize({ mergeCount: 1 });
+  await tables.sessionTable.search({ query: 'q', vector: [], limit: 1 });
   assert.equal(searchCalls, 1);
 
   const optimizeStartedEarly = await Promise.race([
@@ -987,7 +987,7 @@ test('memories.get renders extraction memories', async () => {
           }]
         : [],
     },
-    sessionTable: { get: async () => null },
+    sessionSnapshotTable: { getSnapshot: async () => null },
     turnTable: { get: async () => null },
   };
   const { Memories } = await import('../../dist/api/memory.js');
@@ -1189,14 +1189,14 @@ function makeRecentSessionCheckpoint(turns, sessionId = 'group-a', agent = 'agen
 function makeExtractorClient() {
   let snapshotSequence = 0;
   return {
-    sessionTable: {
+    sessionSnapshotTable: {
       insert: async ({ snapshots }) => snapshots.map((snapshot) => ({
         ...snapshot,
         snapshotId: `snapshot-${snapshotSequence += 1}`,
       })),
       update: async ({ snapshots }) => snapshots,
     },
-    sessionSearchTable: {
+    sessionTable: {
       upsert: async () => undefined,
     },
     extractionTable: {
@@ -1328,7 +1328,7 @@ test('watchdog.start waits for the first interval before maintenance', async (t)
       },
       compact: async () => ({ changed: false }),
     },
-    sessionTable: {
+    sessionSnapshotTable: {
       stats: async () => null,
       compact: async () => ({ changed: false }),
     },
@@ -1373,7 +1373,7 @@ test('watchdog compacts turn data once per indexed version without logging skips
         return { changed: true };
       },
     },
-    sessionTable: {
+    sessionSnapshotTable: {
       stats: async () => null,
       compact: async () => ({ changed: false }),
     },
@@ -1420,7 +1420,7 @@ test('watchdog creates and optimizes extraction index only once for an unchanged
       stats: async () => null,
       compact: async () => ({ changed: false }),
     },
-    sessionTable: {
+    sessionSnapshotTable: {
       stats: async () => null,
       compact: async () => ({ changed: false }),
     },
@@ -1484,7 +1484,7 @@ test('watchdog below-threshold cycles do not compact or write logs', async (t) =
         return { changed: false };
       },
     },
-    sessionTable: {
+    sessionSnapshotTable: {
       stats: async () => null,
       compact: async () => ({ changed: false }),
     },
@@ -1515,7 +1515,7 @@ test('watchdog maintains and cleans session search table', async (t) => {
   await writeFile(resolveCheckpointPath(), `${JSON.stringify(makeCheckpointContent({
     writtenAt: '2024-01-01T00:00:00Z',
     writerPid: 123,
-    sessionSearch: {
+    session: {
       schemaVersion: 1,
       embeddingDimensions: 8,
       sourceSessionVersion: 21,
@@ -1531,7 +1531,7 @@ test('watchdog maintains and cleans session search table', async (t) => {
       stats: async () => null,
       compact: async () => ({ changed: false }),
     },
-    sessionTable: {
+    sessionSnapshotTable: {
       stats: async () => null,
       compact: async () => ({ changed: false }),
     },
@@ -1541,7 +1541,7 @@ test('watchdog maintains and cleans session search table', async (t) => {
       compact: async () => ({ changed: false }),
       optimize: async () => ({ changed: false }),
     },
-    sessionSearchTable: {
+    sessionTable: {
       ensureVectorIndex: async () => ({ created: true }),
       stats: async () => ({
         version: 23,
@@ -1571,22 +1571,22 @@ test('watchdog maintains and cleans session search table', async (t) => {
   assert.equal(optimizeCalls, 1);
   const records = await readWatchdogLog(homeDir);
   assert.ok(records.some((record) => (
-    record.dataset === 'sessionSearch'
+    record.dataset === 'session'
     && record.event === 'index_created'
     && record.version === 23
   )));
   assert.ok(records.some((record) => (
-    record.dataset === 'sessionSearch'
+    record.dataset === 'session'
     && record.event === 'compacted'
     && record.details?.changed === true
   )));
   assert.ok(records.some((record) => (
-    record.dataset === 'sessionSearch'
+    record.dataset === 'session'
     && record.event === 'optimized'
     && record.details?.mergeCount === 4
   )));
   assert.ok(records.some((record) => (
-    record.dataset === 'sessionSearch'
+    record.dataset === 'session'
     && record.event === 'cleaned'
     && record.version === 22
   )));
@@ -1611,7 +1611,7 @@ test('watchdog logs dataset failures to file and stderr', async (t) => {
       stats: async () => null,
       compact: async () => ({ changed: false }),
     },
-    sessionTable: {
+    sessionSnapshotTable: {
       stats: async () => ({
         version: 5,
         fragmentCount: 6,
@@ -1654,7 +1654,7 @@ test('watchdog logs extraction optimize failures with the current stats version'
       stats: async () => null,
       compact: async () => ({ changed: false }),
     },
-    sessionTable: {
+    sessionSnapshotTable: {
       stats: async () => null,
       compact: async () => ({ changed: false }),
     },
@@ -1707,7 +1707,7 @@ test('watchdog logs null version when stats fails before reading the current dat
       },
       compact: async () => ({ changed: false }),
     },
-    sessionTable: {
+    sessionSnapshotTable: {
       stats: async () => null,
       compact: async () => ({ changed: false }),
     },
@@ -1750,7 +1750,7 @@ test('watchdog writes extractor checkpoint files', async (t) => {
       }),
       compact: async () => ({ changed: false }),
     },
-    sessionTable: {
+    sessionSnapshotTable: {
       stats: async () => null,
       compact: async () => ({ changed: false }),
     },
@@ -1864,7 +1864,7 @@ test('watchdog skips checkpoint writes when contributors return no extractor sta
       stats: async () => null,
       compact: async () => ({ changed: false }),
     },
-    sessionTable: {
+    sessionSnapshotTable: {
       stats: async () => null,
       compact: async () => ({ changed: false }),
     },
@@ -1923,7 +1923,7 @@ test('watchdog skips checkpoint writes when extractor content is unchanged', asy
       }),
       compact: async () => ({ changed: false }),
     },
-    sessionTable: {
+    sessionSnapshotTable: {
       stats: async () => null,
       compact: async () => ({ changed: false }),
     },
@@ -1981,7 +1981,7 @@ test('watchdog rewrites checkpoint when the file is deleted after startup', asyn
       }),
       compact: async () => ({ changed: false }),
     },
-    sessionTable: {
+    sessionSnapshotTable: {
       stats: async () => null,
       compact: async () => ({ changed: false }),
     },
@@ -2076,7 +2076,7 @@ test('checkpoint preserves session runs', async () => {
     },
     sessionIndex: { baseline: { turn: 1, session: 1 }, entries: [] },
     dreaming: { projects: {} },
-    sessionSearch: {
+    session: {
       schemaVersion: 1,
       embeddingDimensions: 8,
       sourceSessionVersion: 1,
@@ -2113,7 +2113,7 @@ test('watchdog rewrites checkpoint when extractor content changes', async (t) =>
       }),
       compact: async () => ({ changed: false }),
     },
-    sessionTable: {
+    sessionSnapshotTable: {
       stats: async () => null,
       compact: async () => ({ changed: false }),
     },
@@ -2454,7 +2454,7 @@ test('extractor bootstrap without checkpoint derives committedEpoch from session
         makeExtractableTurn('turn-14', 14, 'epoch14'),
       ],
     },
-    sessionTable: {
+    sessionSnapshotTable: {
       listSnapshots: async () => rows,
       threadSnapshots: async () => rows,
     },
@@ -2483,7 +2483,7 @@ test('extractor bootstrap publishes pending turns by their extractionEpoch', asy
         makeExtractableTurn('turn-14', 14, 'epoch14'),
       ],
     },
-    sessionTable: {
+    sessionSnapshotTable: {
       listSnapshots: async () => [],
     },
     extractionTable: {},
@@ -2519,7 +2519,7 @@ test('extractor bootstrap repacks oversized pending epochs by maxEpochTurns', as
         makeExtractableTurn(`turn-${index + 1}`, 13, `epoch13-${index + 1}`)
       )),
     },
-    sessionTable: {
+    sessionSnapshotTable: {
       listSnapshots: async () => [],
     },
     extractionTable: {},
@@ -2581,7 +2581,7 @@ test('extractor bootstrap restores committed state from checkpoint when baseline
         return [];
       },
     },
-    sessionTable: {
+    sessionSnapshotTable: {
       delta: async () => ({ sourceVersion: 21, rows: [] }),
       stats: async () => ({
         version: 21,
@@ -2692,7 +2692,7 @@ test('extractor checkpoint restore keeps full history for active threads', async
       }),
       loadTurnsAfterEpoch: async () => [],
     },
-    sessionTable: {
+    sessionSnapshotTable: {
       delta: async () => ({ sourceVersion: 21, rows: [] }),
       stats: async () => ({
         version: 21,
@@ -2788,7 +2788,7 @@ test('extractor restore advances committedEpoch and excludes extracted turns fro
         makeExtractableTurn('turn-14', 14, 'epoch14'),
       ],
     },
-    sessionTable: {
+    sessionSnapshotTable: {
       delta: async () => ({
         sourceVersion: 21,
         rows: [
@@ -2915,7 +2915,7 @@ test('extractor restore falls back when session delta refs are missing turn epoc
     turnTable: {
       loadTurnsAfterEpoch: async () => [makeExtractableTurn('turn-13', 13, 'epoch13')],
     },
-    sessionTable: {
+    sessionSnapshotTable: {
       delta: async () => ({
         sourceVersion: 21,
         rows: [
@@ -3000,7 +3000,7 @@ test('extractor restore skips stale threads resource only from session delta', a
     turnTable: {
       loadTurnsAfterEpoch: async () => [makeExtractableTurn('turn-13', 13, 'epoch13')],
     },
-    sessionTable: {
+    sessionSnapshotTable: {
       delta: async () => ({ sourceVersion: 21, rows: [staleRow] }),
       threadSnapshots: async () => [staleRow],
     },
@@ -3059,7 +3059,7 @@ test('extractor restore rebuilds delta-only threads from full history', async (t
       ],
       getTurn: async (turnId) => turnById.get(turnId) ?? null,
     },
-    sessionTable: {
+    sessionSnapshotTable: {
       delta: async () => ({ sourceVersion: 21, rows: [fullRows[6], fullRows[7]] }),
       threadSnapshots: async () => fullRows,
     },
@@ -3109,7 +3109,7 @@ test('extractor bootstrap skips stale checkpoint threads', async (t) => {
       }),
       loadTurnsAfterEpoch: async () => [],
     },
-    sessionTable: {
+    sessionSnapshotTable: {
       delta: async () => ({ sourceVersion: 21, rows: [] }),
       stats: async () => ({
         version: 21,
@@ -3148,7 +3148,7 @@ test('extractor exportCheckpoint keeps the last committed snapshot while extract
   const release = deferred();
   const checkpoint = (await readCheckpointFile())?.extractor ?? null;
   const extractor = new Extractor({
-    sessionTable: {
+    sessionSnapshotTable: {
       insert: async ({ snapshots }) => snapshots.map((snapshot) => ({
         ...snapshot,
         snapshotId: 'snapshot-1',
@@ -3267,7 +3267,7 @@ test('extractor bootstrap ignores extraction version mismatches when session bas
       }),
       loadTurnsAfterEpoch: async () => [],
     },
-    sessionTable: {
+    sessionSnapshotTable: {
       delta: async () => ({ sourceVersion: 21, rows: [] }),
       stats: async () => ({
         version: 21,
@@ -3459,7 +3459,7 @@ test('backend.listSessionIndex returns while checkpoint mutex is busy', async (t
       delta: async () => [],
       stats: async () => ({ version: 10, rowCount: 1, fragmentCount: 1 }),
     },
-    sessionTable: {
+    sessionSnapshotTable: {
       delta: async () => ({ sourceVersion: 21, rows: [] }),
       stats: async () => ({ version: 21, rowCount: 1, fragmentCount: 1 }),
     },
@@ -3503,7 +3503,7 @@ test('recallMemories searches extraction routes and enriches hits', async () => 
         };
       },
     },
-    sessionTable: {
+    sessionSnapshotTable: {
       threadSnapshots: async (sessionId) => (
         sessionId === 'session-2'
           ? [{
@@ -3575,9 +3575,9 @@ test('recallMemories searches extraction routes and enriches hits', async () => 
 test('recall defaults to extraction mode', async () => {
   const calls = [];
   const client = {
-    sessionSearchTable: {
+    sessionTable: {
       search: async () => {
-        throw new Error('sessionSearchTable.search should not be called by extraction recall');
+        throw new Error('sessionTable.search should not be called by extraction recall');
       },
     },
     extractionTable: {
@@ -3608,10 +3608,10 @@ test('recall defaults to extraction mode', async () => {
   assert.deepEqual(hits.map((hit) => hit.memoryId), ['ext:raw-1']);
 });
 
-test('recall session mode searches sessionSearchTable only', async () => {
+test('recall session mode searches sessionTable only', async () => {
   const calls = [];
   const client = {
-    sessionSearchTable: {
+    sessionTable: {
       search: async (params) => {
         calls.push(params);
         return [{
@@ -3649,7 +3649,7 @@ test('recall session mode searches sessionSearchTable only', async () => {
     limit: 10,
   }]);
   assert.equal(hits.length, 1);
-  assert.match(hits[0].memoryId, /^session:search:/);
+  assert.match(hits[0].memoryId, /^session:identity:/);
   assert.equal(hits[0].title, 'Readable session title');
   assert.equal(hits[0].summary, 'Readable session summary');
   assert.equal(hits[0].content, 'Readable session title\n\nReadable session summary');
@@ -3660,7 +3660,7 @@ test('recall session mode searches sessionSearchTable only', async () => {
   assert.equal(hits[0].cwd, '/workspace/project-a');
   assert.equal(hits[0].sessionKey, undefined);
   assert.equal(hits[0].displaySession, 'Readable session title');
-  assert.deepEqual(parseSessionSearchMemoryId(hits[0].memoryId), {
+  assert.deepEqual(parseSessionMemoryId(hits[0].memoryId), {
     project: 'project-a',
     agent: 'codex',
     sessionId: 'session-a',
@@ -3669,7 +3669,7 @@ test('recall session mode searches sessionSearchTable only', async () => {
 
 test('recall session mode rejects budget queryLimit and thinkingRatio', async () => {
   const client = {
-    sessionSearchTable: {
+    sessionTable: {
       search: async () => [],
     },
   };
@@ -3689,12 +3689,12 @@ test('recall session mode rejects budget queryLimit and thinkingRatio', async ()
   );
 });
 
-test('recall extraction mode does not search sessionSearchTable', async () => {
+test('recall extraction mode does not search sessionTable', async () => {
   let extractionSearches = 0;
   const client = {
-    sessionSearchTable: {
+    sessionTable: {
       search: async () => {
-        throw new Error('sessionSearchTable.search should not be called by extraction recall');
+        throw new Error('sessionTable.search should not be called by extraction recall');
       },
     },
     extractionTable: {
@@ -3714,20 +3714,20 @@ test('recall extraction mode does not search sessionSearchTable', async () => {
   assert.equal(extractionSearches, 1);
 });
 
-test('session search memory ids round trip identity without stored id', () => {
+test('session memory ids round trip identity without stored id', () => {
   const identity = {
     project: 'project-a',
     agent: 'codex',
     sessionId: 'session:with/slashes',
   };
 
-  const memoryId = sessionSearchMemoryId(identity);
+  const memoryId = sessionMemoryId(identity);
 
-  assert.match(memoryId, /^session:search:/);
-  assert.deepEqual(parseSessionSearchMemoryId(memoryId), identity);
+  assert.match(memoryId, /^session:identity:/);
+  assert.deepEqual(parseSessionMemoryId(memoryId), identity);
   assert.equal(memoryId.includes('snapshot'), false);
-  assert.equal(parseSessionSearchMemoryId('session:42'), null);
-  assert.equal(parseSessionSearchMemoryId('session:search:not-json'), null);
+  assert.equal(parseSessionMemoryId('session:42'), null);
+  assert.equal(parseSessionMemoryId('session:identity:not-json'), null);
 });
 
 test('recallMemories returns recalled memory when budget is positive', async () => {
@@ -3874,7 +3874,7 @@ test('backend exportCheckpoint advances session search source version only when 
         title: 'Session title',
       }],
     },
-    sessionSearch: {
+    session: {
       schemaVersion: 1,
       embeddingDimensions: 8,
       sourceSessionVersion: 21,
@@ -3884,11 +3884,11 @@ test('backend exportCheckpoint advances session search source version only when 
 
   const staleBackend = makeCheckpointExportBackend(checkpoint, 'session:1');
   const stale = await staleBackend.exportCheckpoint();
-  assert.equal(stale.sessionSearch.sourceSessionVersion, 21);
+  assert.equal(stale.session.sourceSessionVersion, 21);
 
   const freshBackend = makeCheckpointExportBackend(checkpoint, 'session:2');
   const fresh = await freshBackend.exportCheckpoint();
-  assert.equal(fresh.sessionSearch.sourceSessionVersion, 22);
+  assert.equal(fresh.session.sourceSessionVersion, 22);
 });
 
 test('session registry reuses one in-flight session load per key', async () => {
@@ -4210,7 +4210,7 @@ test('extractor.extractCurrentEpoch keeps thread state unchanged when pre-commit
 
   try {
     const extractor = new Extractor({
-      sessionTable: {
+      sessionSnapshotTable: {
         insert: async () => {
           throw new Error('persist failed');
         },
@@ -4501,10 +4501,10 @@ test('indexPendingExtractions surfaces extraction write failures and leaves work
 
   await assert.rejects(
     () => indexTesting.indexPendingExtractions({
-      sessionTable: {
+      sessionSnapshotTable: {
         update: async ({ snapshots }) => snapshots,
       },
-      sessionSearchTable: {
+      sessionTable: {
         upsert: async () => undefined,
       },
       extractionTable: {
@@ -6779,7 +6779,7 @@ test('extractEpoch groups mixed session turns before session', async () => {
   const extractionInputs = [];
   const snapshotRows = [];
   const client = {
-    sessionTable: {
+    sessionSnapshotTable: {
       insert: async ({ snapshots }) => {
         snapshotRows.push(...snapshots);
         return snapshots.map((snapshot, index) => ({
@@ -6831,7 +6831,7 @@ test('extractEpochDraft does not persist session rows before flushThreads', asyn
   const threads = [];
   let insertCalls = 0;
   const client = {
-    sessionTable: {
+    sessionSnapshotTable: {
       insert: async ({ snapshots }) => {
         insertCalls += 1;
         return snapshots.map((snapshot, index) => ({
@@ -6879,7 +6879,7 @@ test('extractEpoch chunks same-session turns by maxEpochTurns', async () => {
   const extractionInputs = [];
   const snapshotRows = [];
   const client = {
-    sessionTable: {
+    sessionSnapshotTable: {
       insert: async ({ snapshots }) => {
         snapshotRows.push(...snapshots);
         return snapshots.map((snapshot, index) => ({
@@ -6940,7 +6940,7 @@ test('extractEpoch chunks same-session turns by rendered newBatchInputChars', as
   const extractionInputs = [];
   const snapshotRows = [];
   const client = {
-    sessionTable: {
+    sessionSnapshotTable: {
       insert: async ({ snapshots }) => {
         snapshotRows.push(...snapshots);
         return snapshots.map((snapshot, index) => ({
@@ -6994,7 +6994,7 @@ test('extractEpoch routes missing sessionId turns to default session thread', as
   const threads = [];
   const extractionInputs = [];
   const client = {
-    sessionTable: {
+    sessionSnapshotTable: {
       insert: async ({ snapshots }) => snapshots.map((snapshot, index) => ({
         ...snapshot,
         snapshotId: `snapshot-${index + 1}`,
@@ -7111,10 +7111,10 @@ test('indexTouchedExtractions immediately advances extraction index for touched 
   }];
 
   await indexTesting.indexTouchedExtractions({
-    sessionTable: {
+    sessionSnapshotTable: {
       update: async ({ snapshots }) => snapshots,
     },
-    sessionSearchTable: {
+    sessionTable: {
       upsert: async () => undefined,
     },
     extractionTable: {
@@ -7139,7 +7139,7 @@ test('extractor.retrySnapshotIndexing refreshes the committed checkpoint snapsho
   await writeExtractorConfig(configPath);
 
   const extractor = new Extractor({
-    sessionTable: {
+    sessionSnapshotTable: {
       update: async ({ snapshots }) => snapshots,
       stats: async () => ({
         version: 22,
@@ -7147,7 +7147,7 @@ test('extractor.retrySnapshotIndexing refreshes the committed checkpoint snapsho
         rowCount: 1,
       }),
     },
-    sessionSearchTable: {
+    sessionTable: {
       upsert: async () => undefined,
     },
     extractionTable: {
@@ -7228,7 +7228,7 @@ test('extractor.extractCurrentEpoch commits session rows before retrying extract
   let extractionUpserts = 0;
   let indexAttempts = 0;
   const extractor = new Extractor({
-    sessionTable: {
+    sessionSnapshotTable: {
       insert: async ({ snapshots }) => snapshots.map((snapshot) => ({
         ...snapshot,
         snapshotId: 'snapshot-1',
@@ -7292,10 +7292,10 @@ test('extractor.run retries pending extraction index before queued epochs when d
 
   const calls = [];
   const extractor = new Extractor({
-    sessionTable: {
+    sessionSnapshotTable: {
       update: async ({ snapshots }) => snapshots,
     },
-    sessionSearchTable: {
+    sessionTable: {
       upsert: async () => undefined,
     },
     extractionTable: {
@@ -7392,10 +7392,10 @@ test('extractor.watermark exposes extraction index retry failures', async (t) =>
   await writeExtractorConfig(configPath);
 
   const extractor = new Extractor({
-    sessionTable: {
+    sessionSnapshotTable: {
       update: async ({ snapshots }) => snapshots,
     },
-    sessionSearchTable: {
+    sessionTable: {
       upsert: async () => undefined,
     },
     extractionTable: {
@@ -8090,7 +8090,7 @@ test('flushThreads persists session state without inline ref or index builders',
   ];
 
   await sessionTesting.flushThreads({
-    sessionTable: {
+    sessionSnapshotTable: {
       insert: async ({ snapshots }) => {
         return snapshots.map((snapshot) => ({
           ...snapshot,
@@ -8149,7 +8149,7 @@ test('flushThreads keeps same raw session id isolated by cwd', async (t) => {
   ];
 
   await sessionTesting.flushThreads({
-    sessionTable: {
+    sessionSnapshotTable: {
       insert: async ({ snapshots }) => snapshots.map((snapshot) => ({
         ...snapshot,
         snapshotId: `snapshot-${snapshot.project}`,

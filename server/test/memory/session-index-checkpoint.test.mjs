@@ -33,7 +33,7 @@ function checkpoint(overrides = {}) {
     dreaming: {
       projects: {},
     },
-    sessionSearch: {
+    session: {
       schemaVersion: 1,
       embeddingDimensions: 4,
       sourceSessionVersion: 5,
@@ -122,12 +122,12 @@ test('checkpoint ignores obsolete dreamingIndex when present', () => {
   assert.equal('dreamingIndex' in parsed, false);
 });
 
-test('checkpoint requires sessionSearch metadata', () => {
+test('checkpoint requires session metadata', () => {
   const content = checkpoint();
-  delete content.sessionSearch;
+  delete content.session;
 
   assert.throws(
     () => parseCheckpointFile(JSON.stringify(content)),
-    /sessionSearch section is invalid/,
+    /session section is invalid/,
   );
 });

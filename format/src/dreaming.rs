@@ -17,7 +17,7 @@ use super::codec::{
     record_batch_to_dreamings, record_batch_to_dreamings_with_row_ids,
 };
 use super::memory_id::{MemoryId, MemoryLayer, deserialize_memory_id, serialize_memory_id};
-use super::session::SourceRows;
+use super::session_snapshot::SourceRows;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
