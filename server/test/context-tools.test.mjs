@@ -26,7 +26,7 @@ test('context ids round trip through opaque prefixes', () => {
   assert.match(sessionContext, /^session_/);
   assert.doesNotMatch(sessionContext, /project-a|codex|session-a/);
   assert.deepEqual(parseSessionContextId(sessionContext), sessionIdentity);
-  assert.equal(contextIdForRecallHit({ memoryId: 'session:identity:x', content: '', references: [], ...sessionIdentity }), sessionContext);
+  assert.equal(contextIdForRecallHit({ memoryId: 'session:1', content: '', references: [], ...sessionIdentity }), sessionContext);
 
   assert.match(turnContext, /^turn_/);
   assert.doesNotMatch(turnContext, /turn:1/);

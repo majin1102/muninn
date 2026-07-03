@@ -23,11 +23,7 @@ import extractionIndexModule from '../../dist/pipeline/extraction.js';
 import sessionModule from '../../dist/pipeline/session.js';
 import extractorLlmModule from '../../dist/llm/extractor.js';
 import { applyExtractionChanges, applyExtractionTableChanges } from '../../dist/pipeline/extraction.js';
-import {
-  parseSessionMemoryId,
-  recallMemories,
-  sessionMemoryId,
-} from '../../dist/api/memory.js';
+import { recallMemories } from '../../dist/api/memory.js';
 import { validateMemoryRecallResult } from '../../dist/api/memory.js';
 import {
   SESSION_TEXT_LIMIT,
@@ -3649,7 +3645,7 @@ test('recall session mode searches sessionTable only', async () => {
     limit: 10,
   }]);
   assert.equal(hits.length, 1);
-  assert.match(hits[0].memoryId, /^session:identity:/);
+  assert.equal(hits[0].memoryId, 'session:42');
   assert.equal(hits[0].title, 'Readable session title');
   assert.equal(hits[0].summary, 'Readable session summary');
   assert.equal(hits[0].content, 'Readable session title\n\nReadable session summary');
@@ -3660,11 +3656,6 @@ test('recall session mode searches sessionTable only', async () => {
   assert.equal(hits[0].cwd, '/workspace/project-a');
   assert.equal(hits[0].sessionKey, undefined);
   assert.equal(hits[0].displaySession, 'Readable session title');
-  assert.deepEqual(parseSessionMemoryId(hits[0].memoryId), {
-    project: 'project-a',
-    agent: 'codex',
-    sessionId: 'session-a',
-  });
 });
 
 test('recall session mode rejects budget queryLimit and thinkingRatio', async () => {
@@ -3712,22 +3703,6 @@ test('recall extraction mode does not search sessionTable', async () => {
   });
 
   assert.equal(extractionSearches, 1);
-});
-
-test('session memory ids round trip identity without stored id', () => {
-  const identity = {
-    project: 'project-a',
-    agent: 'codex',
-    sessionId: 'session:with/slashes',
-  };
-
-  const memoryId = sessionMemoryId(identity);
-
-  assert.match(memoryId, /^session:identity:/);
-  assert.deepEqual(parseSessionMemoryId(memoryId), identity);
-  assert.equal(memoryId.includes('snapshot'), false);
-  assert.equal(parseSessionMemoryId('session:42'), null);
-  assert.equal(parseSessionMemoryId('session:identity:not-json'), null);
 });
 
 test('recallMemories returns recalled memory when budget is positive', async () => {

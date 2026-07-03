@@ -16,7 +16,6 @@ import { readTurnRow, sessionKey as buildSessionKey, normalizeSessionId } from '
 export type RecallPublicMode = 'session' | 'extraction';
 
 type SessionIdentity = { project: string; agent: string; sessionId: string };
-export const SESSION_MEMORY_PREFIX = 'session:identity:';
 
 export interface RenderedMemory {
   memoryId: string;
@@ -60,22 +59,12 @@ export function assertMemoryIdLayer(memoryId: string, expectedLayer: 'turn' | 's
   }
 }
 
-
-
 export function parseExtractionMemoryId(memoryId: string): string {
   const [layer, id, extra] = memoryId.split(':');
   if (layer !== 'ext' || !id || extra !== undefined) {
     throw new Error(`invalid extraction memory id: ${memoryId}`);
   }
   return id;
-}
-
-export function sessionMemoryId(identity: SessionIdentity): string {
-  return `${SESSION_MEMORY_PREFIX}${Buffer.from(JSON.stringify([
-    identity.project,
-    identity.agent,
-    identity.sessionId,
-  ])).toString('base64url')}`;
 }
 
 export function sessionContextId(identity: SessionIdentity): string {
@@ -151,26 +140,6 @@ function validateSessionContextIdentity(identity: {
     || identity.sessionId.trim().length === 0
   ) {
     throw new Error('invalid session context id: project, agent, and sessionId must be non-empty strings');
-  }
-}
-
-export function parseSessionMemoryId(memoryId: string): SessionIdentity | null {
-  if (!memoryId.startsWith(SESSION_MEMORY_PREFIX)) {
-    return null;
-  }
-  try {
-    const raw = Buffer.from(memoryId.slice(SESSION_MEMORY_PREFIX.length), 'base64url').toString('utf8');
-    const parsed = JSON.parse(raw) as unknown;
-    if (!Array.isArray(parsed) || parsed.length !== 3) {
-      return null;
-    }
-    const [project, agent, sessionId] = parsed;
-    if (typeof project !== 'string' || typeof agent !== 'string' || typeof sessionId !== 'string') {
-      return null;
-    }
-    return { project, agent, sessionId };
-  } catch {
-    return null;
   }
 }
 
@@ -263,7 +232,7 @@ export function renderExtraction(memory: Extraction): RenderedMemory {
 
 export function renderSession(memory: SessionRow): RenderedMemory {
   return {
-    memoryId: sessionMemoryId(memory),
+    memoryId: memory.latestSnapshotId,
     title: trimText(memory.title),
     summary: trimText(memory.summary),
     detail: sessionHitContent(memory),
@@ -625,7 +594,7 @@ async function extractionHit(client: NativeTables, row: Extraction): Promise<Rec
 
 function sessionHit(row: SessionRow): RecallHit {
   return {
-    memoryId: sessionMemoryId(row),
+    memoryId: row.latestSnapshotId,
     title: row.title,
     summary: row.summary,
     content: sessionHitContent(row),
@@ -770,11 +739,6 @@ export class Memories {
   }
 
   async get(memoryId: string): Promise<RenderedMemory | null> {
-    const sessionIdentity = parseSessionMemoryId(memoryId);
-    if (sessionIdentity) {
-      const rows = await this.client.sessionTable.get({ identities: [sessionIdentity] });
-      return rows[0] ? renderSession(rows[0]) : null;
-    }
     if (memoryId.startsWith('ext:')) {
       const extraction = await getExtraction(this.client, memoryId);
       return extraction ? renderExtraction(extraction) : null;
