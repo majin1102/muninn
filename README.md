@@ -4,9 +4,9 @@
 
 > The context window is where context happens, not where context ends.
 
-Muninn captures context from agents like Codex and Claude Code as it happens, preserving the conversations, decisions, and artifacts behind each session in a shared, provenance-aware Context Lake.
+Muninn captures context from agents like Codex and Claude Code as it happens, preserving the conversations and working artifacts behind each session in a shared, provenance-aware Context Lake.
 
-Muninn maintains source-linked summaries, semantic indexes, recurring instructions, and skills in the Context Lake. Through progressive disclosure, agents bring back the right depth of context without flooding the window, so continuity and experience can carry across agents and sessions, helping agents evolve over time.
+Muninn maintains a source-linked map of the Context Lake: summaries for orientation, semantic indexes for recall, recurring instructions, and candidate skills. Through progressive disclosure, agents recover the right depth of context without flooding the window, so work can continue across agents and sessions while useful patterns become shared experience for agent evolution.
 
 ## Quick Start
 
