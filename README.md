@@ -2,7 +2,7 @@
 
 **The open-source Context Lake for continuity and evolution across agents.**
 
-> The context window is where context happens, not where context ends.
+> The context window is where work happens, not where context ends.
 
 Muninn captures context from agents like Codex and Claude Code as it happens, preserving the conversations and working artifacts behind each session in a shared, provenance-aware context lake.
 
