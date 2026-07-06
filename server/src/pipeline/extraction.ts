@@ -419,7 +419,7 @@ export function extractionSummary(title: string, row: ExtractionUnit): string {
   ].filter(Boolean).join('\n\n');
 }
 
-function extractionContent(title: string, row: ExtractionUnit): string {
+export function extractionContent(title: string, row: ExtractionUnit): string {
   return [
     '## Title',
     '',

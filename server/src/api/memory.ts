@@ -12,6 +12,8 @@ import { embedText } from '../llm/embedding-provider.js';
 import { generateText } from '../llm/provider.js';
 import { loadPromptTemplate, renderPromptTemplate } from '../llm/prompts.js';
 import { readTurnRow, sessionKey as buildSessionKey, normalizeSessionId } from '../pipeline/ingest.js';
+import { extractionContent, extractionSummary, extractionTitle } from '../pipeline/extraction.js';
+import { parseSnapshotContent, type ExtractionUnit } from '../pipeline/snapshot.js';
 
 export type RecallPublicMode = 'session' | 'extraction';
 
@@ -22,9 +24,16 @@ export interface RenderedMemory {
   title?: string;
   summary?: string;
   detail?: string;
+  extractionContextRefs?: ExtractionContextRef[];
   createdAt: string;
   updatedAt: string;
 }
+
+export type ExtractionContextRef = {
+  contextId: string;
+  title: string;
+  summary: string;
+};
 
 export interface RecallHit {
   memoryId: string;
@@ -228,6 +237,89 @@ export function renderExtraction(memory: Extraction): RenderedMemory {
     createdAt: memory.createdAt,
     updatedAt: memory.createdAt,
   };
+}
+
+export async function sessionExtractionContextRefs(
+  client: NativeTables,
+  snapshot: SessionSnapshotRow,
+): Promise<ExtractionContextRef[]> {
+  const extractionTable = client.extractionTable as NativeTables['extractionTable'] | undefined;
+  if (!extractionTable?.list) {
+    return [];
+  }
+
+  let units: ExtractionUnit[];
+  try {
+    units = parseSnapshotContent(snapshot.content, new Set(snapshot.references)).extractions;
+  } catch {
+    return [];
+  }
+  if (units.length === 0) {
+    return [];
+  }
+
+  const rows = await extractionTable.list({});
+  const rowsByKey = new Map<string, Extraction[]>();
+  for (const row of [...rows].sort((left, right) => left.id.localeCompare(right.id))) {
+    const key = storedExtractionKey(row);
+    const bucket = rowsByKey.get(key) ?? [];
+    bucket.push(row);
+    rowsByKey.set(key, bucket);
+  }
+
+  const refs: ExtractionContextRef[] = [];
+  const seen = new Set<string>();
+  for (const unit of units) {
+    const bucket = rowsByKey.get(snapshotExtractionKey(unit));
+    const row = bucket?.shift();
+    if (!row || seen.has(row.id)) {
+      continue;
+    }
+    seen.add(row.id);
+    refs.push({
+      contextId: `ext:${row.id}`,
+      title: row.title,
+      summary: row.summary,
+    });
+  }
+  return refs;
+}
+
+function snapshotExtractionKey(unit: ExtractionUnit): string {
+  const title = extractionTitle(unit);
+  return extractionMatchKey({
+    title,
+    summary: extractionSummary(title, unit),
+    content: extractionContent(title, unit),
+    refs: unit.references,
+  });
+}
+
+function storedExtractionKey(row: Extraction): string {
+  return extractionMatchKey({
+    title: row.title,
+    summary: row.summary,
+    content: row.content,
+    refs: row.turnRefs,
+  });
+}
+
+function extractionMatchKey(value: {
+  title: string;
+  summary: string;
+  content: string;
+  refs: string[];
+}): string {
+  return JSON.stringify([
+    keyText(value.title),
+    keyText(value.summary),
+    keyText(value.content),
+    [...new Set(value.refs)].sort(),
+  ]);
+}
+
+function keyText(value: string): string {
+  return value.replace(/\r\n/g, '\n').trim();
 }
 
 export function renderSession(memory: SessionRow): RenderedMemory {
@@ -745,7 +837,14 @@ export class Memories {
     }
     if (memoryId.startsWith('session:')) {
       const snapshot = await getSessionSnapshotRow(this.client, memoryId);
-      return snapshot ? renderSessionSnapshotRow(snapshot) : null;
+      const rendered = snapshot ? renderSessionSnapshotRow(snapshot) : null;
+      if (!snapshot || !rendered) {
+        return null;
+      }
+      return {
+        ...rendered,
+        extractionContextRefs: await sessionExtractionContextRefs(this.client, snapshot),
+      };
     }
     const turn = await getTurn(this.client, memoryId);
     return turn ? renderTurn(turn) : null;

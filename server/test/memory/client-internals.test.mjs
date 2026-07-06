@@ -996,6 +996,76 @@ test('memories.get renders extraction memories', async () => {
   assert.match(memory.detail, /turn:1/);
 });
 
+test('memories.get adds extraction context refs for session snapshots', async () => {
+  const snapshotExtraction = {
+    title: 'Adoption agencies',
+    text: 'Caroline compared adoption agencies.',
+    context: 'Agency notes',
+    references: ['turn:1'],
+  };
+  const client = {
+    sessionSnapshotTable: {
+      getSnapshot: async (snapshotId) => snapshotId === 'session:42'
+        ? {
+            snapshotId: 'session:42',
+            sessionId: 'session-a',
+            project: 'project-a',
+            cwd: '/workspace/project-a',
+            agent: 'codex',
+            snapshotSequence: 0,
+            createdAt: '2024-01-01T00:00:00Z',
+            updatedAt: '2024-01-02T00:00:00Z',
+            extractor: 'extractor-a',
+            title: 'Session title',
+            summary: 'Session summary',
+            memorySignals: [],
+            skillSignals: [],
+            skillDetails: '{}',
+            content: renderSnapshotContent('Session title', 'Session summary', {
+              memorySignals: [],
+              skillSignals: [],
+              skillDetails: {},
+            }, [snapshotExtraction]),
+            references: ['turn:1'],
+          }
+        : null,
+    },
+    extractionTable: {
+      list: async () => [{
+        id: 'memory-1',
+        title: 'Adoption agencies',
+        summary: 'Adoption agencies\n\nCaroline compared adoption agencies.',
+        content: [
+          '## Title',
+          '',
+          'Adoption agencies',
+          '',
+          '## Summary',
+          '',
+          'Caroline compared adoption agencies.',
+          '',
+          '## Content',
+          '',
+          'Agency notes',
+        ].join('\n'),
+        cwd: '/workspace/project-a',
+        vector: [0, 1],
+        turnRefs: ['turn:1'],
+        createdAt: '2024-01-01T00:00:00Z',
+        updatedAt: '2024-01-02T00:00:00Z',
+      }],
+    },
+  };
+  const { Memories } = await import('../../dist/api/memory.js');
+  const memory = await new Memories(client).get('session:42');
+
+  assert.deepEqual(memory.extractionContextRefs, [{
+    contextId: 'ext:memory-1',
+    title: 'Adoption agencies',
+    summary: 'Adoption agencies\n\nCaroline compared adoption agencies.',
+  }]);
+});
+
 function deferred() {
   let resolve;
   let reject;
