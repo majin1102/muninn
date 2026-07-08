@@ -12,9 +12,7 @@ pub mod turn;
 
 pub use access::{TableDescription, TableOptions, TableStats};
 pub use config::data_root;
-pub use dreaming::{
-    Dreaming, DreamingProject, DreamingProjectTable, DreamingSupportTurn, DreamingTable,
-};
+pub use dreaming::{Dreaming, DreamingSupportTurn, DreamingTable};
 pub use extraction::{Extraction, ExtractionTable, RecallMode};
 pub use memory_id::{MemoryId, MemoryLayer, deserialize_memory_id, serialize_memory_id};
 pub use session::{Session, SessionIdentity, SessionTable};

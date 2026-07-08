@@ -103,18 +103,6 @@ pub fn dreaming_schema() -> Schema {
     ])
 }
 
-pub fn dreaming_project_schema() -> Schema {
-    Schema::new(vec![
-        Field::new("project", DataType::Utf8, false),
-        Field::new("session_snapshot_version", DataType::UInt64, false),
-        Field::new(
-            "updated_at",
-            DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
-            false,
-        ),
-    ])
-}
-
 pub fn session_schema(dimensions: usize) -> Schema {
     let mut key_metadata = std::collections::HashMap::new();
     key_metadata.insert(

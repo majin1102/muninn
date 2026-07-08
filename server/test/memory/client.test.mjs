@@ -1065,7 +1065,7 @@ test('validateSettings rejects legacy provider shape', async (t) => {
         },
       },
     }, null, 2)),
-    /extractor\.llm is no longer supported|unsupported top-level config key: llm/i,
+    /llm is no longer supported; use providers\.llm instead/i,
   );
 });
 
@@ -1081,7 +1081,7 @@ test('validateSettings rejects top-level extraction config', async (t) => {
         embeddingProvider: 'default',
       },
     }), null, 2)),
-    /unsupported top-level config key: extraction/i,
+    /extraction is no longer supported; use extractor\.embeddingProvider instead/i,
   );
 });
 
@@ -1202,7 +1202,7 @@ test('validateSettings rejects top-level turn config', async (t) => {
     () => validateSettings(JSON.stringify(validSettings({
       turn: { llmProvider: 'removed_provider' },
     }), null, 2)),
-    /unsupported top-level config key: turn/i,
+    /turn is no longer supported; turn summaries are generated locally during ingest/i,
   );
 });
 

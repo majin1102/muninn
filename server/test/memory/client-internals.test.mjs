@@ -44,6 +44,7 @@ const {
   loadThreads,
   parseSnapshotContent,
   renderSnapshotContent,
+  threadFromSnapshots,
   threadIdentityKey,
   toSessionSnapshot,
 } = sessionModule;
@@ -996,13 +997,14 @@ test('memories.get renders extraction memories', async () => {
   assert.match(memory.detail, /turn:1/);
 });
 
-test('memories.get adds extraction context refs for session snapshots', async () => {
+test('memories.get does not scan extractions for session snapshots', async () => {
   const snapshotExtraction = {
     title: 'Adoption agencies',
     text: 'Caroline compared adoption agencies.',
     context: 'Agency notes',
     references: ['turn:1'],
   };
+  let listCalls = 0;
   const client = {
     sessionSnapshotTable: {
       getSnapshot: async (snapshotId) => snapshotId === 'session:42'
@@ -1031,39 +1033,17 @@ test('memories.get adds extraction context refs for session snapshots', async ()
         : null,
     },
     extractionTable: {
-      list: async () => [{
-        id: 'memory-1',
-        title: 'Adoption agencies',
-        summary: 'Adoption agencies\n\nCaroline compared adoption agencies.',
-        content: [
-          '## Title',
-          '',
-          'Adoption agencies',
-          '',
-          '## Summary',
-          '',
-          'Caroline compared adoption agencies.',
-          '',
-          '## Content',
-          '',
-          'Agency notes',
-        ].join('\n'),
-        cwd: '/workspace/project-a',
-        vector: [0, 1],
-        turnRefs: ['turn:1'],
-        createdAt: '2024-01-01T00:00:00Z',
-        updatedAt: '2024-01-02T00:00:00Z',
-      }],
+      list: async () => {
+        listCalls += 1;
+        throw new Error('session read must not list extractions');
+      },
     },
   };
   const { Memories } = await import('../../dist/api/memory.js');
   const memory = await new Memories(client).get('session:42');
 
-  assert.deepEqual(memory.extractionContextRefs, [{
-    contextId: 'ext:memory-1',
-    title: 'Adoption agencies',
-    summary: 'Adoption agencies\n\nCaroline compared adoption agencies.',
-  }]);
+  assert.equal(listCalls, 0);
+  assert.equal(memory.extractionContextRefs, undefined);
 });
 
 function deferred() {
@@ -1240,6 +1220,76 @@ test('createSessionThread preserves complete readable title and summary text', (
   assert.equal(thread.summary, summary);
   assert.doesNotMatch(thread.title, /\.\.\.$/);
   assert.doesNotMatch(thread.summary, /\.\.\.$/);
+});
+
+test('flushThreads appends using persisted snapshotSequence after partial history restore', async () => {
+  const now = new Date().toISOString();
+  const inserted = [];
+  const thread = threadFromSnapshots([
+    {
+      snapshotId: 'snapshot-36',
+      sessionId: 'session-a',
+      project: 'project-a',
+      cwd: '/workspace/project-a',
+      agent: 'codex',
+      snapshotSequence: 36,
+      createdAt: now,
+      updatedAt: now,
+      extractor: 'default-extractor',
+      title: 'Thread',
+      summary: 'Summary 36',
+      ...emptySnapshotSignals(),
+      content: snapshotContentFixture('', { title: 'Thread', summary: 'Summary 36' }),
+      references: ['turn:36'],
+    },
+    {
+      snapshotId: 'snapshot-73',
+      sessionId: 'session-a',
+      project: 'project-a',
+      cwd: '/workspace/project-a',
+      agent: 'codex',
+      snapshotSequence: 73,
+      createdAt: now,
+      updatedAt: now,
+      extractor: 'default-extractor',
+      title: 'Thread',
+      summary: 'Summary 73',
+      ...emptySnapshotSignals(),
+      content: snapshotContentFixture('', { title: 'Thread', summary: 'Summary 73' }),
+      references: ['turn:36', 'turn:73'],
+    },
+  ], 73);
+
+  threadTesting.applyExtractionForTests(
+    thread,
+    {
+      title: 'Thread',
+      summary: 'Summary 74',
+      memorySignals: [],
+      skillSignals: [],
+      skillDetails: {},
+      snapshotContent: '',
+      extractions: [],
+      nextSteps: [],
+      contextRefs: [{ turnId: 'turn:74', summary: 'Captured turn 74.' }],
+    },
+    74,
+    () => ({ extractionChanges: [], extractions: [] }),
+    now,
+  );
+
+  await sessionTesting.flushThreads({
+    sessionSnapshotTable: {
+      insert: async ({ snapshots }) => {
+        inserted.push(...snapshots);
+        return snapshots.map((snapshot) => ({ ...snapshot, snapshotId: 'snapshot-74' }));
+      },
+    },
+  }, [thread], new Set([threadIdentityKey(thread)]));
+
+  assert.equal(inserted.length, 1);
+  assert.equal(inserted[0].snapshotSequence, 74);
+  assert.equal(thread.snapshotId, 'snapshot-74');
 });
 
 function makeRecentSessionCheckpoint(turns, sessionId = 'group-a', agent = 'agent-a') {
@@ -1702,12 +1752,12 @@ test('watchdog logs dataset failures to file and stderr', async (t) => {
   const records = await readWatchdogLog(homeDir);
   assert.ok(records.some((record) => (
     record.level === 'error'
-    && record.dataset === 'session'
+    && record.dataset === 'sessionSnapshot'
     && record.event === 'failed'
     && record.version === 5
     && /session compact failed/i.test(String(record.details?.errorMessage))
   )));
-  assert.ok(errors.some((entry) => /session maintenance failed: session compact failed/i.test(entry)));
+  assert.ok(errors.some((entry) => /sessionSnapshot maintenance failed: session compact failed/i.test(entry)));
 });
 
 test('watchdog logs extraction optimize failures with the current stats version', async (t) => {
@@ -2208,6 +2258,38 @@ test('watchdog rewrites checkpoint when extractor content changes', async (t) =>
   assert.ok(afterStat.mtimeMs >= beforeStat.mtimeMs);
 });
 
+test('watchdog blocks checkpoint committedEpoch regression', async (t) => {
+  const { dir, homeDir, configPath } = await makeConfigHome();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+  process.env.MUNINN_HOME = homeDir;
+  await writeExtractorConfig(configPath);
+
+  await mkdir(path.dirname(resolveCheckpointPath()), { recursive: true });
+  await writeFile(resolveCheckpointPath(), `${JSON.stringify(makeCheckpointContent({
+    writtenAt: '2024-01-01T00:00:00Z',
+    writerPid: 123,
+    extractor: makeExtractorCheckpoint({ committedEpoch: 482, nextEpoch: 483 }),
+  }), null, 2)}\n`, 'utf8');
+
+  const runtime = new Watchdog({}, createWatchdogConfig({ intervalMs: 25 }), createCheckpointBackend(makeCheckpointContent({
+    extractor: makeExtractorCheckpoint({
+      committedEpoch: 10,
+      nextEpoch: 11,
+      recentSessions: [makeRecentSessionCheckpoint([makeRecentTurn('turn:101', 'regressed-checkpoint')])],
+    }),
+  })));
+  t.after(async () => runtime.stop());
+
+  await runtime.flushCheckpoint();
+
+  const after = await readCheckpoint();
+  assert.equal(after.extractor.committedEpoch, 482);
+  assert.equal(after.extractor.nextEpoch, 483);
+  assert.deepEqual(after.extractor.recentSessions, [
+    makeRecentSessionCheckpoint([makeRecentTurn('turn:101', 'regressed-checkpoint')]),
+  ]);
+});
+
 test('getPendingIndex returns the unindexed snapshot range', () => {
   const pending = getPendingIndex({
     sessionId: 'session-a',
@@ -2345,6 +2427,38 @@ test('loadThreads keeps full history for active threads', () => {
   assert.deepEqual(threads[0].snapshotIds, ['snapshot-0', 'snapshot-1']);
   assert.equal(threads[0].snapshots.length, 2);
   assert.equal(threads[0].indexedSnapshotSequence, null);
+});
+
+test('loadThreads restores extraction ids from inline context ids', () => {
+  const now = new Date().toISOString();
+  const extractionId = '123e4567-e89b-42d3-a456-426614174000';
+  const threads = loadThreads([
+    {
+      snapshotId: 'snapshot-1',
+      sessionId: 'thread-a',
+      project: 'project-a',
+      cwd: '/workspace/project-a',
+      agent: 'agent-a',
+      snapshotSequence: 0,
+      createdAt: now,
+      updatedAt: now,
+      extractor: 'default-extractor',
+      title: 'Thread A',
+      summary: 'Thread summary',
+      ...emptySnapshotSignals(),
+      content: snapshotContentFixture([
+        `<!-- context_id: ext:${extractionId}; refs: [turn:1] -->`,
+        '### Title',
+        'Remembered fact',
+        '',
+        '### Summary',
+        'The thread persisted an extraction context id.',
+      ].join('\n'), { title: 'Thread A', summary: 'Thread summary' }),
+      references: ['turn:1'],
+    },
+  ], 'default-extractor', 30);
+
+  assert.equal(threads[0]?.snapshots[0]?.extractions[0]?.id, extractionId);
 });
 
 test('epochQueue.shift returns a published epoch without waiting', () => {
@@ -3202,6 +3316,65 @@ test('extractor bootstrap skips stale checkpoint threads', async (t) => {
   assert.equal(extractor.threads.length, 0);
   assert.equal(extractor.committedEpoch, 12);
   assert.equal(extractor.openEpoch.epoch, 13);
+});
+
+test('extractor exports checkpoint thread with persisted latest snapshotSequence', async (t) => {
+  const { dir, homeDir, configPath } = await makeConfigHome();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+  process.env.MUNINN_HOME = homeDir;
+  await writeExtractorConfig(configPath);
+
+  const now = new Date().toISOString();
+  const extractor = new Extractor({
+    turnTable: { loadTurnsAfterEpoch: async () => [] },
+    sessionSnapshotTable: { listSnapshots: async () => [] },
+    extractionTable: {},
+  }, null);
+  t.after(async () => extractor.shutdown());
+
+  extractor.threads = [threadFromSnapshots([
+    {
+      snapshotId: 'snapshot-36',
+      sessionId: 'session-a',
+      project: 'project-a',
+      cwd: '/workspace/project-a',
+      agent: 'codex',
+      snapshotSequence: 36,
+      createdAt: now,
+      updatedAt: now,
+      extractor: 'default-extractor',
+      title: 'Thread',
+      summary: 'Summary 36',
+      ...emptySnapshotSignals(),
+      content: snapshotContentFixture('', { title: 'Thread', summary: 'Summary 36' }),
+      references: ['turn:36'],
+    },
+    {
+      snapshotId: 'snapshot-73',
+      sessionId: 'session-a',
+      project: 'project-a',
+      cwd: '/workspace/project-a',
+      agent: 'codex',
+      snapshotSequence: 73,
+      createdAt: now,
+      updatedAt: now,
+      extractor: 'default-extractor',
+      title: 'Thread',
+      summary: 'Summary 73',
+      ...emptySnapshotSignals(),
+      content: snapshotContentFixture('', { title: 'Thread', summary: 'Summary 73' }),
+      references: ['turn:36', 'turn:73'],
+    },
+  ], 73)];
+
+  extractor.bootstrapped = true;
+  extractor.committedEpoch = 73;
+  extractor.openEpoch = new OpenEpoch(74);
+  extractor.refreshCheckpointSnapshot();
+
+  const checkpoint = extractor.exportCheckpoint();
+  assert.equal(checkpoint.threads[0].latestSnapshotId, 'snapshot-73');
+  assert.equal(checkpoint.threads[0].latestSnapshotSequence, 73);
 });
 
 test('extractor exportCheckpoint keeps the last committed snapshot while extractCurrentEpoch is mid-flight', async (t) => {
@@ -4401,7 +4574,7 @@ test('extraction state rewrite computes update add and delete changes', () => {
   assert.equal(result.extractions[0].title, 'Career plan');
   assert.deepEqual(result.extractions[0].references, ['turn:1', 'turn:3']);
   assert.equal(result.extractions[1].title, 'Painting preference');
-  assert.match(result.extractions[1].id, /^[a-f0-9]{24}$/);
+  assert.match(result.extractions[1].id, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
 });
 
 test('extraction state rewrite rejects unknown and duplicate ids', () => {
@@ -4768,6 +4941,59 @@ test('snapshot content round-trips split signal sections and skill details', () 
   assert.deepEqual(parsed.skillSignals, signals.skillSignals);
   assert.equal('openQuestions' in parsed, false);
   assert.deepEqual(parsed.skillDetails, signals.skillDetails);
+});
+
+test('snapshot parser accepts inline context ids without treating them as extraction identity', () => {
+  const contextId = '123e4567-e89b-42d3-a456-426614174000';
+  const parsed = parseSnapshotContent([
+    '# Parser Boundaries',
+    '',
+    '## Summary',
+    'The parser accepts public context ids on extraction units.',
+    '',
+    '## Instruction Signals',
+    '',
+    '## Skill Signals',
+    '',
+    '## Skill Details',
+    '',
+    '## Extractions',
+    `<!-- context_id: ext:${contextId}; refs: [turn:13] -->`,
+    '### Title',
+    'Parser boundary',
+    '',
+    '### Summary',
+    'Public context ids are metadata for readers, not extraction identity input.',
+  ].join('\n'), new Set(['turn:13']));
+
+  assert.equal(parsed.extractions[0]?.id, undefined);
+  assert.deepEqual(parsed.extractions[0]?.references, ['turn:13']);
+});
+
+test('snapshot parser rejects non-UUID extraction context ids', () => {
+  assert.throws(
+    () => parseSnapshotContent([
+      '# Parser Boundaries',
+      '',
+      '## Summary',
+      'The parser rejects malformed public context ids.',
+      '',
+      '## Instruction Signals',
+      '',
+      '## Skill Signals',
+      '',
+      '## Skill Details',
+      '',
+      '## Extractions',
+      '<!-- context_id: ext:memory-1; refs: [turn:13] -->',
+      '### Title',
+      'Parser boundary',
+      '',
+      '### Summary',
+      'Public context ids must use ext UUIDs.',
+    ].join('\n'), new Set(['turn:13'])),
+    /invalid extraction context_id: ext:memory-1/i,
+  );
 });
 
 test('snapshot content rejects removed Open Questions section', () => {
@@ -6630,8 +6856,144 @@ test('session snapshot persists markdown content with parsed title and summary',
   assert.deepEqual(snapshot.skillSignals, []);
   assert.equal('openQuestions' in snapshot, false);
   assert.equal(snapshot.skillDetails, '{}');
-  assert.equal(snapshot.content, markdown);
+  assert.match(snapshot.content, /context_id: ext:/);
+  assert.match(snapshot.content, /### Summary\nMelanie painted a lake sunrise in 2022\./);
   assert.doesNotMatch(snapshot.content, /^\s*\{/);
+});
+
+test('session snapshot content stores inline extraction context ids', () => {
+  const thread = createSessionThread(
+    'default-extractor',
+    'Draft title',
+    'Draft summary',
+    [],
+    1,
+    '2026-01-01T00:00:00.000Z',
+  );
+  const markdown = snapshotContentFixture(
+    [
+      '<!-- refs: [turn:1] -->',
+      '### Title',
+      'Lake sunrise painting',
+      '',
+      '### Summary',
+      'Melanie painted a lake sunrise in 2022.',
+    ].join('\n'),
+    {
+      title: 'Melanie Painting',
+      summary: 'Melanie painted a lake sunrise and considers it special.',
+    },
+  );
+
+  threadTesting.applyExtractionForTests(
+    thread,
+    {
+      title: 'Melanie Painting',
+      summary: 'Melanie painted a lake sunrise and considers it special.',
+      memorySignals: [],
+      skillSignals: [],
+      skillDetails: {},
+      snapshotContent: markdown,
+      extractions: [{
+        title: 'Lake sunrise painting',
+        text: 'Melanie painted a lake sunrise in 2022.',
+        references: ['turn:1'],
+      }],
+      nextSteps: [],
+      contextRefs: [{ turnId: 'turn:1', summary: 'Melanie discussed a lake sunrise painting.' }],
+    },
+    1,
+    applyExtractionChanges,
+    '2026-01-01T00:00:00.000Z',
+  );
+
+  const extractionId = thread.snapshots.at(-1).extractions[0]?.id;
+  assert.ok(extractionId);
+  const snapshot = toSessionSnapshot(thread);
+  assert.match(snapshot.content, new RegExp(`<!-- context_id: ext:${extractionId}; refs: \\[turn:1\\] -->`));
+  assert.match(snapshot.content, /### Title\nLake sunrise painting/);
+  assert.match(snapshot.content, /### Summary\nMelanie painted a lake sunrise in 2022\./);
+});
+
+test('session snapshot content keeps extraction context id across updates', () => {
+  const thread = createSessionThread(
+    'default-extractor',
+    'Draft title',
+    'Draft summary',
+    [],
+    1,
+    '2026-01-01T00:00:00.000Z',
+  );
+
+  threadTesting.applyExtractionForTests(
+    thread,
+    {
+      title: 'Melanie Painting',
+      summary: 'Melanie painted a lake sunrise and considers it special.',
+      memorySignals: [],
+      skillSignals: [],
+      skillDetails: {},
+      snapshotContent: snapshotContentFixture([
+        '<!-- refs: [turn:1] -->',
+        '### Title',
+        'Lake sunrise painting',
+        '',
+        '### Summary',
+        'Melanie painted a lake sunrise in 2022.',
+      ].join('\n')),
+      extractions: [{
+        title: 'Lake sunrise painting',
+        text: 'Melanie painted a lake sunrise in 2022.',
+        references: ['turn:1'],
+      }],
+      nextSteps: [],
+      contextRefs: [{ turnId: 'turn:1', summary: 'Melanie discussed a lake sunrise painting.' }],
+    },
+    1,
+    applyExtractionChanges,
+    '2026-01-01T00:00:00.000Z',
+  );
+
+  const originalId = thread.snapshots.at(-1).extractions[0]?.id;
+  assert.ok(originalId);
+
+  threadTesting.applyExtractionForTests(
+    thread,
+    {
+      title: 'Melanie Painting',
+      summary: 'Melanie painted a lake sunrise and revised the memory.',
+      memorySignals: [],
+      skillSignals: [],
+      skillDetails: {},
+      snapshotContent: snapshotContentFixture([
+        '<!-- refs: [turn:1, turn:2] -->',
+        '### Title',
+        'Lake sunrise painting',
+        '',
+        '### Summary',
+        'Melanie painted a lake sunrise in 2022 and later clarified it was watercolor.',
+      ].join('\n')),
+      extractions: [{
+        id: originalId,
+        title: 'Lake sunrise painting',
+        text: 'Melanie painted a lake sunrise in 2022 and later clarified it was watercolor.',
+        references: ['turn:1', 'turn:2'],
+      }],
+      nextSteps: [],
+      contextRefs: [
+        { turnId: 'turn:1', summary: 'Melanie discussed a lake sunrise painting.' },
+        { turnId: 'turn:2', summary: 'Melanie clarified the painting medium.' },
+      ],
+    },
+    2,
+    applyExtractionChanges,
+    '2026-01-01T00:00:01.000Z',
+  );
+
+  const snapshot = toSessionSnapshot(thread);
+  assert.equal(thread.snapshots.at(-1).extractions[0]?.id, originalId);
+  assert.match(snapshot.content, new RegExp(`<!-- context_id: ext:${originalId}; refs: \\[turn:1, turn:2\\] -->`));
+  assert.match(snapshot.content, /clarified it was watercolor/);
 });
 
 test('extractSessionThread passes raw turns to extractor', async () => {
@@ -7176,6 +7538,58 @@ test('indexTouchedExtractions immediately advances extraction index for touched 
   assert.equal(getPendingIndex(threads[0]), null);
 });
 
+test('indexTouchedExtractions advances cursor using persisted snapshotSequence after partial history restore', async (t) => {
+  const { dir, homeDir, configPath } = await makeConfigHome();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+
+  process.env.MUNINN_HOME = homeDir;
+  await writeExtractorConfig(configPath);
+
+  const sessionUpserts = [];
+  const threads = [{
+    threadId: 'session-a',
+    sessionId: 'session-a',
+    project: 'alpha',
+    cwd: '/workspace/alpha',
+    agent: 'codex',
+    kind: 'session',
+    snapshotId: 'snapshot-74',
+    snapshotIds: ['snapshot-36', 'snapshot-73', 'snapshot-74'],
+    snapshotSequences: [36, 73, 74],
+    extractionEpoch: 74,
+    title: 'Existing title',
+    summary: 'Existing summary',
+    snapshots: [
+      { extractions: [], contextRefs: [], nextSteps: [], extractionChanges: [] },
+      { extractions: [], contextRefs: [], nextSteps: [], extractionChanges: [] },
+      { extractions: [], contextRefs: [], nextSteps: [], extractionChanges: [] },
+    ],
+    references: ['turn:74'],
+    indexedSnapshotSequence: 73,
+    extractor: 'default-extractor',
+    createdAt: '2024-01-01T00:00:00Z',
+    updatedAt: '2024-01-01T00:00:00Z',
+  }];
+
+  await indexTesting.indexTouchedExtractions({
+    sessionTable: {
+      upsert: async ({ rows }) => {
+        sessionUpserts.push(...rows);
+      },
+    },
+    extractionTable: {
+      delete: async () => ({ deleted: 0 }),
+      get: async () => [],
+      upsert: async () => undefined,
+    },
+  }, threads, new Set(['codex\0/workspace/alpha\0session-a']));
+
+  assert.equal(sessionUpserts.length, 1);
+  assert.equal(sessionUpserts[0].latestSnapshotId, 'snapshot-74');
+  assert.equal(threads[0].indexedSnapshotSequence, 74);
+  assert.equal(getPendingIndex(threads[0]), null);
+});
+
 test('extractor.retrySnapshotIndexing refreshes the committed checkpoint snapshot after session rows are updated', async (t) => {
   const { dir, homeDir, configPath } = await makeConfigHome();
   t.after(async () => rm(dir, { recursive: true, force: true }));
@@ -7384,7 +7798,13 @@ test('extractor.run retries pending extraction index before queued epochs when d
           extractions: [],
           contextRefs: [],
           nextSteps: [],
-          extractionChanges: [{ type: 'add', text: 'remember this', references: ['session:existing'], reason: 'adds memory' }],
+          extractionChanges: [{
+            type: 'add',
+            extractionId: '123e4567-e89b-42d3-a456-426614174000',
+            text: 'remember this',
+            references: ['session:existing'],
+            reason: 'adds memory',
+          }],
         },
       ],
       references: [],

@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 
 import { embedText } from '../llm/embedding-provider.js';
 import type { NativeTables, Extraction as StoredExtraction } from '../native.js';
@@ -12,6 +12,7 @@ import type {
 import {
   getPendingIndex,
   snapshotRef,
+  snapshotSequenceAt,
   threadIdentityKey,
 } from './session.js';
 import { upsertSessionRow } from './session-table.js';
@@ -19,6 +20,7 @@ import { upsertSessionRow } from './session-table.js';
 export function applyExtractionChanges(
   currentExtractions: ExtractionUnit[],
   result: SessionExtractionResult,
+  options: { allowNewIds?: boolean } = {},
 ): {
   extractionChanges: ExtractionChange[];
   extractions: ExtractionUnit[];
@@ -40,23 +42,16 @@ export function applyExtractionChanges(
 
   for (const raw of result.extractions) {
     const normalized = cloneExtraction(raw, { requireReferences: true });
-    const generatedId = addedExtractionId({
-      type: 'add',
-      text: normalized.text,
-      context: normalized.context ?? null,
-      references: normalized.references,
-      reason: 'state rewrite added extraction',
-    });
     const matched = normalized.id
       ? currentById.get(normalized.id)
-      : currentById.get(generatedId) ?? currentByUnitKey.get(extractionUnitKey(normalized));
-    const id = normalized.id || matched?.id || generatedId;
+      : currentByUnitKey.get(extractionUnitKey(normalized));
+    const id = normalized.id || matched?.id || randomUUID();
     if (seenIds.has(id)) {
       throw new Error(`duplicate extraction id in state rewrite: ${id}`);
     }
 
     const existing = currentById.get(id);
-    if (normalized.id && !existing) {
+    if (normalized.id && !existing && !options.allowNewIds) {
       throw new Error(`unknown extraction id in state rewrite: ${normalized.id}`);
     }
 
@@ -71,6 +66,7 @@ export function applyExtractionChanges(
     if (!existing) {
       changes.push({
         type: 'add',
+        extractionId: id,
         text: next.text,
         context: next.context ?? null,
         references: next.references,
@@ -132,7 +128,7 @@ export async function applyExtractionTableChanges(
   const upsertIds = new Set<string>();
   for (const change of changes) {
     if (change.type === 'add') {
-      upsertIds.add(addedExtractionId(change));
+      upsertIds.add(change.extractionId);
       continue;
     }
     if (change.type === 'merge') {
@@ -140,7 +136,7 @@ export async function applyExtractionTableChanges(
         sourceIds.add(extractionId);
         deletedIds.add(extractionId);
       }
-      upsertIds.add(mergedExtractionId(change));
+      upsertIds.add(change.extractionId);
       continue;
     }
     if (change.type === 'update') {
@@ -179,9 +175,9 @@ export async function applyExtractionTableChanges(
       continue;
     }
     const id = change.type === 'add'
-      ? addedExtractionId(change)
+      ? change.extractionId
       : change.type === 'merge'
-        ? mergedExtractionId(change)
+        ? change.extractionId
         : change.type === 'update'
           ? change.extractionId
           : null;
@@ -231,9 +227,6 @@ async function indexThreadExtractions(
     throwIfAborted(signal);
     const current = thread.snapshots[snapshotIndex];
     const previous = snapshotIndex > 0 ? thread.snapshots[snapshotIndex - 1] : undefined;
-    const previousIds = new Set((previous?.extractions ?? [])
-      .map((extraction) => extraction.id)
-      .filter((id): id is string => Boolean(id)));
     const diff = applyExtractionChanges(previous?.extractions ?? [], {
       title: thread.title,
       summary: thread.summary,
@@ -241,14 +234,10 @@ async function indexThreadExtractions(
       skillSignals: current.skillSignals ?? [],
       skillDetails: current.skillDetails ?? {},
       snapshotContent: current.snapshotContent,
-      extractions: current.extractions.map((extraction) => (
-        extraction.id && previousIds.has(extraction.id)
-          ? extraction
-          : { ...extraction, id: undefined }
-      )),
+      extractions: current.extractions,
       nextSteps: current.nextSteps ?? [],
       contextRefs: current.contextRefs,
-    });
+    }, { allowNewIds: true });
     const indexedSnapshot = {
       ...current,
       extractions: diff.extractions,
@@ -257,7 +246,7 @@ async function indexThreadExtractions(
     const snapshotId = snapshotRef(thread, snapshotIndex);
     await upsertSessionRow(client, thread, indexedSnapshot, snapshotId, signal);
     await applyExtractionTableChanges(client, indexedSnapshot, snapshotId, signal);
-    latestIndexedSequence = snapshotIndex;
+    latestIndexedSequence = snapshotSequenceAt(thread, snapshotIndex);
   }
 
   if (latestIndexedSequence !== thread.indexedSnapshotSequence) {
@@ -330,31 +319,6 @@ function referencesForChange(
     references.push(...(existingById.get(extractionId)?.turnRefs ?? []));
   }
   return [...new Set(references)];
-}
-
-function addedExtractionId(change: Extract<ExtractionChange, { type: 'add' }>): string {
-  return stableExtractionId({
-    type: change.type,
-    text: change.text,
-    context: change.context ?? null,
-    references: [...change.references].sort(),
-  });
-}
-
-function mergedExtractionId(change: Extract<ExtractionChange, { type: 'merge' }>): string {
-  return stableExtractionId({
-    type: change.type,
-    extractionIds: [...change.extractionIds].sort(),
-    text: change.text,
-    context: change.context ?? null,
-  });
-}
-
-function stableExtractionId(value: unknown): string {
-  return createHash('sha256')
-    .update(JSON.stringify(value))
-    .digest('hex')
-    .slice(0, 24);
 }
 
 function cloneExtraction(

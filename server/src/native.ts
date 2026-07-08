@@ -117,12 +117,6 @@ export type DreamingRow = {
   supportTurns: DreamingSupportTurn[];
 };
 
-export type DreamingProjectRow = {
-  project: string;
-  sessionSnapshotVersion: number;
-  updatedAt: string;
-};
-
 export type ExtractionRow = {
   id: string;
   title: string;
@@ -247,13 +241,6 @@ type NativeCoreBinding = {
   dreamingDelete(params: {
     dreamingIds: string[];
   }): MaybePromise<{ deleted: number }>;
-  dreamingProjectList(): MaybePromise<DreamingProjectRow[]>;
-  dreamingProjectGet(params: {
-    project: string;
-  }): MaybePromise<DreamingProjectRow | null>;
-  dreamingProjectUpsert(params: {
-    row: DreamingProjectRow;
-  }): MaybePromise<void>;
   dreamingTableStats(): MaybePromise<TableStats | null>;
   extractionNearest(params: {
     vector: number[];
@@ -389,16 +376,6 @@ export interface DreamingTableBinding {
   describe(): Promise<TableDescription | null>;
 }
 
-export interface DreamingProjectTableBinding {
-  list(): Promise<DreamingProjectRow[]>;
-  get(params: {
-    project: string;
-  }): Promise<DreamingProjectRow | null>;
-  upsert(params: {
-    row: DreamingProjectRow;
-  }): Promise<void>;
-}
-
 export interface SessionTableBinding {
   search(params: {
     query: string;
@@ -485,7 +462,6 @@ export interface NativeTables {
   turnTable: TurnTableBinding;
   sessionSnapshotTable: SessionSnapshotTableBinding;
   dreamingTable: DreamingTableBinding;
-  dreamingProjectTable: DreamingProjectTableBinding;
   sessionTable: SessionTableBinding;
   extractionTable: ExtractionTableBinding;
 }
@@ -587,14 +563,6 @@ function wrapBinding(native: NativeCoreBinding): NativeTables {
       stats: async () => resolveNativeResult(native.dreamingTableStats()),
       describe: async () => resolveNativeResult(native.describeDreamingTable()),
     },
-    dreamingProjectTable: {
-      list: async () => resolveNativeResult(native.dreamingProjectList()),
-      get: async (params) => normalizeOptionalRecord(
-        await resolveNativeResult(native.dreamingProjectGet(params)),
-        'project',
-      ),
-      upsert: async (params) => resolveNativeResult(native.dreamingProjectUpsert(params)),
-    },
     sessionTable: {
       search: async (params) => resolveNativeResult(native.sessionQuery(params)),
       get: async (params) => resolveNativeResult(native.sessionGet(params)),
@@ -694,10 +662,6 @@ export function lockNativeTables<T extends NativeTables>(tables: T, locks: Table
       append: (params) => locks.with('dreaming', () => tables.dreamingTable.append(params)),
       update: (params) => locks.with('dreaming', () => tables.dreamingTable.update(params)),
       delete: (params) => locks.with('dreaming', () => tables.dreamingTable.delete(params)),
-    },
-    dreamingProjectTable: tables.dreamingProjectTable && {
-      ...tables.dreamingProjectTable,
-      upsert: (params) => locks.with('dreaming', () => tables.dreamingProjectTable.upsert(params)),
     },
     sessionTable: tables.sessionTable && {
       ...tables.sessionTable,

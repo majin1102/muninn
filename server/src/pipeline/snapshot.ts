@@ -25,6 +25,7 @@ export type SnapshotSignals = {
 export type ExtractionChange =
   | {
     type: 'add';
+    extractionId: string;
     text: string;
     context?: string | null;
     references: string[];
@@ -32,6 +33,7 @@ export type ExtractionChange =
   }
   | {
     type: 'merge';
+    extractionId: string;
     extractionIds: string[];
     text: string;
     context?: string | null;
@@ -102,8 +104,15 @@ export type ParsedSnapshotPatch = {
 
 type UnitMetadata = {
   sequence?: number;
+  contextId?: string;
   references: string[];
 };
+
+type ParseSnapshotContentOptions = {
+  includeContextIds?: boolean;
+};
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const SNAPSHOT_SECTION_ORDER = [
   'Summary',
@@ -161,6 +170,7 @@ export function signalEvidenceLabels(signals: string[]): Set<string> {
 export function parseSnapshotContent(
   raw: string,
   validReferences: Set<string>,
+  options: ParseSnapshotContentOptions = {},
 ): ParsedSnapshotContent {
   const snapshotContent = stripMarkdownFence(typeof raw === 'string' ? raw.trim() : '');
   if (!snapshotContent) {
@@ -197,7 +207,7 @@ export function parseSnapshotContent(
     skillDetails,
     snapshotContent,
     extractionMarkdown,
-    extractions: parseSnapshotContentUnits(extractionMarkdown, validReferences),
+    extractions: parseSnapshotContentUnits(extractionMarkdown, validReferences, options),
   };
 }
 
@@ -258,6 +268,7 @@ export function parseSnapshotPatch(
 export function parseSnapshotContentUnits(
   snapshotContent: string,
   validReferences: Set<string>,
+  options: ParseSnapshotContentOptions = {},
 ): ExtractionUnit[] {
   if (!snapshotContent.trim()) {
     return [];
@@ -271,7 +282,11 @@ export function parseSnapshotContentUnits(
     }
     validateSnapshotContentReferences(metadata.references, validReferences);
     const body = parseTitleSummaryContent(lines.slice(1));
+    const id = options.includeContextIds && metadata.contextId
+      ? metadata.contextId.slice('ext:'.length)
+      : undefined;
     return {
+      ...(id ? { id } : {}),
       title: body.title,
       text: normalizeText(body.summary),
       context: normalizeContext(body.content ?? ''),
@@ -285,6 +300,7 @@ export function renderSnapshotContent(
   summary: string,
   signals: SnapshotSignals,
   extractions: ExtractionUnit[],
+  options: { includeContextIds?: boolean } = {},
 ): string {
   validateSkillSignals(signals.skillSignals);
   validateSkillDetailsHaveSignals(signals.skillDetails, signals.skillSignals, 'snapshot content document');
@@ -304,16 +320,19 @@ export function renderSnapshotContent(
     renderSkillDetails(signals.skillDetails),
     '',
     '## Extractions',
-    extractions.map((extraction) => renderExtractionBlock(extraction)).join('\n\n----\n\n'),
+    extractions.map((extraction) => renderExtractionBlock(extraction, {
+      includeContextId: options.includeContextIds,
+    })).join('\n\n----\n\n'),
   ].join('\n').trimEnd();
 }
 
 export function renderExtractionBlock(
   extraction: ExtractionUnit,
-  options: { sequence?: number; includeRefs?: boolean } = {},
+  options: { sequence?: number; includeRefs?: boolean; includeContextId?: boolean } = {},
 ): string {
   const metadata = renderMetadata({
     sequence: options.sequence,
+    contextId: options.includeContextId && extraction.id ? `ext:${extraction.id}` : undefined,
     references: options.includeRefs === false ? [] : extraction.references,
   });
   return [
@@ -712,8 +731,18 @@ function parseSnapshotContentMetadata(value: string): UnitMetadata | null {
   if (sequence !== undefined && (!Number.isInteger(sequence) || sequence < 0)) {
     throw new Error(`invalid extraction sequence: ${sequenceMatch?.[1] ?? ''}`);
   }
+  const contextIdMatch = body.match(/(?:^|;)\s*context_id:\s*([^;]+?)\s*(?:;|$)/i);
+  const contextId = contextIdMatch?.[1]?.trim();
+  const contextKey = contextId?.slice('ext:'.length);
+  if (
+    contextId !== undefined
+    && (!contextId.startsWith('ext:') || !contextKey || !UUID_PATTERN.test(contextKey))
+  ) {
+    throw new Error(`invalid extraction context_id: ${contextId}`);
+  }
   return {
     ...(sequence === undefined ? {} : { sequence }),
+    ...(contextId === undefined ? {} : { contextId }),
     references: parseSnapshotContentRefs(refsMatch[1]),
   };
 }
@@ -722,6 +751,9 @@ function renderMetadata(value: UnitMetadata): string {
   const parts = [];
   if (value.sequence !== undefined) {
     parts.push(`sequence: ${value.sequence}`);
+  }
+  if (value.contextId !== undefined) {
+    parts.push(`context_id: ${value.contextId}`);
   }
   if (value.references.length > 0) {
     parts.push(`refs: [${value.references.join(', ')}]`);

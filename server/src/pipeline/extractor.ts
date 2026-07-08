@@ -17,6 +17,7 @@ import {
   getPendingIndex,
   getPendingIndexUpTo,
   isActiveThread,
+  latestSnapshotSequence,
   loadThreads,
   replaySnapshots,
   threadFromSnapshots,
@@ -704,7 +705,7 @@ export class Extractor {
       .map((thread) => ({
         sessionId: thread.sessionId ?? thread.threadId,
         latestSnapshotId: thread.snapshotId ?? '',
-        latestSnapshotSequence: thread.snapshots.length - 1,
+        latestSnapshotSequence: latestSnapshotSequence(thread),
         indexedSnapshotSequence: thread.indexedSnapshotSequence ?? null,
         updatedAt: thread.updatedAt,
       }))

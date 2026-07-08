@@ -1750,7 +1750,7 @@ test('ui settings config rejects top-level extraction config', async (t) => {
   assert.equal(writeResponse.status, 400);
   const body = await json(writeResponse);
   assert.equal(body.errorCode, 'invalidRequest');
-  assert.match(body.errorMessage, /unsupported top-level config key: extraction/i);
+  assert.match(body.errorMessage, /extraction is no longer supported; use extractor\.embeddingProvider instead/i);
 });
 
 test('ui settings config rejects missing extractor.embeddingProvider config', async (t) => {

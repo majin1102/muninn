@@ -8,7 +8,8 @@ test.afterEach(async () => {
   await core.shutdownCoreForTests();
 });
 
-test('MCP read renders extraction context references for session contexts', async (t) => {
+test('MCP read returns inline session context ids without appended extraction references', async (t) => {
+  const extractionId = '123e4567-e89b-42d3-a456-426614174000';
   const originalGet = backendMemories.get;
   t.after(() => {
     backendMemories.get = originalGet;
@@ -20,11 +21,18 @@ test('MCP read renders extraction context references for session contexts', asyn
       memoryId: 'session:42',
       title: 'Session title',
       summary: 'Session summary',
-      detail: '# Session title\n\n## Extractions\n...',
+      detail: [
+        '# Session title',
+        '',
+        '## Extractions',
+        `<!-- context_id: ext:${extractionId}; refs: [turn:1] -->`,
+        '### Title',
+        'Adoption agencies',
+      ].join('\n'),
       createdAt: '2024-01-01T00:00:00Z',
       updatedAt: '2024-01-02T00:00:00Z',
       extractionContextRefs: [{
-        contextId: 'ext:memory-1',
+        contextId: `ext:${extractionId}`,
         title: 'Adoption agencies',
         summary: 'Adoption agencies\n\nCaroline compared adoption agencies.',
       }],
@@ -39,7 +47,7 @@ test('MCP read renders extraction context references for session contexts', asyn
 
   assert.equal(response.status, 200);
   const text = await response.text();
-  assert.match(text, /## Extraction Context References/);
-  assert.match(text, /context_id: ext:memory-1/);
+  assert.doesNotMatch(text, /## Extraction Context References/);
+  assert.match(text, new RegExp(`context_id: ext:${extractionId}`));
   assert.match(text, /Adoption agencies/);
 });

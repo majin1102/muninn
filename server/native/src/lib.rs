@@ -3,9 +3,9 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use muninn_format::{
-    Dreaming, DreamingProject, DreamingProjectTable, DreamingTable, Extraction, ExtractionTable,
-    MemoryId, MemoryLayer, RecallMode, SessionIdentity, Session, SessionTable,
-    SessionSnapshot, SessionSnapshotTable, TableOptions, Turn, TurnTable, data_root,
+    Dreaming, DreamingTable, Extraction, ExtractionTable, MemoryId, MemoryLayer, RecallMode,
+    Session, SessionIdentity, SessionSnapshot, SessionSnapshotTable, SessionTable, TableOptions,
+    Turn, TurnTable, data_root,
 };
 use napi::{Error, Result as NapiResult};
 use napi_derive::napi;
@@ -16,7 +16,6 @@ use tokio::sync::Mutex;
 #[derive(Clone)]
 struct CoreResources {
     dreaming_table: DreamingTable,
-    dreaming_project_table: DreamingProjectTable,
     session_snapshot_table: SessionSnapshotTable,
     session_table: SessionTable,
     turn_table: TurnTable,
@@ -157,18 +156,6 @@ struct DreamingUpdateParams {
 #[serde(rename_all = "camelCase")]
 struct DreamingDeleteParams {
     dreaming_ids: Vec<String>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct DreamingProjectGetParams {
-    project: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct DreamingProjectUpsertParams {
-    row: DreamingProject,
 }
 
 #[derive(Debug, Deserialize)]
@@ -756,30 +743,6 @@ impl CoreBinding {
         to_napi_value(DeletedCount { deleted })
     }
 
-    #[napi(js_name = "dreamingProjectList")]
-    pub async fn dreaming_project_list(&self) -> NapiResult<Value> {
-        let resources = self.resources().await?;
-        into_napi_value(resources.dreaming_project_table.list().await)
-    }
-
-    #[napi(js_name = "dreamingProjectGet")]
-    pub async fn dreaming_project_get(&self, params: Value) -> NapiResult<Value> {
-        let params = parse_params::<DreamingProjectGetParams>(params)?;
-        let resources = self.resources().await?;
-        into_napi_value(resources.dreaming_project_table.get(&params.project).await)
-    }
-
-    #[napi(js_name = "dreamingProjectUpsert")]
-    pub async fn dreaming_project_upsert(&self, params: Value) -> NapiResult<()> {
-        let params = parse_params::<DreamingProjectUpsertParams>(params)?;
-        let resources = self.resources().await?;
-        resources
-            .dreaming_project_table
-            .upsert(params.row)
-            .await
-            .map_err(to_napi_error)
-    }
-
     #[napi(js_name = "dreamingTableStats")]
     pub async fn dreaming_table_stats(&self) -> NapiResult<Value> {
         let resources = self.resources().await?;
@@ -954,14 +917,12 @@ pub fn create_core_binding(params: Option<Value>) -> NapiResult<CoreBinding> {
     let turn_table = TurnTable::new(table_options.clone());
     let session_snapshot_table = SessionSnapshotTable::new(table_options.clone());
     let dreaming_table = DreamingTable::new(table_options.clone());
-    let dreaming_project_table = DreamingProjectTable::new(table_options.clone());
     let session_table = SessionTable::new(table_options.clone());
     let extraction_table = ExtractionTable::new(table_options);
     Ok(CoreBinding {
         inner: Arc::new(CoreState {
             resources: Mutex::new(Some(CoreResources {
                 dreaming_table,
-                dreaming_project_table,
                 turn_table,
                 session_snapshot_table,
                 session_table,

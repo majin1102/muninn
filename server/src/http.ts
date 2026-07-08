@@ -529,32 +529,12 @@ function renderReadMemory(contextId: string, memory: RenderedMemory): string {
   const detail = contextId.startsWith('ext:')
     ? stripExtractionReferences(memory.detail)
     : memory.detail;
-  const extractionRefs = contextId.startsWith('session_')
-    ? renderExtractionContextRefs(memory.extractionContextRefs ?? [])
-    : '';
   return [
     `## ${contextId}`,
     memory.title ? `Title: ${memory.title}` : '',
     memory.summary ? `Summary: ${memory.summary}` : '',
     detail ? ['', detail].join('\n') : '',
-    extractionRefs,
   ].filter((line) => line !== '').join('\n');
-}
-
-function renderExtractionContextRefs(refs: NonNullable<RenderedMemory['extractionContextRefs']>): string {
-  if (refs.length === 0) {
-    return '';
-  }
-  const lines = ['## Extraction Context References'];
-  refs.forEach((ref, index) => {
-    lines.push(
-      '',
-      `${index + 1}. ${ref.title || ref.contextId}`,
-      `   context_id: ${ref.contextId}`,
-      ref.summary ? `   summary: ${previewText(ref.summary, 240)}` : '',
-    );
-  });
-  return lines.filter((line) => line !== '').join('\n');
 }
 
 async function renderMcpRead(contextIds: string[]): Promise<string> {

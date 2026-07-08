@@ -14,11 +14,10 @@ use lance::{Error, Result};
 use serde_json::{Map, Value};
 
 use super::schema::{
-    dreaming_project_schema, dreaming_schema, extraction_schema, session_schema,
-    session_snapshot_schema, turn_schema,
+    dreaming_schema, extraction_schema, session_schema, session_snapshot_schema, turn_schema,
 };
 use crate::config::extraction_config;
-use crate::dreaming::{Dreaming, DreamingProject, DreamingSupportTurn};
+use crate::dreaming::{Dreaming, DreamingSupportTurn};
 use crate::extraction::Extraction;
 use crate::memory_id::{MemoryId, MemoryLayer};
 use crate::session::Session;
@@ -563,66 +562,6 @@ pub(crate) fn dreamings_to_reader(
     let schema = Arc::new(dreaming_schema());
     let batch = dreamings_to_record_batch(&rows);
     RecordBatchIterator::new(vec![batch].into_iter(), schema)
-}
-
-pub(crate) fn dreaming_projects_to_record_batch(
-    rows: &[DreamingProject],
-) -> std::result::Result<RecordBatch, ArrowError> {
-    let project = StringArray::from_iter_values(rows.iter().map(|row| row.project.as_str()));
-    let session_snapshot_version =
-        UInt64Array::from_iter_values(rows.iter().map(|row| row.session_snapshot_version));
-    let updated_at = TimestampMicrosecondArray::from_iter_values(
-        rows.iter().map(|row| row.updated_at.timestamp_micros()),
-    )
-    .with_timezone("UTC");
-
-    Ok(RecordBatch::try_new(
-        Arc::new(dreaming_project_schema()),
-        vec![
-            Arc::new(project),
-            Arc::new(session_snapshot_version),
-            Arc::new(updated_at),
-        ],
-    )?)
-}
-
-pub(crate) fn dreaming_projects_to_reader(
-    rows: Vec<DreamingProject>,
-) -> RecordBatchIterator<impl Iterator<Item = std::result::Result<RecordBatch, ArrowError>>> {
-    let schema = Arc::new(dreaming_project_schema());
-    let batch = dreaming_projects_to_record_batch(&rows);
-    RecordBatchIterator::new(vec![batch].into_iter(), schema)
-}
-
-pub(crate) fn record_batch_to_dreaming_projects(
-    batch: &RecordBatch,
-) -> Result<Vec<DreamingProject>> {
-    let project = batch
-        .column(0)
-        .as_any()
-        .downcast_ref::<StringArray>()
-        .unwrap();
-    let session_snapshot_version = batch
-        .column(1)
-        .as_any()
-        .downcast_ref::<UInt64Array>()
-        .unwrap();
-    let updated_at = batch
-        .column(2)
-        .as_any()
-        .downcast_ref::<TimestampMicrosecondArray>()
-        .unwrap();
-
-    Ok((0..batch.num_rows())
-        .map(|index| DreamingProject {
-            project: project.value(index).to_string(),
-            session_snapshot_version: session_snapshot_version.value(index),
-            updated_at: Utc
-                .timestamp_micros(updated_at.value(index))
-                .single()
-                .unwrap(),
-        })
-        .collect())
 }
 
 pub(crate) fn record_batch_to_dreamings(batch: &RecordBatch) -> Result<Vec<Dreaming>> {

@@ -50,6 +50,7 @@ export class Watchdog {
   private checkpointFlush: Promise<void> | null = null;
   private lastCheckpointJson: string | null = null;
   private checkpointStateLoaded = false;
+  private checkpointCommittedEpoch: number | undefined;
   private readonly state = new Map<DatasetName, DatasetState>(
     DATASETS.map((dataset) => [dataset, {
       lastSeenVersion: null,
@@ -154,7 +155,9 @@ export class Watchdog {
       if (!exported) {
         return;
       }
-      const checkpointJson = JSON.stringify(exported);
+      const guarded = await this.guardCommittedEpoch(exported);
+      this.checkpointCommittedEpoch = guarded.extractor.committedEpoch;
+      const checkpointJson = JSON.stringify(guarded);
       if (checkpointJson === this.lastCheckpointJson) {
         try {
           await access(this.checkpointPath());
@@ -166,13 +169,13 @@ export class Watchdog {
         }
       }
       const checkpoint: CheckpointFile = {
-        ...exported,
+        ...guarded,
         writtenAt: new Date().toISOString(),
         writerPid: process.pid,
       };
       await this.writeCheckpointAtomically(serializeCheckpointFile(checkpoint));
       this.lastCheckpointJson = checkpointJson;
-      await this.updateCheckpointFloors(exported);
+      await this.updateCheckpointFloors(guarded);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.error(`[muninn:watchdog] checkpoint flush failed: ${message}`);
@@ -436,6 +439,7 @@ export class Watchdog {
     if (!checkpoint) {
       return;
     }
+    this.checkpointCommittedEpoch = checkpoint.extractor.committedEpoch;
     this.lastCheckpointJson ??= JSON.stringify({
       schemaVersion: checkpoint.schemaVersion,
       extractor: checkpoint.extractor,
@@ -444,6 +448,26 @@ export class Watchdog {
       session: checkpoint.session,
     });
     await this.updateCheckpointFloors(checkpoint);
+  }
+
+  private async guardCommittedEpoch(checkpoint: CheckpointContent): Promise<CheckpointContent> {
+    const previous = this.checkpointCommittedEpoch;
+    const next = checkpoint.extractor.committedEpoch;
+    if (previous === undefined || (next !== undefined && next >= previous)) {
+      return checkpoint;
+    }
+    await writeMuninnLog(this.database, 'error', 'watchdog', 'checkpoint_committed_epoch_regression_blocked', {
+      previousCommittedEpoch: previous,
+      attemptedCommittedEpoch: next ?? null,
+    });
+    return {
+      ...checkpoint,
+      extractor: {
+        ...checkpoint.extractor,
+        committedEpoch: previous,
+        nextEpoch: Math.max(checkpoint.extractor.nextEpoch, previous + 1),
+      },
+    };
   }
 
   private async updateCheckpointFloors(checkpoint: CheckpointContent | CheckpointFile): Promise<void> {
