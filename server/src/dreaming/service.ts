@@ -92,7 +92,7 @@ export class ProjectDreamingService {
     if (!this.extractorName) {
       return [];
     }
-    const source = await this.client.sessionTable.listSnapshotsWithVersion({ extractor: this.extractorName });
+    const source = await this.client.sessionSnapshotTable.listSnapshotsWithVersion({ extractor: this.extractorName });
     const projects = new Set<string>();
     for (const row of source.rows) {
       if (hasSignalState(row)) {
@@ -125,13 +125,13 @@ export class ProjectDreamingService {
     const watermark = this.watermarks().get(project);
     const existingRows = await this.projectRows(project);
     const source = watermark
-      ? await this.client.sessionTable.delta({
+      ? await this.client.sessionSnapshotTable.delta({
         extractor: this.extractorName,
         baselineVersion: watermark.sessionSnapshotVersion,
       })
-      : await this.client.sessionTable.listSnapshotsWithVersion({ extractor: this.extractorName });
+      : await this.client.sessionSnapshotTable.listSnapshotsWithVersion({ extractor: this.extractorName });
     const baseline = watermark
-      ? await this.client.sessionTable.listSnapshotsWithVersion({
+      ? await this.client.sessionSnapshotTable.listSnapshotsWithVersion({
         extractor: this.extractorName,
         version: watermark.sessionSnapshotVersion,
       })

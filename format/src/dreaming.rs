@@ -8,16 +8,14 @@ use object_store::path::Path;
 use serde::{Deserialize, Serialize};
 
 use super::access::{
-    LanceDataset, TableAccess, TableDescription, TableOptions, TableStats, delete_by_ids,
-    delete_by_row_ids,
+    LanceDataset, TableAccess, TableDescription, TableOptions, TableStats, delete_by_row_ids,
     describe_dataset,
 };
 use super::codec::{
-    dreaming_projects_to_reader, dreamings_to_reader, record_batch_to_dreaming_projects,
-    record_batch_to_dreamings, record_batch_to_dreamings_with_row_ids,
+    dreamings_to_reader, record_batch_to_dreamings, record_batch_to_dreamings_with_row_ids,
 };
 use super::memory_id::{MemoryId, MemoryLayer, deserialize_memory_id, serialize_memory_id};
-use super::session::SourceRows;
+use super::session_snapshot::SourceRows;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -42,21 +40,8 @@ pub struct DreamingSupportTurn {
     pub contribution: i32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct DreamingProject {
-    pub project: String,
-    pub session_snapshot_version: u64,
-    pub updated_at: DateTime<Utc>,
-}
-
 #[derive(Debug, Clone)]
 pub struct DreamingTable {
-    access: TableAccess,
-}
-
-#[derive(Debug, Clone)]
-pub struct DreamingProjectTable {
     access: TableAccess,
 }
 
@@ -232,56 +217,6 @@ impl DreamingTable {
             source_version,
             rows,
         })
-    }
-}
-
-impl DreamingProjectTable {
-    pub fn new(options: TableOptions) -> Self {
-        Self {
-            access: TableAccess::new(
-                options,
-                Path::parse("dreaming_project").expect("valid dreaming project table path"),
-            ),
-        }
-    }
-
-    pub async fn list(&self) -> Result<Vec<DreamingProject>> {
-        let Some(dataset) = self.access.try_open().await? else {
-            return Ok(Vec::new());
-        };
-        let batch = dataset.scan().try_into_batch().await?;
-        if batch.num_rows() == 0 {
-            return Ok(Vec::new());
-        }
-        let mut rows = record_batch_to_dreaming_projects(&batch)?;
-        rows.sort_by(|left, right| left.project.cmp(&right.project));
-        Ok(rows)
-    }
-
-    pub async fn get(&self, project: &str) -> Result<Option<DreamingProject>> {
-        Ok(self
-            .list()
-            .await?
-            .into_iter()
-            .find(|row| row.project == project))
-    }
-
-    pub async fn upsert(&self, row: DreamingProject) -> Result<()> {
-        let dataset = self.access.try_open().await?;
-        let _ = delete_by_ids(dataset, "project", vec![row.project.clone()]).await?;
-        if let Some(mut dataset) = self.access.try_open().await? {
-            dataset
-                .append(
-                    dreaming_projects_to_reader(vec![row]),
-                    self.access.options().write_params(),
-                )
-                .await?;
-        } else {
-            self.access
-                .write(dreaming_projects_to_reader(vec![row]))
-                .await?;
-        }
-        Ok(())
     }
 }
 

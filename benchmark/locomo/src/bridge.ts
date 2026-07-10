@@ -6,7 +6,7 @@ import http from 'node:http';
 import https from 'node:https';
 import { existsSync } from 'node:fs';
 import { access, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
-import type { RecallMode } from '@muninn/server';
+import type { RecallPublicMode } from '@muninn/server';
 
 const CONFIG_FILE_NAME = 'muninn.json';
 const WATERMARK_POLL_MS = 2_000;
@@ -224,8 +224,8 @@ async function recallCommand(options: Map<string, string>) {
   process.env.MUNINN_HOME = home;
   const query = requireOption(options, 'query');
   const limit = parsePositiveInt(requireOption(options, 'limit'), 'limit');
-  const recallMode = parseRecallMode(options.get('recall-mode'));
-  const budget = parseOptionalNonNegativeInt(options.get('budget'), 'budget') ?? 0;
+  const mode = parseRecallPublicMode(options.get('mode'));
+  const budget = parseOptionalNonNegativeInt(options.get('budget'), 'budget');
   const queryLimit = parseOptionalPositiveInt(options.get('query-limit'), 'query-limit');
   const skipWatermark = options.has('skip-watermark');
   const manifest = filterManifestBySample(await readManifest(home), options.get('sample-id'));
@@ -234,7 +234,7 @@ async function recallCommand(options: Map<string, string>) {
   if (!skipWatermark) {
     await waitForImportWatermark(manifest, { database });
   }
-  const hits = await recallHits(query, limit, manifest, recallMode, budget, queryLimit);
+  const hits = await recallHits(query, limit, manifest, mode, budget, queryLimit);
   return { hits };
 }
 
@@ -242,8 +242,8 @@ async function recallBatchCommand(options: Map<string, string>) {
   const home = requireOption(options, 'muninn-home');
   process.env.MUNINN_HOME = home;
   const queriesFile = requireOption(options, 'queries-file');
-  const recallMode = parseRecallMode(options.get('recall-mode'));
-  const budget = parseOptionalNonNegativeInt(options.get('budget'), 'budget') ?? 0;
+  const mode = parseRecallPublicMode(options.get('mode'));
+  const budget = parseOptionalNonNegativeInt(options.get('budget'), 'budget');
   const queryLimit = parseOptionalPositiveInt(options.get('query-limit'), 'query-limit');
   const skipWatermark = options.has('skip-watermark');
   const raw = await readFile(queriesFile, 'utf8');
@@ -258,7 +258,7 @@ async function recallBatchCommand(options: Map<string, string>) {
   const queryTimeoutMs = envPositiveInt('MUNINN_LOCOMO_RECALL_QUERY_TIMEOUT_MS', RECALL_QUERY_TIMEOUT_MS);
 
   console.error(
-    `[locomo] recall_batch_start total=${queries.length} mode=${recallMode} budget=${budget} query_limit=${queryLimit ?? '(none)'} timeout_ms=${queryTimeoutMs}`
+    `[locomo] recall_batch_start total=${queries.length} mode=${mode} budget=${budget ?? '(none)'} query_limit=${queryLimit ?? '(none)'} timeout_ms=${queryTimeoutMs}`
   );
 
   for (let index = 0; index < queries.length; index += 1) {
@@ -269,7 +269,7 @@ async function recallBatchCommand(options: Map<string, string>) {
     );
     try {
       const hits = await withTimeout(
-        recallHits(item.query, item.limit, manifest, recallMode, budget, queryLimit),
+        recallHits(item.query, item.limit, manifest, mode, budget, queryLimit),
         queryTimeoutMs,
         `recall query timed out after ${queryTimeoutMs}ms: key=${item.key} query=${item.query}`
       );
@@ -497,8 +497,8 @@ async function recallHits(
   query: string,
   limit: number,
   manifest: ImportManifest,
-  mode: RecallMode,
-  budget = 0,
+  mode: RecallPublicMode,
+  budget?: number,
   queryLimit?: number,
 ): Promise<BridgeHit[]> {
   const payload = await withTransientRetry(
@@ -512,11 +512,11 @@ async function recallHits(
   return payload.hits;
 }
 
-function parseRecallMode(raw: string | undefined): RecallMode {
+function parseRecallPublicMode(raw: string | undefined): RecallPublicMode {
   if (!raw) {
-    return 'hybrid';
+    return 'extraction';
   }
-  if (raw === 'vector' || raw === 'fts' || raw === 'hybrid') {
+  if (raw === 'session' || raw === 'extraction') {
     return raw;
   }
   throw new Error(`invalid recall mode: ${raw}`);
@@ -578,28 +578,47 @@ async function fetchLocomoRecall(
   query: string,
   limit: number,
   manifest: ImportManifest,
-  mode: RecallMode,
-  budget = 0,
+  mode: RecallPublicMode,
+  budget?: number,
   queryLimit?: number,
 ): Promise<{ hits: BridgeHit[] }> {
+  const body = buildLocomoRecallBody(query, limit, manifest, mode, budget, queryLimit);
   const payload = await fetchJsonObject(`${serverBaseUrl()}/api/v1/benchmark/locomo/recall`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      query,
-      database: manifest.sample_id,
-      limit,
-      recallMode: mode,
-      budget,
-      queryLimit,
-      manifest,
-    }),
+    body: JSON.stringify(body),
   }, 'benchmark recall');
   const hits = payload.hits;
   if (!Array.isArray(hits)) {
     throw new Error('benchmark recall response did not include hits array');
   }
   return { hits: hits.map(parseBridgeHit) };
+}
+
+export function buildLocomoRecallBody(
+  query: string,
+  limit: number,
+  manifest: ImportManifest,
+  mode: RecallPublicMode,
+  budget?: number,
+  queryLimit?: number,
+): Record<string, unknown> {
+  const body: Record<string, unknown> = {
+    query,
+    database: manifest.sample_id,
+    limit,
+    mode,
+    manifest,
+  };
+  if (mode === 'extraction') {
+    if (budget !== undefined) {
+      body.budget = budget;
+    }
+    if (queryLimit !== undefined) {
+      body.queryLimit = queryLimit;
+    }
+  }
+  return body;
 }
 
 async function fetchJsonObject(url: string, init: RequestInit, label: string): Promise<Record<string, unknown>> {

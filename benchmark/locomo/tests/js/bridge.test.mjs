@@ -440,6 +440,42 @@ test('withTransientRetry does not retry non-transient failures', async () => {
   assert.equal(attempts, 1);
 });
 
+test('bridge recall commands read only the public mode option', async () => {
+  const source = await readFile(path.join(repoRoot, 'benchmark/locomo/src/bridge.ts'), 'utf8');
+
+  assert.match(source, /options\.get\('mode'\)/);
+  assert.doesNotMatch(source, /options\.get\('recall-mode'\)/);
+});
+
+test('bridge recall body omits extraction-only fields in session mode', async () => {
+  const bridgeModule = await import(`${bridgePath}?recall-body=${Date.now()}`);
+  const manifest = watermarkManifest();
+
+  const sessionBody = bridgeModule.buildLocomoRecallBody(
+    'support group',
+    5,
+    manifest,
+    'session',
+    0,
+    8,
+  );
+  assert.equal(sessionBody.mode, 'session');
+  assert.equal('budget' in sessionBody, false);
+  assert.equal('queryLimit' in sessionBody, false);
+
+  const extractionBody = bridgeModule.buildLocomoRecallBody(
+    'support group',
+    5,
+    manifest,
+    'extraction',
+    220,
+    20,
+  );
+  assert.equal(extractionBody.mode, 'extraction');
+  assert.equal(extractionBody.budget, 220);
+  assert.equal(extractionBody.queryLimit, 20);
+});
+
 test('bridge emits JSON error envelope for command failures', async () => {
   await assert.rejects(
     async () => {

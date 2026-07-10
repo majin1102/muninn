@@ -13,7 +13,7 @@ export type DemoSessionGroupItem = {
 };
 
 export type DemoSessionTimelineItem = {
-  memoryId: string;
+  contextId: string;
   createdAt: string;
   updatedAt: string;
   preview: string;
@@ -23,13 +23,13 @@ export type DemoSessionTimelineItem = {
 };
 
 export type DemoSessionSnapshotReferenceItem = {
-  memoryId: string;
+  contextId: string;
   timestamp: string;
   summary: string;
 };
 
 export type DemoSessionSnapshotListItem = {
-  memoryId: string;
+  contextId: string;
   title: string;
   summary: string;
   updatedAt: string;
@@ -39,7 +39,7 @@ export type DemoSessionSnapshotListItem = {
 export type DemoPipelineTask = PipelineTask;
 
 export type DemoMemoryDocument = {
-  memoryId: string;
+  contextId: string;
   kind: 'turn' | 'session';
   title: string;
   markdown: string;
@@ -253,7 +253,7 @@ export const demoSearchResults: SearchSessionResult[] = [
         title: 'Provider selector and model routing',
         content: 'Search provider selection should start as a visual control with Default, OpenAI, and Local choices. The BotMessageSquare icon represents the future model/provider switch without implying hardware routing.',
         createdAt: '2026-06-02T10:30:00.000Z',
-        memoryId: 'turn:1020',
+        contextId: 'turn:1020',
       },
       {
         id: 'demo-search-provider-extraction-1',
@@ -273,7 +273,7 @@ export const demoSearchResults: SearchSessionResult[] = [
           '- The provider icon should read as model-related without implying hardware routing.',
         ].join('\n'),
         createdAt: '2026-06-02T10:36:00.000Z',
-        memoryId: 'extraction:demo-provider-routing',
+        contextId: 'extraction:demo-provider-routing',
         references: ['turn:1020', 'turn:1021'],
       },
       {
@@ -287,7 +287,7 @@ export const demoSearchResults: SearchSessionResult[] = [
           'The first version does not generate answers or summaries at the top of the page.',
         ].join('\n'),
         createdAt: '2026-06-01T07:15:00.000Z',
-        memoryId: 'turn:1010',
+        contextId: 'turn:1010',
       },
     ],
   },
@@ -305,7 +305,7 @@ export const demoSearchResults: SearchSessionResult[] = [
         title: 'Long project and session title preview',
         content: 'This demo result keeps a long project and session title visible in search filters so menu width, truncation, and single-line behavior can be checked directly.',
         createdAt: '2026-06-01T13:32:00.000Z',
-        memoryId: 'turn:1601',
+        contextId: 'turn:1601',
       },
       {
         id: 'demo-search-multimodal-1',
@@ -313,7 +313,7 @@ export const demoSearchResults: SearchSessionResult[] = [
         title: 'Multi-modal search intake',
         content: 'The plus menu reserves space for image search, file search, and agent search. In the current version those entries are placeholders, but they make the composer ready for multi-modal recall workflows.',
         createdAt: '2026-06-01T13:40:00.000Z',
-        memoryId: 'turn:1602',
+        contextId: 'turn:1602',
       },
       {
         id: 'demo-search-agent-icon-1',
@@ -321,7 +321,7 @@ export const demoSearchResults: SearchSessionResult[] = [
         title: 'Session menu keeps agent icons',
         content: 'Session filter rows keep Codex, Claude, OpenClaw, and fallback agent icons so duplicate session names can still be visually distinguished.',
         createdAt: '2026-06-01T13:45:00.000Z',
-        memoryId: 'extraction:demo-agent-icons',
+        contextId: 'extraction:demo-agent-icons',
       },
     ],
   },
@@ -338,7 +338,7 @@ export const demoSearchResults: SearchSessionResult[] = [
         title: 'Muninn Web Search contract',
         content: 'The team decided the Search page should behave like a search engine and group results by session, with Project and Session controls shaping the request scope.',
         createdAt: '2026-06-01T12:01:00.000Z',
-        memoryId: 'turn:1005',
+        contextId: 'turn:1005',
       },
       {
         id: 'demo-search-auth-extraction-1',
@@ -346,7 +346,7 @@ export const demoSearchResults: SearchSessionResult[] = [
         title: 'Request-level scope',
         content: 'Project and Session filters are request-level search scope, not client-side filtering after a broad result set has already been returned.',
         createdAt: '2026-06-01T12:05:00.000Z',
-        memoryId: 'extraction:demo-auth-search-scope',
+        contextId: 'extraction:demo-auth-search-scope',
       },
       {
         id: 'demo-search-topn-1',
@@ -354,7 +354,7 @@ export const demoSearchResults: SearchSessionResult[] = [
         title: 'Top N and Session Top N behavior',
         content: 'Top N controls the number of returned session groups. Session Top N controls how many hit items are kept inside each session result. Both values are user-entered positive integers.',
         createdAt: '2026-06-01T12:12:00.000Z',
-        memoryId: 'turn:1006',
+        contextId: 'turn:1006',
       },
     ],
   },
@@ -371,7 +371,7 @@ export const demoSearchResults: SearchSessionResult[] = [
         title: 'LoCoMo benchmark quality triage',
         content: 'Release check reviewed benchmark quality where recall improved for conversation evidence but extraction recall still missed a small set of LoCoMo questions.',
         createdAt: '2026-05-26T12:00:00.000Z',
-        memoryId: 'turn:1301',
+        contextId: 'turn:1301',
       },
       {
         id: 'demo-search-benchmark-extraction-1',
@@ -379,7 +379,7 @@ export const demoSearchResults: SearchSessionResult[] = [
         title: 'Benchmark evidence source split',
         content: 'Benchmark search should show whether a hit came from conversation or extraction so release debugging can separate raw chat context from distilled memory facts.',
         createdAt: '2026-05-26T12:08:00.000Z',
-        memoryId: 'extraction:demo-benchmark-source-split',
+        contextId: 'extraction:demo-benchmark-source-split',
       },
     ],
   },
@@ -396,7 +396,7 @@ export const demoSearchResults: SearchSessionResult[] = [
         title: 'Right pane link handoff',
         content: 'Search result links are included now even though the right pane is not implemented in this version. Later the right pane can open the referenced turn, memory, or session without changing the search result shape.',
         createdAt: '2026-05-18T12:00:00.000Z',
-        memoryId: 'turn:1401',
+        contextId: 'turn:1401',
       },
       {
         id: 'demo-search-contract-1',
@@ -404,7 +404,7 @@ export const demoSearchResults: SearchSessionResult[] = [
         title: 'Stable result contract',
         content: 'The Muninn Web client receives one stable result contract: session result, metadata line, and hit items. The UI should not branch on storage-specific shapes.',
         createdAt: '2026-05-18T12:10:00.000Z',
-        memoryId: 'extraction:demo-stable-result-contract',
+        contextId: 'extraction:demo-stable-result-contract',
       },
     ],
   },
@@ -561,79 +561,79 @@ export const demoSessionGroups: Record<string, DemoSessionGroupItem[]> = {
 export const demoSessionTurns: Record<string, DemoSessionTimelineItem[]> = {
   'openclaw::auth-refactor': [
     {
-      memoryId: 'turn:1001',
+      contextId: 'turn:1001',
       createdAt: '2026-03-20T10:12:00.000Z',
       updatedAt: '2026-03-20T10:12:00.000Z',
       preview: '完成 server 写入口从历史的 message/add 收敛到 turn/capture，并同步校正文档、类型命名和测试描述，让对外语义明确变成一次提交一条完整 turn',
     },
     {
-      memoryId: 'turn:1002',
+      contextId: 'turn:1002',
       createdAt: '2026-03-20T10:27:00.000Z',
       updatedAt: '2026-03-20T10:27:00.000Z',
       preview: '确认 extra 只保留在接口传输层，由 server 适配逻辑按需消费，不进入 Rust format、Lance schema、recall 和 detail 渲染，避免污染稳定持久化协议',
     },
     {
-      memoryId: 'turn:1003',
+      contextId: 'turn:1003',
       createdAt: '2026-03-20T10:41:00.000Z',
       updatedAt: '2026-03-20T10:41:00.000Z',
       preview: '补 server 写接口和读链路回归测试，覆盖 prompt-only、response-only、tool-only、extra 校验以及写后通过 detail、timeline、recall 回读的主流程行为',
     },
     {
-      memoryId: 'turn:1004',
+      contextId: 'turn:1004',
       createdAt: '2026-03-20T11:05:00.000Z',
       updatedAt: '2026-03-20T11:05:00.000Z',
       preview: '开始搭建 Muninn App 的页面承载位与最小信息架构，先把顶栏、左右分栏、详情文档区和模式切换稳定下来，再逐步接入真实 server UI API',
     },
     {
-      memoryId: 'turn:1005',
+      contextId: 'turn:1005',
       createdAt: '2026-03-20T11:26:00.000Z',
       updatedAt: '2026-03-20T11:26:00.000Z',
       preview: '确定 session 左栏采用 agent -> sessionId -> timeline 的树状组织，并要求 agent 与 session 节点统一显示最后更新时间，而不是无助于浏览路径判断的数量统计',
     },
     {
-      memoryId: 'turn:1006',
+      contextId: 'turn:1006',
       createdAt: '2026-03-20T12:18:00.000Z',
       updatedAt: '2026-03-20T12:18:00.000Z',
       preview: '将 Muninn App 的视觉方向收敛为白灰中性控制台，弱化大卡片和风格化包装，让界面更像一个稳定、克制、可扩展的 memory explorer 工作台',
     },
     {
-      memoryId: 'turn:1007',
+      contextId: 'turn:1007',
       createdAt: '2026-03-20T12:35:00.000Z',
       updatedAt: '2026-03-20T12:35:00.000Z',
       preview: '讨论 sidebar 应该承担主导航和项目树入口，topbar 只保留全局动作，避免两个区域都在抢主导航语义',
     },
     {
-      memoryId: 'turn:1008',
+      contextId: 'turn:1008',
       createdAt: '2026-03-20T12:48:00.000Z',
       updatedAt: '2026-03-20T12:48:00.000Z',
       preview: '确认第一版 Muninn Web 只围绕 Search、LLM Wiki、Session、Settings 展开，Snapshots 不再作为一级页面或下拉选项存在',
     },
     {
-      memoryId: 'turn:1009',
+      contextId: 'turn:1009',
       createdAt: '2026-03-20T13:02:00.000Z',
       updatedAt: '2026-03-20T13:02:00.000Z',
       preview: '右侧详情不再展示文档标题和面包屑，而是直接渲染 User 与 Agent 的对话气泡，保留 Markdown 能力',
     },
     {
-      memoryId: 'turn:1011',
+      contextId: 'turn:1011',
       createdAt: '2026-03-20T13:18:00.000Z',
       updatedAt: '2026-03-20T13:18:00.000Z',
       preview: '移除 slogan，只保留乌鸦 logo 与 Muninn 字标，调整字体、字号和间距，让品牌区更像开源项目的简洁 lockup',
     },
     {
-      memoryId: 'turn:1012',
+      contextId: 'turn:1012',
       createdAt: '2026-03-20T13:32:00.000Z',
       updatedAt: '2026-03-20T13:32:00.000Z',
       preview: 'Settings 从弹窗改为侧边栏页面，配置文件编辑器直接嵌在内容区，顶部栏不再出现重复入口',
     },
     {
-      memoryId: 'turn:1013',
+      contextId: 'turn:1013',
       createdAt: '2026-03-20T13:46:00.000Z',
       updatedAt: '2026-03-20T13:46:00.000Z',
       preview: '将整体界面调整为白底工作台，不再使用灰底套白卡片的页面级色块，只在局部 hover、active 和聊天气泡中使用浅灰',
     },
     {
-      memoryId: 'turn:1014',
+      contextId: 'turn:1014',
       createdAt: '2026-03-20T14:00:00.000Z',
       updatedAt: '2026-03-20T14:00:00.000Z',
       preview: '让 demo 模式默认预加载并展开 session turns，避免进入页面后看不到任何样例聊天轮次',
@@ -641,7 +641,7 @@ export const demoSessionTurns: Record<string, DemoSessionTimelineItem[]> = {
   ],
   'openclaw::app-memory': [
     {
-      memoryId: 'turn:1010',
+      contextId: 'turn:1010',
       createdAt: '2026-03-20T11:05:00.000Z',
       updatedAt: '2026-03-20T11:05:00.000Z',
       preview: '为 Muninn App 单独创建 web 模块，明确它是独立的页面承载位，而不是继续把只读查看器能力散落在 server、mcp 或其他说明文档里',
@@ -649,7 +649,7 @@ export const demoSessionTurns: Record<string, DemoSessionTimelineItem[]> = {
   ],
   'claude_code::auth-refactor': [
     {
-      memoryId: 'turn:1301',
+      contextId: 'turn:1301',
       createdAt: '2026-03-20T13:42:00.000Z',
       updatedAt: '2026-03-20T13:42:00.000Z',
       preview: '从 Claude Code 会话里补充确认 capture endpoint 的命名，避免 server 和 app 在 session 视角上继续混用 message 与 turn 两套词。',
@@ -657,7 +657,7 @@ export const demoSessionTurns: Record<string, DemoSessionTimelineItem[]> = {
   ],
   'claude_code::release-check': [
     {
-      memoryId: 'turn:1020',
+      contextId: 'turn:1020',
       createdAt: '2026-03-20T11:32:00.000Z',
       updatedAt: '2026-03-20T11:32:00.000Z',
       preview: '检查 MCP 命名调整对 demo 文档、说明页和演示入口的影响，确认 turn/capture、UI API 和 session snapshot read model 的表述在对外展示层面保持一致',
@@ -665,7 +665,7 @@ export const demoSessionTurns: Record<string, DemoSessionTimelineItem[]> = {
   ],
   'codex_cli::auth-refactor': [
     {
-      memoryId: 'turn:1401',
+      contextId: 'turn:1401',
       createdAt: '2026-03-20T13:18:00.000Z',
       updatedAt: '2026-03-20T13:18:00.000Z',
       preview: 'Codex 会话补充 app demo 模式下的 session tree 验证点，确保 auth-refactor 项目在多 agent 聚合后仍能稳定展开。',
@@ -673,7 +673,7 @@ export const demoSessionTurns: Record<string, DemoSessionTimelineItem[]> = {
   ],
   'codex_cli::sdk-cleanup': [
     {
-      memoryId: 'turn:1030',
+      contextId: 'turn:1030',
       createdAt: '2026-03-20T10:41:00.000Z',
       updatedAt: '2026-03-20T10:41:00.000Z',
       preview: '清理旧 sdk 残留并确认 workspace 构建链完整，避免历史 package 和演进中的 core、server、app 模块在命名和构建路径上互相干扰',
@@ -681,7 +681,7 @@ export const demoSessionTurns: Record<string, DemoSessionTimelineItem[]> = {
   ],
   'memory_agent::auth-refactor': [
     {
-      memoryId: 'turn:1501',
+      contextId: 'turn:1501',
       createdAt: '2026-03-20T12:56:00.000Z',
       updatedAt: '2026-03-20T12:56:00.000Z',
       preview: 'Cursor 会话记录了 auth-refactor 中旧字段迁移的备注，用来让 demo 覆盖超过三个 agent 的 project 顶层展示。',
@@ -689,31 +689,31 @@ export const demoSessionTurns: Record<string, DemoSessionTimelineItem[]> = {
   ],
   'memory_agent::memory-inbox/daily-recall': [
     {
-      memoryId: 'turn:1601',
+      contextId: 'turn:1601',
       createdAt: '2026-06-01T12:50:15.000Z',
       updatedAt: '2026-06-01T12:50:15.000Z',
       preview: '通用 memory agent 汇总最近 24 小时内的 auth-refactor、app UI 和 agent icon 相关会话，准备作为 recall 入口的样例数据。',
     },
     {
-      memoryId: 'turn:1602',
+      contextId: 'turn:1602',
       createdAt: '2026-06-01T13:05:44.000Z',
       updatedAt: '2026-06-01T13:05:44.000Z',
       preview: '记录用户偏好：左栏应接近 Codex 风格，项目行更像分组，session 行像可打开文档，agent 图标适配应封装在 asset 内部。',
     },
     {
-      memoryId: 'turn:1603',
+      contextId: 'turn:1603',
       createdAt: '2026-06-01T13:18:27.000Z',
       updatedAt: '2026-06-01T13:18:27.000Z',
       preview: '补充未适配 agent 的演示会话，使用通用 Bot 图标展示未知 agent，避免只有 Claude、Codex、OpenClaw 三类品牌图标。',
     },
     {
-      memoryId: 'turn:1604',
+      contextId: 'turn:1604',
       createdAt: '2026-06-01T13:25:02.000Z',
       updatedAt: '2026-06-01T13:25:02.000Z',
       preview: '将 24 小时内的 turn 时间显示为时分秒，超过 24 小时的 turn 继续使用短相对时间，让 session tree 更接近 Codex 左栏的信息密度。',
     },
     {
-      memoryId: 'turn:1605',
+      contextId: 'turn:1605',
       createdAt: '2026-06-01T13:32:00.000Z',
       updatedAt: '2026-06-01T13:32:00.000Z',
       preview: '补充一条专门覆盖 Markdown 渲染的 demo turn，包含代码块、表格、列表、引用和 inline code，用来检查聊天气泡内的排版与溢出控制。',
@@ -723,7 +723,7 @@ export const demoSessionTurns: Record<string, DemoSessionTimelineItem[]> = {
 
 export const demoDocuments: Record<string, DemoMemoryDocument> = {
   'turn:1001': {
-    memoryId: 'turn:1001',
+    contextId: 'turn:1001',
     kind: 'turn',
     title: '完成 server 写入口从 message/add 收敛到 turn/capture',
     agent: 'openclaw',
@@ -751,7 +751,7 @@ export const demoDocuments: Record<string, DemoMemoryDocument> = {
 完成路由、命名、测试和文档同步`,
   },
   'turn:1002': {
-    memoryId: 'turn:1002',
+    contextId: 'turn:1002',
     kind: 'turn',
     title: '确认 extra 只保留在接口层，不进入稳定 format',
     agent: 'openclaw',
@@ -776,7 +776,7 @@ export const demoDocuments: Record<string, DemoMemoryDocument> = {
 - align-server-contract`,
   },
   'turn:1003': {
-    memoryId: 'turn:1003',
+    contextId: 'turn:1003',
     kind: 'turn',
     title: '补 server 写接口和读链路回归测试',
     agent: 'openclaw',
@@ -801,7 +801,7 @@ export const demoDocuments: Record<string, DemoMemoryDocument> = {
 - status: passed`,
   },
   'turn:1004': {
-    memoryId: 'turn:1004',
+    contextId: 'turn:1004',
     kind: 'turn',
     title: '开始搭建 Muninn App 的页面承载位与最小信息架构',
     agent: 'openclaw',
@@ -825,7 +825,7 @@ export const demoDocuments: Record<string, DemoMemoryDocument> = {
 先把页面结构和信息层级站住，再接 server 的真实 UI API`,
   },
   'turn:1005': {
-    memoryId: 'turn:1005',
+    contextId: 'turn:1005',
     kind: 'turn',
     title: '确定 session 左栏采用 agent -> sessionId -> timeline 的树状组织',
     agent: 'openclaw',
@@ -849,7 +849,7 @@ export const demoDocuments: Record<string, DemoMemoryDocument> = {
 我希望整个界面简洁大气，有简洁，高效，舒服的气质`,
   },
   'turn:1006': {
-    memoryId: 'turn:1006',
+    contextId: 'turn:1006',
     kind: 'turn',
     title: '将 Muninn App 的视觉方向收敛为白灰中性控制台',
     agent: 'openclaw',
@@ -873,7 +873,7 @@ export const demoDocuments: Record<string, DemoMemoryDocument> = {
 顶部栏保留，主体改为左右平铺工作台，中间可拖拽`,
   },
   'turn:1007': {
-    memoryId: 'turn:1007',
+    contextId: 'turn:1007',
     kind: 'turn',
     title: '重新评估 sidebar 与 topbar 的职责边界',
     agent: 'openclaw',
@@ -896,7 +896,7 @@ export const demoDocuments: Record<string, DemoMemoryDocument> = {
 - content: 当前页面的实际工作区`,
   },
   'turn:1008': {
-    memoryId: 'turn:1008',
+    contextId: 'turn:1008',
     kind: 'turn',
     title: '把 Snapshots 从 Muninn Web 第一版移除',
     agent: 'openclaw',
@@ -915,7 +915,7 @@ SNAPSHOT 这个我不要了，给我干掉，那个下拉框也不要了
 Snapshots 不再作为可见入口出现，原来的下拉也移除。观察类数据后续如果要回归，应该进入 LLM Wiki 或独立的 memory layer 设计，而不是挤在 Session 页面里。`,
   },
   'turn:1009': {
-    memoryId: 'turn:1009',
+    contextId: 'turn:1009',
     kind: 'turn',
     title: '将 Session 详情改成聊天框',
     agent: 'openclaw',
@@ -940,7 +940,7 @@ Session turn 的详情区改成 chat-only view：
 如果 turn 里没有明确的 Prompt/Response，也会 fallback 成一条 memory message，避免空白。`,
   },
   'turn:1011': {
-    memoryId: 'turn:1011',
+    contextId: 'turn:1011',
     kind: 'turn',
     title: '收敛品牌区 logo 与 Muninn 字标',
     agent: 'openclaw',
@@ -964,7 +964,7 @@ Session turn 的详情区改成 chat-only view：
 这比额外加 slogan 更适合现在的工具型界面。`,
   },
   'turn:1012': {
-    memoryId: 'turn:1012',
+    contextId: 'turn:1012',
     kind: 'turn',
     title: '把 Settings 改成内嵌页面',
     agent: 'openclaw',
@@ -986,7 +986,7 @@ Settings 现在是一个普通内容页：
 - Edit/Save 保留原来的校验和保存逻辑`,
   },
   'turn:1013': {
-    memoryId: 'turn:1013',
+    contextId: 'turn:1013',
     kind: 'turn',
     title: '减少页面级色块',
     agent: 'openclaw',
@@ -1010,7 +1010,7 @@ Settings 现在是一个普通内容页：
 这样页面会更轻，也更接近 shadcn dashapp 的实用工具感。`,
   },
   'turn:1014': {
-    memoryId: 'turn:1014',
+    contextId: 'turn:1014',
     kind: 'turn',
     title: '恢复 demo 可见性',
     agent: 'openclaw',
@@ -1029,7 +1029,7 @@ Demo 模式会默认预加载 session turns，并展开 session 内容。
 同时补充了一组围绕 Muninn Web UI 迭代的聊天轮次，让左侧列表和右侧 chat view 都有更接近真实产品使用的样例内容。`,
   },
   'turn:1010': {
-    memoryId: 'turn:1010',
+    contextId: 'turn:1010',
     kind: 'turn',
     title: '为 Muninn App 单独创建 web 模块',
     agent: 'openclaw',
@@ -1049,7 +1049,7 @@ Demo 模式会默认预加载 session turns，并展开 session 内容。
 为 Muninn App 单独创建 web 模块`,
   },
   'turn:1020': {
-    memoryId: 'turn:1020',
+    contextId: 'turn:1020',
     kind: 'turn',
     title: '检查 MCP 命名调整对 demo 文档和说明页的影响',
     agent: 'claude_code',
@@ -1069,7 +1069,7 @@ Demo 模式会默认预加载 session turns，并展开 session 内容。
 检查 MCP 命名调整对 demo 文档和说明页的影响`,
   },
   'turn:1030': {
-    memoryId: 'turn:1030',
+    contextId: 'turn:1030',
     kind: 'turn',
     title: '清理旧 sdk 残留并确认 workspace 构建链完整',
     agent: 'codex_cli',
@@ -1089,7 +1089,7 @@ Demo 模式会默认预加载 session turns，并展开 session 内容。
 清理旧 sdk 残留并确认 workspace 构建链完整`,
   },
   'turn:1601': {
-    memoryId: 'turn:1601',
+    contextId: 'turn:1601',
     kind: 'turn',
     title: '整理今日可召回事项',
     agent: 'memory_agent',
@@ -1106,7 +1106,7 @@ Demo 模式会默认预加载 session turns，并展开 session 内容。
 已汇总最近 24 小时内的 auth-refactor、app UI 和 agent icon 相关会话，作为 recall 入口的样例数据。`,
   },
   'turn:1602': {
-    memoryId: 'turn:1602',
+    contextId: 'turn:1602',
     kind: 'turn',
     title: '抽取 session tree 的 UI 偏好',
     agent: 'memory_agent',
@@ -1123,7 +1123,7 @@ Demo 模式会默认预加载 session turns，并展开 session 内容。
 用户偏好接近 Codex 左栏：项目行更像分组，session 行像可打开文档，agent 图标适配应封装在 asset 内部。`,
   },
   'turn:1603': {
-    memoryId: 'turn:1603',
+    contextId: 'turn:1603',
     kind: 'turn',
     title: '生成 fallback agent 展示数据',
     agent: 'memory_agent',
@@ -1140,7 +1140,7 @@ Demo 模式会默认预加载 session turns，并展开 session 内容。
 已创建 memory_agent 会话，用通用 Bot 图标展示未知 agent，避免 demo 只覆盖 Claude、Codex、OpenClaw 三类品牌图标。`,
   },
   'turn:1604': {
-    memoryId: 'turn:1604',
+    contextId: 'turn:1604',
     kind: 'turn',
     title: '校正 turn 时间显示规则',
     agent: 'memory_agent',
@@ -1157,7 +1157,7 @@ Demo 模式会默认预加载 session turns，并展开 session 内容。
 24 小时内的 turn 显示为时分秒；超过 24 小时的 turn 继续使用短相对时间。时间移动到摘要右侧，便于横向扫描。`,
   },
   'turn:1605': {
-    memoryId: 'turn:1605',
+    contextId: 'turn:1605',
     kind: 'turn',
     title: 'Markdown 渲染样例',
     agent: 'memory_agent',
@@ -1187,7 +1187,7 @@ Demo 模式会默认预加载 session turns，并展开 session 内容。
 
 \`\`\`ts
 type MemoryTurn = {
-  memoryId: string;
+  contextId: string;
   agent: 'openclaw' | 'claude_code' | 'codex_cli' | 'memory_agent';
   preview: string;
 };
@@ -1214,7 +1214,7 @@ export function renderTurn(turn: MemoryTurn) {
 \`muninn://session/memory-inbox/daily-recall/turn/1605/this-is-a-long-reference-that-should-wrap-inside-the-chat-bubble\``,
   },
   'session:2001': {
-    memoryId: 'session:2001',
+    contextId: 'session:2001',
     kind: 'session',
     title: '写接口命名已经稳定到 turn/capture',
     updatedAt: '2026-03-20T12:30:00.000Z',
@@ -1234,7 +1234,7 @@ export function renderTurn(turn: MemoryTurn) {
 - 当前 extra 仍然只保留在接口层`,
   },
   'session:2002': {
-    memoryId: 'session:2002',
+    contextId: 'session:2002',
     kind: 'session',
     title: 'Muninn App 应该采用控制台而不是小而美的展示页方向',
     updatedAt: '2026-03-20T12:48:00.000Z',
@@ -1258,36 +1258,36 @@ Muninn App 更适合作为 memory explorer/workbench，而不是概念展示页
 
 export const demoSessionSnapshots: DemoSessionSnapshotListItem[] = [
   {
-    memoryId: 'session:2002',
+    contextId: 'session:2002',
     title: 'Muninn App 应该采用控制台而不是小而美的展示页方向',
     summary: 'Muninn 作为 memory format 和生态位项目，不适合继续沿用偏卡片、偏展示页的小而美思路。更合理的方向是白灰中性、左右平铺、以 explorer 和文档阅读为核心的控制台式界面，这样可以为后续扩展 session snapshots、editing 和更多 memory layer 预留空间',
     updatedAt: '2026-03-20T12:48:00.000Z',
     references: [
       {
-        memoryId: 'turn:1006',
+        contextId: 'turn:1006',
         timestamp: '2026-03-20T12:18:00.000Z',
         summary: '将 Muninn App 的视觉方向收敛为白灰中性控制台',
       },
       {
-        memoryId: 'turn:1005',
+        contextId: 'turn:1005',
         timestamp: '2026-03-20T11:26:00.000Z',
         summary: '确定 session 左栏采用 agent -> sessionId -> timeline 的树状组织',
       },
     ],
   },
   {
-    memoryId: 'session:2001',
+    contextId: 'session:2001',
     title: '写接口命名已经稳定到 turn/capture',
     summary: 'server 的主写入口已经稳定到 turn/capture，接口语言从“写一个 session memory row”收敛到“一次提交一条完整 turn”。这一点能帮助后续 session memory extraction和 OpenClaw 精炼记忆的建模保持清晰',
     updatedAt: '2026-03-20T12:30:00.000Z',
     references: [
       {
-        memoryId: 'turn:1001',
+        contextId: 'turn:1001',
         timestamp: '2026-03-20T10:12:00.000Z',
         summary: '完成 server 写入口从 message/add 收敛到 turn/capture',
       },
       {
-        memoryId: 'turn:1002',
+        contextId: 'turn:1002',
         timestamp: '2026-03-20T10:27:00.000Z',
         summary: '确认 extra 只保留在接口层，不进入稳定 format',
       },

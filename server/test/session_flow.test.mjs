@@ -123,14 +123,14 @@ async function captureTurnAndGetTurn(turn) {
   const listResponse = await app.request('/api/v1/list?mode=recency&limit=20');
   assert.equal(listResponse.status, 200);
   const listed = await json(listResponse);
-  const match = listed.memoryHits.find((candidate) => (
-    typeof candidate.memoryId === 'string'
-    && candidate.memoryId.startsWith('turn:')
+  const match = listed.contextHits.find((candidate) => (
+    typeof candidate.contextId === 'string'
+    && candidate.contextId.startsWith('turn:')
     && candidate.content.includes(turn.prompt)
     && candidate.content.includes(turn.response)
   ));
   assert.ok(match);
-  return { turnId: match.memoryId };
+  return { turnId: match.contextId };
 }
 
 async function benchmarkCaptureTurn(turn) {
@@ -194,7 +194,6 @@ function createValidSettings({
       name: 'default-extractor',
       llmProvider: 'default_extractor_llm',
       embeddingProvider: 'default',
-      recallMode: 'hybrid',
       maxAttempts: 3,
       minEpochTurns: 1,
       maxEpochTurns: 32,
@@ -254,19 +253,19 @@ test('turn/capture writes a complete turn and detail reads it back', async (t) =
   }));
 
   const detailResponse = await app.request(
-    `/api/v1/detail?memoryId=${encodeURIComponent(addedTurn.turnId)}`
+    `/api/v1/detail?contextId=${encodeURIComponent(addedTurn.turnId)}`
   );
   assert.equal(detailResponse.status, 200);
   const detail = await json(detailResponse);
-  assert.equal(detail.memoryHits.length, 1);
-  assert.equal(detail.memoryHits[0].memoryId, addedTurn.turnId);
-  assert.doesNotMatch(detail.memoryHits[0].content, /## Title/);
-  assert.match(detail.memoryHits[0].content, /alpha prompt/);
-  assert.match(detail.memoryHits[0].content, /## Created At/);
-  assert.doesNotMatch(detail.memoryHits[0].content, /## Summary/);
-  assert.match(detail.memoryHits[0].content, /## Detail/);
-  assert.match(detail.memoryHits[0].content, /alpha prompt/);
-  assert.match(detail.memoryHits[0].content, /alpha response/);
+  assert.equal(detail.contextHits.length, 1);
+  assert.equal(detail.contextHits[0].contextId, addedTurn.turnId);
+  assert.doesNotMatch(detail.contextHits[0].content, /## Title/);
+  assert.match(detail.contextHits[0].content, /alpha prompt/);
+  assert.match(detail.contextHits[0].content, /## Created At/);
+  assert.doesNotMatch(detail.contextHits[0].content, /## Summary/);
+  assert.match(detail.contextHits[0].content, /## Detail/);
+  assert.match(detail.contextHits[0].content, /alpha prompt/);
+  assert.match(detail.contextHits[0].content, /alpha response/);
 });
 
 test('turn/capture/batch writes multiple turns and updates session UI immediately', async (t) => {
@@ -330,12 +329,12 @@ test('turn/capture/batch writes multiple turns and updates session UI immediatel
   assert.equal('turns' in timelineBody, false);
 
   const positionResponse = await app.request(sessionTurnPositionPath('agent-a', 'batch-session', {
-    turnId: turnsBody.turns[1].memoryId,
+    turnId: turnsBody.turns[1].contextId,
     limit: 1,
   }));
   assert.equal(positionResponse.status, 200);
   const positionBody = await json(positionResponse);
-  assert.equal(positionBody.turnId, turnsBody.turns[1].memoryId);
+  assert.equal(positionBody.turnId, turnsBody.turns[1].contextId);
   assert.equal(positionBody.offset, 1);
 });
 
@@ -555,16 +554,16 @@ test('openclaw hook capture persists artifacts through server and native readbac
   const listResponse = await app.request('/api/v1/list?mode=recency&limit=20');
   assert.equal(listResponse.status, 200);
   const listed = await json(listResponse);
-  const match = listed.memoryHits.find((candidate) => (
-    typeof candidate.memoryId === 'string'
-    && candidate.memoryId.startsWith('turn:')
+  const match = listed.contextHits.find((candidate) => (
+    typeof candidate.contextId === 'string'
+    && candidate.contextId.startsWith('turn:')
     && candidate.content.includes('hook prompt')
     && candidate.content.includes('hook response')
   ));
   assert.ok(match);
 
   const tables = await getNativeTables(defaultStorageTarget(homeDir));
-  const persisted = await tables.turnTable.getTurn(match.memoryId);
+  const persisted = await tables.turnTable.getTurn(match.contextId);
   assert.ok(persisted);
   assert.deepEqual(persisted.events, [
     { type: 'userMessage', text: 'hook prompt' },
@@ -593,12 +592,12 @@ test('openclaw hook capture persists artifacts through server and native readbac
   }]);
 
   const detailResponse = await app.request(
-    `/api/v1/detail?memoryId=${encodeURIComponent(match.memoryId)}`
+    `/api/v1/detail?contextId=${encodeURIComponent(match.contextId)}`
   );
   assert.equal(detailResponse.status, 200);
   const detail = await json(detailResponse);
-  assert.equal(detail.memoryHits.length, 1);
-  assert.match(detail.memoryHits[0].content, /Artifacts: note\.txt: artifact body/);
+  assert.equal(detail.contextHits.length, 1);
+  assert.match(detail.contextHits[0].content, /Artifacts: note\.txt: artifact body/);
 });
 
 test('turn/capture accepts typed image and file artifacts', async (t) => {
@@ -635,7 +634,7 @@ test('turn/capture accepts typed image and file artifacts', async (t) => {
   const list = await json(listResponse);
   assert.equal(list.turns.length, 1);
 
-  const detailResponse = await app.request(`/app/api/memories/${encodeURIComponent(list.turns[0].memoryId)}/document`);
+  const detailResponse = await app.request(`/app/api/memories/${encodeURIComponent(list.turns[0].contextId)}/document`);
   assert.equal(detailResponse.status, 200);
   const detail = await json(detailResponse);
   assert.match(detail.document.markdown, /prompt-image/);
@@ -825,28 +824,28 @@ test('list and timeline cover the written flow, and recall returns indexed memor
   const listResponse = await app.request('/api/v1/list?mode=recency&limit=10');
   assert.equal(listResponse.status, 200);
   const listed = await json(listResponse);
-  const turnHits = listed.memoryHits.filter((hit) => /^turn:/.test(hit.memoryId));
+  const turnHits = listed.contextHits.filter((hit) => /^turn:/.test(hit.contextId));
   assert.ok(turnHits.length >= 3);
   assert.ok(turnHits.some((hit) => /second alpha prompt/.test(hit.content)));
   assert.ok(turnHits.some((hit) => /third alpha prompt/.test(hit.content)));
   assert.ok(turnHits.some((hit) => /other beta prompt/.test(hit.content)));
-  const secondTurnId = turnHits.find((hit) => /second alpha prompt/.test(hit.content))?.memoryId;
+  const secondTurnId = turnHits.find((hit) => /second alpha prompt/.test(hit.content))?.contextId;
   assert.ok(secondTurnId);
 
   const timelineResponse = await app.request(
-    `/api/v1/timeline?memoryId=${encodeURIComponent(secondTurnId)}&beforeLimit=1&afterLimit=1`
+    `/api/v1/timeline?contextId=${encodeURIComponent(secondTurnId)}&beforeLimit=1&afterLimit=1`
   );
   assert.equal(timelineResponse.status, 200);
   const timeline = await json(timelineResponse);
-  assert.equal(timeline.memoryHits.length, 3);
-  assert.equal(timeline.memoryHits[1].memoryId, secondTurnId);
+  assert.equal(timeline.contextHits.length, 3);
+  assert.equal(timeline.contextHits[1].contextId, secondTurnId);
 
   const recallResponse = await app.request('/api/v1/recall?query=alpha&limit=2');
   assert.equal(recallResponse.status, 200);
   const recalled = await json(recallResponse);
-  assert.ok(recalled.memoryHits.length > 0);
-  assert.equal('text' in recalled.memoryHits[0], false);
-  assert.equal(typeof recalled.memoryHits[0].content, 'string');
+  assert.ok(recalled.contextHits.length > 0);
+  assert.equal('text' in recalled.contextHits[0], false);
+  assert.equal(typeof recalled.contextHits[0].content, 'string');
 });
 
 test('benchmark locomo capture returns turn id and recall returns body-only hits', async (t) => {
@@ -885,14 +884,14 @@ test('benchmark locomo capture returns turn id and recall returns body-only hits
     body: JSON.stringify({
       query: 'adoption agency',
       limit: 2,
-      recallMode: 'hybrid',
+      mode: 'extraction',
       manifest,
     }),
   });
   assert.equal(recallResponse.status, 200);
   const recalled = await json(recallResponse);
   assert.ok(recalled.hits.length > 0);
-  assert.equal(typeof recalled.hits[0].memory_id, 'string');
+  assert.equal(typeof recalled.hits[0].context_id, 'string');
   assert.match(recalled.hits[0].detail, /adoption agency/);
   assert.equal('evidence_ids' in recalled.hits[0], false);
   assert.equal('references' in recalled.hits[0], false);
@@ -927,27 +926,27 @@ test('timeline stays scoped to the full session key when agents share a sessionI
   const agentTurnsResponse = await app.request(sessionTurnsPath('agent-a', 'group-a'));
   assert.equal(agentTurnsResponse.status, 200);
   const agentTurns = await json(agentTurnsResponse);
-  const firstTurnId = agentTurns.turns.find((turn) => turn.prompt === 'agent a prompt 1')?.memoryId;
-  const secondTurnId = agentTurns.turns.find((turn) => turn.prompt === 'agent a prompt 2')?.memoryId;
+  const firstTurnId = agentTurns.turns.find((turn) => turn.prompt === 'agent a prompt 1')?.contextId;
+  const secondTurnId = agentTurns.turns.find((turn) => turn.prompt === 'agent a prompt 2')?.contextId;
   assert.ok(firstTurnId);
   assert.ok(secondTurnId);
 
   const otherTurnsResponse = await app.request(sessionTurnsPath('agent-b', 'group-a'));
   assert.equal(otherTurnsResponse.status, 200);
   const otherTurns = await json(otherTurnsResponse);
-  const otherAgentTurnId = otherTurns.turns[0].memoryId;
+  const otherAgentTurnId = otherTurns.turns[0].contextId;
 
   const timelineResponse = await app.request(
-    `/api/v1/timeline?memoryId=${encodeURIComponent(secondTurnId)}&beforeLimit=1&afterLimit=1`
+    `/api/v1/timeline?contextId=${encodeURIComponent(secondTurnId)}&beforeLimit=1&afterLimit=1`
   );
   assert.equal(timelineResponse.status, 200);
   const timeline = await json(timelineResponse);
-  const memoryIds = timeline.memoryHits.map((hit) => hit.memoryId);
-  assert.deepEqual(memoryIds, [
+  const contextIds = timeline.contextHits.map((hit) => hit.contextId);
+  assert.deepEqual(contextIds, [
     firstTurnId,
     secondTurnId,
   ]);
-  assert.ok(!memoryIds.includes(otherAgentTurnId));
+  assert.ok(!contextIds.includes(otherAgentTurnId));
 });
 
 test('recall and timeline surface request and not-found errors', async () => {
@@ -961,7 +960,7 @@ test('recall and timeline surface request and not-found errors', async () => {
     assert.equal(missingQuery.status, 400);
 
     const missingTimeline = await app.request(
-      `/api/v1/timeline?memoryId=${encodeURIComponent('turn:999999')}`
+      `/api/v1/timeline?contextId=${encodeURIComponent('turn:999999')}`
     );
     assert.equal(missingTimeline.status, 404);
   } finally {
@@ -985,7 +984,7 @@ test('recall, list, and timeline reject invalid numeric query parameters', async
     assert.equal(badListBody.errorCode, 'invalidRequest');
 
     const badTimeline = await app.request(
-      `/api/v1/timeline?memoryId=${encodeURIComponent('turn:999999')}&beforeLimit=1.5`
+      `/api/v1/timeline?contextId=${encodeURIComponent('turn:999999')}&beforeLimit=1.5`
     );
     assert.equal(badTimeline.status, 400);
     const badTimelineBody = await json(badTimeline);
@@ -995,20 +994,20 @@ test('recall, list, and timeline reject invalid numeric query parameters', async
   }
 });
 
-test('detail and timeline map invalid memoryId inputs to invalidRequest', async () => {
+test('detail and timeline map invalid contextId inputs to invalidRequest', async () => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   process.env.MUNINN_HOME = homeDir;
   
   try {
     await writeMuninnConfig(configPath);
 
-    const badDetail = await app.request('/api/v1/detail?memoryId=bad');
+    const badDetail = await app.request('/api/v1/detail?contextId=bad');
     assert.equal(badDetail.status, 400);
     const badDetailBody = await json(badDetail);
     assert.equal(badDetailBody.errorCode, 'invalidRequest');
 
     const wrongLayerTimeline = await app.request(
-      `/api/v1/timeline?memoryId=${encodeURIComponent('thinking:42')}`
+      `/api/v1/timeline?contextId=${encodeURIComponent('thinking:42')}`
     );
     assert.equal(wrongLayerTimeline.status, 400);
     const wrongLayerBody = await json(wrongLayerTimeline);
@@ -1046,7 +1045,7 @@ test('memory pipeline watermark reports pending turns until flush completes', as
   assert.deepEqual(resolvedBody.pending.turns, []);
 });
 
-test('detail returns notFound for missing memoryId', async () => {
+test('detail returns notFound for missing contextId', async () => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   process.env.MUNINN_HOME = homeDir;
 
@@ -1054,7 +1053,7 @@ test('detail returns notFound for missing memoryId', async () => {
     await writeMuninnConfig(configPath);
 
     const missingDetail = await app.request(
-      `/api/v1/detail?memoryId=${encodeURIComponent('turn:999999')}`
+      `/api/v1/detail?contextId=${encodeURIComponent('turn:999999')}`
     );
     assert.equal(missingDetail.status, 404);
     const missingDetailBody = await json(missingDetail);
@@ -1076,15 +1075,15 @@ test('turn/capture accepts complete turns without local summary generation', asy
     response: 'response only',
   }));
   const detailResponse = await app.request(
-    `/api/v1/detail?memoryId=${encodeURIComponent(created.turnId)}`
+    `/api/v1/detail?contextId=${encodeURIComponent(created.turnId)}`
   );
   assert.equal(detailResponse.status, 200);
   const detail = await json(detailResponse);
-  assert.equal(detail.memoryHits.length, 1);
-  assert.doesNotMatch(detail.memoryHits[0].content, /## Summary/);
-  assert.match(detail.memoryHits[0].content, /## Detail/);
-  assert.match(detail.memoryHits[0].content, /response prompt/);
-  assert.match(detail.memoryHits[0].content, /response only/);
+  assert.equal(detail.contextHits.length, 1);
+  assert.doesNotMatch(detail.contextHits[0].content, /## Summary/);
+  assert.match(detail.contextHits[0].content, /## Detail/);
+  assert.match(detail.contextHits[0].content, /response prompt/);
+  assert.match(detail.contextHits[0].content, /response only/);
 });
 
 test('ui session endpoints group by agent/session and return rendered turn documents', async (t) => {
@@ -1167,7 +1166,7 @@ test('ui session endpoints group by agent/session and return rendered turn docum
   );
 
   const documentResponse = await app.request(
-    `/app/api/memories/${encodeURIComponent(turnsBody.turns[0].memoryId)}/document`
+    `/app/api/memories/${encodeURIComponent(turnsBody.turns[0].contextId)}/document`
   );
   assert.equal(documentResponse.status, 200);
   const documentBody = await json(documentResponse);
@@ -1180,7 +1179,7 @@ test('ui session endpoints group by agent/session and return rendered turn docum
   const codexTurnsBody = await json(codexTurnsResponse);
   assert.equal(codexTurnsBody.turns.length, 1);
   const codexDocumentResponse = await app.request(
-    `/app/api/memories/${encodeURIComponent(codexTurnsBody.turns[0].memoryId)}/document`
+    `/app/api/memories/${encodeURIComponent(codexTurnsBody.turns[0].contextId)}/document`
   );
   assert.equal(codexDocumentResponse.status, 200);
   const codexDocumentBody = await json(codexDocumentResponse);
@@ -1470,27 +1469,27 @@ test('session snapshots are readable through list/detail/timeline', async (t) =>
   const listResponse = await app.request('/api/v1/list?mode=recency&limit=10');
   assert.equal(listResponse.status, 200);
   const listed = await json(listResponse);
-  const snapshotHit = listed.memoryHits.find((hit) => hit.memoryId.startsWith('session:'));
+  const snapshotHit = listed.contextHits.find((hit) => hit.contextId.startsWith('session:'));
   assert.ok(snapshotHit);
   assert.match(snapshotHit.content, /## Summary|## Detail/);
   assert.match(snapshotHit.content, /extract this prompt|extract this response/);
 
   const detailResponse = await app.request(
-    `/api/v1/detail?memoryId=${encodeURIComponent(snapshotHit.memoryId)}`
+    `/api/v1/detail?contextId=${encodeURIComponent(snapshotHit.contextId)}`
   );
   assert.equal(detailResponse.status, 200);
   const detail = await json(detailResponse);
-  assert.equal(detail.memoryHits.length, 1);
-  assert.equal(detail.memoryHits[0].memoryId, snapshotHit.memoryId);
-  assert.match(detail.memoryHits[0].content, /## Detail/);
+  assert.equal(detail.contextHits.length, 1);
+  assert.equal(detail.contextHits[0].contextId, snapshotHit.contextId);
+  assert.match(detail.contextHits[0].content, /## Detail/);
 
   const timelineResponse = await app.request(
-    `/api/v1/timeline?memoryId=${encodeURIComponent(snapshotHit.memoryId)}&beforeLimit=1&afterLimit=1`
+    `/api/v1/timeline?contextId=${encodeURIComponent(snapshotHit.contextId)}&beforeLimit=1&afterLimit=1`
   );
   assert.equal(timelineResponse.status, 200);
   const timeline = await json(timelineResponse);
-  assert.equal(timeline.memoryHits.length, 1);
-  assert.equal(timeline.memoryHits[0].memoryId, snapshotHit.memoryId);
+  assert.equal(timeline.contextHits.length, 1);
+  assert.equal(timeline.contextHits[0].contextId, snapshotHit.contextId);
 
 });
 
@@ -1515,13 +1514,13 @@ test('ui session snapshots endpoint returns live session snapshots and documents
   assert.equal(snapshotsResponse.status, 200);
   const snapshots = await json(snapshotsResponse);
   assert.ok(snapshots.sessionSnapshots.length >= 1);
-  const snapshot = snapshots.sessionSnapshots.find((item) => item.memoryId.startsWith('session:'));
+  const snapshot = snapshots.sessionSnapshots.find((item) => item.contextId.startsWith('session:'));
   assert.ok(snapshot);
   assert.ok(snapshot.references.length >= 1);
   assert.match(snapshot.summary, /Default session memory thread for session group-ui/);
 
   const documentResponse = await app.request(
-    `/app/api/memories/${encodeURIComponent(snapshot.memoryId)}/document`
+    `/app/api/memories/${encodeURIComponent(snapshot.contextId)}/document`
   );
   assert.equal(documentResponse.status, 200);
   const document = await json(documentResponse);
@@ -1550,7 +1549,6 @@ test('ui settings config reads and writes muninn.json through server', async (t)
 
   const updatedConfig = createValidSettings({ includeWatchdog: true });
   updatedConfig.extractor.name = 'live-extractor';
-  updatedConfig.extractor.recallMode = 'fts';
   const writeResponse = await app.request('/app/api/settings/config', {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
@@ -1562,7 +1560,7 @@ test('ui settings config reads and writes muninn.json through server', async (t)
 
   const persisted = await readFile(configPath, 'utf8');
   assert.match(persisted, /"name": "live-extractor"/);
-  assert.match(persisted, /"recallMode": "fts"/);
+  assert.doesNotMatch(persisted, /"recallMode"/);
   assert.doesNotMatch(persisted, /"defaultImportance"/);
 });
 
@@ -1752,7 +1750,7 @@ test('ui settings config rejects top-level extraction config', async (t) => {
   assert.equal(writeResponse.status, 400);
   const body = await json(writeResponse);
   assert.equal(body.errorCode, 'invalidRequest');
-  assert.match(body.errorMessage, /unsupported top-level config key: extraction/i);
+  assert.match(body.errorMessage, /extraction is no longer supported; use extractor\.embeddingProvider instead/i);
 });
 
 test('ui settings config rejects missing extractor.embeddingProvider config', async (t) => {

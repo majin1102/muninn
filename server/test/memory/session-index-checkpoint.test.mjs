@@ -5,7 +5,7 @@ import { parseCheckpointFile, serializeCheckpointFile } from '../../dist/checkpo
 
 function checkpoint(overrides = {}) {
   return {
-    schemaVersion: 13,
+    schemaVersion: 14,
     writtenAt: '2026-06-02T00:00:00.000Z',
     writerPid: 123,
     extractor: {
@@ -33,6 +33,12 @@ function checkpoint(overrides = {}) {
     dreaming: {
       projects: {},
     },
+    session: {
+      schemaVersion: 1,
+      embeddingDimensions: 4,
+      sourceSessionVersion: 5,
+      tableVersion: 7,
+    },
     ...overrides,
   };
 }
@@ -40,7 +46,8 @@ function checkpoint(overrides = {}) {
 test('checkpoint parses and serializes sessionIndex entries', () => {
   const parsed = parseCheckpointFile(JSON.stringify(checkpoint()));
 
-  assert.equal(parsed.schemaVersion, 13);
+  assert.equal(parsed.schemaVersion, 14);
+  assert.equal(parsed.schemaVersion, 14);
   assert.deepEqual(parsed.sessionIndex, {
     baseline: { turn: 10, session: 5 },
     entries: [
@@ -58,6 +65,16 @@ test('checkpoint parses and serializes sessionIndex entries', () => {
 
   const reparsed = parseCheckpointFile(serializeCheckpointFile(parsed));
   assert.deepEqual(reparsed.sessionIndex, parsed.sessionIndex);
+});
+
+test('checkpoint rejects previous v13 shape as unsupported schema', () => {
+  assert.throws(
+    () => parseCheckpointFile(JSON.stringify({
+      ...checkpoint({ schemaVersion: 13 }),
+      session: undefined,
+    })),
+    /unsupported checkpoint schemaVersion: 13/,
+  );
 });
 
 test('checkpoint rejects missing sessionIndex', () => {
@@ -113,4 +130,14 @@ test('checkpoint ignores obsolete dreamingIndex when present', () => {
   })));
 
   assert.equal('dreamingIndex' in parsed, false);
+});
+
+test('checkpoint requires session metadata', () => {
+  const content = checkpoint();
+  delete content.session;
+
+  assert.throws(
+    () => parseCheckpointFile(JSON.stringify(content)),
+    /session section is invalid/,
+  );
 });

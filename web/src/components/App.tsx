@@ -28,7 +28,7 @@ import { DreamingContent } from './DreamingContent.js';
 
 type RouteState = {
   view: PrimaryView;
-  memoryId: string | null;
+  contextId: string | null;
   sessionSelectionId: string | null;
 };
 
@@ -56,10 +56,10 @@ export function App() {
   const [projectLoading, setProjectLoading] = useState(false);
   const [projectError, setProjectError] = useState<string | null>(null);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(() => parseRoute(window.location.hash).sessionSelectionId);
-  const [activeTimelineId, setActiveTimelineId] = useState<string | null>(() => parseRoute(window.location.hash).memoryId);
-  const [openTimelineId, setOpenTimelineId] = useState<string | null>(() => parseRoute(window.location.hash).memoryId);
+  const [activeTimelineId, setActiveTimelineId] = useState<string | null>(() => parseRoute(window.location.hash).contextId);
+  const [openTimelineId, setOpenTimelineId] = useState<string | null>(() => parseRoute(window.location.hash).contextId);
   const [openTimelineRequestId, setOpenTimelineRequestId] = useState(0);
-  const [focusMemoryId, setFocusMemoryId] = useState<string | null>(() => parseRoute(window.location.hash).memoryId);
+  const [focusContextId, setFocusContextId] = useState<string | null>(() => parseRoute(window.location.hash).contextId);
   const [focusRequestId, setFocusRequestId] = useState(0);
   const [document, setDocument] = useState<MemoryDocument | null>(null);
   const [documentLoading, setDocumentLoading] = useState(false);
@@ -75,10 +75,10 @@ export function App() {
   const contentShellRef = useRef<HTMLDivElement>(null);
   const client = useMemo(() => createAppClient(apiBase, usesDemoData), [apiBase, usesDemoData]);
   const footerDate = useMemo(() => formatFooterDate(new Date()), []);
-  const routeTurnMemoryId = route.memoryId ? turnMemoryIdFromTimelineMemoryId(route.memoryId) : null;
+  const routeTurnContextId = route.contextId ? turnContextIdFromTimelineId(route.contextId) : null;
   const activeTurnSession = useMemo(() => (
-    routeTurnMemoryId ? findSessionForTurn(projects, routeTurnMemoryId) : null
-  ), [projects, routeTurnMemoryId]);
+    routeTurnContextId ? findSessionForTurn(projects, routeTurnContextId) : null
+  ), [projects, routeTurnContextId]);
   const documentSession = useMemo(() => (
     document ? findSessionForDocument(projects, document) : null
   ), [document, projects]);
@@ -88,15 +88,15 @@ export function App() {
   const activeSession = activeTurnSession ?? documentSession ?? selectedSession;
   const activeSessionTurns = activeSession?.turns ?? [];
   const activeSessionSelectionId = activeSession ? selectedSessionKey(activeSession) : selectedSessionId;
-  const pendingActiveSessionSearch = Boolean(
-    route.memoryId
+  const pendingActiveSessionLookup = Boolean(
+    route.contextId
     && !activeTurnSession
     && findNextSessionToSearch(projects),
   );
   const locatingActiveTurn = Boolean(
-    route.memoryId
+    route.contextId
     && !activeTurnSession
-    && (pendingActiveSessionSearch || (documentSession && documentSession.nextOffset !== null)),
+    && (pendingActiveSessionLookup || (documentSession && documentSession.nextOffset !== null)),
   );
 
   useEffect(() => {
@@ -161,7 +161,7 @@ export function App() {
   }, [loadProjects, route.view]);
 
   useEffect(() => {
-    if (!routeTurnMemoryId) {
+    if (!routeTurnContextId) {
       setDocument(null);
       setDocumentError(null);
       return;
@@ -169,14 +169,14 @@ export function App() {
 
     setDocumentLoading(true);
     setDocumentError(null);
-    client.getDocument(routeTurnMemoryId)
+    client.getDocument(routeTurnContextId)
       .then(setDocument)
       .catch((error: unknown) => {
         setDocument(null);
         setDocumentError(asErrorMessage(error));
       })
       .finally(() => setDocumentLoading(false));
-  }, [client, routeTurnMemoryId]);
+  }, [client, routeTurnContextId]);
 
   useEffect(() => {
     if (route.view !== 'session' || !documentSession || documentSession.loaded || documentSession.loading) {
@@ -205,12 +205,12 @@ export function App() {
   }, [projectDreams, route.view, selectedSession]);
 
   useEffect(() => {
-    if (route.memoryId) {
+    if (route.contextId) {
       setSelectedSessionId(null);
-      setActiveTimelineId(route.memoryId);
-      setOpenTimelineId(route.memoryId);
+      setActiveTimelineId(route.contextId);
+      setOpenTimelineId(route.contextId);
       setOpenTimelineRequestId((current) => current + 1);
-      setFocusMemoryId(turnMemoryIdFromTimelineMemoryId(route.memoryId));
+      setFocusContextId(turnContextIdFromTimelineId(route.contextId));
       setFocusRequestId((current) => current + 1);
       return;
     }
@@ -219,24 +219,24 @@ export function App() {
       setActiveTimelineId(null);
       setOpenTimelineId(null);
       setOpenTimelineRequestId((current) => current + 1);
-      setFocusMemoryId(null);
+      setFocusContextId(null);
       setFocusRequestId((current) => current + 1);
       setDocument(null);
       setDocumentError(null);
     }
-  }, [route.memoryId, route.sessionSelectionId, route.view]);
+  }, [route.contextId, route.sessionSelectionId, route.view]);
 
   useEffect(() => {
-    if (!route.memoryId || !activeTurnSession) {
+    if (!route.contextId || !activeTurnSession) {
       return;
     }
     setSelectedSessionId(selectedSessionKey(activeTurnSession));
-  }, [activeTurnSession, route.memoryId]);
+  }, [activeTurnSession, route.contextId]);
 
   useEffect(() => {
     if (
       route.view !== 'session'
-      || !route.memoryId
+      || !route.contextId
       || activeTurnSession
       || selectedSessionId
       || documentLoading
@@ -251,7 +251,7 @@ export function App() {
     }
 
     void openSession(session);
-  }, [activeTurnSession, documentLoading, documentSession, projects, route.memoryId, route.view, selectedSessionId]);
+  }, [activeTurnSession, documentLoading, documentSession, projects, route.contextId, route.view, selectedSessionId]);
 
   useEffect(() => {
     if (
@@ -361,14 +361,14 @@ export function App() {
     }
   }
 
-  async function loadUntilTurn(session: ProjectSessionNode, memoryId: string) {
-    if (hasTurn(session, memoryId)) {
+  async function loadUntilTurn(session: ProjectSessionNode, contextId: string) {
+    if (hasTurn(session, contextId)) {
       return;
     }
 
     updateSession(session, { loading: true });
     try {
-      const offset = await client.locateSessionTurn(session, memoryId);
+      const offset = await client.locateSessionTurn(session, contextId);
       const response = await client.loadSessionTurns(session, offset);
       updateSession(session, {
         turns: mergeSessionTurns(session.turns, response.turns),
@@ -388,7 +388,7 @@ export function App() {
     setActiveTimelineId(null);
     setOpenTimelineId(null);
     setOpenTimelineRequestId((current) => current + 1);
-    setFocusMemoryId(null);
+    setFocusContextId(null);
     setFocusRequestId((current) => current + 1);
     setDocument(null);
     setDocumentError(null);
@@ -418,32 +418,32 @@ export function App() {
     })));
   }
 
-  function openTimelineFromTree(memoryId: string, session: ProjectSessionNode) {
+  function openTimelineFromTree(contextId: string, session: ProjectSessionNode) {
     setSelectedSessionId(selectedSessionKey(session));
-    setActiveTimelineId(memoryId);
-    setOpenTimelineId(memoryId);
+    setActiveTimelineId(contextId);
+    setOpenTimelineId(contextId);
     setOpenTimelineRequestId((current) => current + 1);
-    setFocusMemoryId(turnMemoryIdFromTimelineMemoryId(memoryId));
+    setFocusContextId(turnContextIdFromTimelineId(contextId));
     setFocusRequestId((current) => current + 1);
-    window.location.hash = `#/session/${encodeURIComponent(memoryId)}`;
+    window.location.hash = `#/session/${encodeURIComponent(contextId)}`;
   }
 
-  function openTimelineInPane(memoryId: string) {
-    setActiveTimelineId(memoryId);
-    setOpenTimelineId(memoryId);
+  function openTimelineInPane(contextId: string) {
+    setActiveTimelineId(contextId);
+    setOpenTimelineId(contextId);
     setOpenTimelineRequestId((current) => current + 1);
   }
 
-  function locateConversationTurn(memoryId: string) {
+  function locateConversationTurn(contextId: string) {
     const session = activeSession;
-    if (!session || hasTurn(session, memoryId)) {
-      setFocusMemoryId(memoryId);
+    if (!session || hasTurn(session, contextId)) {
+      setFocusContextId(contextId);
       setFocusRequestId((current) => current + 1);
       return;
     }
 
-    void loadUntilTurn(session, memoryId).finally(() => {
-      setFocusMemoryId(memoryId);
+    void loadUntilTurn(session, contextId).finally(() => {
+      setFocusContextId(contextId);
       setFocusRequestId((current) => current + 1);
     });
   }
@@ -577,7 +577,7 @@ export function App() {
                 <SessionTree
                   projects={projects}
                   selectedSessionId={activeSessionSelectionId}
-                  activeMemoryId={activeTimelineId}
+                  activeContextId={activeTimelineId}
                   canExpandSessions={sessionTreeCanExpand(sessionContentMode)}
                   loading={projectLoading}
                   error={projectError}
@@ -620,7 +620,7 @@ export function App() {
                   activeTimelineId={activeTimelineId}
                   openTimelineId={openTimelineId}
                   openTimelineRequestId={openTimelineRequestId}
-                  focusMemoryId={focusMemoryId}
+                  focusContextId={focusContextId}
                   focusRequestId={focusRequestId}
                   sessionTurns={activeSessionTurns}
                   mode={sessionContentMode}
@@ -628,11 +628,11 @@ export function App() {
                   onActiveTimelineChange={setActiveTimelineId}
                   onOpenTimeline={openTimelineInPane}
                   onLocateConversationTurn={locateConversationTurn}
-                  onLoadTurnDetail={(memoryId) => {
+                  onLoadTurnDetail={(contextId) => {
                     if (!activeSession) {
                       return Promise.reject(new Error('No active session'));
                     }
-                    return client.loadTurnDetail(activeSession, memoryId);
+                    return client.loadTurnDetail(activeSession, contextId);
                   }}
                   canLoadMoreAfter={Boolean(activeSession && activeSession.nextOffset !== null)}
                   loadingMoreAfter={activeSession?.loading ?? false}
@@ -747,10 +747,10 @@ function appStatusSignature(status: AppStatusResponse): string {
   ].join('|');
 }
 
-function findSessionForTurn(projects: ProjectNode[], memoryId: string): ProjectNode['sessions'][number] | null {
+function findSessionForTurn(projects: ProjectNode[], contextId: string): ProjectNode['sessions'][number] | null {
   for (const project of projects) {
     for (const session of project.sessions) {
-      if (session.turns.some((turn) => turn.memoryId === memoryId)) {
+      if (session.turns.some((turn) => turn.contextId === contextId)) {
         return session;
       }
     }
@@ -812,14 +812,14 @@ function sameSession(left: ProjectSessionNode, right: ProjectSessionNode): boole
     && left.sessionKey === right.sessionKey;
 }
 
-function hasTurn(session: ProjectSessionNode, memoryId: string): boolean {
-  return session.turns.some((turn) => turn.memoryId === memoryId);
+function hasTurn(session: ProjectSessionNode, contextId: string): boolean {
+  return session.turns.some((turn) => turn.contextId === contextId);
 }
 
 function mergeSessionTurns(existing: ProjectTurnNode[], incoming: ProjectTurnNode[]): ProjectTurnNode[] {
   const byId = new Map<string, ProjectTurnNode>();
   for (const turn of [...existing, ...incoming]) {
-    byId.set(turn.memoryId, turn);
+    byId.set(turn.contextId, turn);
   }
   return [...byId.values()].sort((left, right) => {
     const created = left.createdAt.localeCompare(right.createdAt);
@@ -830,7 +830,7 @@ function mergeSessionTurns(existing: ProjectTurnNode[], incoming: ProjectTurnNod
     if (updated !== 0) {
       return updated;
     }
-    return left.memoryId.localeCompare(right.memoryId);
+    return left.contextId.localeCompare(right.contextId);
   });
 }
 
@@ -878,25 +878,25 @@ function parseRoute(hash: string): RouteState {
   const view = parts[0] as PrimaryView | undefined;
 
   if (view === 'recall' || view === 'wiki' || view === 'pipelines' || view === 'settings') {
-    return { view, memoryId: null, sessionSelectionId: null };
+    return { view, contextId: null, sessionSelectionId: null };
   }
 
   if (parts[1] === 's') {
     return {
       view: 'session',
-      memoryId: null,
+      contextId: null,
       sessionSelectionId: parts[2] ? decodeURIComponent(parts.slice(2).join('/')) : null,
     };
   }
 
   return {
     view: 'session',
-    memoryId: parts[1] ? decodeURIComponent(parts.slice(1).join('/')) : null,
+    contextId: parts[1] ? decodeURIComponent(parts.slice(1).join('/')) : null,
     sessionSelectionId: null,
   };
 }
 
-function turnMemoryIdFromTimelineMemoryId(memoryId: string): string {
-  const timelineIndex = memoryId.indexOf('~timeline');
-  return timelineIndex >= 0 ? memoryId.slice(0, timelineIndex) : memoryId;
+function turnContextIdFromTimelineId(contextId: string): string {
+  const timelineIndex = contextId.indexOf('~timeline');
+  return timelineIndex >= 0 ? contextId.slice(0, timelineIndex) : contextId;
 }

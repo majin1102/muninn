@@ -1,62 +1,14 @@
 # Muninn MCP Demo
 
-The current demo shape is:
+Muninn MCP exposes four tools:
 
-- the sidecar stores session memory rows in the Lance-backed `turn` dataset (public memory layer `SESSION`)
-- `turn/capture` writes one complete turn into a logical session
-- memory APIs return `MemoryResponse`
+- `muninn_recall` with `{ query, budget?, top_k? }`
+- `muninn_list` with `{ query, top_k? }`
+- `muninn_read` with `{ context_ids }`
+- `muninn_explain` with `{ context_id }`
 
-## Core Types
+`muninn_list` returns session summaries with opaque `session_*` context ids. `muninn_recall` returns extracted recall content and a source context reference table when a recalled hit can be tied back to a session.
 
-```ts
-export interface MemoryHit {
-  memoryId: string;
-  content: string;
-}
+Use `muninn_read` to read `session_*` or `turn_*` context ids. Use `muninn_explain` to inspect source provenance for `session_*` context ids.
 
-export interface MemoryResponse {
-  memoryHits: MemoryHit[];
-  requestId: string;
-}
-```
-
-## Write Shape
-
-```ts
-export interface Artifact {
-  key: string;
-  kind: "metadata" | "text" | "image" | "file";
-  source: "prompt" | "response" | "tool" | "import";
-  content?: string;
-  uri?: string;
-  name?: string;
-  mimeType?: string;
-  sizeBytes?: number;
-}
-
-export type TurnEvent =
-  | { type: "userMessage"; text: string; timestamp?: string; artifacts?: Artifact[] }
-  | { type: "assistantMessage"; text: string; timestamp?: string; artifacts?: Artifact[] }
-  | { type: "toolCall"; id?: string; name: string; input?: string; timestamp?: string }
-  | { type: "toolOutput"; id?: string; output?: string; timestamp?: string; artifacts?: Artifact[] };
-
-export interface TurnContent {
-  sessionId: string;
-  agent: string;
-  prompt: string;
-  response: string;
-  events: TurnEvent[];
-  artifacts?: Artifact[];
-}
-
-export interface CaptureTurnRequest {
-  turn: TurnContent;
-}
-
-export interface CaptureTurnResponse {
-  turnId: string;
-  requestId: string;
-}
-```
-
-The HTTP path is `POST /api/v1/turn/capture`. `sessionId`, `agent`, `prompt`, `response`, and `events` are required. `artifacts` is optional.
+MCP hosts should treat context ids as opaque strings and pass them back unchanged.

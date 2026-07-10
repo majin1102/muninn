@@ -30,16 +30,39 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--out-file", required=True, type=Path)
     parser.add_argument("--progress-file", default=None, type=Path)
     parser.add_argument("--top-k", default=3, type=int)
-    parser.add_argument("--recall-mode", choices=["vector", "fts", "hybrid"], default="hybrid")
-    parser.add_argument("--budget", default=400, type=int)
-    parser.add_argument("--query-limit", default=8, type=int)
+    parser.add_argument("--mode", choices=["session", "extraction"], default="extraction")
+    parser.add_argument("--budget", default=None, type=int)
+    parser.add_argument("--query-limit", default=None, type=int)
     parser.add_argument("--sample-id", default=None)
     parser.add_argument("--limit-questions", default=None, type=int)
     parser.add_argument("--keep-home", action="store_true")
     parser.add_argument("--home-dir", default=None, type=Path)
-    parser.add_argument("--mode", choices=["diagnostic", "benchmark"], default="diagnostic")
+    parser.add_argument("--run-mode", choices=["diagnostic", "benchmark"], default="diagnostic")
     parser.add_argument("--answerer", choices=["llm", "heuristic"], default="llm")
-    return parser.parse_args(argv)
+    return normalize_recall_args(parser, parser.parse_args(argv), default_budget=400, default_query_limit=8)
+
+
+def normalize_recall_args(
+    parser: argparse.ArgumentParser,
+    args: argparse.Namespace,
+    *,
+    default_budget: int,
+    default_query_limit: int,
+) -> argparse.Namespace:
+    if args.mode == "session":
+        if args.budget is not None and args.budget > 0:
+            parser.error("budget and query_limit are only supported in extraction mode")
+        if args.query_limit is not None:
+            parser.error("budget and query_limit are only supported in extraction mode")
+        args.budget = 0
+        args.query_limit = None
+        return args
+
+    if args.budget is None:
+        args.budget = default_budget
+    if args.query_limit is None:
+        args.query_limit = default_query_limit
+    return args
 
 
 def main() -> None:
@@ -70,15 +93,15 @@ def main() -> None:
         top_k_ignored=args.budget > 0,
         budget=args.budget,
         query_limit=args.query_limit,
-        recall_mode=args.recall_mode,
+        mode=args.mode,
         keep_home=args.keep_home,
         limit_questions=args.limit_questions,
         sample_filter=args.sample_id,
-        mode=args.mode,
+        run_mode=args.run_mode,
         answerer=args.answerer,
     )
 
-    model_key = build_model_key(args.top_k, args.recall_mode, args.budget, args.query_limit)
+    model_key = build_model_key(args.top_k, args.mode, args.budget, args.query_limit)
     try:
         home_dir = prepare_home(
             bridge,
@@ -178,9 +201,9 @@ def main() -> None:
                     top_k=args.top_k,
                     started_at=run_started_timestamp,
                     completed_at=utc_now(),
-                    mode=args.mode,
+                    run_mode=args.run_mode,
                     answerer=args.answerer,
-                    recall_mode=args.recall_mode,
+                    mode=args.mode,
                 ),
             ),
             out_file=args.out_file.with_name(f"{args.out_file.stem}_metadata.json"),
@@ -228,10 +251,10 @@ def ensure_selected_samples(
     )
 
 
-def build_model_key(top_k: int, recall_mode: str = "hybrid", budget: int = 0, query_limit: int = 8) -> str:
+def build_model_key(top_k: int, mode: str = "extraction", budget: int = 0, query_limit: int = 8) -> str:
     if budget > 0:
-        return f"muninn_{recall_mode}_encoded_budget_{budget}_query_{query_limit}"
-    return f"muninn_{recall_mode}_top_{top_k}"
+        return f"muninn_{mode}_encoded_budget_{budget}_query_{query_limit}"
+    return f"muninn_{mode}_top_{top_k}"
 
 
 def utc_now() -> str:
@@ -410,7 +433,7 @@ def run_qa_unit(
                 qas,
                 args.top_k,
                 home_dir.path,
-                args.recall_mode,
+                args.mode,
                 args.budget,
                 args.query_limit,
                 True,
@@ -422,7 +445,7 @@ def run_qa_unit(
             top_k=args.top_k,
             budget=args.budget,
             query_limit=args.query_limit,
-            recall_mode=args.recall_mode,
+            mode=args.mode,
             home_dir=home_dir.path,
         )
         run_phase(
@@ -775,9 +798,9 @@ def collect_batch_hits(
     qas: list[dict[str, object]],
     top_k: int,
     home_dir: Path,
-    recall_mode: str = "hybrid",
+    mode: str = "extraction",
     budget: int = 0,
-    query_limit: int = 8,
+    query_limit: int | None = 8,
     skip_watermark: bool = False,
     sample_id: str | None = None,
 ) -> dict[int, list[RecallHit]]:
@@ -795,7 +818,7 @@ def collect_batch_hits(
     batch_results = bridge.recall_batch(
         queries,
         home_dir,
-        recall_mode,
+        mode,
         budget=budget,
         query_limit=query_limit,
         skip_watermark=skip_watermark,

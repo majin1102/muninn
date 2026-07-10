@@ -29,7 +29,7 @@ pub fn turn_schema() -> Schema {
     ])
 }
 
-pub fn session_schema() -> Schema {
+pub fn session_snapshot_schema() -> Schema {
     Schema::new(vec![
         Field::new("session_id", DataType::Utf8, false),
         Field::new("project", DataType::Utf8, false),
@@ -103,10 +103,24 @@ pub fn dreaming_schema() -> Schema {
     ])
 }
 
-pub fn dreaming_project_schema() -> Schema {
+pub fn session_schema(dimensions: usize) -> Schema {
     Schema::new(vec![
+        Field::new("latest_snapshot_id", DataType::Utf8, false),
+        Field::new("session_id", DataType::Utf8, false),
         Field::new("project", DataType::Utf8, false),
-        Field::new("session_snapshot_version", DataType::UInt64, false),
+        Field::new("cwd", DataType::Utf8, false),
+        Field::new("agent", DataType::Utf8, false),
+        Field::new("title", DataType::Utf8, false),
+        Field::new("summary", DataType::Utf8, false),
+        Field::new("search_text", DataType::Utf8, false),
+        Field::new(
+            "vector",
+            DataType::FixedSizeList(
+                Arc::new(Field::new("item", DataType::Float32, true)),
+                dimensions as i32,
+            ),
+            false,
+        ),
         Field::new(
             "updated_at",
             DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
@@ -188,6 +202,49 @@ mod tests {
     }
 
     #[test]
+    fn session_schema_has_expected_fields() {
+        let schema = session_schema(4);
+        assert_eq!(
+            schema
+                .fields()
+                .iter()
+                .map(|field| field.name().as_str())
+            .collect::<Vec<_>>(),
+            vec![
+                "latest_snapshot_id",
+                "session_id",
+                "project",
+                "cwd",
+                "agent",
+                "title",
+                "summary",
+                "search_text",
+                "vector",
+                "updated_at",
+            ]
+        );
+        assert!(schema.field_with_name("context_id").is_err());
+        assert!(schema.field_with_name("latest_snapshot_id").is_ok());
+        assert!(schema.field_with_name("session_id").is_ok());
+        assert!(schema.field_with_name("project").is_ok());
+        assert!(schema.field_with_name("cwd").is_ok());
+        assert!(schema.field_with_name("agent").is_ok());
+        assert!(schema.field_with_name("title").is_ok());
+        assert!(schema.field_with_name("summary").is_ok());
+        assert!(schema.field_with_name("search_text").is_ok());
+        assert!(schema.field_with_name("vector").is_ok());
+        assert!(schema.field_with_name("updated_at").is_ok());
+        assert!(schema.field_with_name("id").is_err());
+        assert!(schema.field_with_name("session_key").is_err());
+        assert!(schema.field_with_name("references").is_err());
+        assert!(schema.field_with_name("created_at").is_err());
+
+        assert!(schema.field_with_name("project").unwrap().metadata().is_empty());
+        assert!(schema.field_with_name("agent").unwrap().metadata().is_empty());
+        assert!(schema.field_with_name("session_id").unwrap().metadata().is_empty());
+    }
+
+    #[test]
     fn turn_schema_uses_events_json_not_tool_calls_json() {
         let schema = turn_schema();
         assert!(schema.field_with_name("project").is_ok());
@@ -208,7 +265,7 @@ mod tests {
 
     #[test]
     fn session_schema_tracks_project_cwd_agent_and_extractor() {
-        let schema = session_schema();
+        let schema = session_snapshot_schema();
         assert!(schema.field_with_name("session_id").is_ok());
         assert!(schema.field_with_name("project").is_ok());
         assert!(schema.field_with_name("cwd").is_ok());
@@ -219,7 +276,7 @@ mod tests {
 
     #[test]
     fn session_schema_has_signal_fields() {
-        let schema = session_schema();
+        let schema = session_snapshot_schema();
         assert_eq!(schema.index_of("memory_signals").unwrap(), 10);
         assert_eq!(schema.index_of("skill_signals").unwrap(), 11);
         assert_eq!(schema.index_of("skill_details").unwrap(), 12);

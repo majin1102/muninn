@@ -118,7 +118,39 @@ class MuninnBridgeTests(unittest.TestCase):
         self.assertEqual(results["0:0"][0].memory_id, "turn:1")
         self.assertEqual(results["0:0"][0].detail, "memory")
 
-    def test_recall_batch_passes_budget_and_query_limit(self) -> None:
+    def test_recall_passes_public_mode(self) -> None:
+        bridge = MuninnBridge()
+        bridge.ensure_built = MagicMock()
+        bridge._run_json = MagicMock(return_value={"hits": []})
+
+        bridge.recall(
+            "summer plans",
+            5,
+            Path("/tmp/muninn-home"),
+            mode="session",
+        )
+
+        _, kwargs = bridge._run_json.call_args
+        self.assertEqual(kwargs["mode"], "session")
+        self.assertNotIn("recall_mode", kwargs)
+        self.assertNotIn("budget", kwargs)
+        self.assertNotIn("query_limit", kwargs)
+
+    def test_recall_rejects_internal_mode_names(self) -> None:
+        bridge = MuninnBridge()
+
+        with self.assertRaisesRegex(ValueError, "mode must be one of"):
+            bridge.recall("summer plans", 5, Path("/tmp/muninn-home"), mode="hybrid")
+
+    def test_recall_rejects_session_budget_and_query_limit(self) -> None:
+        bridge = MuninnBridge()
+
+        with self.assertRaisesRegex(ValueError, "budget and query_limit are only supported"):
+            bridge.recall("summer plans", 5, Path("/tmp/muninn-home"), mode="session", budget=1)
+        with self.assertRaisesRegex(ValueError, "budget and query_limit are only supported"):
+            bridge.recall("summer plans", 5, Path("/tmp/muninn-home"), mode="session", query_limit=8)
+
+    def test_recall_batch_session_mode_omits_extraction_only_fields(self) -> None:
         bridge = MuninnBridge()
         bridge.ensure_built = MagicMock()
         bridge._run_json = MagicMock(return_value={"results": {"0:0": []}})
@@ -126,7 +158,31 @@ class MuninnBridgeTests(unittest.TestCase):
         bridge.recall_batch(
             [{"key": "0:0", "query": "summer plans", "limit": 5}],
             Path("/tmp/muninn-home"),
-            recall_mode="hybrid",
+            mode="session",
+        )
+
+        _, kwargs = bridge._run_json.call_args
+        self.assertEqual(kwargs["mode"], "session")
+        self.assertNotIn("budget", kwargs)
+        self.assertNotIn("query_limit", kwargs)
+
+    def test_recall_batch_rejects_session_budget_and_query_limit(self) -> None:
+        bridge = MuninnBridge()
+
+        with self.assertRaisesRegex(ValueError, "budget and query_limit are only supported"):
+            bridge.recall_batch([], Path("/tmp/muninn-home"), mode="session", budget=1)
+        with self.assertRaisesRegex(ValueError, "budget and query_limit are only supported"):
+            bridge.recall_batch([], Path("/tmp/muninn-home"), mode="session", query_limit=8)
+
+    def test_recall_batch_passes_public_mode_budget_and_query_limit(self) -> None:
+        bridge = MuninnBridge()
+        bridge.ensure_built = MagicMock()
+        bridge._run_json = MagicMock(return_value={"results": {"0:0": []}})
+
+        bridge.recall_batch(
+            [{"key": "0:0", "query": "summer plans", "limit": 5}],
+            Path("/tmp/muninn-home"),
+            mode="extraction",
             budget=220,
             query_limit=20,
             skip_watermark=True,
@@ -134,6 +190,8 @@ class MuninnBridgeTests(unittest.TestCase):
         )
 
         _, kwargs = bridge._run_json.call_args
+        self.assertEqual(kwargs["mode"], "extraction")
+        self.assertNotIn("recall_mode", kwargs)
         self.assertEqual(kwargs["budget"], "220")
         self.assertEqual(kwargs["query_limit"], "20")
         self.assertEqual(kwargs["skip_watermark"], "1")

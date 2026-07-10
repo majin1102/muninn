@@ -56,7 +56,7 @@ export function hasSessionContext(session: unknown, document: unknown): boolean 
 }
 
 type TimelineRef = {
-  memoryId: string;
+  contextId: string;
   refs: string[];
 };
 
@@ -128,7 +128,7 @@ export function locateTimelineEnabled(
   }
   void conversationTurnIds;
   void activeItem;
-  return conversationItem.memoryId !== activeTimelineId;
+  return conversationItem.contextId !== activeTimelineId;
 }
 
 export function selectedSessionKey(session: {

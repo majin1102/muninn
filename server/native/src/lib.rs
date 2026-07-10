@@ -3,9 +3,9 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use muninn_format::{
-    Dreaming, DreamingProject, DreamingProjectTable, DreamingTable, Extraction, ExtractionTable,
-    MemoryId, MemoryLayer, RecallMode, SessionSnapshot, SessionTable, TableOptions, Turn,
-    TurnTable, data_root,
+    Dreaming, DreamingTable, Extraction, ExtractionTable, MemoryId, MemoryLayer, RecallMode,
+    Session, SessionIdentity, SessionSnapshot, SessionSnapshotTable, SessionTable, TableOptions,
+    Turn, TurnTable, data_root,
 };
 use napi::{Error, Result as NapiResult};
 use napi_derive::napi;
@@ -16,7 +16,7 @@ use tokio::sync::Mutex;
 #[derive(Clone)]
 struct CoreResources {
     dreaming_table: DreamingTable,
-    dreaming_project_table: DreamingProjectTable,
+    session_snapshot_table: SessionSnapshotTable,
     session_table: SessionTable,
     turn_table: TurnTable,
     extraction_table: ExtractionTable,
@@ -46,7 +46,7 @@ struct TurnListParams {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct TurnTimelineParams {
-    memory_id: String,
+    context_id: String,
     before_limit: Option<usize>,
     after_limit: Option<usize>,
 }
@@ -92,14 +92,61 @@ struct SessionListSnapshotsParams {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct SessionSnapshotThreadParams {
+    project: String,
+    agent: String,
+    session_id: String,
+    extractor: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct SessionInsertParams {
     snapshots: Vec<SessionSnapshot>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct SessionDeleteParams {
+struct SessionSnapshotDeleteParams {
     snapshot_ids: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionQueryParams {
+    query: String,
+    vector: Vec<f32>,
+    limit: usize,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionGetParams {
+    identities: Option<Vec<SessionIdentity>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionListParams {
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionUpsertParams {
+    rows: Vec<Session>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionReplaceAllParams {
+    rows: Vec<Session>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionDeleteParams {
+    identities: Vec<SessionIdentity>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -118,18 +165,6 @@ struct DreamingUpdateParams {
 #[serde(rename_all = "camelCase")]
 struct DreamingDeleteParams {
     dreaming_ids: Vec<String>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct DreamingProjectGetParams {
-    project: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct DreamingProjectUpsertParams {
-    row: DreamingProject,
 }
 
 #[derive(Debug, Deserialize)]
@@ -285,7 +320,7 @@ impl CoreBinding {
     pub async fn turn_timeline(&self, params: Value) -> NapiResult<Value> {
         let params = parse_params::<TurnTimelineParams>(params)?;
         let resources = self.resources().await?;
-        let memory_id = parse_memory_id(&params.memory_id, MemoryLayer::Turn)?;
+        let memory_id = parse_memory_id(&params.context_id, MemoryLayer::Turn)?;
         into_napi_value(
             resources
                 .turn_table
@@ -387,39 +422,39 @@ impl CoreBinding {
         into_napi_value(resources.turn_table.describe().await)
     }
 
-    #[napi(js_name = "sessionGetSnapshot")]
-    pub async fn session_get_snapshot(&self, snapshot_id: String) -> NapiResult<Value> {
+    #[napi(js_name = "sessionSnapshotGet")]
+    pub async fn session_snapshot_get(&self, snapshot_id: String) -> NapiResult<Value> {
         let resources = self.resources().await?;
         let memory_id = parse_memory_id(&snapshot_id, MemoryLayer::Session)?;
-        into_napi_value(resources.session_table.get(memory_id.memory_point()).await)
+        into_napi_value(resources.session_snapshot_table.get(memory_id.memory_point()).await)
     }
 
-    #[napi(js_name = "sessionListSnapshots")]
-    pub async fn session_list_snapshots(&self, params: Value) -> NapiResult<Value> {
+    #[napi(js_name = "sessionSnapshotList")]
+    pub async fn session_snapshot_list(&self, params: Value) -> NapiResult<Value> {
         let params = parse_params::<SessionListSnapshotsParams>(params)?;
         let resources = self.resources().await?;
         into_napi_value(
             resources
-                .session_table
+                .session_snapshot_table
                 .list(params.extractor.as_deref())
                 .await,
         )
     }
 
-    #[napi(js_name = "sessionListSnapshotsWithVersion")]
-    pub async fn session_list_snapshots_with_version(&self, params: Value) -> NapiResult<Value> {
+    #[napi(js_name = "sessionSnapshotListWithVersion")]
+    pub async fn session_snapshot_list_with_version(&self, params: Value) -> NapiResult<Value> {
         let params = parse_params::<SessionListSnapshotsParams>(params)?;
         let resources = self.resources().await?;
         let result = match params.version {
             Some(version) => {
                 resources
-                    .session_table
+                    .session_snapshot_table
                     .list_at_version(params.extractor.as_deref(), version)
                     .await
             }
             None => {
                 resources
-                    .session_table
+                    .session_snapshot_table
                     .list_with_version(params.extractor.as_deref())
                     .await
             }
@@ -427,45 +462,51 @@ impl CoreBinding {
         into_napi_value(result)
     }
 
-    #[napi(js_name = "sessionSnapshots")]
-    pub async fn session_snapshots(&self, session_id: String) -> NapiResult<Value> {
+    #[napi(js_name = "sessionSnapshotThread")]
+    pub async fn session_snapshot_thread(&self, params: Value) -> NapiResult<Value> {
+        let params = parse_params::<SessionSnapshotThreadParams>(params)?;
         let resources = self.resources().await?;
         into_napi_value(
             resources
-                .session_table
-                .load_thread_snapshots(&session_id)
+                .session_snapshot_table
+                .load_thread_snapshots(
+                    &params.project,
+                    &params.agent,
+                    &params.session_id,
+                    params.extractor.as_deref(),
+                )
                 .await,
         )
     }
 
-    #[napi(js_name = "sessionDelta")]
-    pub async fn session_delta(&self, params: Value) -> NapiResult<Value> {
+    #[napi(js_name = "sessionSnapshotDelta")]
+    pub async fn session_snapshot_delta(&self, params: Value) -> NapiResult<Value> {
         let params = parse_params::<TableDeltaParams>(params)?;
         let resources = self.resources().await?;
         into_napi_value(
             resources
-                .session_table
+                .session_snapshot_table
                 .delta(&params.extractor, params.baseline_version)
                 .await,
         )
     }
 
-    #[napi(js_name = "sessionInsert")]
-    pub async fn session_insert(&self, params: Value) -> NapiResult<Value> {
+    #[napi(js_name = "sessionSnapshotInsert")]
+    pub async fn session_snapshot_insert(&self, params: Value) -> NapiResult<Value> {
         let params = parse_params::<SessionInsertParams>(params)?;
         let resources = self.resources().await?;
         let mut snapshots = params.snapshots;
         resources
-            .session_table
+            .session_snapshot_table
             .insert(&mut snapshots)
             .await
             .map_err(to_napi_error)?;
         to_napi_value(snapshots)
     }
 
-    #[napi(js_name = "sessionDelete")]
-    pub async fn session_delete(&self, params: Value) -> NapiResult<Value> {
-        let params = parse_params::<SessionDeleteParams>(params)?;
+    #[napi(js_name = "sessionSnapshotDelete")]
+    pub async fn session_snapshot_delete(&self, params: Value) -> NapiResult<Value> {
+        let params = parse_params::<SessionSnapshotDeleteParams>(params)?;
         let resources = self.resources().await?;
         let snapshot_ids = params
             .snapshot_ids
@@ -473,17 +514,136 @@ impl CoreBinding {
             .map(|snapshot_id| parse_memory_id(snapshot_id, MemoryLayer::Session))
             .collect::<NapiResult<Vec<_>>>()?;
         let deleted = resources
-            .session_table
+            .session_snapshot_table
             .delete(snapshot_ids)
             .await
             .map_err(to_napi_error)?;
         to_napi_value(DeletedCount { deleted })
     }
 
+    #[napi(js_name = "sessionSnapshotTableStats")]
+    pub async fn session_snapshot_table_stats(&self) -> NapiResult<Value> {
+        let resources = self.resources().await?;
+        into_napi_value(resources.session_snapshot_table.stats().await)
+    }
+
+    #[napi(js_name = "sessionSnapshotCompact")]
+    pub async fn session_snapshot_compact(&self) -> NapiResult<Value> {
+        let resources = self.resources().await?;
+        let changed = resources
+            .session_snapshot_table
+            .compact()
+            .await
+            .map_err(to_napi_error)?;
+        to_napi_value(ChangedResult { changed })
+    }
+
+    #[napi(js_name = "sessionSnapshotCleanup")]
+    pub async fn session_snapshot_cleanup(&self, params: Value) -> NapiResult<Value> {
+        let params = parse_params::<CleanupParams>(params)?;
+        let resources = self.resources().await?;
+        let changed = resources
+            .session_snapshot_table
+            .cleanup(params.floor_version)
+            .await
+            .map_err(to_napi_error)?;
+        to_napi_value(ChangedResult { changed })
+    }
+
+    #[napi(js_name = "describeSessionSnapshotTable")]
+    pub async fn describe_session_snapshot_table(&self) -> NapiResult<Value> {
+        let resources = self.resources().await?;
+        into_napi_value(resources.session_snapshot_table.describe().await)
+    }
+
+    #[napi(js_name = "sessionQuery")]
+    pub async fn session_query(&self, params: Value) -> NapiResult<Value> {
+        let params = parse_params::<SessionQueryParams>(params)?;
+        let resources = self.resources().await?;
+        into_napi_value(
+            resources
+                .session_table
+                .search(&params.query, &params.vector, params.limit)
+                .await,
+        )
+    }
+
+    #[napi(js_name = "sessionGet")]
+    pub async fn session_get(&self, params: Value) -> NapiResult<Value> {
+        let params = parse_params::<SessionGetParams>(params)?;
+        let resources = self.resources().await?;
+        let identities = params.identities.unwrap_or_default();
+        into_napi_value(resources.session_table.get(&identities).await)
+    }
+
+    #[napi(js_name = "sessionList")]
+    pub async fn session_list(&self, params: Value) -> NapiResult<Value> {
+        let params = parse_params::<SessionListParams>(params)?;
+        let resources = self.resources().await?;
+        into_napi_value(resources.session_table.list(params.limit).await)
+    }
+
+    #[napi(js_name = "sessionUpsert")]
+    pub async fn session_upsert(&self, params: Value) -> NapiResult<()> {
+        let params = parse_params::<SessionUpsertParams>(params)?;
+        let resources = self.resources().await?;
+        resources
+            .session_table
+            .upsert(params.rows)
+            .await
+            .map_err(to_napi_error)
+    }
+
+    #[napi(js_name = "sessionReplaceAll")]
+    pub async fn session_replace_all(&self, params: Value) -> NapiResult<()> {
+        let params = parse_params::<SessionReplaceAllParams>(params)?;
+        let resources = self.resources().await?;
+        resources
+            .session_table
+            .replace_all(params.rows)
+            .await
+            .map_err(to_napi_error)
+    }
+
+    #[napi(js_name = "sessionDelete")]
+    pub async fn session_delete(&self, params: Value) -> NapiResult<Value> {
+        let params = parse_params::<SessionDeleteParams>(params)?;
+        let resources = self.resources().await?;
+        let deleted = resources
+            .session_table
+            .delete(params.identities)
+            .await
+            .map_err(to_napi_error)?;
+        to_napi_value(DeletedCount { deleted })
+    }
+
+    #[napi(js_name = "sessionValidateDimensions")]
+    pub async fn session_validate_dimensions(&self, params: Value) -> NapiResult<()> {
+        let params = parse_params::<ExpectedDimensionsParams>(params)?;
+        let resources = self.resources().await?;
+        resources
+            .session_table
+            .validate_dimensions(params.expected)
+            .await
+            .map_err(to_napi_error)
+    }
+
     #[napi(js_name = "sessionTableStats")]
     pub async fn session_table_stats(&self) -> NapiResult<Value> {
         let resources = self.resources().await?;
         into_napi_value(resources.session_table.stats().await)
+    }
+
+    #[napi(js_name = "sessionEnsureVectorIndex")]
+    pub async fn session_ensure_vector_index(&self, params: Value) -> NapiResult<Value> {
+        let params = parse_params::<TargetPartitionSizeParams>(params)?;
+        let resources = self.resources().await?;
+        let created = resources
+            .session_table
+            .ensure_vector_index(params.target_partition_size)
+            .await
+            .map_err(to_napi_error)?;
+        to_napi_value(CreatedResult { created })
     }
 
     #[napi(js_name = "sessionCompact")]
@@ -504,6 +664,18 @@ impl CoreBinding {
         let changed = resources
             .session_table
             .cleanup(params.floor_version)
+            .await
+            .map_err(to_napi_error)?;
+        to_napi_value(ChangedResult { changed })
+    }
+
+    #[napi(js_name = "sessionOptimize")]
+    pub async fn session_optimize(&self, params: Value) -> NapiResult<Value> {
+        let params = parse_params::<OptimizeParams>(params)?;
+        let resources = self.resources().await?;
+        let changed = resources
+            .session_table
+            .optimize(params.merge_count)
             .await
             .map_err(to_napi_error)?;
         to_napi_value(ChangedResult { changed })
@@ -585,30 +757,6 @@ impl CoreBinding {
             .await
             .map_err(to_napi_error)?;
         to_napi_value(DeletedCount { deleted })
-    }
-
-    #[napi(js_name = "dreamingProjectList")]
-    pub async fn dreaming_project_list(&self) -> NapiResult<Value> {
-        let resources = self.resources().await?;
-        into_napi_value(resources.dreaming_project_table.list().await)
-    }
-
-    #[napi(js_name = "dreamingProjectGet")]
-    pub async fn dreaming_project_get(&self, params: Value) -> NapiResult<Value> {
-        let params = parse_params::<DreamingProjectGetParams>(params)?;
-        let resources = self.resources().await?;
-        into_napi_value(resources.dreaming_project_table.get(&params.project).await)
-    }
-
-    #[napi(js_name = "dreamingProjectUpsert")]
-    pub async fn dreaming_project_upsert(&self, params: Value) -> NapiResult<()> {
-        let params = parse_params::<DreamingProjectUpsertParams>(params)?;
-        let resources = self.resources().await?;
-        resources
-            .dreaming_project_table
-            .upsert(params.row)
-            .await
-            .map_err(to_napi_error)
     }
 
     #[napi(js_name = "dreamingTableStats")]
@@ -783,16 +931,16 @@ pub fn create_core_binding(params: Option<Value>) -> NapiResult<CoreBinding> {
         None => TableOptions::load().map_err(to_napi_error)?,
     };
     let turn_table = TurnTable::new(table_options.clone());
-    let session_table = SessionTable::new(table_options.clone());
+    let session_snapshot_table = SessionSnapshotTable::new(table_options.clone());
     let dreaming_table = DreamingTable::new(table_options.clone());
-    let dreaming_project_table = DreamingProjectTable::new(table_options.clone());
+    let session_table = SessionTable::new(table_options.clone());
     let extraction_table = ExtractionTable::new(table_options);
     Ok(CoreBinding {
         inner: Arc::new(CoreState {
             resources: Mutex::new(Some(CoreResources {
                 dreaming_table,
-                dreaming_project_table,
                 turn_table,
+                session_snapshot_table,
                 session_table,
                 extraction_table,
             })),

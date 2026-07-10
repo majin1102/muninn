@@ -539,6 +539,9 @@ function captureTurnsFromSession<Session extends AgentSession>(
 }
 
 function stripCaptureMarkersFromTurn<Turn extends AgentTurn>(turn: Turn): Turn | null {
+  if (captureMarkerLines(turn.response).length > 0) {
+    return null;
+  }
   const stripped = stripCaptureMarkerLines(turn.response);
   if (stripped === turn.response) {
     return turn;
@@ -599,7 +602,7 @@ function captureMarkerLines(value: string): CaptureMarkerAction[] {
 }
 
 function captureMarkerLine(value: string): CaptureMarkerAction | null {
-  const match = /^<MUNINN_CAPTURE_CURRENT_SESSION action="(enable|disable)" nonce="([^"]+)" \/>$/.exec(value);
+  const match = /^<!--\s*muninn:capture-current-session\s+action=(enable|disable)\s+nonce=([^\s>]+)\s*-->$/.exec(value);
   if (!match || match[2] !== CAPTURE_MARKER_NONCE) {
     return null;
   }

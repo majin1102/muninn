@@ -7,8 +7,10 @@ import path from 'node:path';
 import { captureFromTranscript, resolveHookConfig } from '../dist/agent-hook.js';
 import { muninnSessionKey } from '../dist/session-identity.js';
 
-const ENABLE_MARKER = '<MUNINN_CAPTURE_CURRENT_SESSION action="enable" nonce="muninn-capture-v1" />';
-const DISABLE_MARKER = '<MUNINN_CAPTURE_CURRENT_SESSION action="disable" nonce="muninn-capture-v1" />';
+const ENABLE_MARKER = '<!-- muninn:capture-current-session action=enable nonce=muninn-capture-v1 -->';
+const DISABLE_MARKER = '<!-- muninn:capture-current-session action=disable nonce=muninn-capture-v1 -->';
+const ENABLE_REPLY = `已开启当前会话的 Muninn 捕获。\n${ENABLE_MARKER}`;
+const DISABLE_REPLY = `已停止捕获当前会话，并会从 Muninn 删除这条会话。\n${DISABLE_MARKER}`;
 
 test('hook config reads server base URL and trims trailing slashes', () => {
   const config = resolveHookConfig({
@@ -38,7 +40,7 @@ test('hook config falls back to live managed server state', async (t) => {
 test('captureFromTranscript enables current session capture from marker and captures prior turns', async (t) => {
   const { home, transcriptPath } = await writeAgentSession([
     { prompt: 'remember this', response: 'noted' },
-    { prompt: '$remember-session', response: ENABLE_MARKER },
+    { prompt: '$muninn-remember', response: ENABLE_REPLY },
   ]);
   setMuninnHome(t, home);
   const captured = [];
@@ -77,9 +79,9 @@ test('captureFromTranscript enables current session capture from marker and capt
   assert.equal(finalized, 1);
 });
 
-test('captureFromTranscript advances progress for marker-only enable turn', async (t) => {
+test('captureFromTranscript advances progress for friendly marker enable turn without capturing it', async (t) => {
   const { home, transcriptPath } = await writeAgentSession([
-    { prompt: '$remember-session', response: ENABLE_MARKER },
+    { prompt: '$muninn-remember', response: ENABLE_REPLY },
   ]);
   setMuninnHome(t, home);
   const captured = [];
@@ -139,8 +141,8 @@ test('captureFromTranscript enables current session capture without replaying ca
   }));
   await writeFile(transcriptPath, `${capturedPrefix}${JSON.stringify({
     type: 'turn',
-    prompt: '$remember-session',
-    response: ENABLE_MARKER,
+    prompt: '$muninn-remember',
+    response: ENABLE_REPLY,
     promptTimestamp: '2026-06-10T03:01:01.000Z',
     responseTimestamp: '2026-06-10T03:01:02.000Z',
   })}\n`);
@@ -172,7 +174,7 @@ test('captureFromTranscript enables current session capture without replaying ca
 test('captureFromTranscript does not advance progress when marker capture fails', async (t) => {
   const { home, transcriptPath } = await writeAgentSession([
     { prompt: 'remember this', response: 'noted' },
-    { prompt: '$remember-session', response: ENABLE_MARKER },
+    { prompt: '$muninn-remember', response: ENABLE_REPLY },
   ]);
   setMuninnHome(t, home);
   let finalized = 0;
@@ -205,7 +207,7 @@ test('captureFromTranscript does not advance progress when marker capture fails'
 test('captureFromTranscript disables current session capture from marker and deletes session', async (t) => {
   const { home, transcriptPath } = await writeAgentSession([
     { prompt: 'remember this', response: 'noted' },
-    { prompt: '$forget-session', response: DISABLE_MARKER },
+    { prompt: '$muninn-forget', response: DISABLE_REPLY },
   ]);
   setMuninnHome(t, home);
   const sessionKey = muninnSessionKey({ project: 'github.com/example/muninn', sessionId: 'session-a', agent: 'codex' });

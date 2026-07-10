@@ -8,20 +8,28 @@ import {
   buildSessionTurnPageForTests,
   buildTurnDetailForTests,
   buildTurnPreviewForTests,
+  extractionRefsFromSnapshotForTests,
   resolveSessionTreeNextOffsetForTests,
   resolveSessionNodeFromIndexForTests,
 } from '../dist/web/routes.js';
 
+const sessionIdentity = {
+  project: 'project-a',
+  agent: 'codex',
+  sessionId: 'session-a',
+};
+const sessionContext = 'session:snapshot';
+
 const turns = [
   {
-    memoryId: 'turn:2',
+    contextId: 'turn:2',
     createdAt: '2026-06-02T10:10:00.000Z',
     updatedAt: '2026-06-02T10:10:00.000Z',
     summary: 'fallback b',
     prompt: 'fallback prompt b',
   },
   {
-    memoryId: 'turn:1',
+    contextId: 'turn:1',
     createdAt: '2026-06-02T10:00:00.000Z',
     updatedAt: '2026-06-02T10:00:00.000Z',
     summary: 'fallback a',
@@ -32,6 +40,7 @@ const turns = [
 function snapshotDoc(content) {
   return {
     snapshotId: 'session:snapshot',
+    ...sessionIdentity,
     content,
     createdAt: '2026-06-02T09:00:00.000Z',
     updatedAt: '2026-06-02T11:00:00.000Z',
@@ -60,13 +69,13 @@ test('builds snapshot extraction segments in snapshot order', () => {
 
   assert.deepEqual(buildSessionSegmentsForTests(snapshotDoc(snapshot), turns), [
     {
-      memoryId: 'turn:2~timeline:0',
+      contextId: 'turn:2~timeline:0',
       title: '晚一点的问题段落',
       createdAt: '2026-06-02T10:10:00.000Z',
       updatedAt: '2026-06-02T10:10:00.000Z',
     },
     {
-      memoryId: 'turn:1~timeline:1',
+      contextId: 'turn:1~timeline:1',
       title: '更早的问题段落',
       createdAt: '2026-06-02T10:00:00.000Z',
       updatedAt: '2026-06-02T10:00:00.000Z',
@@ -90,10 +99,44 @@ test('uses extraction title heading for segment titles', () => {
 
   assert.deepEqual(buildSessionSegmentsForTests(snapshotDoc(snapshot), turns), [
     {
-      memoryId: 'turn:1~timeline:0',
+      contextId: 'turn:1~timeline:0',
       title: 'Discussion segment navigation',
       createdAt: '2026-06-02T10:00:00.000Z',
       updatedAt: '2026-06-02T10:00:00.000Z',
+    },
+  ]);
+});
+
+test('builds extraction timeline items from public context id metadata', () => {
+  const snapshot = [
+    '## Extractions',
+    '<!-- context_id: ext:fe947862-8d4f-414b-93ed-d1c8c442ab98; refs: [turn:1, turn:2] -->',
+    '### Title',
+    'Inline context id extraction',
+    '',
+    '### Summary',
+    'The UI should render extraction blocks with public context ids.',
+    '',
+    '### Content',
+    '- Keep turn refs available for conversation location.',
+  ].join('\n');
+
+  assert.deepEqual(extractionRefsFromSnapshotForTests(snapshotDoc(snapshot)), ['turn:1', 'turn:2']);
+  assert.deepEqual(extractionTimeline(snapshot), [
+    {
+      contextId: 'ext:fe947862-8d4f-414b-93ed-d1c8c442ab98',
+      kind: 'extraction',
+      title: 'Inline context id extraction',
+      createdAt: '2026-06-02T10:00:00.000Z',
+      updatedAt: '2026-06-02T10:00:00.000Z',
+      markdown: [
+        '### Summary',
+        'The UI should render extraction blocks with public context ids.',
+        '',
+        '### Content',
+        '- Keep turn refs available for conversation location.',
+      ].join('\n'),
+      refs: ['turn:1', 'turn:2'],
     },
   ]);
 });
@@ -113,7 +156,7 @@ test('parses extraction headings when Markdown leaves blank lines after headings
 
   assert.deepEqual(extractionTimeline(snapshot), [
     {
-      memoryId: 'turn:1~timeline:0',
+      contextId: 'turn:1~timeline:0',
       kind: 'extraction',
       title: 'Markdown heading spacing',
       createdAt: '2026-06-02T10:00:00.000Z',
@@ -167,7 +210,7 @@ test('builds snapshot timeline with summary, split signals, markdown, and refs',
 
   assert.deepEqual(buildSessionTimelineForTests(snapshotDoc(snapshot), turns), [
     {
-      memoryId: 'session:snapshot~timeline:summary',
+      contextId: `${sessionContext}~timeline:summary`,
       kind: 'summary',
       title: 'Summary',
       createdAt: '2026-06-02T09:00:00.000Z',
@@ -176,7 +219,7 @@ test('builds snapshot timeline with summary, split signals, markdown, and refs',
       refs: [],
     },
     {
-      memoryId: 'session:snapshot~timeline:instructions',
+      contextId: `${sessionContext}~timeline:instructions`,
       kind: 'signals',
       title: 'Instruction Signals',
       createdAt: '2026-06-02T09:00:00.000Z',
@@ -185,7 +228,7 @@ test('builds snapshot timeline with summary, split signals, markdown, and refs',
       refs: [],
     },
     {
-      memoryId: 'session:snapshot~timeline:skills',
+      contextId: `${sessionContext}~timeline:skills`,
       kind: 'signals',
       title: 'Skill Signals',
       createdAt: '2026-06-02T09:00:00.000Z',
@@ -194,7 +237,7 @@ test('builds snapshot timeline with summary, split signals, markdown, and refs',
       refs: [],
     },
     {
-      memoryId: 'turn:1~timeline:0',
+      contextId: 'turn:1~timeline:0',
       kind: 'extraction',
       title: 'Prompt budget rules',
       createdAt: '2026-06-02T10:00:00.000Z',
@@ -203,7 +246,7 @@ test('builds snapshot timeline with summary, split signals, markdown, and refs',
       refs: ['turn:1', 'turn:2'],
     },
     {
-      memoryId: 'turn:2~timeline:1',
+      contextId: 'turn:2~timeline:1',
       kind: 'extraction',
       title: 'Title language',
       createdAt: '2026-06-02T10:10:00.000Z',
@@ -236,13 +279,13 @@ test('session timeline page segments use snapshot content when available', async
 
   assert.deepEqual(page.segments, [
     {
-      memoryId: 'turn:2~timeline:0',
+      contextId: 'turn:2~timeline:0',
       title: 'snapshot segment b',
       createdAt: '2026-06-02T10:10:00.000Z',
       updatedAt: '2026-06-02T10:10:00.000Z',
     },
     {
-      memoryId: 'turn:1~timeline:1',
+      contextId: 'turn:1~timeline:1',
       title: 'snapshot segment a',
       createdAt: '2026-06-02T10:00:00.000Z',
       updatedAt: '2026-06-02T10:00:00.000Z',

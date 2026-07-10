@@ -149,6 +149,15 @@ function generateMockText(request: LlmTextRequest): string {
       refs,
     });
   }
+  if (request.system.includes('session recall result reranker')) {
+    const contextIds = [...request.prompt.matchAll(/context_id:\s*(session:[^\s]+)/g)]
+      .map((match) => match[1])
+      .filter(Boolean);
+    return JSON.stringify({
+      context_ids: contextIds,
+      filtered_context_ids: [],
+    });
+  }
   if (request.system.includes('extractor that rewrites one session memory document')) {
     const ref = request.prompt.match(/(?:session|turn):[A-Za-z0-9:_-]+/)?.[0] ?? 'turn:mock';
     return [

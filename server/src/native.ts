@@ -3,9 +3,10 @@ import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
 
 import type { Artifact, TurnEvent } from '@muninn/common';
-import type { RecallMode } from './config.js';
 
 type MaybePromise<T> = Promise<T> | T;
+
+export type RecallMode = 'vector' | 'fts' | 'hybrid';
 
 export interface TableDescription {
   // describe() exposes table facts surfaced by the opened dataset. It does not
@@ -82,6 +83,29 @@ export interface SessionSnapshotRow {
   references: string[];
 }
 
+export type SessionIdentity = {
+  project: string;
+  agent: string;
+  sessionId: string;
+};
+
+export type SessionSnapshotThreadScope = SessionIdentity & {
+  extractor?: string;
+};
+
+export type SessionRow = {
+  latestSnapshotId: string;
+  sessionId: string;
+  project: string;
+  cwd: string;
+  agent: string;
+  title: string;
+  summary: string;
+  searchText: string;
+  vector: number[];
+  updatedAt: string;
+};
+
 export type DreamingSupportTurn = {
   turnId: string;
   createdAt: string;
@@ -95,12 +119,6 @@ export type DreamingRow = {
   updatedAt: string;
   content: string;
   supportTurns: DreamingSupportTurn[];
-};
-
-export type DreamingProjectRow = {
-  project: string;
-  sessionSnapshotVersion: number;
-  updatedAt: string;
 };
 
 export type ExtractionRow = {
@@ -117,6 +135,7 @@ export type ExtractionRow = {
 
 export type Turn = TurnRow;
 export type SessionSnapshot = SessionSnapshotRow;
+export type Session = SessionRow;
 export type Dreaming = DreamingRow;
 export type Extraction = ExtractionRow;
 
@@ -131,7 +150,7 @@ type NativeCoreBinding = {
     extractor?: string;
   }): MaybePromise<Turn[]>;
   turnTimeline(params: {
-    memoryId: string;
+    contextId: string;
     beforeLimit?: number;
     afterLimit?: number;
   }): MaybePromise<Turn[]>;
@@ -154,29 +173,63 @@ type NativeCoreBinding = {
   turnCleanup(params: {
     floorVersion: number;
   }): MaybePromise<CompactResult>;
-  sessionGetSnapshot(snapshotId: string): MaybePromise<SessionSnapshotRow | null>;
-  sessionListSnapshots(params: {
+  sessionSnapshotGet(snapshotId: string): MaybePromise<SessionSnapshotRow | null>;
+  sessionSnapshotList(params: {
     extractor?: string;
   }): MaybePromise<SessionSnapshotRow[]>;
-  sessionListSnapshotsWithVersion(params: {
+  sessionSnapshotListWithVersion(params: {
     extractor?: string;
     version?: number;
   }): MaybePromise<SourceRows<SessionSnapshotRow>>;
-  sessionSnapshots(sessionId: string): MaybePromise<SessionSnapshotRow[]>;
-  sessionDelta(params: {
+  sessionSnapshotThread(scope: SessionSnapshotThreadScope): MaybePromise<SessionSnapshotRow[]>;
+  sessionSnapshotDelta(params: {
     extractor: string;
     baselineVersion: number;
   }): MaybePromise<SourceRows<SessionSnapshotRow>>;
-  sessionInsert(params: {
+  sessionSnapshotInsert(params: {
     snapshots: SessionSnapshotRow[];
   }): MaybePromise<SessionSnapshotRow[]>;
-  sessionDelete(params: {
+  sessionSnapshotDelete(params: {
     snapshotIds: string[];
   }): MaybePromise<{ deleted: number }>;
+  sessionSnapshotTableStats(): MaybePromise<TableStats | null>;
+  sessionSnapshotCompact(): MaybePromise<CompactResult>;
+  sessionSnapshotCleanup(params: {
+    floorVersion: number;
+  }): MaybePromise<CompactResult>;
+  sessionQuery(params: {
+    query: string;
+    vector: number[];
+    limit: number;
+  }): MaybePromise<Session[]>;
+  sessionGet(params: {
+    identities?: SessionIdentity[];
+  }): MaybePromise<Session[]>;
+  sessionList(params: {
+    limit?: number;
+  }): MaybePromise<Session[]>;
+  sessionUpsert(params: {
+    rows: Session[];
+  }): MaybePromise<void>;
+  sessionReplaceAll(params: {
+    rows: Session[];
+  }): MaybePromise<void>;
+  sessionDelete(params: {
+    identities: SessionIdentity[];
+  }): MaybePromise<{ deleted: number }>;
+  sessionValidateDimensions(params: {
+    expected: number;
+  }): MaybePromise<void>;
   sessionTableStats(): MaybePromise<TableStats | null>;
+  sessionEnsureVectorIndex(params: {
+    targetPartitionSize: number;
+  }): MaybePromise<EnsureVectorIndexResult>;
   sessionCompact(): MaybePromise<CompactResult>;
   sessionCleanup(params: {
     floorVersion: number;
+  }): MaybePromise<CompactResult>;
+  sessionOptimize(params: {
+    mergeCount: number;
   }): MaybePromise<CompactResult>;
   dreamingGet(dreamingId: string): MaybePromise<DreamingRow | null>;
   dreamingList(): MaybePromise<DreamingRow[]>;
@@ -192,13 +245,6 @@ type NativeCoreBinding = {
   dreamingDelete(params: {
     dreamingIds: string[];
   }): MaybePromise<{ deleted: number }>;
-  dreamingProjectList(): MaybePromise<DreamingProjectRow[]>;
-  dreamingProjectGet(params: {
-    project: string;
-  }): MaybePromise<DreamingProjectRow | null>;
-  dreamingProjectUpsert(params: {
-    row: DreamingProjectRow;
-  }): MaybePromise<void>;
   dreamingTableStats(): MaybePromise<TableStats | null>;
   extractionNearest(params: {
     vector: number[];
@@ -240,6 +286,7 @@ type NativeCoreBinding = {
     mergeCount: number;
   }): MaybePromise<CompactResult>;
   describeTurnTable(): MaybePromise<TableDescription | null>;
+  describeSessionSnapshotTable(): MaybePromise<TableDescription | null>;
   describeSessionTable(): MaybePromise<TableDescription | null>;
   describeDreamingTable(): MaybePromise<TableDescription | null>;
   describeExtractionTable(): MaybePromise<TableDescription | null>;
@@ -260,7 +307,7 @@ export interface TurnTableBinding {
     extractor?: string;
   }): Promise<Turn[]>;
   timelineTurns(params: {
-    memoryId: string;
+    contextId: string;
     beforeLimit?: number;
     afterLimit?: number;
   }): Promise<Turn[]>;
@@ -286,7 +333,7 @@ export interface TurnTableBinding {
   describe(): Promise<TableDescription | null>;
 }
 
-export interface SessionTableBinding {
+export interface SessionSnapshotTableBinding {
   getSnapshot(snapshotId: string): Promise<SessionSnapshot | null>;
   listSnapshots(params: {
     extractor?: string;
@@ -295,7 +342,7 @@ export interface SessionTableBinding {
     extractor?: string;
     version?: number;
   }): Promise<SourceRows<SessionSnapshotRow>>;
-  threadSnapshots(sessionId: string): Promise<SessionSnapshotRow[]>;
+  threadSnapshots(scope: SessionSnapshotThreadScope): Promise<SessionSnapshotRow[]>;
   delta(params: {
     extractor: string;
     baselineVersion: number;
@@ -333,14 +380,42 @@ export interface DreamingTableBinding {
   describe(): Promise<TableDescription | null>;
 }
 
-export interface DreamingProjectTableBinding {
-  list(): Promise<DreamingProjectRow[]>;
+export interface SessionTableBinding {
+  search(params: {
+    query: string;
+    vector: number[];
+    limit: number;
+  }): Promise<SessionRow[]>;
   get(params: {
-    project: string;
-  }): Promise<DreamingProjectRow | null>;
+    identities?: SessionIdentity[];
+  }): Promise<SessionRow[]>;
+  list(params: {
+    limit?: number;
+  }): Promise<SessionRow[]>;
   upsert(params: {
-    row: DreamingProjectRow;
+    rows: SessionRow[];
   }): Promise<void>;
+  replaceAll(params: {
+    rows: SessionRow[];
+  }): Promise<void>;
+  delete(params: {
+    identities: SessionIdentity[];
+  }): Promise<{ deleted: number }>;
+  validateDimensions(params: {
+    expected: number;
+  }): Promise<void>;
+  stats(): Promise<TableStats | null>;
+  ensureVectorIndex(params: {
+    targetPartitionSize: number;
+  }): Promise<EnsureVectorIndexResult>;
+  compact(): Promise<CompactResult>;
+  cleanup(params: {
+    floorVersion: number;
+  }): Promise<CompactResult>;
+  optimize(params: {
+    mergeCount: number;
+  }): Promise<CompactResult>;
+  describe(): Promise<TableDescription | null>;
 }
 
 export interface ExtractionTableBinding {
@@ -389,9 +464,9 @@ export interface ExtractionTableBinding {
 export interface NativeTables {
   close(): Promise<void>;
   turnTable: TurnTableBinding;
-  sessionTable: SessionTableBinding;
+  sessionSnapshotTable: SessionSnapshotTableBinding;
   dreamingTable: DreamingTableBinding;
-  dreamingProjectTable: DreamingProjectTableBinding;
+  sessionTable: SessionTableBinding;
   extractionTable: ExtractionTableBinding;
 }
 
@@ -463,21 +538,21 @@ function wrapBinding(native: NativeCoreBinding): NativeTables {
   return {
     close: async () => resolveNativeResult(native.close()),
     turnTable,
-    sessionTable: {
+    sessionSnapshotTable: {
       getSnapshot: async (snapshotId) => normalizeOptionalRecord(
-        await resolveNativeResult(native.sessionGetSnapshot(snapshotId)),
+        await resolveNativeResult(native.sessionSnapshotGet(snapshotId)),
         'snapshotId',
       ),
-      listSnapshots: async (params) => resolveNativeResult(native.sessionListSnapshots(params)),
-      listSnapshotsWithVersion: async (params) => resolveNativeResult(native.sessionListSnapshotsWithVersion(params)),
-      threadSnapshots: async (sessionId) => resolveNativeResult(native.sessionSnapshots(sessionId)),
-      delta: async (params) => resolveNativeResult(native.sessionDelta(params)),
-      insert: async (params) => resolveNativeResult(native.sessionInsert(params)),
-      delete: async (params) => resolveNativeResult(native.sessionDelete(params)),
-      stats: async () => resolveNativeResult(native.sessionTableStats()),
-      compact: async () => resolveNativeResult(native.sessionCompact()),
-      cleanup: async (params) => resolveNativeResult(native.sessionCleanup(params)),
-      describe: async () => resolveNativeResult(native.describeSessionTable()),
+      listSnapshots: async (params) => resolveNativeResult(native.sessionSnapshotList(params)),
+      listSnapshotsWithVersion: async (params) => resolveNativeResult(native.sessionSnapshotListWithVersion(params)),
+      threadSnapshots: async (scope) => resolveNativeResult(native.sessionSnapshotThread(scope)),
+      delta: async (params) => resolveNativeResult(native.sessionSnapshotDelta(params)),
+      insert: async (params) => resolveNativeResult(native.sessionSnapshotInsert(params)),
+      delete: async (params) => resolveNativeResult(native.sessionSnapshotDelete(params)),
+      stats: async () => resolveNativeResult(native.sessionSnapshotTableStats()),
+      compact: async () => resolveNativeResult(native.sessionSnapshotCompact()),
+      cleanup: async (params) => resolveNativeResult(native.sessionSnapshotCleanup(params)),
+      describe: async () => resolveNativeResult(native.describeSessionSnapshotTable()),
     },
     dreamingTable: {
       get: async (dreamingId) => normalizeOptionalRecord(
@@ -492,13 +567,20 @@ function wrapBinding(native: NativeCoreBinding): NativeTables {
       stats: async () => resolveNativeResult(native.dreamingTableStats()),
       describe: async () => resolveNativeResult(native.describeDreamingTable()),
     },
-    dreamingProjectTable: {
-      list: async () => resolveNativeResult(native.dreamingProjectList()),
-      get: async (params) => normalizeOptionalRecord(
-        await resolveNativeResult(native.dreamingProjectGet(params)),
-        'project',
-      ),
-      upsert: async (params) => resolveNativeResult(native.dreamingProjectUpsert(params)),
+    sessionTable: {
+      search: async (params) => resolveNativeResult(native.sessionQuery(params)),
+      get: async (params) => resolveNativeResult(native.sessionGet(params)),
+      list: async (params) => resolveNativeResult(native.sessionList(params)),
+      upsert: async (params) => resolveNativeResult(native.sessionUpsert(params)),
+      replaceAll: async (params) => resolveNativeResult(native.sessionReplaceAll(params)),
+      delete: async (params) => resolveNativeResult(native.sessionDelete(params)),
+      validateDimensions: async (params) => resolveNativeResult(native.sessionValidateDimensions(params)),
+      stats: async () => resolveNativeResult(native.sessionTableStats()),
+      ensureVectorIndex: async (params) => resolveNativeResult(native.sessionEnsureVectorIndex(params)),
+      compact: async () => resolveNativeResult(native.sessionCompact()),
+      cleanup: async (params) => resolveNativeResult(native.sessionCleanup(params)),
+      optimize: async (params) => resolveNativeResult(native.sessionOptimize(params)),
+      describe: async () => resolveNativeResult(native.describeSessionTable()),
     },
     extractionTable: {
       nearest: async (params) => resolveNativeResult(native.extractionNearest(params)),
@@ -535,6 +617,7 @@ export const __testing = {
 
 export type TableName =
   | 'turn'
+  | 'sessionSnapshot'
   | 'session'
   | 'dreaming'
   | 'extraction';
@@ -572,11 +655,11 @@ export function lockNativeTables<T extends NativeTables>(tables: T, locks: Table
       compact: () => locks.with('turn', () => tables.turnTable.compact()),
       cleanup: (params) => locks.with('turn', () => tables.turnTable.cleanup(params)),
     },
-    sessionTable: tables.sessionTable && {
-      ...tables.sessionTable,
-      insert: (params) => locks.with('session', () => tables.sessionTable.insert(params)),
-      compact: () => locks.with('session', () => tables.sessionTable.compact()),
-      cleanup: (params) => locks.with('session', () => tables.sessionTable.cleanup(params)),
+    sessionSnapshotTable: tables.sessionSnapshotTable && {
+      ...tables.sessionSnapshotTable,
+      insert: (params) => locks.with('sessionSnapshot', () => tables.sessionSnapshotTable.insert(params)),
+      compact: () => locks.with('sessionSnapshot', () => tables.sessionSnapshotTable.compact()),
+      cleanup: (params) => locks.with('sessionSnapshot', () => tables.sessionSnapshotTable.cleanup(params)),
     },
     dreamingTable: tables.dreamingTable && {
       ...tables.dreamingTable,
@@ -584,9 +667,15 @@ export function lockNativeTables<T extends NativeTables>(tables: T, locks: Table
       update: (params) => locks.with('dreaming', () => tables.dreamingTable.update(params)),
       delete: (params) => locks.with('dreaming', () => tables.dreamingTable.delete(params)),
     },
-    dreamingProjectTable: tables.dreamingProjectTable && {
-      ...tables.dreamingProjectTable,
-      upsert: (params) => locks.with('dreaming', () => tables.dreamingProjectTable.upsert(params)),
+    sessionTable: tables.sessionTable && {
+      ...tables.sessionTable,
+      upsert: (params) => locks.with('session', () => tables.sessionTable.upsert(params)),
+      replaceAll: (params) => locks.with('session', () => tables.sessionTable.replaceAll(params)),
+      delete: (params) => locks.with('session', () => tables.sessionTable.delete(params)),
+      ensureVectorIndex: (params) => locks.with('session', () => tables.sessionTable.ensureVectorIndex(params)),
+      compact: () => locks.with('session', () => tables.sessionTable.compact()),
+      cleanup: (params) => locks.with('session', () => tables.sessionTable.cleanup(params)),
+      optimize: (params) => locks.with('session', () => tables.sessionTable.optimize(params)),
     },
     extractionTable: tables.extractionTable && {
       ...tables.extractionTable,

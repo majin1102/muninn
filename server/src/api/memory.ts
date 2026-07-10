@@ -2,19 +2,23 @@ import type {
   ListModeInput,
   NativeTables,
   ExtractionRow as Extraction,
+  SessionRow,
   SessionSnapshotRow,
   TurnRow,
 } from '../native.js';
 import { embedText } from '../llm/embedding-provider.js';
 import { generateText } from '../llm/provider.js';
 import { loadPromptTemplate, renderPromptTemplate } from '../llm/prompts.js';
-import { getRecallConfig, parseRecallMode, type RecallMode } from '../config.js';
 import { readTurnRow, sessionKey as buildSessionKey, normalizeSessionId } from '../pipeline/ingest.js';
+import { parseSnapshotContent } from '../pipeline/snapshot.js';
 
-export type { RecallMode };
+export type RecallPublicMode = 'session' | 'extraction';
 
-export interface RenderedMemory {
-  memoryId: string;
+type SessionIdentity = { project: string; agent: string; sessionId: string };
+type ContextKind = 'turn' | 'session' | 'extraction';
+
+export interface RenderedContext {
+  contextId: string;
   title?: string;
   summary?: string;
   detail?: string;
@@ -23,7 +27,8 @@ export interface RenderedMemory {
 }
 
 export interface RecallHit {
-  memoryId: string;
+  kind?: 'context' | 'synthesis';
+  contextId?: string;
   title?: string;
   summary?: string;
   content: string;
@@ -38,79 +43,111 @@ export interface RecallHit {
   updatedAt?: string;
 }
 
-export function assertMemoryIdLayer(memoryId: string, expectedLayer: 'turn' | 'session'): void {
-  const [layer, point, extra] = memoryId.split(':');
-  if (!layer || !point || extra !== undefined || !/^\d+$/.test(point)) {
-    throw new Error(`invalid memory id: ${memoryId}`);
-  }
-  if (layer !== expectedLayer) {
-    throw new Error(`invalid memory id layer: expected ${expectedLayer}, got ${layer}`);
-  }
+export interface ContextReadRow {
+  contextId: string;
+  title?: string;
+  content?: string;
+  error?: string;
 }
 
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const SESSION_CONTEXT_ROW_ID_PATTERN = /^[0-9]+$/;
+const SESSION_READ_EXTRACTION_SUMMARY_CHARS = 100;
 
+export type ParsedContextId = {
+  kind: ContextKind;
+  contextId: string;
+  id: string;
+};
 
-export function parseExtractionMemoryId(memoryId: string): string {
-  const [layer, id, extra] = memoryId.split(':');
-  if (layer !== 'ext' || !id || extra !== undefined) {
-    throw new Error(`invalid extraction memory id: ${memoryId}`);
+export function turnContextId(turnId: string): string {
+  if (!/^turn:[^\s:]+$/.test(turnId)) {
+    throw new Error(`invalid turn context id: ${turnId}`);
   }
-  return id;
+  return turnId;
+}
+
+export function extractionContextId(id: string): string {
+  const contextId = id.startsWith('ext:') ? id : `ext:${id}`;
+  const parsed = parseContextId(contextId);
+  if (parsed.kind !== 'extraction') {
+    throw new Error(`invalid extraction context id: ${contextId}`);
+  }
+  return parsed.contextId;
+}
+
+export function parseContextId(contextId: string): ParsedContextId {
+  if (contextId.startsWith('ext:')) {
+    const id = contextId.slice('ext:'.length);
+    if (!UUID_PATTERN.test(id)) {
+      throw new Error(`invalid extraction context id: ${contextId}`);
+    }
+    return { kind: 'extraction', contextId: `ext:${id.toLowerCase()}`, id: id.toLowerCase() };
+  }
+  if (contextId.startsWith('session:')) {
+    const id = contextId.slice('session:'.length);
+    if (!SESSION_CONTEXT_ROW_ID_PATTERN.test(id)) {
+      throw new Error(`invalid session context id: ${contextId}`);
+    }
+    return { kind: 'session', contextId: `session:${id}`, id };
+  }
+  if (contextId.startsWith('turn:')) {
+    return { kind: 'turn', contextId: turnContextId(contextId), id: contextId.slice('turn:'.length) };
+  }
+  throw new Error(`unsupported context id: ${contextId}`);
+}
+
+function normalizeContextPart(value: string): string {
+  return value.trim();
 }
 
 export async function getExtraction(
   client: NativeTables,
-  memoryId: string,
+  contextId: string,
 ): Promise<Extraction | null> {
-  const id = parseExtractionMemoryId(memoryId);
+  const { id } = parseContextId(contextId);
   const rows = await client.extractionTable.get({ ids: [id] });
   return rows[0] ?? null;
 }
 
-export function inferRenderedMemoryKind(memoryId: string): 'turn' | 'session' | 'extraction' {
-  if (memoryId.startsWith('turn:')) {
-    return 'turn';
-  }
-  if (memoryId.startsWith('ext:')) {
-    return 'extraction';
-  }
-  return 'session';
+export function inferRenderedContextKind(contextId: string): 'turn' | 'session' | 'extraction' {
+  return parseContextId(contextId).kind;
 }
 
-export function fallbackRenderedMemoryTitle(memory: RenderedMemory): string {
-  return memory.title ?? memory.summary ?? memory.detail ?? memory.memoryId;
+export function fallbackRenderedContextTitle(context: RenderedContext): string {
+  return context.title ?? context.summary ?? context.detail ?? context.contextId;
 }
 
-export function renderRenderedMemoryMarkdown(memory: RenderedMemory): string {
-  const sections = [`# ${memory.memoryId}`];
-  if (memory.title) {
-    sections.push('', '## Title', '', memory.title);
+export function renderRenderedContextMarkdown(context: RenderedContext): string {
+  const sections = [`# ${context.contextId}`];
+  if (context.title) {
+    sections.push('', '## Title', '', context.title);
   }
-  sections.push('', '## Created At', '', memory.createdAt);
-  sections.push('', '## Updated At', '', memory.updatedAt);
-  if (memory.summary) {
-    sections.push('', '## Summary', '', memory.summary);
+  sections.push('', '## Created At', '', context.createdAt);
+  sections.push('', '## Updated At', '', context.updatedAt);
+  if (context.summary) {
+    sections.push('', '## Summary', '', context.summary);
   }
-  if (memory.detail) {
-    sections.push('', '## Detail', '', memory.detail);
+  if (context.detail) {
+    sections.push('', '## Detail', '', context.detail);
   }
   return sections.join('\n');
 }
 
-export function renderTurn(memory: TurnRow): RenderedMemory | null {
-  const detail = renderTurnDetail(memory);
+export function renderTurn(turn: TurnRow): RenderedContext | null {
+  const detail = renderTurnDetail(turn);
   if (!detail) {
     return null;
   }
   return {
-    memoryId: memory.turnId,
+    contextId: turnContextId(turn.turnId),
     detail,
-    createdAt: memory.createdAt,
-    updatedAt: memory.updatedAt,
+    createdAt: turn.createdAt,
+    updatedAt: turn.updatedAt,
   };
 }
 
-export function renderSessionSnapshotRow(memory: SessionSnapshotRow): RenderedMemory | null {
+export function renderSessionSnapshotRow(memory: SessionSnapshotRow): RenderedContext | null {
   const title = trimText(memory.title);
   const summary = trimText(memory.summary);
   const detail = trimText(memory.content);
@@ -118,7 +155,7 @@ export function renderSessionSnapshotRow(memory: SessionSnapshotRow): RenderedMe
     return null;
   }
   return {
-    memoryId: memory.snapshotId,
+    contextId: memory.snapshotId,
     title,
     summary,
     detail,
@@ -127,7 +164,7 @@ export function renderSessionSnapshotRow(memory: SessionSnapshotRow): RenderedMe
   };
 }
 
-export function renderExtraction(memory: Extraction): RenderedMemory {
+export function renderExtraction(memory: Extraction): RenderedContext {
   const content = trimText(memory.content)
     ? `Content:\n${memory.content.trim()}`
     : undefined;
@@ -136,13 +173,89 @@ export function renderExtraction(memory: Extraction): RenderedMemory {
     : undefined;
   const detail = [content, references].filter(Boolean).join('\n\n') || undefined;
   return {
-    memoryId: `ext:${memory.id}`,
+    contextId: extractionContextId(memory.id),
     title: memory.title,
     summary: memory.summary,
     detail,
     createdAt: memory.createdAt,
     updatedAt: memory.createdAt,
   };
+}
+
+export function renderSession(memory: SessionRow): RenderedContext {
+  return {
+    contextId: memory.latestSnapshotId,
+    title: trimText(memory.title),
+    summary: trimText(memory.summary),
+    detail: sessionHitContent(memory),
+    createdAt: memory.updatedAt,
+    updatedAt: memory.updatedAt,
+  };
+}
+
+function renderSessionReadMarkdown(snapshot: SessionSnapshotRow): string {
+  const title = trimText(snapshot.title) ?? snapshot.snapshotId;
+  const summary = trimText(snapshot.summary);
+  const lines = [`# ${title}`];
+  if (summary) {
+    lines.push('', summary);
+  }
+  const extractions = sessionReadExtractions(snapshot);
+  if (extractions.length > 0) {
+    lines.push('', '## Extractions');
+    for (const extraction of extractions) {
+      lines.push('', `### ${extraction.title}`);
+      if (extraction.contextId) {
+        lines.push(`context_id: ${extraction.contextId}`);
+      }
+      lines.push(`summary: ${truncateSessionExtractionSummary(extraction.summary)}`);
+    }
+  }
+  return lines.join('\n');
+}
+
+function sessionReadExtractions(snapshot: SessionSnapshotRow): Array<{
+  title: string;
+  summary: string;
+  contextId?: string;
+}> {
+  try {
+    const refs = new Set([
+      ...snapshot.references,
+      ...snapshotRefsFromMarkdown(snapshot.content),
+    ]);
+    const parsed = parseSnapshotContent(snapshot.content, refs, { includeContextIds: true });
+    return parsed.extractions.map((extraction) => ({
+      title: trimText(extraction.title) ?? trimText(extraction.text) ?? '(untitled extraction)',
+      summary: trimText(extraction.text) ?? '',
+      ...(extraction.id ? { contextId: extractionContextId(extraction.id) } : {}),
+    }));
+  } catch {
+    return [];
+  }
+}
+
+function truncateSessionExtractionSummary(value: string): string {
+  const normalized = value.replace(/\s+/g, ' ').trim();
+  const chars = Array.from(normalized);
+  if (chars.length <= SESSION_READ_EXTRACTION_SUMMARY_CHARS) {
+    return normalized;
+  }
+  return `${chars.slice(0, Math.max(0, SESSION_READ_EXTRACTION_SUMMARY_CHARS - 3)).join('')}...`;
+}
+
+function snapshotRefsFromMarkdown(markdown: string): string[] {
+  const refs: string[] = [];
+  for (const match of markdown.matchAll(/(?:<!--|^|;)\s*refs:\s*\[([^\]]*)\]/gim)) {
+    const list = match[1] ?? '';
+    for (const item of list.split(',')) {
+      const ref = item.trim();
+      if (ref) {
+        refs.push(ref);
+      }
+    }
+  }
+  return refs;
 }
 
 export function renderTurnDetail(turn: TurnRow): string | undefined {
@@ -180,10 +293,13 @@ function trimText(value?: string | null): string | undefined {
 
 export async function getTurn(
   client: NativeTables,
-  memoryId: string,
+  contextId: string,
 ): Promise<TurnRow | null> {
-  assertMemoryIdLayer(memoryId, 'turn');
-  const turn = await client.turnTable.getTurn(memoryId);
+  const parsed = parseContextId(contextId);
+  if (parsed.kind !== 'turn') {
+    throw new Error(`invalid turn context id: ${contextId}`);
+  }
+  const turn = await client.turnTable.getTurn(contextId);
   return turn ? readTurnRow(turn) : null;
 }
 
@@ -202,11 +318,14 @@ export async function listTurns(
 
 export async function timelineTurns(
   client: NativeTables,
-  params: { memoryId: string; beforeLimit?: number; afterLimit?: number },
+  params: { contextId: string; beforeLimit?: number; afterLimit?: number },
 ): Promise<TurnRow[]> {
-  assertMemoryIdLayer(params.memoryId, 'turn');
+  const parsed = parseContextId(params.contextId);
+  if (parsed.kind !== 'turn') {
+    throw new Error(`invalid turn context id: ${params.contextId}`);
+  }
   const turns = await client.turnTable.timelineTurns({
-    memoryId: params.memoryId,
+    contextId: params.contextId,
     beforeLimit: params.beforeLimit,
     afterLimit: params.afterLimit,
   });
@@ -217,17 +336,16 @@ export async function timelineTurns(
 
 export async function getSessionSnapshotRow(
   client: NativeTables,
-  memoryId: string,
+  snapshotId: string,
 ): Promise<SessionSnapshotRow | null> {
-  assertMemoryIdLayer(memoryId, 'session');
-  return client.sessionTable.getSnapshot(memoryId);
+  return client.sessionSnapshotTable.getSnapshot(snapshotId);
 }
 
 export async function listSessionSnapshotRows(
   client: NativeTables,
   params: { mode: ListModeInput; extractor?: string },
 ): Promise<SessionSnapshotRow[]> {
-  const rows = await client.sessionTable.listSnapshots({
+  const rows = await client.sessionSnapshotTable.listSnapshots({
     extractor: params.extractor,
   });
   return applySessionSnapshotListMode(rows, params.mode);
@@ -235,19 +353,23 @@ export async function listSessionSnapshotRows(
 
 export async function timelineSessionSnapshotRows(
   client: NativeTables,
-  params: { memoryId: string; beforeLimit?: number; afterLimit?: number },
+  params: { snapshotId: string; beforeLimit?: number; afterLimit?: number },
 ): Promise<SessionSnapshotRow[]> {
-  assertMemoryIdLayer(params.memoryId, 'session');
-  const anchor = await getSessionSnapshotRow(client, params.memoryId);
+  const anchor = await getSessionSnapshotRow(client, params.snapshotId);
   if (!anchor) {
     return [];
   }
-  const snapshots = await client.sessionTable.threadSnapshots(anchor.sessionId);
+  const snapshots = await client.sessionSnapshotTable.threadSnapshots({
+    project: anchor.project,
+    agent: anchor.agent,
+    sessionId: anchor.sessionId,
+    extractor: anchor.extractor,
+  });
   snapshots.sort((left, right) => (
     left.snapshotSequence - right.snapshotSequence
     || left.createdAt.localeCompare(right.createdAt)
   ));
-  const anchorIndex = snapshots.findIndex((row) => row.snapshotId === params.memoryId);
+  const anchorIndex = snapshots.findIndex((row) => row.snapshotId === params.snapshotId);
   if (anchorIndex < 0) {
     return [];
   }
@@ -259,18 +381,19 @@ export async function timelineSessionSnapshotRows(
 }
 
 function applySessionSnapshotListMode(rows: SessionSnapshotRow[], mode: ListModeInput): SessionSnapshotRow[] {
-  const latestBySessionId = new Map<string, SessionSnapshotRow>();
+  const latestBySession = new Map<string, SessionSnapshotRow>();
   for (const row of rows) {
-    const current = latestBySessionId.get(row.sessionId);
+    const key = sessionIdentityKey(row);
+    const current = latestBySession.get(key);
     if (!current
       || row.snapshotSequence > current.snapshotSequence
       || (row.snapshotSequence === current.snapshotSequence && row.createdAt > current.createdAt)
     ) {
-      latestBySessionId.set(row.sessionId, row);
+      latestBySession.set(key, row);
     }
   }
 
-  const latest = [...latestBySessionId.values()];
+  const latest = [...latestBySession.values()];
   latest.sort((left, right) => (
     right.createdAt.localeCompare(left.createdAt)
     || right.snapshotSequence - left.snapshotSequence
@@ -287,10 +410,18 @@ function applySessionSnapshotListMode(rows: SessionSnapshotRow[], mode: ListMode
   return latest.slice(mode.offset, mode.offset + mode.limit);
 }
 
+function sessionIdentityKey(identity: SessionIdentity): string {
+  return JSON.stringify([
+    normalizeContextPart(identity.project),
+    normalizeContextPart(identity.agent),
+    normalizeContextPart(identity.sessionId),
+  ]);
+}
+
 
 
 export type MemoryRecallCandidate = {
-  memoryId: string;
+  contextId: string;
   content: string;
   context?: string | null;
   refs: string[];
@@ -305,6 +436,25 @@ export type MemoryRecallInput = {
 export type MemoryRecallResult = {
   content: string;
   refs: string[];
+};
+
+type SessionRerankCandidate = {
+  contextId: string;
+  title: string;
+  summary: string;
+  updatedAt?: string;
+  backendRank: number;
+};
+
+type SessionRerankInput = {
+  query: string;
+  now: string;
+  candidates: SessionRerankCandidate[];
+};
+
+type SessionRerankResult = {
+  contextIds: string[];
+  filteredContextIds: string[];
 };
 
 export async function recallMemoryContext(input: MemoryRecallInput): Promise<MemoryRecallResult> {
@@ -375,7 +525,7 @@ function stripJsonFence(raw: string): string {
 
 function renderCandidates(candidates: MemoryRecallCandidate[]): string {
   return candidates.map((candidate, index) => [
-    `[${index + 1}] ${candidate.memoryId}`,
+    `[${index + 1}] ${candidate.contextId}`,
     `Content: ${candidate.content}`,
     candidate.context?.trim() ? `Context: ${candidate.context.trim()}` : '',
     `Refs: ${candidate.refs.join(', ')}`,
@@ -398,11 +548,14 @@ function uniqueStrings(values: string[]): string[] {
 
 
 type RecallOptions = {
-  mode?: RecallMode;
+  mode?: RecallPublicMode;
   budget?: number;
   queryLimit?: number;
+  thinkingRatio?: number;
   embed?: (text: string) => Promise<number[]>;
   recallMemory?: (input: MemoryRecallInput) => Promise<MemoryRecallResult>;
+  sessionRerank?: (input: SessionRerankInput) => Promise<SessionRerankResult>;
+  excludeSession?: SessionIdentity;
 };
 
 export async function recallMemories(
@@ -415,6 +568,31 @@ export async function recallMemories(
   if (!trimmed) {
     return [];
   }
+  const mode = options.mode ?? 'extraction';
+  if (mode !== 'session' && mode !== 'extraction') {
+    throw new Error('recall mode must be one of: session, extraction');
+  }
+  if (mode === 'session') {
+    if (options.budget !== undefined || options.queryLimit !== undefined || options.thinkingRatio !== undefined) {
+      throw new Error('budget, queryLimit, and thinkingRatio are only supported in extraction recall mode');
+    }
+    if (limit <= 0) {
+      return [];
+    }
+    const vector = await (options.embed ?? embedText)(trimmed);
+    const outputLimit = Math.max(0, limit);
+    const candidateLimit = outputLimit * 4;
+    const rows = await client.sessionTable.search({
+      query: trimmed,
+      vector,
+      limit: candidateLimit,
+    });
+    const hits = rows
+      .map(sessionHit)
+      .filter((hit) => !isExcludedSession(hit, options.excludeSession));
+    return rerankSessionHits(trimmed, hits, outputLimit, options.sessionRerank);
+  }
+
   const budget = options.budget ?? 0;
   if (!Number.isSafeInteger(budget) || budget < 0) {
     throw new Error('recall budget must be a non-negative integer');
@@ -426,15 +604,12 @@ export async function recallMemories(
   if (!Number.isSafeInteger(queryLimit) || queryLimit <= 0) {
     throw new Error('recall queryLimit must be a positive integer');
   }
-  const mode = parseRecallMode(options.mode ?? getRecallConfig().mode);
-  const vector = mode === 'fts'
-    ? []
-    : await (options.embed ?? embedText)(trimmed);
+  const vector = await (options.embed ?? embedText)(trimmed);
   const extractionRows = await client.extractionTable.search({
     query: trimmed,
     vector,
     limit: queryLimit,
-    mode,
+    mode: 'hybrid',
   });
   const hits = await Promise.all(extractionRows.map((row) => extractionHit(client, row)));
   if (budget > 0) {
@@ -442,7 +617,7 @@ export async function recallMemories(
       return [];
     }
     const candidates = extractionRows.map((row) => ({
-      memoryId: `ext:${row.id}`,
+      contextId: extractionContextId(row.id),
       content: row.content,
       refs: row.turnRefs,
     }));
@@ -456,7 +631,7 @@ export async function recallMemories(
       input,
     );
     return [{
-      memoryId: 'recalled:memory',
+      kind: 'synthesis',
       content: recalled.content,
       references: uniqueRefs(candidates.flatMap((candidate) => candidate.refs ?? [])),
       ...hitMetadata(hits.find((hit) => hasSessionMetadata(hit))),
@@ -465,10 +640,10 @@ export async function recallMemories(
   return hits.slice(0, limit);
 }
 
-
 async function extractionHit(client: NativeTables, row: Extraction): Promise<RecallHit> {
   return {
-    memoryId: `ext:${row.id}`,
+    kind: 'context',
+    contextId: extractionContextId(row.id),
     title: row.title,
     summary: row.summary,
     content: row.content,
@@ -479,13 +654,231 @@ async function extractionHit(client: NativeTables, row: Extraction): Promise<Rec
   };
 }
 
+function sessionHit(row: SessionRow): RecallHit {
+  return {
+    kind: 'context',
+    contextId: row.latestSnapshotId,
+    title: row.title,
+    summary: row.summary,
+    content: sessionHitContent(row),
+    references: [],
+    project: row.project,
+    sessionId: row.sessionId,
+    agent: row.agent,
+    cwd: row.cwd,
+    displaySession: row.title,
+    createdAt: row.updatedAt,
+    updatedAt: row.updatedAt,
+  };
+}
+
+function sessionHitContent(row: Pick<SessionRow, 'latestSnapshotId' | 'title' | 'summary'>): string {
+  return [trimText(row.title), trimText(row.summary)]
+    .filter(Boolean)
+    .join('\n\n') || row.latestSnapshotId;
+}
+
+function isExcludedSession(hit: RecallHit, excluded: SessionIdentity | undefined): boolean {
+  return Boolean(
+    excluded
+    && hit.project === excluded.project
+    && hit.agent === excluded.agent
+    && hit.sessionId === excluded.sessionId,
+  );
+}
+
+async function rerankSessionHits(
+  query: string,
+  hits: RecallHit[],
+  limit: number,
+  rerank: (input: SessionRerankInput) => Promise<SessionRerankResult> = rerankSessionImportCandidates,
+): Promise<RecallHit[]> {
+  const candidates = hits
+    .map((hit, index) => ({ hit, candidate: sessionRerankCandidate(hit, index + 1) }))
+    .filter((entry): entry is { hit: RecallHit; candidate: SessionRerankCandidate } => Boolean(entry.candidate));
+  const fallback = deterministicSessionOrder(query, candidates);
+  if (candidates.length === 0) {
+    return fallback.map((entry) => entry.hit).slice(0, limit);
+  }
+  try {
+    const result = await rerank({
+      query,
+      now: new Date().toISOString(),
+      candidates: candidates.map((entry) => entry.candidate),
+    });
+    return completeSessionRerank(result, candidates)
+      .map((entry) => entry.hit)
+      .slice(0, limit);
+  } catch {
+    return fallback.map((entry) => entry.hit).slice(0, limit);
+  }
+}
+
+function sessionRerankCandidate(hit: RecallHit, backendRank: number): SessionRerankCandidate | null {
+  if (!hit.contextId?.startsWith('session:')) {
+    return null;
+  }
+  return {
+    contextId: hit.contextId,
+    title: trimText(hit.title) ?? trimText(hit.displaySession) ?? trimText(hit.sessionId) ?? hit.contextId,
+    summary: trimText(hit.summary) ?? trimText(hit.content) ?? '',
+    updatedAt: hit.updatedAt,
+    backendRank,
+  };
+}
+
+async function rerankSessionImportCandidates(input: SessionRerankInput): Promise<SessionRerankResult> {
+  const template = loadPromptTemplate('session_reranker');
+  const raw = await generateText('extractor', {
+    system: template.system,
+    prompt: renderPromptTemplate(template.userTemplate, {
+      query: input.query,
+      now: input.now,
+      candidates: renderSessionRerankCandidates(input.candidates),
+    }),
+  });
+  if (!raw) {
+    throw new Error('session reranker llm is unavailable');
+  }
+  return parseSessionRerankJson(raw);
+}
+
+function renderSessionRerankCandidates(candidates: SessionRerankCandidate[]): string {
+  return candidates.map((candidate) => [
+    `context_id: ${candidate.contextId}`,
+    `backend_rank: ${candidate.backendRank}`,
+    `updated_at: ${candidate.updatedAt ?? ''}`,
+    `title: ${candidate.title}`,
+    `summary: ${candidate.summary}`,
+  ].join('\n')).join('\n\n');
+}
+
+function parseSessionRerankJson(raw: string): SessionRerankResult {
+  const parsed = JSON.parse(stripJsonFence(raw)) as unknown;
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('session reranker result must be a JSON object');
+  }
+  const record = parsed as Record<string, unknown>;
+  const value = record.context_ids ?? record.contextIds;
+  const filteredValue = record.filtered_context_ids ?? record.filteredContextIds;
+  if (!Array.isArray(value)) {
+    throw new Error('session reranker result.context_ids must be an array');
+  }
+  if (!Array.isArray(filteredValue)) {
+    throw new Error('session reranker result.filtered_context_ids must be an array');
+  }
+  return {
+    contextIds: value.map((contextId) => String(contextId).trim()).filter(Boolean),
+    filteredContextIds: filteredValue.map((contextId) => String(contextId).trim()).filter(Boolean),
+  };
+}
+
+function completeSessionRerank(
+  result: SessionRerankResult,
+  candidates: { hit: RecallHit; candidate: SessionRerankCandidate }[],
+): { hit: RecallHit; candidate: SessionRerankCandidate }[] {
+  const byId = new Map(candidates.map((entry) => [entry.candidate.contextId, entry]));
+  const used = new Set<string>();
+  const ordered: { hit: RecallHit; candidate: SessionRerankCandidate }[] = [];
+  const consume = (contextId: string): { hit: RecallHit; candidate: SessionRerankCandidate } => {
+    const entry = byId.get(contextId);
+    if (!entry || used.has(contextId)) {
+      throw new Error(`invalid session reranker context id: ${contextId}`);
+    }
+    used.add(contextId);
+    return entry;
+  };
+  for (const contextId of result.contextIds) {
+    ordered.push(consume(contextId));
+  }
+  for (const contextId of result.filteredContextIds) {
+    consume(contextId);
+  }
+  if (used.size !== byId.size) {
+    throw new Error('session reranker omitted context ids');
+  }
+  return ordered;
+}
+
+function deterministicSessionOrder(
+  query: string,
+  entries: { hit: RecallHit; candidate: SessionRerankCandidate }[],
+): { hit: RecallHit; candidate: SessionRerankCandidate }[] {
+  const tokens = queryTokensForRerank(query);
+  const newest = Math.max(0, ...entries.map((entry) => Date.parse(entry.candidate.updatedAt ?? '') || 0));
+  return entries.slice().sort((left, right) => {
+    const leftScore = deterministicSessionScore(left.candidate, tokens, newest);
+    const rightScore = deterministicSessionScore(right.candidate, tokens, newest);
+    return rightScore - leftScore
+      || left.candidate.backendRank - right.candidate.backendRank
+      || (right.candidate.updatedAt ?? '').localeCompare(left.candidate.updatedAt ?? '');
+  });
+}
+
+function deterministicSessionScore(
+  candidate: SessionRerankCandidate,
+  tokens: string[],
+  newestMs: number,
+): number {
+  const title = normalizeRerankText(candidate.title);
+  const summary = normalizeRerankText(candidate.summary);
+  const query = tokens.join(' ');
+  const titlePhrase = query && title.includes(query) ? 12 : 0;
+  const summaryPhrase = query && summary.includes(query) ? 6 : 0;
+  const titleMatches = tokens.filter((token) => title.includes(token)).length;
+  const summaryMatches = tokens.filter((token) => summary.includes(token)).length;
+  const coverage = new Set(tokens.filter((token) => title.includes(token) || summary.includes(token))).size;
+  const backendPrior = 0.25 / Math.max(1, candidate.backendRank);
+  const recency = recencyTieBreaker(candidate.updatedAt, newestMs);
+  return titlePhrase
+    + summaryPhrase
+    + titleMatches * 5
+    + summaryMatches * 2
+    + coverage * 3
+    + backendPrior
+    + recency;
+}
+
+function recencyTieBreaker(updatedAt: string | undefined, newestMs: number): number {
+  const updatedMs = Date.parse(updatedAt ?? '');
+  if (!updatedMs || !newestMs || updatedMs > newestMs) {
+    return 0;
+  }
+  const ageDays = (newestMs - updatedMs) / 86_400_000;
+  return Math.max(0, 0.2 - Math.min(ageDays, 30) * (0.2 / 30));
+}
+
+function queryTokensForRerank(query: string): string[] {
+  return Array.from(new Set(normalizeRerankText(query)
+    .split(/\s+/)
+    .filter((token) => token.length >= 2 && !RERANK_STOPWORDS.has(token))));
+}
+
+const RERANK_STOPWORDS = new Set([
+  'the',
+  'and',
+  'for',
+  'with',
+  'that',
+  'this',
+  'from',
+  'about',
+]);
+
+function normalizeRerankText(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .trim();
+}
+
 async function ownershipFromTurnRefs(client: NativeTables, refs: string[]): Promise<Partial<RecallHit>> {
   for (const ref of refs) {
-    const turnId = turnMemoryId(ref);
-    if (!turnId) {
+    const contextId = turnContextRef(ref);
+    if (!contextId) {
       continue;
     }
-    const rawTurn = await client.turnTable?.getTurn?.(turnId);
+    const rawTurn = await client.turnTable?.getTurn?.(contextId);
     if (rawTurn) {
       const turn = readTurnRow(rawTurn);
       return {
@@ -509,8 +902,13 @@ async function displaySession(client: NativeTables, turn: TurnRow): Promise<stri
   if (!sessionId) {
     return 'Default Session';
   }
-  const snapshots = typeof client.sessionTable?.threadSnapshots === 'function'
-    ? await client.sessionTable.threadSnapshots(sessionId).catch(() => [])
+  const snapshots = typeof client.sessionSnapshotTable?.threadSnapshots === 'function'
+    ? await client.sessionSnapshotTable.threadSnapshots({
+      project: turn.project,
+      agent: turn.agent,
+      sessionId,
+      extractor: turn.extractor,
+    }).catch(() => [])
     : [];
   const newest = snapshots
     ?.slice()
@@ -537,12 +935,16 @@ function hasSessionMetadata(hit: RecallHit): boolean {
   return Boolean(hit.project && hit.agent && hit.cwd);
 }
 
-function turnMemoryId(ref: string): string | null {
+function turnContextRef(ref: string): string | null {
   const trimmed = ref.trim();
   if (!trimmed) {
     return null;
   }
-  return trimmed.startsWith('turn:') ? trimmed : null;
+  try {
+    return parseContextId(trimmed).kind === 'turn' ? trimmed : null;
+  } catch {
+    return null;
+  }
 }
 
 function displayTitle(sessionId: string): string {
@@ -578,8 +980,8 @@ function uniqueRefs(values: string[]): string[] {
 export class Memories {
   constructor(private readonly client: NativeTables) {}
 
-  async getTurn(memoryId: string): Promise<TurnRow | null> {
-    return getTurn(this.client, memoryId);
+  async getTurn(contextId: string): Promise<TurnRow | null> {
+    return getTurn(this.client, contextId);
   }
 
   async listTurns(params: {
@@ -591,8 +993,8 @@ export class Memories {
     return listTurns(this.client, params);
   }
 
-  async getSession(memoryId: string): Promise<SessionSnapshotRow | null> {
-    return getSessionSnapshotRow(this.client, memoryId);
+  async getSessionSnapshot(snapshotId: string): Promise<SessionSnapshotRow | null> {
+    return getSessionSnapshotRow(this.client, snapshotId);
   }
 
   async listSessions(params: {
@@ -602,20 +1004,37 @@ export class Memories {
     return listSessionSnapshotRows(this.client, params);
   }
 
-  async get(memoryId: string): Promise<RenderedMemory | null> {
-    if (memoryId.startsWith('ext:')) {
-      const extraction = await getExtraction(this.client, memoryId);
+  async getContext(contextId: string): Promise<RenderedContext | null> {
+    const parsed = parseContextId(contextId);
+    if (parsed.kind === 'extraction') {
+      const extraction = await getExtraction(this.client, contextId);
       return extraction ? renderExtraction(extraction) : null;
     }
-    if (memoryId.startsWith('session:')) {
-      const snapshot = await getSessionSnapshotRow(this.client, memoryId);
+    if (parsed.kind === 'session') {
+      const snapshot = await this.getSessionSnapshotForContextId(contextId);
       return snapshot ? renderSessionSnapshotRow(snapshot) : null;
     }
-    const turn = await getTurn(this.client, memoryId);
+    const turn = await getTurn(this.client, contextId);
     return turn ? renderTurn(turn) : null;
   }
 
-  async list(params: { mode: ListModeInput }): Promise<RenderedMemory[]> {
+  async readContextIds(contextIds: string[]): Promise<ContextReadRow[]> {
+    return Promise.all(contextIds.map(async (contextId) => {
+      try {
+        return await this.readContextId(contextId);
+      } catch (error) {
+        if (!isExpectedContextReadError(error)) {
+          throw error;
+        }
+        return {
+          contextId,
+          error: error.message,
+        };
+      }
+    }));
+  }
+
+  async list(params: { mode: ListModeInput }): Promise<RenderedContext[]> {
     const sourceMode = params.mode.type === 'page'
       ? { type: 'recency', limit: params.mode.offset + params.mode.limit } as const
       : params.mode;
@@ -626,7 +1045,7 @@ export class Memories {
     const combined = turns
       .map(renderTurn)
       .concat(sessions.map(renderSessionSnapshotRow))
-      .filter((memory): memory is RenderedMemory => Boolean(memory));
+      .filter((context): context is RenderedContext => Boolean(context));
     combined.sort((left, right) => right.createdAt.localeCompare(left.createdAt));
     if (params.mode.type === 'recency') {
       const selected = combined.slice(0, params.mode.limit);
@@ -636,25 +1055,115 @@ export class Memories {
   }
 
   async timeline(params: {
-    memoryId: string;
+    contextId: string;
     beforeLimit?: number;
     afterLimit?: number;
-  }): Promise<RenderedMemory[]> {
-    if (params.memoryId.startsWith('session:')) {
-      return (await timelineSessionSnapshotRows(this.client, params))
+  }): Promise<RenderedContext[]> {
+    const parsed = parseContextId(params.contextId);
+    if (parsed.kind === 'session') {
+      return (await timelineSessionSnapshotRows(this.client, {
+        snapshotId: params.contextId,
+        beforeLimit: params.beforeLimit,
+        afterLimit: params.afterLimit,
+      }))
         .map(renderSessionSnapshotRow)
-        .filter((memory): memory is RenderedMemory => Boolean(memory));
+        .filter((context): context is RenderedContext => Boolean(context));
     }
     return (await timelineTurns(this.client, params))
       .map(renderTurn)
-      .filter((memory): memory is RenderedMemory => Boolean(memory));
+      .filter((context): context is RenderedContext => Boolean(context));
   }
 
   async recall(
     query: string,
     limit?: number,
-    options?: { mode?: RecallMode; budget?: number; queryLimit?: number },
+    options?: {
+      mode?: RecallPublicMode;
+      budget?: number;
+      queryLimit?: number;
+      thinkingRatio?: number;
+      excludeSession?: SessionIdentity;
+    },
   ): Promise<RecallHit[]> {
     return recallMemories(this.client, query, limit, options);
   }
+
+  private async getSessionSnapshotForContextId(contextId: string): Promise<SessionSnapshotRow | null> {
+    return this.client.sessionSnapshotTable.getSnapshot(contextId);
+  }
+
+  private async readContextId(contextId: string): Promise<ContextReadRow> {
+    const parsed = parseContextId(contextId);
+    if (parsed.kind === 'session') {
+      return this.readSessionContextId(contextId);
+    }
+    if (parsed.kind === 'turn') {
+      return this.readTurnContextId(contextId);
+    }
+    const rendered = await this.getContext(contextId);
+    if (!rendered) {
+      throw new Error(`extraction context not found: ${contextId}`);
+    }
+    return {
+      contextId,
+      title: rendered.title,
+      content: renderRenderedContextMarkdown(rendered),
+    };
+  }
+
+  private async readSessionContextId(contextId: string): Promise<ContextReadRow> {
+    const snapshot = await this.getSessionSnapshotForContextId(contextId);
+    if (!snapshot) {
+      throw new Error(`session context not found: ${contextId}`);
+    }
+    const title = trimText(snapshot.title);
+    return {
+      contextId,
+      title,
+      content: renderSessionReadMarkdown(snapshot),
+    };
+  }
+
+  private async readTurnContextId(contextId: string): Promise<ContextReadRow> {
+    const turn = await getTurn(this.client, contextId);
+    if (!turn) {
+      throw new Error(`turn context not found: ${contextId}`);
+    }
+    const rendered = renderTurn(turn);
+    if (!rendered) {
+      throw new Error(`turn context has no readable content: ${contextId}`);
+    }
+    return {
+      contextId,
+      title: contextId,
+      content: renderTurnContextMarkdown(contextId, rendered),
+    };
+  }
+
+}
+
+function isExpectedContextReadError(error: unknown): error is Error {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  return [
+    'unsupported context id:',
+    'invalid session context id:',
+    'invalid turn context id:',
+    'invalid extraction context id:',
+    'session context not found:',
+    'extraction context not found:',
+    'turn context not found:',
+    'turn context has no readable content:',
+  ].some((prefix) => error.message.startsWith(prefix));
+}
+
+function renderTurnContextMarkdown(contextId: string, memory: RenderedContext): string {
+  const sections = [`# ${contextId}`];
+  sections.push('', '## Created At', '', memory.createdAt);
+  sections.push('', '## Updated At', '', memory.updatedAt);
+  if (memory.detail) {
+    sections.push('', '## Detail', '', memory.detail);
+  }
+  return sections.join('\n');
 }

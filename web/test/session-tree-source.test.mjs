@@ -75,8 +75,8 @@ test('session loading uses a small first page instead of fetching one hundred tu
   assert.doesNotMatch(apiSource, /limit: '100'/);
 });
 
-test('memory-id route search does not sweep sessions while a session selection or document lookup is active', async () => {
+test('context-id route search does not sweep sessions while a session selection or document lookup is active', async () => {
   const appSource = await readFile(new URL('../src/components/App.tsx', import.meta.url), 'utf8');
 
-  assert.match(appSource, /route\.view !== 'session'\s*\|\| !route\.memoryId\s*\|\| activeTurnSession\s*\|\| selectedSessionId\s*\|\| documentLoading\s*\|\| documentSession/);
+  assert.match(appSource, /route\.view !== 'session'\s*\|\| !route\.contextId\s*\|\| activeTurnSession\s*\|\| selectedSessionId\s*\|\| documentLoading\s*\|\| documentSession/);
 });

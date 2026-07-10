@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use arrow_array::RecordBatchReader;
 use lance::dataset::builder::DatasetBuilder;
-use lance::dataset::{ROW_ID, WriteParams};
+use lance::dataset::{ROW_ID, WriteMode, WriteParams};
 use lance::io::{ObjectStoreParams, StorageOptionsAccessor};
 use lance::{Error, Result};
 use object_store::path::Path;
@@ -191,6 +191,17 @@ impl TableAccess {
             self.options.write_params(),
         )
         .await
+    }
+
+    pub(crate) async fn overwrite<R>(&self, reader: R) -> Result<LanceDataset>
+    where
+        R: RecordBatchReader + Send + 'static,
+    {
+        let mut params = self.options.write_params();
+        if let Some(params) = params.as_mut() {
+            params.mode = WriteMode::Overwrite;
+        }
+        LanceDataset::write(reader, &self.options.uri_for(&self.path), params).await
     }
 
     pub(crate) async fn maintenance_stats(&self) -> Result<Option<TableStats>> {

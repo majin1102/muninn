@@ -9,6 +9,7 @@ import {
   type ListModeInput,
   type DreamingRow,
   type NativeTables,
+  type SessionIdentity,
   type SessionSnapshotRow,
   type TurnRow,
 } from './native.js';
@@ -32,7 +33,7 @@ import {
   type ExtractorCheckpoint,
   type SessionIndexEntry,
 } from './checkpoint.js';
-import { Memories, type RecallHit, type RenderedMemory } from './api/memory.js';
+import { Memories, type ContextReadRow, type RecallHit, type RecallPublicMode, type RenderedContext } from './api/memory.js';
 import { Extractor } from './pipeline/extractor.js';
 import { IngestSessionRegistry } from './pipeline/ingest.js';
 import { readTurnRow } from './pipeline/ingest.js';
@@ -42,12 +43,13 @@ import { SessionIndex } from './session-index.js';
 import { ProjectDreamingService, type DreamingWatermarkStore, type ProjectDreamCreateResult } from './dreaming/service.js';
 import { ProjectDreamingScheduler } from './dreaming/scheduler.js';
 import type { ProjectDreamSignals } from './dreaming/content.js';
+import { rebuildSessionTable } from './pipeline/session-table.js';
 import type { ProjectDreamProjectView, TurnContent } from '@muninn/common';
 
 export type Turn = TurnRow;
 export type SessionSnapshot = SessionSnapshotRow;
 
-export type RecallMode = 'vector' | 'fts' | 'hybrid';
+export type { RecallPublicMode };
 
 export type MemoryWatermarkPhase = 'idle' | 'pending' | 'running' | 'draining' | 'error';
 
@@ -136,6 +138,7 @@ export class MuninnBackend {
     const tableLocks = new TableMutationLocks();
     const backend = new MuninnBackend(lockNativeTables(client, tableLocks), databaseName, checkpoint);
     await backend.restoreCheckpointSessions();
+    await backend.ensureSessionFresh();
     const watchdogConfig = getWatchdogConfig();
     if (watchdogConfig.enabled) {
       const lastCheckpointJson = checkpoint
@@ -144,6 +147,7 @@ export class MuninnBackend {
           extractor: checkpoint.extractor,
           sessionIndex: checkpoint.sessionIndex,
           dreaming: checkpoint.dreaming,
+          session: checkpoint.session,
         })
         : null;
       const watchdogClient = lockNativeTables(
@@ -266,7 +270,13 @@ export class MuninnBackend {
   async recallMemories(
     query: string,
     limit?: number,
-    options?: { mode?: RecallMode; budget?: number; queryLimit?: number },
+    options?: {
+      mode?: RecallPublicMode;
+      budget?: number;
+      queryLimit?: number;
+      thinkingRatio?: number;
+      excludeSession?: SessionIdentity;
+    },
   ): Promise<RecallHit[]> {
     await writeMuninnLog(this.database, 'info', 'recall', 'query', {
       query,
@@ -278,6 +288,13 @@ export class MuninnBackend {
     return this.memories.recall(query, limit, options);
   }
 
+  async readContextIds(contextIds: string[]): Promise<ContextReadRow[]> {
+    await writeMuninnLog(this.database, 'info', 'context', 'read', {
+      count: contextIds.length,
+    });
+    return this.memories.readContextIds(contextIds);
+  }
+
   async exportCheckpoint(): Promise<CheckpointContent | null> {
     return this.checkpointMutex.run(async () => {
       const extractor = this.extractor;
@@ -285,15 +302,17 @@ export class MuninnBackend {
       if (!extractor || !extractorCheckpoint) {
         return null;
       }
-      const [turnStats, sessionStats, extractionStats] = await Promise.all([
+      const [turnStats, sessionSnapshotStats, extractionStats, sessionStats] = await Promise.all([
         this.client.turnTable.stats(),
-        this.client.sessionTable.stats(),
+        this.client.sessionSnapshotTable.stats(),
         this.client.extractionTable.stats(),
+        this.client.sessionTable.stats(),
       ]);
+      const embedding = getEmbeddingConfig();
       const extractorSection: ExtractorCheckpoint = {
         baseline: {
           turn: turnStats?.version ?? 0,
-          session: sessionStats?.version ?? 0,
+          session: sessionSnapshotStats?.version ?? 0,
           extraction: extractionStats?.version ?? 0,
         },
         committedEpoch: extractorCheckpoint.committedEpoch,
@@ -302,11 +321,22 @@ export class MuninnBackend {
         threads: extractorCheckpoint.threads,
         runs: extractorCheckpoint.runs,
       };
+      const sessionIndexSection = await this.sessionIndex.exportCheckpoint(this.client);
+      const sourceSessionVersion = await this.sessionSourceVersion(
+        sessionIndexSection.entries,
+        sessionSnapshotStats?.version ?? 0,
+      );
       return {
-        schemaVersion: 13,
+        schemaVersion: 14,
         extractor: extractorSection,
-        sessionIndex: this.sessionIndex.currentCheckpoint(),
+        sessionIndex: sessionIndexSection,
         dreaming: cloneDreamingCheckpoint(this.dreamingCheckpoint),
+        session: {
+          schemaVersion: 1,
+          embeddingDimensions: embedding.dimensions,
+          sourceSessionVersion,
+          tableVersion: sessionStats?.version ?? 0,
+        },
       };
     });
   }
@@ -406,6 +436,66 @@ export class MuninnBackend {
     }
   }
 
+  private async ensureSessionFresh(): Promise<void> {
+    if (!loadMuninnConfig()?.extractor) {
+      return;
+    }
+    const embedding = getEmbeddingConfig();
+    const [sessionSnapshotStats, sessionStats] = await Promise.all([
+      this.client.sessionSnapshotTable.stats(),
+      this.client.sessionTable.stats(),
+    ]);
+    const sourceSessionVersion = sessionSnapshotStats?.version ?? 0;
+    const checkpoint = this.checkpoint?.session ?? null;
+    let needsRebuild = (
+      !checkpoint
+      || !sessionStats
+      || checkpoint.schemaVersion !== 1
+      || checkpoint.embeddingDimensions !== embedding.dimensions
+      || checkpoint.sourceSessionVersion !== sourceSessionVersion
+    );
+
+    if (!needsRebuild) {
+      try {
+        await this.client.sessionTable.validateDimensions({ expected: embedding.dimensions });
+      } catch {
+        needsRebuild = true;
+      }
+    }
+
+    if (needsRebuild) {
+      await rebuildSessionTable(this.client, this.sessionIndex);
+    }
+  }
+
+  private async sessionSourceVersion(
+    entries: SessionIndexEntry[],
+    currentSessionVersion: number,
+  ): Promise<number> {
+    const indexedEntries = entries.filter((entry) => entry.snapshotId);
+    if (indexedEntries.length === 0) {
+      return currentSessionVersion;
+    }
+
+    const identities: SessionIdentity[] = indexedEntries.map((entry) => ({
+      project: entry.project,
+      agent: entry.agent,
+      sessionId: entry.sessionId,
+    }));
+    const rows = await this.client.sessionTable.get({ identities });
+    const byIdentity = new Map(rows.map((row) => [
+      sessionIdentityKey(row),
+      row.latestSnapshotId,
+    ]));
+
+    const complete = indexedEntries.every((entry) => (
+      byIdentity.get(sessionIdentityKey(entry)) === entry.snapshotId
+    ));
+    return complete
+      ? currentSessionVersion
+      : (this.checkpoint?.session.sourceSessionVersion ?? 0);
+  }
+
   private dreamingWatermarks(): DreamingWatermarkStore {
     return {
       list: () => Object.entries(this.dreamingCheckpoint.projects)
@@ -416,6 +506,10 @@ export class MuninnBackend {
       },
     };
   }
+}
+
+function sessionIdentityKey(identity: SessionIdentity): string {
+  return JSON.stringify([identity.project, identity.agent, identity.sessionId]);
 }
 
 function emptyDreamingCheckpoint(): DreamingCheckpoint {
@@ -504,10 +598,10 @@ export async function validateSettings(content: string): Promise<void> {
 }
 
 export const turns = {
-  async get(memoryId: string, database?: string | null): Promise<Turn | null> {
+  async get(contextId: string, database?: string | null): Promise<Turn | null> {
     const databaseName = resolveDatabaseName(database);
-    await writeMuninnLog(databaseName, 'info', 'detail', 'turn_get', { memoryId });
-    return (await getBackend(databaseName)).memories.getTurn(memoryId);
+    await writeMuninnLog(databaseName, 'info', 'detail', 'turn_get', { contextId });
+    return (await getBackend(databaseName)).memories.getTurn(contextId);
   },
 
   async list(params: {
@@ -541,10 +635,10 @@ export const turns = {
 };
 
 export const sessions = {
-  async get(memoryId: string, database?: string | null): Promise<SessionSnapshot | null> {
+  async getSnapshot(snapshotId: string, database?: string | null): Promise<SessionSnapshot | null> {
     const databaseName = resolveDatabaseName(database);
-    await writeMuninnLog(databaseName, 'info', 'detail', 'session_get', { memoryId });
-    return (await getBackend(databaseName)).memories.getSession(memoryId);
+    await writeMuninnLog(databaseName, 'info', 'detail', 'session_snapshot_get', { snapshotId });
+    return (await getBackend(databaseName)).memories.getSessionSnapshot(snapshotId);
   },
 
   async list(params: {
@@ -575,16 +669,16 @@ export const sessions = {
 };
 
 export const memories = {
-  async get(memoryId: string, database?: string | null): Promise<RenderedMemory | null> {
+  async getContext(contextId: string, database?: string | null): Promise<RenderedContext | null> {
     const databaseName = resolveDatabaseName(database);
-    await writeMuninnLog(databaseName, 'info', 'detail', 'memory_get', { memoryId });
-    return (await getBackend(databaseName)).memories.get(memoryId);
+    await writeMuninnLog(databaseName, 'info', 'detail', 'context_get', { contextId });
+    return (await getBackend(databaseName)).memories.getContext(contextId);
   },
 
   async list(params: {
     mode: ListModeInput;
     database?: string | null;
-  }): Promise<RenderedMemory[]> {
+  }): Promise<RenderedContext[]> {
     const databaseName = resolveDatabaseName(params.database);
     await writeMuninnLog(databaseName, 'info', 'list', 'memory_list', {
       mode: params.mode.type,
@@ -594,14 +688,14 @@ export const memories = {
   },
 
   async timeline(params: {
-    memoryId: string;
+    contextId: string;
     beforeLimit?: number;
     afterLimit?: number;
     database?: string | null;
-  }): Promise<RenderedMemory[]> {
+  }): Promise<RenderedContext[]> {
     const databaseName = resolveDatabaseName(params.database);
-    await writeMuninnLog(databaseName, 'info', 'timeline', 'memory_timeline', {
-      memoryId: params.memoryId,
+    await writeMuninnLog(databaseName, 'info', 'timeline', 'context_timeline', {
+      contextId: params.contextId,
       beforeLimit: params.beforeLimit,
       afterLimit: params.afterLimit,
     });
@@ -611,10 +705,23 @@ export const memories = {
   async recall(
     query: string,
     limit?: number,
-    options?: { mode?: RecallMode; budget?: number; queryLimit?: number; database?: string | null },
+    options?: {
+      mode?: RecallPublicMode;
+      budget?: number;
+      queryLimit?: number;
+      thinkingRatio?: number;
+      excludeSession?: SessionIdentity;
+      database?: string | null;
+    },
   ): Promise<RecallHit[]> {
     return (await getBackend(options?.database)).recallMemories(query, limit, options);
   },
+
+  async readContextIds(contextIds: string[], database?: string | null): Promise<ContextReadRow[]> {
+    const databaseName = resolveDatabaseName(database);
+    return (await getBackend(databaseName)).readContextIds(contextIds);
+  },
+
 };
 
 export const memoryPipeline = {

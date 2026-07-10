@@ -14,10 +14,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--out-dir", default=Path("benchmark") / "locomo" / "out", type=Path)
     parser.add_argument("--budgets", default="220,300,400,500")
     parser.add_argument("--query-limit", default=8, type=int)
-    parser.add_argument("--recall-mode", choices=["vector", "fts", "hybrid"], default="hybrid")
+    parser.add_argument("--mode", choices=["session", "extraction"], default="extraction")
     parser.add_argument("--limit-questions", default=None, type=int)
     parser.add_argument("--answerer", choices=["llm", "heuristic"], default="llm")
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.mode == "session":
+        parser.error("budget and query_limit are only supported in extraction mode")
+    return args
 
 
 def main() -> None:
@@ -40,8 +43,8 @@ def main() -> None:
             str(budget),
             "--query-limit",
             str(args.query_limit),
-            "--recall-mode",
-            args.recall_mode,
+            "--mode",
+            args.mode,
             "--answerer",
             args.answerer,
             "--out-file",

@@ -174,7 +174,7 @@ test('generateWithTools sends openai-codex Responses tools and parses calls', as
         type: 'function_call',
         call_id: 'call-1',
         name: 'memory-get',
-        arguments: '{"memoryIds":["ext:1"]}',
+        arguments: '{"contextIds":["ext:1"]}',
         }],
       },
     }));
@@ -194,9 +194,9 @@ test('generateWithTools sends openai-codex Responses tools and parses calls', as
       parameters: {
         type: 'object',
         properties: {
-          memoryIds: { type: 'array', items: { type: 'string' } },
+          contextIds: { type: 'array', items: { type: 'string' } },
         },
-        required: ['memoryIds'],
+        required: ['contextIds'],
       },
     }],
   });
@@ -219,9 +219,9 @@ test('generateWithTools sends openai-codex Responses tools and parses calls', as
     parameters: {
       type: 'object',
       properties: {
-        memoryIds: { type: 'array', items: { type: 'string' } },
+        contextIds: { type: 'array', items: { type: 'string' } },
       },
-      required: ['memoryIds'],
+      required: ['contextIds'],
     },
   }]);
   assert.deepEqual(result, {
@@ -229,7 +229,7 @@ test('generateWithTools sends openai-codex Responses tools and parses calls', as
     toolCalls: [{
       id: 'call-1',
       name: 'memory-get',
-      arguments: { memoryIds: ['ext:1'] },
+      arguments: { contextIds: ['ext:1'] },
     }],
   });
 });
@@ -290,9 +290,9 @@ test('generateWithTools parses openai-codex output_text.done as final text', asy
       parameters: {
         type: 'object',
         properties: {
-          memoryIds: { type: 'array', items: { type: 'string' } },
+          contextIds: { type: 'array', items: { type: 'string' } },
         },
-        required: ['memoryIds'],
+        required: ['contextIds'],
       },
     }],
   });
@@ -322,7 +322,7 @@ test('generateWithTools dedupes openai-codex streaming function call skeletons',
         type: 'function_call',
         call_id: 'call-1',
         name: 'memory-get',
-        arguments: '{"memoryIds":["session:1"]}',
+        arguments: '{"contextIds":["session:1"]}',
       },
     },
   ));
@@ -341,9 +341,9 @@ test('generateWithTools dedupes openai-codex streaming function call skeletons',
       parameters: {
         type: 'object',
         properties: {
-          memoryIds: { type: 'array', items: { type: 'string' } },
+          contextIds: { type: 'array', items: { type: 'string' } },
         },
-        required: ['memoryIds'],
+        required: ['contextIds'],
       },
     }],
   });
@@ -353,7 +353,7 @@ test('generateWithTools dedupes openai-codex streaming function call skeletons',
     toolCalls: [{
       id: 'call-1',
       name: 'memory-get',
-      arguments: { memoryIds: ['session:1'] },
+      arguments: { contextIds: ['session:1'] },
     }],
   });
 });
@@ -395,9 +395,9 @@ test('generateWithTools writes sanitized diagnostics when openai-codex response 
         parameters: {
           type: 'object',
           properties: {
-            memoryIds: { type: 'array', items: { type: 'string' } },
+            contextIds: { type: 'array', items: { type: 'string' } },
           },
-          required: ['memoryIds'],
+          required: ['contextIds'],
         },
       }],
     }),

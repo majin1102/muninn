@@ -1,32 +1,32 @@
 import {
-  fallbackRenderedMemoryTitle,
-  inferRenderedMemoryKind,
+  fallbackRenderedContextTitle,
+  inferRenderedContextKind,
   type RecallHit,
-  renderRenderedMemoryMarkdown,
-  type RenderedMemory,
+  renderRenderedContextMarkdown,
+  type RenderedContext,
 } from '../api/memory.js';
 import type { MemoryDocument, MemoryHit } from '@muninn/common';
 
-export function renderRenderedMemoryDocument(memory: RenderedMemory): MemoryDocument {
+export function renderRenderedContextDocument(context: RenderedContext): MemoryDocument {
   return {
-    memoryId: memory.memoryId,
-    kind: inferRenderedMemoryKind(memory.memoryId) as MemoryDocument['kind'],
-    title: fallbackRenderedMemoryTitle(memory),
-    markdown: renderRenderedMemoryMarkdown(memory),
-    updatedAt: memory.updatedAt,
+    contextId: context.contextId,
+    kind: inferRenderedContextKind(context.contextId) as MemoryDocument['kind'],
+    title: fallbackRenderedContextTitle(context),
+    markdown: renderRenderedContextMarkdown(context),
+    updatedAt: context.updatedAt,
   };
 }
 
-export function renderRenderedMemoryHit(record: RenderedMemory): MemoryHit {
+export function renderRenderedContextHit(record: RenderedContext): MemoryHit {
   return {
-    memoryId: record.memoryId,
-    content: renderRenderedMemoryMarkdown(record),
+    contextId: record.contextId,
+    content: renderRenderedContextMarkdown(record),
   };
 }
 
 export function renderRecallHit(record: RecallHit): MemoryHit {
   return {
-    memoryId: record.memoryId,
+    contextId: record.contextId ?? 'synthesis',
     title: record.title,
     summary: record.summary,
     content: record.content,

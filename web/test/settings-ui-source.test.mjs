@@ -35,7 +35,7 @@ test('settings pipeline tabs keep extractor fields with stable paths', async () 
   assert.match(source, /description="extractor\.name" path=\{\['extractor', 'name'\]\}/);
   assert.match(source, /description="extractor\.llmProvider" path=\{\['extractor', 'llmProvider'\]\}/);
   assert.match(source, /description="extractor\.embeddingProvider" path=\{\['extractor', 'embeddingProvider'\]\}/);
-  assert.match(source, /description="extractor\.recallMode" path=\{\['extractor', 'recallMode'\]\}/);
+  assert.doesNotMatch(source, /description="extractor\.recallMode" path=\{\['extractor', 'recallMode'\]\}/);
   assert.match(source, /description="extractor\.maxAttempts" path=\{\['extractor', 'maxAttempts'\]\}/);
   assert.match(source, /description="extractor\.activeWindowDays" path=\{\['extractor', 'activeWindowDays'\]\}/);
 });

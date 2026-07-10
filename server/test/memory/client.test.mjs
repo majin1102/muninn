@@ -55,6 +55,19 @@ async function waitForPipelineResolved({ timeoutMs = 2_000, intervalMs = 20 } = 
   throw new Error('timed out waiting for memory pipeline watermark');
 }
 
+async function waitForBackendResolved(backend, { timeoutMs = 2_000, intervalMs = 20 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  await backend.memoryFinalize();
+  while (Date.now() < deadline) {
+    const watermark = await backend.memoryWatermark();
+    if (memoryWatermarkResolved(watermark)) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  throw new Error('timed out waiting for backend watermark');
+}
+
 async function waitForFile(filePath, { timeoutMs = 2_000, intervalMs = 20 } = {}) {
   const deadline = Date.now() + timeoutMs;
   let lastError;
@@ -189,7 +202,7 @@ function defaultStorageTarget(homeDir) {
 }
 
 function firstExtractionRef(hits) {
-  for (const ref of hits.flatMap((hit) => [hit.memoryId, ...(hit.references ?? [])])) {
+  for (const ref of hits.flatMap((hit) => [hit.contextId, ...(hit.references ?? [])])) {
     if (ref.startsWith('ext:')) {
       return ref.slice('ext:'.length);
     }
@@ -552,13 +565,13 @@ test('turns.list returns the recent window in chronological order, and memories.
   assert.equal(listed[1].sessionId, 'group-b');
 
   const timeline = await memories.timeline({
-    memoryId: second.turnId,
+    contextId: second.turnId,
     beforeLimit: 1,
     afterLimit: 1,
   });
   assert.ok(timeline.length >= 2);
-  assert.ok(timeline.some((memory) => memory.memoryId === first.turnId));
-  assert.ok(timeline.some((memory) => memory.memoryId === second.turnId));
+  assert.ok(timeline.some((memory) => memory.contextId === first.turnId));
+  assert.ok(timeline.some((memory) => memory.contextId === second.turnId));
 });
 
 test('pure read APIs work without extractor bootstrap config', async (t) => {
@@ -582,8 +595,8 @@ test('pure read APIs work without extractor bootstrap config', async (t) => {
   }
 
   const hitsBefore = await memories.recall('bootstrap-free prompt', 1);
-  assert.ok(hitsBefore[0]?.memoryId.startsWith('ext:'));
-  const extractionId = hitsBefore[0].memoryId;
+  assert.ok(hitsBefore[0]?.contextId.startsWith('ext:'));
+  const extractionId = hitsBefore[0].contextId;
 
   await shutdownCoreForTests();
   await writeFile(configPath, '{}\n', 'utf8');
@@ -595,26 +608,26 @@ test('pure read APIs work without extractor bootstrap config', async (t) => {
   const sessionList = await turns.list({ mode: { type: 'recency', limit: 10 } });
   assert.ok(sessionList.some((turn) => turn.turnId === created.turnId));
 
-  const extractionDetail = await memories.get(extractionId);
+  const extractionDetail = await memories.getContext(extractionId);
   assert.ok(extractionDetail);
-  assert.equal(extractionDetail.memoryId, extractionId);
+  assert.equal(extractionDetail.contextId, extractionId);
 
-  const renderedDetail = await memories.get(created.turnId);
+  const renderedDetail = await memories.getContext(created.turnId);
   assert.ok(renderedDetail);
-  assert.equal(renderedDetail.memoryId, created.turnId);
+  assert.equal(renderedDetail.contextId, created.turnId);
 
   const renderedList = await memories.list({ mode: { type: 'recency', limit: 10 } });
-  assert.ok(renderedList.some((memory) => memory.memoryId === created.turnId));
+  assert.ok(renderedList.some((memory) => memory.contextId === created.turnId));
 
   const renderedTimeline = await memories.timeline({
-    memoryId: created.turnId,
+    contextId: created.turnId,
     beforeLimit: 1,
     afterLimit: 1,
   });
-  assert.ok(renderedTimeline.some((memory) => memory.memoryId === created.turnId));
+  assert.ok(renderedTimeline.some((memory) => memory.contextId === created.turnId));
 });
 
-test('invalid memory ids reject through the native binding', async (t) => {
+test('invalid context ids reject through the native binding', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(cleanupDataset(dir));
 
@@ -622,13 +635,13 @@ test('invalid memory ids reject through the native binding', async (t) => {
   await writeMuninnConfig(configPath);
 
   await assert.rejects(
-    () => turns.get('bad-memory-id'),
-    /invalid/i,
+    () => turns.get('bad-context-id'),
+    /unsupported context id/i,
   );
 
   await assert.rejects(
     () => turns.get('thinking:42'),
-    /invalid/i,
+    /unsupported context id/i,
   );
 });
 
@@ -721,6 +734,90 @@ test('checkpoint restore keeps recent turn dedupe within the same extractor', as
     }
   } finally {
     await firstBackend.shutdown().catch(() => undefined);
+  }
+});
+
+test('startup rebuilds session search when checkpoint is missing', async (t) => {
+  const { dir, homeDir, configPath } = await makeDatasetUri();
+  t.after(cleanupDataset(dir));
+
+  process.env.MUNINN_HOME = homeDir;
+  await writeMuninnConfig(configPath, { observerProvider: 'mock' });
+
+  const firstBackend = await MuninnBackend.create(await getNativeTables());
+  try {
+    await firstBackend.accept(makeTurnContent({
+      sessionId: 'startup-rebuild-missing',
+      agent: 'codex',
+      project: 'project-a',
+      cwd: '/workspace/project-a',
+      prompt: 'startup rebuild prompt',
+      response: 'startup rebuild response',
+    }));
+    await waitForBackendResolved(firstBackend);
+    const tables = await getNativeTables();
+    assert.ok((await tables.sessionTable.list({})).some((row) => row.sessionId === 'startup-rebuild-missing'));
+    await tables.sessionTable.replaceAll({ rows: [] });
+    assert.equal((await tables.sessionTable.list({})).length, 0);
+  } finally {
+    await firstBackend.shutdown();
+    await shutdownCoreForTests();
+  }
+  await rm(resolveCheckpointPath(), { force: true });
+
+  const secondBackend = await MuninnBackend.create(await getNativeTables());
+  try {
+    const rows = await (await getNativeTables()).sessionTable.list({});
+    assert.ok(rows.some((row) => (
+      row.sessionId === 'startup-rebuild-missing'
+      && row.project === 'project-a'
+      && row.agent === 'codex'
+    )));
+  } finally {
+    await secondBackend.shutdown();
+  }
+});
+
+test('startup rebuilds session search when embedding dimensions change', async (t) => {
+  const { dir, homeDir, configPath } = await makeDatasetUri();
+  t.after(cleanupDataset(dir));
+
+  process.env.MUNINN_HOME = homeDir;
+  await writeMuninnConfig(configPath, { observerProvider: 'mock', semanticDimensions: 4 });
+
+  const firstBackend = await MuninnBackend.create(await getNativeTables());
+  try {
+    await firstBackend.accept(makeTurnContent({
+      sessionId: 'startup-rebuild-dimensions',
+      agent: 'codex',
+      project: 'project-a',
+      cwd: '/workspace/project-a',
+      prompt: 'dimension rebuild prompt',
+      response: 'dimension rebuild response',
+    }));
+    await waitForBackendResolved(firstBackend);
+    const rows = await (await getNativeTables()).sessionTable.list({});
+    assert.equal(rows.find((row) => row.sessionId === 'startup-rebuild-dimensions')?.vector.length, 4);
+    const exported = await firstBackend.exportCheckpoint();
+    assert.ok(exported);
+    await mkdir(path.dirname(resolveCheckpointPath()), { recursive: true });
+    await writeFile(resolveCheckpointPath(), `${JSON.stringify({
+      ...exported,
+      writtenAt: new Date().toISOString(),
+      writerPid: process.pid,
+    }, null, 2)}\n`, 'utf8');
+  } finally {
+    await firstBackend.shutdown();
+    await shutdownCoreForTests();
+  }
+
+  await writeMuninnConfig(configPath, { observerProvider: 'mock', semanticDimensions: 8 });
+  const secondBackend = await MuninnBackend.create(await getNativeTables());
+  try {
+    const rows = await (await getNativeTables()).sessionTable.list({});
+    assert.equal(rows.find((row) => row.sessionId === 'startup-rebuild-dimensions')?.vector.length, 8);
+  } finally {
+    await secondBackend.shutdown();
   }
 });
 
@@ -939,7 +1036,6 @@ test('validateSettings accepts provider registry references', async (t) => {
         name: 'test-extractor',
         llmProvider: 'default',
         embeddingProvider: 'default',
-        recallMode: 'hybrid',
       },
     }, null, 2)),
   );
@@ -969,7 +1065,7 @@ test('validateSettings rejects legacy provider shape', async (t) => {
         },
       },
     }, null, 2)),
-    /extractor\.llm is no longer supported|unsupported top-level config key: llm/i,
+    /llm is no longer supported; use providers\.llm instead/i,
   );
 });
 
@@ -985,7 +1081,7 @@ test('validateSettings rejects top-level extraction config', async (t) => {
         embeddingProvider: 'default',
       },
     }), null, 2)),
-    /unsupported top-level config key: extraction/i,
+    /extraction is no longer supported; use extractor\.embeddingProvider instead/i,
   );
 });
 
@@ -1106,7 +1202,7 @@ test('validateSettings rejects top-level turn config', async (t) => {
     () => validateSettings(JSON.stringify(validSettings({
       turn: { llmProvider: 'removed_provider' },
     }), null, 2)),
-    /unsupported top-level config key: turn/i,
+    /turn is no longer supported; turn summaries are generated locally during ingest/i,
   );
 });
 
@@ -1169,7 +1265,7 @@ test('validateSettings rejects extraction dimension changes when the table exist
 
   const binding = await getNativeTables(defaultStorageTarget(homeDir));
   assert.ok(typeof binding.turnTable.describe === 'function');
-  assert.ok(typeof binding.sessionTable.describe === 'function');
+  assert.ok(typeof binding.sessionSnapshotTable.describe === 'function');
   assert.ok(typeof binding.dreamingTable.describe === 'function');
   assert.ok(typeof binding.extractionTable.describe === 'function');
 
@@ -1260,7 +1356,7 @@ test('native session snapshots can be listed at a historical version', async (t)
   await writeMuninnConfig(configPath, { llmProvider: 'mock' });
 
   const binding = await getNativeTables(defaultStorageTarget(homeDir));
-  await binding.sessionTable.insert({
+  await binding.sessionSnapshotTable.insert({
     snapshots: [sessionSnapshotRow({
       snapshotId: 'session:18446744073709551615',
       sessionId: 's1',
@@ -1268,9 +1364,9 @@ test('native session snapshots can be listed at a historical version', async (t)
       memorySignals: ['- [turn:1 +1] Prefer minimal changes.'],
     })],
   });
-  const baseline = await binding.sessionTable.listSnapshotsWithVersion({ extractor: 'test-extractor' });
+  const baseline = await binding.sessionSnapshotTable.listSnapshotsWithVersion({ extractor: 'test-extractor' });
 
-  await binding.sessionTable.insert({
+  await binding.sessionSnapshotTable.insert({
     snapshots: [sessionSnapshotRow({
       snapshotId: 'session:18446744073709551615',
       sessionId: 's1',
@@ -1278,8 +1374,8 @@ test('native session snapshots can be listed at a historical version', async (t)
       memorySignals: ['- [turn:1 +1, turn:2 +1] Prefer minimal changes.'],
     })],
   });
-  const current = await binding.sessionTable.listSnapshotsWithVersion({ extractor: 'test-extractor' });
-  const historical = await binding.sessionTable.listSnapshotsWithVersion({
+  const current = await binding.sessionSnapshotTable.listSnapshotsWithVersion({ extractor: 'test-extractor' });
+  const historical = await binding.sessionSnapshotTable.listSnapshotsWithVersion({
     extractor: 'test-extractor',
     version: baseline.sourceVersion,
   });
@@ -1473,7 +1569,7 @@ test('memoryPipeline.finalize seals hook captures even when the default epoch wi
   assert.deepEqual(resolved.pending.turns, []);
   assert.equal(resolved.phases.extractor, 'idle');
   const hits = await memories.recall('low frequency hook prompt', 1);
-  assert.ok(hits[0]?.memoryId.startsWith('ext:'));
+  assert.ok(hits[0]?.contextId.startsWith('ext:'));
 });
 
 test('captureTurn persists raw prompt and response without title or summary', async (t) => {
@@ -1535,7 +1631,7 @@ test('extractor writes atomic extractions before indexing snapshots', async (t) 
   const hits = await memories.recall('counseling programs', 5);
   const extractionRef = firstExtractionRef(hits);
   assert.ok(extractionRef);
-  const extraction = await memories.get(`ext:${extractionRef}`);
+  const extraction = await memories.getContext(`ext:${extractionRef}`);
   assert.ok(extraction);
   assert.match(extraction.summary ?? extraction.title ?? '', /counseling/i);
 });
@@ -1557,11 +1653,11 @@ test('rendered memory binding returns unified turn and extraction reads', async 
   await waitForPipelineResolved();
 
   const listed = await memories.list({ mode: { type: 'recency', limit: 10 } });
-  assert.ok(listed.some((memory) => memory.memoryId === turn.turnId));
+  assert.ok(listed.some((memory) => memory.contextId === turn.turnId));
 
-  const turnDetail = await memories.get(turn.turnId);
+  const turnDetail = await memories.getContext(turn.turnId);
   assert.ok(turnDetail);
-  assert.equal(turnDetail.memoryId, turn.turnId);
+  assert.equal(turnDetail.contextId, turn.turnId);
   assert.ok(turnDetail.createdAt);
   assert.ok(turnDetail.updatedAt);
   assert.match(turnDetail.summary ?? turnDetail.detail ?? '', /rendered prompt|rendered response/);
@@ -1569,13 +1665,13 @@ test('rendered memory binding returns unified turn and extraction reads', async 
   const recalled = await memories.recall('rendered', 10);
   const extractionRef = firstExtractionRef(recalled);
   assert.ok(extractionRef);
-  const extraction = await memories.get(`ext:${extractionRef}`);
+  const extraction = await memories.getContext(`ext:${extractionRef}`);
   assert.ok(extraction);
-  assert.equal(extraction.memoryId, `ext:${extractionRef}`);
+  assert.equal(extraction.contextId, `ext:${extractionRef}`);
   assert.match(extraction.summary ?? extraction.title ?? '', /rendered prompt|rendered response/);
 });
 
-test('recall returns extraction memory ids and detail renders references', async (t) => {
+test('recall returns extraction context ids and detail renders references', async (t) => {
   const { dir, homeDir, configPath } = await makeDatasetUri();
   t.after(cleanupDataset(dir));
 
@@ -1585,7 +1681,7 @@ test('recall returns extraction memory ids and detail renders references', async
   const binding = await getNativeTables(defaultStorageTarget(homeDir));
   await binding.extractionTable.upsert({
     rows: [{
-      id: 'obs-1',
+      id: '123e4567-e89b-42d3-a456-426614174001',
       title: 'Caroline support group',
       summary: 'Caroline joined an LGBTQ support group in May 2023.',
       content: '## Title\n\nCaroline support group\n\n## Summary\n\nCaroline joined an LGBTQ support group in May 2023.\n\n## Content\n\n',
@@ -1598,10 +1694,10 @@ test('recall returns extraction memory ids and detail renders references', async
   });
 
   const hits = await memories.recall('support group', 1);
-  assert.equal(hits[0].memoryId, 'ext:obs-1');
-  const detail = await memories.get('ext:obs-1');
+  assert.equal(hits[0].contextId, 'ext:123e4567-e89b-42d3-a456-426614174001');
+  const detail = await memories.getContext('ext:123e4567-e89b-42d3-a456-426614174001');
   assert.ok(detail);
-  assert.equal(detail.memoryId, 'ext:obs-1');
+  assert.equal(detail.contextId, 'ext:123e4567-e89b-42d3-a456-426614174001');
   assert.match(detail.detail ?? '', /turn:1/);
 });
 
@@ -1631,11 +1727,11 @@ test('rendered memory page mode paginates after combining session and extraction
   assert.equal(firstPage.length, 2);
   assert.equal(secondPage.length, 2);
   assert.deepEqual(
-    firstPage.map((memory) => memory.memoryId),
-    combinedPage.slice(0, 2).map((memory) => memory.memoryId),
+    firstPage.map((memory) => memory.contextId),
+    combinedPage.slice(0, 2).map((memory) => memory.contextId),
   );
   assert.deepEqual(
-    secondPage.map((memory) => memory.memoryId),
-    combinedPage.slice(2, 4).map((memory) => memory.memoryId),
+    secondPage.map((memory) => memory.contextId),
+    combinedPage.slice(2, 4).map((memory) => memory.contextId),
   );
 });

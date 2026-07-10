@@ -69,11 +69,19 @@ export type DreamingCheckpoint = {
   }>;
 };
 
+export type SessionCheckpoint = {
+  schemaVersion: 1;
+  embeddingDimensions: number;
+  sourceSessionVersion: number;
+  tableVersion: number;
+};
+
 export type CheckpointContent = {
-  schemaVersion: 13;
+  schemaVersion: 14;
   extractor: ExtractorCheckpoint;
   sessionIndex: SessionIndexCheckpoint;
   dreaming: DreamingCheckpoint;
+  session: SessionCheckpoint;
 };
 
 export type CheckpointFile = CheckpointContent & {
@@ -119,12 +127,13 @@ export function parseCheckpointFile(raw: string): CheckpointFile {
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
     throw new Error('checkpoint must be a JSON object');
   }
-  if (parsed.schemaVersion !== 13) {
+  if (parsed.schemaVersion !== 14) {
     throw new Error(`unsupported checkpoint schemaVersion: ${String(parsed.schemaVersion)}`);
   }
   const extractor = parseExtractorSection(parsed.extractor);
   const sessionIndex = parseSessionIndexSection(parsed.sessionIndex);
   const dreaming = parseDreamingSection(parsed.dreaming);
+  const session = parseSessionSection(parsed.session);
   if (!extractor) {
     throw new Error('checkpoint extractor section is invalid');
   }
@@ -134,13 +143,17 @@ export function parseCheckpointFile(raw: string): CheckpointFile {
   if (!dreaming) {
     throw new Error('checkpoint dreaming section is invalid');
   }
+  if (!session) {
+    throw new Error('checkpoint session section is invalid');
+  }
   return {
-    schemaVersion: 13,
+    schemaVersion: 14,
     writtenAt: typeof parsed.writtenAt === 'string' ? parsed.writtenAt : new Date(0).toISOString(),
     writerPid: typeof parsed.writerPid === 'number' ? parsed.writerPid : 0,
     extractor,
     sessionIndex,
     dreaming,
+    session,
   };
 }
 
@@ -195,6 +208,26 @@ function parseExtractorSection(value: unknown): ExtractorCheckpoint | null {
     recentSessions,
     threads,
     runs,
+  };
+}
+
+function parseSessionSection(value: unknown): SessionCheckpoint | null {
+  if (!isObjectRecord(value)) {
+    return null;
+  }
+  if (
+    value.schemaVersion !== 1
+    || typeof value.embeddingDimensions !== 'number'
+    || typeof value.sourceSessionVersion !== 'number'
+    || typeof value.tableVersion !== 'number'
+  ) {
+    return null;
+  }
+  return {
+    schemaVersion: 1,
+    embeddingDimensions: value.embeddingDimensions,
+    sourceSessionVersion: value.sourceSessionVersion,
+    tableVersion: value.tableVersion,
   };
 }
 

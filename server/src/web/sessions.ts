@@ -17,7 +17,7 @@ import type {
   TurnPreview,
 } from '@muninn/common';
 import { memories, sessions, turns } from '../backend.js';
-import { renderRenderedMemoryDocument } from './render.js';
+import { renderRenderedContextDocument } from './render.js';
 
 export const sessionRoutes = new Hono();
 
@@ -70,6 +70,7 @@ function mapCoreLookupError(error: unknown): { status: number; body: ErrorRespon
 
   if (
     lowered.includes('invalid')
+    || lowered.includes('unsupported context id')
     || lowered.includes('memory layer')
   ) {
     return {
@@ -231,7 +232,7 @@ async function loadAllSessionTurns(): Promise<Awaited<ReturnType<typeof turns.li
 function toTurnPreview(turn: AppSessionTurn): TurnPreview {
   const events = turnEvents(turn);
   return {
-    memoryId: turn.turnId,
+    contextId: turn.turnId,
     createdAt: turn.createdAt,
     updatedAt: turn.updatedAt,
     turnSequence: turn.turnSequence ?? undefined,
@@ -246,7 +247,7 @@ function toTurnPreview(turn: AppSessionTurn): TurnPreview {
 function toTurnDetail(turn: AppSessionTurn): TurnPreview {
   const events = turnEvents(turn);
   return {
-    memoryId: turn.turnId,
+    contextId: turn.turnId,
     createdAt: turn.createdAt,
     updatedAt: turn.updatedAt,
     turnSequence: turn.turnSequence ?? undefined,
@@ -353,12 +354,12 @@ function previewPayload(value: string | undefined): { preview: string; bytes: nu
 
 async function enrichMemoryDocument(
   document: MemoryDocumentResponse['document'],
-  memoryId: string,
+  contextId: string,
 ): Promise<MemoryDocumentResponse['document']> {
-  if (!memoryId.startsWith('turn:')) {
+  if (!contextId.startsWith('turn:')) {
     return document;
   }
-  const turn = await turns.get(memoryId);
+  const turn = await turns.get(contextId);
   if (!turn) {
     return document;
   }
@@ -437,6 +438,9 @@ async function loadSessionTurnPreviewsPage(params: {
 
 type SessionSnapshotContent = {
   snapshotId: string;
+  project: string;
+  agent: string;
+  sessionId: string;
   content: string;
   createdAt: string;
   updatedAt: string;
@@ -454,13 +458,16 @@ async function loadSessionSnapshotContent(project: string, agent: string, sessio
     return null;
   }
 
-  const snapshot = await sessions.get(session.snapshotId);
+  const snapshot = await sessions.getSnapshot(session.snapshotId);
   if (!snapshot) {
     return null;
   }
 
   return {
     snapshotId: snapshot.snapshotId,
+    project: snapshot.project,
+    agent: snapshot.agent,
+    sessionId: snapshot.sessionId,
     content: snapshot.content,
     createdAt: snapshot.createdAt,
     updatedAt: snapshot.updatedAt,
@@ -520,7 +527,7 @@ function buildSessionSegments(
   timeline: SessionTimelineItem[],
 ): SessionSegmentPreview[] {
   return timeline.filter((item) => item.kind === 'extraction').map((item) => ({
-    memoryId: item.memoryId,
+    contextId: item.contextId,
     title: item.title,
     createdAt: item.createdAt,
     updatedAt: item.updatedAt,
@@ -534,12 +541,13 @@ function buildSessionTimeline(
   if (!snapshot?.content) {
     return [];
   }
+  const timelineBaseId = snapshot.snapshotId;
   const sections = snapshotSections(snapshot.content);
   const items: SessionTimelineItem[] = [];
   const summary = sections.get('summary')?.trim();
   if (summary) {
     items.push({
-      memoryId: `${snapshot.snapshotId}~timeline:summary`,
+      contextId: `${timelineBaseId}~timeline:summary`,
       kind: 'summary',
       title: 'Summary',
       createdAt: snapshot.createdAt,
@@ -557,6 +565,7 @@ function buildTimelineSignalItems(
   sections: Map<string, string>,
   snapshot: SessionSnapshotContent,
 ): SessionTimelineItem[] {
+  const timelineBaseId = snapshot.snapshotId;
   const definitions = [
     { heading: 'Instruction Signals', title: 'Instruction Signals', suffix: 'instructions' },
     { heading: 'Skill Signals', title: 'Skill Signals', suffix: 'skills' },
@@ -568,7 +577,7 @@ function buildTimelineSignalItems(
       continue;
     }
     items.push({
-      memoryId: `${snapshot.snapshotId}~timeline:${suffix}`,
+      contextId: `${timelineBaseId}~timeline:${suffix}`,
       kind: 'signals',
       title,
       createdAt: snapshot.createdAt,
@@ -617,25 +626,24 @@ function buildTimelineExtractions(
   if (!section?.trim()) {
     return [];
   }
-  const turnById = new Map(turnPreviews.map((turn, index) => [turn.memoryId, { turn, index }]));
-  const refsPattern = /<!--\s*(?:sequence:\s*\d+\s*;\s*)?refs:\s*\[([^\]]*)\]\s*-->/g;
-  const matches = [...section.matchAll(refsPattern)];
+  const turnById = new Map(turnPreviews.map((turn, index) => [turn.contextId, { turn, index }]));
+  const metadataBlocks = extractionMetadataBlocks(section);
   const timeline: SessionTimelineItem[] = [];
 
-  for (let i = 0; i < matches.length; i += 1) {
-    const match = matches[i]!;
-    const next = matches[i + 1];
-    const block = section.slice(match.index! + match[0].length, next?.index ?? section.length);
+  for (let i = 0; i < metadataBlocks.length; i += 1) {
+    const metadata = metadataBlocks[i]!;
+    const next = metadataBlocks[i + 1];
+    const block = section.slice(metadata.end, next?.start ?? section.length);
     const title = normalizeSegmentTitle(block);
     if (!title) {
       continue;
     }
-    const refs = parseExtractionRefs(match[1]);
+    const refs = metadata.refs;
     const firstTurn = refs
       .map((ref) => turnById.get(ref))
       .find((entry) => entry !== undefined);
     timeline.push({
-      memoryId: firstTurn ? `${firstTurn.turn.memoryId}~timeline:${i}` : `${snapshot.snapshotId}~timeline:ext:${i}`,
+      contextId: metadata.contextId ?? (firstTurn ? `${firstTurn.turn.contextId}~timeline:${i}` : `${snapshot.snapshotId}~timeline:ext:${i}`),
       kind: 'extraction',
       title,
       createdAt: firstTurn?.turn.createdAt ?? snapshot.createdAt,
@@ -707,15 +715,39 @@ function parseExtractionRefs(value: string | undefined): string[] {
     .filter((ref) => ref.startsWith('turn:'));
 }
 
+function extractionMetadataBlocks(section: string): Array<{ start: number; end: number; refs: string[]; contextId?: string }> {
+  const metadataPattern = /^\s*<!--\s*(.*?)\s*-->\s*$/gm;
+  const blocks: Array<{ start: number; end: number; refs: string[]; contextId?: string }> = [];
+  for (const match of section.matchAll(metadataPattern)) {
+    const body = match[1] ?? '';
+    const contextIdMatch = body.match(/(?:^|;)\s*context_id:\s*(ext:[0-9a-f-]+)\s*(?:;|$)/i);
+    const refsMatch = body.match(/(?:^|;)\s*refs:\s*\[([^\]]*)\]\s*(?:;|$)/i);
+    if (!refsMatch) {
+      continue;
+    }
+    const refs = parseExtractionRefs(refsMatch[1]);
+    if (refs.length === 0) {
+      continue;
+    }
+    const start = match.index ?? 0;
+    blocks.push({
+      start,
+      end: start + match[0].length,
+      contextId: contextIdMatch?.[1],
+      refs,
+    });
+  }
+  return blocks;
+}
+
 function extractionRefsFromSnapshot(snapshot: SessionSnapshotContent | null | undefined): string[] {
   const section = snapshot?.content ? snapshotSections(snapshot.content).get('extractions') : undefined;
   if (!section) {
     return [];
   }
-  const refsPattern = /<!--\s*(?:sequence:\s*\d+\s*;\s*)?refs:\s*\[([^\]]*)\]\s*-->/g;
   const refs = new Set<string>();
-  for (const match of section.matchAll(refsPattern)) {
-    for (const ref of parseExtractionRefs(match[1])) {
+  for (const metadata of extractionMetadataBlocks(section)) {
+    for (const ref of metadata.refs) {
       refs.add(ref);
     }
   }
@@ -835,26 +867,26 @@ export function buildTurnDetailForTests(turn: AppSessionTurn): TurnPreview {
 
 async function loadSnapshotReferences(references: string[]): Promise<MemoryReference[]> {
   const resolved = await Promise.all(
-    references.map(async (memoryId) => {
-      if (memoryId.startsWith('turn:')) {
-        const turn = await turns.get(memoryId);
+    references.map(async (contextId) => {
+      if (contextId.startsWith('turn:')) {
+        const turn = await turns.get(contextId);
         if (!turn || !hasTurnPreviewContent(turn)) {
           return null;
         }
         return {
-          memoryId,
+          contextId,
           timestamp: turn.updatedAt,
           summary: turnPreviewText(turn),
         };
       }
 
-      if (memoryId.startsWith('session:')) {
-        const session = await sessions.get(memoryId);
+      if (contextId.startsWith('session:')) {
+        const session = await memories.getContext(contextId);
         if (!session) {
           return null;
         }
         return {
-          memoryId,
+          contextId,
           timestamp: session.updatedAt,
           summary: session.summary,
         };
@@ -1050,24 +1082,24 @@ sessionRoutes.get('/app/api/session/turns/:turnId/detail', async (c) => {
   return c.json(response);
 });
 
-sessionRoutes.get('/app/api/memories/:memoryId/document', async (c) => {
-  const memoryId = c.req.param('memoryId');
-  console.log('[APP_UI_MEMORY_DOCUMENT] memoryId:', memoryId);
+sessionRoutes.get('/app/api/memories/:contextId/document', async (c) => {
+  const contextId = c.req.param('contextId');
+  console.log('[APP_UI_MEMORY_DOCUMENT] contextId:', contextId);
 
-  let memory: Awaited<ReturnType<typeof memories.get>>;
+  let context: Awaited<ReturnType<typeof memories.getContext>>;
   try {
-    memory = await memories.get(memoryId);
+    context = await memories.getContext(contextId);
   } catch (error) {
     const mapped = mapCoreLookupError(error);
     return c.json(mapped.body, mapped.status as 400 | 500);
   }
 
-  if (!memory) {
-    return c.json(errorResponse('notFound', 'memoryId not found'), 404);
+  if (!context) {
+    return c.json(errorResponse('notFound', 'contextId not found'), 404);
   }
 
   const response: MemoryDocumentResponse = {
-    document: await enrichMemoryDocument(renderRenderedMemoryDocument(memory), memoryId),
+    document: await enrichMemoryDocument(renderRenderedContextDocument(context), contextId),
     requestId: generateRequestId(),
   };
 
@@ -1085,7 +1117,7 @@ sessionRoutes.get(SESSION_SNAPSHOTS_ROUTE, async (c) => {
       .slice()
       .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
       .map(async (snapshot) => ({
-        memoryId: snapshot.snapshotId,
+        contextId: snapshot.snapshotId,
         title: snapshot.title,
         summary: snapshot.summary,
         updatedAt: snapshot.updatedAt,

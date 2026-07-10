@@ -4,19 +4,11 @@ export type RecallInput = {
   query: string;
   budget?: number;
   top_k?: number;
-};
-
-export type ListInput = {
-  query: string;
-  top_k?: number;
+  mode?: 'session' | 'extraction';
 };
 
 export type ReadInput = {
   context_ids: string[];
-};
-
-export type ExplainInput = {
-  context_id: string;
 };
 
 type SessionIdentity = {
@@ -33,11 +25,7 @@ export class ServerClient {
   }
 
   recall(request: RecallInput): Promise<string> {
-    return this.postText('/api/v1/mcp/recall', request);
-  }
-
-  list(request: ListInput): Promise<string> {
-    return this.postText('/api/v1/mcp/list', {
+    return this.postText('/api/v1/mcp/recall', {
       ...request,
       session_identity: this.currentSessionIdentity(),
     });
@@ -45,10 +33,6 @@ export class ServerClient {
 
   read(request: ReadInput): Promise<string> {
     return this.postText('/api/v1/mcp/read', request);
-  }
-
-  explain(request: ExplainInput): Promise<string> {
-    return this.postText('/api/v1/mcp/explain', request);
   }
 
   private async postText(path: string, body: unknown): Promise<string> {

@@ -114,7 +114,7 @@ importRoutes.get('/app/api/import/projects', async (c) => {
   for (const { adapter } of importedByAgent) {
     const policy = await getCapturePolicy(adapter.agent);
     for (const [project, enabled] of Object.entries(policy)) {
-      if (!enabled || !isCanonicalProjectIdentity(project)) {
+      if (!isCanonicalProjectIdentity(project)) {
         continue;
       }
       const group = grouped.get(project) ?? {
@@ -130,7 +130,7 @@ importRoutes.get('/app/api/import/projects', async (c) => {
           agent: adapter.agent,
           sessionCount: 0,
           importedCount: 0,
-          captureEnabled: true,
+          captureEnabled: enabled === true,
         });
       }
       grouped.set(project, group);
@@ -311,4 +311,3 @@ function parseOptionalInteger(value: string | undefined): number | undefined {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : undefined;
 }
-

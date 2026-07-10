@@ -25,7 +25,13 @@ import extractorLlmModule from '../../dist/llm/extractor.js';
 import { applyExtractionChanges, applyExtractionTableChanges } from '../../dist/pipeline/extraction.js';
 import { recallMemories } from '../../dist/api/memory.js';
 import { validateMemoryRecallResult } from '../../dist/api/memory.js';
-import { getNativeTables } from '../../dist/native.js';
+import {
+  SESSION_TEXT_LIMIT,
+  rebuildSessionTable,
+  sessionText,
+  sessionVectorText,
+} from '../../dist/pipeline/session-table.js';
+import { createNativeTables, getNativeTables } from '../../dist/native.js';
 
 const { __testing: indexTesting } = extractionIndexModule;
 const { __testing: sessionTesting } = sessionModule;
@@ -38,10 +44,16 @@ const {
   loadThreads,
   parseSnapshotContent,
   renderSnapshotContent,
+  threadFromSnapshots,
+  threadIdentityKey,
   toSessionSnapshot,
 } = sessionModule;
 const { captureTurn, memoryPipeline: memoryPipelineApi, shutdownCoreForTests } = core;
-const CHECKPOINT_SCHEMA_VERSION = 13;
+const CHECKPOINT_SCHEMA_VERSION = 14;
+const EXTRACTION_ID_A = '11111111-1111-4111-8111-111111111111';
+const EXTRACTION_ID_B = '22222222-2222-4222-8222-222222222222';
+const EXTRACTION_ID_C = '33333333-3333-4333-8333-333333333333';
+const EXTRACTION_ID_D = '44444444-4444-4444-8444-444444444444';
 let defaultConfigDir = null;
 
 function createCheckpointBackend(exported = null) {
@@ -82,6 +94,69 @@ function makeCheckpointContent(overrides = {}) {
     dreaming: overrides.dreaming ?? {
       projects: {},
     },
+    session: overrides.session ?? {
+      schemaVersion: 1,
+      embeddingDimensions: 8,
+      sourceSessionVersion: 21,
+      tableVersion: 34,
+    },
+  };
+}
+
+function makeCheckpointExportBackend(checkpoint, indexedSnapshotId) {
+  const tableStats = (version, rowCount = 1) => ({ version, fragmentCount: 1, rowCount });
+  const client = {
+    turnTable: {
+      stats: async () => tableStats(10),
+      delta: async () => [],
+    },
+    sessionSnapshotTable: {
+      stats: async () => tableStats(22),
+      delta: async () => ({ sourceVersion: 22, rows: [] }),
+    },
+    extractionTable: {
+      stats: async () => tableStats(8),
+    },
+    sessionTable: {
+      stats: async () => tableStats(35),
+      get: async ({ identities }) => identities.map((identity) => ({
+        latestSnapshotId: indexedSnapshotId,
+        sessionId: identity.sessionId,
+        project: identity.project,
+        cwd: '/workspace/project-a',
+        agent: identity.agent,
+        title: 'Session title',
+        summary: 'Session summary',
+        searchText: 'Session title\n\nSession summary',
+        vector: [],
+        updatedAt: '2024-01-02T00:00:00Z',
+      })),
+    },
+  };
+  const backend = MuninnBackend.createForTests(client, checkpoint);
+  backend.extractor = {
+    exportCheckpoint: () => checkpoint.extractor,
+  };
+  return backend;
+}
+
+function makeSnapshotRow(overrides = {}) {
+  const title = overrides.title ?? 'Session title';
+  const summary = overrides.summary ?? 'Session summary';
+  return {
+    snapshotId: overrides.snapshotId ?? 'session:1',
+    sessionId: overrides.sessionId ?? 'session-a',
+    project: overrides.project ?? 'project-a',
+    cwd: overrides.cwd ?? '/workspace/project-a',
+    agent: overrides.agent ?? 'codex',
+    snapshotSequence: overrides.snapshotSequence ?? 1,
+    createdAt: overrides.createdAt ?? '2024-01-01T00:00:00Z',
+    updatedAt: overrides.updatedAt ?? '2024-01-01T00:00:00Z',
+    extractor: overrides.extractor ?? 'default-extractor',
+    title,
+    summary,
+    content: overrides.content ?? `# ${title}\n\n## Summary\n${summary}\n`,
+    references: overrides.references ?? [],
   };
 }
 
@@ -199,6 +274,26 @@ test('config reads extraction embedding config and rejects unknown top-level key
   })), /unsupported top-level config key: unsupportedIndex/);
 });
 
+test('config rejects obsolete extractor recall mode', () => {
+  assert.throws(() => validateMuninnConfigInput(JSON.stringify({
+    storage: { uri: 'file:///tmp/muninn-test' },
+    extractor: {
+      name: 'default-extractor',
+      llmProvider: 'extractor_llm',
+      embeddingProvider: 'default',
+      recallMode: 'hybrid',
+    },
+    providers: {
+      llm: {
+        extractor_llm: { type: 'mock' },
+      },
+      embedding: {
+        default: { type: 'mock' },
+      },
+    },
+  })), /extractor\.recallMode is no longer supported/);
+});
+
 test('dreaming scheduler defaults to enabled thirty minute interval and validates positive integer', () => {
   const config = {
     storage: { uri: 'file:///tmp/muninn-test' },
@@ -229,10 +324,10 @@ test('dreaming scheduler defaults to enabled thirty minute interval and validate
   })), /dreaming\.intervalMs must be a positive integer/);
 });
 
-test('native bindings expose turn session dreaming and extraction tables', async () => {
+test('native bindings expose turn session dreaming session search and extraction tables', async () => {
   const tables = await getNativeTables();
   assert.equal(typeof tables.turnTable.listTurns, 'function');
-  assert.equal(typeof tables.sessionTable.listSnapshots, 'function');
+  assert.equal(typeof tables.sessionSnapshotTable.listSnapshots, 'function');
   assert.equal(typeof tables.dreamingTable.list, 'function');
   assert.equal(typeof tables.dreamingTable.append, 'function');
   assert.equal(typeof tables.dreamingTable.update, 'function');
@@ -246,6 +341,500 @@ test('native bindings expose turn session dreaming and extraction tables', async
   assert.equal(typeof tables.extractionTable.compact, 'function');
   assert.equal(typeof tables.extractionTable.cleanup, 'function');
   assert.equal(typeof tables.extractionTable.optimize, 'function');
+  assert.equal(typeof tables.sessionTable.search, 'function');
+  assert.equal(typeof tables.sessionTable.upsert, 'function');
+  assert.equal(typeof tables.sessionTable.replaceAll, 'function');
+  assert.equal(typeof tables.sessionTable.delete, 'function');
+  assert.equal(typeof tables.sessionTable.ensureVectorIndex, 'function');
+  assert.equal(typeof tables.sessionTable.optimize, 'function');
+});
+
+test('session search native wrapper roundtrips rows with escaped identities', async (t) => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'muninn-session-table-native-'));
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+  const tables = await createNativeTables({
+    uri: `file-object-store://${path.join(dir, 'data')}`,
+  });
+  t.after(async () => tables.close());
+  const identity = {
+    project: "project 'quoted'",
+    agent: "codex 'agent'",
+    sessionId: "session 'one'",
+  };
+  const row = {
+    latestSnapshotId: 'snapshot-a',
+    ...identity,
+    cwd: "/repo/project 'quoted'",
+    title: 'Adoption agency shortlist',
+    summary: 'Caroline researched adoption agencies.',
+    searchText: 'Caroline researched adoption agencies and summer timing.',
+    vector: [1, 0, 0, 0, 0, 0, 0, 0],
+    updatedAt: '2024-01-01T00:00:00Z',
+  };
+
+  await tables.sessionTable.upsert({ rows: [row] });
+  assert.deepEqual(await tables.sessionTable.get({ identities: [identity] }), [row]);
+  assert.deepEqual(
+    (await tables.sessionTable.search({
+      query: 'adoption agencies',
+      vector: [0, 1, 0, 0, 0, 0, 0, 0],
+      limit: 1,
+    })).map((hit) => hit.latestSnapshotId),
+    ['snapshot-a'],
+  );
+  await tables.sessionTable.validateDimensions({ expected: 8 });
+  await assert.rejects(
+    () => tables.sessionTable.validateDimensions({ expected: 4 }),
+    /session dimension mismatch/,
+  );
+
+  const replacement = {
+    latestSnapshotId: 'snapshot-b',
+    project: "project 'replacement'",
+    agent: "claude 'agent'",
+    sessionId: "session 'two'",
+    cwd: "/repo/project 'replacement'",
+    title: 'Lake painting notes',
+    summary: 'Melanie painted a lake sunrise.',
+    searchText: 'Melanie painted a lake sunrise.',
+    vector: [0, 1, 0, 0, 0, 0, 0, 0],
+    updatedAt: '2024-01-02T00:00:00Z',
+  };
+  await tables.sessionTable.replaceAll({ rows: [replacement] });
+  assert.deepEqual(await tables.sessionTable.get({ identities: [identity] }), []);
+  assert.deepEqual(
+    await tables.sessionTable.get({
+      identities: [{
+        project: replacement.project,
+        agent: replacement.agent,
+        sessionId: replacement.sessionId,
+      }],
+    }),
+    [replacement],
+  );
+
+  const deleted = await tables.sessionTable.delete({
+    identities: [{
+      project: replacement.project,
+      agent: replacement.agent,
+      sessionId: replacement.sessionId,
+    }],
+  });
+  assert.deepEqual(deleted, { deleted: 1 });
+  assert.deepEqual(await tables.sessionTable.list({}), []);
+});
+
+test('session text combines session and extraction summaries', () => {
+  const snapshot = {
+    snapshotContent: 'Session snapshot content',
+    signals: '',
+    extractions: [
+      {
+        id: 'extraction-a',
+        title: 'Adoption research',
+        text: 'Caroline researched adoption agencies.',
+        context: 'Melanie asked about agency timing.',
+        references: ['turn:1'],
+      },
+      {
+        id: 'extraction-b',
+        title: null,
+        text: 'Melanie scheduled a lake painting workshop.',
+        context: null,
+        references: ['turn:2'],
+      },
+    ],
+    contextRefs: [],
+    openQuestions: [],
+    nextSteps: [],
+    extractionChanges: [],
+  };
+
+  const text = sessionText(snapshot, 'Session title', 'Session summary');
+
+  assert.match(text, /^Session title\n\nSession summary/);
+  assert.match(text, /Adoption research/);
+  assert.match(text, /Caroline researched adoption agencies/);
+  assert.match(text, /Melanie scheduled a lake painting workshop/);
+});
+
+test('session text is capped', () => {
+  const snapshot = {
+    snapshotContent: '',
+    signals: '',
+    extractions: [{
+      id: 'extraction-a',
+      title: 'Long extraction',
+      text: 'x'.repeat(SESSION_TEXT_LIMIT * 2),
+      context: null,
+      references: ['turn:1'],
+    }],
+    contextRefs: [],
+    openQuestions: [],
+    nextSteps: [],
+    extractionChanges: [],
+  };
+
+  const text = sessionText(snapshot, 'Title', 'Summary');
+
+  assert.equal(text.length, SESSION_TEXT_LIMIT);
+  assert.match(text, /^Title\n\nSummary\n\nLong extraction/);
+});
+
+test('session vector text uses only title and summary', () => {
+  assert.equal(
+    sessionVectorText('Session title', 'Session summary'),
+    'Session title\n\nSession summary',
+  );
+});
+
+test('rebuildSessionTable replaces rows from latest live turn-backed sessions only', async (t) => {
+  const previousHome = process.env.MUNINN_HOME;
+  const { dir, homeDir, configPath } = await makeConfigHome();
+  process.env.MUNINN_HOME = homeDir;
+  await writeExtractorConfig(configPath);
+  t.after(async () => {
+    await rm(dir, { recursive: true, force: true });
+    if (previousHome === undefined) {
+      delete process.env.MUNINN_HOME;
+    } else {
+      process.env.MUNINN_HOME = previousHome;
+    }
+  });
+
+  let replacedRows = null;
+  const client = {
+    sessionSnapshotTable: {
+      listSnapshots: async () => [
+        makeSnapshotRow({
+          snapshotId: 'session:live-old',
+          sessionId: 'live-session',
+          snapshotSequence: 1,
+          title: 'Old live title',
+          summary: 'Old live summary',
+          updatedAt: '2024-01-01T00:00:00Z',
+        }),
+        makeSnapshotRow({
+          snapshotId: 'session:live-new',
+          sessionId: 'live-session',
+          snapshotSequence: 2,
+          title: 'New live title',
+          summary: 'New live summary',
+          updatedAt: '2024-01-02T00:00:00Z',
+        }),
+        makeSnapshotRow({
+          snapshotId: 'session:deleted-new',
+          sessionId: 'deleted-session',
+          snapshotSequence: 3,
+          title: 'Deleted title',
+          summary: 'Deleted summary',
+          updatedAt: '2024-01-03T00:00:00Z',
+        }),
+      ],
+    },
+    sessionTable: {
+      replaceAll: async ({ rows }) => {
+        replacedRows = rows;
+      },
+    },
+  };
+  const sessionIndex = {
+    list: async () => [{
+      sessionId: 'live-session',
+      agent: 'codex',
+      project: 'project-a',
+      cwd: '/workspace/project-a',
+      latestUpdatedAt: '2024-01-04T00:00:00Z',
+      snapshotId: 'session:live-new',
+    }],
+  };
+
+  await rebuildSessionTable(client, sessionIndex);
+
+  assert.equal(replacedRows.length, 1);
+  assert.equal(replacedRows[0].latestSnapshotId, 'session:live-new');
+  assert.equal(replacedRows[0].sessionId, 'live-session');
+  assert.equal(replacedRows[0].project, 'project-a');
+  assert.equal(replacedRows[0].agent, 'codex');
+  assert.equal(replacedRows[0].title, 'New live title');
+  assert.equal(replacedRows[0].summary, 'New live summary');
+  assert.equal(replacedRows[0].searchText, 'New live title\n\nNew live summary');
+  assert.equal(replacedRows[0].vector.length, 8);
+});
+
+test('rebuildSessionTable uses the session index snapshot id instead of a higher sequence old extractor snapshot', async (t) => {
+  const previousHome = process.env.MUNINN_HOME;
+  const { dir, homeDir, configPath } = await makeConfigHome();
+  process.env.MUNINN_HOME = homeDir;
+  await writeExtractorConfig(configPath);
+  t.after(async () => {
+    await rm(dir, { recursive: true, force: true });
+    if (previousHome === undefined) {
+      delete process.env.MUNINN_HOME;
+    } else {
+      process.env.MUNINN_HOME = previousHome;
+    }
+  });
+
+  let replacedRows = null;
+  const client = {
+    sessionSnapshotTable: {
+      listSnapshots: async () => [
+        makeSnapshotRow({
+          snapshotId: 'session:right',
+          sessionId: 'shared-session',
+          snapshotSequence: 2,
+          title: 'Current extractor title',
+          summary: 'Current extractor summary',
+          extractor: 'default-extractor',
+          updatedAt: '2024-01-02T00:00:00Z',
+        }),
+        makeSnapshotRow({
+          snapshotId: 'session:wrong',
+          sessionId: 'shared-session',
+          snapshotSequence: 99,
+          title: 'Old extractor title',
+          summary: 'Old extractor summary',
+          extractor: 'old-extractor',
+          updatedAt: '2024-01-03T00:00:00Z',
+        }),
+      ],
+    },
+    sessionTable: {
+      replaceAll: async ({ rows }) => {
+        replacedRows = rows;
+      },
+    },
+  };
+  const sessionIndex = {
+    list: async () => [{
+      sessionId: 'shared-session',
+      agent: 'codex',
+      project: 'project-a',
+      cwd: '/workspace/project-a',
+      latestUpdatedAt: '2024-01-04T00:00:00Z',
+      snapshotId: 'session:right',
+    }],
+  };
+
+  await rebuildSessionTable(client, sessionIndex);
+
+  assert.equal(replacedRows.length, 1);
+  assert.equal(replacedRows[0].latestSnapshotId, 'session:right');
+  assert.equal(replacedRows[0].title, 'Current extractor title');
+  assert.equal(replacedRows[0].summary, 'Current extractor summary');
+});
+
+test('rebuildSessionTable falls back to snapshot columns when content is malformed', async (t) => {
+  const previousHome = process.env.MUNINN_HOME;
+  const { dir, homeDir, configPath } = await makeConfigHome();
+  process.env.MUNINN_HOME = homeDir;
+  await writeExtractorConfig(configPath);
+  t.after(async () => {
+    await rm(dir, { recursive: true, force: true });
+    if (previousHome === undefined) {
+      delete process.env.MUNINN_HOME;
+    } else {
+      process.env.MUNINN_HOME = previousHome;
+    }
+  });
+
+  let replacedRows = null;
+  const client = {
+    sessionSnapshotTable: {
+      listSnapshots: async () => [
+        makeSnapshotRow({
+          snapshotId: 'session:malformed',
+          sessionId: 'malformed-session',
+          title: 'Fallback title',
+          summary: 'Fallback summary',
+          content: '# Bad snapshot\n\nmalformed body should not leak',
+        }),
+      ],
+    },
+    sessionTable: {
+      replaceAll: async ({ rows }) => {
+        replacedRows = rows;
+      },
+    },
+  };
+  const sessionIndex = {
+    list: async () => [{
+      sessionId: 'malformed-session',
+      agent: 'codex',
+      project: 'project-a',
+      cwd: '/workspace/project-a',
+      latestUpdatedAt: '2024-01-04T00:00:00Z',
+      snapshotId: 'session:malformed',
+    }],
+  };
+
+  await rebuildSessionTable(client, sessionIndex);
+
+  assert.equal(replacedRows.length, 1);
+  assert.equal(replacedRows[0].latestSnapshotId, 'session:malformed');
+  assert.equal(replacedRows[0].title, 'Fallback title');
+  assert.equal(replacedRows[0].summary, 'Fallback summary');
+  assert.equal(replacedRows[0].searchText, 'Fallback title\n\nFallback summary');
+  assert.doesNotMatch(replacedRows[0].searchText, /malformed body/);
+});
+
+test('backend startup rebuilds session search when matching checkpoint has no session search table stats', async (t) => {
+  const previousHome = process.env.MUNINN_HOME;
+  const { dir, homeDir, configPath } = await makeConfigHome();
+  process.env.MUNINN_HOME = homeDir;
+  await writeExtractorConfig(configPath);
+  t.after(async () => {
+    await rm(dir, { recursive: true, force: true });
+    if (previousHome === undefined) {
+      delete process.env.MUNINN_HOME;
+    } else {
+      process.env.MUNINN_HOME = previousHome;
+    }
+  });
+
+  const checkpoint = makeCheckpointContent({
+    extractor: makeExtractorCheckpoint({
+      baseline: { turn: 4, session: 7, extraction: 0 },
+    }),
+    sessionIndex: {
+      baseline: { turn: 4, session: 7 },
+      entries: [{
+        sessionId: 'stats-null-session',
+        agent: 'codex',
+        project: 'project-a',
+        cwd: '/workspace/project-a',
+        latestUpdatedAt: '2024-01-03T00:00:00Z',
+        snapshotId: 'session:stats-null',
+      }],
+    },
+    session: {
+      schemaVersion: 1,
+      embeddingDimensions: 8,
+      sourceSessionVersion: 7,
+      tableVersion: 11,
+    },
+  });
+  await mkdir(path.dirname(resolveCheckpointPath('stats-null')), { recursive: true });
+  await writeFile(resolveCheckpointPath('stats-null'), `${JSON.stringify({
+    ...checkpoint,
+    writtenAt: '2024-01-04T00:00:00Z',
+    writerPid: 123,
+  }, null, 2)}\n`, 'utf8');
+
+  let replacedRows = null;
+  const backend = await MuninnBackend.create({
+    turnTable: {
+      delta: async () => [],
+      stats: async () => ({ version: 4, fragmentCount: 1, rowCount: 1 }),
+    },
+    sessionSnapshotTable: {
+      delta: async () => ({ sourceVersion: 7, rows: [] }),
+      stats: async () => ({ version: 7, fragmentCount: 1, rowCount: 1 }),
+      listSnapshots: async () => [makeSnapshotRow({
+        snapshotId: 'session:stats-null',
+        sessionId: 'stats-null-session',
+        snapshotSequence: 1,
+        title: 'Stats null title',
+        summary: 'Stats null summary',
+        updatedAt: '2024-01-03T00:00:00Z',
+      })],
+    },
+    sessionTable: {
+      stats: async () => null,
+      validateDimensions: async () => undefined,
+      replaceAll: async ({ rows }) => {
+        replacedRows = rows;
+      },
+    },
+  }, 'stats-null');
+
+  try {
+    assert.equal(replacedRows.length, 1);
+    assert.equal(replacedRows[0].sessionId, 'stats-null-session');
+    assert.equal(replacedRows[0].latestSnapshotId, 'session:stats-null');
+  } finally {
+    await backend.shutdown();
+  }
+});
+
+test('indexTouchedExtractions writes session search before extraction rows', async (t) => {
+  const previousHome = process.env.MUNINN_HOME;
+  const { dir, homeDir, configPath } = await makeConfigHome();
+  process.env.MUNINN_HOME = homeDir;
+  await writeExtractorConfig(configPath);
+  t.after(async () => {
+    await rm(dir, { recursive: true, force: true });
+    if (previousHome === undefined) {
+      delete process.env.MUNINN_HOME;
+    } else {
+      process.env.MUNINN_HOME = previousHome;
+    }
+  });
+
+  const events = [];
+  const client = {
+    sessionTable: {
+      upsert: async ({ rows }) => {
+        events.push({ table: 'session', row: rows[0] });
+      },
+    },
+    extractionTable: {
+      get: async () => [],
+      delete: async () => {
+        throw new Error('delete should not be called for add-only changes');
+      },
+      upsert: async ({ rows }) => {
+        events.push({ table: 'extraction', rows });
+      },
+    },
+  };
+  const thread = createSessionThread(
+    'default-extractor',
+    'Session title',
+    'Session summary',
+    ['turn:1'],
+    0,
+    '2024-01-02T00:00:00Z',
+    'session',
+    'session-a',
+    { project: 'project-a', cwd: '/workspace/project-a', agent: 'codex' },
+  );
+  thread.snapshotIds.push('session:1');
+  thread.snapshotEpochs = [0];
+  thread.snapshots.push({
+    threadKind: 'session',
+    sessionId: 'session-a',
+    project: 'project-a',
+    cwd: '/workspace/project-a',
+    agent: 'codex',
+    snapshotContent: 'Snapshot content',
+    signals: '',
+    extractions: [{
+      id: null,
+      title: 'Adoption agency shortlist',
+      text: 'Caroline compared three adoption agencies.',
+      context: null,
+      references: ['turn:1'],
+      updatedMemory: null,
+    }],
+    contextRefs: [{ turnId: 'turn:1', summary: 'Initial turn' }],
+    openQuestions: [],
+    nextSteps: [],
+    extractionChanges: [],
+  });
+
+  await indexTesting.indexTouchedExtractions(client, [thread], new Set([threadIdentityKey(thread)]));
+
+  assert.deepEqual(events.map((event) => event.table), ['session', 'extraction']);
+  assert.equal(events[0].row.latestSnapshotId, 'session:1');
+  assert.equal(events[0].row.project, 'project-a');
+  assert.equal(events[0].row.agent, 'codex');
+  assert.equal(events[0].row.sessionId, 'session-a');
+  assert.equal(events[0].row.title, 'Session title');
+  assert.equal(events[0].row.summary, 'Session summary');
+  assert.match(events[0].row.searchText, /Adoption agency shortlist/);
+  assert.equal(events[1].rows.length, 1);
 });
 
 test('table mutation locks serialize writes on the same table', async () => {
@@ -341,12 +930,53 @@ test('lockNativeTables serializes same-table mutations without locking reads', a
   assert.deepEqual(await optimize, { changed: true });
 });
 
-test('memories.get renders extraction memories', async () => {
+test('lockNativeTables serializes session search mutations without locking reads', async () => {
+  const { TableMutationLocks, lockNativeTables } = await import('../../dist/native.js');
+  const locks = new TableMutationLocks();
+  const upsertEntered = deferred();
+  const releaseUpsert = deferred();
+  const optimizeEntered = deferred();
+  let searchCalls = 0;
+  const tables = lockNativeTables({
+    sessionTable: {
+      upsert: async () => {
+        upsertEntered.resolve();
+        await releaseUpsert.promise;
+      },
+      optimize: async () => {
+        optimizeEntered.resolve();
+        return { changed: true };
+      },
+      search: async () => {
+        searchCalls += 1;
+        return [];
+      },
+    },
+  }, locks);
+
+  const upsert = tables.sessionTable.upsert({ rows: [] });
+  await upsertEntered.promise;
+  const optimize = tables.sessionTable.optimize({ mergeCount: 1 });
+  await tables.sessionTable.search({ query: 'q', vector: [], limit: 1 });
+  assert.equal(searchCalls, 1);
+
+  const optimizeStartedEarly = await Promise.race([
+    optimizeEntered.promise.then(() => true),
+    new Promise((resolve) => setTimeout(() => resolve(false), 30)),
+  ]);
+  assert.equal(optimizeStartedEarly, false);
+
+  releaseUpsert.resolve();
+  await upsert;
+  assert.deepEqual(await optimize, { changed: true });
+});
+
+test('memories.getContext renders extraction contexts', async () => {
   const client = {
     extractionTable: {
-      get: async ({ ids }) => ids.includes('ext-1')
+      get: async ({ ids }) => ids.includes(EXTRACTION_ID_A)
         ? [{
-            id: 'ext-1',
+            id: EXTRACTION_ID_A,
             title: 'Caroline research',
             summary: 'Caroline researched adoption agencies.',
             content: 'Caroline researched adoption agencies.',
@@ -358,17 +988,66 @@ test('memories.get renders extraction memories', async () => {
           }]
         : [],
     },
-    sessionTable: { get: async () => null },
+    sessionSnapshotTable: { getSnapshot: async () => null },
     turnTable: { get: async () => null },
   };
   const { Memories } = await import('../../dist/api/memory.js');
-  const memory = await new Memories(client).get('ext:ext-1');
+  const memory = await new Memories(client).getContext(`ext:${EXTRACTION_ID_A}`);
 
-  assert.equal(memory.memoryId, 'ext:ext-1');
+  assert.equal(memory.contextId, `ext:${EXTRACTION_ID_A}`);
   assert.equal(memory.title, 'Caroline research');
   assert.equal(memory.summary, 'Caroline researched adoption agencies.');
   assert.match(memory.detail, /References:/);
   assert.match(memory.detail, /turn:1/);
+});
+
+test('memories.getContext does not scan extractions for session snapshots', async () => {
+  const snapshotExtraction = {
+    title: 'Adoption agencies',
+    text: 'Caroline compared adoption agencies.',
+    context: 'Agency notes',
+    references: ['turn:1'],
+  };
+  let listCalls = 0;
+  const client = {
+    sessionSnapshotTable: {
+      getSnapshot: async (snapshotId) => snapshotId === 'session:42'
+        ? {
+            snapshotId: 'session:42',
+            sessionId: 'session-a',
+            project: 'project-a',
+            cwd: '/workspace/project-a',
+            agent: 'codex',
+            snapshotSequence: 0,
+            createdAt: '2024-01-01T00:00:00Z',
+            updatedAt: '2024-01-02T00:00:00Z',
+            extractor: 'extractor-a',
+            title: 'Session title',
+            summary: 'Session summary',
+            memorySignals: [],
+            skillSignals: [],
+            skillDetails: '{}',
+            content: renderSnapshotContent('Session title', 'Session summary', {
+              memorySignals: [],
+              skillSignals: [],
+              skillDetails: {},
+            }, [snapshotExtraction]),
+            references: ['turn:1'],
+          }
+        : null,
+    },
+    extractionTable: {
+      list: async () => {
+        listCalls += 1;
+        throw new Error('session read must not list extractions');
+      },
+    },
+  };
+  const { Memories } = await import('../../dist/api/memory.js');
+  const memory = await new Memories(client).getContext('session:42');
+
+  assert.equal(listCalls, 0);
+  assert.equal(memory.extractionContextRefs, undefined);
 });
 
 function deferred() {
@@ -547,6 +1226,76 @@ test('createSessionThread preserves complete readable title and summary text', (
   assert.doesNotMatch(thread.summary, /\.\.\.$/);
 });
 
+test('flushThreads appends using persisted snapshotSequence after partial history restore', async () => {
+  const now = new Date().toISOString();
+  const inserted = [];
+  const thread = threadFromSnapshots([
+    {
+      snapshotId: 'snapshot-36',
+      sessionId: 'session-a',
+      project: 'project-a',
+      cwd: '/workspace/project-a',
+      agent: 'codex',
+      snapshotSequence: 36,
+      createdAt: now,
+      updatedAt: now,
+      extractor: 'default-extractor',
+      title: 'Thread',
+      summary: 'Summary 36',
+      ...emptySnapshotSignals(),
+      content: snapshotContentFixture('', { title: 'Thread', summary: 'Summary 36' }),
+      references: ['turn:36'],
+    },
+    {
+      snapshotId: 'snapshot-73',
+      sessionId: 'session-a',
+      project: 'project-a',
+      cwd: '/workspace/project-a',
+      agent: 'codex',
+      snapshotSequence: 73,
+      createdAt: now,
+      updatedAt: now,
+      extractor: 'default-extractor',
+      title: 'Thread',
+      summary: 'Summary 73',
+      ...emptySnapshotSignals(),
+      content: snapshotContentFixture('', { title: 'Thread', summary: 'Summary 73' }),
+      references: ['turn:36', 'turn:73'],
+    },
+  ], 73);
+
+  threadTesting.applyExtractionForTests(
+    thread,
+    {
+      title: 'Thread',
+      summary: 'Summary 74',
+      memorySignals: [],
+      skillSignals: [],
+      skillDetails: {},
+      snapshotContent: '',
+      extractions: [],
+      nextSteps: [],
+      contextRefs: [{ turnId: 'turn:74', summary: 'Captured turn 74.' }],
+    },
+    74,
+    () => ({ extractionChanges: [], extractions: [] }),
+    now,
+  );
+
+  await sessionTesting.flushThreads({
+    sessionSnapshotTable: {
+      insert: async ({ snapshots }) => {
+        inserted.push(...snapshots);
+        return snapshots.map((snapshot) => ({ ...snapshot, snapshotId: 'snapshot-74' }));
+      },
+    },
+  }, [thread], new Set([threadIdentityKey(thread)]));
+
+  assert.equal(inserted.length, 1);
+  assert.equal(inserted[0].snapshotSequence, 74);
+  assert.equal(thread.snapshotId, 'snapshot-74');
+});
+
 function makeRecentSessionCheckpoint(turns, sessionId = 'group-a', agent = 'agent-a') {
   return {
     sessionId,
@@ -560,12 +1309,15 @@ function makeRecentSessionCheckpoint(turns, sessionId = 'group-a', agent = 'agen
 function makeExtractorClient() {
   let snapshotSequence = 0;
   return {
-    sessionTable: {
+    sessionSnapshotTable: {
       insert: async ({ snapshots }) => snapshots.map((snapshot) => ({
         ...snapshot,
         snapshotId: `snapshot-${snapshotSequence += 1}`,
       })),
       update: async ({ snapshots }) => snapshots,
+    },
+    sessionTable: {
+      upsert: async () => undefined,
     },
     extractionTable: {
       delete: async () => ({ deleted: 0 }),
@@ -696,7 +1448,7 @@ test('watchdog.start waits for the first interval before maintenance', async (t)
       },
       compact: async () => ({ changed: false }),
     },
-    sessionTable: {
+    sessionSnapshotTable: {
       stats: async () => null,
       compact: async () => ({ changed: false }),
     },
@@ -741,7 +1493,7 @@ test('watchdog compacts turn data once per indexed version without logging skips
         return { changed: true };
       },
     },
-    sessionTable: {
+    sessionSnapshotTable: {
       stats: async () => null,
       compact: async () => ({ changed: false }),
     },
@@ -788,7 +1540,7 @@ test('watchdog creates and optimizes extraction index only once for an unchanged
       stats: async () => null,
       compact: async () => ({ changed: false }),
     },
-    sessionTable: {
+    sessionSnapshotTable: {
       stats: async () => null,
       compact: async () => ({ changed: false }),
     },
@@ -852,7 +1604,7 @@ test('watchdog below-threshold cycles do not compact or write logs', async (t) =
         return { changed: false };
       },
     },
-    sessionTable: {
+    sessionSnapshotTable: {
       stats: async () => null,
       compact: async () => ({ changed: false }),
     },
@@ -874,6 +1626,92 @@ test('watchdog below-threshold cycles do not compact or write logs', async (t) =
   assert.deepEqual(await readWatchdogLog(homeDir), []);
 });
 
+test('watchdog maintains and cleans session search table', async (t) => {
+  const { dir, homeDir, configPath } = await makeConfigHome();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+  process.env.MUNINN_HOME = homeDir;
+  await writeExtractorConfig(configPath);
+  await mkdir(path.dirname(resolveCheckpointPath()), { recursive: true });
+  await writeFile(resolveCheckpointPath(), `${JSON.stringify(makeCheckpointContent({
+    writtenAt: '2024-01-01T00:00:00Z',
+    writerPid: 123,
+    session: {
+      schemaVersion: 1,
+      embeddingDimensions: 8,
+      sourceSessionVersion: 21,
+      tableVersion: 22,
+    },
+  }), null, 2)}\n`, 'utf8');
+
+  let compactCalls = 0;
+  let cleanupFloor = null;
+  let optimizeCalls = 0;
+  const runtime = new Watchdog({
+    turnTable: {
+      stats: async () => null,
+      compact: async () => ({ changed: false }),
+    },
+    sessionSnapshotTable: {
+      stats: async () => null,
+      compact: async () => ({ changed: false }),
+    },
+    extractionTable: {
+      ensureVectorIndex: async () => ({ created: false }),
+      stats: async () => null,
+      compact: async () => ({ changed: false }),
+      optimize: async () => ({ changed: false }),
+    },
+    sessionTable: {
+      ensureVectorIndex: async () => ({ created: true }),
+      stats: async () => ({
+        version: 23,
+        fragmentCount: 5,
+        rowCount: 7,
+      }),
+      compact: async () => {
+        compactCalls += 1;
+        return { changed: true };
+      },
+      optimize: async () => {
+        optimizeCalls += 1;
+        return { changed: true };
+      },
+      cleanup: async ({ floorVersion }) => {
+        cleanupFloor = floorVersion;
+        return { changed: true };
+      },
+    },
+  }, createWatchdogConfig({ compactMinFragments: 3 }));
+  t.after(async () => runtime.stop());
+
+  runtime.start();
+  await waitFor(() => cleanupFloor === 22);
+
+  assert.equal(compactCalls, 1);
+  assert.equal(optimizeCalls, 1);
+  const records = await readWatchdogLog(homeDir);
+  assert.ok(records.some((record) => (
+    record.dataset === 'session'
+    && record.event === 'index_created'
+    && record.version === 23
+  )));
+  assert.ok(records.some((record) => (
+    record.dataset === 'session'
+    && record.event === 'compacted'
+    && record.details?.changed === true
+  )));
+  assert.ok(records.some((record) => (
+    record.dataset === 'session'
+    && record.event === 'optimized'
+    && record.details?.mergeCount === 4
+  )));
+  assert.ok(records.some((record) => (
+    record.dataset === 'session'
+    && record.event === 'cleaned'
+    && record.version === 22
+  )));
+});
+
 test('watchdog logs dataset failures to file and stderr', async (t) => {
   const { dir, homeDir } = await makeConfigHome();
   t.after(async () => rm(dir, { recursive: true, force: true }));
@@ -893,7 +1731,7 @@ test('watchdog logs dataset failures to file and stderr', async (t) => {
       stats: async () => null,
       compact: async () => ({ changed: false }),
     },
-    sessionTable: {
+    sessionSnapshotTable: {
       stats: async () => ({
         version: 5,
         fragmentCount: 6,
@@ -918,12 +1756,12 @@ test('watchdog logs dataset failures to file and stderr', async (t) => {
   const records = await readWatchdogLog(homeDir);
   assert.ok(records.some((record) => (
     record.level === 'error'
-    && record.dataset === 'session'
+    && record.dataset === 'sessionSnapshot'
     && record.event === 'failed'
     && record.version === 5
     && /session compact failed/i.test(String(record.details?.errorMessage))
   )));
-  assert.ok(errors.some((entry) => /session maintenance failed: session compact failed/i.test(entry)));
+  assert.ok(errors.some((entry) => /sessionSnapshot maintenance failed: session compact failed/i.test(entry)));
 });
 
 test('watchdog logs extraction optimize failures with the current stats version', async (t) => {
@@ -936,7 +1774,7 @@ test('watchdog logs extraction optimize failures with the current stats version'
       stats: async () => null,
       compact: async () => ({ changed: false }),
     },
-    sessionTable: {
+    sessionSnapshotTable: {
       stats: async () => null,
       compact: async () => ({ changed: false }),
     },
@@ -989,7 +1827,7 @@ test('watchdog logs null version when stats fails before reading the current dat
       },
       compact: async () => ({ changed: false }),
     },
-    sessionTable: {
+    sessionSnapshotTable: {
       stats: async () => null,
       compact: async () => ({ changed: false }),
     },
@@ -1032,7 +1870,7 @@ test('watchdog writes extractor checkpoint files', async (t) => {
       }),
       compact: async () => ({ changed: false }),
     },
-    sessionTable: {
+    sessionSnapshotTable: {
       stats: async () => null,
       compact: async () => ({ changed: false }),
     },
@@ -1146,7 +1984,7 @@ test('watchdog skips checkpoint writes when contributors return no extractor sta
       stats: async () => null,
       compact: async () => ({ changed: false }),
     },
-    sessionTable: {
+    sessionSnapshotTable: {
       stats: async () => null,
       compact: async () => ({ changed: false }),
     },
@@ -1205,7 +2043,7 @@ test('watchdog skips checkpoint writes when extractor content is unchanged', asy
       }),
       compact: async () => ({ changed: false }),
     },
-    sessionTable: {
+    sessionSnapshotTable: {
       stats: async () => null,
       compact: async () => ({ changed: false }),
     },
@@ -1263,7 +2101,7 @@ test('watchdog rewrites checkpoint when the file is deleted after startup', asyn
       }),
       compact: async () => ({ changed: false }),
     },
-    sessionTable: {
+    sessionSnapshotTable: {
       stats: async () => null,
       compact: async () => ({ changed: false }),
     },
@@ -1358,6 +2196,12 @@ test('checkpoint preserves session runs', async () => {
     },
     sessionIndex: { baseline: { turn: 1, session: 1 }, entries: [] },
     dreaming: { projects: {} },
+    session: {
+      schemaVersion: 1,
+      embeddingDimensions: 8,
+      sourceSessionVersion: 1,
+      tableVersion: 1,
+    },
   };
 
   const parsed = parseCheckpointFile(serializeCheckpointFile(file));
@@ -1389,7 +2233,7 @@ test('watchdog rewrites checkpoint when extractor content changes', async (t) =>
       }),
       compact: async () => ({ changed: false }),
     },
-    sessionTable: {
+    sessionSnapshotTable: {
       stats: async () => null,
       compact: async () => ({ changed: false }),
     },
@@ -1416,6 +2260,38 @@ test('watchdog rewrites checkpoint when extractor content changes', async (t) =>
   assert.equal(after.extractor.nextEpoch, 13);
   assert.ok(after.writtenAt !== '2024-01-01T00:00:00Z');
   assert.ok(afterStat.mtimeMs >= beforeStat.mtimeMs);
+});
+
+test('watchdog blocks checkpoint committedEpoch regression', async (t) => {
+  const { dir, homeDir, configPath } = await makeConfigHome();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+  process.env.MUNINN_HOME = homeDir;
+  await writeExtractorConfig(configPath);
+
+  await mkdir(path.dirname(resolveCheckpointPath()), { recursive: true });
+  await writeFile(resolveCheckpointPath(), `${JSON.stringify(makeCheckpointContent({
+    writtenAt: '2024-01-01T00:00:00Z',
+    writerPid: 123,
+    extractor: makeExtractorCheckpoint({ committedEpoch: 482, nextEpoch: 483 }),
+  }), null, 2)}\n`, 'utf8');
+
+  const runtime = new Watchdog({}, createWatchdogConfig({ intervalMs: 25 }), createCheckpointBackend(makeCheckpointContent({
+    extractor: makeExtractorCheckpoint({
+      committedEpoch: 10,
+      nextEpoch: 11,
+      recentSessions: [makeRecentSessionCheckpoint([makeRecentTurn('turn:101', 'regressed-checkpoint')])],
+    }),
+  })));
+  t.after(async () => runtime.stop());
+
+  await runtime.flushCheckpoint();
+
+  const after = await readCheckpoint();
+  assert.equal(after.extractor.committedEpoch, 482);
+  assert.equal(after.extractor.nextEpoch, 483);
+  assert.deepEqual(after.extractor.recentSessions, [
+    makeRecentSessionCheckpoint([makeRecentTurn('turn:101', 'regressed-checkpoint')]),
+  ]);
 });
 
 test('getPendingIndex returns the unindexed snapshot range', () => {
@@ -1555,6 +2431,38 @@ test('loadThreads keeps full history for active threads', () => {
   assert.deepEqual(threads[0].snapshotIds, ['snapshot-0', 'snapshot-1']);
   assert.equal(threads[0].snapshots.length, 2);
   assert.equal(threads[0].indexedSnapshotSequence, null);
+});
+
+test('loadThreads restores extraction ids from inline context ids', () => {
+  const now = new Date().toISOString();
+  const extractionId = '123e4567-e89b-42d3-a456-426614174000';
+  const threads = loadThreads([
+    {
+      snapshotId: 'snapshot-1',
+      sessionId: 'thread-a',
+      project: 'project-a',
+      cwd: '/workspace/project-a',
+      agent: 'agent-a',
+      snapshotSequence: 0,
+      createdAt: now,
+      updatedAt: now,
+      extractor: 'default-extractor',
+      title: 'Thread A',
+      summary: 'Thread summary',
+      ...emptySnapshotSignals(),
+      content: snapshotContentFixture([
+        `<!-- context_id: ext:${extractionId}; refs: [turn:1] -->`,
+        '### Title',
+        'Remembered fact',
+        '',
+        '### Summary',
+        'The thread persisted an extraction context id.',
+      ].join('\n'), { title: 'Thread A', summary: 'Thread summary' }),
+      references: ['turn:1'],
+    },
+  ], 'default-extractor', 30);
+
+  assert.equal(threads[0]?.snapshots[0]?.extractions[0]?.id, extractionId);
 });
 
 test('epochQueue.shift returns a published epoch without waiting', () => {
@@ -1730,7 +2638,7 @@ test('extractor bootstrap without checkpoint derives committedEpoch from session
         makeExtractableTurn('turn-14', 14, 'epoch14'),
       ],
     },
-    sessionTable: {
+    sessionSnapshotTable: {
       listSnapshots: async () => rows,
       threadSnapshots: async () => rows,
     },
@@ -1759,7 +2667,7 @@ test('extractor bootstrap publishes pending turns by their extractionEpoch', asy
         makeExtractableTurn('turn-14', 14, 'epoch14'),
       ],
     },
-    sessionTable: {
+    sessionSnapshotTable: {
       listSnapshots: async () => [],
     },
     extractionTable: {},
@@ -1795,7 +2703,7 @@ test('extractor bootstrap repacks oversized pending epochs by maxEpochTurns', as
         makeExtractableTurn(`turn-${index + 1}`, 13, `epoch13-${index + 1}`)
       )),
     },
-    sessionTable: {
+    sessionSnapshotTable: {
       listSnapshots: async () => [],
     },
     extractionTable: {},
@@ -1857,7 +2765,7 @@ test('extractor bootstrap restores committed state from checkpoint when baseline
         return [];
       },
     },
-    sessionTable: {
+    sessionSnapshotTable: {
       delta: async () => ({ sourceVersion: 21, rows: [] }),
       stats: async () => ({
         version: 21,
@@ -1868,8 +2776,25 @@ test('extractor bootstrap restores committed state from checkpoint when baseline
         listSnapshotsCalls += 1;
         return [];
       },
-      threadSnapshots: async (sessionId) => {
-        assert.equal(sessionId, 'obs-1');
+      getSnapshot: async (snapshotId) => (
+        snapshotId === 'turn:42'
+          ? {
+            snapshotId: 'turn:42',
+            sessionId: 'obs-1',
+            project: 'project-a',
+            agent: 'agent-a',
+            snapshotSequence: 1,
+            extractor: 'default-extractor',
+          }
+          : null
+      ),
+      threadSnapshots: async (scope) => {
+        assert.deepEqual(scope, {
+          project: 'project-a',
+          agent: 'agent-a',
+          sessionId: 'obs-1',
+          extractor: 'default-extractor',
+        });
         return [
           {
             snapshotId: 'turn:41',
@@ -1968,7 +2893,7 @@ test('extractor checkpoint restore keeps full history for active threads', async
       }),
       loadTurnsAfterEpoch: async () => [],
     },
-    sessionTable: {
+    sessionSnapshotTable: {
       delta: async () => ({ sourceVersion: 21, rows: [] }),
       stats: async () => ({
         version: 21,
@@ -1976,8 +2901,25 @@ test('extractor checkpoint restore keeps full history for active threads', async
         rowCount: 2,
       }),
       listSnapshots: async () => [],
-      threadSnapshots: async (sessionId) => {
-        assert.equal(sessionId, 'mixed-thread');
+      getSnapshot: async (snapshotId) => (
+        snapshotId === 'snapshot-1'
+          ? {
+            snapshotId: 'snapshot-1',
+            sessionId: 'mixed-thread',
+            project: 'project-a',
+            agent: 'agent-a',
+            snapshotSequence: 1,
+            extractor: 'default-extractor',
+          }
+          : null
+      ),
+      threadSnapshots: async (scope) => {
+        assert.deepEqual(scope, {
+          project: 'project-a',
+          agent: 'agent-a',
+          sessionId: 'mixed-thread',
+          extractor: 'default-extractor',
+        });
         return [
           {
             snapshotId: 'snapshot-0',
@@ -2032,6 +2974,116 @@ test('extractor checkpoint restore keeps full history for active threads', async
   assert.equal(extractor.threads[0].indexedSnapshotSequence, 1);
 });
 
+test('extractor checkpoint restore scopes snapshots by latest snapshot identity', async (t) => {
+  const { dir, homeDir, configPath } = await makeConfigHome();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+  process.env.MUNINN_HOME = homeDir;
+  await writeExtractorConfig(configPath, { activeWindowDays: 7 });
+
+  const updatedAt = new Date().toISOString();
+  await mkdir(path.dirname(resolveCheckpointPath()), { recursive: true });
+  await writeFile(resolveCheckpointPath(), `${JSON.stringify(makeCheckpointContent({
+    writtenAt: '2024-01-01T00:00:00Z',
+    writerPid: 123,
+    extractor: makeExtractorCheckpoint({
+      threads: [{
+        sessionId: 'shared-session',
+        latestSnapshotId: 'project-b-1',
+        latestSnapshotSequence: 1,
+        indexedSnapshotSequence: 1,
+        updatedAt,
+      }],
+    }),
+  }), null, 2)}\n`, 'utf8');
+
+  const projectBRows = [
+    {
+      snapshotId: 'project-b-0',
+      sessionId: 'shared-session',
+      project: 'project-b',
+      cwd: '/workspace/project-b',
+      agent: 'agent-b',
+      snapshotSequence: 0,
+      createdAt: updatedAt,
+      updatedAt,
+      extractor: 'default-extractor',
+      title: 'Project B Thread',
+      summary: 'Summary',
+      ...emptySnapshotSignals(),
+      content: snapshotContentFixture('', { title: 'Project B Thread', summary: 'Summary' }),
+      references: [],
+    },
+    {
+      snapshotId: 'project-b-1',
+      sessionId: 'shared-session',
+      project: 'project-b',
+      cwd: '/workspace/project-b',
+      agent: 'agent-b',
+      snapshotSequence: 1,
+      createdAt: updatedAt,
+      updatedAt,
+      extractor: 'default-extractor',
+      title: 'Project B Thread',
+      summary: 'Summary',
+      ...emptySnapshotSignals(),
+      content: snapshotContentFixture('', { title: 'Project B Thread', summary: 'Summary' }),
+      references: [],
+    },
+  ];
+  let requestedScope = null;
+  const checkpoint = (await readCheckpointFile())?.extractor ?? null;
+  const extractor = new Extractor({
+    turnTable: {
+      stats: async () => ({
+        version: 10,
+        fragmentCount: 1,
+        rowCount: 0,
+      }),
+      loadTurnsAfterEpoch: async () => [],
+    },
+    sessionSnapshotTable: {
+      delta: async () => ({ sourceVersion: 21, rows: [] }),
+      stats: async () => ({
+        version: 21,
+        fragmentCount: 1,
+        rowCount: 2,
+      }),
+      listSnapshots: async () => [],
+      getSnapshot: async (snapshotId) => (
+        snapshotId === 'project-b-1' ? projectBRows[1] : null
+      ),
+      threadSnapshots: async (scope) => {
+        requestedScope = scope;
+        assert.deepEqual(scope, {
+          project: 'project-b',
+          agent: 'agent-b',
+          sessionId: 'shared-session',
+          extractor: 'default-extractor',
+        });
+        return projectBRows;
+      },
+    },
+    extractionTable: {
+      stats: async () => ({
+        version: 8,
+        fragmentCount: 1,
+        rowCount: 0,
+      }),
+    },
+  }, checkpoint);
+  t.after(async () => extractor.shutdown());
+
+  await extractor.ensureBootstrapped();
+
+  assert.deepEqual(requestedScope, {
+    project: 'project-b',
+    agent: 'agent-b',
+    sessionId: 'shared-session',
+    extractor: 'default-extractor',
+  });
+  assert.deepEqual(extractor.threads[0].snapshotIds, ['project-b-0', 'project-b-1']);
+});
+
 test('extractor restore advances committedEpoch and excludes extracted turns from pending', async (t) => {
   const { dir, homeDir, configPath } = await makeConfigHome();
   t.after(async () => rm(dir, { recursive: true, force: true }));
@@ -2064,7 +3116,7 @@ test('extractor restore advances committedEpoch and excludes extracted turns fro
         makeExtractableTurn('turn-14', 14, 'epoch14'),
       ],
     },
-    sessionTable: {
+    sessionSnapshotTable: {
       delta: async () => ({
         sourceVersion: 21,
         rows: [
@@ -2102,7 +3154,26 @@ test('extractor restore advances committedEpoch and excludes extracted turns fro
           },
         ],
       }),
-      threadSnapshots: async () => [
+      getSnapshot: async (snapshotId) => (
+        snapshotId === 'snapshot-0'
+          ? {
+            snapshotId: 'snapshot-0',
+            sessionId: 'obs-1',
+            project: 'project-a',
+            agent: 'agent-a',
+            snapshotSequence: 0,
+            extractor: 'default-extractor',
+          }
+          : null
+      ),
+      threadSnapshots: async (scope) => {
+        assert.deepEqual(scope, {
+          project: 'project-a',
+          agent: 'agent-a',
+          sessionId: 'obs-1',
+          extractor: 'default-extractor',
+        });
+        return [
         {
           snapshotId: 'snapshot-0',
           sessionId: 'obs-1',
@@ -2151,7 +3222,8 @@ test('extractor restore advances committedEpoch and excludes extracted turns fro
           content: snapshotContentFixture('', { title: 'Thread', summary: 'Summary' }),
           references: ['turn-13', 'turn-14'],
         },
-      ],
+        ];
+      },
     },
     extractionTable: {},
   }, checkpoint);
@@ -2191,7 +3263,7 @@ test('extractor restore falls back when session delta refs are missing turn epoc
     turnTable: {
       loadTurnsAfterEpoch: async () => [makeExtractableTurn('turn-13', 13, 'epoch13')],
     },
-    sessionTable: {
+    sessionSnapshotTable: {
       delta: async () => ({
         sourceVersion: 21,
         rows: [
@@ -2213,7 +3285,26 @@ test('extractor restore falls back when session delta refs are missing turn epoc
           },
         ],
       }),
-      threadSnapshots: async () => [
+      getSnapshot: async (snapshotId) => (
+        snapshotId === 'snapshot-0'
+          ? {
+            snapshotId: 'snapshot-0',
+            sessionId: 'obs-1',
+            project: 'project-a',
+            agent: 'agent-a',
+            snapshotSequence: 0,
+            extractor: 'default-extractor',
+          }
+          : null
+      ),
+      threadSnapshots: async (scope) => {
+        assert.deepEqual(scope, {
+          project: 'project-a',
+          agent: 'agent-a',
+          sessionId: 'obs-1',
+          extractor: 'default-extractor',
+        });
+        return [
         {
           snapshotId: 'snapshot-0',
           sessionId: 'obs-1',
@@ -2230,7 +3321,8 @@ test('extractor restore falls back when session delta refs are missing turn epoc
           content: snapshotContentFixture('', { title: 'Thread', summary: 'Summary' }),
           references: [],
         },
-      ],
+        ];
+      },
     },
     extractionTable: {},
   }, checkpoint);
@@ -2276,7 +3368,7 @@ test('extractor restore skips stale threads resource only from session delta', a
     turnTable: {
       loadTurnsAfterEpoch: async () => [makeExtractableTurn('turn-13', 13, 'epoch13')],
     },
-    sessionTable: {
+    sessionSnapshotTable: {
       delta: async () => ({ sourceVersion: 21, rows: [staleRow] }),
       threadSnapshots: async () => [staleRow],
     },
@@ -2335,7 +3427,7 @@ test('extractor restore rebuilds delta-only threads from full history', async (t
       ],
       getTurn: async (turnId) => turnById.get(turnId) ?? null,
     },
-    sessionTable: {
+    sessionSnapshotTable: {
       delta: async () => ({ sourceVersion: 21, rows: [fullRows[6], fullRows[7]] }),
       threadSnapshots: async () => fullRows,
     },
@@ -2385,7 +3477,7 @@ test('extractor bootstrap skips stale checkpoint threads', async (t) => {
       }),
       loadTurnsAfterEpoch: async () => [],
     },
-    sessionTable: {
+    sessionSnapshotTable: {
       delta: async () => ({ sourceVersion: 21, rows: [] }),
       stats: async () => ({
         version: 21,
@@ -2414,6 +3506,65 @@ test('extractor bootstrap skips stale checkpoint threads', async (t) => {
   assert.equal(extractor.openEpoch.epoch, 13);
 });
 
+test('extractor exports checkpoint thread with persisted latest snapshotSequence', async (t) => {
+  const { dir, homeDir, configPath } = await makeConfigHome();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+  process.env.MUNINN_HOME = homeDir;
+  await writeExtractorConfig(configPath);
+
+  const now = new Date().toISOString();
+  const extractor = new Extractor({
+    turnTable: { loadTurnsAfterEpoch: async () => [] },
+    sessionSnapshotTable: { listSnapshots: async () => [] },
+    extractionTable: {},
+  }, null);
+  t.after(async () => extractor.shutdown());
+
+  extractor.threads = [threadFromSnapshots([
+    {
+      snapshotId: 'snapshot-36',
+      sessionId: 'session-a',
+      project: 'project-a',
+      cwd: '/workspace/project-a',
+      agent: 'codex',
+      snapshotSequence: 36,
+      createdAt: now,
+      updatedAt: now,
+      extractor: 'default-extractor',
+      title: 'Thread',
+      summary: 'Summary 36',
+      ...emptySnapshotSignals(),
+      content: snapshotContentFixture('', { title: 'Thread', summary: 'Summary 36' }),
+      references: ['turn:36'],
+    },
+    {
+      snapshotId: 'snapshot-73',
+      sessionId: 'session-a',
+      project: 'project-a',
+      cwd: '/workspace/project-a',
+      agent: 'codex',
+      snapshotSequence: 73,
+      createdAt: now,
+      updatedAt: now,
+      extractor: 'default-extractor',
+      title: 'Thread',
+      summary: 'Summary 73',
+      ...emptySnapshotSignals(),
+      content: snapshotContentFixture('', { title: 'Thread', summary: 'Summary 73' }),
+      references: ['turn:36', 'turn:73'],
+    },
+  ], 73)];
+
+  extractor.bootstrapped = true;
+  extractor.committedEpoch = 73;
+  extractor.openEpoch = new OpenEpoch(74);
+  extractor.refreshCheckpointSnapshot();
+
+  const checkpoint = extractor.exportCheckpoint();
+  assert.equal(checkpoint.threads[0].latestSnapshotId, 'snapshot-73');
+  assert.equal(checkpoint.threads[0].latestSnapshotSequence, 73);
+});
+
 test('extractor exportCheckpoint keeps the last committed snapshot while extractCurrentEpoch is mid-flight', async (t) => {
   const { dir, homeDir, configPath } = await makeConfigHome();
   t.after(async () => rm(dir, { recursive: true, force: true }));
@@ -2424,7 +3575,7 @@ test('extractor exportCheckpoint keeps the last committed snapshot while extract
   const release = deferred();
   const checkpoint = (await readCheckpointFile())?.extractor ?? null;
   const extractor = new Extractor({
-    sessionTable: {
+    sessionSnapshotTable: {
       insert: async ({ snapshots }) => snapshots.map((snapshot) => ({
         ...snapshot,
         snapshotId: 'snapshot-1',
@@ -2543,7 +3694,7 @@ test('extractor bootstrap ignores extraction version mismatches when session bas
       }),
       loadTurnsAfterEpoch: async () => [],
     },
-    sessionTable: {
+    sessionSnapshotTable: {
       delta: async () => ({ sourceVersion: 21, rows: [] }),
       stats: async () => ({
         version: 21,
@@ -2554,7 +3705,26 @@ test('extractor bootstrap ignores extraction version mismatches when session bas
         listSnapshotsCalls += 1;
         return [];
       },
-      threadSnapshots: async () => [
+      getSnapshot: async (snapshotId) => (
+        snapshotId === 'turn:42'
+          ? {
+            snapshotId: 'turn:42',
+            sessionId: 'obs-1',
+            project: 'project-a',
+            agent: 'agent-a',
+            snapshotSequence: 1,
+            extractor: 'default-extractor',
+          }
+          : null
+      ),
+      threadSnapshots: async (scope) => {
+        assert.deepEqual(scope, {
+          project: 'project-a',
+          agent: 'agent-a',
+          sessionId: 'obs-1',
+          extractor: 'default-extractor',
+        });
+        return [
         {
           snapshotId: 'turn:41',
           sessionId: 'obs-1',
@@ -2587,7 +3757,8 @@ test('extractor bootstrap ignores extraction version mismatches when session bas
           content: snapshotContentFixture('', { title: 'Thread', summary: 'Summary' }),
           references: [],
         },
-      ],
+        ];
+      },
     },
     extractionTable: {
       stats: async () => ({
@@ -2735,7 +3906,7 @@ test('backend.listSessionIndex returns while checkpoint mutex is busy', async (t
       delta: async () => [],
       stats: async () => ({ version: 10, rowCount: 1, fragmentCount: 1 }),
     },
-    sessionTable: {
+    sessionSnapshotTable: {
       delta: async () => ({ sourceVersion: 21, rows: [] }),
       stats: async () => ({ version: 21, rowCount: 1, fragmentCount: 1 }),
     },
@@ -2779,12 +3950,18 @@ test('recallMemories searches extraction routes and enriches hits', async () => 
         };
       },
     },
-    sessionTable: {
-      threadSnapshots: async (sessionId) => (
-        sessionId === 'session-2'
+    sessionSnapshotTable: {
+      threadSnapshots: async (scope) => {
+        assert.deepEqual(scope, {
+          project: 'memory-project',
+          agent: 'codex',
+          sessionId: 'session-2',
+          extractor: 'default-extractor',
+        });
+        return scope.sessionId === 'session-2'
           ? [{
             snapshotId: 'session:snapshot-2',
-            sessionId,
+            sessionId: scope.sessionId,
             project: 'memory-project',
             cwd: '/workspace/memory-project',
             agent: 'codex',
@@ -2798,8 +3975,8 @@ test('recallMemories searches extraction routes and enriches hits', async () => 
             content: 'Readable content',
             references: ['turn:session-2'],
           }]
-          : []
-      ),
+          : [];
+      },
     },
     extractionTable: {
       search: async (params) => {
@@ -2807,7 +3984,7 @@ test('recallMemories searches extraction routes and enriches hits', async () => 
         const title = 'Counseling work';
         const summary = 'Caroline is interested in counseling work.';
         return [{
-          id: 'raw-2',
+          id: EXTRACTION_ID_B,
           title,
           summary: title + '\n\n' + summary,
           content: extractionContent(title, summary),
@@ -2824,7 +4001,8 @@ test('recallMemories searches extraction routes and enriches hits', async () => 
 
   assert.deepEqual(hits, [
     {
-      memoryId: 'ext:raw-2',
+      kind: 'context',
+      contextId: `ext:${EXTRACTION_ID_B}`,
       title: 'Counseling work',
       summary: 'Counseling work\n\nCaroline is interested in counseling work.',
       content: extractionContent('Counseling work', 'Caroline is interested in counseling work.'),
@@ -2848,33 +4026,141 @@ test('recallMemories searches extraction routes and enriches hits', async () => 
   assert.equal(calls.length, 1);
 });
 
-test('recallMemories supports fts mode without embedding the query', async () => {
-  let embedCalls = 0;
+test('recall defaults to extraction mode', async () => {
   const calls = [];
   const client = {
+    sessionTable: {
+      search: async () => {
+        throw new Error('sessionTable.search should not be called by extraction recall');
+      },
+    },
     extractionTable: {
       search: async (params) => {
         calls.push(params);
+        return [{
+          id: EXTRACTION_ID_C,
+          title: 'Adoption planning',
+          summary: 'Caroline planned adoption research.',
+          content: extractionContent('Adoption planning', 'Caroline planned adoption research.'),
+          turnRefs: [],
+          vector: [],
+          createdAt: '2024-01-01T00:00:00Z',
+          updatedAt: '2024-01-01T00:00:00Z',
+        }];
+      },
+    },
+  };
+
+  const hits = await recallMemories(client, '  adoption agencies  ', 3, { embed: async () => [1, 0] });
+
+  assert.deepEqual(calls, [{
+    query: 'adoption agencies',
+    vector: [1, 0],
+    limit: 3,
+    mode: 'hybrid',
+  }]);
+  assert.deepEqual(hits.map((hit) => hit.contextId), [`ext:${EXTRACTION_ID_C}`]);
+});
+
+test('recall session mode searches sessionTable only', async () => {
+  const calls = [];
+  const client = {
+    sessionTable: {
+      search: async (params) => {
+        calls.push(params);
+        return [{
+          latestSnapshotId: 'session:42',
+          project: 'project-a',
+          cwd: '/workspace/project-a',
+          agent: 'codex',
+          sessionId: 'session-a',
+          title: 'Readable session title',
+          summary: 'Readable session summary',
+          searchText: 'Readable session title\n\nReadable session summary\n\nExtraction evidence text',
+          vector: [0, 1],
+          updatedAt: '2024-01-03T00:00:00Z',
+        }];
+      },
+    },
+    extractionTable: {
+      search: async () => {
+        throw new Error('extractionTable.search should not be called by session recall');
+      },
+    },
+  };
+
+  const hits = await recallMemories(client, '  readable session  ', 10, {
+    mode: 'session',
+    embed: async (text) => {
+      assert.equal(text, 'readable session');
+      return [0, 1];
+    },
+  });
+
+  assert.deepEqual(calls, [{
+    query: 'readable session',
+    vector: [0, 1],
+    limit: 40,
+  }]);
+  assert.equal(hits.length, 1);
+  assert.equal(hits[0].contextId, 'session:42');
+  assert.equal(hits[0].title, 'Readable session title');
+  assert.equal(hits[0].summary, 'Readable session summary');
+  assert.equal(hits[0].content, 'Readable session title\n\nReadable session summary');
+  assert.deepEqual(hits[0].references, []);
+  assert.equal(hits[0].project, 'project-a');
+  assert.equal(hits[0].agent, 'codex');
+  assert.equal(hits[0].sessionId, 'session-a');
+  assert.equal(hits[0].cwd, '/workspace/project-a');
+  assert.equal(hits[0].sessionKey, undefined);
+  assert.equal(hits[0].displaySession, 'Readable session title');
+});
+
+test('recall session mode rejects budget queryLimit and thinkingRatio', async () => {
+  const client = {
+    sessionTable: {
+      search: async () => [],
+    },
+  };
+  const message = /budget, queryLimit, and thinkingRatio are only supported in extraction recall mode/;
+
+  await assert.rejects(
+    () => recallMemories(client, 'query', 10, { mode: 'session', budget: 0 }),
+    message,
+  );
+  await assert.rejects(
+    () => recallMemories(client, 'query', 10, { mode: 'session', queryLimit: 10 }),
+    message,
+  );
+  await assert.rejects(
+    () => recallMemories(client, 'query', 10, { mode: 'session', thinkingRatio: 0.5 }),
+    message,
+  );
+});
+
+test('recall extraction mode does not search sessionTable', async () => {
+  let extractionSearches = 0;
+  const client = {
+    sessionTable: {
+      search: async () => {
+        throw new Error('sessionTable.search should not be called by extraction recall');
+      },
+    },
+    extractionTable: {
+      search: async (params) => {
+        extractionSearches += 1;
+        assert.equal(params.mode, 'hybrid');
         return [];
       },
     },
   };
 
   await recallMemories(client, 'adoption agencies', 2, {
-    mode: 'fts',
-    embed: async () => {
-      embedCalls += 1;
-      return [1, 0];
-    },
+    mode: 'extraction',
+    embed: async () => [1, 0],
   });
 
-  assert.equal(embedCalls, 0);
-  assert.deepEqual(calls[0], {
-    query: 'adoption agencies',
-    vector: [],
-    limit: 2,
-    mode: 'fts',
-  });
+  assert.equal(extractionSearches, 1);
 });
 
 test('recallMemories returns recalled memory when budget is positive', async () => {
@@ -2886,7 +4172,7 @@ test('recallMemories returns recalled memory when budget is positive', async () 
         calls.push(params);
         return [
           {
-            id: 'ext-1',
+            id: EXTRACTION_ID_A,
             title: 'Summer outing',
             summary: 'Caroline and Melanie planned a summer outing.',
             content: extractionContent('Summer outing', 'Caroline and Melanie planned a summer outing.'),
@@ -2896,7 +4182,7 @@ test('recallMemories returns recalled memory when budget is positive', async () 
             updatedAt: '2024-01-01T00:00:00Z',
           },
           {
-            id: 'ext-2',
+            id: EXTRACTION_ID_D,
             title: 'Adoption research',
             summary: 'Caroline researched adoption agencies.',
             content: extractionContent('Adoption research', 'Caroline researched adoption agencies.'),
@@ -2924,15 +4210,52 @@ test('recallMemories returns recalled memory when budget is positive', async () 
   });
 
   assert.deepEqual(hits, [{
-    memoryId: 'recalled:memory',
+    kind: 'synthesis',
     content: 'Caroline researched adoption agencies.',
     references: ['D12:17', 'D2:8'],
   }]);
   assert.equal(calls[0].limit, 20);
-  assert.deepEqual(seenCandidates.map((candidate) => candidate.memoryId), [
-    'ext:ext-1',
-    'ext:ext-2',
+  assert.deepEqual(seenCandidates.map((candidate) => candidate.contextId), [
+    `ext:${EXTRACTION_ID_A}`,
+    `ext:${EXTRACTION_ID_D}`,
   ]);
+});
+
+test('recallMemories uses candidate refs for recalled memory', async () => {
+  const client = {
+    extractionTable: {
+      search: async () => [
+        {
+          id: EXTRACTION_ID_A,
+          title: 'Adoption agency research',
+          summary: 'Caroline researched adoption agencies.',
+          content: extractionContent('Adoption agency research', 'Caroline researched adoption agencies.'),
+          vector: [],
+          turnRefs: ['D2:8'],
+          createdAt: '2024-01-01T00:00:00Z',
+          updatedAt: '2024-01-01T00:00:00Z',
+        },
+      ],
+    },
+  };
+
+  const hits = await recallMemories(client, 'What did Caroline research?', 1, {
+    budget: 80,
+    queryLimit: 20,
+    embed: async () => [1, 0],
+    recallMemory: async () => ({
+      content: 'Caroline researched adoption agencies.',
+      refs: ['D99:1'],
+      raw: '',
+      candidates: [],
+    }),
+  });
+
+  assert.deepEqual(hits, [{
+    kind: 'synthesis',
+    content: 'Caroline researched adoption agencies.',
+    references: ['D2:8'],
+  }]);
 });
 
 test('memory recaller validation treats budget as a soft target', () => {
@@ -2963,6 +4286,42 @@ test('backend exportCheckpoint returns null before extractor creation', async ()
   const exported = await backend.exportCheckpoint();
 
   assert.equal(exported, null);
+});
+
+test('backend exportCheckpoint advances session search source version only when indexed rows match session index', async (t) => {
+  const { dir, homeDir, configPath } = await makeConfigHome();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+  process.env.MUNINN_HOME = homeDir;
+  await writeExtractorConfig(configPath);
+
+  const checkpoint = makeCheckpointContent({
+    sessionIndex: {
+      baseline: { turn: 10, session: 21 },
+      entries: [{
+        sessionId: 'session-a',
+        agent: 'codex',
+        project: 'project-a',
+        cwd: '/workspace/project-a',
+        latestUpdatedAt: '2024-01-02T00:00:00Z',
+        snapshotId: 'session:2',
+        title: 'Session title',
+      }],
+    },
+    session: {
+      schemaVersion: 1,
+      embeddingDimensions: 8,
+      sourceSessionVersion: 21,
+      tableVersion: 34,
+    },
+  });
+
+  const staleBackend = makeCheckpointExportBackend(checkpoint, 'session:1');
+  const stale = await staleBackend.exportCheckpoint();
+  assert.equal(stale.session.sourceSessionVersion, 21);
+
+  const freshBackend = makeCheckpointExportBackend(checkpoint, 'session:2');
+  const fresh = await freshBackend.exportCheckpoint();
+  assert.equal(fresh.session.sourceSessionVersion, 22);
 });
 
 test('session registry reuses one in-flight session load per key', async () => {
@@ -3284,7 +4643,7 @@ test('extractor.extractCurrentEpoch keeps thread state unchanged when pre-commit
 
   try {
     const extractor = new Extractor({
-      sessionTable: {
+      sessionSnapshotTable: {
         insert: async () => {
           throw new Error('persist failed');
         },
@@ -3430,7 +4789,7 @@ test('extraction state rewrite computes update add and delete changes', () => {
   assert.equal(result.extractions[0].title, 'Career plan');
   assert.deepEqual(result.extractions[0].references, ['turn:1', 'turn:3']);
   assert.equal(result.extractions[1].title, 'Painting preference');
-  assert.match(result.extractions[1].id, /^[a-f0-9]{24}$/);
+  assert.match(result.extractions[1].id, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
 });
 
 test('extraction state rewrite rejects unknown and duplicate ids', () => {
@@ -3575,8 +4934,11 @@ test('indexPendingExtractions surfaces extraction write failures and leaves work
 
   await assert.rejects(
     () => indexTesting.indexPendingExtractions({
-      sessionTable: {
+      sessionSnapshotTable: {
         update: async ({ snapshots }) => snapshots,
+      },
+      sessionTable: {
+        upsert: async () => undefined,
       },
       extractionTable: {
         delete: async () => ({ deleted: 0 }),
@@ -3794,6 +5156,59 @@ test('snapshot content round-trips split signal sections and skill details', () 
   assert.deepEqual(parsed.skillSignals, signals.skillSignals);
   assert.equal('openQuestions' in parsed, false);
   assert.deepEqual(parsed.skillDetails, signals.skillDetails);
+});
+
+test('snapshot parser accepts inline context ids without treating them as extraction identity', () => {
+  const contextId = '123e4567-e89b-42d3-a456-426614174000';
+  const parsed = parseSnapshotContent([
+    '# Parser Boundaries',
+    '',
+    '## Summary',
+    'The parser accepts public context ids on extraction units.',
+    '',
+    '## Instruction Signals',
+    '',
+    '## Skill Signals',
+    '',
+    '## Skill Details',
+    '',
+    '## Extractions',
+    `<!-- context_id: ext:${contextId}; refs: [turn:13] -->`,
+    '### Title',
+    'Parser boundary',
+    '',
+    '### Summary',
+    'Public context ids are metadata for readers, not extraction identity input.',
+  ].join('\n'), new Set(['turn:13']));
+
+  assert.equal(parsed.extractions[0]?.id, undefined);
+  assert.deepEqual(parsed.extractions[0]?.references, ['turn:13']);
+});
+
+test('snapshot parser rejects non-UUID extraction context ids', () => {
+  assert.throws(
+    () => parseSnapshotContent([
+      '# Parser Boundaries',
+      '',
+      '## Summary',
+      'The parser rejects malformed public context ids.',
+      '',
+      '## Instruction Signals',
+      '',
+      '## Skill Signals',
+      '',
+      '## Skill Details',
+      '',
+      '## Extractions',
+      '<!-- context_id: ext:memory-1; refs: [turn:13] -->',
+      '### Title',
+      'Parser boundary',
+      '',
+      '### Summary',
+      'Public context ids must use ext UUIDs.',
+    ].join('\n'), new Set(['turn:13'])),
+    /invalid extraction context_id: ext:memory-1/i,
+  );
 });
 
 test('snapshot content rejects removed Open Questions section', () => {
@@ -5656,8 +7071,144 @@ test('session snapshot persists markdown content with parsed title and summary',
   assert.deepEqual(snapshot.skillSignals, []);
   assert.equal('openQuestions' in snapshot, false);
   assert.equal(snapshot.skillDetails, '{}');
-  assert.equal(snapshot.content, markdown);
+  assert.match(snapshot.content, /context_id: ext:/);
+  assert.match(snapshot.content, /### Summary\nMelanie painted a lake sunrise in 2022\./);
   assert.doesNotMatch(snapshot.content, /^\s*\{/);
+});
+
+test('session snapshot content stores inline extraction context ids', () => {
+  const thread = createSessionThread(
+    'default-extractor',
+    'Draft title',
+    'Draft summary',
+    [],
+    1,
+    '2026-01-01T00:00:00.000Z',
+  );
+  const markdown = snapshotContentFixture(
+    [
+      '<!-- refs: [turn:1] -->',
+      '### Title',
+      'Lake sunrise painting',
+      '',
+      '### Summary',
+      'Melanie painted a lake sunrise in 2022.',
+    ].join('\n'),
+    {
+      title: 'Melanie Painting',
+      summary: 'Melanie painted a lake sunrise and considers it special.',
+    },
+  );
+
+  threadTesting.applyExtractionForTests(
+    thread,
+    {
+      title: 'Melanie Painting',
+      summary: 'Melanie painted a lake sunrise and considers it special.',
+      memorySignals: [],
+      skillSignals: [],
+      skillDetails: {},
+      snapshotContent: markdown,
+      extractions: [{
+        title: 'Lake sunrise painting',
+        text: 'Melanie painted a lake sunrise in 2022.',
+        references: ['turn:1'],
+      }],
+      nextSteps: [],
+      contextRefs: [{ turnId: 'turn:1', summary: 'Melanie discussed a lake sunrise painting.' }],
+    },
+    1,
+    applyExtractionChanges,
+    '2026-01-01T00:00:00.000Z',
+  );
+
+  const extractionId = thread.snapshots.at(-1).extractions[0]?.id;
+  assert.ok(extractionId);
+  const snapshot = toSessionSnapshot(thread);
+  assert.match(snapshot.content, new RegExp(`<!-- context_id: ext:${extractionId}; refs: \\[turn:1\\] -->`));
+  assert.match(snapshot.content, /### Title\nLake sunrise painting/);
+  assert.match(snapshot.content, /### Summary\nMelanie painted a lake sunrise in 2022\./);
+});
+
+test('session snapshot content keeps extraction context id across updates', () => {
+  const thread = createSessionThread(
+    'default-extractor',
+    'Draft title',
+    'Draft summary',
+    [],
+    1,
+    '2026-01-01T00:00:00.000Z',
+  );
+
+  threadTesting.applyExtractionForTests(
+    thread,
+    {
+      title: 'Melanie Painting',
+      summary: 'Melanie painted a lake sunrise and considers it special.',
+      memorySignals: [],
+      skillSignals: [],
+      skillDetails: {},
+      snapshotContent: snapshotContentFixture([
+        '<!-- refs: [turn:1] -->',
+        '### Title',
+        'Lake sunrise painting',
+        '',
+        '### Summary',
+        'Melanie painted a lake sunrise in 2022.',
+      ].join('\n')),
+      extractions: [{
+        title: 'Lake sunrise painting',
+        text: 'Melanie painted a lake sunrise in 2022.',
+        references: ['turn:1'],
+      }],
+      nextSteps: [],
+      contextRefs: [{ turnId: 'turn:1', summary: 'Melanie discussed a lake sunrise painting.' }],
+    },
+    1,
+    applyExtractionChanges,
+    '2026-01-01T00:00:00.000Z',
+  );
+
+  const originalId = thread.snapshots.at(-1).extractions[0]?.id;
+  assert.ok(originalId);
+
+  threadTesting.applyExtractionForTests(
+    thread,
+    {
+      title: 'Melanie Painting',
+      summary: 'Melanie painted a lake sunrise and revised the memory.',
+      memorySignals: [],
+      skillSignals: [],
+      skillDetails: {},
+      snapshotContent: snapshotContentFixture([
+        '<!-- refs: [turn:1, turn:2] -->',
+        '### Title',
+        'Lake sunrise painting',
+        '',
+        '### Summary',
+        'Melanie painted a lake sunrise in 2022 and later clarified it was watercolor.',
+      ].join('\n')),
+      extractions: [{
+        id: originalId,
+        title: 'Lake sunrise painting',
+        text: 'Melanie painted a lake sunrise in 2022 and later clarified it was watercolor.',
+        references: ['turn:1', 'turn:2'],
+      }],
+      nextSteps: [],
+      contextRefs: [
+        { turnId: 'turn:1', summary: 'Melanie discussed a lake sunrise painting.' },
+        { turnId: 'turn:2', summary: 'Melanie clarified the painting medium.' },
+      ],
+    },
+    2,
+    applyExtractionChanges,
+    '2026-01-01T00:00:01.000Z',
+  );
+
+  const snapshot = toSessionSnapshot(thread);
+  assert.equal(thread.snapshots.at(-1).extractions[0]?.id, originalId);
+  assert.match(snapshot.content, new RegExp(`<!-- context_id: ext:${originalId}; refs: \\[turn:1, turn:2\\] -->`));
+  assert.match(snapshot.content, /clarified it was watercolor/);
 });
 
 test('extractSessionThread passes raw turns to extractor', async () => {
@@ -5850,7 +7401,7 @@ test('extractEpoch groups mixed session turns before session', async () => {
   const extractionInputs = [];
   const snapshotRows = [];
   const client = {
-    sessionTable: {
+    sessionSnapshotTable: {
       insert: async ({ snapshots }) => {
         snapshotRows.push(...snapshots);
         return snapshots.map((snapshot, index) => ({
@@ -5902,7 +7453,7 @@ test('extractEpochDraft does not persist session rows before flushThreads', asyn
   const threads = [];
   let insertCalls = 0;
   const client = {
-    sessionTable: {
+    sessionSnapshotTable: {
       insert: async ({ snapshots }) => {
         insertCalls += 1;
         return snapshots.map((snapshot, index) => ({
@@ -5950,7 +7501,7 @@ test('extractEpoch chunks same-session turns by maxEpochTurns', async () => {
   const extractionInputs = [];
   const snapshotRows = [];
   const client = {
-    sessionTable: {
+    sessionSnapshotTable: {
       insert: async ({ snapshots }) => {
         snapshotRows.push(...snapshots);
         return snapshots.map((snapshot, index) => ({
@@ -6011,7 +7562,7 @@ test('extractEpoch chunks same-session turns by rendered newBatchInputChars', as
   const extractionInputs = [];
   const snapshotRows = [];
   const client = {
-    sessionTable: {
+    sessionSnapshotTable: {
       insert: async ({ snapshots }) => {
         snapshotRows.push(...snapshots);
         return snapshots.map((snapshot, index) => ({
@@ -6065,7 +7616,7 @@ test('extractEpoch routes missing sessionId turns to default session thread', as
   const threads = [];
   const extractionInputs = [];
   const client = {
-    sessionTable: {
+    sessionSnapshotTable: {
       insert: async ({ snapshots }) => snapshots.map((snapshot, index) => ({
         ...snapshot,
         snapshotId: `snapshot-${index + 1}`,
@@ -6182,8 +7733,11 @@ test('indexTouchedExtractions immediately advances extraction index for touched 
   }];
 
   await indexTesting.indexTouchedExtractions({
-    sessionTable: {
+    sessionSnapshotTable: {
       update: async ({ snapshots }) => snapshots,
+    },
+    sessionTable: {
+      upsert: async () => undefined,
     },
     extractionTable: {
       delete: async () => ({ deleted: 0 }),
@@ -6199,6 +7753,58 @@ test('indexTouchedExtractions immediately advances extraction index for touched 
   assert.equal(getPendingIndex(threads[0]), null);
 });
 
+test('indexTouchedExtractions advances cursor using persisted snapshotSequence after partial history restore', async (t) => {
+  const { dir, homeDir, configPath } = await makeConfigHome();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+
+  process.env.MUNINN_HOME = homeDir;
+  await writeExtractorConfig(configPath);
+
+  const sessionUpserts = [];
+  const threads = [{
+    threadId: 'session-a',
+    sessionId: 'session-a',
+    project: 'alpha',
+    cwd: '/workspace/alpha',
+    agent: 'codex',
+    kind: 'session',
+    snapshotId: 'snapshot-74',
+    snapshotIds: ['snapshot-36', 'snapshot-73', 'snapshot-74'],
+    snapshotSequences: [36, 73, 74],
+    extractionEpoch: 74,
+    title: 'Existing title',
+    summary: 'Existing summary',
+    snapshots: [
+      { extractions: [], contextRefs: [], nextSteps: [], extractionChanges: [] },
+      { extractions: [], contextRefs: [], nextSteps: [], extractionChanges: [] },
+      { extractions: [], contextRefs: [], nextSteps: [], extractionChanges: [] },
+    ],
+    references: ['turn:74'],
+    indexedSnapshotSequence: 73,
+    extractor: 'default-extractor',
+    createdAt: '2024-01-01T00:00:00Z',
+    updatedAt: '2024-01-01T00:00:00Z',
+  }];
+
+  await indexTesting.indexTouchedExtractions({
+    sessionTable: {
+      upsert: async ({ rows }) => {
+        sessionUpserts.push(...rows);
+      },
+    },
+    extractionTable: {
+      delete: async () => ({ deleted: 0 }),
+      get: async () => [],
+      upsert: async () => undefined,
+    },
+  }, threads, new Set(['codex\0/workspace/alpha\0session-a']));
+
+  assert.equal(sessionUpserts.length, 1);
+  assert.equal(sessionUpserts[0].latestSnapshotId, 'snapshot-74');
+  assert.equal(threads[0].indexedSnapshotSequence, 74);
+  assert.equal(getPendingIndex(threads[0]), null);
+});
+
 test('extractor.retrySnapshotIndexing refreshes the committed checkpoint snapshot after session rows are updated', async (t) => {
   const { dir, homeDir, configPath } = await makeConfigHome();
   t.after(async () => rm(dir, { recursive: true, force: true }));
@@ -6207,13 +7813,16 @@ test('extractor.retrySnapshotIndexing refreshes the committed checkpoint snapsho
   await writeExtractorConfig(configPath);
 
   const extractor = new Extractor({
-    sessionTable: {
+    sessionSnapshotTable: {
       update: async ({ snapshots }) => snapshots,
       stats: async () => ({
         version: 22,
         fragmentCount: 1,
         rowCount: 1,
       }),
+    },
+    sessionTable: {
+      upsert: async () => undefined,
     },
     extractionTable: {
       delete: async () => ({ deleted: 0 }),
@@ -6293,7 +7902,7 @@ test('extractor.extractCurrentEpoch commits session rows before retrying extract
   let extractionUpserts = 0;
   let indexAttempts = 0;
   const extractor = new Extractor({
-    sessionTable: {
+    sessionSnapshotTable: {
       insert: async ({ snapshots }) => snapshots.map((snapshot) => ({
         ...snapshot,
         snapshotId: 'snapshot-1',
@@ -6357,8 +7966,11 @@ test('extractor.run retries pending extraction index before queued epochs when d
 
   const calls = [];
   const extractor = new Extractor({
-    sessionTable: {
+    sessionSnapshotTable: {
       update: async ({ snapshots }) => snapshots,
+    },
+    sessionTable: {
+      upsert: async () => undefined,
     },
     extractionTable: {
       delete: async () => ({ deleted: 0 }),
@@ -6401,7 +8013,13 @@ test('extractor.run retries pending extraction index before queued epochs when d
           extractions: [],
           contextRefs: [],
           nextSteps: [],
-          extractionChanges: [{ type: 'add', text: 'remember this', references: ['session:existing'], reason: 'adds memory' }],
+          extractionChanges: [{
+            type: 'add',
+            extractionId: '123e4567-e89b-42d3-a456-426614174000',
+            text: 'remember this',
+            references: ['session:existing'],
+            reason: 'adds memory',
+          }],
         },
       ],
       references: [],
@@ -6454,8 +8072,11 @@ test('extractor.watermark exposes extraction index retry failures', async (t) =>
   await writeExtractorConfig(configPath);
 
   const extractor = new Extractor({
-    sessionTable: {
+    sessionSnapshotTable: {
       update: async ({ snapshots }) => snapshots,
+    },
+    sessionTable: {
+      upsert: async () => undefined,
     },
     extractionTable: {
       delete: async () => ({ deleted: 0 }),
@@ -7149,7 +8770,7 @@ test('flushThreads persists session state without inline ref or index builders',
   ];
 
   await sessionTesting.flushThreads({
-    sessionTable: {
+    sessionSnapshotTable: {
       insert: async ({ snapshots }) => {
         return snapshots.map((snapshot) => ({
           ...snapshot,
@@ -7208,7 +8829,7 @@ test('flushThreads keeps same raw session id isolated by cwd', async (t) => {
   ];
 
   await sessionTesting.flushThreads({
-    sessionTable: {
+    sessionSnapshotTable: {
       insert: async ({ snapshots }) => snapshots.map((snapshot) => ({
         ...snapshot,
         snapshotId: `snapshot-${snapshot.project}`,

@@ -111,9 +111,9 @@ export type AppClient = {
     segments: ProjectSegmentNode[];
     timeline: ProjectTimelineNode[];
   }>;
-  locateSessionTurn(session: ProjectSessionNode, memoryId: string): Promise<number>;
-  loadTurnDetail(session: ProjectSessionNode, memoryId: string): Promise<ProjectTurnNode>;
-  getDocument(memoryId: string): Promise<MemoryDocument>;
+  locateSessionTurn(session: ProjectSessionNode, contextId: string): Promise<number>;
+  loadTurnDetail(session: ProjectSessionNode, contextId: string): Promise<ProjectTurnNode>;
+  getDocument(contextId: string): Promise<MemoryDocument>;
   searchRecall(params: {
     query: string;
     projectKeys?: string[];
@@ -365,10 +365,10 @@ export function createAppClient(apiBase: string, usesDemoData: boolean): AppClie
         })),
       };
     },
-    async locateSessionTurn(session, memoryId) {
+    async locateSessionTurn(session, contextId) {
       if (usesDemoData) {
         const response = await getDemoSessionTurns(session.agent, session.sessionKey, 0, 1_000);
-        const index = response.turns.findIndex((turn) => turn.memoryId === memoryId);
+        const index = response.turns.findIndex((turn) => turn.contextId === contextId);
         if (index < 0) {
           throw new Error('turnId not found');
         }
@@ -376,7 +376,7 @@ export function createAppClient(apiBase: string, usesDemoData: boolean): AppClie
       }
       const params = new URLSearchParams({
         project: session.projectKey,
-        turnId: memoryId,
+        turnId: contextId,
         limit: String(SESSION_TURN_PAGE_SIZE),
       });
       const response = await fetchJson<SessionTurnPositionResponse>(
@@ -384,10 +384,10 @@ export function createAppClient(apiBase: string, usesDemoData: boolean): AppClie
       );
       return response.offset;
     },
-    async loadTurnDetail(session, memoryId) {
+    async loadTurnDetail(session, contextId) {
       if (usesDemoData) {
         const response = await getDemoSessionTurns(session.agent, session.sessionKey, 0, 1_000);
-        const turn = response.turns.find((item) => item.memoryId === memoryId);
+        const turn = response.turns.find((item) => item.contextId === contextId);
         if (!turn) {
           throw new Error('turnId not found');
         }
@@ -399,7 +399,7 @@ export function createAppClient(apiBase: string, usesDemoData: boolean): AppClie
         };
       }
       const response = await fetchJson<SessionTurnDetailResponse>(
-        `/app/api/session/turns/${encodeURIComponent(memoryId)}/detail`,
+        `/app/api/session/turns/${encodeURIComponent(contextId)}/detail`,
       );
       return {
         ...response.turn,
@@ -408,12 +408,12 @@ export function createAppClient(apiBase: string, usesDemoData: boolean): AppClie
         sessionLabel: session.displaySessionId,
       };
     },
-    async getDocument(memoryId) {
+    async getDocument(contextId) {
       if (usesDemoData) {
-        return getDemoDocument(memoryId);
+        return getDemoDocument(contextId);
       }
       const response = await fetchJson<MemoryDocumentResponse>(
-        `/app/api/memories/${encodeURIComponent(memoryId)}/document`,
+        `/app/api/memories/${encodeURIComponent(contextId)}/document`,
       );
       return response.document;
     },

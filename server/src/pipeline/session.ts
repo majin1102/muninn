@@ -7,6 +7,7 @@ import { applyExtractionChanges } from './extraction.js';
 import type { SealedEpoch } from './epoch.js';
 import {
   parseSnapshotContent,
+  renderSnapshotContent,
   type ContextRef,
   type ExtractionChange,
   type ExtractionUnit,
@@ -51,6 +52,7 @@ export type SessionThread = {
   agent: string;
   snapshotId?: string;
   snapshotIds: string[];
+  snapshotSequences?: number[];
   snapshotEpochs?: number[];
   extractionEpoch: number;
   title: string;
@@ -173,6 +175,7 @@ export function createSessionThread(
     cwd: ownership.cwd,
     agent: ownership.agent,
     snapshotIds: [],
+    snapshotSequences: [],
     snapshotEpochs: [],
     extractionEpoch,
     title: normalizeTitle(title),
@@ -191,6 +194,7 @@ export function cloneSessionThread(thread: SessionThread): SessionThread {
     kind: thread.kind,
     sessionId: thread.sessionId ?? null,
     snapshotIds: [...thread.snapshotIds],
+    snapshotSequences: [...snapshotSequences(thread)],
     snapshotEpochs: [...(thread.snapshotEpochs ?? [])],
     references: [...thread.references],
     snapshots: thread.snapshots.map((snapshot) => ({
@@ -268,6 +272,7 @@ export function threadFromSnapshots(
     agent: latest.agent,
     snapshotId: latest.snapshotId,
     snapshotIds: ordered.map((row) => row.snapshotId),
+    snapshotSequences: ordered.map((row) => row.snapshotSequence),
     snapshotEpochs: ordered.map(() => extractionEpoch),
     extractionEpoch,
     title: latest.title,
@@ -291,19 +296,22 @@ export function replaySnapshots(
     || left.updatedAt.localeCompare(right.updatedAt)
   ));
   for (const row of ordered) {
-    if (row.snapshotSequence < thread.snapshots.length) {
+    const sequences = snapshotSequences(thread);
+    const latestSequence = sequences.at(-1) ?? -1;
+    if (row.snapshotSequence <= latestSequence) {
       continue;
     }
-    if (row.snapshotSequence !== thread.snapshots.length) {
+    if (row.snapshotSequence !== latestSequence + 1) {
       throw new Error(`unexpected snapshot gap for session memory thread ${thread.threadId}`);
     }
+    const snapshot = deserializeSnapshot(row);
     thread.snapshotId = row.snapshotId;
     thread.snapshotIds.push(row.snapshotId);
+    thread.snapshotSequences = [...sequences, row.snapshotSequence];
     thread.snapshotEpochs = [...(thread.snapshotEpochs ?? []), extractionEpoch];
     thread.extractionEpoch = extractionEpoch;
     thread.title = row.title;
     thread.summary = row.summary;
-    const snapshot = deserializeSnapshot(row);
     thread.kind = snapshot.threadKind ?? thread.kind;
     thread.sessionId = snapshot.sessionId ?? thread.sessionId ?? null;
     thread.project = snapshot.project ?? thread.project;
@@ -341,8 +349,22 @@ export function applyExtraction(
 ): void {
   const current = latestSnapshot(thread) ?? emptySnapshot();
   const patched = applyExtractionChanges(current.extractions, result);
+  const summary = result.summary ?? thread.summary;
+  const memorySignals = [...(result.memorySignals ?? [])];
+  const skillSignals = [...(result.skillSignals ?? [])];
+  const skillDetails = { ...(result.skillDetails ?? {}) };
+  const snapshotContent = renderSnapshotContent(
+    result.title,
+    summary,
+    { memorySignals, skillSignals, skillDetails },
+    patched.extractions,
+    { includeContextIds: true },
+  );
+  const previousSnapshotSequences = snapshotSequences(thread);
+  const latestPersistedSequence = previousSnapshotSequences.at(-1) ?? -1;
+  const nextSnapshotSequence = latestPersistedSequence + 1;
   thread.title = result.title;
-  thread.summary = result.summary ?? thread.summary;
+  thread.summary = summary;
   thread.extractionEpoch = extractionEpoch;
   thread.snapshots.push({
     threadKind: thread.kind,
@@ -350,10 +372,10 @@ export function applyExtraction(
     project: thread.project,
     cwd: thread.cwd,
     agent: thread.agent,
-    snapshotContent: result.snapshotContent ?? '',
-    memorySignals: [...(result.memorySignals ?? [])],
-    skillSignals: [...(result.skillSignals ?? [])],
-    skillDetails: { ...(result.skillDetails ?? {}) },
+    snapshotContent,
+    memorySignals,
+    skillSignals,
+    skillDetails,
     extractions: patched.extractions,
     contextRefs: mergeContextRefs(
       current.contextRefs,
@@ -363,6 +385,7 @@ export function applyExtraction(
     extractionChanges: patched.extractionChanges,
   });
   thread.references = latestSnapshot(thread)?.contextRefs.map((reference) => reference.turnId) ?? [];
+  thread.snapshotSequences = [...previousSnapshotSequences, nextSnapshotSequence];
   thread.snapshotEpochs = [...(thread.snapshotEpochs ?? []), extractionEpoch];
   thread.snapshotId = undefined;
   thread.updatedAt = now;
@@ -387,13 +410,14 @@ function toSessionSnapshotAt(thread: SessionThread, snapshotSequence: number): S
   if (!snapshot) {
     throw new Error(`missing snapshot for session memory thread ${thread.threadId} at sequence ${snapshotSequence}`);
   }
+  const persistedSequence = snapshotSequenceAt(thread, snapshotSequence);
   return {
     snapshotId: thread.snapshotIds[snapshotSequence] ?? PENDING_SNAPSHOT_ID,
     sessionId: thread.sessionId ?? thread.threadId,
     project: thread.project,
     cwd: thread.cwd,
     agent: thread.agent,
-    snapshotSequence,
+    snapshotSequence: persistedSequence,
     createdAt: thread.updatedAt,
     updatedAt: thread.updatedAt,
     extractor: thread.extractor,
@@ -419,6 +443,19 @@ export function snapshotRef(thread: SessionThread, snapshotIndex: number): strin
   return snapshotId;
 }
 
+export function snapshotSequenceAt(thread: SessionThread, snapshotIndex: number): number {
+  const sequence = snapshotSequences(thread)[snapshotIndex];
+  if (sequence === undefined) {
+    throw new Error(`missing snapshot sequence for session memory thread ${thread.threadId} at index ${snapshotIndex}`);
+  }
+  return sequence;
+}
+
+export function latestSnapshotSequence(thread: SessionThread): number {
+  const sequences = snapshotSequences(thread);
+  return sequences.length === 0 ? -1 : sequences[sequences.length - 1]!;
+}
+
 export function threadIdentityKey(value: {
   agent: string;
   project: string;
@@ -434,8 +471,8 @@ export function getPendingIndex(thread: SessionThread): PendingIndex | null {
   if (latestSnapshotSequence < 0) {
     return null;
   }
-  const start = (thread.indexedSnapshotSequence ?? -1) + 1;
-  if (start > latestSnapshotSequence) {
+  const start = firstSnapshotIndexAfter(thread, thread.indexedSnapshotSequence);
+  if (start === null || start > latestSnapshotSequence) {
     return null;
   }
   return {
@@ -460,8 +497,8 @@ export function getPendingIndexUpTo(
   if (latestSnapshotSequence < 0) {
     return null;
   }
-  const start = (thread.indexedSnapshotSequence ?? -1) + 1;
-  if (start > latestSnapshotSequence) {
+  const start = firstSnapshotIndexAfter(thread, thread.indexedSnapshotSequence);
+  if (start === null || start > latestSnapshotSequence) {
     return null;
   }
   return {
@@ -471,7 +508,9 @@ export function getPendingIndexUpTo(
 }
 
 function deserializeSnapshot(row: SessionSnapshot): SnapshotContent {
-  const parsed = parseSnapshotContent(normalizePersistedSnapshotContent(row.content), new Set(row.references));
+  const parsed = parseSnapshotContent(normalizePersistedSnapshotContent(row.content), new Set(row.references), {
+    includeContextIds: true,
+  });
   return {
     threadKind: 'session',
     sessionId: row.sessionId,
@@ -545,6 +584,23 @@ function emptySnapshot(): SnapshotContent {
   };
 }
 
+function snapshotSequences(thread: SessionThread): number[] {
+  if (thread.snapshotSequences && thread.snapshotSequences.length === thread.snapshots.length) {
+    return thread.snapshotSequences;
+  }
+  return thread.snapshots.map((_, index) => index);
+}
+
+function firstSnapshotIndexAfter(
+  thread: SessionThread,
+  indexedSnapshotSequence: number | null | undefined,
+): number | null {
+  const indexed = indexedSnapshotSequence ?? -1;
+  const sequences = snapshotSequences(thread);
+  const index = sequences.findIndex((sequence) => sequence > indexed);
+  return index < 0 ? null : index;
+}
+
 function mergeContextRefs(
   current: ContextRef[],
   next: ContextRef[],
@@ -592,7 +648,7 @@ type ExtractSessionThreadParams = {
   extractionEpoch: number;
   signal?: AbortSignal;
   database?: string;
-  memories?: Pick<Memories, 'get'>;
+  memories?: Pick<Memories, 'getContext'>;
   sessionExtractionImpl?: SessionExtractionImpl;
   inputBudgetStoppedBy?: SessionExtractionInput['inputBudgetStoppedBy'];
   candidateTurnCount?: number;
@@ -849,7 +905,7 @@ export async function flushThreads(
     return;
   }
 
-  const persistedRows = await client.sessionTable.insert({
+  const persistedRows = await client.sessionSnapshotTable.insert({
     snapshots,
   });
   updateThreadsFromRows(threads, persistedRows);
@@ -866,15 +922,16 @@ function updateThreadsFromRows(
     if (!thread) {
       continue;
     }
-    if (row.snapshotSequence > thread.snapshotIds.length) {
-      throw new Error(`unexpected persisted snapshot gap for session memory thread ${thread.threadId}`);
+    const snapshotIndex = snapshotSequences(thread).indexOf(row.snapshotSequence);
+    if (snapshotIndex < 0) {
+      throw new Error(`unexpected persisted snapshot sequence for session memory thread ${thread.threadId}: ${row.snapshotSequence}`);
     }
-    const existingId = thread.snapshotIds[row.snapshotSequence];
+    const existingId = thread.snapshotIds[snapshotIndex];
     if (existingId && existingId !== row.snapshotId) {
       throw new Error(`conflicting snapshot id for session memory thread ${thread.threadId} at sequence ${row.snapshotSequence}`);
     }
-    thread.snapshotIds[row.snapshotSequence] = row.snapshotId;
-    if (row.snapshotSequence === thread.snapshots.length - 1) {
+    thread.snapshotIds[snapshotIndex] = row.snapshotId;
+    if (snapshotIndex === thread.snapshots.length - 1) {
       thread.snapshotId = row.snapshotId;
       thread.references = [...row.references];
       thread.updatedAt = row.updatedAt;

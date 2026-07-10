@@ -80,7 +80,7 @@ Direct `python3 benchmark/locomo/run.py ...` runs also auto-build the bridge and
 export the bundled Muninn daemon when needed.
 
 By default the benchmark uses recalled memory composition with `--budget 400`,
-`--query-limit 8`, and `--recall-mode hybrid`. Set `--budget 0` to use raw
+`--query-limit 8`, and `--mode extraction`. Set `--budget 0` to use raw
 top-k recall hits.
 
 For budget-only tuning against an existing imported run, use:

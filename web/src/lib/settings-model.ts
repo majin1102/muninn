@@ -34,7 +34,6 @@ export const SAMPLE_SETTINGS: JsonObject = {
     name: 'default-extractor',
     llmProvider: 'default',
     embeddingProvider: 'default',
-    recallMode: 'hybrid',
     maxAttempts: 3,
     activeWindowDays: 30,
   },

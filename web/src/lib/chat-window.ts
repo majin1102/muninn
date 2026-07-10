@@ -8,9 +8,9 @@ export type ChatTurnWindow<T> = {
   afterCount: number;
 };
 
-export function chatTurnWindow<T extends { memoryId?: string }>(
+export function chatTurnWindow<T extends { contextId?: string }>(
   turns: T[],
-  activeMemoryId: string | null,
+  activeContextId: string | null,
   beforeLimit = INITIAL_CHAT_CONTEXT_RADIUS,
   afterLimit?: number,
 ): ChatTurnWindow<T> {
@@ -22,7 +22,7 @@ export function chatTurnWindow<T extends { memoryId?: string }>(
     };
   }
 
-  if (!activeMemoryId) {
+  if (!activeContextId) {
     const end = Math.min(turns.length, afterLimit ?? DEFAULT_CHAT_INITIAL_TURN_COUNT);
     return {
       turns: turns.slice(0, end),
@@ -31,8 +31,8 @@ export function chatTurnWindow<T extends { memoryId?: string }>(
     };
   }
 
-  const matchedIndex = activeMemoryId
-    ? turns.findIndex((turn) => turn.memoryId === activeMemoryId)
+  const matchedIndex = activeContextId
+    ? turns.findIndex((turn) => turn.contextId === activeContextId)
     : -1;
   const activeIndex = matchedIndex >= 0 ? matchedIndex : 0;
   const start = Math.max(0, activeIndex - beforeLimit);

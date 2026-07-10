@@ -17,19 +17,19 @@ import type {
   TurnContent,
   TurnEvent,
 } from '@muninn/common';
-import { muninnSessionKey, type MuninnSessionIdentity } from '@muninn/common/session-identity';
+import type { MuninnSessionIdentity } from '@muninn/common/session-identity';
 import {
   captureTurn,
   captureTurns,
   dreaming,
   memories,
   memoryPipeline,
-  sessions,
   turns,
 } from './backend.js';
-import type { RecallMode, SessionSnapshot } from './backend.js';
-import type { RecallHit, RenderedMemory } from './api/memory.js';
-import { renderRecallHit, renderRenderedMemoryHit } from './web/render.js';
+import type { RecallPublicMode } from './backend.js';
+import { type RecallHit, type RenderedContext } from './api/memory.js';
+import { parseSnapshotContent } from './pipeline/snapshot.js';
+import { renderRecallHit, renderRenderedContextHit } from './web/render.js';
 import { invalidateSessionTreeCache, webRoutes } from './web/routes.js';
 import { generateRequestId } from './web/request.js';
 
@@ -117,7 +117,7 @@ app.post('/api/v1/mcp/recall', async (c) => {
   if (!parsed.body) {
     return c.text(parsed.error ?? 'Invalid JSON body', 400);
   }
-  const unsupported = rejectUnsupportedFields(parsed.body, new Set(['query', 'budget', 'top_k']));
+  const unsupported = rejectUnsupportedFields(parsed.body, new Set(['query', 'budget', 'top_k', 'mode', 'session_identity']));
   if (unsupported) {
     return c.text(unsupported, 400);
   }
@@ -129,51 +129,32 @@ app.post('/api/v1/mcp/recall', async (c) => {
   if (topK.error) {
     return c.text(topK.error, 400);
   }
-  const budget = readNonNegativeInteger(parsed.body, 'budget', MCP_DEFAULT_BUDGET, MCP_MAX_BUDGET);
-  if (budget.error) {
-    return c.text(budget.error, 400);
-  }
-
-  try {
-    const hits = await memories.recall(query.value, topK.value, {
-      budget: budget.value,
-      queryLimit: topK.value,
-    });
-    return c.text(renderMcpRecall(hits), 200);
-  } catch (error) {
-    const mapped = mapCoreLookupError(error);
-    return c.text(mapped.body.errorMessage, mapped.status as 400 | 500 | 503);
-  }
-});
-
-app.post('/api/v1/mcp/list', async (c) => {
-  const parsed = await readJsonRecord(c);
-  if (!parsed.body) {
-    return c.text(parsed.error ?? 'Invalid JSON body', 400);
-  }
-  const unsupported = rejectUnsupportedFields(parsed.body, new Set(['query', 'top_k', 'session_identity']));
-  if (unsupported) {
-    return c.text(unsupported, 400);
-  }
-  const query = readRequiredString(parsed.body, 'query');
-  if (query.error || !query.value) {
-    return c.text(query.error ?? 'query is required', 400);
-  }
-  const topK = readPositiveInteger(parsed.body, 'top_k', MCP_DEFAULT_TOP_K, MCP_MAX_TOP_K);
-  if (topK.error) {
-    return c.text(topK.error, 400);
+  const mode = parseMcpRecallMode(parsed.body.mode);
+  if (mode.error) {
+    return c.text(mode.error, 400);
   }
   const currentSession = parseMcpSessionIdentity(parsed.body.session_identity);
   if (currentSession.error) {
     return c.text(currentSession.error, 400);
   }
+  const budget = mode.value === 'session'
+    ? { value: undefined, error: parsed.body.budget === undefined ? null : 'budget is only supported in extraction recall mode' }
+    : readNonNegativeInteger(parsed.body, 'budget', MCP_DEFAULT_BUDGET, MCP_MAX_BUDGET);
+  if (budget.error) {
+    return c.text(budget.error, 400);
+  }
 
   try {
-    return c.text(renderMcpList(await mcpListCandidates({
-      query: query.value,
-      topK: topK.value,
-      currentSession: currentSession.value,
-    })), 200);
+    const hits = mode.value === 'session'
+      ? await memories.recall(query.value, topK.value, currentSession.value
+        ? { mode: 'session', excludeSession: currentSession.value }
+        : { mode: 'session' })
+      : await memories.recall(query.value, topK.value, {
+        mode: 'extraction',
+        budget: budget.value,
+        queryLimit: topK.value,
+      });
+    return c.text(renderMcpRecall(hits, mode.value), 200);
   } catch (error) {
     const mapped = mapCoreLookupError(error);
     return c.text(mapped.body.errorMessage, mapped.status as 400 | 500 | 503);
@@ -201,28 +182,6 @@ app.post('/api/v1/mcp/read', async (c) => {
   }
 });
 
-app.post('/api/v1/mcp/explain', async (c) => {
-  const parsed = await readJsonRecord(c);
-  if (!parsed.body) {
-    return c.text(parsed.error ?? 'Invalid JSON body', 400);
-  }
-  const unsupported = rejectUnsupportedFields(parsed.body, new Set(['context_id']));
-  if (unsupported) {
-    return c.text(unsupported, 400);
-  }
-  const contextId = readRequiredString(parsed.body, 'context_id');
-  if (contextId.error || !contextId.value) {
-    return c.text(contextId.error ?? 'context_id is required', 400);
-  }
-  try {
-    const result = await renderMcpExplain(contextId.value);
-    return c.text(result.text, result.status ?? 200);
-  } catch (error) {
-    const mapped = mapCoreLookupError(error);
-    return c.text(mapped.body.errorMessage, mapped.status as 400 | 500 | 503);
-  }
-});
-
 function errorResponse(errorCode: string, errorMessage: string): ErrorResponse {
   return {
     errorCode,
@@ -231,9 +190,9 @@ function errorResponse(errorCode: string, errorMessage: string): ErrorResponse {
   };
 }
 
-function memoryResponse(memoryHits: MemoryHit[]): MemoryResponse {
+function memoryResponse(contextHits: MemoryHit[]): MemoryResponse {
   return {
-    memoryHits,
+    contextHits,
     requestId: generateRequestId(),
   };
 }
@@ -269,16 +228,9 @@ const MCP_DEFAULT_TOP_K = 8;
 const MCP_MAX_TOP_K = 50;
 const MCP_DEFAULT_BUDGET = 4_000;
 const MCP_MAX_BUDGET = 20_000;
-const MCP_SESSION_SCAN_LIMIT = 500;
+const MCP_SESSION_EXTRACTION_SUMMARY_CHARS = 100;
 
 type JsonRecord = Record<string, unknown>;
-
-type McpSessionCandidate = {
-  contextId: string;
-  title: string;
-  summary: string;
-  snapshot: SessionSnapshot;
-};
 
 async function readJsonRecord(c: Context): Promise<{ body: JsonRecord | null; error: string | null }> {
   try {
@@ -343,6 +295,16 @@ function readNonNegativeInteger(
   return { value: raw, error: null };
 }
 
+function parseMcpRecallMode(value: unknown): { value: RecallPublicMode; error: string | null } {
+  if (value === undefined) {
+    return { value: 'extraction', error: null };
+  }
+  if (value === 'session' || value === 'extraction') {
+    return { value, error: null };
+  }
+  return { value: 'extraction', error: 'mode must be one of: session, extraction' };
+}
+
 function readOptionalStringArray(body: JsonRecord, fieldName: string): { value: string[] | null; error: string | null } {
   const value = body[fieldName];
   if (!Array.isArray(value) || value.length === 0 || value.some((item) => typeof item !== 'string' || item.trim().length === 0)) {
@@ -379,32 +341,6 @@ function parseMcpSessionIdentity(value: unknown): { value: MuninnSessionIdentity
   };
 }
 
-function toContextId(memoryId: string): string | null {
-  if (memoryId.startsWith('turn:')) {
-    return `turn_${memoryId.slice('turn:'.length)}`;
-  }
-  if (memoryId.startsWith('session:')) {
-    return `session_${memoryId.slice('session:'.length)}`;
-  }
-  if (memoryId.startsWith('ext:')) {
-    return memoryId;
-  }
-  return null;
-}
-
-function toMemoryId(contextId: string): { memoryId: string | null; kind: 'session' | 'turn' | 'extraction' | null } {
-  if (contextId.startsWith('ext:') && contextId.length > 'ext:'.length) {
-    return { memoryId: contextId, kind: 'extraction' };
-  }
-  if (contextId.startsWith('turn_') && contextId.length > 'turn_'.length) {
-    return { memoryId: `turn:${contextId.slice('turn_'.length)}`, kind: 'turn' };
-  }
-  if (contextId.startsWith('session_') && contextId.length > 'session_'.length) {
-    return { memoryId: `session:${contextId.slice('session_'.length)}`, kind: 'session' };
-  }
-  return { memoryId: null, kind: null };
-}
-
 function previewText(value: string | undefined, maxChars = 120): string {
   const singleLine = (value ?? '').replace(/\s+/g, ' ').trim();
   return singleLine.length > maxChars ? `${singleLine.slice(0, maxChars - 1)}...` : singleLine;
@@ -418,17 +354,20 @@ function stripExtractionReferences(detail: string | undefined): string | undefin
   return stripped || undefined;
 }
 
-function renderMcpRecall(hits: RecallHit[]): string {
+function renderMcpRecall(hits: RecallHit[], mode: RecallPublicMode = 'extraction'): string {
+  if (mode === 'session') {
+    return renderMcpSessionRecall(hits);
+  }
   const lines = ['# Muninn Recall'];
   const sourceRows = new Map<string, { reason: string; preview: string }>();
   if (hits.length === 0) {
     lines.push('', 'No matching Muninn context found.');
   }
   for (const hit of hits) {
-    if (hit.memoryId === 'recalled:memory') {
+    if (hit.kind === 'synthesis') {
       lines.push('', hit.content.trim());
     } else {
-      const contextId = toContextId(hit.memoryId);
+      const contextId = hit.contextId;
       if (contextId) {
         sourceRows.set(contextId, {
           reason: hit.title ?? 'matched extracted context',
@@ -437,7 +376,7 @@ function renderMcpRecall(hits: RecallHit[]): string {
       }
       lines.push(
         '',
-        `## ${contextId ?? hit.memoryId}`,
+        `## ${contextId ?? 'unknown context'}`,
         '',
         hit.title ? `Title: ${hit.title}` : '',
         hit.summary ? `Summary: ${hit.summary}` : '',
@@ -445,10 +384,10 @@ function renderMcpRecall(hits: RecallHit[]): string {
       );
     }
     for (const reference of hit.references ?? []) {
-      const contextId = toContextId(reference);
+      const contextId = reference.trim();
       if (contextId && !sourceRows.has(contextId)) {
         sourceRows.set(contextId, {
-          reason: `source reference for ${hit.title ?? hit.memoryId}`,
+          reason: `source reference for ${hit.title ?? hit.contextId ?? 'synthesis'}`,
           preview: '',
         });
       }
@@ -463,85 +402,86 @@ function renderMcpRecall(hits: RecallHit[]): string {
   return lines.filter((line) => line !== '').join('\n');
 }
 
-function sessionMatchesHit(snapshot: SessionSnapshot, hit: RecallHit): boolean {
-  return snapshot.sessionId === hit.sessionId
-    && snapshot.agent === hit.agent
-    && (snapshot.project === hit.project || snapshot.cwd === hit.cwd);
-}
-
-function sessionKeyForSnapshot(snapshot: SessionSnapshot): string {
-  return muninnSessionKey({
-    project: snapshot.project,
-    agent: snapshot.agent,
-    sessionId: snapshot.sessionId,
-  });
-}
-
-async function mcpListCandidates(params: {
-  query: string;
-  topK: number;
-  currentSession?: MuninnSessionIdentity;
-}): Promise<McpSessionCandidate[]> {
-  const hits = await memories.recall(params.query, params.topK * 4, {
-    budget: 0,
-    queryLimit: params.topK * 4,
-  });
-  const snapshots = await sessions.list({ mode: { type: 'recency', limit: MCP_SESSION_SCAN_LIMIT } });
-  const currentSessionKey = params.currentSession ? muninnSessionKey(params.currentSession) : undefined;
-  const candidates: McpSessionCandidate[] = [];
-  const seen = new Set<string>();
-
-  for (const hit of hits) {
-    const snapshot = snapshots.find((candidate) => sessionMatchesHit(candidate, hit));
-    if (!snapshot || seen.has(snapshot.snapshotId)) {
-      continue;
-    }
-    if (currentSessionKey && sessionKeyForSnapshot(snapshot) === currentSessionKey) {
-      continue;
-    }
-    const contextId = toContextId(snapshot.snapshotId);
-    if (!contextId) {
-      continue;
-    }
-    seen.add(snapshot.snapshotId);
-    candidates.push({
-      contextId,
-      title: snapshot.title || hit.displaySession || hit.title || snapshot.sessionId,
-      summary: snapshot.summary || hit.summary || previewText(hit.content, 240),
-      snapshot,
-    });
-    if (candidates.length >= params.topK) {
-      break;
-    }
-  }
-  return candidates;
-}
-
-function renderMcpList(candidates: McpSessionCandidate[]): string {
-  const lines = ['# Muninn List'];
-  if (candidates.length === 0) {
+function renderMcpSessionRecall(hits: RecallHit[]): string {
+  const lines = ['# Muninn Recall'];
+  if (hits.length === 0) {
     lines.push('', 'No matching prior session contexts found.');
     return lines.join('\n');
   }
-  candidates.forEach((candidate, index) => {
+  hits.forEach((hit, index) => {
+    if (!hit.contextId?.startsWith('session:')) {
+      return;
+    }
     lines.push(
       '',
-      `${index + 1}. ${candidate.title}`,
-      `   context_id: ${candidate.contextId}`,
-      `   summary: ${candidate.summary || '(empty)'}`,
+      `${index + 1}. ${hit.title || hit.displaySession || hit.sessionId || hit.contextId}`,
+      `   context_id: ${hit.contextId}`,
+      `   summary: ${hit.summary || previewText(hit.content, 240) || '(empty)'}`,
     );
   });
   return lines.join('\n');
 }
 
-function renderReadMemory(contextId: string, memory: RenderedMemory): string {
+function truncateMcpSummary(value: string, maxChars = MCP_SESSION_EXTRACTION_SUMMARY_CHARS): string {
+  const normalized = value.replace(/\s+/g, ' ').trim();
+  const chars = Array.from(normalized);
+  if (chars.length <= maxChars) {
+    return normalized;
+  }
+  return `${chars.slice(0, Math.max(0, maxChars - 3)).join('')}...`;
+}
+
+function snapshotRefsFromMarkdown(markdown: string | undefined): Set<string> {
+  const refs = new Set<string>();
+  const text = markdown ?? '';
+  for (const match of text.matchAll(/(?:<!--|^|;)\s*refs:\s*\[([^\]]*)\]/gim)) {
+    const list = match[1] ?? '';
+    for (const item of list.split(',')) {
+      const ref = item.trim();
+      if (ref) {
+        refs.add(ref);
+      }
+    }
+  }
+  return refs;
+}
+
+function renderSessionExtractionSummaries(detail: string | undefined): string | undefined {
+  if (!detail?.trim()) {
+    return undefined;
+  }
+  let parsed: ReturnType<typeof parseSnapshotContent>;
+  try {
+    parsed = parseSnapshotContent(detail, snapshotRefsFromMarkdown(detail), {
+      includeContextIds: true,
+    });
+  } catch {
+    return undefined;
+  }
+  if (parsed.extractions.length === 0) {
+    return undefined;
+  }
+  const lines = ['## Extractions'];
+  parsed.extractions.forEach((extraction, index) => {
+    lines.push(
+      '',
+      `${index + 1}. context_id: ${extraction.id ? `ext:${extraction.id}` : '(missing)'}`,
+      `   summary: ${truncateMcpSummary(extraction.text)}`,
+    );
+  });
+  return lines.join('\n');
+}
+
+function renderReadContext(contextId: string, context: RenderedContext): string {
   const detail = contextId.startsWith('ext:')
-    ? stripExtractionReferences(memory.detail)
-    : memory.detail;
+    ? stripExtractionReferences(context.detail)
+    : contextId.startsWith('session:')
+      ? renderSessionExtractionSummaries(context.detail)
+      : context.detail;
   return [
     `## ${contextId}`,
-    memory.title ? `Title: ${memory.title}` : '',
-    memory.summary ? `Summary: ${memory.summary}` : '',
+    context.title ? `Title: ${context.title}` : '',
+    context.summary ? `Summary: ${context.summary}` : '',
     detail ? ['', detail].join('\n') : '',
   ].filter((line) => line !== '').join('\n');
 }
@@ -549,65 +489,19 @@ function renderReadMemory(contextId: string, memory: RenderedMemory): string {
 async function renderMcpRead(contextIds: string[]): Promise<string> {
   const lines = ['# Muninn Read'];
   for (const contextId of contextIds) {
-    const { memoryId } = toMemoryId(contextId);
-    if (!memoryId) {
-      lines.push('', `## ${contextId}`, 'Error: unsupported context_id');
-      continue;
+    try {
+      const context = await memories.getContext(contextId);
+      if (!context) {
+        lines.push('', `## ${contextId}`, 'Error: context not found');
+        continue;
+      }
+      lines.push('', renderReadContext(contextId, context));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      lines.push('', `## ${contextId}`, `Error: ${message}`);
     }
-    const memory = await memories.get(memoryId);
-    if (!memory) {
-      lines.push('', `## ${contextId}`, 'Error: context not found');
-      continue;
-    }
-    lines.push('', renderReadMemory(contextId, memory));
   }
   return lines.join('\n');
-}
-
-async function renderMcpExplain(contextId: string): Promise<{ text: string; status?: 400 | 404 }> {
-  const { memoryId, kind } = toMemoryId(contextId);
-  if (!memoryId || kind !== 'session') {
-    return { text: 'muninn-explain only accepts session_* context_id values', status: 400 };
-  }
-  const snapshot = await sessions.get(memoryId);
-  if (!snapshot) {
-    return { text: 'context not found', status: 404 };
-  }
-  const lines = [
-    '# Muninn Explain',
-    '',
-    `Explained: ${contextId}`,
-    '',
-    '## Source Provenance',
-    '',
-    `Project: ${snapshot.project}`,
-    `Agent: ${snapshot.agent}`,
-    `Session ID: ${snapshot.sessionId}`,
-    `Snapshot: ${snapshot.snapshotId}`,
-  ];
-  if (snapshot.references.length === 0) {
-    lines.push('', 'No source references recorded.');
-    return { text: lines.join('\n') };
-  }
-  for (const reference of snapshot.references) {
-    const referenceContextId = toContextId(reference) ?? reference;
-    lines.push('', `### ${referenceContextId}`);
-    try {
-      const turn = reference.startsWith('turn:') ? await turns.get(reference) : null;
-      if (turn?.prompt) {
-        lines.push('', `Prompt: ${previewText(turn.prompt, 500)}`);
-      }
-      if (turn?.response) {
-        lines.push('', `Response: ${previewText(turn.response, 500)}`);
-      }
-      if (!turn) {
-        lines.push('', 'Source detail unavailable.');
-      }
-    } catch {
-      lines.push('', 'Source detail unavailable.');
-    }
-  }
-  return { text: lines.join('\n') };
 }
 
 function projectDreamResponse(project: string, signals: ApiProjectDreamSignals | null, created?: boolean): ProjectDreamResponse {
@@ -653,17 +547,33 @@ function parseNonNegativeInteger(
   return { value, error: null };
 }
 
-function parseRecallMode(raw: string | undefined): RecallMode | undefined {
+function parseRecallPublicMode(raw: string | undefined): RecallPublicMode | undefined {
   if (raw === undefined) {
     return undefined;
   }
-  if (raw === 'vector' || raw === 'fts' || raw === 'hybrid') {
+  if (raw === 'session' || raw === 'extraction') {
     return raw;
   }
-  throw new Error('recallMode must be one of: vector, fts, hybrid');
+  throw new Error('mode must be one of: session, extraction');
 }
 
-function mapCoreLookupError(error: unknown): { status: number; body: ErrorResponse } {
+function parseThinkingRatio(raw: string | undefined): { value: number | undefined; error: string | null } {
+  if (raw === undefined) {
+    return { value: undefined, error: null };
+  }
+  if (raw.trim() === '') {
+    return { value: undefined, error: 'thinkingRatio must be a number between 0 and 1' };
+  }
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value < 0 || value > 1) {
+    return { value: undefined, error: 'thinkingRatio must be a number between 0 and 1' };
+  }
+  return { value, error: null };
+}
+
+type ErrorStatus = 400 | 404 | 500 | 503;
+
+function mapCoreLookupError(error: unknown): { status: ErrorStatus; body: ErrorResponse } {
   const message = error instanceof Error ? error.message : String(error);
   const lowered = message.toLowerCase();
 
@@ -671,10 +581,21 @@ function mapCoreLookupError(error: unknown): { status: number; body: ErrorRespon
     lowered.includes('invalid')
     || lowered.includes('database must')
     || lowered.includes('memory layer')
+    || lowered.includes('unsupported context id')
   ) {
     return {
       status: 400,
       body: errorResponse('invalidRequest', message),
+    };
+  }
+
+  if (
+    lowered.includes('session context not found')
+    || lowered.includes('session snapshot not found')
+  ) {
+    return {
+      status: 404,
+      body: errorResponse('notFound', message),
     };
   }
 
@@ -711,7 +632,7 @@ type LocomoImportManifest = {
 };
 
 type LocomoBridgeHit = {
-  memory_id: string;
+  context_id: string;
   matched_text: string;
   detail?: string;
 };
@@ -790,18 +711,31 @@ app.get('/api/v1/recall', async (c) => {
   const budget = c.req.query('budget');
   const queryLimit = c.req.query('queryLimit');
   const thinkingRatio = c.req.query('thinkingRatio');
-  let recallMode: RecallMode | undefined;
+  let mode: RecallPublicMode | undefined;
 
   try {
-    recallMode = parseRecallMode(c.req.query('recallMode'));
+    if (c.req.query('recallMode') !== undefined) {
+      throw new Error('recallMode is no longer supported; use mode with session or extraction');
+    }
+    mode = parseRecallPublicMode(c.req.query('mode'));
   } catch (error) {
     return c.json(errorResponse('invalidRequest', error instanceof Error ? error.message : String(error)), 400);
   }
 
-  console.log('[RECALL] database:', database ?? 'main', 'query:', query, 'limit:', limit, 'budget:', budget, 'queryLimit:', queryLimit, 'thinkingRatio:', thinkingRatio, 'recallMode:', recallMode);
+  console.log('[RECALL] database:', database ?? 'main', 'query:', query, 'limit:', limit, 'budget:', budget, 'queryLimit:', queryLimit, 'thinkingRatio:', thinkingRatio, 'mode:', mode);
 
   if (!query) {
     return c.json(errorResponse('invalidRequest', 'query is required'), 400);
+  }
+
+  if (
+    mode === 'session'
+    && (budget !== undefined || queryLimit !== undefined || thinkingRatio !== undefined)
+  ) {
+    return c.json(errorResponse(
+      'invalidRequest',
+      'budget, queryLimit, and thinkingRatio are only supported in extraction recall mode',
+    ), 400);
   }
 
   const parsedLimit = parseNonNegativeInteger(limit, 'limit');
@@ -816,6 +750,10 @@ app.get('/api/v1/recall', async (c) => {
   if (parsedQueryLimit.error) {
     return c.json(errorResponse('invalidRequest', parsedQueryLimit.error), 400);
   }
+  const parsedThinkingRatio = parseThinkingRatio(thinkingRatio);
+  if (parsedThinkingRatio.error) {
+    return c.json(errorResponse('invalidRequest', parsedThinkingRatio.error), 400);
+  }
   if ((parsedBudget.value ?? 0) > 0 && parsedQueryLimit.value === 0) {
     return c.json(errorResponse('invalidRequest', 'queryLimit must be positive when budget is positive'), 400);
   }
@@ -824,17 +762,48 @@ app.get('/api/v1/recall', async (c) => {
   let matched;
   try {
     matched = (await memories.recall(query, maxResults, {
-      mode: recallMode,
+      mode,
       budget: parsedBudget.value,
       queryLimit: parsedQueryLimit.value,
+      thinkingRatio: parsedThinkingRatio.value,
       database,
     })).map(renderRecallHit);
   } catch (error) {
     const mapped = mapCoreLookupError(error);
-    return c.json(mapped.body, mapped.status as 400 | 500);
+    return c.json(mapped.body, mapped.status);
   }
 
   return c.json(memoryResponse(matched));
+});
+
+app.post('/api/v1/context/read', async (c) => {
+  let body: { database?: unknown; context_ids?: unknown };
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json(errorResponse('invalidRequest', 'Invalid JSON body'), 400);
+  }
+
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    return c.json(errorResponse('invalidRequest', 'request body must be an object'), 400);
+  }
+  if (!Array.isArray(body.context_ids) || body.context_ids.length === 0) {
+    return c.json(errorResponse('invalidRequest', 'context_ids must be a non-empty array'), 400);
+  }
+  if (!body.context_ids.every((contextId) => typeof contextId === 'string')) {
+    return c.json(errorResponse('invalidRequest', 'context_ids must contain only strings'), 400);
+  }
+  if (body.database !== undefined && typeof body.database !== 'string') {
+    return c.json(errorResponse('invalidRequest', 'database must be a string'), 400);
+  }
+
+  try {
+    const contexts = await memories.readContextIds(body.context_ids, body.database);
+    return c.json({ contexts, requestId: generateRequestId() });
+  } catch (error) {
+    const mapped = mapCoreLookupError(error);
+    return c.json(mapped.body, mapped.status);
+  }
 });
 
 app.post('/api/v1/benchmark/locomo/recall', async (c) => {
@@ -844,6 +813,8 @@ app.post('/api/v1/benchmark/locomo/recall', async (c) => {
     limit?: unknown;
     budget?: unknown;
     queryLimit?: unknown;
+    thinkingRatio?: unknown;
+    mode?: unknown;
     recallMode?: unknown;
     manifest?: unknown;
   };
@@ -855,6 +826,31 @@ app.post('/api/v1/benchmark/locomo/recall', async (c) => {
 
   if (typeof body.query !== 'string' || body.query.trim().length === 0) {
     return c.json(errorResponse('invalidRequest', 'query is required'), 400);
+  }
+  let mode: RecallPublicMode | undefined;
+  try {
+    if (body.recallMode !== undefined) {
+      throw new Error('recallMode is no longer supported; use mode with session or extraction');
+    }
+    if (body.mode !== undefined && typeof body.mode !== 'string') {
+      throw new Error('mode must be one of: session, extraction');
+    }
+    mode = parseRecallPublicMode(body.mode);
+  } catch (error) {
+    return c.json(errorResponse('invalidRequest', error instanceof Error ? error.message : String(error)), 400);
+  }
+  if (
+    mode === 'session'
+    && (body.budget !== undefined || body.queryLimit !== undefined || body.thinkingRatio !== undefined)
+  ) {
+    return c.json(errorResponse(
+      'invalidRequest',
+      'budget, queryLimit, and thinkingRatio are only supported in extraction recall mode',
+    ), 400);
+  }
+  const parsedThinkingRatio = parseRequestRatio(body.thinkingRatio, 'thinkingRatio');
+  if (parsedThinkingRatio.error) {
+    return c.json(errorResponse('invalidRequest', parsedThinkingRatio.error), 400);
   }
   const parsedLimit = parseRequestInteger(body.limit, 'limit', 10, false);
   if (parsedLimit.error) {
@@ -868,12 +864,6 @@ app.post('/api/v1/benchmark/locomo/recall', async (c) => {
   if (parsedQueryLimit.error) {
     return c.json(errorResponse('invalidRequest', parsedQueryLimit.error), 400);
   }
-  let recallMode: RecallMode | undefined;
-  try {
-    recallMode = parseRecallMode(typeof body.recallMode === 'string' ? body.recallMode : undefined);
-  } catch (error) {
-    return c.json(errorResponse('invalidRequest', error instanceof Error ? error.message : String(error)), 400);
-  }
   const manifest = parseLocomoManifest(body.manifest);
   if (!manifest) {
     return c.json(errorResponse('invalidRequest', 'manifest.turns is required'), 400);
@@ -882,18 +872,22 @@ app.post('/api/v1/benchmark/locomo/recall', async (c) => {
   const database = typeof body.database === 'string' ? body.database : undefined;
   try {
     const rows = await memories.recall(body.query, parsedLimit.value ?? 10, {
-      mode: recallMode,
+      mode,
       budget: parsedBudget.value,
       queryLimit: parsedQueryLimit.value,
+      thinkingRatio: parsedThinkingRatio.value,
       database,
     });
     const hits: LocomoBridgeHit[] = [];
     for (const row of rows) {
-      if (row.memoryId === 'recalled:memory') {
+      if (row.kind === 'synthesis') {
         hits.push(toRecalledLocomoHit(row));
         continue;
       }
-      const rendered = await memories.get(row.memoryId, database);
+      if (!row.contextId) {
+        continue;
+      }
+      const rendered = await memories.getContext(row.contextId, database);
       if (!rendered) {
         continue;
       }
@@ -902,7 +896,7 @@ app.post('/api/v1/benchmark/locomo/recall', async (c) => {
     return c.json({ hits, requestId: generateRequestId() });
   } catch (error) {
     const mapped = mapCoreLookupError(error);
-    return c.json(mapped.body, mapped.status as 400 | 500);
+    return c.json(mapped.body, mapped.status);
   }
 });
 
@@ -924,7 +918,7 @@ app.get('/api/v1/list', async (c) => {
   }
 
   const maxResults = parsedLimit.value ?? 10;
-  const recent = (await memories.list({ mode: { type: 'recency', limit: maxResults }, database })).map(renderRenderedMemoryHit);
+  const recent = (await memories.list({ mode: { type: 'recency', limit: maxResults }, database })).map(renderRenderedContextHit);
 
   return c.json(memoryResponse(recent));
 });
@@ -944,6 +938,22 @@ function parseRequestInteger(
       error: allowZero
         ? `${fieldName} must be a non-negative integer`
         : `${fieldName} must be a positive integer`,
+    };
+  }
+  return { value: raw, error: null };
+}
+
+function parseRequestRatio(
+  raw: unknown,
+  fieldName: string,
+): { value: number | undefined; error: string | null } {
+  if (raw === undefined || raw === null) {
+    return { value: undefined, error: null };
+  }
+  if (typeof raw !== 'number' || !Number.isFinite(raw) || raw < 0 || raw > 1) {
+    return {
+      value: undefined,
+      error: `${fieldName} must be a number between 0 and 1`,
     };
   }
   return { value: raw, error: null };
@@ -989,28 +999,28 @@ function parseLocomoManifest(value: unknown): LocomoImportManifest | null {
 }
 
 function toRecalledLocomoHit(
-  row: { memoryId: string; content: string },
+  row: { content: string },
 ): LocomoBridgeHit {
   return {
-    memory_id: row.memoryId,
+    context_id: 'synthesis',
     matched_text: row.content,
     detail: row.content,
   };
 }
 
 function toLocomoHit(
-  rendered: RenderedMemory,
+  rendered: RenderedContext,
   matchedText: string,
 ): LocomoBridgeHit {
   return {
-    memory_id: rendered.memoryId,
+    context_id: rendered.contextId,
     matched_text: matchedText,
-    detail: renderBridgeMemoryText(rendered, matchedText),
+    detail: renderBridgeContextText(rendered, matchedText),
   };
 }
 
-function renderBridgeMemoryText(rendered: RenderedMemory, matchedText: string): string {
-  if (rendered.memoryId.startsWith('ext:')) {
+function renderBridgeContextText(rendered: RenderedContext, matchedText: string): string {
+  if (rendered.contextId.startsWith('ext:')) {
     const extraction = matchedText || rendered.summary || rendered.title || '';
     const context = rendered.detail?.match(/(?:^|\n)Context:\n([\s\S]*?)(?:\n\nReferences:|$)/)?.[1]?.trim();
     return [
@@ -1022,15 +1032,15 @@ function renderBridgeMemoryText(rendered: RenderedMemory, matchedText: string): 
 }
 
 app.get('/api/v1/timeline', async (c) => {
-  const memoryId = c.req.query('memoryId');
+  const contextId = c.req.query('contextId');
   const database = c.req.query('database');
   const beforeLimit = c.req.query('beforeLimit');
   const afterLimit = c.req.query('afterLimit');
 
-  console.log('[TIMELINE] database:', database ?? 'main', 'memoryId:', memoryId, 'beforeLimit:', beforeLimit, 'afterLimit:', afterLimit);
+  console.log('[TIMELINE] database:', database ?? 'main', 'contextId:', contextId, 'beforeLimit:', beforeLimit, 'afterLimit:', afterLimit);
 
-  if (!memoryId) {
-    return c.json(errorResponse('invalidRequest', 'memoryId is required'), 400);
+  if (!contextId) {
+    return c.json(errorResponse('invalidRequest', 'contextId is required'), 400);
   }
 
   const parsedBeforeLimit = parseNonNegativeInteger(beforeLimit, 'beforeLimit');
@@ -1046,46 +1056,46 @@ app.get('/api/v1/timeline', async (c) => {
   let windowed;
   try {
     windowed = (await memories.timeline({
-      memoryId,
+      contextId,
       beforeLimit: parsedBeforeLimit.value ?? 3,
       afterLimit: parsedAfterLimit.value ?? 3,
       database,
-    })).map(renderRenderedMemoryHit);
+    })).map(renderRenderedContextHit);
   } catch (error) {
     const mapped = mapCoreLookupError(error);
-    return c.json(mapped.body, mapped.status as 400 | 500);
+    return c.json(mapped.body, mapped.status);
   }
 
   if (windowed.length === 0) {
-    return c.json(errorResponse('notFound', 'memoryId not found'), 404);
+    return c.json(errorResponse('notFound', 'contextId not found'), 404);
   }
 
   return c.json(memoryResponse(windowed));
 });
 
 app.get('/api/v1/detail', async (c) => {
-  const memoryId = c.req.query('memoryId');
+  const contextId = c.req.query('contextId');
   const database = c.req.query('database');
 
-  console.log('[DETAIL] database:', database ?? 'main', 'memoryId:', memoryId);
+  console.log('[DETAIL] database:', database ?? 'main', 'contextId:', contextId);
 
-  if (!memoryId) {
-    return c.json(errorResponse('invalidRequest', 'memoryId is required'), 400);
+  if (!contextId) {
+    return c.json(errorResponse('invalidRequest', 'contextId is required'), 400);
   }
 
-  let memory;
+  let context;
   try {
-    memory = await memories.get(memoryId, database);
+    context = await memories.getContext(contextId, database);
   } catch (error) {
     const mapped = mapCoreLookupError(error);
-    return c.json(mapped.body, mapped.status as 400 | 500);
+    return c.json(mapped.body, mapped.status);
   }
 
-  if (!memory) {
-    return c.json(errorResponse('notFound', 'memoryId not found'), 404);
+  if (!context) {
+    return c.json(errorResponse('notFound', 'contextId not found'), 404);
   }
 
-  return c.json(memoryResponse([renderRenderedMemoryHit(memory)]));
+  return c.json(memoryResponse([renderRenderedContextHit(context)]));
 });
 
 app.get('/api/v1/memory/watermark', async (c) => {
@@ -1095,7 +1105,7 @@ app.get('/api/v1/memory/watermark', async (c) => {
     watermark = await memoryPipeline.watermark(database);
   } catch (error) {
     const mapped = mapCoreLookupError(error);
-    return c.json(mapped.body, mapped.status as 400 | 500);
+    return c.json(mapped.body, mapped.status);
   }
 
   return c.json(memoryWatermarkResponse(watermark));
@@ -1114,7 +1124,7 @@ app.post('/api/v1/memory/finalize', async (c) => {
     watermark = await memoryPipeline.finalize(database);
   } catch (error) {
     const mapped = mapCoreLookupError(error);
-    return c.json(mapped.body, mapped.status as 400 | 500);
+    return c.json(mapped.body, mapped.status);
   }
 
   return c.json(memoryWatermarkResponse(watermark));
@@ -1204,7 +1214,7 @@ function isTimestamp(value: unknown): value is string {
   return typeof value === 'string' && !Number.isNaN(Date.parse(value));
 }
 
-function mapCoreWriteError(error: unknown): { status: number; body: ErrorResponse } {
+function mapCoreWriteError(error: unknown): { status: 400 | 500; body: ErrorResponse } {
   const message = error instanceof Error ? error.message : String(error);
   const lowered = message.toLowerCase();
 
@@ -1350,7 +1360,7 @@ app.post('/api/v1/turn/capture', async (c) => {
     await captureTurn(body.turn, body.database);
   } catch (error) {
     const mapped = mapCoreWriteError(error);
-    return c.json(mapped.body, mapped.status as 400 | 500);
+    return c.json(mapped.body, mapped.status);
   }
 
   invalidateSessionTreeCache();
@@ -1380,7 +1390,7 @@ app.post('/api/v1/turn/capture/batch', async (c) => {
     }
   } catch (error) {
     const mapped = mapCoreWriteError(error);
-    return c.json(mapped.body, mapped.status as 400 | 500);
+    return c.json(mapped.body, mapped.status);
   }
 
   if (capturedTurns > 0) {
@@ -1428,7 +1438,7 @@ app.post('/api/v1/benchmark/locomo/turn/capture', async (c) => {
       const message = error instanceof Error ? error.message : String(error);
       return c.json(errorResponse('internalError', message), 500);
     }
-    return c.json(mapped.body, mapped.status as 400 | 500);
+    return c.json(mapped.body, mapped.status);
   }
 });
 

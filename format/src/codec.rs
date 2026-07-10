@@ -14,13 +14,14 @@ use lance::{Error, Result};
 use serde_json::{Map, Value};
 
 use super::schema::{
-    dreaming_project_schema, dreaming_schema, extraction_schema, session_schema, turn_schema,
+    dreaming_schema, extraction_schema, session_schema, session_snapshot_schema, turn_schema,
 };
 use crate::config::extraction_config;
-use crate::dreaming::{Dreaming, DreamingProject, DreamingSupportTurn};
+use crate::dreaming::{Dreaming, DreamingSupportTurn};
 use crate::extraction::Extraction;
 use crate::memory_id::{MemoryId, MemoryLayer};
-use crate::session::SessionSnapshot;
+use crate::session::Session;
+use crate::session_snapshot::SessionSnapshot;
 use crate::turn::{Artifact, Turn, TurnEvent};
 
 pub(crate) fn turns_to_record_batch(
@@ -381,7 +382,7 @@ pub(crate) fn session_snapshots_to_record_batch(
     );
 
     Ok(RecordBatch::try_new(
-        Arc::new(session_schema()),
+        Arc::new(session_snapshot_schema()),
         vec![
             Arc::new(session_ids),
             Arc::new(project),
@@ -405,7 +406,7 @@ pub(crate) fn session_snapshots_to_record_batch(
 pub(crate) fn session_snapshots_to_reader(
     session_snapshots: Vec<SessionSnapshot>,
 ) -> RecordBatchIterator<impl Iterator<Item = std::result::Result<RecordBatch, ArrowError>>> {
-    let schema = Arc::new(session_schema());
+    let schema = Arc::new(session_snapshot_schema());
     let batch = session_snapshots_to_record_batch(&session_snapshots);
     RecordBatchIterator::new(vec![batch].into_iter(), schema)
 }
@@ -561,66 +562,6 @@ pub(crate) fn dreamings_to_reader(
     let schema = Arc::new(dreaming_schema());
     let batch = dreamings_to_record_batch(&rows);
     RecordBatchIterator::new(vec![batch].into_iter(), schema)
-}
-
-pub(crate) fn dreaming_projects_to_record_batch(
-    rows: &[DreamingProject],
-) -> std::result::Result<RecordBatch, ArrowError> {
-    let project = StringArray::from_iter_values(rows.iter().map(|row| row.project.as_str()));
-    let session_snapshot_version =
-        UInt64Array::from_iter_values(rows.iter().map(|row| row.session_snapshot_version));
-    let updated_at = TimestampMicrosecondArray::from_iter_values(
-        rows.iter().map(|row| row.updated_at.timestamp_micros()),
-    )
-    .with_timezone("UTC");
-
-    Ok(RecordBatch::try_new(
-        Arc::new(dreaming_project_schema()),
-        vec![
-            Arc::new(project),
-            Arc::new(session_snapshot_version),
-            Arc::new(updated_at),
-        ],
-    )?)
-}
-
-pub(crate) fn dreaming_projects_to_reader(
-    rows: Vec<DreamingProject>,
-) -> RecordBatchIterator<impl Iterator<Item = std::result::Result<RecordBatch, ArrowError>>> {
-    let schema = Arc::new(dreaming_project_schema());
-    let batch = dreaming_projects_to_record_batch(&rows);
-    RecordBatchIterator::new(vec![batch].into_iter(), schema)
-}
-
-pub(crate) fn record_batch_to_dreaming_projects(
-    batch: &RecordBatch,
-) -> Result<Vec<DreamingProject>> {
-    let project = batch
-        .column(0)
-        .as_any()
-        .downcast_ref::<StringArray>()
-        .unwrap();
-    let session_snapshot_version = batch
-        .column(1)
-        .as_any()
-        .downcast_ref::<UInt64Array>()
-        .unwrap();
-    let updated_at = batch
-        .column(2)
-        .as_any()
-        .downcast_ref::<TimestampMicrosecondArray>()
-        .unwrap();
-
-    Ok((0..batch.num_rows())
-        .map(|index| DreamingProject {
-            project: project.value(index).to_string(),
-            session_snapshot_version: session_snapshot_version.value(index),
-            updated_at: Utc
-                .timestamp_micros(updated_at.value(index))
-                .single()
-                .unwrap(),
-        })
-        .collect())
 }
 
 pub(crate) fn record_batch_to_dreamings(batch: &RecordBatch) -> Result<Vec<Dreaming>> {
@@ -891,6 +832,138 @@ pub(crate) fn record_batch_to_extractions(batch: &RecordBatch) -> Result<Vec<Ext
                     .timestamp_micros(created_at.value(index))
                     .single()
                     .unwrap(),
+                updated_at: Utc
+                    .timestamp_micros(updated_at.value(index))
+                    .single()
+                    .unwrap(),
+            })
+        })
+        .collect()
+}
+
+pub(crate) fn sessions_to_record_batch(rows: &[Session]) -> Result<RecordBatch> {
+    let dimensions = extraction_config()?.dimensions;
+    let latest_snapshot_id =
+        StringArray::from_iter_values(rows.iter().map(|row| row.latest_snapshot_id.as_str()));
+    let session_id = StringArray::from_iter_values(rows.iter().map(|row| row.session_id.as_str()));
+    let project = StringArray::from_iter_values(rows.iter().map(|row| row.project.as_str()));
+    let cwd = StringArray::from_iter_values(rows.iter().map(|row| row.cwd.as_str()));
+    let agent = StringArray::from_iter_values(rows.iter().map(|row| row.agent.as_str()));
+    let title = StringArray::from_iter_values(rows.iter().map(|row| row.title.as_str()));
+    let summary = StringArray::from_iter_values(rows.iter().map(|row| row.summary.as_str()));
+    let search_text =
+        StringArray::from_iter_values(rows.iter().map(|row| row.search_text.as_str()));
+    let vector = build_float32_fixed_size_list_array(
+        rows.iter().map(|row| row.vector.as_slice()),
+        dimensions,
+    )
+    .map_err(|error| Error::invalid_input(format!("invalid session vector: {error}")))?;
+    let updated_at = TimestampMicrosecondArray::from_iter_values(
+        rows.iter().map(|row| row.updated_at.timestamp_micros()),
+    )
+    .with_timezone("UTC");
+
+    RecordBatch::try_new(
+        Arc::new(session_schema(dimensions)),
+        vec![
+            Arc::new(latest_snapshot_id),
+            Arc::new(session_id),
+            Arc::new(project),
+            Arc::new(cwd),
+            Arc::new(agent),
+            Arc::new(title),
+            Arc::new(summary),
+            Arc::new(search_text),
+            Arc::new(vector),
+            Arc::new(updated_at),
+        ],
+    )
+    .map_err(|error| Error::invalid_input(format!("build session batch: {error}")))
+}
+
+pub(crate) fn sessions_to_reader(
+    rows: Vec<Session>,
+) -> Result<RecordBatchIterator<impl Iterator<Item = std::result::Result<RecordBatch, ArrowError>>>>
+{
+    let dimensions = extraction_config()?.dimensions;
+    let schema = Arc::new(session_schema(dimensions));
+    let batch = sessions_to_record_batch(&rows).map_err(arrow_error_from_lance)?;
+    Ok(RecordBatchIterator::new(
+        vec![Ok(batch)].into_iter(),
+        schema,
+    ))
+}
+
+pub(crate) fn record_batch_to_sessions(batch: &RecordBatch) -> Result<Vec<Session>> {
+    let latest_snapshot_id = batch
+        .column(0)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap();
+    let session_id = batch
+        .column(1)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap();
+    let project = batch
+        .column(2)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap();
+    let cwd = batch
+        .column(3)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap();
+    let agent = batch
+        .column(4)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap();
+    let title = batch
+        .column(5)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap();
+    let summary = batch
+        .column(6)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap();
+    let search_text = batch
+        .column(7)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap();
+    let vector = batch.column(8);
+    let updated_at = batch
+        .column(9)
+        .as_any()
+        .downcast_ref::<TimestampMicrosecondArray>()
+        .unwrap();
+
+    (0..batch.num_rows())
+        .map(|index| {
+            let vector = if let Some(vector) = vector.as_any().downcast_ref::<FixedSizeListArray>()
+            {
+                optional_float32_fixed_size_list(vector, index).unwrap_or_default()
+            } else {
+                return Err(Error::invalid_input(format!(
+                    "session.vector must be FixedSizeList<Float32, N>, got {:?}",
+                    vector.data_type()
+                )));
+            };
+
+            Ok(Session {
+                latest_snapshot_id: latest_snapshot_id.value(index).to_string(),
+                session_id: session_id.value(index).to_string(),
+                project: project.value(index).to_string(),
+                cwd: cwd.value(index).to_string(),
+                agent: agent.value(index).to_string(),
+                title: title.value(index).to_string(),
+                summary: summary.value(index).to_string(),
+                search_text: search_text.value(index).to_string(),
+                vector,
                 updated_at: Utc
                     .timestamp_micros(updated_at.value(index))
                     .single()

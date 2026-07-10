@@ -47,7 +47,7 @@ test('requires a selected session or document before rendering session content',
 });
 
 test('enables conversation locate only when the selected timeline item is outside the conversation window', () => {
-  const item = { memoryId: 'timeline:1', refs: ['turn:2'] };
+  const item = { contextId: 'timeline:1', refs: ['turn:2'] };
 
   assert.equal(locateConversationEnabled(null, ['turn:1']), false);
   assert.equal(locateConversationEnabled(item, ['turn:1', 'turn:2', 'turn:3']), false);
@@ -56,20 +56,20 @@ test('enables conversation locate only when the selected timeline item is outsid
 
 test('selects the first matching timeline item in the conversation window', () => {
   const timeline = [
-    { memoryId: 'timeline:1', refs: ['turn:8'] },
-    { memoryId: 'timeline:2', refs: ['turn:3', 'turn:6'] },
-    { memoryId: 'timeline:3', refs: ['turn:6'] },
+    { contextId: 'timeline:1', refs: ['turn:8'] },
+    { contextId: 'timeline:2', refs: ['turn:3', 'turn:6'] },
+    { contextId: 'timeline:3', refs: ['turn:6'] },
   ];
 
-  assert.equal(timelineItemForConversationWindow(timeline, ['turn:1', 'turn:3', 'turn:6'])?.memoryId, 'timeline:2');
+  assert.equal(timelineItemForConversationWindow(timeline, ['turn:1', 'turn:3', 'turn:6'])?.contextId, 'timeline:2');
   assert.equal(timelineItemForConversationWindow(timeline, ['turn:4', 'turn:5']), null);
 });
 
 test('selects the nearest started timeline item when refs overlap', () => {
   const timeline = [
-    { memoryId: 'timeline:1', refs: ['turn:1', 'turn:9'] },
-    { memoryId: 'timeline:2', refs: ['turn:5'] },
-    { memoryId: 'timeline:3', refs: ['turn:10'] },
+    { contextId: 'timeline:1', refs: ['turn:1', 'turn:9'] },
+    { contextId: 'timeline:2', refs: ['turn:5'] },
+    { contextId: 'timeline:3', refs: ['turn:10'] },
   ];
 
   assert.equal(
@@ -77,7 +77,7 @@ test('selects the nearest started timeline item when refs overlap', () => {
       timeline,
       ['turn:9'],
       ['turn:1', 'turn:5', 'turn:9', 'turn:10'],
-    )?.memoryId,
+    )?.contextId,
     'timeline:2',
   );
 });
@@ -94,13 +94,13 @@ test('uses visible conversation turns before the inferred conversation window', 
 });
 
 test('enables timeline locate only when the window match is not already active and open', () => {
-  const item = { memoryId: 'timeline:2', refs: ['turn:3'] };
+  const item = { contextId: 'timeline:2', refs: ['turn:3'] };
 
   assert.equal(locateTimelineEnabled(null, null), false);
   assert.equal(locateTimelineEnabled(item, null), true);
   assert.equal(locateTimelineEnabled(item, 'timeline:1'), true);
   assert.equal(locateTimelineEnabled(item, 'timeline:2'), false);
-  assert.equal(locateTimelineEnabled(item, 'timeline:1', ['turn:9'], { memoryId: 'timeline:1', refs: ['turn:9'] }), true);
+  assert.equal(locateTimelineEnabled(item, 'timeline:1', ['turn:9'], { contextId: 'timeline:1', refs: ['turn:9'] }), true);
 });
 
 test('resolves selected session identity from project agent and session key', () => {

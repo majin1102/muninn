@@ -15,7 +15,6 @@ function defaultConfigContent(): string {
     '    "name": "default-extractor",',
     '    "llmProvider": "default",',
     '    "embeddingProvider": "default",',
-    '    "recallMode": "hybrid",',
     '    "maxAttempts": 3,',
     '    "activeWindowDays": 7,',
     '    "failedEpochRetryIntervalMs": 900000',

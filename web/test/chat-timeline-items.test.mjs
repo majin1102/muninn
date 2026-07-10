@@ -31,7 +31,7 @@ test('folds total time into the preceding timeline item', async () => {
     {
       type: 'totalTime',
       totalTime: {
-        memoryId: 'turn:1',
+        contextId: 'turn:1',
         startedAt: '2026-06-02T10:00:00.000Z',
         completedAt: '2026-06-02T10:00:41.000Z',
       },
@@ -43,7 +43,7 @@ test('folds total time into the preceding timeline item', async () => {
   assert.equal(items[1].type, 'entry');
   assert.equal(items[1].entry.type, 'message');
   assert.deepEqual(items[1].totalTime, {
-    memoryId: 'turn:1',
+    contextId: 'turn:1',
     startedAt: '2026-06-02T10:00:00.000Z',
     completedAt: '2026-06-02T10:00:41.000Z',
   });

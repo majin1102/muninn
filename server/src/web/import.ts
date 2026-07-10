@@ -190,7 +190,7 @@ export async function importSelectedSessions(adapter: ImportAdapter, sourcePaths
 
   let importedSessions = 0;
   let importedTurns = 0;
-  const enabledProjects = new Set<string>();
+  const registeredProjects = new Set<string>();
   for (const { session, firstTurnSequence } of importableSessions.sort((left, right) => (
     compareSessionsForImport(left.session, right.session)
   ))) {
@@ -215,42 +215,44 @@ export async function importSelectedSessions(adapter: ImportAdapter, sourcePaths
       if (capturedTurns > 0) {
         importedSessions += 1;
         importedTurns += capturedTurns;
-        enabledProjects.add(session.project);
+        registeredProjects.add(session.project);
       }
     } catch (error) {
       failedSessions.push({ sourcePath: session.sourcePath, errorMessage: error instanceof Error ? error.message : String(error) });
     }
   }
 
-  // Importing a project opts it into live auto-capture going forward.
-  for (const project of enabledProjects) {
-    if (isCanonicalProjectIdentity(project)) {
-      await setCaptureEnabled(adapter.agent, project, true);
-    }
-  }
+  await registerProjectsWithCaptureDisabled(adapter.agent, registeredProjects);
 
   return { importedSessions, importedTurns, failedSessions, requestId };
 }
 
 export async function importProjects(adapter: ImportAdapter, projects: string[], requestId: string): Promise<ImportProjectsResponse> {
   const uniqueProjects = [...new Set(projects.map((project) => project.trim()).filter((project) => project.length > 0))];
-  for (const project of uniqueProjects) {
-    await setCaptureEnabled(adapter.agent, project, true);
-  }
+  await registerProjectsWithCaptureDisabled(adapter.agent, uniqueProjects);
   return {
     importedProjects: uniqueProjects.length,
     requestId,
   };
 }
 
+async function registerProjectsWithCaptureDisabled(agent: string, projects: Iterable<string>): Promise<void> {
+  const policy = await getCapturePolicy(agent);
+  for (const project of projects) {
+    if (!isCanonicalProjectIdentity(project) || policy[project] !== undefined) {
+      continue;
+    }
+    await setCaptureEnabled(agent, project, false);
+  }
+}
+
 export async function deleteImportedProject(adapter: ImportAdapter, project: string, requestId: string): Promise<DeleteImportedProjectResponse> {
-  const sessionKeys = new Set(
-    (await sessions.index())
-      .filter((entry) => entry.agent === adapter.agent && entry.project === project)
-      .map(SessionIdentityKey.sessionIdentityKey),
-  );
+  const entries = (await sessions.index())
+    .filter((entry) => entry.agent === adapter.agent && entry.project === project);
+  const sessionKeys = new Set(entries.map(SessionIdentityKey.sessionIdentityKey));
+  const identities = entries.map(sessionIdentity);
   const { deleted: deletedTurns, turnIds } = await deleteProjectTurns(adapter, sessionKeys);
-  await deleteRelatedMemories(turnIds);
+  await deleteRelatedMemories(turnIds, identities);
   await deleteSessionSnapshots(adapter, sessionKeys);
   await sessions.refreshIndex();
   await removeCapturePolicy(adapter.agent, project);
@@ -267,14 +269,17 @@ export async function deleteImportedSession(
   sessionId: string,
   requestId: string,
 ): Promise<DeleteImportedSessionResponse> {
-  const key = identityKey(adapter, { project, sessionId });
-  const exists = (await sessions.index()).some((entry) => (
+  const entries = (await sessions.index()).filter((entry) => (
     entry.agent === adapter.agent
-    && SessionIdentityKey.sessionIdentityKey(entry) === key
+    && entry.project === project
+    && entry.sessionId === sessionId
   ));
-  const { deleted: deletedTurns, turnIds } = await deleteProjectTurns(adapter, exists ? new Set([key]) : new Set());
-  await deleteRelatedMemories(turnIds);
-  await deleteSessionSnapshots(adapter, exists ? new Set([key]) : new Set());
+  const exists = entries.length > 0;
+  const sessionKeys = new Set(entries.map(SessionIdentityKey.sessionIdentityKey));
+  const identities = entries.map(sessionIdentity);
+  const { deleted: deletedTurns, turnIds } = await deleteProjectTurns(adapter, sessionKeys);
+  await deleteRelatedMemories(turnIds, identities);
+  await deleteSessionSnapshots(adapter, sessionKeys);
   await sessions.refreshIndex();
   return {
     deletedSessions: exists ? 1 : 0,
@@ -306,7 +311,7 @@ async function deleteSessionSnapshots(adapter: ImportAdapter, sessionKeys: Set<s
     return;
   }
   const tables = await getNativeTables(resolveStorageTarget(loadMuninnConfig() ?? {}, 'main'));
-  const snapshotIds = (await tables.sessionTable.listSnapshots({}))
+  const snapshotIds = (await tables.sessionSnapshotTable.listSnapshots({}))
     .filter((snapshot) => (
       snapshot.agent === adapter.agent
       && sessionKeys.has(identityKey(adapter, {
@@ -316,22 +321,36 @@ async function deleteSessionSnapshots(adapter: ImportAdapter, sessionKeys: Set<s
     ))
     .map((snapshot) => snapshot.snapshotId);
   if (snapshotIds.length > 0) {
-    await tables.sessionTable.delete({ snapshotIds });
+    await tables.sessionSnapshotTable.delete({ snapshotIds });
   }
 }
 
-async function deleteRelatedMemories(turnIds: string[]): Promise<void> {
+async function deleteRelatedMemories(turnIds: string[], sessionIdentities: SessionIdentity[]): Promise<void> {
+  if (turnIds.length === 0 && sessionIdentities.length === 0) {
+    return;
+  }
+  const tables = await getNativeTables(resolveStorageTarget(loadMuninnConfig() ?? {}, 'main'));
+  if (sessionIdentities.length > 0) {
+    await tables.sessionTable.delete({ identities: sessionIdentities });
+  }
   if (turnIds.length === 0) {
     return;
   }
   const turnIdSet = new Set(turnIds);
-  const tables = await getNativeTables(resolveStorageTarget(loadMuninnConfig() ?? {}, 'main'));
   const extractions = (await tables.extractionTable.list({}))
     .filter((row) => row.turnRefs.some((ref) => turnIdSet.has(ref)));
   const extractionIds = [...new Set(extractions.map((row) => row.id))];
   if (extractionIds.length > 0) {
     await tables.extractionTable.delete({ ids: extractionIds });
   }
+}
+
+function sessionIdentity(entry: { project: string; agent: string; sessionId: string }): SessionIdentity {
+  return {
+    project: entry.project,
+    agent: entry.agent,
+    sessionId: entry.sessionId,
+  };
 }
 
 async function listAgentTurns(agent: string): Promise<ImportTurn[]> {

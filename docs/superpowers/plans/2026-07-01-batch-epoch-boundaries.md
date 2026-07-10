@@ -4,7 +4,7 @@
 
 **Goal:** Make batch capture respect extractor epoch boundaries so large imports progress in bounded epochs, while ordinary hook capture stops forcing tiny epochs.
 
-**Architecture:** Keep the public capture schema unchanged. Refactor `Extractor.acceptBatch()` to pack incoming `TurnContent[]` into bounded groups before writing each group to `OpenEpoch`, using `maxEpochTurns` and `newBatchInputChars`. Remove automatic `*-hook` finalize from backend capture, and make remember-session marker handling explicitly call the existing finalize endpoint after successful capture.
+**Architecture:** Keep the public capture schema unchanged. Refactor `Extractor.acceptBatch()` to pack incoming `TurnContent[]` into bounded groups before writing each group to `OpenEpoch`, using `maxEpochTurns` and `newBatchInputChars`. Remove automatic `*-hook` finalize from backend capture, and make muninn-remember marker handling explicitly call the existing finalize endpoint after successful capture.
 
 **Tech Stack:** TypeScript packages built by `pnpm`, Node test runner tests in `.mjs`, existing Muninn server/common packages.
 
@@ -19,7 +19,7 @@
   - Removes hook-name-based automatic finalize from generic capture writes.
 - `common/src/agent-hook.ts`
   - Adds an optional `finalizeMemory()` client method.
-  - Calls finalize after successful remember-session enable marker capture.
+  - Calls finalize after successful muninn-remember enable marker capture.
 - `server/test/memory/client-internals.test.mjs`
   - Adds extractor batch packing tests beside existing `Extractor.accept` epoch tests.
   - Extends `writeExtractorConfig()` test helper with `newBatchInputChars` and `previewChars`.
@@ -602,7 +602,7 @@ Expected: PASS.
 
 ```bash
 git add common/src/agent-hook.ts common/test/agent-hook.test.mjs
-git commit -m "fix: finalize remember-session explicitly"
+git commit -m "fix: finalize muninn remember explicitly"
 ```
 
 ---

@@ -13,7 +13,7 @@ import { writeMuninnLog } from './logging.js';
 import type { MuninnBackend } from './backend.js';
 import type { NativeTables, TableStats } from './native.js';
 
-type DatasetName = 'turn' | 'session' | 'extraction';
+type DatasetName = 'turn' | 'sessionSnapshot' | 'session' | 'extraction';
 type WatchdogLevel = 'info' | 'error';
 type WatchdogEvent =
   | 'failed'
@@ -41,7 +41,7 @@ type DatasetState = {
 };
 
 const WATCHDOG_LOG_FILE_NAME = 'watchdog.jsonl';
-const DATASETS: DatasetName[] = ['turn', 'session', 'extraction'];
+const DATASETS: DatasetName[] = ['turn', 'sessionSnapshot', 'session', 'extraction'];
 
 export class Watchdog {
   private timer: NodeJS.Timeout | null = null;
@@ -50,6 +50,7 @@ export class Watchdog {
   private checkpointFlush: Promise<void> | null = null;
   private lastCheckpointJson: string | null = null;
   private checkpointStateLoaded = false;
+  private checkpointCommittedEpoch: number | undefined;
   private readonly state = new Map<DatasetName, DatasetState>(
     DATASETS.map((dataset) => [dataset, {
       lastSeenVersion: null,
@@ -123,7 +124,8 @@ export class Watchdog {
     this.inFlight = (async () => {
       await Promise.all([
         this.maintainTurns(),
-        this.maintainSessions(),
+        this.maintainSessionSnapshots(),
+        this.maintainSession(),
         this.maintainExtraction(),
       ]);
       await this.flushCheckpoint();
@@ -153,7 +155,9 @@ export class Watchdog {
       if (!exported) {
         return;
       }
-      const checkpointJson = JSON.stringify(exported);
+      const guarded = await this.guardCommittedEpoch(exported);
+      this.checkpointCommittedEpoch = guarded.extractor.committedEpoch;
+      const checkpointJson = JSON.stringify(guarded);
       if (checkpointJson === this.lastCheckpointJson) {
         try {
           await access(this.checkpointPath());
@@ -165,13 +169,13 @@ export class Watchdog {
         }
       }
       const checkpoint: CheckpointFile = {
-        ...exported,
+        ...guarded,
         writtenAt: new Date().toISOString(),
         writerPid: process.pid,
       };
       await this.writeCheckpointAtomically(serializeCheckpointFile(checkpoint));
       this.lastCheckpointJson = checkpointJson;
-      await this.updateCheckpointFloors(exported);
+      await this.updateCheckpointFloors(guarded);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.error(`[muninn:watchdog] checkpoint flush failed: ${message}`);
@@ -226,17 +230,17 @@ export class Watchdog {
     });
   }
 
-  private async maintainSessions(): Promise<void> {
-    await this.runDatasetMaintenance('session', async (setVersion) => {
-      const stats = await this.binding.sessionTable.stats();
+  private async maintainSessionSnapshots(): Promise<void> {
+    await this.runDatasetMaintenance('sessionSnapshot', async (setVersion) => {
+      const stats = await this.binding.sessionSnapshotTable.stats();
       if (!stats) {
-        this.resetState('session');
+        this.resetState('sessionSnapshot');
         return;
       }
 
       setVersion(stats.version);
-      const unchanged = this.versionUnchanged('session', stats);
-      this.updateSeenState('session', stats);
+      const unchanged = this.versionUnchanged('sessionSnapshot', stats);
+      this.updateSeenState('sessionSnapshot', stats);
 
       if (unchanged) {
         return;
@@ -246,10 +250,10 @@ export class Watchdog {
         return;
       }
 
-      const result = await this.binding.sessionTable.compact();
-      const finalStats = await this.binding.sessionTable.stats() ?? stats;
-      this.updateMaintainedState('session', finalStats);
-      await this.logInfo('session', 'compacted', finalStats.version, {
+      const result = await this.binding.sessionSnapshotTable.compact();
+      const finalStats = await this.binding.sessionSnapshotTable.stats() ?? stats;
+      this.updateMaintainedState('sessionSnapshot', finalStats);
+      await this.logInfo('sessionSnapshot', 'compacted', finalStats.version, {
         changed: result.changed,
         fragmentCount: finalStats.fragmentCount,
         rowCount: finalStats.rowCount,
@@ -301,6 +305,62 @@ export class Watchdog {
         });
       }
       await this.logInfo('extraction', 'optimized', finalStats.version, {
+        changed: optimizeResult.changed,
+        mergeCount: this.config.extraction.optimizeMergeCount,
+        fragmentCount: finalStats.fragmentCount,
+        rowCount: finalStats.rowCount,
+        indexCreated: ensured.created,
+      });
+    });
+  }
+
+  private async maintainSession(): Promise<void> {
+    if (!this.binding.sessionTable?.ensureVectorIndex) {
+      return;
+    }
+    await this.runDatasetMaintenance('session', async (setVersion) => {
+      const ensured = await this.binding.sessionTable.ensureVectorIndex({
+        targetPartitionSize: this.config.extraction.targetPartitionSize,
+      });
+      const stats = await this.binding.sessionTable.stats();
+      if (!stats) {
+        this.resetState('session');
+        return;
+      }
+
+      setVersion(stats.version);
+      const unchanged = this.versionUnchanged('session', stats);
+      this.updateSeenState('session', stats);
+
+      if (!ensured.created && unchanged) {
+        return;
+      }
+
+      let compactResult: { changed: boolean } | null = null;
+      if (stats.fragmentCount >= this.config.compactMinFragments) {
+        compactResult = await this.binding.sessionTable.compact();
+      }
+      const optimizeResult = await this.binding.sessionTable.optimize({
+        mergeCount: this.config.extraction.optimizeMergeCount,
+      });
+      const finalStats = await this.binding.sessionTable.stats() ?? stats;
+      this.updateMaintainedState('session', finalStats);
+
+      if (ensured.created) {
+        await this.logInfo('session', 'index_created', finalStats.version, {
+          targetPartitionSize: this.config.extraction.targetPartitionSize,
+          fragmentCount: finalStats.fragmentCount,
+          rowCount: finalStats.rowCount,
+        });
+      }
+      if (compactResult) {
+        await this.logInfo('session', 'compacted', finalStats.version, {
+          changed: compactResult.changed,
+          fragmentCount: finalStats.fragmentCount,
+          rowCount: finalStats.rowCount,
+        });
+      }
+      await this.logInfo('session', 'optimized', finalStats.version, {
         changed: optimizeResult.changed,
         mergeCount: this.config.extraction.optimizeMergeCount,
         fragmentCount: finalStats.fragmentCount,
@@ -379,13 +439,35 @@ export class Watchdog {
     if (!checkpoint) {
       return;
     }
+    this.checkpointCommittedEpoch = checkpoint.extractor.committedEpoch;
     this.lastCheckpointJson ??= JSON.stringify({
       schemaVersion: checkpoint.schemaVersion,
       extractor: checkpoint.extractor,
       sessionIndex: checkpoint.sessionIndex,
       dreaming: checkpoint.dreaming,
+      session: checkpoint.session,
     });
     await this.updateCheckpointFloors(checkpoint);
+  }
+
+  private async guardCommittedEpoch(checkpoint: CheckpointContent): Promise<CheckpointContent> {
+    const previous = this.checkpointCommittedEpoch;
+    const next = checkpoint.extractor.committedEpoch;
+    if (previous === undefined || (next !== undefined && next >= previous)) {
+      return checkpoint;
+    }
+    await writeMuninnLog(this.database, 'error', 'watchdog', 'checkpoint_committed_epoch_regression_blocked', {
+      previousCommittedEpoch: previous,
+      attemptedCommittedEpoch: next ?? null,
+    });
+    return {
+      ...checkpoint,
+      extractor: {
+        ...checkpoint.extractor,
+        committedEpoch: previous,
+        nextEpoch: Math.max(checkpoint.extractor.nextEpoch, previous + 1),
+      },
+    };
   }
 
   private async updateCheckpointFloors(checkpoint: CheckpointContent | CheckpointFile): Promise<void> {
@@ -440,8 +522,10 @@ export class Watchdog {
     switch (dataset) {
       case 'turn':
         return this.binding.turnTable.cleanup?.({ floorVersion }) ?? Promise.resolve({ changed: false });
+      case 'sessionSnapshot':
+        return this.binding.sessionSnapshotTable.cleanup?.({ floorVersion }) ?? Promise.resolve({ changed: false });
       case 'session':
-        return this.binding.sessionTable.cleanup?.({ floorVersion }) ?? Promise.resolve({ changed: false });
+        return this.binding.sessionTable?.cleanup?.({ floorVersion }) ?? Promise.resolve({ changed: false });
       case 'extraction':
         return this.binding.extractionTable.cleanup?.({ floorVersion }) ?? Promise.resolve({ changed: false });
     }
@@ -507,7 +591,8 @@ async function checkpointFloors(
 
   return {
     turn: checkpoint.extractor.baseline.turn,
-    session: sessionFloor,
+    sessionSnapshot: sessionFloor,
+    session: checkpoint.session.tableVersion,
     extraction: checkpoint.extractor.baseline.extraction,
   };
 }

@@ -16,6 +16,7 @@ BRIDGE_PACKAGE_NAME = "@muninn/benchmark-locomo"
 BRIDGE_DIST = REPO_ROOT / "benchmark" / "locomo" / "dist" / "bridge.js"
 BOOTSTRAP_SCRIPT = REPO_ROOT / "benchmark" / "locomo" / "scripts" / "bootstrap.sh"
 NODE_BINARY_ENV = "MUNINN_NODE_BINARY"
+RECALL_PUBLIC_MODES = {"session", "extraction"}
 
 
 class BridgeError(RuntimeError):
@@ -61,17 +62,18 @@ class MuninnBridge:
         query: str,
         limit: int,
         muninn_home: Path,
-        recall_mode: str = "hybrid",
+        mode: str = "extraction",
         budget: int = 0,
         query_limit: int | None = None,
         skip_watermark: bool = False,
         sample_id: str | None = None,
     ) -> list[RecallHit]:
+        validate_recall_options(mode, budget, query_limit)
         kwargs = {
             "query": query,
             "limit": str(limit),
             "muninn_home": str(muninn_home),
-            "recall_mode": recall_mode,
+            "mode": mode,
         }
         if sample_id:
             kwargs["sample_id"] = sample_id
@@ -97,12 +99,13 @@ class MuninnBridge:
         self,
         queries: list[dict[str, Any]],
         muninn_home: Path,
-        recall_mode: str = "hybrid",
+        mode: str = "extraction",
         budget: int = 0,
         query_limit: int | None = None,
         skip_watermark: bool = False,
         sample_id: str | None = None,
     ) -> dict[str, list[RecallHit]]:
+        validate_recall_options(mode, budget, query_limit)
         with tempfile.NamedTemporaryFile(
             "w",
             suffix=".json",
@@ -116,7 +119,7 @@ class MuninnBridge:
             kwargs = {
                 "queries_file": str(query_file),
                 "muninn_home": str(muninn_home),
-                "recall_mode": recall_mode,
+                "mode": mode,
             }
             if sample_id:
                 kwargs["sample_id"] = sample_id
@@ -275,6 +278,17 @@ class MuninnBridge:
 def node_binary() -> str:
     value = os.environ.get(NODE_BINARY_ENV, "").strip()
     return value or "node"
+
+
+def validate_mode(mode: str) -> None:
+    if mode not in RECALL_PUBLIC_MODES:
+        raise ValueError("mode must be one of: session, extraction")
+
+
+def validate_recall_options(mode: str, budget: int, query_limit: int | None) -> None:
+    validate_mode(mode)
+    if mode == "session" and (budget > 0 or query_limit is not None):
+        raise ValueError("budget and query_limit are only supported in extraction mode")
 
 
 def format_command(args: Any) -> str:

@@ -82,7 +82,7 @@ function createClient({
     turnTable: {
       getTurn: async (turnId) => turns[turnId] ?? null,
     },
-    sessionTable: {
+    sessionSnapshotTable: {
       listSnapshotsWithVersion: async (params = {}) => (
         params.version == null
           ? { sourceVersion, rows: snapshots }
@@ -93,6 +93,7 @@ function createClient({
         return { sourceVersion: deltaVersion, rows: deltaRows };
       },
     },
+    sessionTable: {},
     dreamingTable: {
       list: async () => rows,
       append: async ({ row }) => {
@@ -120,11 +121,6 @@ function createClient({
       delta: async () => ({ sourceVersion: 0, rows: [] }),
       stats: async () => ({ version: 0, rowCount: rows.length, fragmentCount: 1 }),
       describe: async () => null,
-    },
-    dreamingProjectTable: {
-      list: async () => assert.fail('runtime should read dreaming watermarks from checkpoint'),
-      get: async () => assert.fail('runtime should read dreaming watermarks from checkpoint'),
-      upsert: async () => assert.fail('runtime should write dreaming watermarks to checkpoint'),
     },
     extractionTable: {},
   };

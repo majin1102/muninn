@@ -12,13 +12,13 @@ import { Button } from './ui/button.js';
 type SessionTreeProps = {
   projects: ProjectNode[];
   selectedSessionId: string | null;
-  activeMemoryId: string | null;
+  activeContextId: string | null;
   canExpandSessions: boolean;
   loading: boolean;
   error: string | null;
   onOpenSession: (session: ProjectSessionNode) => void;
   onLoadSession: (session: ProjectSessionNode) => void;
-  onOpenTurn: (memoryId: string, session: ProjectSessionNode) => void;
+  onOpenTurn: (contextId: string, session: ProjectSessionNode) => void;
   onLoadMore: (session: ProjectSessionNode) => void;
   onImportSessions?: () => void;
 };
@@ -40,7 +40,7 @@ const TURN_LIST_PAGE_SIZE = 20;
 export function SessionTree({
   projects,
   selectedSessionId,
-  activeMemoryId,
+  activeContextId,
   canExpandSessions,
   loading,
   error,
@@ -87,8 +87,8 @@ export function SessionTree({
     timeRange,
   }), [projects, query, selectedAgents, timeRange]);
   const activePath = useMemo(
-    () => findActivePath(filteredProjects, activeMemoryId, selectedSessionId),
-    [activeMemoryId, filteredProjects, selectedSessionId],
+    () => findActivePath(filteredProjects, activeContextId, selectedSessionId),
+    [activeContextId, filteredProjects, selectedSessionId],
   );
 
   useEffect(() => {
@@ -478,7 +478,7 @@ export function SessionTree({
                   </div>
                 );
               }
-              const sessionHasActiveChild = hasActiveSessionChild(session, activeMemoryId);
+              const sessionHasActiveChild = hasActiveSessionChild(session, activeContextId);
               const sessionOpen = canExpandSessions && (openSessions[key] ?? false);
               return (
               <Collapsible
@@ -527,7 +527,7 @@ export function SessionTree({
                     ) : null}
                     <SessionTurnList
                       session={session}
-                      activeMemoryId={activeMemoryId}
+                      activeContextId={activeContextId}
                       activeRef={activeRef}
                       visibleCount={expandedTurnLists[key] ?? TURN_LIST_PAGE_SIZE}
                       onVisibleCountChange={(visibleCount) => setExpandedTurnLists((current) => ({
@@ -595,7 +595,7 @@ function ProjectDreamingIcon() {
 
 function SessionTurnList({
   session,
-  activeMemoryId,
+  activeContextId,
   activeRef,
   visibleCount,
   onVisibleCountChange,
@@ -603,11 +603,11 @@ function SessionTurnList({
   onLoadMore,
 }: {
   session: ProjectSessionNode;
-  activeMemoryId: string | null;
+  activeContextId: string | null;
   activeRef: RefObject<HTMLButtonElement | null>;
   visibleCount: number;
   onVisibleCountChange: (visibleCount: number) => void;
-  onOpenTurn: (memoryId: string, session: ProjectSessionNode) => void;
+  onOpenTurn: (contextId: string, session: ProjectSessionNode) => void;
   onLoadMore: (session: ProjectSessionNode) => void;
 }) {
   const items = session.segments.length > 0 ? session.segments : session.turns;
@@ -626,12 +626,12 @@ function SessionTurnList({
     <>
       {visibleItems.map((turn) => (
         <button
-          key={turn.memoryId}
-          ref={activeMemoryId === turn.memoryId ? activeRef : null}
-          data-memory-id={turn.memoryId}
-          className={activeMemoryId === turn.memoryId ? 'turn-item turn-item-active' : 'turn-item'}
+          key={turn.contextId}
+          ref={activeContextId === turn.contextId ? activeRef : null}
+          data-context-id={turn.contextId}
+          className={activeContextId === turn.contextId ? 'turn-item turn-item-active' : 'turn-item'}
           type="button"
-          onClick={() => onOpenTurn(turn.memoryId, session)}
+          onClick={() => onOpenTurn(turn.contextId, session)}
         >
           <MessageSquare className="turn-icon" />
           <TurnSummary text={segmentTitle(turn)} />
@@ -814,12 +814,12 @@ function sessionKey(session: ProjectSessionNode): string {
   });
 }
 
-function hasActiveSessionChild(session: ProjectSessionNode, activeMemoryId: string | null): boolean {
-  if (!activeMemoryId) {
+function hasActiveSessionChild(session: ProjectSessionNode, activeContextId: string | null): boolean {
+  if (!activeContextId) {
     return false;
   }
-  return session.turns.some((turn) => turn.memoryId === activeMemoryId)
-    || session.segments.some((segment) => segment.memoryId === activeMemoryId);
+  return session.turns.some((turn) => turn.contextId === activeContextId)
+    || session.segments.some((segment) => segment.contextId === activeContextId);
 }
 
 function openVisibleProjects(current: Record<string, boolean>, projects: ProjectNode[]): Record<string, boolean> {
@@ -842,16 +842,16 @@ function openVisibleSessions(current: Record<string, boolean>, projects: Project
 
 function findActivePath(
   projects: ProjectNode[],
-  activeMemoryId: string | null,
+  activeContextId: string | null,
   selectedSessionId: string | null,
 ): { projectKey: string; sessionKey: string; expandSession: boolean } | null {
   for (const project of projects) {
     for (const session of project.sessions) {
       if (
-        activeMemoryId
+        activeContextId
         && (
-          session.turns.some((turn) => turn.memoryId === activeMemoryId)
-          || session.segments.some((segment) => segment.memoryId === activeMemoryId)
+          session.turns.some((turn) => turn.contextId === activeContextId)
+          || session.segments.some((segment) => segment.contextId === activeContextId)
         )
       ) {
         return {

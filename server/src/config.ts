@@ -21,7 +21,6 @@ const DEFAULT_WATCHDOG_TARGET_PARTITION_SIZE = 1_024;
 const DEFAULT_WATCHDOG_OPTIMIZE_MERGE_COUNT = 4;
 const DEFAULT_DREAMING_INTERVAL_MS = 1_800_000;
 const DEFAULT_EXTRACTION_DIMENSIONS = 8;
-const DEFAULT_RECALL_MODE = 'hybrid';
 
 export type RecallMode = 'vector' | 'fts' | 'hybrid';
 
@@ -37,7 +36,6 @@ type ExtractorConfigRecord = {
   name: string;
   llmProvider: string;
   embeddingProvider: string;
-  recallMode?: RecallMode;
   maxAttempts?: number;
   activeWindowDays?: number;
   continuityHints?: number;
@@ -105,10 +103,6 @@ export type EmbeddingConfig = {
   apiKey?: string;
   baseUrl?: string;
   dimensions: number;
-};
-
-export type RecallConfig = {
-  mode: RecallMode;
 };
 
 export type WatchdogConfig = {
@@ -219,12 +213,6 @@ export function getEmbeddingConfig(): EmbeddingConfig {
     apiKey: embedding.apiKey,
     baseUrl: embedding.baseUrl,
     dimensions: embedding.dimensions,
-  };
-}
-
-export function getRecallConfig(): RecallConfig {
-  return {
-    mode: parseRecallMode(loadMuninnConfig()?.extractor?.recallMode ?? DEFAULT_RECALL_MODE),
   };
 }
 
@@ -394,12 +382,25 @@ function validateTopLevelConfig(config: MuninnConfigRecord): void {
   const raw = config as Record<string, unknown>;
   const allowedKeys = new Set(['server', 'storage', 'extractor', 'providers', 'watchdog', 'dreaming']);
   for (const key of Object.keys(raw)) {
-    if (!allowedKeys.has(key)) {
-      if (key === 'capture') {
-        throw new Error('capture is no longer supported in muninn.json; use capture.json instead.');
-      }
-      throw new Error(`unsupported top-level config key: ${key}`);
+    if (allowedKeys.has(key)) {
+      continue;
     }
+    if (key === 'capture') {
+      throw new Error('capture is no longer supported in muninn.json; use capture.json instead.');
+    }
+    if (key === 'semanticIndex') {
+      throw new Error('semanticIndex is no longer supported; use extractor.embeddingProvider instead.');
+    }
+    if (key === 'llm') {
+      throw new Error('llm is no longer supported; use providers.llm instead.');
+    }
+    if (key === 'extraction') {
+      throw new Error('extraction is no longer supported; use extractor.embeddingProvider instead.');
+    }
+    if (key === 'turn') {
+      throw new Error('turn is no longer supported; turn summaries are generated locally during ingest.');
+    }
+    throw new Error(`unsupported top-level config key: ${key}`);
   }
   validateServerConfig(config.server);
   validateStorageConfig(config.storage);
@@ -456,7 +457,7 @@ function validateExtractorConfig(extractor: unknown): void {
   requireNonEmptyString(config.llmProvider, 'extractor.llmProvider');
   requireNonEmptyString(config.embeddingProvider, 'extractor.embeddingProvider');
   if (config.recallMode !== undefined) {
-    parseRecallMode(config.recallMode);
+    throw new Error('extractor.recallMode is no longer supported.');
   }
   validateOptionalPositiveInteger(config.maxAttempts, 'extractor.maxAttempts');
   validateOptionalPositiveInteger(config.activeWindowDays, 'extractor.activeWindowDays');
@@ -515,13 +516,6 @@ function validateProvidersConfig(providers: unknown): void {
       }
     }
   }
-}
-
-export function parseRecallMode(value: unknown): RecallMode {
-  if (value === 'vector' || value === 'fts' || value === 'hybrid') {
-    return value;
-  }
-  throw new Error('extractor.recallMode must be one of: vector, fts, hybrid');
 }
 
 function appendDatabaseToStorageUri(uri: string, database: string): string {
