@@ -33,16 +33,21 @@ export function planCodexConfig(before: string, options: CodexConfigPlanOptions)
 
   if (options.parts.has('hook')) {
     const previous = after;
-    const withoutHook = removeMuninnStopHooks(after, options.commands.hookCommand);
+    const withoutStopHook = removeMuninnHooks(after, 'Stop', options.commands.hookCommand);
+    const withoutHook = removeMuninnHooks(withoutStopHook, 'SessionStart', options.commands.hookCommand);
     if (options.action === 'install') {
-      after = appendSection(withoutHook, renderStopHook(options.commands.hookCommand));
+      after = appendSection(withoutHook, [
+        renderSessionStartHook(options.commands.hookCommand),
+        '',
+        renderStopHook(options.commands.hookCommand),
+      ].join('\n'));
       if (after !== previous) {
-        summary.push('Configure Codex Stop hook: muninn-codex-hook');
+        summary.push('Configure Codex SessionStart and Stop hooks: muninn-codex-hook');
       }
     } else {
       after = withoutHook;
       if (after !== previous) {
-        summary.push('Remove Codex Stop hook: muninn-codex-hook');
+        summary.push('Remove Codex SessionStart and Stop hooks: muninn-codex-hook');
       }
     }
   }
@@ -57,6 +62,18 @@ export function planCodexConfig(before: string, options: CodexConfigPlanOptions)
     after,
     summary: changed ? summary : [],
   };
+}
+
+function renderSessionStartHook(command: string): string {
+  return [
+    '[[hooks.SessionStart]]',
+    'matcher = "startup"',
+    '[[hooks.SessionStart.hooks]]',
+    'type = "command"',
+    `command = ${tomlString(command)}`,
+    'timeout = 10',
+    'statusMessage = "Loading Muninn context"',
+  ].join('\n');
 }
 
 function renderMcpServer(command: string, serverUrl: string): string {
@@ -95,19 +112,21 @@ function removeMcpServer(input: string): string {
   return compactBlankLines(output.join('\n'));
 }
 
-function removeMuninnStopHooks(input: string, hookCommand: string): string {
+function removeMuninnHooks(input: string, event: 'SessionStart' | 'Stop', hookCommand: string): string {
   const lines = input.split('\n');
   const output: string[] = [];
+  const eventHeader = `[[hooks.${event}]]`;
+  const hookHeader = `[[hooks.${event}.hooks]]`;
   for (let index = 0; index < lines.length;) {
-    if (lines[index].trim() === '[[hooks.Stop]]') {
+    if (lines[index].trim() === eventHeader) {
       const block: string[] = [];
       block.push(lines[index]);
       index += 1;
-      while (index < lines.length && !startsNextStopBlock(lines[index])) {
+      while (index < lines.length && !startsNextHookBlock(lines[index], hookHeader)) {
         block.push(lines[index]);
         index += 1;
       }
-      const keptBlock = removeMuninnHookEntries(block, hookCommand);
+      const keptBlock = removeMuninnHookEntries(block, hookHeader, hookCommand);
       if (keptBlock.length > 0) {
         output.push(...keptBlock);
       }
@@ -119,15 +138,15 @@ function removeMuninnStopHooks(input: string, hookCommand: string): string {
   return compactBlankLines(output.join('\n'));
 }
 
-function removeMuninnHookEntries(block: string[], hookCommand: string): string[] {
+function removeMuninnHookEntries(block: string[], hookHeader: string, hookCommand: string): string[] {
   const output: string[] = [];
   let keptHook = false;
 
   for (let index = 0; index < block.length;) {
-    if (block[index].trim() === '[[hooks.Stop.hooks]]') {
+    if (block[index].trim() === hookHeader) {
       const hook: string[] = [block[index]];
       index += 1;
-      while (index < block.length && block[index].trim() !== '[[hooks.Stop.hooks]]') {
+      while (index < block.length && block[index].trim() !== hookHeader) {
         hook.push(block[index]);
         index += 1;
       }
@@ -278,9 +297,9 @@ function isTomlTableHeader(line: string): boolean {
   return /^\s*\[/.test(line);
 }
 
-function startsNextStopBlock(line: string): boolean {
+function startsNextHookBlock(line: string, hookHeader: string): boolean {
   const trimmed = line.trim();
-  if (trimmed === '[[hooks.Stop.hooks]]') {
+  if (trimmed === hookHeader) {
     return false;
   }
   return isTomlTableHeader(line);

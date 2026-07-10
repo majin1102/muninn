@@ -7,7 +7,13 @@ import test from 'node:test';
 import { promisify } from 'node:util';
 
 import { muninnSessionKey } from '@muninn/common/session-identity';
-import { handleStop, isStopEvent } from '../dist/hook.js';
+import {
+  handleSessionStart,
+  handleStop,
+  isSessionStartEvent,
+  isStopEvent,
+  sessionStartOutput,
+} from '../dist/hook.js';
 import { readCodexSession, readCodexSessionSummary, resolveProjectIdentity } from '../dist/mapping.js';
 
 const execFileAsync = promisify(execFile);
@@ -107,6 +113,48 @@ test('isStopEvent matches Stop case-insensitively and rejects others', () => {
   assert.equal(isStopEvent({ hook_event_name: 'stop' }), true);
   assert.equal(isStopEvent({ hook_event_name: 'UserPromptSubmit' }), false);
   assert.equal(isStopEvent({}), false);
+});
+
+test('handleSessionStart loads only startup events and formats JSON developer context', async () => {
+  const response = {
+    project: 'github.com/majin1102/muninn',
+    recentSessions: [{ contextId: 'session_1', title: 'Title', summary: 'Summary' }],
+    instructionSignals: ['Keep contracts aligned.'],
+    skills: [{ name: 'review-pr-loop', summary: 'Review until clean.' }],
+  };
+  const requests = [];
+  const client = {
+    async captureTurn() {
+      return true;
+    },
+    async startupRecent(request) {
+      requests.push(request);
+      return response;
+    },
+  };
+
+  assert.equal(isSessionStartEvent({ hook_event_name: 'SessionStart' }), true);
+  assert.deepEqual(await handleSessionStart({
+    hook_event_name: 'SessionStart',
+    source: 'startup',
+    cwd: '/repo/muninn',
+  }, { client }), response);
+  assert.deepEqual(requests, [{ cwd: '/repo/muninn' }]);
+  assert.deepEqual(sessionStartOutput(response), {
+    hookSpecificOutput: {
+      hookEventName: 'SessionStart',
+      additionalContext: JSON.stringify(response, null, 2),
+    },
+  });
+
+  for (const source of ['resume', 'clear', 'compact']) {
+    assert.equal(await handleSessionStart({
+      hook_event_name: 'SessionStart',
+      source,
+      cwd: '/repo/muninn',
+    }, { client }), null);
+  }
+  assert.equal(requests.length, 1);
 });
 
 test('handleStop maps the latest transcript turn to TurnContent and captures it', async () => {

@@ -9,6 +9,7 @@ import {
   type HookPayload,
   type MuninnClient,
 } from '@muninn/common/agent-hook';
+import type { StartupRecentResponse } from '@muninn/common';
 import { CODEX_IMPORT_AGENT, readCodexSession, toTurnContent } from './mapping.js';
 
 const HOOK_INGEST = 'codex-hook';
@@ -39,6 +40,33 @@ export async function handleStop(
     label: 'muninn-codex-hook',
     client: deps.client,
   });
+}
+
+export function isSessionStartEvent(payload: HookPayload): boolean {
+  return payload.hook_event_name?.toLowerCase() === 'sessionstart';
+}
+
+export async function handleSessionStart(
+  payload: HookPayload,
+  deps: { client?: MuninnClient } = {},
+): Promise<StartupRecentResponse | null> {
+  if (!isSessionStartEvent(payload) || payload.source !== 'startup') {
+    return null;
+  }
+  const cwd = payload.cwd?.trim();
+  if (!cwd || !deps.client?.startupRecent) {
+    return null;
+  }
+  return deps.client.startupRecent({ cwd });
+}
+
+export function sessionStartOutput(context: StartupRecentResponse): Record<string, unknown> {
+  return {
+    hookSpecificOutput: {
+      hookEventName: 'SessionStart',
+      additionalContext: JSON.stringify(context, null, 2),
+    },
+  };
 }
 
 async function resolveTranscriptPath(payload: HookPayload, sessionsRoot?: string): Promise<string | null> {

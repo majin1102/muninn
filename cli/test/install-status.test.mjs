@@ -147,7 +147,7 @@ test('installTargets confirms all hosts once before writing any config', async (
   assert.equal(asked, 1);
   assert.deepEqual(summary, [
     'Configure Codex MCP server: muninn',
-    'Configure Codex Stop hook: muninn-codex-hook',
+    'Configure Codex SessionStart and Stop hooks: muninn-codex-hook',
     'Configure Claude Code MCP server: muninn',
     'Configure Claude Code Stop hook: muninn-claude-hook',
   ]);

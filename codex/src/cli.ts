@@ -1,13 +1,20 @@
 #!/usr/bin/env node
-import { handleStop, isStopEvent, type CodexHookPayload } from './hook.js';
+import {
+  handleSessionStart,
+  handleStop,
+  isSessionStartEvent,
+  isStopEvent,
+  sessionStartOutput,
+  type CodexHookPayload,
+} from './hook.js';
 import { createMuninnClient, resolveHookConfig, writeHookDebugEvent } from '@muninn/common/agent-hook';
 import os from 'node:os';
 
 /**
  * Entry point registered as a Codex lifecycle-hook `command`. Codex pipes the
- * hook event as JSON on stdin. We only act on `Stop` (turn end); every other
- * event is ignored. The process must always exit 0 so a hook failure never
- * blocks Codex.
+ * hook event as JSON on stdin. We act on `SessionStart(startup)` and `Stop`;
+ * every other event is ignored. The process must always exit 0 so a hook
+ * failure never blocks Codex.
  */
 async function main(): Promise<void> {
   const options = parseCliOptions(process.argv.slice(2));
@@ -47,15 +54,17 @@ async function main(): Promise<void> {
     stage: 'payload-read',
     hookEventName: payload.hook_event_name,
     isStop: isStopEvent(payload),
+    isSessionStart: isSessionStartEvent(payload),
+    source: payload.source,
     sessionId: payload.session_id,
     transcriptPath: payload.transcript_path,
     agentTranscriptPath: payload.agent_transcript_path,
     cwd: payload.cwd,
     turnId: payload.turn_id,
   });
-  if (!isStopEvent(payload)) {
+  if (!isStopEvent(payload) && !isSessionStartEvent(payload)) {
     await writeHookDebugEvent('muninn-codex-hook', {
-      stage: 'skip-non-stop',
+      stage: 'skip-unsupported-event',
       hookEventName: payload.hook_event_name,
     });
     return;
@@ -68,17 +77,28 @@ async function main(): Promise<void> {
     hasServerUrl: Boolean(serverUrl),
   });
 
-  const captured = await handleStop(payload, serverUrl
-    ? {
-        client: createMuninnClient({
-          config: {
-            ...resolveHookConfig(),
-            baseUrl: serverUrl.replace(/\/+$/, ''),
-          },
-          label: 'muninn-codex-hook',
-        }),
-      }
-    : {});
+  const hookConfig = resolveHookConfig();
+  const client = createMuninnClient({
+    config: {
+      ...hookConfig,
+      ...(isSessionStartEvent(payload) ? { timeoutMs: Math.min(hookConfig.timeoutMs, 8_000) } : {}),
+      ...(serverUrl ? { baseUrl: serverUrl.replace(/\/+$/, '') } : {}),
+    },
+    label: 'muninn-codex-hook',
+  });
+  if (isSessionStartEvent(payload)) {
+    const context = await handleSessionStart(payload, { client });
+    if (context) {
+      process.stdout.write(`${JSON.stringify(sessionStartOutput(context))}\n`);
+    }
+    await writeHookDebugEvent('muninn-codex-hook', {
+      stage: 'handle-session-start-finished',
+      injected: Boolean(context),
+    });
+    return;
+  }
+
+  const captured = await handleStop(payload, { client });
   await writeHookDebugEvent('muninn-codex-hook', {
     stage: 'handle-stop-finished',
     captured,

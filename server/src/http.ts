@@ -1,5 +1,6 @@
 import { Hono, type Context, type Next } from 'hono';
 import { cors } from 'hono/cors';
+import { stat } from 'node:fs/promises';
 import type {
   AppStatusResponse,
   Artifact,
@@ -17,6 +18,7 @@ import type {
   TurnContent,
   TurnEvent,
 } from '@muninn/common';
+import { resolveProjectIdentity } from '@muninn/codex';
 import type { MuninnSessionIdentity } from '@muninn/common/session-identity';
 import {
   captureTurn,
@@ -32,6 +34,7 @@ import { parseSnapshotContent } from './pipeline/snapshot.js';
 import { renderRecallHit, renderRenderedContextHit } from './web/render.js';
 import { invalidateSessionTreeCache, webRoutes } from './web/routes.js';
 import { generateRequestId } from './web/request.js';
+import { buildStartupRecent } from './startup-context.js';
 
 export const app = new Hono();
 
@@ -96,6 +99,34 @@ app.get('/version', (c) => {
     },
     requestId: generateRequestId(),
   });
+});
+
+app.post('/api/v1/startup/recent', async (c) => {
+  const parsed = await readJsonRecord(c);
+  if (!parsed.body) {
+    return c.json(errorResponse('invalidRequest', parsed.error ?? 'Invalid JSON body'), 400);
+  }
+  const unsupported = rejectUnsupportedFields(parsed.body, new Set(['cwd']));
+  if (unsupported) {
+    return c.json(errorResponse('invalidRequest', unsupported), 400);
+  }
+  const cwd = readRequiredString(parsed.body, 'cwd');
+  if (cwd.error || !cwd.value) {
+    return c.json(errorResponse('invalidRequest', cwd.error ?? 'cwd is required'), 400);
+  }
+  try {
+    if (!(await stat(cwd.value)).isDirectory()) {
+      return c.json(errorResponse('invalidRequest', 'cwd must be an existing directory'), 400);
+    }
+    const { project } = await resolveProjectIdentity(cwd.value);
+    return c.json(await buildStartupRecent(project));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') {
+      return c.json(errorResponse('invalidRequest', 'cwd must be an existing directory'), 400);
+    }
+    const mapped = mapCoreLookupError(error);
+    return c.json(mapped.body, mapped.status as 400 | 500 | 503);
+  }
 });
 
 app.get('/app/api/status', async (c) => {

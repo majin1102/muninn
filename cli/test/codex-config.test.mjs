@@ -22,10 +22,13 @@ test('planCodexConfig installs mcp and hook into empty config', () => {
   assert.match(plan.after, /command = "muninn-mcp"/);
   assert.match(plan.after, /MUNINN_SERVER_BASE_URL = "http:\/\/127\.0\.0\.1:8080"/);
   assert.match(plan.after, /\[\[hooks\.Stop\]\]/);
+  assert.match(plan.after, /\[\[hooks\.SessionStart\]\]/);
+  assert.match(plan.after, /matcher = "startup"/);
   assert.match(plan.after, /command = "muninn-codex-hook"/);
   assert.doesNotMatch(plan.after, /--server-url/);
   assert.match(plan.after, /timeout = 30/);
   assert.match(plan.after, /statusMessage = "Syncing turn to Muninn"/);
+  assert.match(plan.after, /statusMessage = "Loading Muninn context"/);
 });
 
 test('planCodexConfig updates existing muninn mcp without duplicating it', () => {
@@ -72,7 +75,7 @@ test('planCodexConfig does not remove unrelated Stop hooks', () => {
   });
 
   assert.match(plan.after, /command = "python3 \.\/existing.py"/);
-  assert.equal((plan.after.match(/muninn-codex-hook/g) ?? []).length, 1);
+  assert.equal((plan.after.match(/muninn-codex-hook/g) ?? []).length, 2);
 });
 
 test('planCodexConfig install dedupes muninn hook inside mixed Stop block', () => {
@@ -100,7 +103,7 @@ test('planCodexConfig install dedupes muninn hook inside mixed Stop block', () =
   });
 
   assert.match(plan.after, /command = "python3 \.\/existing.py"/);
-  assert.equal((plan.after.match(/muninn-codex-hook/g) ?? []).length, 1);
+  assert.equal((plan.after.match(/muninn-codex-hook/g) ?? []).length, 2);
 });
 
 test('planCodexConfig uninstall removes muninn hook inside mixed Stop block only', () => {
@@ -168,7 +171,7 @@ test('planCodexConfig matches muninn hook command with inline TOML comment', () 
   });
 
   assert.match(install.after, /command = "python3 \.\/existing.py"/);
-  assert.equal((install.after.match(/^command = "muninn-codex-hook"$/gm) ?? []).length, 1);
+  assert.equal((install.after.match(/^command = "muninn-codex-hook"$/gm) ?? []).length, 2);
 });
 
 test('planCodexConfig matches muninn hook command by absolute path basename', () => {
@@ -208,7 +211,7 @@ test('planCodexConfig matches muninn hook command by absolute path basename', ()
 
   assert.match(install.after, /command = "python3 \.\/existing.py"/);
   assert.doesNotMatch(install.after, /\/opt\/homebrew\/bin\/muninn-codex-hook/);
-  assert.equal((install.after.match(/^command = "muninn-codex-hook"$/gm) ?? []).length, 1);
+  assert.equal((install.after.match(/^command = "muninn-codex-hook"$/gm) ?? []).length, 2);
 });
 
 test('planCodexConfig preserves hook entries that only mention muninn hook outside command value', () => {
@@ -250,7 +253,44 @@ test('planCodexConfig preserves hook entries that only mention muninn hook outsi
   assert.match(install.after, /command = "python3 \.\/existing.py"/);
   assert.match(install.after, /command = "muninn-codex-hook-wrapper"/);
   assert.match(install.after, /statusMessage = "mentions muninn-codex-hook"/);
-  assert.equal((install.after.match(/^command = "muninn-codex-hook"$/gm) ?? []).length, 1);
+  assert.equal((install.after.match(/^command = "muninn-codex-hook"$/gm) ?? []).length, 2);
+});
+
+test('planCodexConfig preserves unrelated SessionStart hooks on install and uninstall', () => {
+  const before = [
+    '[[hooks.SessionStart]]',
+    'matcher = "startup|resume"',
+    '[[hooks.SessionStart.hooks]]',
+    'type = "command"',
+    'command = "other-context-hook"',
+    'timeout = 5',
+    '',
+    '[[hooks.SessionStart.hooks]]',
+    'type = "command"',
+    'command = "muninn-codex-hook"',
+    'timeout = 10',
+    '',
+  ].join('\n');
+
+  const installed = planCodexConfig(before, {
+    path: '/home/dev/.codex/config.toml',
+    action: 'install',
+    parts: new Set(['hook']),
+    serverUrl: 'http://127.0.0.1:8080',
+    commands,
+  });
+  assert.match(installed.after, /command = "other-context-hook"/);
+  assert.equal((installed.after.match(/^command = "muninn-codex-hook"$/gm) ?? []).length, 2);
+
+  const uninstalled = planCodexConfig(installed.after, {
+    path: '/home/dev/.codex/config.toml',
+    action: 'uninstall',
+    parts: new Set(['hook']),
+    serverUrl: 'http://127.0.0.1:8080',
+    commands,
+  });
+  assert.match(uninstalled.after, /command = "other-context-hook"/);
+  assert.doesNotMatch(uninstalled.after, /muninn-codex-hook/);
 });
 
 test('planCodexConfig uninstall from empty config has empty summary', () => {
