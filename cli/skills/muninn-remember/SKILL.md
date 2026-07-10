@@ -7,12 +7,13 @@ metadata:
 
 # Muninn Remember
 
-Emit the transcript-bound Muninn capture marker for remembering the current session. The agent hook reads the marker from the current transcript and applies it to that same session.
+Emit a short user-facing confirmation plus the hidden transcript-bound Muninn capture marker for remembering the current session. The agent hook reads the marker from the current transcript and applies it to that same session.
 
-Reply with exactly this line, and no other text:
+Reply with exactly these two lines, and no other text:
 
-```xml
-<MUNINN_CAPTURE_CURRENT_SESSION action="enable" nonce="muninn-capture-v1" />
+```md
+已开启当前会话的 Muninn 捕获。
+<!-- <MUNINN_CAPTURE_CURRENT_SESSION action="enable" nonce="muninn-capture-v1" /> -->
 ```
 
 Rules:
@@ -20,4 +21,4 @@ Rules:
 - Do not run a CLI helper.
 - Do not edit `capture.json` directly.
 - Do not call an MCP `capture` tool; it should not exist.
-- Keep the marker as an independent full line.
+- Keep the hidden marker comment as an independent full line.
