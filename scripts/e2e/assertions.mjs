@@ -72,7 +72,7 @@ export async function assertSessionTurn(baseUrl, agent, project, sessionId, { pr
 
 export async function assertRecallHit(baseUrl, query, { agent, project, sessionId, includes, allowUnscoped = false }) {
   const body = await recall(baseUrl, query);
-  const hit = body.memoryHits.find((entry) => (
+  const hit = body.contextHits.find((entry) => (
     (allowUnscoped || (
       entry.agent === agent
       && entry.project === project
@@ -85,7 +85,7 @@ export async function assertRecallHit(baseUrl, query, { agent, project, sessionI
 
 export async function assertNoRecallHit(baseUrl, query, { includes }) {
   const body = await recall(baseUrl, query);
-  const hit = body.memoryHits.find((entry) => (
+  const hit = body.contextHits.find((entry) => (
     includes.every((fragment) => entry.content.toLowerCase().includes(fragment.toLowerCase()))
   ));
   assert.equal(hit, undefined, `expected no recall hit for ${query}`);

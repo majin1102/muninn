@@ -26,7 +26,7 @@ test('builds ordered timeline entries from interleaved codex events', () => {
     { type: 'toolOutput', id: 'call-2', output: 'content', timestamp: '2026-06-02T10:00:10.000Z' },
     { type: 'assistantMessage', text: 'assistant C', timestamp: '2026-06-02T10:00:11.000Z' },
   ], {
-    memoryId: 'turn:1',
+    contextId: 'turn:1',
     agent: 'codex',
     startedAt: '2026-06-02T10:00:00.000Z',
     completedAt: '2026-06-02T10:00:12.000Z',
@@ -61,7 +61,7 @@ test('groups consecutive tool calls before the next message', () => {
     { type: 'toolOutput', id: 'call-2', output: 'README.md' },
     { type: 'assistantMessage', text: 'done' },
   ], {
-    memoryId: 'turn:2',
+    contextId: 'turn:2',
     agent: 'codex',
   });
 
@@ -89,7 +89,7 @@ test('keeps session preview tool IO separate from full detail fields', async () 
       outputTruncated: true,
     },
   ], {
-    memoryId: 'turn:preview',
+    contextId: 'turn:preview',
     agent: 'codex',
   });
 
@@ -119,7 +119,7 @@ test('attaches tool output artifacts to the matching timeline tool call', async 
       }],
     },
   ], {
-    memoryId: 'turn:tool-artifact',
+    contextId: 'turn:tool-artifact',
     agent: 'codex',
   });
 
@@ -130,7 +130,7 @@ test('attaches tool output artifacts to the matching timeline tool call', async 
 
 test('fallback data still renders tool calls and total time', () => {
   const entries = __testing.entriesFromFallback({
-    memoryId: 'turn:3',
+    contextId: 'turn:3',
     agent: 'codex',
     createdAt: '2026-06-02T10:00:00.000Z',
     updatedAt: '2026-06-02T10:00:05.000Z',
@@ -156,7 +156,7 @@ test('source timeline records total and tool call time ranges from event timesta
     { type: 'toolOutput', id: 'call-2', output: 'content', timestamp: '2026-06-02T10:00:09.000Z' },
     { type: 'assistantMessage', text: 'done', timestamp: '2026-06-02T10:00:10.000Z' },
   ], {
-    memoryId: 'turn:1',
+    contextId: 'turn:1',
     agent: 'codex',
     startedAt: '2026-06-02T10:00:00.000Z',
     completedAt: '2026-06-02T10:00:12.000Z',
@@ -199,7 +199,7 @@ test('source timeline omits tool row time when timestamps are incomplete', async
     { type: 'toolCall', id: 'call-1', name: 'exec_command', input: '{"cmd":"pwd"}', timestamp: '2026-06-02T10:00:02.000Z' },
     { type: 'toolOutput', id: 'call-1', output: '/repo' },
   ], {
-    memoryId: 'turn:2',
+    contextId: 'turn:2',
     agent: 'codex',
   });
 

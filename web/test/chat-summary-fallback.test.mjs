@@ -17,7 +17,7 @@ async function loadChatTimeline() {
 test('splits imported preview fallback into user and agent messages', async () => {
   const { entriesFromFallback } = await loadChatTimeline();
   const entries = entriesFromFallback({
-    memoryId: 'turn:338',
+    contextId: 'turn:338',
     agent: 'codex',
     createdAt: '2026-06-02T13:21:08.176Z',
     updatedAt: '2026-06-02T13:22:09.108Z',

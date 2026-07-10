@@ -62,6 +62,13 @@ async function importSession({ baseUrl, agent, sourcePath }) {
   });
 }
 
+async function setProjectCapture({ baseUrl, agent, enabled }) {
+  return requestJson(baseUrl, `/app/api/import/${agent}/capture-policy`, {
+    method: 'PUT',
+    body: JSON.stringify({ project: PROJECT_ID, enabled }),
+  });
+}
+
 async function deleteSession({ baseUrl, agent, sessionId }) {
   return requestJson(baseUrl, `/app/api/import/${agent}/session`, {
     method: 'DELETE',
@@ -135,8 +142,11 @@ async function runMockRound(config, workspace, server) {
     sessionId: baselineSessionId,
     includes: ['Stop hooks', 'zero turns'],
   });
+  await assertCaptureEnabled(server.baseUrl, config.agent, PROJECT_ID, false);
+  log({ run: config.runId, agent: config.agent, driver: 'mock', phase: 'import', status: 'ok', sessions: 1, turns: 2, captureEnabled: false, recall: 'ok', project: PROJECT_ID });
+
+  await setProjectCapture({ baseUrl: server.baseUrl, agent: config.agent, enabled: true });
   await assertCaptureEnabled(server.baseUrl, config.agent, PROJECT_ID, true);
-  log({ run: config.runId, agent: config.agent, driver: 'mock', phase: 'import', status: 'ok', sessions: 1, turns: 2, recall: 'ok', project: PROJECT_ID });
 
   const livePath = await config.writeTranscript(workspace.home, liveSessionId, workspace.project, [
     liveFact,

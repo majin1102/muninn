@@ -50,6 +50,10 @@ const {
 } = sessionModule;
 const { captureTurn, memoryPipeline: memoryPipelineApi, shutdownCoreForTests } = core;
 const CHECKPOINT_SCHEMA_VERSION = 14;
+const EXTRACTION_ID_A = '11111111-1111-4111-8111-111111111111';
+const EXTRACTION_ID_B = '22222222-2222-4222-8222-222222222222';
+const EXTRACTION_ID_C = '33333333-3333-4333-8333-333333333333';
+const EXTRACTION_ID_D = '44444444-4444-4444-8444-444444444444';
 let defaultConfigDir = null;
 
 function createCheckpointBackend(exported = null) {
@@ -967,12 +971,12 @@ test('lockNativeTables serializes session search mutations without locking reads
   assert.deepEqual(await optimize, { changed: true });
 });
 
-test('memories.get renders extraction memories', async () => {
+test('memories.getContext renders extraction contexts', async () => {
   const client = {
     extractionTable: {
-      get: async ({ ids }) => ids.includes('ext-1')
+      get: async ({ ids }) => ids.includes(EXTRACTION_ID_A)
         ? [{
-            id: 'ext-1',
+            id: EXTRACTION_ID_A,
             title: 'Caroline research',
             summary: 'Caroline researched adoption agencies.',
             content: 'Caroline researched adoption agencies.',
@@ -988,16 +992,16 @@ test('memories.get renders extraction memories', async () => {
     turnTable: { get: async () => null },
   };
   const { Memories } = await import('../../dist/api/memory.js');
-  const memory = await new Memories(client).get('ext:ext-1');
+  const memory = await new Memories(client).getContext(`ext:${EXTRACTION_ID_A}`);
 
-  assert.equal(memory.contextId, 'ext:ext-1');
+  assert.equal(memory.contextId, `ext:${EXTRACTION_ID_A}`);
   assert.equal(memory.title, 'Caroline research');
   assert.equal(memory.summary, 'Caroline researched adoption agencies.');
   assert.match(memory.detail, /References:/);
   assert.match(memory.detail, /turn:1/);
 });
 
-test('memories.get does not scan extractions for session snapshots', async () => {
+test('memories.getContext does not scan extractions for session snapshots', async () => {
   const snapshotExtraction = {
     title: 'Adoption agencies',
     text: 'Caroline compared adoption agencies.',
@@ -1040,7 +1044,7 @@ test('memories.get does not scan extractions for session snapshots', async () =>
     },
   };
   const { Memories } = await import('../../dist/api/memory.js');
-  const memory = await new Memories(client).get('session:42');
+  const memory = await new Memories(client).getContext('session:42');
 
   assert.equal(listCalls, 0);
   assert.equal(memory.extractionContextRefs, undefined);
@@ -3980,7 +3984,7 @@ test('recallMemories searches extraction routes and enriches hits', async () => 
         const title = 'Counseling work';
         const summary = 'Caroline is interested in counseling work.';
         return [{
-          id: 'raw-2',
+          id: EXTRACTION_ID_B,
           title,
           summary: title + '\n\n' + summary,
           content: extractionContent(title, summary),
@@ -3997,7 +4001,8 @@ test('recallMemories searches extraction routes and enriches hits', async () => 
 
   assert.deepEqual(hits, [
     {
-      contextId: 'ext:raw-2',
+      kind: 'context',
+      contextId: `ext:${EXTRACTION_ID_B}`,
       title: 'Counseling work',
       summary: 'Counseling work\n\nCaroline is interested in counseling work.',
       content: extractionContent('Counseling work', 'Caroline is interested in counseling work.'),
@@ -4033,7 +4038,7 @@ test('recall defaults to extraction mode', async () => {
       search: async (params) => {
         calls.push(params);
         return [{
-          id: 'raw-1',
+          id: EXTRACTION_ID_C,
           title: 'Adoption planning',
           summary: 'Caroline planned adoption research.',
           content: extractionContent('Adoption planning', 'Caroline planned adoption research.'),
@@ -4054,7 +4059,7 @@ test('recall defaults to extraction mode', async () => {
     limit: 3,
     mode: 'hybrid',
   }]);
-  assert.deepEqual(hits.map((hit) => hit.contextId), ['ext:raw-1']);
+  assert.deepEqual(hits.map((hit) => hit.contextId), [`ext:${EXTRACTION_ID_C}`]);
 });
 
 test('recall session mode searches sessionTable only', async () => {
@@ -4167,7 +4172,7 @@ test('recallMemories returns recalled memory when budget is positive', async () 
         calls.push(params);
         return [
           {
-            id: 'ext-1',
+            id: EXTRACTION_ID_A,
             title: 'Summer outing',
             summary: 'Caroline and Melanie planned a summer outing.',
             content: extractionContent('Summer outing', 'Caroline and Melanie planned a summer outing.'),
@@ -4177,7 +4182,7 @@ test('recallMemories returns recalled memory when budget is positive', async () 
             updatedAt: '2024-01-01T00:00:00Z',
           },
           {
-            id: 'ext-2',
+            id: EXTRACTION_ID_D,
             title: 'Adoption research',
             summary: 'Caroline researched adoption agencies.',
             content: extractionContent('Adoption research', 'Caroline researched adoption agencies.'),
@@ -4205,14 +4210,14 @@ test('recallMemories returns recalled memory when budget is positive', async () 
   });
 
   assert.deepEqual(hits, [{
-    contextId: 'recalled:memory',
+    kind: 'synthesis',
     content: 'Caroline researched adoption agencies.',
     references: ['D12:17', 'D2:8'],
   }]);
   assert.equal(calls[0].limit, 20);
   assert.deepEqual(seenCandidates.map((candidate) => candidate.contextId), [
-    'ext:ext-1',
-    'ext:ext-2',
+    `ext:${EXTRACTION_ID_A}`,
+    `ext:${EXTRACTION_ID_D}`,
   ]);
 });
 
@@ -4221,7 +4226,7 @@ test('recallMemories uses candidate refs for recalled memory', async () => {
     extractionTable: {
       search: async () => [
         {
-          id: 'ext-1',
+          id: EXTRACTION_ID_A,
           title: 'Adoption agency research',
           summary: 'Caroline researched adoption agencies.',
           content: extractionContent('Adoption agency research', 'Caroline researched adoption agencies.'),
@@ -4247,7 +4252,7 @@ test('recallMemories uses candidate refs for recalled memory', async () => {
   });
 
   assert.deepEqual(hits, [{
-    contextId: 'recalled:memory',
+    kind: 'synthesis',
     content: 'Caroline researched adoption agencies.',
     references: ['D2:8'],
   }]);
