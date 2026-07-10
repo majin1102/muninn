@@ -13,7 +13,7 @@ Reply with exactly these two lines, and no other text:
 
 ```md
 已开启当前会话的 Muninn 捕获。
-<!-- <MUNINN_CAPTURE_CURRENT_SESSION action="enable" nonce="muninn-capture-v1" /> -->
+<!-- muninn:capture-current-session action=enable nonce=muninn-capture-v1 -->
 ```
 
 Rules:

@@ -13,7 +13,7 @@ Reply with exactly these two lines, and no other text:
 
 ```md
 已停止捕获当前会话，并会从 Muninn 删除这条会话。
-<!-- <MUNINN_CAPTURE_CURRENT_SESSION action="disable" nonce="muninn-capture-v1" /> -->
+<!-- muninn:capture-current-session action=disable nonce=muninn-capture-v1 -->
 ```
 
 Rules:

@@ -602,7 +602,7 @@ function captureMarkerLines(value: string): CaptureMarkerAction[] {
 }
 
 function captureMarkerLine(value: string): CaptureMarkerAction | null {
-  const match = /^<!--\s*<MUNINN_CAPTURE_CURRENT_SESSION action="(enable|disable)" nonce="([^"]+)" \/>\s*-->$/.exec(value);
+  const match = /^<!--\s*muninn:capture-current-session\s+action=(enable|disable)\s+nonce=([^\s>]+)\s*-->$/.exec(value);
   if (!match || match[2] !== CAPTURE_MARKER_NONCE) {
     return null;
   }

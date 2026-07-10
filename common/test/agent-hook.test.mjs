@@ -7,8 +7,8 @@ import path from 'node:path';
 import { captureFromTranscript, resolveHookConfig } from '../dist/agent-hook.js';
 import { muninnSessionKey } from '../dist/session-identity.js';
 
-const ENABLE_MARKER = '<!-- <MUNINN_CAPTURE_CURRENT_SESSION action="enable" nonce="muninn-capture-v1" /> -->';
-const DISABLE_MARKER = '<!-- <MUNINN_CAPTURE_CURRENT_SESSION action="disable" nonce="muninn-capture-v1" /> -->';
+const ENABLE_MARKER = '<!-- muninn:capture-current-session action=enable nonce=muninn-capture-v1 -->';
+const DISABLE_MARKER = '<!-- muninn:capture-current-session action=disable nonce=muninn-capture-v1 -->';
 const ENABLE_REPLY = `已开启当前会话的 Muninn 捕获。\n${ENABLE_MARKER}`;
 const DISABLE_REPLY = `已停止捕获当前会话，并会从 Muninn 删除这条会话。\n${DISABLE_MARKER}`;
 
