@@ -18,7 +18,7 @@ The fix should make batch ingest respect epoch boundaries without adding new pub
 - Keep `minEpochTurns`, `maxEpochTurns`, `newBatchInputChars`, and `epochWindowMs` meaningful.
 - Avoid adding `mode`, `flush`, or other new capture request fields.
 - Stop ordinary hook capture from forcing tiny epochs after every stop hook.
-- Keep `$remember-session` able to make the current session visible quickly by using the existing finalize endpoint.
+- Keep `$muninn-remember` able to make the current session visible quickly by using the existing finalize endpoint.
 - Preserve existing extraction-stage chunking as a safety net.
 
 ## Non-Goals
@@ -84,9 +84,9 @@ Ordinary `codex-hook` and `claude-hook` capture should no longer auto-finalize j
 
 ### Remember Session
 
-`$remember-session` already uses a transcript marker. When the hook handles the enable marker and successfully captures the selected turns, it should call the existing `/api/v1/memory/finalize` endpoint.
+`$muninn-remember` already uses a transcript marker. When the hook handles the enable marker and successfully captures the selected turns, it should call the existing `/api/v1/memory/finalize` endpoint.
 
-This keeps remember-session fast and visible without adding fields to `/api/v1/turn/capture/batch`.
+This keeps muninn-remember fast and visible without adding fields to `/api/v1/turn/capture/batch`.
 
 ### Budget Measurement
 

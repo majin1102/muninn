@@ -1,11 +1,11 @@
 ---
-name: remember-session
+name: muninn-remember
 description: Use when the user explicitly asks Muninn, the agent context memory system, to remember, capture, include, or keep the current session for future recall.
 metadata:
   short-description: Remember current session in Muninn
 ---
 
-# Remember Session
+# Muninn Remember
 
 Emit the transcript-bound Muninn capture marker for remembering the current session. The agent hook reads the marker from the current transcript and applies it to that same session.
 

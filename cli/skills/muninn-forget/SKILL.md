@@ -1,11 +1,11 @@
 ---
-name: forget-session
+name: muninn-forget
 description: Use when the user explicitly asks Muninn, the agent context memory system, to forget, remove, delete, exclude, or stop capturing the current session.
 metadata:
   short-description: Forget current session in Muninn
 ---
 
-# Forget Session
+# Muninn Forget
 
 Emit the transcript-bound Muninn capture marker for forgetting the current session. The agent hook reads the marker from the current transcript and applies it to that same session.
 
