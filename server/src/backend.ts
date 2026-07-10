@@ -33,7 +33,7 @@ import {
   type ExtractorCheckpoint,
   type SessionIndexEntry,
 } from './checkpoint.js';
-import { Memories, type ContextReadRow, type RecallHit, type RecallPublicMode, type RenderedMemory } from './api/memory.js';
+import { Memories, type ContextReadRow, type RecallHit, type RecallPublicMode, type RenderedContext } from './api/memory.js';
 import { Extractor } from './pipeline/extractor.js';
 import { IngestSessionRegistry } from './pipeline/ingest.js';
 import { readTurnRow } from './pipeline/ingest.js';
@@ -270,7 +270,13 @@ export class MuninnBackend {
   async recallMemories(
     query: string,
     limit?: number,
-    options?: { mode?: RecallPublicMode; budget?: number; queryLimit?: number; thinkingRatio?: number },
+    options?: {
+      mode?: RecallPublicMode;
+      budget?: number;
+      queryLimit?: number;
+      thinkingRatio?: number;
+      excludeSession?: SessionIdentity;
+    },
   ): Promise<RecallHit[]> {
     await writeMuninnLog(this.database, 'info', 'recall', 'query', {
       query,
@@ -287,13 +293,6 @@ export class MuninnBackend {
       count: contextIds.length,
     });
     return this.memories.readContextIds(contextIds);
-  }
-
-  async explainContextId(contextId: string): Promise<ContextReadRow> {
-    await writeMuninnLog(this.database, 'info', 'context', 'explain', {
-      contextId,
-    });
-    return this.memories.explainContextId(contextId);
   }
 
   async exportCheckpoint(): Promise<CheckpointContent | null> {
@@ -599,10 +598,10 @@ export async function validateSettings(content: string): Promise<void> {
 }
 
 export const turns = {
-  async get(memoryId: string, database?: string | null): Promise<Turn | null> {
+  async get(contextId: string, database?: string | null): Promise<Turn | null> {
     const databaseName = resolveDatabaseName(database);
-    await writeMuninnLog(databaseName, 'info', 'detail', 'turn_get', { memoryId });
-    return (await getBackend(databaseName)).memories.getTurn(memoryId);
+    await writeMuninnLog(databaseName, 'info', 'detail', 'turn_get', { contextId });
+    return (await getBackend(databaseName)).memories.getTurn(contextId);
   },
 
   async list(params: {
@@ -636,10 +635,10 @@ export const turns = {
 };
 
 export const sessions = {
-  async get(memoryId: string, database?: string | null): Promise<SessionSnapshot | null> {
+  async getSnapshot(snapshotId: string, database?: string | null): Promise<SessionSnapshot | null> {
     const databaseName = resolveDatabaseName(database);
-    await writeMuninnLog(databaseName, 'info', 'detail', 'session_get', { memoryId });
-    return (await getBackend(databaseName)).memories.getSession(memoryId);
+    await writeMuninnLog(databaseName, 'info', 'detail', 'session_snapshot_get', { snapshotId });
+    return (await getBackend(databaseName)).memories.getSessionSnapshot(snapshotId);
   },
 
   async list(params: {
@@ -670,16 +669,16 @@ export const sessions = {
 };
 
 export const memories = {
-  async get(memoryId: string, database?: string | null): Promise<RenderedMemory | null> {
+  async getContext(contextId: string, database?: string | null): Promise<RenderedContext | null> {
     const databaseName = resolveDatabaseName(database);
-    await writeMuninnLog(databaseName, 'info', 'detail', 'memory_get', { memoryId });
-    return (await getBackend(databaseName)).memories.get(memoryId);
+    await writeMuninnLog(databaseName, 'info', 'detail', 'context_get', { contextId });
+    return (await getBackend(databaseName)).memories.getContext(contextId);
   },
 
   async list(params: {
     mode: ListModeInput;
     database?: string | null;
-  }): Promise<RenderedMemory[]> {
+  }): Promise<RenderedContext[]> {
     const databaseName = resolveDatabaseName(params.database);
     await writeMuninnLog(databaseName, 'info', 'list', 'memory_list', {
       mode: params.mode.type,
@@ -689,14 +688,14 @@ export const memories = {
   },
 
   async timeline(params: {
-    memoryId: string;
+    contextId: string;
     beforeLimit?: number;
     afterLimit?: number;
     database?: string | null;
-  }): Promise<RenderedMemory[]> {
+  }): Promise<RenderedContext[]> {
     const databaseName = resolveDatabaseName(params.database);
-    await writeMuninnLog(databaseName, 'info', 'timeline', 'memory_timeline', {
-      memoryId: params.memoryId,
+    await writeMuninnLog(databaseName, 'info', 'timeline', 'context_timeline', {
+      contextId: params.contextId,
       beforeLimit: params.beforeLimit,
       afterLimit: params.afterLimit,
     });
@@ -711,6 +710,7 @@ export const memories = {
       budget?: number;
       queryLimit?: number;
       thinkingRatio?: number;
+      excludeSession?: SessionIdentity;
       database?: string | null;
     },
   ): Promise<RecallHit[]> {
@@ -722,10 +722,6 @@ export const memories = {
     return (await getBackend(databaseName)).readContextIds(contextIds);
   },
 
-  async explainContextId(contextId: string, database?: string | null): Promise<ContextReadRow> {
-    const databaseName = resolveDatabaseName(database);
-    return (await getBackend(databaseName)).explainContextId(contextId);
-  },
 };
 
 export const memoryPipeline = {

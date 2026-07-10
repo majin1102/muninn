@@ -269,17 +269,32 @@ impl SessionSnapshotTable {
         .await
     }
 
-    pub async fn load_thread_snapshots(&self, session_id: &str) -> Result<Vec<SessionSnapshot>> {
+    pub async fn load_thread_snapshots(
+        &self,
+        project: &str,
+        agent: &str,
+        session_id: &str,
+        extractor: Option<&str>,
+    ) -> Result<Vec<SessionSnapshot>> {
         let Some(dataset) = self.access.try_open().await? else {
             return Ok(Vec::new());
         };
+        let mut predicate = format!(
+            "project = '{}' AND agent = '{}' AND session_id = '{}'",
+            escape_predicate_string(project),
+            escape_predicate_string(agent),
+            escape_predicate_string(session_id),
+        );
+        if let Some(extractor) = extractor {
+            predicate.push_str(&format!(
+                " AND extractor = '{}'",
+                escape_predicate_string(extractor),
+            ));
+        }
         let batch = dataset
             .scan()
             .with_row_id()
-            .filter(&format!(
-                "session_id = '{}'",
-                escape_predicate_string(session_id)
-            ))?
+            .filter(&predicate)?
             .try_into_batch()
             .await?;
         if batch.num_rows() == 0 {
@@ -528,5 +543,78 @@ mod tests {
             .unwrap();
         assert_eq!(scanned.rows.len(), 1);
         assert_eq!(scanned.source_version, delta.source_version);
+    }
+
+    #[tokio::test]
+    async fn load_thread_snapshots_scopes_by_session_identity_and_extractor() {
+        let dir = tempfile::tempdir().unwrap();
+        let table = SessionSnapshotTable::new(TableOptions::local(dir.path()).unwrap());
+        let now = Utc::now();
+        let mut rows = vec![
+            SessionSnapshot {
+                snapshot_id: MemoryId::new(MemoryLayer::Session, u64::MAX),
+                session_id: "shared-session".to_string(),
+                project: "project-a".to_string(),
+                cwd: "/repo/project-a".to_string(),
+                agent: "codex".to_string(),
+                snapshot_sequence: 0,
+                created_at: now,
+                updated_at: now,
+                extractor: "extractor-a".to_string(),
+                title: "Project A".to_string(),
+                summary: "Session summary".to_string(),
+                memory_signals: Vec::new(),
+                skill_signals: Vec::new(),
+                skill_details: "{}".to_string(),
+                content: "# Project A".to_string(),
+                references: vec!["turn:a".to_string()],
+            },
+            SessionSnapshot {
+                snapshot_id: MemoryId::new(MemoryLayer::Session, u64::MAX),
+                session_id: "shared-session".to_string(),
+                project: "project-b".to_string(),
+                cwd: "/repo/project-b".to_string(),
+                agent: "codex".to_string(),
+                snapshot_sequence: 0,
+                created_at: now,
+                updated_at: now,
+                extractor: "extractor-a".to_string(),
+                title: "Project B".to_string(),
+                summary: "Session summary".to_string(),
+                memory_signals: Vec::new(),
+                skill_signals: Vec::new(),
+                skill_details: "{}".to_string(),
+                content: "# Project B".to_string(),
+                references: vec!["turn:b".to_string()],
+            },
+            SessionSnapshot {
+                snapshot_id: MemoryId::new(MemoryLayer::Session, u64::MAX),
+                session_id: "shared-session".to_string(),
+                project: "project-b".to_string(),
+                cwd: "/repo/project-b".to_string(),
+                agent: "codex".to_string(),
+                snapshot_sequence: 0,
+                created_at: now,
+                updated_at: now,
+                extractor: "extractor-b".to_string(),
+                title: "Other Extractor".to_string(),
+                summary: "Session summary".to_string(),
+                memory_signals: Vec::new(),
+                skill_signals: Vec::new(),
+                skill_details: "{}".to_string(),
+                content: "# Other Extractor".to_string(),
+                references: vec!["turn:c".to_string()],
+            },
+        ];
+
+        table.insert(&mut rows).await.unwrap();
+
+        let loaded = table
+            .load_thread_snapshots("project-b", "codex", "shared-session", Some("extractor-a"))
+            .await
+            .unwrap();
+
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].title, "Project B");
     }
 }

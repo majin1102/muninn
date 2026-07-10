@@ -127,7 +127,7 @@ export async function importDemoProjects(agent: string, projects: string[]): Pro
       continue;
     }
     registered.add(project);
-    item.captureEnabled = true;
+    item.captureEnabled = false;
     importedProjects += 1;
   }
   return { importedProjects, requestId: `demo-import-projects-${agent}` };
@@ -153,7 +153,7 @@ export async function importDemoSessionsByPaths(agent: string, sourcePaths: stri
       changedProject = true;
     }
     if (changedProject) {
-      project.captureEnabled = true;
+      project.captureEnabled = project.captureEnabled === true;
       const registered = demoRegisteredProjects[agent] ?? new Set<string>();
       registered.add(project.project);
       demoRegisteredProjects[agent] = registered;
@@ -234,15 +234,15 @@ export async function getDemoSessionTurns(
   limit: number,
 ): Promise<{
   turns: DemoSessionTimelineItem[];
-  segments: Array<{ memoryId: string; title: string; createdAt: string; updatedAt: string }>;
-  timeline: Array<{ memoryId: string; kind: 'summary' | 'signals' | 'extraction'; title: string; createdAt: string; updatedAt: string; markdown: string; refs: string[] }>;
+  segments: Array<{ contextId: string; title: string; createdAt: string; updatedAt: string }>;
+  timeline: Array<{ contextId: string; kind: 'summary' | 'signals' | 'extraction'; title: string; createdAt: string; updatedAt: string; markdown: string; refs: string[] }>;
   nextOffset: number | null;
 }> {
   const turns = demoSessionTurns[`${agent}::${sessionKey}`] ?? [];
   const page = turns.slice(offset, offset + limit).map(enrichDemoTurn);
   const firstTurn = turns[0];
   const timeline: Array<{
-    memoryId: string;
+    contextId: string;
     kind: 'summary' | 'signals' | 'extraction';
     title: string;
     createdAt: string;
@@ -252,7 +252,7 @@ export async function getDemoSessionTurns(
   }> = [];
   if (firstTurn) {
     timeline.push({
-      memoryId: `${firstTurn.memoryId}~timeline:summary`,
+      contextId: `${firstTurn.contextId}~timeline:summary`,
       kind: 'summary',
       title: 'Summary',
       createdAt: firstTurn.createdAt,
@@ -260,7 +260,7 @@ export async function getDemoSessionTurns(
       markdown: firstTurn.preview,
       refs: [],
     }, {
-      memoryId: `${firstTurn.memoryId}~timeline:signals`,
+      contextId: `${firstTurn.contextId}~timeline:signals`,
       kind: 'signals',
       title: 'Signals',
       createdAt: firstTurn.createdAt,
@@ -276,7 +276,7 @@ export async function getDemoSessionTurns(
     });
   }
   timeline.push(...turns.map((turn) => ({
-    memoryId: `${turn.memoryId}~timeline`,
+    contextId: `${turn.contextId}~timeline`,
     kind: 'extraction' as const,
     title: turn.prompt ?? turn.preview,
     createdAt: turn.createdAt,
@@ -289,12 +289,12 @@ export async function getDemoSessionTurns(
       turn.prompt ? `- Prompt: ${turn.prompt}` : undefined,
       turn.response ? `- Response: ${turn.response}` : undefined,
     ].filter(Boolean).join('\n'),
-    refs: [turn.memoryId],
+    refs: [turn.contextId],
   })));
   return {
     turns: page,
     segments: turns.map((turn) => ({
-      memoryId: `${turn.memoryId}~timeline`,
+      contextId: `${turn.contextId}~timeline`,
       title: turn.prompt ?? turn.preview,
       createdAt: turn.createdAt,
       updatedAt: turn.updatedAt,
@@ -305,7 +305,7 @@ export async function getDemoSessionTurns(
 }
 
 function enrichDemoTurn(turn: DemoSessionTimelineItem): DemoSessionTimelineItem {
-  const document = demoDocuments[turn.memoryId];
+  const document = demoDocuments[turn.contextId];
   if (!document) {
     return turn;
   }
@@ -370,10 +370,10 @@ export async function getDemoPipelineTasks(): Promise<PipelineTasksResponse> {
   };
 }
 
-export async function getDemoDocument(memoryId: string): Promise<DemoMemoryDocument> {
-  const document = demoDocuments[memoryId];
+export async function getDemoDocument(contextId: string): Promise<DemoMemoryDocument> {
+  const document = demoDocuments[contextId];
   if (!document) {
-    throw new Error(`demo memory not found: ${memoryId}`);
+    throw new Error(`demo memory not found: ${contextId}`);
   }
   return document;
 }

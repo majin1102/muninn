@@ -16,8 +16,8 @@ type TimelinePaneProps = {
   openTimelineRequestId: number;
   sessionKey: string | null;
   sessionTurns: ProjectTurnNode[];
-  onActiveTimelineChange: (memoryId: string | null) => void;
-  onLocateTurn: (memoryId: string) => void;
+  onActiveTimelineChange: (contextId: string | null) => void;
+  onLocateTurn: (contextId: string) => void;
 };
 
 export function TimelinePane({
@@ -36,7 +36,7 @@ export function TimelinePane({
   const [scrollThumb, setScrollThumb] = useState({ height: 0, top: 0, visible: false });
   const showLoading = useDelayedBoolean(loading, 150);
   const restoreTimelineId = openTimelineId ?? activeTimelineId;
-  const turnIndexById = new Map(sessionTurns.map((turn, index) => [turn.memoryId, index + 1]));
+  const turnIndexById = new Map(sessionTurns.map((turn, index) => [turn.contextId, index + 1]));
 
   useEffect(() => {
     setOpenItems(new Set());
@@ -120,15 +120,15 @@ export function TimelinePane({
           ) : (
             <div className="timeline-list">
               {timeline.map((item) => {
-                const open = openItems.has(item.memoryId);
+                const open = openItems.has(item.contextId);
                 return (
                   <section
-                    key={item.memoryId}
-                    data-timeline-id={item.memoryId}
+                    key={item.contextId}
+                    data-timeline-id={item.contextId}
                     className={cn(
                       'timeline-item',
                       `timeline-item-${item.kind}`,
-                      item.memoryId === activeTimelineId && 'timeline-item-active',
+                      item.contextId === activeTimelineId && 'timeline-item-active',
                     )}
                   >
                     <Collapsible
@@ -137,15 +137,15 @@ export function TimelinePane({
                         setOpenItems((current) => {
                           const next = new Set(current);
                           if (nextOpen) {
-                            next.add(item.memoryId);
+                            next.add(item.contextId);
                           } else {
-                            next.delete(item.memoryId);
+                            next.delete(item.contextId);
                           }
                           return next;
                         });
                         if (nextOpen) {
-                          onActiveTimelineChange(item.memoryId);
-                        } else if (item.memoryId === activeTimelineId) {
+                          onActiveTimelineChange(item.contextId);
+                        } else if (item.contextId === activeTimelineId) {
                           onActiveTimelineChange(null);
                         }
                       }}

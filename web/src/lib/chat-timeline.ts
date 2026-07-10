@@ -6,7 +6,7 @@ export type ChatMessage = {
   role: ChatRole;
   label: string;
   body: string;
-  memoryId?: string;
+  contextId?: string;
   agent?: string;
   timestamp?: string;
   startedAt?: string;
@@ -15,7 +15,7 @@ export type ChatMessage = {
 };
 
 export type ChatToolGroup = {
-  memoryId?: string;
+  contextId?: string;
   agent?: string;
   timestamp?: string;
   startedAt?: string;
@@ -30,7 +30,7 @@ export type ChatToolCall = ToolCall & {
 };
 
 export type ChatTotalTime = {
-  memoryId?: string;
+  contextId?: string;
   startedAt?: string;
   completedAt?: string;
 };
@@ -41,7 +41,7 @@ export type ChatTimelineEntry =
   | { type: 'totalTime'; totalTime: ChatTotalTime };
 
 type TimelineContext = {
-  memoryId: string;
+  contextId: string;
   agent?: string;
   startedAt?: string;
   completedAt?: string;
@@ -67,7 +67,7 @@ export function entriesFromEvents(events: TurnEvent[], context: TimelineContext)
     entries.push({
       type: 'toolGroup',
       group: {
-        memoryId: context.memoryId,
+        contextId: context.contextId,
         agent: context.agent,
         timestamp: pendingToolTimestamp,
         startedAt: firstToolTimestamp(pendingToolCalls),
@@ -89,7 +89,7 @@ export function entriesFromEvents(events: TurnEvent[], context: TimelineContext)
           role: 'user',
           label: 'User',
           body: event.text,
-          memoryId: context.memoryId,
+          contextId: context.contextId,
           agent: context.agent,
           timestamp: event.timestamp,
           artifacts: event.artifacts,
@@ -107,7 +107,7 @@ export function entriesFromEvents(events: TurnEvent[], context: TimelineContext)
           role: 'agent',
           label: 'Agent',
           body: event.text,
-          memoryId: context.memoryId,
+          contextId: context.contextId,
           agent: context.agent,
           timestamp: event.timestamp,
           startedAt: previousTimestamp,
@@ -187,7 +187,7 @@ export function entriesFromEvents(events: TurnEvent[], context: TimelineContext)
 
 export function entriesFromFallback(
   turn: {
-    memoryId: string;
+    contextId: string;
     agent?: string;
     createdAt?: string;
     updatedAt?: string;
@@ -206,7 +206,7 @@ export function entriesFromFallback(
         role: 'user',
         label: 'User',
         body: turn.prompt,
-        memoryId: turn.memoryId,
+        contextId: turn.contextId,
         agent: turn.agent,
         timestamp: turn.createdAt,
         artifacts: turn.artifacts?.filter((artifact) => artifact.source === 'prompt'),
@@ -220,7 +220,7 @@ export function entriesFromFallback(
         role: 'agent',
         label: 'Agent',
         body: turn.response,
-        memoryId: turn.memoryId,
+        contextId: turn.contextId,
         agent: turn.agent,
         timestamp: turn.updatedAt,
         startedAt: turn.createdAt,
@@ -238,7 +238,7 @@ export function entriesFromFallback(
           role: 'user',
           label: 'User',
           body: split.prompt,
-          memoryId: turn.memoryId,
+          contextId: turn.contextId,
           agent: turn.agent,
           timestamp: turn.createdAt,
         },
@@ -249,7 +249,7 @@ export function entriesFromFallback(
           role: 'agent',
           label: 'Agent',
           body: split.response,
-          memoryId: turn.memoryId,
+          contextId: turn.contextId,
           agent: turn.agent,
           timestamp: turn.updatedAt,
           startedAt: turn.createdAt,
@@ -265,7 +265,7 @@ export function entriesFromFallback(
             role: 'agent',
             label: 'Agent',
             body,
-            memoryId: turn.memoryId,
+            contextId: turn.contextId,
             agent: turn.agent,
             timestamp: turn.updatedAt ?? turn.createdAt,
             startedAt: turn.createdAt,
@@ -279,7 +279,7 @@ export function entriesFromFallback(
     entries.push({
       type: 'toolGroup',
       group: {
-        memoryId: turn.memoryId,
+        contextId: turn.contextId,
         agent: turn.agent,
         timestamp: turn.updatedAt,
         toolCalls: turn.toolCalls,
@@ -287,7 +287,7 @@ export function entriesFromFallback(
     });
   }
   appendTotalTime(entries, {
-    memoryId: turn.memoryId,
+    contextId: turn.contextId,
     startedAt: turn.createdAt,
     completedAt: turn.updatedAt,
   });
@@ -301,7 +301,7 @@ function appendTotalTime(entries: ChatTimelineEntry[], context: TimelineContext)
   entries.push({
     type: 'totalTime',
     totalTime: {
-      memoryId: context.memoryId,
+      contextId: context.contextId,
       startedAt: context.startedAt,
       completedAt: context.completedAt,
     },

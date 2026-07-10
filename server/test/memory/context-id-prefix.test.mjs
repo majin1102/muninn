@@ -2,14 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  inferRenderedMemoryKind,
-  parseExtractionMemoryId,
+  inferRenderedContextKind,
+  parseContextId,
   renderExtraction,
 } from '../../dist/api/memory.js';
 
 function extraction(overrides = {}) {
   return {
-    id: 'abc123',
+    id: '123e4567-e89b-42d3-a456-426614174002',
     title: 'MCP schema',
     summary: 'Recall/read/explain naming',
     content: 'Use short public context ids.',
@@ -21,7 +21,7 @@ function extraction(overrides = {}) {
 }
 
 test('extraction context ids use the ext prefix', () => {
-  assert.equal(parseExtractionMemoryId('ext:abc123'), 'abc123');
-  assert.equal(renderExtraction(extraction()).memoryId, 'ext:abc123');
-  assert.equal(inferRenderedMemoryKind('ext:abc123'), 'extraction');
+  assert.equal(parseContextId('ext:123e4567-e89b-42d3-a456-426614174002').id, '123e4567-e89b-42d3-a456-426614174002');
+  assert.equal(renderExtraction(extraction()).contextId, 'ext:123e4567-e89b-42d3-a456-426614174002');
+  assert.equal(inferRenderedContextKind('ext:123e4567-e89b-42d3-a456-426614174002'), 'extraction');
 });

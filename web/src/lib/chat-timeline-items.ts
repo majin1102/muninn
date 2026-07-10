@@ -50,9 +50,9 @@ function timestampForEntry(entry: Exclude<ChatTimelineEntry, { type: 'totalTime'
 
 function keyForEntry(entry: Exclude<ChatTimelineEntry, { type: 'totalTime' }>, index: number): string {
   if (entry.type === 'message') {
-    return `${entry.message.memoryId ?? 'document'}-${entry.message.role}-${index}`;
+    return `${entry.message.contextId ?? 'document'}-${entry.message.role}-${index}`;
   }
-  return `${entry.group.memoryId ?? 'document'}-tool-${index}`;
+  return `${entry.group.contextId ?? 'document'}-tool-${index}`;
 }
 
 function shouldShowTimeSeparator(timestamp: string, previous: Date | null, timeSeparatorGapMs: number): boolean {

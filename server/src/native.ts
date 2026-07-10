@@ -89,6 +89,10 @@ export type SessionIdentity = {
   sessionId: string;
 };
 
+export type SessionSnapshotThreadScope = SessionIdentity & {
+  extractor?: string;
+};
+
 export type SessionRow = {
   latestSnapshotId: string;
   sessionId: string;
@@ -146,7 +150,7 @@ type NativeCoreBinding = {
     extractor?: string;
   }): MaybePromise<Turn[]>;
   turnTimeline(params: {
-    memoryId: string;
+    contextId: string;
     beforeLimit?: number;
     afterLimit?: number;
   }): MaybePromise<Turn[]>;
@@ -177,7 +181,7 @@ type NativeCoreBinding = {
     extractor?: string;
     version?: number;
   }): MaybePromise<SourceRows<SessionSnapshotRow>>;
-  sessionSnapshotThread(sessionId: string): MaybePromise<SessionSnapshotRow[]>;
+  sessionSnapshotThread(scope: SessionSnapshotThreadScope): MaybePromise<SessionSnapshotRow[]>;
   sessionSnapshotDelta(params: {
     extractor: string;
     baselineVersion: number;
@@ -199,7 +203,7 @@ type NativeCoreBinding = {
     limit: number;
   }): MaybePromise<Session[]>;
   sessionGet(params: {
-    identities: SessionIdentity[];
+    identities?: SessionIdentity[];
   }): MaybePromise<Session[]>;
   sessionList(params: {
     limit?: number;
@@ -303,7 +307,7 @@ export interface TurnTableBinding {
     extractor?: string;
   }): Promise<Turn[]>;
   timelineTurns(params: {
-    memoryId: string;
+    contextId: string;
     beforeLimit?: number;
     afterLimit?: number;
   }): Promise<Turn[]>;
@@ -338,7 +342,7 @@ export interface SessionSnapshotTableBinding {
     extractor?: string;
     version?: number;
   }): Promise<SourceRows<SessionSnapshotRow>>;
-  threadSnapshots(sessionId: string): Promise<SessionSnapshotRow[]>;
+  threadSnapshots(scope: SessionSnapshotThreadScope): Promise<SessionSnapshotRow[]>;
   delta(params: {
     extractor: string;
     baselineVersion: number;
@@ -383,7 +387,7 @@ export interface SessionTableBinding {
     limit: number;
   }): Promise<SessionRow[]>;
   get(params: {
-    identities: SessionIdentity[];
+    identities?: SessionIdentity[];
   }): Promise<SessionRow[]>;
   list(params: {
     limit?: number;
@@ -541,7 +545,7 @@ function wrapBinding(native: NativeCoreBinding): NativeTables {
       ),
       listSnapshots: async (params) => resolveNativeResult(native.sessionSnapshotList(params)),
       listSnapshotsWithVersion: async (params) => resolveNativeResult(native.sessionSnapshotListWithVersion(params)),
-      threadSnapshots: async (sessionId) => resolveNativeResult(native.sessionSnapshotThread(sessionId)),
+      threadSnapshots: async (scope) => resolveNativeResult(native.sessionSnapshotThread(scope)),
       delta: async (params) => resolveNativeResult(native.sessionSnapshotDelta(params)),
       insert: async (params) => resolveNativeResult(native.sessionSnapshotInsert(params)),
       delete: async (params) => resolveNativeResult(native.sessionSnapshotDelete(params)),

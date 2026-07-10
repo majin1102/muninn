@@ -3,15 +3,20 @@ import test from 'node:test';
 
 import { recallMemories } from '../../dist/api/memory.js';
 
-test('session recall hit uses latest snapshot id as memoryId', async () => {
+test('session recall hit uses latest session snapshot id as context id', async () => {
+  const identity = {
+    project: 'project-a',
+    agent: 'codex',
+    sessionId: 'session-a',
+  };
   const client = {
     sessionTable: {
       search: async () => [{
         latestSnapshotId: 'session:42',
-        project: 'project-a',
+        project: identity.project,
         cwd: '/workspace/project-a',
-        agent: 'codex',
-        sessionId: 'session-a',
+        agent: identity.agent,
+        sessionId: identity.sessionId,
         title: 'Readable session title',
         summary: 'Readable session summary',
         searchText: 'Readable session title\n\nReadable session summary',
@@ -27,8 +32,8 @@ test('session recall hit uses latest snapshot id as memoryId', async () => {
   });
 
   assert.equal(hits.length, 1);
-  assert.equal(hits[0].memoryId, 'session:42');
-  assert.equal(hits[0].project, 'project-a');
-  assert.equal(hits[0].agent, 'codex');
-  assert.equal(hits[0].sessionId, 'session-a');
+  assert.equal(hits[0].contextId, 'session:42');
+  assert.equal(hits[0].project, identity.project);
+  assert.equal(hits[0].agent, identity.agent);
+  assert.equal(hits[0].sessionId, identity.sessionId);
 });

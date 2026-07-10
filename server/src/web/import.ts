@@ -190,7 +190,7 @@ export async function importSelectedSessions(adapter: ImportAdapter, sourcePaths
 
   let importedSessions = 0;
   let importedTurns = 0;
-  const enabledProjects = new Set<string>();
+  const registeredProjects = new Set<string>();
   for (const { session, firstTurnSequence } of importableSessions.sort((left, right) => (
     compareSessionsForImport(left.session, right.session)
   ))) {
@@ -215,32 +215,35 @@ export async function importSelectedSessions(adapter: ImportAdapter, sourcePaths
       if (capturedTurns > 0) {
         importedSessions += 1;
         importedTurns += capturedTurns;
-        enabledProjects.add(session.project);
+        registeredProjects.add(session.project);
       }
     } catch (error) {
       failedSessions.push({ sourcePath: session.sourcePath, errorMessage: error instanceof Error ? error.message : String(error) });
     }
   }
 
-  // Importing a project opts it into live auto-capture going forward.
-  for (const project of enabledProjects) {
-    if (isCanonicalProjectIdentity(project)) {
-      await setCaptureEnabled(adapter.agent, project, true);
-    }
-  }
+  await registerProjectsWithCaptureDisabled(adapter.agent, registeredProjects);
 
   return { importedSessions, importedTurns, failedSessions, requestId };
 }
 
 export async function importProjects(adapter: ImportAdapter, projects: string[], requestId: string): Promise<ImportProjectsResponse> {
   const uniqueProjects = [...new Set(projects.map((project) => project.trim()).filter((project) => project.length > 0))];
-  for (const project of uniqueProjects) {
-    await setCaptureEnabled(adapter.agent, project, true);
-  }
+  await registerProjectsWithCaptureDisabled(adapter.agent, uniqueProjects);
   return {
     importedProjects: uniqueProjects.length,
     requestId,
   };
+}
+
+async function registerProjectsWithCaptureDisabled(agent: string, projects: Iterable<string>): Promise<void> {
+  const policy = await getCapturePolicy(agent);
+  for (const project of projects) {
+    if (!isCanonicalProjectIdentity(project) || policy[project] !== undefined) {
+      continue;
+    }
+    await setCaptureEnabled(agent, project, false);
+  }
 }
 
 export async function deleteImportedProject(adapter: ImportAdapter, project: string, requestId: string): Promise<DeleteImportedProjectResponse> {

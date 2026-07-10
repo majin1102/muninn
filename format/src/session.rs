@@ -708,7 +708,7 @@ mod tests {
         assert_eq!(rows[1].latest_snapshot_id, "snapshot-c");
         assert_eq!(table.list(None).await.unwrap().len(), 2);
         let description = table.describe().await.unwrap().unwrap();
-        assert!(!description.field_metadata.contains_key("id"));
+        assert!(!description.field_metadata.contains_key("context_id"));
     }
 
     #[tokio::test]

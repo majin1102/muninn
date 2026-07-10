@@ -11,6 +11,7 @@ const PROMPT_FILE_NAMES = {
   chat: 'chat',
   thread_extracting: 'extractor',
   memory_recaller: 'memory-recaller',
+  session_reranker: 'session-reranker',
   project_dreaming: 'project-dreamer',
 } as const;
 

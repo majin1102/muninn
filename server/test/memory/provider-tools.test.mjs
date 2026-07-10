@@ -25,7 +25,7 @@ test('generateWithTools sends OpenAI-compatible tools and parses tool calls', as
               type: 'function',
               function: {
                 name: 'memory-get',
-                arguments: '{"memoryIds":["ext:1"]}',
+                arguments: '{"contextIds":["ext:1"]}',
               },
             }],
           },
@@ -50,9 +50,9 @@ test('generateWithTools sends OpenAI-compatible tools and parses tool calls', as
       parameters: {
         type: 'object',
         properties: {
-          memoryIds: { type: 'array', items: { type: 'string' } },
+          contextIds: { type: 'array', items: { type: 'string' } },
         },
-        required: ['memoryIds'],
+        required: ['contextIds'],
       },
     }],
   });
@@ -64,7 +64,7 @@ test('generateWithTools sends OpenAI-compatible tools and parses tool calls', as
     toolCalls: [{
       id: 'call-1',
       name: 'memory-get',
-      arguments: { memoryIds: ['ext:1'] },
+      arguments: { contextIds: ['ext:1'] },
     }],
   });
 });
@@ -101,7 +101,7 @@ test('generateWithTools sends tool result messages and parses final text', async
       { role: 'user', content: 'prompt' },
       {
         role: 'assistant',
-        toolCalls: [{ id: 'call-1', name: 'memory-get', arguments: { memoryIds: ['ext:1'] } }],
+        toolCalls: [{ id: 'call-1', name: 'memory-get', arguments: { contextIds: ['ext:1'] } }],
       },
       {
         role: 'tool',

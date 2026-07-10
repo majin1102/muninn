@@ -11,12 +11,10 @@ test('MCP registers only new muninn tool names', () => {
 
   assert.deepEqual(toolNames, [
     'muninn-recall',
-    'muninn-list',
     'muninn-read',
-    'muninn-explain',
   ]);
 
-  for (const oldName of ['print', 'recall', 'list', 'get_timeline', 'get_detail']) {
+  for (const oldName of ['print', 'recall', 'list', 'get_timeline', 'get_detail', 'muninn-explain']) {
     assert.equal(toolNames.includes(oldName), false);
   }
 });
@@ -27,8 +25,9 @@ test('MCP schemas omit obsolete recall/list options', () => {
   }
 
   assert.match(source, /top_k/);
+  assert.match(source, /mode/);
+  assert.match(source, /z\.enum\(\['session', 'extraction'\]\)/);
   assert.match(source, /context_ids/);
-  assert.match(source, /context_id/);
   assert.match(source, /context_ids: z\.array\(z\.string\(\)\.min\(1\)\)\.min\(1\)/);
-  assert.match(source, /context_id: z\.string\(\)\.min\(1\)/);
+  assert.doesNotMatch(source, /ExplainInputSchema/);
 });

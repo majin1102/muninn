@@ -32,13 +32,13 @@ type SessionContentSplitProps = {
   activeTimelineId: string | null;
   openTimelineId: string | null;
   openTimelineRequestId: number;
-  focusMemoryId: string | null;
+  focusContextId: string | null;
   focusRequestId: number;
   sessionTurns: ProjectTurnNode[];
-  onActiveTimelineChange: (memoryId: string | null) => void;
-  onOpenTimeline: (memoryId: string) => void;
-  onLocateConversationTurn: (memoryId: string) => void;
-  onLoadTurnDetail: (memoryId: string) => Promise<ProjectTurnNode>;
+  onActiveTimelineChange: (contextId: string | null) => void;
+  onOpenTimeline: (contextId: string) => void;
+  onLocateConversationTurn: (contextId: string) => void;
+  onLoadTurnDetail: (contextId: string) => Promise<ProjectTurnNode>;
   canLoadMoreAfter: boolean;
   loadingMoreAfter: boolean;
   onLoadMoreAfter: () => void;
@@ -55,7 +55,7 @@ export function SessionContentSplit({
   activeTimelineId,
   openTimelineId,
   openTimelineRequestId,
-  focusMemoryId,
+  focusContextId,
   focusRequestId,
   sessionTurns,
   onActiveTimelineChange,
@@ -79,22 +79,22 @@ export function SessionContentSplit({
   const title = session?.displaySessionId ?? document?.title ?? 'Session';
   const sessionKey = session ? selectedSessionKey(session) : null;
   const activeTimelineItem = activeTimelineId
-    ? session?.timeline.find((item) => item.memoryId === activeTimelineId)
+    ? session?.timeline.find((item) => item.contextId === activeTimelineId)
     : undefined;
-  const activeConversationMemoryId = activeTimelineItem?.refs[0] ?? turnIdFromTimelineId(activeTimelineId);
+  const activeConversationContextId = activeTimelineItem?.refs[0] ?? turnIdFromTimelineId(activeTimelineId);
   const inferredConversationTurnIds = useMemo(() => (
-    chatTurnWindow(sessionTurns, focusMemoryId).turns
-      .map((turn) => turn.memoryId)
-      .filter((memoryId): memoryId is string => Boolean(memoryId))
-  ), [focusMemoryId, sessionTurns]);
+    chatTurnWindow(sessionTurns, focusContextId).turns
+      .map((turn) => turn.contextId)
+      .filter((contextId): contextId is string => Boolean(contextId))
+  ), [focusContextId, sessionTurns]);
   const conversationWindowTurnIds = useMemo(() => conversationLocatorTurnIds(
     visibleConversationTurnIds,
     inferredConversationTurnIds,
   ), [inferredConversationTurnIds, visibleConversationTurnIds]);
   const orderedConversationTurnIds = useMemo(() => (
     sessionTurns
-      .map((turn) => turn.memoryId)
-      .filter((memoryId): memoryId is string => Boolean(memoryId))
+      .map((turn) => turn.contextId)
+      .filter((contextId): contextId is string => Boolean(contextId))
   ), [sessionTurns]);
   const sessionArtifacts = useMemo(() => collectSessionArtifacts(document, sessionTurns), [document, sessionTurns]);
   const conversationTimelineItem = useMemo(() => timelineItemForConversationWindow(
@@ -108,7 +108,7 @@ export function SessionContentSplit({
     conversationWindowTurnIds,
     activeTimelineItem,
   );
-  const canLocateConversation = Boolean(activeConversationMemoryId)
+  const canLocateConversation = Boolean(activeConversationContextId)
     && locateConversationEnabled(activeTimelineItem, conversationWindowTurnIds);
   const style = useMemo(() => ({
     '--session-content-grid': gridTemplateForMode(mode, timelineWidth, containerWidth),
@@ -147,7 +147,7 @@ export function SessionContentSplit({
         if (!canLocateTimeline || !conversationTimelineItem) {
           return;
         }
-        onOpenTimeline(conversationTimelineItem.memoryId);
+        onOpenTimeline(conversationTimelineItem.contextId);
       }}
     >
       <LocateIcon />
@@ -161,10 +161,10 @@ export function SessionContentSplit({
       aria-label="Locate conversation from timeline"
       disabled={!canLocateConversation}
       onClick={() => {
-        if (!canLocateConversation || !activeConversationMemoryId) {
+        if (!canLocateConversation || !activeConversationContextId) {
           return;
         }
-        onLocateConversationTurn(activeConversationMemoryId);
+        onLocateConversationTurn(activeConversationContextId);
       }}
     >
       <LocateIcon />
@@ -272,8 +272,8 @@ export function SessionContentSplit({
         {contentTab === 'conversation' ? (
           <ChatView
             document={document}
-            activeMemoryId={activeConversationMemoryId}
-            focusMemoryId={focusMemoryId}
+            activeContextId={activeConversationContextId}
+            focusContextId={focusContextId}
             focusRequestId={focusRequestId}
             sessionTurns={sessionTurns}
             onVisibleTurnIdsChange={setVisibleConversationTurnIds}
@@ -312,12 +312,12 @@ function collectSessionArtifacts(document: MemoryDocument | null, sessionTurns: 
   return artifacts;
 }
 
-function turnIdFromTimelineId(memoryId: string | null): string | null {
-  if (!memoryId?.startsWith('turn:')) {
+function turnIdFromTimelineId(contextId: string | null): string | null {
+  if (!contextId?.startsWith('turn:')) {
     return null;
   }
-  const timelineIndex = memoryId.indexOf('~timeline');
-  return timelineIndex >= 0 ? memoryId.slice(0, timelineIndex) : memoryId;
+  const timelineIndex = contextId.indexOf('~timeline');
+  return timelineIndex >= 0 ? contextId.slice(0, timelineIndex) : contextId;
 }
 
 function SessionArtifacts({ artifacts, agent }: { artifacts: Artifact[]; agent?: string }) {

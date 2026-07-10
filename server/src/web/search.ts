@@ -23,7 +23,7 @@ export type SearchCandidate = {
   projectCwd?: string;
   latestUpdatedAt: string;
   source: SearchResultItem['source'];
-  memoryId?: string;
+  contextId?: string;
   title?: string;
   content: string;
   references: string[];
@@ -73,7 +73,7 @@ function hitCandidates(
   scope: { projectKeys?: string[]; sessionKeys?: string[] },
 ): SearchCandidate[] {
   return hits.flatMap((hit, index) => {
-    if (!hit.memoryId.startsWith('ext:')) {
+    if (!hit.contextId?.startsWith('ext:')) {
       return [];
     }
     const resolved = searchSession(hit);
@@ -91,7 +91,7 @@ function hitCandidates(
       projectCwd: normalizeText(hit.cwd),
       latestUpdatedAt: hit.updatedAt ?? hit.createdAt ?? '',
       source: 'extraction' as const,
-      memoryId: hit.memoryId,
+      contextId: hit.contextId,
       title: hit.title ?? hit.summary ?? 'Extraction match',
       content: hit.content,
       references: hit.references ?? [],
@@ -206,13 +206,13 @@ function compareCoverageCandidates(left: SearchCandidate, right: SearchCandidate
 
 function candidateToItem(candidate: SearchCandidate): SearchResultItem {
   return {
-    id: `${candidate.source}:${candidate.memoryId ?? `${candidate.sessionKey}:${candidate.title ?? candidate.createdAt ?? ''}`}`,
+    id: `${candidate.source}:${candidate.contextId ?? `${candidate.sessionKey}:${candidate.title ?? candidate.createdAt ?? ''}`}`,
     source: candidate.source,
     title: candidate.title,
     content: candidate.content,
     references: candidate.references,
     createdAt: candidate.createdAt,
-    memoryId: candidate.memoryId,
+    contextId: candidate.contextId,
   };
 }
 

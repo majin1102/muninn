@@ -990,7 +990,7 @@ test('memories.get renders extraction memories', async () => {
   const { Memories } = await import('../../dist/api/memory.js');
   const memory = await new Memories(client).get('ext:ext-1');
 
-  assert.equal(memory.memoryId, 'ext:ext-1');
+  assert.equal(memory.contextId, 'ext:ext-1');
   assert.equal(memory.title, 'Caroline research');
   assert.equal(memory.summary, 'Caroline researched adoption agencies.');
   assert.match(memory.detail, /References:/);
@@ -2772,8 +2772,25 @@ test('extractor bootstrap restores committed state from checkpoint when baseline
         listSnapshotsCalls += 1;
         return [];
       },
-      threadSnapshots: async (sessionId) => {
-        assert.equal(sessionId, 'obs-1');
+      getSnapshot: async (snapshotId) => (
+        snapshotId === 'turn:42'
+          ? {
+            snapshotId: 'turn:42',
+            sessionId: 'obs-1',
+            project: 'project-a',
+            agent: 'agent-a',
+            snapshotSequence: 1,
+            extractor: 'default-extractor',
+          }
+          : null
+      ),
+      threadSnapshots: async (scope) => {
+        assert.deepEqual(scope, {
+          project: 'project-a',
+          agent: 'agent-a',
+          sessionId: 'obs-1',
+          extractor: 'default-extractor',
+        });
         return [
           {
             snapshotId: 'turn:41',
@@ -2880,8 +2897,25 @@ test('extractor checkpoint restore keeps full history for active threads', async
         rowCount: 2,
       }),
       listSnapshots: async () => [],
-      threadSnapshots: async (sessionId) => {
-        assert.equal(sessionId, 'mixed-thread');
+      getSnapshot: async (snapshotId) => (
+        snapshotId === 'snapshot-1'
+          ? {
+            snapshotId: 'snapshot-1',
+            sessionId: 'mixed-thread',
+            project: 'project-a',
+            agent: 'agent-a',
+            snapshotSequence: 1,
+            extractor: 'default-extractor',
+          }
+          : null
+      ),
+      threadSnapshots: async (scope) => {
+        assert.deepEqual(scope, {
+          project: 'project-a',
+          agent: 'agent-a',
+          sessionId: 'mixed-thread',
+          extractor: 'default-extractor',
+        });
         return [
           {
             snapshotId: 'snapshot-0',
@@ -2934,6 +2968,116 @@ test('extractor checkpoint restore keeps full history for active threads', async
   assert.deepEqual(extractor.threads[0].snapshotIds, ['snapshot-0', 'snapshot-1']);
   assert.equal(extractor.threads[0].snapshots.length, 2);
   assert.equal(extractor.threads[0].indexedSnapshotSequence, 1);
+});
+
+test('extractor checkpoint restore scopes snapshots by latest snapshot identity', async (t) => {
+  const { dir, homeDir, configPath } = await makeConfigHome();
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+  process.env.MUNINN_HOME = homeDir;
+  await writeExtractorConfig(configPath, { activeWindowDays: 7 });
+
+  const updatedAt = new Date().toISOString();
+  await mkdir(path.dirname(resolveCheckpointPath()), { recursive: true });
+  await writeFile(resolveCheckpointPath(), `${JSON.stringify(makeCheckpointContent({
+    writtenAt: '2024-01-01T00:00:00Z',
+    writerPid: 123,
+    extractor: makeExtractorCheckpoint({
+      threads: [{
+        sessionId: 'shared-session',
+        latestSnapshotId: 'project-b-1',
+        latestSnapshotSequence: 1,
+        indexedSnapshotSequence: 1,
+        updatedAt,
+      }],
+    }),
+  }), null, 2)}\n`, 'utf8');
+
+  const projectBRows = [
+    {
+      snapshotId: 'project-b-0',
+      sessionId: 'shared-session',
+      project: 'project-b',
+      cwd: '/workspace/project-b',
+      agent: 'agent-b',
+      snapshotSequence: 0,
+      createdAt: updatedAt,
+      updatedAt,
+      extractor: 'default-extractor',
+      title: 'Project B Thread',
+      summary: 'Summary',
+      ...emptySnapshotSignals(),
+      content: snapshotContentFixture('', { title: 'Project B Thread', summary: 'Summary' }),
+      references: [],
+    },
+    {
+      snapshotId: 'project-b-1',
+      sessionId: 'shared-session',
+      project: 'project-b',
+      cwd: '/workspace/project-b',
+      agent: 'agent-b',
+      snapshotSequence: 1,
+      createdAt: updatedAt,
+      updatedAt,
+      extractor: 'default-extractor',
+      title: 'Project B Thread',
+      summary: 'Summary',
+      ...emptySnapshotSignals(),
+      content: snapshotContentFixture('', { title: 'Project B Thread', summary: 'Summary' }),
+      references: [],
+    },
+  ];
+  let requestedScope = null;
+  const checkpoint = (await readCheckpointFile())?.extractor ?? null;
+  const extractor = new Extractor({
+    turnTable: {
+      stats: async () => ({
+        version: 10,
+        fragmentCount: 1,
+        rowCount: 0,
+      }),
+      loadTurnsAfterEpoch: async () => [],
+    },
+    sessionSnapshotTable: {
+      delta: async () => ({ sourceVersion: 21, rows: [] }),
+      stats: async () => ({
+        version: 21,
+        fragmentCount: 1,
+        rowCount: 2,
+      }),
+      listSnapshots: async () => [],
+      getSnapshot: async (snapshotId) => (
+        snapshotId === 'project-b-1' ? projectBRows[1] : null
+      ),
+      threadSnapshots: async (scope) => {
+        requestedScope = scope;
+        assert.deepEqual(scope, {
+          project: 'project-b',
+          agent: 'agent-b',
+          sessionId: 'shared-session',
+          extractor: 'default-extractor',
+        });
+        return projectBRows;
+      },
+    },
+    extractionTable: {
+      stats: async () => ({
+        version: 8,
+        fragmentCount: 1,
+        rowCount: 0,
+      }),
+    },
+  }, checkpoint);
+  t.after(async () => extractor.shutdown());
+
+  await extractor.ensureBootstrapped();
+
+  assert.deepEqual(requestedScope, {
+    project: 'project-b',
+    agent: 'agent-b',
+    sessionId: 'shared-session',
+    extractor: 'default-extractor',
+  });
+  assert.deepEqual(extractor.threads[0].snapshotIds, ['project-b-0', 'project-b-1']);
 });
 
 test('extractor restore advances committedEpoch and excludes extracted turns from pending', async (t) => {
@@ -3006,7 +3150,26 @@ test('extractor restore advances committedEpoch and excludes extracted turns fro
           },
         ],
       }),
-      threadSnapshots: async () => [
+      getSnapshot: async (snapshotId) => (
+        snapshotId === 'snapshot-0'
+          ? {
+            snapshotId: 'snapshot-0',
+            sessionId: 'obs-1',
+            project: 'project-a',
+            agent: 'agent-a',
+            snapshotSequence: 0,
+            extractor: 'default-extractor',
+          }
+          : null
+      ),
+      threadSnapshots: async (scope) => {
+        assert.deepEqual(scope, {
+          project: 'project-a',
+          agent: 'agent-a',
+          sessionId: 'obs-1',
+          extractor: 'default-extractor',
+        });
+        return [
         {
           snapshotId: 'snapshot-0',
           sessionId: 'obs-1',
@@ -3055,7 +3218,8 @@ test('extractor restore advances committedEpoch and excludes extracted turns fro
           content: snapshotContentFixture('', { title: 'Thread', summary: 'Summary' }),
           references: ['turn-13', 'turn-14'],
         },
-      ],
+        ];
+      },
     },
     extractionTable: {},
   }, checkpoint);
@@ -3117,7 +3281,26 @@ test('extractor restore falls back when session delta refs are missing turn epoc
           },
         ],
       }),
-      threadSnapshots: async () => [
+      getSnapshot: async (snapshotId) => (
+        snapshotId === 'snapshot-0'
+          ? {
+            snapshotId: 'snapshot-0',
+            sessionId: 'obs-1',
+            project: 'project-a',
+            agent: 'agent-a',
+            snapshotSequence: 0,
+            extractor: 'default-extractor',
+          }
+          : null
+      ),
+      threadSnapshots: async (scope) => {
+        assert.deepEqual(scope, {
+          project: 'project-a',
+          agent: 'agent-a',
+          sessionId: 'obs-1',
+          extractor: 'default-extractor',
+        });
+        return [
         {
           snapshotId: 'snapshot-0',
           sessionId: 'obs-1',
@@ -3134,7 +3317,8 @@ test('extractor restore falls back when session delta refs are missing turn epoc
           content: snapshotContentFixture('', { title: 'Thread', summary: 'Summary' }),
           references: [],
         },
-      ],
+        ];
+      },
     },
     extractionTable: {},
   }, checkpoint);
@@ -3517,7 +3701,26 @@ test('extractor bootstrap ignores extraction version mismatches when session bas
         listSnapshotsCalls += 1;
         return [];
       },
-      threadSnapshots: async () => [
+      getSnapshot: async (snapshotId) => (
+        snapshotId === 'turn:42'
+          ? {
+            snapshotId: 'turn:42',
+            sessionId: 'obs-1',
+            project: 'project-a',
+            agent: 'agent-a',
+            snapshotSequence: 1,
+            extractor: 'default-extractor',
+          }
+          : null
+      ),
+      threadSnapshots: async (scope) => {
+        assert.deepEqual(scope, {
+          project: 'project-a',
+          agent: 'agent-a',
+          sessionId: 'obs-1',
+          extractor: 'default-extractor',
+        });
+        return [
         {
           snapshotId: 'turn:41',
           sessionId: 'obs-1',
@@ -3550,7 +3753,8 @@ test('extractor bootstrap ignores extraction version mismatches when session bas
           content: snapshotContentFixture('', { title: 'Thread', summary: 'Summary' }),
           references: [],
         },
-      ],
+        ];
+      },
     },
     extractionTable: {
       stats: async () => ({
@@ -3743,11 +3947,17 @@ test('recallMemories searches extraction routes and enriches hits', async () => 
       },
     },
     sessionSnapshotTable: {
-      threadSnapshots: async (sessionId) => (
-        sessionId === 'session-2'
+      threadSnapshots: async (scope) => {
+        assert.deepEqual(scope, {
+          project: 'memory-project',
+          agent: 'codex',
+          sessionId: 'session-2',
+          extractor: 'default-extractor',
+        });
+        return scope.sessionId === 'session-2'
           ? [{
             snapshotId: 'session:snapshot-2',
-            sessionId,
+            sessionId: scope.sessionId,
             project: 'memory-project',
             cwd: '/workspace/memory-project',
             agent: 'codex',
@@ -3761,8 +3971,8 @@ test('recallMemories searches extraction routes and enriches hits', async () => 
             content: 'Readable content',
             references: ['turn:session-2'],
           }]
-          : []
-      ),
+          : [];
+      },
     },
     extractionTable: {
       search: async (params) => {
@@ -3787,7 +3997,7 @@ test('recallMemories searches extraction routes and enriches hits', async () => 
 
   assert.deepEqual(hits, [
     {
-      memoryId: 'ext:raw-2',
+      contextId: 'ext:raw-2',
       title: 'Counseling work',
       summary: 'Counseling work\n\nCaroline is interested in counseling work.',
       content: extractionContent('Counseling work', 'Caroline is interested in counseling work.'),
@@ -3844,7 +4054,7 @@ test('recall defaults to extraction mode', async () => {
     limit: 3,
     mode: 'hybrid',
   }]);
-  assert.deepEqual(hits.map((hit) => hit.memoryId), ['ext:raw-1']);
+  assert.deepEqual(hits.map((hit) => hit.contextId), ['ext:raw-1']);
 });
 
 test('recall session mode searches sessionTable only', async () => {
@@ -3885,10 +4095,10 @@ test('recall session mode searches sessionTable only', async () => {
   assert.deepEqual(calls, [{
     query: 'readable session',
     vector: [0, 1],
-    limit: 10,
+    limit: 40,
   }]);
   assert.equal(hits.length, 1);
-  assert.equal(hits[0].memoryId, 'session:42');
+  assert.equal(hits[0].contextId, 'session:42');
   assert.equal(hits[0].title, 'Readable session title');
   assert.equal(hits[0].summary, 'Readable session summary');
   assert.equal(hits[0].content, 'Readable session title\n\nReadable session summary');
@@ -3995,12 +4205,12 @@ test('recallMemories returns recalled memory when budget is positive', async () 
   });
 
   assert.deepEqual(hits, [{
-    memoryId: 'recalled:memory',
+    contextId: 'recalled:memory',
     content: 'Caroline researched adoption agencies.',
     references: ['D12:17', 'D2:8'],
   }]);
   assert.equal(calls[0].limit, 20);
-  assert.deepEqual(seenCandidates.map((candidate) => candidate.memoryId), [
+  assert.deepEqual(seenCandidates.map((candidate) => candidate.contextId), [
     'ext:ext-1',
     'ext:ext-2',
   ]);
@@ -4037,7 +4247,7 @@ test('recallMemories uses candidate refs for recalled memory', async () => {
   });
 
   assert.deepEqual(hits, [{
-    memoryId: 'recalled:memory',
+    contextId: 'recalled:memory',
     content: 'Caroline researched adoption agencies.',
     references: ['D2:8'],
   }]);

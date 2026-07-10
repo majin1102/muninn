@@ -22,7 +22,7 @@ import {
   replaySnapshots,
   threadFromSnapshots,
 } from './session.js';
-import type { SessionThread } from './session.js';
+import type { SessionSnapshot, SessionThread } from './session.js';
 import { extractEpochDraft, flushThreads } from './session.js';
 import { indexPendingExtractions, indexTouchedExtractions } from './extraction.js';
 import { renderCurrentBatchTurns } from '../llm/extraction-input.js';
@@ -43,6 +43,29 @@ export type ExtractorCheckpointState = {
 const noopCheckpointMutex: CheckpointMutex = {
   run: async (operation) => operation(),
 };
+
+function snapshotThreadScope(snapshot: SessionSnapshot): {
+  project: string;
+  agent: string;
+  sessionId: string;
+  extractor: string;
+} {
+  return {
+    project: snapshot.project,
+    agent: snapshot.agent,
+    sessionId: snapshot.sessionId,
+    extractor: snapshot.extractor,
+  };
+}
+
+function snapshotThreadKey(snapshot: SessionSnapshot): string {
+  return [
+    snapshot.project,
+    snapshot.agent,
+    snapshot.sessionId,
+    snapshot.extractor,
+  ].join('\0');
+}
 
 export class Extractor {
   name: string;
@@ -764,11 +787,12 @@ export class Extractor {
     indexedTurnIds: Set<string>;
     committedEpoch?: number;
   } | null> {
-    const rowsById = new Map<string, Array<import('./session.js').SessionSnapshot>>();
+    const rowsById = new Map<string, SessionSnapshot[]>();
     for (const row of deltaRows) {
-      const rows = rowsById.get(row.sessionId) ?? [];
+      const key = snapshotThreadKey(row);
+      const rows = rowsById.get(key) ?? [];
       rows.push(row);
-      rowsById.set(row.sessionId, rows);
+      rowsById.set(key, rows);
     }
     const restored: SessionThread[] = [];
     const indexedTurnIds = new Set<string>();
@@ -778,7 +802,19 @@ export class Extractor {
       if (!isActiveThread(threadRef.updatedAt, this.activeWindowDays)) {
         continue;
       }
-      const rows = await this.client.sessionSnapshotTable.threadSnapshots(threadRef.sessionId);
+      const anchor = await this.client.sessionSnapshotTable.getSnapshot(threadRef.latestSnapshotId);
+      if (!anchor) {
+        return null;
+      }
+      if (
+        anchor.sessionId !== threadRef.sessionId
+        || anchor.snapshotSequence !== threadRef.latestSnapshotSequence
+        || anchor.extractor !== this.name
+      ) {
+        return null;
+      }
+      const threadKey = snapshotThreadKey(anchor);
+      const rows = await this.client.sessionSnapshotTable.threadSnapshots(snapshotThreadScope(anchor));
       if (rows.length === 0) {
         return null;
       }
@@ -798,7 +834,7 @@ export class Extractor {
         threadRef.indexedSnapshotSequence ?? null,
       );
       let previousRefs = new Set(latest.references);
-      const appendedRows = (rowsById.get(threadRef.sessionId) ?? [])
+      const appendedRows = (rowsById.get(threadKey) ?? [])
         .filter((row) => row.snapshotSequence > threadRef.latestSnapshotSequence)
         .sort((left, right) => left.snapshotSequence - right.snapshotSequence);
       for (const row of appendedRows) {
@@ -835,7 +871,7 @@ export class Extractor {
           : committedEpoch;
         previousRefs = new Set(row.references);
       }
-      rowsById.delete(threadRef.sessionId);
+      rowsById.delete(threadKey);
       restored.push(thread);
     }
     for (const rows of rowsById.values()) {
@@ -844,7 +880,7 @@ export class Extractor {
       if (!first) {
         continue;
       }
-      const fullRows = (await this.client.sessionSnapshotTable.threadSnapshots(first.sessionId))
+      const fullRows = (await this.client.sessionSnapshotTable.threadSnapshots(snapshotThreadScope(first)))
         .sort((left, right) => left.snapshotSequence - right.snapshotSequence);
       const firstIndex = fullRows.findIndex((row) => row.snapshotId === first.snapshotId);
       if (firstIndex < 0) {

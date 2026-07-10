@@ -1,10 +1,9 @@
 export interface MemoryHit {
-  memoryId: string;
+  contextId: string;
   title?: string;
   summary?: string;
   content: string;
   references?: string[];
-  contextId?: string | null;
   project?: string;
   sessionId?: string;
   agent?: string;
@@ -16,7 +15,7 @@ export interface MemoryHit {
 }
 
 export interface MemoryResponse {
-  memoryHits: MemoryHit[];
+  contextHits: MemoryHit[];
   requestId: string;
 }
 
@@ -145,14 +144,14 @@ export interface ListRequest {
 
 export interface GetTimelineRequest {
   database?: string;
-  memoryId: string;
+  contextId: string;
   beforeLimit?: number;
   afterLimit?: number;
 }
 
 export interface GetDetailRequest {
   database?: string;
-  memoryId: string;
+  contextId: string;
 }
 
 export interface Artifact {
@@ -270,7 +269,7 @@ export interface SessionGroupsResponse {
 }
 
 export interface TurnPreview {
-  memoryId: string;
+  contextId: string;
   createdAt: string;
   updatedAt: string;
   turnSequence?: number | null;
@@ -283,14 +282,14 @@ export interface TurnPreview {
 }
 
 export interface SessionSegmentPreview {
-  memoryId: string;
+  contextId: string;
   title: string;
   createdAt: string;
   updatedAt?: string;
 }
 
 export interface SessionTimelineItem {
-  memoryId: string;
+  contextId: string;
   kind: 'summary' | 'signals' | 'extraction';
   title: string;
   createdAt: string;
@@ -323,7 +322,7 @@ export interface SessionTurnDetailResponse {
 }
 
 export interface MemoryDocument {
-  memoryId: string;
+  contextId: string;
   kind: 'turn' | 'session' | 'extraction';
   title: string;
   markdown: string;
@@ -348,13 +347,13 @@ export interface MemoryDocumentResponse {
 }
 
 export interface MemoryReference {
-  memoryId: string;
+  contextId: string;
   timestamp: string;
   summary: string;
 }
 
 export interface SessionSnapshotCard {
-  memoryId: string;
+  contextId: string;
   title: string;
   summary: string;
   updatedAt: string;
@@ -419,7 +418,7 @@ export interface SearchResultItem {
   content: string;
   references?: string[];
   createdAt?: string;
-  memoryId?: string;
+  contextId?: string;
 }
 
 export interface SearchSessionResult {

@@ -49,7 +49,7 @@ type ToolModel = (
 ) => Promise<LlmToolResult | null>;
 
 type SessionExtractionDeps = {
-  memories?: Pick<Memories, 'get'>;
+  memories?: Pick<Memories, 'getContext'>;
   model?: ToolModel;
   database?: string;
 };

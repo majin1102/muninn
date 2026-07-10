@@ -648,7 +648,7 @@ type ExtractSessionThreadParams = {
   extractionEpoch: number;
   signal?: AbortSignal;
   database?: string;
-  memories?: Pick<Memories, 'get'>;
+  memories?: Pick<Memories, 'getContext'>;
   sessionExtractionImpl?: SessionExtractionImpl;
   inputBudgetStoppedBy?: SessionExtractionInput['inputBudgetStoppedBy'];
   candidateTurnCount?: number;

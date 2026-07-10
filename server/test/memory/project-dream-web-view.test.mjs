@@ -72,7 +72,7 @@ test('buildProjectDreamView exposes project dream rows and skill details without
       ].join('\n'),
     },
   ]);
-  assert.equal('memoryId' in view, false);
+  assert.equal('contextId' in view, false);
   assert.equal('sessionSnapshotVersion' in view, false);
   assert.equal('createdAt' in view, false);
 });

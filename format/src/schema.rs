@@ -104,39 +104,12 @@ pub fn dreaming_schema() -> Schema {
 }
 
 pub fn session_schema(dimensions: usize) -> Schema {
-    let mut key_metadata = std::collections::HashMap::new();
-    key_metadata.insert(
-        "lance-schema:unenforced-primary-key".to_string(),
-        "true".to_string(),
-    );
-
     Schema::new(vec![
         Field::new("latest_snapshot_id", DataType::Utf8, false),
-        Field::new("session_id", DataType::Utf8, false).with_metadata({
-            let mut metadata = key_metadata.clone();
-            metadata.insert(
-                "lance-schema:unenforced-primary-key:position".to_string(),
-                "3".to_string(),
-            );
-            metadata
-        }),
-        Field::new("project", DataType::Utf8, false).with_metadata({
-            let mut metadata = key_metadata.clone();
-            metadata.insert(
-                "lance-schema:unenforced-primary-key:position".to_string(),
-                "1".to_string(),
-            );
-            metadata
-        }),
+        Field::new("session_id", DataType::Utf8, false),
+        Field::new("project", DataType::Utf8, false),
         Field::new("cwd", DataType::Utf8, false),
-        Field::new("agent", DataType::Utf8, false).with_metadata({
-            let mut metadata = key_metadata;
-            metadata.insert(
-                "lance-schema:unenforced-primary-key:position".to_string(),
-                "2".to_string(),
-            );
-            metadata
-        }),
+        Field::new("agent", DataType::Utf8, false),
         Field::new("title", DataType::Utf8, false),
         Field::new("summary", DataType::Utf8, false),
         Field::new("search_text", DataType::Utf8, false),
@@ -229,14 +202,14 @@ mod tests {
     }
 
     #[test]
-    fn session_schema_has_expected_fields_and_no_id() {
+    fn session_schema_has_expected_fields() {
         let schema = session_schema(4);
         assert_eq!(
             schema
                 .fields()
                 .iter()
                 .map(|field| field.name().as_str())
-                .collect::<Vec<_>>(),
+            .collect::<Vec<_>>(),
             vec![
                 "latest_snapshot_id",
                 "session_id",
@@ -250,6 +223,7 @@ mod tests {
                 "updated_at",
             ]
         );
+        assert!(schema.field_with_name("context_id").is_err());
         assert!(schema.field_with_name("latest_snapshot_id").is_ok());
         assert!(schema.field_with_name("session_id").is_ok());
         assert!(schema.field_with_name("project").is_ok());
@@ -265,27 +239,9 @@ mod tests {
         assert!(schema.field_with_name("references").is_err());
         assert!(schema.field_with_name("created_at").is_err());
 
-        let project = schema.field_with_name("project").unwrap();
-        let agent = schema.field_with_name("agent").unwrap();
-        let session_id = schema.field_with_name("session_id").unwrap();
-        assert_eq!(
-            project
-                .metadata()
-                .get("lance-schema:unenforced-primary-key:position"),
-            Some(&"1".to_string())
-        );
-        assert_eq!(
-            agent
-                .metadata()
-                .get("lance-schema:unenforced-primary-key:position"),
-            Some(&"2".to_string())
-        );
-        assert_eq!(
-            session_id
-                .metadata()
-                .get("lance-schema:unenforced-primary-key:position"),
-            Some(&"3".to_string())
-        );
+        assert!(schema.field_with_name("project").unwrap().metadata().is_empty());
+        assert!(schema.field_with_name("agent").unwrap().metadata().is_empty());
+        assert!(schema.field_with_name("session_id").unwrap().metadata().is_empty());
     }
 
     #[test]

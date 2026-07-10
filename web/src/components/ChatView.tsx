@@ -30,15 +30,15 @@ import { ScrollArea } from './ui/scroll-area.js';
 
 type ChatViewProps = {
   document: MemoryDocument | null;
-  activeMemoryId: string | null;
-  focusMemoryId: string | null;
+  activeContextId: string | null;
+  focusContextId: string | null;
   focusRequestId: number;
   sessionTurns: ProjectTurnNode[];
   onVisibleTurnIdsChange?: (turnIds: string[]) => void;
   canLoadMoreAfter?: boolean;
   loadingMoreAfter?: boolean;
   onLoadMoreAfter?: () => void;
-  onLoadTurnDetail?: (memoryId: string) => Promise<ProjectTurnNode>;
+  onLoadTurnDetail?: (contextId: string) => Promise<ProjectTurnNode>;
   loading: boolean;
   error: string | null;
 };
@@ -47,8 +47,8 @@ const TIME_SEPARATOR_GAP_MS = 5 * 60 * 1000;
 
 export function ChatView({
   document,
-  activeMemoryId,
-  focusMemoryId,
+  activeContextId,
+  focusContextId,
   focusRequestId,
   sessionTurns,
   onVisibleTurnIdsChange,
@@ -68,13 +68,13 @@ export function ChatView({
   const [turnDetailErrors, setTurnDetailErrors] = useState<Record<string, string>>({});
   const sessionDetailKey = sessionTurns[0]
     ? `${sessionTurns[0].agent}:${sessionTurns[0].sessionKey}`
-    : document?.memoryId ?? 'empty';
+    : document?.contextId ?? 'empty';
   const displayTurns = useMemo(() => sessionTurns.map((turn) => (
-    turn.memoryId && turnDetails[turn.memoryId] ? { ...turn, ...turnDetails[turn.memoryId] } : turn
+    turn.contextId && turnDetails[turn.contextId] ? { ...turn, ...turnDetails[turn.contextId] } : turn
   )), [sessionTurns, turnDetails]);
   const turnWindow = useMemo(
-    () => chatTurnWindow(displayTurns, focusMemoryId, beforeLimit, afterLimit),
-    [afterLimit, beforeLimit, displayTurns, focusMemoryId],
+    () => chatTurnWindow(displayTurns, focusContextId, beforeLimit, afterLimit),
+    [afterLimit, beforeLimit, displayTurns, focusContextId],
   );
   const laterTurnCount = turnWindow.afterCount > 0
     ? Math.min(CHAT_CONTEXT_STEP, turnWindow.afterCount)
@@ -84,33 +84,33 @@ export function ChatView({
   ), [displayTurns.length, document, turnWindow.turns]);
   const timelineItems = useMemo(() => chatTimelineItems(entries, TIME_SEPARATOR_GAP_MS), [entries]);
 
-  const ensureTurnDetail = useCallback(async (memoryId: string | undefined) => {
-    if (!memoryId || !onLoadTurnDetail || turnDetails[memoryId] || turnDetailLoading[memoryId]) {
+  const ensureTurnDetail = useCallback(async (contextId: string | undefined) => {
+    if (!contextId || !onLoadTurnDetail || turnDetails[contextId] || turnDetailLoading[contextId]) {
       return;
     }
-    setTurnDetailLoading((current) => ({ ...current, [memoryId]: true }));
+    setTurnDetailLoading((current) => ({ ...current, [contextId]: true }));
     setTurnDetailErrors((current) => {
       const next = { ...current };
-      delete next[memoryId];
+      delete next[contextId];
       return next;
     });
     try {
-      const detail = await onLoadTurnDetail(memoryId);
-      setTurnDetails((current) => ({ ...current, [memoryId]: detail }));
+      const detail = await onLoadTurnDetail(contextId);
+      setTurnDetails((current) => ({ ...current, [contextId]: detail }));
     } catch (error) {
       setTurnDetailErrors((current) => ({
         ...current,
-        [memoryId]: error instanceof Error ? error.message : String(error),
+        [contextId]: error instanceof Error ? error.message : String(error),
       }));
     } finally {
-      setTurnDetailLoading((current) => ({ ...current, [memoryId]: false }));
+      setTurnDetailLoading((current) => ({ ...current, [contextId]: false }));
     }
   }, [onLoadTurnDetail, turnDetailLoading, turnDetails]);
 
   useEffect(() => {
     setBeforeLimit(INITIAL_CHAT_CONTEXT_RADIUS);
-    setAfterLimit(focusMemoryId ? INITIAL_CHAT_CONTEXT_RADIUS : DEFAULT_CHAT_INITIAL_TURN_COUNT);
-  }, [focusMemoryId, focusRequestId]);
+    setAfterLimit(focusContextId ? INITIAL_CHAT_CONTEXT_RADIUS : DEFAULT_CHAT_INITIAL_TURN_COUNT);
+  }, [focusContextId, focusRequestId]);
 
   useEffect(() => {
     setTurnDetails({});
@@ -119,7 +119,7 @@ export function ChatView({
   }, [sessionDetailKey]);
 
   useEffect(() => {
-    if (!focusMemoryId) {
+    if (!focusContextId) {
       return;
     }
 
@@ -127,7 +127,7 @@ export function ChatView({
       const scroller = scrollRef.current;
       const active = scroller
         ? Array.from(scroller.querySelectorAll<HTMLElement>('.chat-message-row'))
-          .find((row) => row.dataset.memoryId === focusMemoryId)
+          .find((row) => row.dataset.contextId === focusContextId)
         : null;
       if (!active || !scroller) {
         return;
@@ -146,7 +146,7 @@ export function ChatView({
       window.cancelAnimationFrame(frame);
       window.clearTimeout(timeout);
     };
-  }, [focusMemoryId, focusRequestId, timelineItems.length, turnWindow.turns]);
+  }, [focusContextId, focusRequestId, timelineItems.length, turnWindow.turns]);
 
   useEffect(() => {
     const scroller = scrollRef.current;
@@ -211,7 +211,7 @@ export function ChatView({
           }
           return renderTimelineEntry({
             item,
-            activeMemoryId,
+            activeContextId,
             activeMessageRef,
             documentAgent: document?.agent ?? document?.extractor ?? '',
             onLoadTurnDetail: ensureTurnDetail,
@@ -247,34 +247,34 @@ function visibleTurnIds(scroller: HTMLElement): string[] {
   const scrollerRect = scroller.getBoundingClientRect();
   const ids: string[] = [];
   const seen = new Set<string>();
-  for (const row of Array.from(scroller.querySelectorAll<HTMLElement>('.chat-message-row[data-memory-id]'))) {
-    const memoryId = row.dataset.memoryId;
-    if (!memoryId || seen.has(memoryId)) {
+  for (const row of Array.from(scroller.querySelectorAll<HTMLElement>('.chat-message-row[data-context-id]'))) {
+    const contextId = row.dataset.contextId;
+    if (!contextId || seen.has(contextId)) {
       continue;
     }
     const rowRect = row.getBoundingClientRect();
     if (rowRect.bottom <= scrollerRect.top || rowRect.top >= scrollerRect.bottom) {
       continue;
     }
-    seen.add(memoryId);
-    ids.push(memoryId);
+    seen.add(contextId);
+    ids.push(contextId);
   }
   return ids;
 }
 
 function renderTimelineEntry(params: {
   item: Extract<ChatTimelineItem, { type: 'entry' }>;
-  activeMemoryId: string | null;
+  activeContextId: string | null;
   activeMessageRef: React.RefObject<HTMLElement | null>;
   documentAgent: string;
-  onLoadTurnDetail: (memoryId: string | undefined) => void;
+  onLoadTurnDetail: (contextId: string | undefined) => void;
   turnDetailLoading: Record<string, boolean>;
   turnDetailErrors: Record<string, string>;
   loadedTurnDetails: Record<string, ProjectTurnNode>;
 }) {
   const {
     item,
-    activeMemoryId,
+    activeContextId,
     activeMessageRef,
     documentAgent,
     onLoadTurnDetail,
@@ -287,10 +287,10 @@ function renderTimelineEntry(params: {
     return (
       <section
         key={item.key}
-        data-memory-id={group.memoryId}
+        data-context-id={group.contextId}
         className={cn(
           'chat-message-row chat-message-row-agent chat-tool-group-row',
-          group.memoryId === activeMemoryId && 'chat-turn-active',
+          group.contextId === activeContextId && 'chat-turn-active',
         )}
       >
         <Avatar className="chat-avatar chat-avatar-agent chat-avatar-spacer">
@@ -300,10 +300,10 @@ function renderTimelineEntry(params: {
           <ToolCallList
             toolCalls={group.toolCalls}
             agent={group.agent ?? documentAgent}
-            memoryId={group.memoryId}
-            loadingDetail={group.memoryId ? Boolean(turnDetailLoading[group.memoryId]) : false}
-            detailError={group.memoryId ? turnDetailErrors[group.memoryId] : undefined}
-            hasFullDetail={group.memoryId ? Boolean(loadedTurnDetails[group.memoryId]) : false}
+            contextId={group.contextId}
+            loadingDetail={group.contextId ? Boolean(turnDetailLoading[group.contextId]) : false}
+            detailError={group.contextId ? turnDetailErrors[group.contextId] : undefined}
+            hasFullDetail={group.contextId ? Boolean(loadedTurnDetails[group.contextId]) : false}
             onLoadTurnDetail={onLoadTurnDetail}
             startedAt={group.startedAt}
             completedAt={group.completedAt}
@@ -319,12 +319,12 @@ function renderTimelineEntry(params: {
   return (
     <section
       key={item.key}
-      ref={message.memoryId === activeMemoryId && message.role === 'user' ? activeMessageRef : null}
-      data-memory-id={message.memoryId}
+      ref={message.contextId === activeContextId && message.role === 'user' ? activeMessageRef : null}
+      data-context-id={message.contextId}
       className={cn(
         'chat-message-row',
         message.role === 'agent' && 'chat-message-row-agent',
-        message.memoryId === activeMemoryId && 'chat-turn-active',
+        message.contextId === activeContextId && 'chat-turn-active',
       )}
     >
       <Avatar className={cn('chat-avatar', message.role === 'agent' && 'chat-avatar-agent')}>
@@ -369,7 +369,7 @@ function entriesFromDocument(document: MemoryDocument | null): ChatTimelineEntry
   }
   if (document.events && document.events.length > 0) {
     return entriesFromEvents(document.events, {
-      memoryId: document.memoryId,
+      contextId: document.contextId,
       agent: document.agent ?? document.extractor,
       startedAt: document.createdAt,
       completedAt: document.updatedAt,
@@ -377,7 +377,7 @@ function entriesFromDocument(document: MemoryDocument | null): ChatTimelineEntry
   }
   if (document.prompt || document.response) {
     return entriesFromFallback({
-      memoryId: document.memoryId,
+      contextId: document.contextId,
       agent: document.agent ?? document.extractor,
       createdAt: document.createdAt ?? document.updatedAt,
       updatedAt: document.updatedAt,
@@ -391,7 +391,7 @@ function entriesFromDocument(document: MemoryDocument | null): ChatTimelineEntry
     type: 'message',
     message: {
       ...message,
-      memoryId: document.memoryId,
+      contextId: document.contextId,
       agent: document.agent ?? document.extractor,
       timestamp: document.updatedAt,
     },
@@ -402,14 +402,14 @@ function entriesFromTurns(turns: ProjectTurnNode[]): ChatTimelineEntry[] {
   return turns.flatMap((turn) => {
     if (turn.events && turn.events.length > 0) {
       return entriesFromEvents(turn.events, {
-        memoryId: turn.memoryId,
+        contextId: turn.contextId,
         agent: turn.agent,
         startedAt: turn.createdAt,
         completedAt: turn.updatedAt,
       });
     }
     return entriesFromFallback({
-      memoryId: turn.memoryId,
+      contextId: turn.contextId,
       agent: turn.agent,
       createdAt: turn.createdAt,
       updatedAt: turn.updatedAt,
@@ -484,7 +484,7 @@ function ChatTimeMetaRow({
 function ToolCallList({
   toolCalls,
   agent,
-  memoryId,
+  contextId,
   loadingDetail,
   detailError,
   hasFullDetail,
@@ -496,11 +496,11 @@ function ToolCallList({
 }: {
   toolCalls: ChatToolCall[];
   agent?: string;
-  memoryId?: string;
+  contextId?: string;
   loadingDetail: boolean;
   detailError?: string;
   hasFullDetail: boolean;
-  onLoadTurnDetail: (memoryId: string | undefined) => void;
+  onLoadTurnDetail: (contextId: string | undefined) => void;
   startedAt?: string;
   completedAt?: string;
   totalStartedAt?: string;
@@ -536,7 +536,7 @@ function ToolCallList({
                     const nextOpen = event.currentTarget.open;
                     setOpenRows((current) => ({ ...current, [key]: nextOpen }));
                     if (nextOpen && hasPreviewOnlyToolIo(toolCall) && !hasFullDetail) {
-                      onLoadTurnDetail(memoryId);
+                      onLoadTurnDetail(contextId);
                     }
                   }}
                 >

@@ -138,7 +138,8 @@ test('imported project list is exposed as a single aggregated API', async () => 
   assert.match(serverSource, /const response: ImportedProjectsResponse/);
   assert.match(serverSource, /getCapturePolicy\(adapter\.agent\)/);
   assert.match(serverSource, /sessionCount: 0/);
-  assert.match(serverSource, /captureEnabled: true/);
+  assert.match(serverSource, /captureEnabled: enabled === true/);
+  assert.doesNotMatch(serverSource, /if \(!enabled \|\| !isCanonicalProjectIdentity\(project\)\)/);
   assert.match(demoSource, /export async function getDemoImportedProjects/);
 });
 

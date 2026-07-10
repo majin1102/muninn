@@ -46,7 +46,7 @@ struct TurnListParams {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct TurnTimelineParams {
-    memory_id: String,
+    context_id: String,
     before_limit: Option<usize>,
     after_limit: Option<usize>,
 }
@@ -92,6 +92,15 @@ struct SessionListSnapshotsParams {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct SessionSnapshotThreadParams {
+    project: String,
+    agent: String,
+    session_id: String,
+    extractor: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct SessionInsertParams {
     snapshots: Vec<SessionSnapshot>,
 }
@@ -113,7 +122,7 @@ struct SessionQueryParams {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SessionGetParams {
-    identities: Vec<SessionIdentity>,
+    identities: Option<Vec<SessionIdentity>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -311,7 +320,7 @@ impl CoreBinding {
     pub async fn turn_timeline(&self, params: Value) -> NapiResult<Value> {
         let params = parse_params::<TurnTimelineParams>(params)?;
         let resources = self.resources().await?;
-        let memory_id = parse_memory_id(&params.memory_id, MemoryLayer::Turn)?;
+        let memory_id = parse_memory_id(&params.context_id, MemoryLayer::Turn)?;
         into_napi_value(
             resources
                 .turn_table
@@ -454,12 +463,18 @@ impl CoreBinding {
     }
 
     #[napi(js_name = "sessionSnapshotThread")]
-    pub async fn session_snapshot_thread(&self, session_id: String) -> NapiResult<Value> {
+    pub async fn session_snapshot_thread(&self, params: Value) -> NapiResult<Value> {
+        let params = parse_params::<SessionSnapshotThreadParams>(params)?;
         let resources = self.resources().await?;
         into_napi_value(
             resources
                 .session_snapshot_table
-                .load_thread_snapshots(&session_id)
+                .load_thread_snapshots(
+                    &params.project,
+                    &params.agent,
+                    &params.session_id,
+                    params.extractor.as_deref(),
+                )
                 .await,
         )
     }
@@ -557,7 +572,8 @@ impl CoreBinding {
     pub async fn session_get(&self, params: Value) -> NapiResult<Value> {
         let params = parse_params::<SessionGetParams>(params)?;
         let resources = self.resources().await?;
-        into_napi_value(resources.session_table.get(&params.identities).await)
+        let identities = params.identities.unwrap_or_default();
+        into_napi_value(resources.session_table.get(&identities).await)
     }
 
     #[napi(js_name = "sessionList")]
