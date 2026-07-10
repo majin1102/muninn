@@ -123,7 +123,6 @@ export async function applyExtractionTableChanges(
     throw new Error('snapshot cwd is required to write extractions');
   }
 
-  const sourceIds = new Set<string>();
   const deletedIds = new Set<string>();
   const upsertIds = new Set<string>();
   for (const change of changes) {
@@ -133,25 +132,17 @@ export async function applyExtractionTableChanges(
     }
     if (change.type === 'merge') {
       for (const extractionId of change.extractionIds) {
-        sourceIds.add(extractionId);
         deletedIds.add(extractionId);
       }
       upsertIds.add(change.extractionId);
       continue;
     }
     if (change.type === 'update') {
-      sourceIds.add(change.extractionId);
       upsertIds.add(change.extractionId);
       continue;
     }
-    sourceIds.add(change.extractionId);
     deletedIds.add(change.extractionId);
   }
-
-  const existingRows = sourceIds.size > 0
-    ? await client.extractionTable.get({ ids: [...sourceIds] })
-    : [];
-  const existingById = new Map(existingRows.map((row) => [row.id, row]));
 
   if (deletedIds.size > 0) {
     await client.extractionTable.delete({ ids: [...deletedIds] });
@@ -189,8 +180,7 @@ export async function applyExtractionTableChanges(
     if (!extraction || !text) {
       continue;
     }
-    const existing = storedById.get(id) ?? (change.type === 'update' ? existingById.get(id) : undefined);
-    const references = referencesForChange(change, existingById);
+    const existing = storedById.get(id);
     const now = new Date().toISOString();
     const title = extractionTitle(extraction);
     const summary = extractionSummary(title, extraction);
@@ -201,7 +191,7 @@ export async function applyExtractionTableChanges(
       content: extractionContent(title, extraction),
       cwd,
       vector: await embedText(summary, signal),
-      turnRefs: references,
+      turnRefs: extraction.references,
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
     });
@@ -303,23 +293,6 @@ export const __testing = {
   indexTouchedExtractions,
   indexPendingExtractions,
 };
-
-function referencesForChange(
-  change: Extract<ExtractionChange, { type: 'add' | 'merge' | 'update' }>,
-  existingById: Map<string, StoredExtraction>,
-): string[] {
-  if (change.type === 'add') {
-    return change.references;
-  }
-  if (change.type === 'update') {
-    return change.references ?? existingById.get(change.extractionId)?.turnRefs ?? [];
-  }
-  const references = [];
-  for (const extractionId of change.extractionIds) {
-    references.push(...(existingById.get(extractionId)?.turnRefs ?? []));
-  }
-  return [...new Set(references)];
-}
 
 function cloneExtraction(
   row: ExtractionUnit,
