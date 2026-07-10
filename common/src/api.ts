@@ -91,6 +91,28 @@ export interface ProjectDreamRequest {
   project: string;
 }
 
+export interface StartupRecentRequest {
+  cwd: string;
+}
+
+export interface StartupRecentSession {
+  contextId: string;
+  title: string;
+  summary: string;
+}
+
+export interface StartupRecentSkill {
+  name: string;
+  summary: string;
+}
+
+export interface StartupRecentResponse {
+  project: string;
+  recentSessions: StartupRecentSession[];
+  instructionSignals: string[];
+  skills: StartupRecentSkill[];
+}
+
 export interface MemoryWatermark {
   pending: {
     turns: string[];

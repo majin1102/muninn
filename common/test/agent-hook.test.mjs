@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { captureFromTranscript, resolveHookConfig } from '../dist/agent-hook.js';
+import { captureFromTranscript, createMuninnClient, resolveHookConfig } from '../dist/agent-hook.js';
 import { muninnSessionKey } from '../dist/session-identity.js';
 
 const ENABLE_MARKER = '<!-- muninn:capture-current-session action=enable nonce=muninn-capture-v1 -->';
@@ -35,6 +35,37 @@ test('hook config falls back to live managed server state', async (t) => {
   const config = resolveHookConfig({});
 
   assert.equal(config.baseUrl, 'http://127.0.0.1:52423');
+});
+
+test('startupRecent validates and strips fields outside the startup context schema', async () => {
+  const client = createMuninnClient({
+    config: { baseUrl: 'http://127.0.0.1:8080', timeoutMs: 1000 },
+    fetchImpl: async (url, init) => {
+      assert.equal(url, 'http://127.0.0.1:8080/api/v1/startup/recent');
+      assert.equal(init.method, 'POST');
+      assert.deepEqual(JSON.parse(init.body), { cwd: '/repo/muninn' });
+      return {
+        ok: true,
+        status: 200,
+        async text() {
+          return JSON.stringify({
+            project: 'github.com/example/muninn',
+            recentSessions: [{ contextId: 'session:1', title: 'Title', summary: 'Summary', internal: true }],
+            instructionSignals: ['Instruction'],
+            skills: [{ name: 'skill', summary: 'Summary', detail: 'hidden' }],
+            requestId: 'hidden',
+          });
+        },
+      };
+    },
+  });
+
+  assert.deepEqual(await client.startupRecent({ cwd: '/repo/muninn' }), {
+    project: 'github.com/example/muninn',
+    recentSessions: [{ contextId: 'session:1', title: 'Title', summary: 'Summary' }],
+    instructionSignals: ['Instruction'],
+    skills: [{ name: 'skill', summary: 'Summary' }],
+  });
 });
 
 test('captureFromTranscript enables current session capture from marker and captures prior turns', async (t) => {

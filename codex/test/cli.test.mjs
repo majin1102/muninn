@@ -88,6 +88,103 @@ test('codex hook CLI ignores stale sidecar config and uses server URL environmen
   }
 });
 
+test('codex hook CLI injects startup context as formatted JSON', async () => {
+  const requests = [];
+  const context = {
+    project: 'github.com/majin1102/muninn',
+    recentSessions: [{ contextId: 'session:1', title: 'Title', summary: 'Summary' }],
+    instructionSignals: ['Keep contracts aligned.'],
+    skills: [{ name: 'review-pr-loop', summary: 'Review until clean.' }],
+  };
+  const server = createServer(async (request, response) => {
+    let body = '';
+    request.setEncoding('utf8');
+    for await (const chunk of request) {
+      body += chunk;
+    }
+    requests.push({ url: request.url, method: request.method, body });
+    response.writeHead(200, { 'content-type': 'application/json' });
+    response.end(JSON.stringify(context));
+  });
+  await listen(server);
+  try {
+    const address = server.address();
+    assert.ok(address && typeof address === 'object');
+    const result = await runHook([
+      '--server-url',
+      `http://127.0.0.1:${address.port}`,
+    ], {
+      hook_event_name: 'SessionStart',
+      source: 'startup',
+      cwd: '/repo/muninn',
+    });
+
+    assert.equal(result.code, 0);
+    assert.equal(result.stderr, '');
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].method, 'POST');
+    assert.equal(requests[0].url, '/api/v1/startup/recent');
+    assert.deepEqual(JSON.parse(requests[0].body), { cwd: '/repo/muninn' });
+    assert.deepEqual(JSON.parse(result.stdout), {
+      hookSpecificOutput: {
+        hookEventName: 'SessionStart',
+        additionalContext: JSON.stringify(context, null, 2),
+      },
+    });
+  } finally {
+    await close(server);
+  }
+});
+
+test('codex hook CLI ignores non-startup SessionStart sources', async () => {
+  const result = await runHook([], {
+    hook_event_name: 'SessionStart',
+    source: 'compact',
+    cwd: '/repo/muninn',
+  });
+
+  assert.equal(result.code, 0);
+  assert.equal(result.stdout, '');
+});
+
+test('codex hook CLI emits no hook output when startup context server is unavailable', async () => {
+  const result = await runHook([], {
+    hook_event_name: 'SessionStart',
+    source: 'startup',
+    cwd: '/repo/muninn',
+  });
+
+  assert.equal(result.code, 0);
+  assert.equal(result.stdout, '');
+  assert.match(result.stderr, /startup context request failed/);
+});
+
+test('codex hook CLI silently skips startup context when server response is malformed', async () => {
+  const server = createServer((_request, response) => {
+    response.writeHead(200, { 'content-type': 'application/json' });
+    response.end(JSON.stringify({ project: 'missing-required-fields' }));
+  });
+  await listen(server);
+  try {
+    const address = server.address();
+    assert.ok(address && typeof address === 'object');
+    const result = await runHook([
+      '--server-url',
+      `http://127.0.0.1:${address.port}`,
+    ], {
+      hook_event_name: 'SessionStart',
+      source: 'startup',
+      cwd: '/repo/muninn',
+    });
+
+    assert.equal(result.code, 0);
+    assert.equal(result.stdout, '');
+    assert.equal(result.stderr, '');
+  } finally {
+    await close(server);
+  }
+});
+
 async function writeTranscript() {
   const root = await mkdtemp(path.join(os.tmpdir(), 'muninn-codex-cli-'));
   process.env.MUNINN_HOME = path.join(root, 'muninn-home');

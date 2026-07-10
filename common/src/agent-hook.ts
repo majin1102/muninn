@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { appendFile, mkdir, open, readFile, realpath, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import type { TurnContent } from './api';
+import type { StartupRecentRequest, StartupRecentResponse, TurnContent } from './api';
 import { CODEX_AGENT } from './agents';
 import type { CapturePolicyFile, CaptureProgressFile } from './capture-policy';
 import { muninnSessionKey, type MuninnSessionIdentity } from './session-identity';
@@ -74,10 +74,12 @@ export type MuninnClient = {
   captureTurns?(turns: TurnContent[]): Promise<boolean>;
   deleteSession?(identity: MuninnSessionIdentity): Promise<boolean>;
   finalizeMemory?(): Promise<boolean>;
+  startupRecent?(request: StartupRecentRequest): Promise<StartupRecentResponse | null>;
 };
 
 export type HookPayload = {
   hook_event_name?: string;
+  source?: string;
   session_id?: string;
   transcript_path?: string;
   agent_transcript_path?: string;
@@ -215,6 +217,64 @@ export function createMuninnClient(params: { config: HookConfig; fetchImpl?: Fet
         return false;
       }
     },
+    async startupRecent(request) {
+      try {
+        const response = await fetchImpl(`${params.config.baseUrl}/api/v1/startup/recent`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(request),
+          signal: AbortSignal.timeout(params.config.timeoutMs),
+        });
+        const body = await safeReadBody(response);
+        if (!response.ok) {
+          logWarn(label, `muninn startup context failed with status ${response.status}${body ? ` body=${body}` : ''}`);
+          return null;
+        }
+        try {
+          return parseStartupRecentResponse(JSON.parse(body));
+        } catch {
+          return null;
+        }
+      } catch (error) {
+        logWarn(label, 'muninn startup context request failed', error);
+        return null;
+      }
+    },
+  };
+}
+
+function parseStartupRecentResponse(value: unknown): StartupRecentResponse | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+  const response = value as Partial<StartupRecentResponse>;
+  if (!(typeof response.project === 'string' && response.project.length > 0)
+    || !Array.isArray(response.recentSessions)
+    || !response.recentSessions.every((session) => (
+      Boolean(session)
+      && typeof session.contextId === 'string' && session.contextId.length > 0
+      && typeof session.title === 'string' && session.title.length > 0
+      && typeof session.summary === 'string' && session.summary.length > 0
+    ))
+    || !Array.isArray(response.instructionSignals)
+    || !response.instructionSignals.every((signal) => typeof signal === 'string' && signal.length > 0)
+    || !Array.isArray(response.skills)
+    || !response.skills.every((skill) => (
+      Boolean(skill)
+      && typeof skill.name === 'string' && skill.name.length > 0
+      && typeof skill.summary === 'string' && skill.summary.length > 0
+    ))) {
+    return null;
+  }
+  return {
+    project: response.project,
+    recentSessions: response.recentSessions.map((session) => ({
+      contextId: session.contextId,
+      title: session.title,
+      summary: session.summary,
+    })),
+    instructionSignals: [...response.instructionSignals],
+    skills: response.skills.map((skill) => ({ name: skill.name, summary: skill.summary })),
   };
 }
 
