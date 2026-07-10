@@ -697,7 +697,7 @@ async function rerankSessionHits(
     .map((hit, index) => ({ hit, candidate: sessionRerankCandidate(hit, index + 1) }))
     .filter((entry): entry is { hit: RecallHit; candidate: SessionRerankCandidate } => Boolean(entry.candidate));
   const fallback = deterministicSessionOrder(query, candidates);
-  if (candidates.length <= 1) {
+  if (candidates.length === 0) {
     return fallback.map((entry) => entry.hit).slice(0, limit);
   }
   try {

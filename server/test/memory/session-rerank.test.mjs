@@ -173,6 +173,38 @@ test('recall session mode can return no hits when reranker filters every candida
   assert.deepEqual(hits, []);
 });
 
+test('recall session mode lets reranker filter a single unrelated candidate', async () => {
+  const client = {
+    sessionTable: {
+      search: async () => [
+        sessionRow({
+          snapshotId: 'session:61',
+          sessionId: 'session-61',
+          title: 'Codex authentication',
+          summary: 'Local auth and proxy setup notes.',
+          updatedAt: '2024-01-02T00:00:00Z',
+        }),
+      ],
+    },
+    extractionTable: {
+      search: async () => {
+        throw new Error('extractionTable.search should not be called by session recall');
+      },
+    },
+  };
+
+  const hits = await recallMemories(client, 'lance wiki', 10, {
+    mode: 'session',
+    embed: async () => [0, 1],
+    sessionRerank: async () => ({
+      contextIds: [],
+      filteredContextIds: ['session:61'],
+    }),
+  });
+
+  assert.deepEqual(hits, []);
+});
+
 function sessionRow({
   snapshotId,
   sessionId,
