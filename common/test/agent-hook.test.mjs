@@ -50,7 +50,7 @@ test('startupRecent validates and strips fields outside the startup context sche
         async text() {
           return JSON.stringify({
             project: 'github.com/example/muninn',
-            recentSessions: [{ contextId: 'session_1', title: 'Title', summary: 'Summary', internal: true }],
+            recentSessions: [{ contextId: 'session:1', title: 'Title', summary: 'Summary', internal: true }],
             instructionSignals: ['Instruction'],
             skills: [{ name: 'skill', summary: 'Summary', detail: 'hidden' }],
             requestId: 'hidden',
@@ -62,7 +62,7 @@ test('startupRecent validates and strips fields outside the startup context sche
 
   assert.deepEqual(await client.startupRecent({ cwd: '/repo/muninn' }), {
     project: 'github.com/example/muninn',
-    recentSessions: [{ contextId: 'session_1', title: 'Title', summary: 'Summary' }],
+    recentSessions: [{ contextId: 'session:1', title: 'Title', summary: 'Summary' }],
     instructionSignals: ['Instruction'],
     skills: [{ name: 'skill', summary: 'Summary' }],
   });

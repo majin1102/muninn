@@ -92,7 +92,7 @@ test('codex hook CLI injects startup context as formatted JSON', async () => {
   const requests = [];
   const context = {
     project: 'github.com/majin1102/muninn',
-    recentSessions: [{ contextId: 'session_1', title: 'Title', summary: 'Summary' }],
+    recentSessions: [{ contextId: 'session:1', title: 'Title', summary: 'Summary' }],
     instructionSignals: ['Keep contracts aligned.'],
     skills: [{ name: 'review-pr-loop', summary: 'Review until clean.' }],
   };

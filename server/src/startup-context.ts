@@ -4,6 +4,7 @@ import type {
   StartupRecentSkill,
 } from '@muninn/common';
 import { dreaming, sessions, turns } from './backend.js';
+import { parseContextId } from './api/memory.js';
 import type { ProjectDreamSignals } from './dreaming/content.js';
 import type { SessionSnapshotRow, TurnRow } from './native.js';
 
@@ -68,13 +69,7 @@ async function recentSnapshots(project: string, deps: StartupContextDeps): Promi
     .filter((entry) => entry.project === project && Boolean(entry.snapshotId));
   const loaded = await Promise.all(entries.map((entry) => deps.getSession(entry.snapshotId!)));
   return loaded
-    .filter((snapshot): snapshot is SessionSnapshotRow => Boolean(
-      snapshot
-      && snapshot.project === project
-      && snapshot.snapshotId.startsWith('session:')
-      && normalizeText(snapshot.title)
-      && normalizeText(snapshot.summary),
-    ))
+    .filter((snapshot): snapshot is SessionSnapshotRow => isPublicSessionSnapshot(snapshot, project))
     .sort((left, right) => (
       right.updatedAt.localeCompare(left.updatedAt)
       || left.snapshotId.localeCompare(right.snapshotId)
@@ -84,10 +79,27 @@ async function recentSnapshots(project: string, deps: StartupContextDeps): Promi
 
 function toRecentSession(snapshot: SessionSnapshotRow): StartupRecentSession {
   return {
-    contextId: `session_${snapshot.snapshotId.slice('session:'.length)}`,
+    contextId: snapshot.snapshotId,
     title: snapshot.title.trim(),
     summary: snapshot.summary.trim(),
   };
+}
+
+function isPublicSessionSnapshot(
+  snapshot: SessionSnapshotRow | null,
+  project: string,
+): snapshot is SessionSnapshotRow {
+  if (!snapshot
+    || snapshot.project !== project
+    || !normalizeText(snapshot.title)
+    || !normalizeText(snapshot.summary)) {
+    return false;
+  }
+  try {
+    return parseContextId(snapshot.snapshotId).kind === 'session';
+  } catch {
+    return false;
+  }
 }
 
 async function supportTurnTimes(

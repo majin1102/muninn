@@ -28,7 +28,8 @@ export async function readInstallStatus(params: {
   return {
     codex: {
       mcp: hasCodexMcp(codexConfig, 'muninn-mcp'),
-      hook: hasCodexStopHook(codexConfig, 'muninn-codex-hook'),
+      hook: hasCodexHook(codexConfig, 'Stop', 'muninn-codex-hook')
+        && hasCodexHook(codexConfig, 'SessionStart', 'muninn-codex-hook', 'startup'),
     },
     claude: {
       mcp: hasClaudeMcp(claudeMcpJson, 'muninn-mcp'),
@@ -56,26 +57,42 @@ function hasCodexMcp(input: string, commandName: string): boolean {
   return false;
 }
 
-function hasCodexStopHook(input: string, commandName: string): boolean {
+function hasCodexHook(
+  input: string,
+  event: 'SessionStart' | 'Stop',
+  commandName: string,
+  matcher?: string,
+): boolean {
   const lines = input.split('\n');
+  const eventHeader = `[[hooks.${event}]]`;
+  const hookHeader = `[[hooks.${event}.hooks]]`;
   for (let index = 0; index < lines.length;) {
-    if (stripInlineComment(lines[index]).trim() !== '[[hooks.Stop]]') {
+    if (stripInlineComment(lines[index]).trim() !== eventHeader) {
       index += 1;
       continue;
     }
 
+    const block: string[] = [];
     index += 1;
-    while (index < lines.length && !startsNextStopBlock(lines[index])) {
-      if (stripInlineComment(lines[index]).trim() !== '[[hooks.Stop.hooks]]') {
-        index += 1;
+    while (index < lines.length && !startsNextHookBlock(lines[index], hookHeader)) {
+      block.push(lines[index]);
+      index += 1;
+    }
+    if (matcher !== undefined && !block.some((line) => isTomlValueLine(line, 'matcher', matcher))) {
+      continue;
+    }
+
+    for (let blockIndex = 0; blockIndex < block.length;) {
+      if (stripInlineComment(block[blockIndex]).trim() !== hookHeader) {
+        blockIndex += 1;
         continue;
       }
 
       const hook: string[] = [];
-      index += 1;
-      while (index < lines.length && !isTomlTableHeader(lines[index])) {
-        hook.push(lines[index]);
-        index += 1;
+      blockIndex += 1;
+      while (blockIndex < block.length && stripInlineComment(block[blockIndex]).trim() !== hookHeader) {
+        hook.push(block[blockIndex]);
+        blockIndex += 1;
       }
       if (hook.some((line) => isCommandLine(line, commandName))) {
         return true;
@@ -83,6 +100,11 @@ function hasCodexStopHook(input: string, commandName: string): boolean {
     }
   }
   return false;
+}
+
+function isTomlValueLine(line: string, key: string, expected: string): boolean {
+  const match = new RegExp(`^\\s*${key}\\s*=\\s*(.+?)\\s*$`).exec(stripInlineComment(line));
+  return Boolean(match && parseTomlString(match[1].trimEnd()) === expected);
 }
 
 function hasClaudeMcp(input: string, commandName: string): boolean {
@@ -275,9 +297,9 @@ function isTomlTableHeader(line: string): boolean {
   return /^\s*\[/.test(stripInlineComment(line));
 }
 
-function startsNextStopBlock(line: string): boolean {
+function startsNextHookBlock(line: string, hookHeader: string): boolean {
   const trimmed = stripInlineComment(line).trim();
-  if (trimmed === '[[hooks.Stop.hooks]]') {
+  if (trimmed === hookHeader) {
     return false;
   }
   return isTomlTableHeader(line);

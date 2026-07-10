@@ -53,7 +53,7 @@ test('buildStartupRecent returns five sessions and independent recent/project si
 
   assert.equal(result.recentSessions.length, 5);
   assert.deepEqual(result.recentSessions[0], {
-    contextId: 'session_snapshot-5',
+    contextId: 'session:6',
     title: 'Session 5',
     summary: 'Summary 5',
   });
@@ -81,16 +81,17 @@ test('buildStartupRecent excludes malformed sessions and signals without support
   const valid = snapshot(1);
   valid.memorySignals = [signal('turn:missing', 'unsupported')];
   const invalid = { ...snapshot(2), title: '' };
+  const invalidId = { ...snapshot(3), snapshotId: 'session:not-public' };
   const deps = {
     async listSessionIndex() {
-      return [invalid, valid].map((row) => ({
+      return [invalidId, invalid, valid].map((row) => ({
         project: row.project,
         latestUpdatedAt: row.updatedAt,
         snapshotId: row.snapshotId,
       }));
     },
     async getSession(snapshotId) {
-      return [invalid, valid].find((row) => row.snapshotId === snapshotId) ?? null;
+      return [invalidId, invalid, valid].find((row) => row.snapshotId === snapshotId) ?? null;
     },
     async getTurn() {
       return null;
@@ -132,7 +133,7 @@ test('buildStartupRecent ranks sessions by snapshot update time instead of stale
 
   assert.deepEqual(
     result.recentSessions.map((session) => session.contextId),
-    ['session_snapshot-5', 'session_snapshot-4', 'session_snapshot-3', 'session_snapshot-2', 'session_snapshot-1'],
+    ['session:6', 'session:5', 'session:4', 'session:3', 'session:2'],
   );
 });
 
@@ -172,7 +173,7 @@ test('buildStartupRecent normalizes multiline instruction and skill signals', as
 function snapshot(index) {
   const timestamp = `2026-07-${String(index + 1).padStart(2, '0')}T00:00:00.000Z`;
   return {
-    snapshotId: `session:snapshot-${index}`,
+    snapshotId: `session:${index + 1}`,
     sessionId: `session-${index}`,
     project: 'github.com/majin1102/muninn',
     cwd: '/repo/muninn',

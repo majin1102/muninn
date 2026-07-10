@@ -292,6 +292,44 @@ test('readInstallStatus detects installed Codex and Claude entries', async () =>
   assert.equal(status.claude.hook, true);
 });
 
+test('readInstallStatus requires both Codex SessionStart and Stop hooks', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'muninn-status-codex-hooks-'));
+  const cwd = path.join(root, 'project');
+  const configPath = path.join(root, '.codex', 'config.toml');
+  await mkdir(path.dirname(configPath), { recursive: true });
+
+  const sessionStart = [
+    '[[hooks.SessionStart]]',
+    'matcher = "startup"',
+    '[[hooks.SessionStart.hooks]]',
+    'type = "command"',
+    'command = "muninn-codex-hook"',
+    '',
+  ];
+  const stop = [
+    '[[hooks.Stop]]',
+    '[[hooks.Stop.hooks]]',
+    'type = "command"',
+    'command = "muninn-codex-hook"',
+    '',
+  ];
+
+  await writeFile(configPath, stop.join('\n'));
+  assert.equal((await readInstallStatus({ home: root, cwd, scope: 'user' })).codex.hook, false);
+
+  await writeFile(configPath, sessionStart.join('\n'));
+  assert.equal((await readInstallStatus({ home: root, cwd, scope: 'user' })).codex.hook, false);
+
+  await writeFile(configPath, [...sessionStart, ...stop].join('\n'));
+  assert.equal((await readInstallStatus({ home: root, cwd, scope: 'user' })).codex.hook, true);
+
+  await writeFile(configPath, [
+    ...sessionStart.map((line) => line === 'matcher = "startup"' ? 'matcher = "resume"' : line),
+    ...stop,
+  ].join('\n'));
+  assert.equal((await readInstallStatus({ home: root, cwd, scope: 'user' })).codex.hook, false);
+});
+
 test('readInstallStatus ignores comments status messages wrapper names and unrelated JSON fields', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'muninn-status-false-positive-'));
   const cwd = path.join(root, 'project');
@@ -381,6 +419,12 @@ test('readInstallStatus accepts workspace package bin fallback paths', async () 
   await writeFile(path.join(root, '.codex', 'config.toml'), [
     '[mcp_servers.muninn]',
     'command = "/repo/cli/node_modules/@muninn/mcp/dist/index.js"',
+    '',
+    '[[hooks.SessionStart]]',
+    'matcher = "startup"',
+    '[[hooks.SessionStart.hooks]]',
+    'type = "command"',
+    'command = "/repo/cli/node_modules/@muninn/codex/dist/cli.js"',
     '',
     '[[hooks.Stop]]',
     '[[hooks.Stop.hooks]]',

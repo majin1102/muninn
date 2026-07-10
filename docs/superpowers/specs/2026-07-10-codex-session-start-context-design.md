@@ -102,12 +102,12 @@ Example:
   "project": "muninn",
   "recentSessions": [
     {
-      "contextId": "session_01JZ8WQ3J17Y6V8C5Y0FQYQH4P",
+      "contextId": "session:42",
       "title": "梳理 Muninn hooks",
       "summary": "核对各 agent 的 hook 能力，确认 Codex 支持 SessionStart。"
     },
     {
-      "contextId": "session_01JZ8WJ8C1R9EKQTM1R0BRFJ3S",
+      "contextId": "session:41",
       "title": "恢复 Codex 项目会话",
       "summary": "排查侧边栏项目路径归属问题并恢复历史会话。"
     }
@@ -136,7 +136,7 @@ The server selects recent sessions as follows:
 4. Skip snapshots whose public `contextId`, title, or summary is empty.
 5. Continue through older candidates until five valid sessions are selected or candidates are exhausted.
 
-Every returned `contextId` is a public `session_*` handle. Codex may pass it unchanged to the Muninn MCP drill-down tools. The id is opaque; the agent must not parse or synthesize it.
+Every returned `contextId` is a public `session:*` handle. Codex may pass it unchanged to the Muninn MCP drill-down tools. The id is opaque; the agent must not parse or synthesize it.
 
 Because the event runs only for a newly created session, there is no persisted current session to exclude.
 
@@ -345,7 +345,7 @@ This feature must consume the existing project signal view and score ordering. I
 
 - Starting a new Codex session in a project with Muninn history injects valid formatted JSON developer context.
 - The JSON contains at most five recent sessions, twenty instructions, and ten skills.
-- Every returned session includes a public `session_*` `contextId`, title, and summary.
+- Every returned session includes a public `session:*` `contextId`, title, and summary.
 - Recent instruction and skill quotas are selected by supporting-turn time, not score.
 - Remaining instruction and skill slots are selected by the existing project score ordering.
 - No signal provenance, score, timestamp, support turn, internal id, or full skill detail reaches model context.
