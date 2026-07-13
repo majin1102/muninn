@@ -67,6 +67,14 @@ test('session tree uses project agent session identity instead of cwd for row ke
   assert.doesNotMatch(apiSource, /params\.set\('cwd', session\.cwd\)/);
 });
 
+test('session tree keeps the current session selected when a child extraction is active', async () => {
+  const source = await readFile(new URL('../src/components/SessionTree.tsx', import.meta.url), 'utf8');
+
+  assert.match(source, /sessionActive \? 'tree-trigger-session-active' : ''/);
+  assert.doesNotMatch(source, /sessionActive && !sessionHasActiveChild/);
+  assert.doesNotMatch(source, /function hasActiveSessionChild/);
+});
+
 test('session loading uses a small first page instead of fetching one hundred turns', async () => {
   const apiSource = await readFile(new URL('../src/lib/api.ts', import.meta.url), 'utf8');
 

@@ -448,6 +448,36 @@ export function App() {
     });
   }
 
+  async function locateConversationEnd(): Promise<string | null> {
+    const session = activeSession;
+    if (!session) {
+      return null;
+    }
+
+    updateSession(session, { loading: true });
+    try {
+      const position = await client.locateSessionEnd(session);
+      if (!hasTurn(session, position.contextId)) {
+        const response = await client.loadSessionTurns(session, position.offset);
+        updateSession(session, {
+          turns: mergeSessionTurns(session.turns, response.turns),
+          nextOffset: response.nextOffset,
+          loading: false,
+          loaded: true,
+        });
+      } else {
+        updateSession(session, { loading: false });
+      }
+      setFocusContextId(position.contextId);
+      setFocusRequestId((current) => current + 1);
+      return position.contextId;
+    } catch (error) {
+      setProjectError(asErrorMessage(error));
+      updateSession(session, { loading: false });
+      return null;
+    }
+  }
+
   function openView(view: PrimaryView) {
     window.location.hash = `#/${view}`;
   }
@@ -628,6 +658,7 @@ export function App() {
                   onActiveTimelineChange={setActiveTimelineId}
                   onOpenTimeline={openTimelineInPane}
                   onLocateConversationTurn={locateConversationTurn}
+                  onLocateConversationEnd={locateConversationEnd}
                   onLoadTurnDetail={(contextId) => {
                     if (!activeSession) {
                       return Promise.reject(new Error('No active session'));

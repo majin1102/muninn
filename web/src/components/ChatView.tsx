@@ -33,6 +33,8 @@ type ChatViewProps = {
   activeContextId: string | null;
   focusContextId: string | null;
   focusRequestId: number;
+  scrollToBottomRequestId: number;
+  scrollToBottomContextId: string | null;
   sessionTurns: ProjectTurnNode[];
   onVisibleTurnIdsChange?: (turnIds: string[]) => void;
   canLoadMoreAfter?: boolean;
@@ -50,6 +52,8 @@ export function ChatView({
   activeContextId,
   focusContextId,
   focusRequestId,
+  scrollToBottomRequestId,
+  scrollToBottomContextId,
   sessionTurns,
   onVisibleTurnIdsChange,
   canLoadMoreAfter = false,
@@ -61,6 +65,7 @@ export function ChatView({
 }: ChatViewProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const activeMessageRef = useRef<HTMLElement>(null);
+  const handledScrollToBottomRequestRef = useRef(0);
   const [beforeLimit, setBeforeLimit] = useState(INITIAL_CHAT_CONTEXT_RADIUS);
   const [afterLimit, setAfterLimit] = useState(DEFAULT_CHAT_INITIAL_TURN_COUNT);
   const [turnDetails, setTurnDetails] = useState<Record<string, ProjectTurnNode>>({});
@@ -147,6 +152,39 @@ export function ChatView({
       window.clearTimeout(timeout);
     };
   }, [focusContextId, focusRequestId, timelineItems.length, turnWindow.turns]);
+
+  useEffect(() => {
+    if (scrollToBottomRequestId === handledScrollToBottomRequestRef.current) {
+      return;
+    }
+
+    const scrollToBottom = () => {
+      const scroller = scrollRef.current;
+      const target = scroller && scrollToBottomContextId
+        ? Array.from(scroller.querySelectorAll<HTMLElement>('.chat-message-row'))
+          .find((row) => row.dataset.contextId === scrollToBottomContextId)
+        : null;
+      if (!scroller || !target) {
+        return false;
+      }
+      handledScrollToBottomRequestRef.current = scrollToBottomRequestId;
+      scroller.scrollTo({
+        top: scroller.scrollHeight,
+        behavior: 'smooth',
+      });
+      return true;
+    };
+
+    if (!scrollToBottom()) {
+      return;
+    }
+    const frame = window.requestAnimationFrame(scrollToBottom);
+    const timeout = window.setTimeout(scrollToBottom, 50);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.clearTimeout(timeout);
+    };
+  }, [scrollToBottomContextId, scrollToBottomRequestId, timelineItems.length, turnWindow.turns]);
 
   useEffect(() => {
     const scroller = scrollRef.current;

@@ -112,6 +112,7 @@ export type AppClient = {
     timeline: ProjectTimelineNode[];
   }>;
   locateSessionTurn(session: ProjectSessionNode, contextId: string): Promise<number>;
+  locateSessionEnd(session: ProjectSessionNode): Promise<{ contextId: string; offset: number }>;
   loadTurnDetail(session: ProjectSessionNode, contextId: string): Promise<ProjectTurnNode>;
   getDocument(contextId: string): Promise<MemoryDocument>;
   searchRecall(params: {
@@ -383,6 +384,28 @@ export function createAppClient(apiBase: string, usesDemoData: boolean): AppClie
         `/app/api/session/agents/${encodeURIComponent(session.agent)}/sessions/${encodeURIComponent(session.sessionKey)}/turn-position?${params.toString()}`,
       );
       return response.offset;
+    },
+    async locateSessionEnd(session) {
+      if (usesDemoData) {
+        const response = await getDemoSessionTurns(session.agent, session.sessionKey, 0, 1_000);
+        const index = response.turns.length - 1;
+        const turn = response.turns[index];
+        if (!turn) {
+          throw new Error('session has no turns');
+        }
+        return {
+          contextId: turn.contextId,
+          offset: Math.floor(index / SESSION_TURN_PAGE_SIZE) * SESSION_TURN_PAGE_SIZE,
+        };
+      }
+      const params = new URLSearchParams({
+        project: session.projectKey,
+        limit: String(SESSION_TURN_PAGE_SIZE),
+      });
+      const response = await fetchJson<SessionTurnPositionResponse>(
+        `/app/api/session/agents/${encodeURIComponent(session.agent)}/sessions/${encodeURIComponent(session.sessionKey)}/latest-turn-position?${params.toString()}`,
+      );
+      return { contextId: response.turnId, offset: response.offset };
     },
     async loadTurnDetail(session, contextId) {
       if (usesDemoData) {

@@ -117,6 +117,14 @@ function sessionTurnPositionPath(agent, sessionKey, { project = TEST_PROJECT, tu
   return `/app/api/session/agents/${encodeURIComponent(agent)}/sessions/${encodeURIComponent(sessionKey)}/turn-position?${params.toString()}`;
 }
 
+function latestSessionTurnPositionPath(agent, sessionKey, { project = TEST_PROJECT, limit = 10 } = {}) {
+  const params = new URLSearchParams({
+    project,
+    limit: String(limit),
+  });
+  return `/app/api/session/agents/${encodeURIComponent(agent)}/sessions/${encodeURIComponent(sessionKey)}/latest-turn-position?${params.toString()}`;
+}
+
 async function captureTurnAndGetTurn(turn) {
   const response = await captureTurn(turn);
   assert.equal(response.status, 204);
@@ -1387,6 +1395,68 @@ test('ui session turn paging skips non-previewable rows without ending early', a
   const secondBody = await json(secondResponse);
   assert.deepEqual(secondBody.turns.map((turn) => turn.prompt), ['preview prompt 2']);
   assert.equal(secondBody.nextOffset, null);
+});
+
+test('ui latest turn position points to the final page of the current session', async (t) => {
+  const { dir, homeDir, configPath } = await makeDatasetUri();
+  t.after(async () => {
+    await shutdownCoreForTests();
+    resetSessionTreeCacheForTests();
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  process.env.MUNINN_HOME = homeDir;
+  await writeMuninnConfig(configPath, {});
+  resetSessionTreeCacheForTests();
+
+  const tables = await getNativeTables(defaultStorageTarget(homeDir));
+  await tables.turnTable.insert({
+    turns: [
+      serializeTurnRow({
+        turnId: 'turn:18446744073709551615',
+        createdAt: '2026-06-03T02:00:00.000Z',
+        updatedAt: '2026-06-03T02:00:00.000Z',
+        sessionId: 'latest-session',
+        project: TEST_PROJECT,
+        cwd: TEST_CWD,
+        agent: 'agent-a',
+        extractor: 'test-extractor',
+        events: [],
+        artifacts: [],
+        prompt: null,
+        response: null,
+      }),
+      ...Array.from({ length: 5 }, (_, index) => serializeTurnRow({
+        turnId: 'turn:18446744073709551615',
+        createdAt: `2026-06-03T02:0${index + 1}:00.000Z`,
+        updatedAt: `2026-06-03T02:0${index + 1}:00.000Z`,
+        sessionId: 'latest-session',
+        project: TEST_PROJECT,
+        cwd: TEST_CWD,
+        agent: 'agent-a',
+        extractor: 'test-extractor',
+        events: [],
+        artifacts: null,
+        prompt: `latest prompt ${index + 1}`,
+        response: `latest response ${index + 1}`,
+      })),
+    ],
+  });
+
+  const response = await app.request(latestSessionTurnPositionPath('agent-a', 'latest-session', { limit: 2 }));
+  assert.equal(response.status, 200);
+  const body = await json(response);
+  assert.equal(body.offset, 5);
+
+  const pageResponse = await app.request(sessionTurnsPath('agent-a', 'latest-session', {
+    offset: body.offset,
+    limit: 2,
+  }));
+  assert.equal(pageResponse.status, 200);
+  const pageBody = await json(pageResponse);
+  assert.deepEqual(pageBody.turns.map((turn) => turn.contextId), [body.turnId]);
+  assert.deepEqual(pageBody.turns.map((turn) => turn.prompt), ['latest prompt 5']);
+  assert.equal(pageBody.nextOffset, null);
 });
 
 test('ui session turn-position maps invalid turn ids to invalidRequest', async (t) => {
