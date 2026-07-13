@@ -64,7 +64,10 @@ export function sessionStartOutput(context: StartupRecentResponse): Record<strin
   return {
     hookSpecificOutput: {
       hookEventName: 'SessionStart',
-      additionalContext: JSON.stringify(context, null, 2),
+      additionalContext: [
+        'Use recent session contextIds to read the relevant session before answering questions about prior work.',
+        JSON.stringify(context, null, 2),
+      ].join('\n\n'),
     },
   };
 }
