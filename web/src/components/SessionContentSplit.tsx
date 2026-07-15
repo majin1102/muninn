@@ -20,7 +20,7 @@ import {
 import { cn } from '../lib/utils.js';
 import { ArtifactList } from './ArtifactList.js';
 import { ChatView } from './ChatView.js';
-import { LocateIcon } from './icons.js';
+import { LocateIcon, ScrollToBottomIcon } from './icons.js';
 import { TimelinePane } from './TimelinePane.js';
 import { EmptyState } from './ui/empty-state.js';
 import { ScrollArea } from './ui/scroll-area.js';
@@ -38,6 +38,8 @@ type SessionContentSplitProps = {
   onActiveTimelineChange: (contextId: string | null) => void;
   onOpenTimeline: (contextId: string) => void;
   onLocateConversationTurn: (contextId: string) => void;
+  onLocateConversationEnd: () => Promise<string | null>;
+  conversationGapBeforeContextId: string | null;
   onLoadTurnDetail: (contextId: string) => Promise<ProjectTurnNode>;
   canLoadMoreAfter: boolean;
   loadingMoreAfter: boolean;
@@ -61,6 +63,8 @@ export function SessionContentSplit({
   onActiveTimelineChange,
   onOpenTimeline,
   onLocateConversationTurn,
+  onLocateConversationEnd,
+  conversationGapBeforeContextId,
   onLoadTurnDetail,
   canLoadMoreAfter,
   loadingMoreAfter,
@@ -74,6 +78,9 @@ export function SessionContentSplit({
   const [timelineWidth, setTimelineWidth] = useState(DEFAULT_TIMELINE_WIDTH);
   const [containerWidth, setContainerWidth] = useState<number | undefined>(undefined);
   const [visibleConversationTurnIds, setVisibleConversationTurnIds] = useState<string[]>([]);
+  const [scrollToBottomRequestId, setScrollToBottomRequestId] = useState(0);
+  const [scrollToBottomContextId, setScrollToBottomContextId] = useState<string | null>(null);
+  const [locatingEnd, setLocatingEnd] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const hasContext = hasSessionContext(session, document);
   const title = session?.displaySessionId ?? document?.title ?? 'Session';
@@ -110,6 +117,7 @@ export function SessionContentSplit({
   );
   const canLocateConversation = Boolean(activeConversationContextId)
     && locateConversationEnabled(activeTimelineItem, conversationWindowTurnIds);
+  const canScrollToBottom = !loading && !loadingMoreAfter && !locatingEnd && Boolean(session);
   const style = useMemo(() => ({
     '--session-content-grid': gridTemplateForMode(mode, timelineWidth, containerWidth),
   }) as CSSProperties, [containerWidth, mode, timelineWidth]);
@@ -168,6 +176,33 @@ export function SessionContentSplit({
       }}
     >
       <LocateIcon />
+    </button>
+  );
+  const scrollToBottomButton = (
+    <button
+      className="session-locate-button"
+      type="button"
+      title="Go to latest conversation content"
+      aria-label="Go to latest conversation content"
+      disabled={!canScrollToBottom}
+      onClick={() => {
+        if (!canScrollToBottom) {
+          return;
+        }
+        setContentTab('conversation');
+        setLocatingEnd(true);
+        void onLocateConversationEnd()
+          .then((contextId) => {
+            if (!contextId) {
+              return;
+            }
+            setScrollToBottomContextId(contextId);
+            setScrollToBottomRequestId((current) => current + 1);
+          })
+          .finally(() => setLocatingEnd(false));
+      }}
+    >
+      <ScrollToBottomIcon />
     </button>
   );
   const modeButton = (
@@ -265,6 +300,7 @@ export function SessionContentSplit({
             </div>
             <div className="session-conversation-toolbar-actions">
               {locateConversationButton}
+              {scrollToBottomButton}
               {modeButton}
             </div>
           </div>
@@ -275,6 +311,9 @@ export function SessionContentSplit({
             activeContextId={activeConversationContextId}
             focusContextId={focusContextId}
             focusRequestId={focusRequestId}
+            scrollToBottomRequestId={scrollToBottomRequestId}
+            scrollToBottomContextId={scrollToBottomContextId}
+            conversationGapBeforeContextId={conversationGapBeforeContextId}
             sessionTurns={sessionTurns}
             onVisibleTurnIdsChange={setVisibleConversationTurnIds}
             canLoadMoreAfter={canLoadMoreAfter}

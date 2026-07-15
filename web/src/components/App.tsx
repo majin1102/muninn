@@ -32,6 +32,11 @@ type RouteState = {
   sessionSelectionId: string | null;
 };
 
+type ConversationGap = {
+  offset: number;
+  beforeContextId: string;
+};
+
 const navItems: Array<{ view: PrimaryView; label: string; icon: ComponentType }> = [
   { view: 'recall', label: 'Recall', icon: Search },
   { view: 'session', label: 'Session', icon: FileText },
@@ -61,6 +66,7 @@ export function App() {
   const [openTimelineRequestId, setOpenTimelineRequestId] = useState(0);
   const [focusContextId, setFocusContextId] = useState<string | null>(() => parseRoute(window.location.hash).contextId);
   const [focusRequestId, setFocusRequestId] = useState(0);
+  const [conversationGaps, setConversationGaps] = useState<Record<string, ConversationGap>>({});
   const [document, setDocument] = useState<MemoryDocument | null>(null);
   const [documentLoading, setDocumentLoading] = useState(false);
   const [documentError, setDocumentError] = useState<string | null>(null);
@@ -88,6 +94,9 @@ export function App() {
   const activeSession = activeTurnSession ?? documentSession ?? selectedSession;
   const activeSessionTurns = activeSession?.turns ?? [];
   const activeSessionSelectionId = activeSession ? selectedSessionKey(activeSession) : selectedSessionId;
+  const activeConversationGap = activeSession
+    ? visibleConversationGap(activeSession, conversationGaps[selectedSessionKey(activeSession)])
+    : undefined;
   const pendingActiveSessionLookup = Boolean(
     route.contextId
     && !activeTurnSession
@@ -348,13 +357,22 @@ export function App() {
     }
     updateSession(session, { loading: true });
     try {
-      const response = await client.loadSessionTurns(session, session.nextOffset);
+      const offset = session.nextOffset;
+      const response = await client.loadSessionTurns(session, offset);
       updateSession(session, {
         turns: mergeSessionTurns(session.turns, response.turns),
         nextOffset: response.nextOffset,
         loading: false,
         loaded: true,
       });
+      const key = selectedSessionKey(session);
+      if (conversationGaps[key]?.offset === offset) {
+        setConversationGaps((current) => {
+          const next = { ...current };
+          delete next[key];
+          return next;
+        });
+      }
     } catch (error) {
       setProjectError(asErrorMessage(error));
       updateSession(session, { loading: false });
@@ -446,6 +464,57 @@ export function App() {
       setFocusContextId(contextId);
       setFocusRequestId((current) => current + 1);
     });
+  }
+
+  async function locateConversationEnd(): Promise<string | null> {
+    const session = activeSession;
+    if (!session || session.loading) {
+      return null;
+    }
+    const key = selectedSessionKey(session);
+    const routeHash = window.location.hash;
+
+    updateSession(session, { loading: true });
+    try {
+      const position = await client.locateSessionEnd(session);
+      if (!hasTurn(session, position.contextId)) {
+        const response = await client.loadSessionTurns(session, position.offset);
+        const hasGap = session.nextOffset !== null && session.nextOffset < position.offset;
+
+        updateSession(session, {
+          turns: mergeSessionTurns(session.turns, response.turns),
+          nextOffset: hasGap ? session.nextOffset : response.nextOffset,
+          loading: false,
+          loaded: true,
+        });
+        setConversationGaps((current) => {
+          if (!hasGap) {
+            const next = { ...current };
+            delete next[key];
+            return next;
+          }
+          return {
+            ...current,
+            [key]: {
+              offset: position.offset,
+              beforeContextId: response.turns[0]?.contextId ?? position.contextId,
+            },
+          };
+        });
+      } else {
+        updateSession(session, { loading: false });
+      }
+      if (window.location.hash !== routeHash) {
+        return null;
+      }
+      setFocusContextId(position.contextId);
+      setFocusRequestId((current) => current + 1);
+      return position.contextId;
+    } catch (error) {
+      setProjectError(asErrorMessage(error));
+      updateSession(session, { loading: false });
+      return null;
+    }
   }
 
   function openView(view: PrimaryView) {
@@ -628,6 +697,8 @@ export function App() {
                   onActiveTimelineChange={setActiveTimelineId}
                   onOpenTimeline={openTimelineInPane}
                   onLocateConversationTurn={locateConversationTurn}
+                  onLocateConversationEnd={locateConversationEnd}
+                  conversationGapBeforeContextId={activeConversationGap?.beforeContextId ?? null}
                   onLoadTurnDetail={(contextId) => {
                     if (!activeSession) {
                       return Promise.reject(new Error('No active session'));
@@ -814,6 +885,18 @@ function sameSession(left: ProjectSessionNode, right: ProjectSessionNode): boole
 
 function hasTurn(session: ProjectSessionNode, contextId: string): boolean {
   return session.turns.some((turn) => turn.contextId === contextId);
+}
+
+function visibleConversationGap(
+  session: ProjectSessionNode,
+  gap: ConversationGap | undefined,
+): ConversationGap | undefined {
+  return gap
+    && session.nextOffset !== null
+    && session.nextOffset <= gap.offset
+    && hasTurn(session, gap.beforeContextId)
+    ? gap
+    : undefined;
 }
 
 function mergeSessionTurns(existing: ProjectTurnNode[], incoming: ProjectTurnNode[]): ProjectTurnNode[] {

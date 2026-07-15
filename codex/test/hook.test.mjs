@@ -143,7 +143,10 @@ test('handleSessionStart loads only startup events and formats JSON developer co
   assert.deepEqual(sessionStartOutput(response), {
     hookSpecificOutput: {
       hookEventName: 'SessionStart',
-      additionalContext: JSON.stringify(response, null, 2),
+      additionalContext: [
+        'Use recent session contextIds to read the relevant session before answering questions about prior work.',
+        JSON.stringify(response, null, 2),
+      ].join('\n\n'),
     },
   });
 

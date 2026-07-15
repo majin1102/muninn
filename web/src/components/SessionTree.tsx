@@ -478,7 +478,6 @@ export function SessionTree({
                   </div>
                 );
               }
-              const sessionHasActiveChild = hasActiveSessionChild(session, activeContextId);
               const sessionOpen = canExpandSessions && (openSessions[key] ?? false);
               return (
               <Collapsible
@@ -491,7 +490,7 @@ export function SessionTree({
                   className={[
                     'tree-trigger tree-trigger-session',
                     !canExpandSessions ? 'tree-trigger-session-flat' : '',
-                    sessionActive && !sessionHasActiveChild ? 'tree-trigger-session-active' : '',
+                    sessionActive ? 'tree-trigger-session-active' : '',
                   ].filter(Boolean).join(' ')}
                 >
                   {canExpandSessions ? (
@@ -812,14 +811,6 @@ function sessionKey(session: ProjectSessionNode): string {
     agent: session.agent,
     sessionId: session.sessionKey,
   });
-}
-
-function hasActiveSessionChild(session: ProjectSessionNode, activeContextId: string | null): boolean {
-  if (!activeContextId) {
-    return false;
-  }
-  return session.turns.some((turn) => turn.contextId === activeContextId)
-    || session.segments.some((segment) => segment.contextId === activeContextId);
 }
 
 function openVisibleProjects(current: Record<string, boolean>, projects: ProjectNode[]): Record<string, boolean> {

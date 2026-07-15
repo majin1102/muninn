@@ -804,6 +804,33 @@ async function locateSessionTurnOffset(params: {
   return index >= 0 ? Math.floor(index / params.limit) * params.limit : null;
 }
 
+async function locateLatestSessionTurn(params: {
+  agent: string;
+  project: string;
+  sessionKey: string;
+  limit: number;
+}): Promise<{ turnId: string; offset: number } | null> {
+  const rows = await turns.list({
+    mode: { type: 'page', offset: 0, limit: SESSION_TREE_PAGE_LIMIT },
+    project: params.project,
+    agent: params.agent,
+    ...(isDefaultSessionKey(params.sessionKey) ? {} : { sessionId: params.sessionKey }),
+  });
+  const previews = rows
+    .map((turn, offset) => ({ turn, offset }))
+    .filter(({ turn }) => (
+      matchesSessionNode(turn, params.sessionKey)
+      && turn.project === params.project
+      && hasTurnPreviewContent(turn)
+    ));
+  const latest = previews[previews.length - 1];
+  if (!latest) {
+    return null;
+  }
+  const pageStart = previews[Math.floor((previews.length - 1) / params.limit) * params.limit]!;
+  return { turnId: latest.turn.turnId, offset: pageStart.offset };
+}
+
 function compareTurnsForConversation(left: AppSessionTurn, right: AppSessionTurn): number {
   const created = left.createdAt.localeCompare(right.createdAt);
   if (created !== 0) {
@@ -1052,6 +1079,46 @@ sessionRoutes.get('/app/api/session/agents/:agent/sessions/:sessionKey/turn-posi
   const response: SessionTurnPositionResponse = {
     turnId,
     offset,
+    requestId: generateRequestId(),
+  };
+
+  return c.json(response);
+});
+
+sessionRoutes.get('/app/api/session/agents/:agent/sessions/:sessionKey/latest-turn-position', async (c) => {
+  const agent = c.req.param('agent');
+  const sessionKey = c.req.param('sessionKey');
+  const project = normalizeText(c.req.query('project'));
+  const limitRaw = c.req.query('limit');
+  const limit = limitRaw ? Number(limitRaw) : 10;
+
+  console.log('[APP_UI_SESSION_LATEST_TURN_POSITION] agent:', agent, 'project:', project, 'sessionKey:', sessionKey, 'limit:', limit);
+
+  if (!project) {
+    return c.json(errorResponse('invalidRequest', 'project is required'), 400);
+  }
+  if (Number.isNaN(limit) || limit <= 0) {
+    return c.json(errorResponse('invalidRequest', 'limit must be a positive number'), 400);
+  }
+
+  let position: { turnId: string; offset: number } | null;
+  try {
+    position = await locateLatestSessionTurn({
+      agent,
+      project,
+      sessionKey,
+      limit,
+    });
+  } catch (error) {
+    const mapped = mapCoreLookupError(error);
+    return c.json(mapped.body, mapped.status as 400 | 500);
+  }
+  if (!position) {
+    return c.json(errorResponse('notFound', 'session has no turns'), 404);
+  }
+
+  const response: SessionTurnPositionResponse = {
+    ...position,
     requestId: generateRequestId(),
   };
 

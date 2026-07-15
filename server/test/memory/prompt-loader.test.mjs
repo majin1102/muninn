@@ -95,7 +95,7 @@ test('thread session memory prompt uses generic recall-ready memory guidance', (
   assert.match(system, /Split only when a unit would exceed budget and the new content can stand as an independent durable context unit/);
   assert.match(system, /## Signal/);
   assert.match(system, /Instruction Signals are AGENTS\.md\/MEMORY\.md candidate instructions for future agents/);
-  assert.match(system, /Skill Signals index reusable workflow candidates that may become `SKILL\.md`; Skill Details store procedure details for accepted Skill Signals/);
+  assert.match(system, /Skill Signals index reusable workflow candidates; Skill Details store procedure details for accepted Skill Signals/);
   assert.match(system, /### Signal rewrite rules/);
   assert.doesNotMatch(system, /organizes related session content for future recall/);
   assert.match(system, /You update a compact session context snapshot from new conversation turns for future recall/);
@@ -202,7 +202,7 @@ test('session memory prompt preserves the current extraction schema', () => {
   assert.doesNotMatch(system, /simple reusable workflows/);
   assert.doesNotMatch(system, /unless they are direct future-agent instructions/);
   assert.match(system, /Keep reusable guidance as an Instruction Signal when it fits in 1-3 concise sentences/);
-  assert.match(system, /Installed\/invoked\/referenced\/edited agent skills are execution context, not Skill\/Instruction Signals/);
+  assert.match(system, /Treat agent skills and their creation or modification as execution context, never as Skill\/Instruction Signals/);
   assert.doesNotMatch(system, /record only user-prompt changes to the reusable workflow itself/);
   assert.match(system, /avoid PR numbers, error strings, feature codenames, today's fix\/debug task, task execution artifacts, assistant-devised plans, command history, and one-off task steps/);
   assert.match(system, /Store details under .*## Skill Details.* only for accepted Skill Signals/);

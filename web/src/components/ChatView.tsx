@@ -33,6 +33,9 @@ type ChatViewProps = {
   activeContextId: string | null;
   focusContextId: string | null;
   focusRequestId: number;
+  scrollToBottomRequestId: number;
+  scrollToBottomContextId: string | null;
+  conversationGapBeforeContextId: string | null;
   sessionTurns: ProjectTurnNode[];
   onVisibleTurnIdsChange?: (turnIds: string[]) => void;
   canLoadMoreAfter?: boolean;
@@ -50,6 +53,9 @@ export function ChatView({
   activeContextId,
   focusContextId,
   focusRequestId,
+  scrollToBottomRequestId,
+  scrollToBottomContextId,
+  conversationGapBeforeContextId,
   sessionTurns,
   onVisibleTurnIdsChange,
   canLoadMoreAfter = false,
@@ -61,6 +67,7 @@ export function ChatView({
 }: ChatViewProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const activeMessageRef = useRef<HTMLElement>(null);
+  const handledScrollToBottomRequestRef = useRef(0);
   const [beforeLimit, setBeforeLimit] = useState(INITIAL_CHAT_CONTEXT_RADIUS);
   const [afterLimit, setAfterLimit] = useState(DEFAULT_CHAT_INITIAL_TURN_COUNT);
   const [turnDetails, setTurnDetails] = useState<Record<string, ProjectTurnNode>>({});
@@ -83,6 +90,15 @@ export function ChatView({
     displayTurns.length > 0 ? entriesFromTurns(turnWindow.turns) : entriesFromDocument(document)
   ), [displayTurns.length, document, turnWindow.turns]);
   const timelineItems = useMemo(() => chatTimelineItems(entries, TIME_SEPARATOR_GAP_MS), [entries]);
+  const conversationGapIndex = useMemo(() => {
+    if (!conversationGapBeforeContextId) {
+      return -1;
+    }
+    const entryIndex = timelineItems.findIndex((item) => (
+      item.type === 'entry' && timelineEntryContextId(item) === conversationGapBeforeContextId
+    ));
+    return entryIndex > 0 && timelineItems[entryIndex - 1]?.type === 'time' ? entryIndex - 1 : entryIndex;
+  }, [conversationGapBeforeContextId, timelineItems]);
 
   const ensureTurnDetail = useCallback(async (contextId: string | undefined) => {
     if (!contextId || !onLoadTurnDetail || turnDetails[contextId] || turnDetailLoading[contextId]) {
@@ -149,6 +165,39 @@ export function ChatView({
   }, [focusContextId, focusRequestId, timelineItems.length, turnWindow.turns]);
 
   useEffect(() => {
+    if (scrollToBottomRequestId === handledScrollToBottomRequestRef.current) {
+      return;
+    }
+
+    const scrollToBottom = () => {
+      const scroller = scrollRef.current;
+      const target = scroller && scrollToBottomContextId
+        ? Array.from(scroller.querySelectorAll<HTMLElement>('.chat-message-row'))
+          .find((row) => row.dataset.contextId === scrollToBottomContextId)
+        : null;
+      if (!scroller || !target) {
+        return false;
+      }
+      handledScrollToBottomRequestRef.current = scrollToBottomRequestId;
+      scroller.scrollTo({
+        top: scroller.scrollHeight,
+        behavior: 'smooth',
+      });
+      return true;
+    };
+
+    if (!scrollToBottom()) {
+      return;
+    }
+    const frame = window.requestAnimationFrame(scrollToBottom);
+    const timeout = window.setTimeout(scrollToBottom, 50);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.clearTimeout(timeout);
+    };
+  }, [scrollToBottomContextId, scrollToBottomRequestId, timelineItems.length, turnWindow.turns]);
+
+  useEffect(() => {
     const scroller = scrollRef.current;
     if (!scroller || !onVisibleTurnIdsChange) {
       return;
@@ -205,11 +254,10 @@ export function ChatView({
             Show {Math.min(CHAT_CONTEXT_STEP, turnWindow.beforeCount)} earlier turns
           </Button>
         ) : null}
-        {timelineItems.map((item) => {
-          if (item.type === 'time') {
-            return <TimeSeparator key={item.key} timestamp={item.timestamp} />;
-          }
-          return renderTimelineEntry({
+        {timelineItems.map((item, index) => {
+          const content = item.type === 'time'
+            ? <TimeSeparator key={item.key} timestamp={item.timestamp} />
+            : renderTimelineEntry({
             item,
             activeContextId,
             activeMessageRef,
@@ -219,8 +267,22 @@ export function ChatView({
             turnDetailErrors,
             loadedTurnDetails: turnDetails,
           });
+          return index === conversationGapIndex ? (
+            <Fragment key={`gap:${item.key}`}>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="chat-collapse-divider"
+                disabled={loadingMoreAfter}
+                onClick={onLoadMoreAfter}
+              >
+                {loadingMoreAfter ? 'Loading...' : 'Load missing turns'}
+              </Button>
+              {content}
+            </Fragment>
+          ) : content;
         })}
-        {turnWindow.afterCount > 0 || canLoadMoreAfter ? (
+        {turnWindow.afterCount > 0 || (canLoadMoreAfter && !conversationGapBeforeContextId) ? (
           <Button
             variant="ghost"
             size="sm"
@@ -241,6 +303,10 @@ export function ChatView({
       </div>
     </ScrollArea>
   );
+}
+
+function timelineEntryContextId(item: Extract<ChatTimelineItem, { type: 'entry' }>): string | undefined {
+  return item.entry.type === 'toolGroup' ? item.entry.group.contextId : item.entry.message.contextId;
 }
 
 function visibleTurnIds(scroller: HTMLElement): string[] {

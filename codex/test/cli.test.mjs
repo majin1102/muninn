@@ -128,7 +128,10 @@ test('codex hook CLI injects startup context as formatted JSON', async () => {
     assert.deepEqual(JSON.parse(result.stdout), {
       hookSpecificOutput: {
         hookEventName: 'SessionStart',
-        additionalContext: JSON.stringify(context, null, 2),
+        additionalContext: [
+          'Use recent session contextIds to read the relevant session before answering questions about prior work.',
+          JSON.stringify(context, null, 2),
+        ].join('\n\n'),
       },
     });
   } finally {
