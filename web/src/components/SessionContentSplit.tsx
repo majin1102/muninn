@@ -39,6 +39,7 @@ type SessionContentSplitProps = {
   onOpenTimeline: (contextId: string) => void;
   onLocateConversationTurn: (contextId: string) => void;
   onLocateConversationEnd: () => Promise<string | null>;
+  conversationGapBeforeContextId: string | null;
   onLoadTurnDetail: (contextId: string) => Promise<ProjectTurnNode>;
   canLoadMoreAfter: boolean;
   loadingMoreAfter: boolean;
@@ -63,6 +64,7 @@ export function SessionContentSplit({
   onOpenTimeline,
   onLocateConversationTurn,
   onLocateConversationEnd,
+  conversationGapBeforeContextId,
   onLoadTurnDetail,
   canLoadMoreAfter,
   loadingMoreAfter,
@@ -115,7 +117,7 @@ export function SessionContentSplit({
   );
   const canLocateConversation = Boolean(activeConversationContextId)
     && locateConversationEnabled(activeTimelineItem, conversationWindowTurnIds);
-  const canScrollToBottom = !loading && !locatingEnd && Boolean(session);
+  const canScrollToBottom = !loading && !loadingMoreAfter && !locatingEnd && Boolean(session);
   const style = useMemo(() => ({
     '--session-content-grid': gridTemplateForMode(mode, timelineWidth, containerWidth),
   }) as CSSProperties, [containerWidth, mode, timelineWidth]);
@@ -311,6 +313,7 @@ export function SessionContentSplit({
             focusRequestId={focusRequestId}
             scrollToBottomRequestId={scrollToBottomRequestId}
             scrollToBottomContextId={scrollToBottomContextId}
+            conversationGapBeforeContextId={conversationGapBeforeContextId}
             sessionTurns={sessionTurns}
             onVisibleTurnIdsChange={setVisibleConversationTurnIds}
             canLoadMoreAfter={canLoadMoreAfter}

@@ -8,6 +8,7 @@ test('conversation toolbar places the scroll-to-bottom button between locate and
   assert.match(source, /import \{ LocateIcon, ScrollToBottomIcon \} from '\.\/icons\.js';/);
   assert.match(source, /aria-label="Go to latest conversation content"/);
   assert.match(source, /onLocateConversationEnd\(\)/);
+  assert.match(source, /!loading && !loadingMoreAfter && !locatingEnd/);
   assert.match(source, /setScrollToBottomContextId\(contextId\);\s*setScrollToBottomRequestId\(\(current\) => current \+ 1\);/);
   assert.match(
     source,
@@ -34,6 +35,21 @@ test('conversation end lookup requests the latest turn position for the current 
   assert.match(source, /locateSessionEnd\(session: ProjectSessionNode\)/);
   assert.match(source, /\/latest-turn-position\?\$\{params\.toString\(\)\}/);
   assert.match(source, /return \{ contextId: response\.turnId, offset: response\.offset \}/);
+});
+
+test('conversation end loading preserves and marks a missing page range', async () => {
+  const appSource = await readFile(new URL('../src/components/App.tsx', import.meta.url), 'utf8');
+  const chatSource = await readFile(new URL('../src/components/ChatView.tsx', import.meta.url), 'utf8');
+
+  assert.match(appSource, /const hasGap = session\.nextOffset !== null && session\.nextOffset < position\.offset;/);
+  assert.match(appSource, /nextOffset: hasGap \? session\.nextOffset : response\.nextOffset/);
+  assert.match(appSource, /offset: position\.offset,\s*beforeContextId: response\.turns\[0\]\?\.contextId \?\? position\.contextId/);
+  assert.match(appSource, /conversationGaps\[key\]\?\.offset === offset/);
+  assert.match(appSource, /session\.nextOffset <= gap\.offset\s*&& hasTurn\(session, gap\.beforeContextId\)/);
+  assert.match(appSource, /const routeHash = window\.location\.hash/);
+  assert.match(appSource, /window\.location\.hash !== routeHash/);
+  assert.match(chatSource, /Load missing turns/);
+  assert.match(chatSource, /canLoadMoreAfter && !conversationGapBeforeContextId/);
 });
 
 test('scroll-to-bottom icon uses the approved arrow-to-baseline shape', async () => {
