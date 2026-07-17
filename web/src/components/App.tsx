@@ -17,6 +17,7 @@ import {
   sessionTreeCanExpand,
   type SessionContentMode,
 } from '../lib/session-content-state.js';
+import { turnsBeforeGap } from '../lib/conversation-gap.js';
 import { asErrorMessage } from '../lib/utils.js';
 import { PipelinesPage } from './PipelinesPage.js';
 import { RecallPage } from './SearchPage.js';
@@ -480,9 +481,13 @@ export function App() {
       if (!hasTurn(session, position.contextId)) {
         const response = await client.loadSessionTurns(session, position.offset);
         const hasGap = session.nextOffset !== null && session.nextOffset < position.offset;
+        const gap = visibleConversationGap(session, conversationGaps[key]);
+        const baseTurns = hasGap && gap
+          ? turnsBeforeGap(session.turns, gap.beforeContextId)
+          : session.turns;
 
         updateSession(session, {
-          turns: mergeSessionTurns(session.turns, response.turns),
+          turns: mergeSessionTurns(baseTurns, response.turns),
           nextOffset: hasGap ? session.nextOffset : response.nextOffset,
           loading: false,
           loaded: true,

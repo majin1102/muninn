@@ -541,9 +541,29 @@ test('generateText rejects missing Codex access token before request', async (t)
   assert.equal(called, false);
 });
 
-test('generateText rejects Codex access tokens expiring within twenty four hours', async (t) => {
+test('generateText accepts valid Codex access tokens expiring within twenty four hours', async (t) => {
   await setupCodexRun(t, {
     accessToken: makeJwt(Math.floor(Date.now() / 1000) + 3600),
+  });
+  const originalFetch = globalThis.fetch;
+  let called = false;
+  globalThis.fetch = async () => {
+    called = true;
+    return new Response(codexSse({ type: 'response.output_text.delta', delta: 'Codex answer' }));
+  };
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  const output = await generateText('extractor', { system: 'system', prompt: 'prompt' });
+
+  assert.equal(output, 'Codex answer');
+  assert.equal(called, true);
+});
+
+test('generateText rejects expired Codex access tokens before request', async (t) => {
+  await setupCodexRun(t, {
+    accessToken: makeJwt(Math.floor(Date.now() / 1000) - 60),
   });
   const originalFetch = globalThis.fetch;
   let called = false;
@@ -557,7 +577,7 @@ test('generateText rejects Codex access tokens expiring within twenty four hours
 
   await assert.rejects(
     () => generateText('extractor', { system: 'system', prompt: 'prompt' }),
-    /Codex CLI auth token expires within 24 hours/i,
+    /Codex CLI auth token has expired/i,
   );
   assert.equal(called, false);
 });

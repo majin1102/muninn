@@ -48,6 +48,8 @@ test('conversation end loading preserves and marks a missing page range', async 
   assert.match(appSource, /session\.nextOffset <= gap\.offset\s*&& hasTurn\(session, gap\.beforeContextId\)/);
   assert.match(appSource, /const routeHash = window\.location\.hash/);
   assert.match(appSource, /window\.location\.hash !== routeHash/);
+  assert.match(appSource, /turnsBeforeGap\(session\.turns, gap\.beforeContextId\)/);
+  assert.match(appSource, /turns: mergeSessionTurns\(baseTurns, response\.turns\)/);
   assert.match(chatSource, /Load missing turns/);
   assert.match(chatSource, /canLoadMoreAfter && !conversationGapBeforeContextId/);
 });
