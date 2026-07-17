@@ -1248,10 +1248,6 @@ function abortError(): Error {
   return error;
 }
 
-
-
-const MIN_TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
-
 type CodexAuthFile = {
   auth_mode?: unknown;
   tokens?: {
@@ -1280,8 +1276,8 @@ function loadCodexCliAuth(now = Date.now()): CodexCliAuth {
   if (!expiresAt) {
     throw new Error('Codex CLI auth token is not a JWT with an exp claim. Run `codex login` again.');
   }
-  if (expiresAt - now < MIN_TOKEN_TTL_MS) {
-    throw new Error('Codex CLI auth token expires within 24 hours. Run `codex login` again before starting the benchmark.');
+  if (expiresAt <= now) {
+    throw new Error('Codex CLI auth token has expired. Run Codex to refresh it or run `codex login` again.');
   }
 
   return { accessToken, expiresAt };
